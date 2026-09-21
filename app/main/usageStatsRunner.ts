@@ -5,6 +5,16 @@ import { scanForSecrets } from '../shared/secretGuard.js';
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js';
 export const USAGE_REFRESH_INTERVAL_MS = 5 * 60000;
 export const USAGE_WORKER_TIMEOUT_MS = 125000;
+
+/**
+ * The retained-history dashboard is production-ready and enabled by default.
+ * Keep one explicit off switch so an operator can stop the independent worker
+ * without changing account or transcript state.
+ */
+export function isUsageDashboardEnabled(value = process.env.CATCODE_USAGE_DASHBOARD): boolean {
+    return value !== '0';
+}
+
 export type UsageRunOptions = {
     command: string;
     args: string[];

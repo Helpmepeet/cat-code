@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { UsagePage } from './UsagePage.js';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { initialUsageDashboardState, reduceUsageDashboard, usageColors } from './usageDashboardState.js';
+import { usageGraphColors } from './usageGraphState.js';
 import { UsageModelDonut } from './UsageOverviewDetails.js';
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 test('loading, failure and confirmed empty history are distinct; zero prompt is not applicable', () => {
@@ -58,13 +59,15 @@ test('invalid timing records are scoped to timing without making usage history p
     expect(html).toContain('2 invalid timing records were excluded');
     expect(html).not.toContain('Partial history');
 });
-test('refresh failure retains original cutoff and range and recovery replaces it', () => {
+test('refresh failure keeps saved values without adding status prose', () => {
     const good = reduceUsageDashboard(initialUsageDashboardState, { type: 'usage', version: 1, snapshot });
     const stale = reduceUsageDashboard(good, { type: 'error', version: 1, code: 'timeout' });
     expect(stale.snapshot).toBe(snapshot);
     const html = renderToStaticMarkup(<UsagePage state={stale}/>);
-    expect(html).toContain('Showing an older snapshot');
-    expect(html).toContain('2026-09-13 12:00:00 UTC');
+    expect(html).not.toContain('Showing an older snapshot');
+    expect(html).not.toContain('Usage update timed out');
+    expect(html).not.toContain('Another attempt will run automatically');
+    expect(renderToStaticMarkup(<UsagePage state={{ snapshot, status: 'loading' }}/>)).not.toContain('Refreshing recorded usage');
     expect(reduceUsageDashboard(stale, { type: 'usage', version: 1, snapshot }).status).toBe('ready');
 });
 test('tiny model geometry uses real fractional shares; palette has distinct colors', () => {
@@ -76,12 +79,12 @@ test('tiny model geometry uses real fractional shares; palette has distinct colo
     expect(html).toContain('Tiny: 1 tokens');
     expect(html).toContain('Large: 9,999 tokens');
     expect(new Set(Object.values(usageColors(Array.from({ length: 10 }, (_, i) => String(i))))).size).toBe(10);
+    expect(new Set(Object.values(usageGraphColors(Array.from({ length: 10 }, (_, i) => String(i))))).size).toBe(10);
 });
-test('specific failure reason is visible while keeping saved values', () => {
+test('specific failure reason is shown only when there are no saved values', () => {
     const state = reduceUsageDashboard({ snapshot, status: 'ready' }, { type: 'error', version: 1, code: 'resource-limit' });
-    const html = renderToStaticMarkup(<UsagePage state={state}/>);
-    expect(html).toContain('Usage history exceeded the processing limit');
-    expect(html).toContain('Accessible values table');
+    expect(renderToStaticMarkup(<UsagePage state={state}/>)).not.toContain('Usage history exceeded the processing limit');
+    expect(renderToStaticMarkup(<UsagePage state={{ snapshot: null, status: 'error', errorCode: 'resource-limit' }}/>)).toContain('Usage history exceeded the processing limit');
     expect(state.snapshot).toBe(snapshot);
 });
 test('cache trend fits observed percentages with padding and keeps valid endpoints', async () => {

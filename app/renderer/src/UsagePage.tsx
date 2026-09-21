@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { UsageWindow } from '../../shared/usageDashboard.js';
 import { type UsageDashboardState, initialUsageSelection, type UsageSelection, usageCompact, usageCacheWrites, usageFailureMessage, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
 import { UsageTokenFlow } from './UsageDashboardCharts.js';
@@ -44,12 +44,9 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const updateSelection = (next: UsageSelection) => { setLocalSelection(next); onSelectionChange?.(next); };
     const setRange = (next: UsageWindow) => updateSelection({ range: next, date: '' });
     const setSelectedDate = (date: string) => updateSelection({ range, date });
-    const [now, setNow] = useState(() => Date.now());
-    useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer); }, []);
     const snapshot = state.snapshot, summary = snapshot?.ranges[range];
     const unavailable = state.status === 'unavailable';
     const partial = snapshot?.coverage.state === 'partial';
-    const stale = !!snapshot && (state.status === 'error' || now - Date.parse(snapshot.asOf) > 10 * 60000);
     const selected = summary?.days.find(d => d.date === selectedDate);
     const colors = usageModelColors(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(r => r.models) : []);
     const unknown = state.status === 'loading' ? 'Loading' : 'Unavailable';
@@ -58,7 +55,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
   <header className="usage-header"><div><h1 id="usage-title">Usage</h1></div><div className="usage-range" role="group" aria-label="Usage period">{(['7d', '30d', 'all'] as const).map(r => <button key={r} type="button" aria-pressed={r === range} onClick={() => setRange(r)}>{r === 'all' ? 'All' : r === '7d' ? '7 days' : '30 days'}</button>)}</div></header>
   {snapshot && summary && !unavailable && <p className="usage-note usage-freshness"><span>{summary.startInclusive.slice(0, 10)} to {new Date(Date.parse(summary.endExclusive) - 86400000).toISOString().slice(0, 10)} UTC</span><span title={snapshot.asOf.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC')}>Updated {snapshot.asOf.slice(11, 16)} UTC</span></p>}
   <div className="usage-status" role="status">
-   {unavailable ? 'Usage is unavailable.' : !snapshot ? (state.status === 'loading' ? 'Loading recorded usage…' : usageFailureMessage(state.errorCode)) : <>{state.status === 'loading' && <p>Refreshing recorded usage…</p>}{stale && <p>Showing an older snapshot. {state.status === 'error' ? usageFailureMessage(state.errorCode) : 'Waiting for a fresh update.'}</p>}{partial && <p>Partial history. Totals may be incomplete.</p>}{!partial && empty && <p>No recorded usage in available history.</p>}</>}
+   {unavailable ? 'Usage is unavailable.' : !snapshot ? (state.status === 'loading' ? 'Loading recorded usage…' : usageFailureMessage(state.errorCode)) : <>{partial && <p>Partial history. Totals may be incomplete.</p>}{!partial && empty && <p>No recorded usage in available history.</p>}</>}
   </div>
   <UsageMetrics summary={unavailable ? undefined : summary} unknown={unknown} partial={!!partial}/>
   {summary && snapshot && !unavailable && <>

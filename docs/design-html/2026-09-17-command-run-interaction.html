@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cat Code command Run proposal</title>
+<style>
+@font-face{font-family:DM Sans;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');font-weight:100 1000}
+@font-face{font-family:DM Mono;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');font-weight:400}
+body{margin:0;background:#09090b}
+.x-toolbar{margin:28px auto 64px;max-width:760px;padding:0 24px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#999}
+.x-label{margin-right:auto}
+.x-select{font:11px ui-monospace,monospace;color:#aaa;background:#09090b;border:0;border-bottom:1px solid #555;padding:8px 2px;border-radius:0}
+.specimen{max-width:680px;margin:0 auto;padding:0 24px;color:#f4f4f5;font:500 14px/1.65 'DM Sans',sans-serif}
+.specimen p{margin:0 0 16px}
+.command{border:1px solid rgba(255,255,255,.06);border-radius:8px;overflow:hidden;margin:12px 0;background:#09090b}
+.source{position:relative}
+.source pre{margin:0;padding:14px 144px 14px 14px;overflow-x:auto;font:400 12.5px/1.65 'DM Mono',monospace}
+.actions{position:absolute;right:8px;top:7px;display:flex;gap:4px}
+.specimen button{font:500 12px 'DM Sans',sans-serif;color:#98989f;border:0;background:transparent;border-radius:6px;min-height:28px;padding:4px 8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.specimen button:hover{background:rgba(255,255,255,.06);color:#f4f4f5}
+.specimen button:disabled{color:#75757b;cursor:default;background:transparent}
+.specimen button:focus-visible{outline:1px solid #98989f;outline-offset:2px}
+.specimen .copy{width:28px;padding:4px}
+.copy svg{width:15px;height:15px}
+.run-icon{font-size:10px}
+.location{padding:7px 14px;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:12px;justify-content:space-between;font:400 11px/1.6 'DM Mono',monospace;color:#98989f;flex-wrap:wrap}
+.result{border-top:1px solid rgba(255,255,255,.06);padding:12px 14px}
+.result[hidden]{display:none}
+.output{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:400 12.5px/1.65 'DM Mono',monospace;color:#98989f}
+.outcome{margin-top:10px;font:500 12px/1.5 'DM Sans',sans-serif;color:#98989f}
+.outcome.failed{color:#fca5a5}
+@media(max-width:480px){.specimen{padding:0 16px}.x-toolbar{padding:0 16px;margin-bottom:42px}.source pre{padding-right:130px}}
+</style>
+<div class="x-toolbar">
+  <span class="x-label">Proposed interaction · simulation</span>
+  <label for="scenario">State</label>
+  <select class="x-select" id="scenario">
+    <option value="ready">Ready</option><option value="running">Running</option>
+    <option value="success">Completed</option><option value="failed">Failed</option>
+    <option value="stopped">Stopped</option><option value="busy">Agent busy</option>
+    <option value="writing">Command streaming</option>
+  </select>
+</div>
+<main class="specimen" aria-label="Proposed assistant command block">
+  <p>You can run the tests with:</p>
+  <div class="command">
+    <div class="source">
+      <pre><code id="command-text">bun test</code></pre>
+      <div class="actions">
+        <button id="run" type="button"><span class="run-icon" aria-hidden="true">▶</span><span id="run-label">Run</span></button>
+        <button class="copy" id="copy" type="button" aria-label="Copy code" title="Copy code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h1"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="location"><span>/workspace/project</span><span id="status"></span></div>
+    <div class="result" id="result" hidden>
+      <pre class="output" id="output"></pre>
+      <div class="outcome" id="outcome" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+</main>
+<script>
+const scenario=document.getElementById('scenario');
+const run=document.getElementById('run');
+const runLabel=document.getElementById('run-label');
+const icon=run.querySelector('.run-icon');
+const copy=document.getElementById('copy');
+const status=document.getElementById('status');
+const result=document.getElementById('result');
+const output=document.getElementById('output');
+const outcome=document.getElementById('outcome');
+let state='ready';
+let timers=[];
+function clearTimers(){timers.forEach(clearTimeout);timers=[]}
+function show(next){
+  clearTimers();state=next;scenario.value=next;
+  const running=next==='running';
+  const blocked=next==='busy'||next==='writing';
+  run.disabled=blocked;copy.disabled=next==='writing';
+  runLabel.textContent=running?'Stop':next==='ready'||blocked?'Run':'Run again';
+  icon.textContent=running?'■':'▶';
+  status.textContent=next==='busy'?'Agent busy':next==='writing'?'Code still writing':running?'Running…':'';
+  document.getElementById('command-text').textContent=next==='writing'?'bun te':'bun test';
+  result.hidden=next==='ready'||blocked;
+  outcome.className='outcome'+(next==='failed'?' failed':'');
+  output.textContent=next==='success'?'example.test.ts\n✓ example\n\n1 pass\n0 fail':next==='failed'?'example.test.ts\n✗ example\n\nExpected: 2\nReceived: 1\n\n0 pass\n1 fail':next==='stopped'?'example.test.ts':'example.test.ts';
+  outcome.textContent=next==='success'?'Completed · exit 0':next==='failed'?'Failed · exit 1':next==='stopped'?'Stopped':'';
+}
+function start(){
+  show('running');
+  timers.push(setTimeout(()=>{output.textContent+='\n✓ example'},1000));
+  timers.push(setTimeout(()=>show('success'),2800));
+}
+run.addEventListener('click',()=>state==='running'?show('stopped'):start());
+scenario.addEventListener('change',()=>scenario.value==='running'?start():show(scenario.value));
+copy.addEventListener('click',async()=>{
+  try{await navigator.clipboard.writeText('bun test');copy.title='Code copied';copy.setAttribute('aria-label','Code copied');setTimeout(()=>{copy.title='Copy code';copy.setAttribute('aria-label','Copy code')},1200)}
+  catch{copy.title='Copy unavailable'}
+});
+show('ready');
+</script>
+</html>

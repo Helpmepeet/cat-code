@@ -2,7 +2,7 @@ import { createAccountsPoolPublicationGate } from './accountsPoolRunner.js';
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import type { spawn } from 'node:child_process';
-import { runUsageStatsWorker, createUsagePublication } from './usageStatsRunner.js';
+import { runUsageStatsWorker, createUsagePublication, isUsageDashboardEnabled } from './usageStatsRunner.js';
 function fakeSpawn(config: {
     stdout?: string;
     exitCode?: number;
@@ -30,6 +30,13 @@ function fakeSpawn(config: {
 const err = (code: 'collection' | 'timeout' | 'resource-limit' | 'invalid-output' | 'unavailable' = 'collection') => ({ type: 'error' as const, version: 1 as const, code });
 const line = (x: unknown) => `${JSON.stringify(x)}\n`;
 const run = (config: Parameters<typeof fakeSpawn>[0], extra: Record<string, unknown> = {}) => runUsageStatsWorker({ command: 'bun', args: [], cwd: process.cwd(), spawnWorker: fakeSpawn(config), ...(extra as any) });
+
+test('usage dashboard is enabled by default and retains an explicit rollback switch', () => {
+    expect(isUsageDashboardEnabled(undefined)).toBe(true);
+    expect(isUsageDashboardEnabled('1')).toBe(true);
+    expect(isUsageDashboardEnabled('0')).toBe(false);
+});
+
 describe('runUsageStatsWorker boundary', () => {
     test('delivers one valid result only after clean exit', async () => {
         await expect(run({ stdout: line(err('unavailable')) })).resolves.toEqual(err('unavailable'));

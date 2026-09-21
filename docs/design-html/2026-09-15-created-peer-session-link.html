@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Created peer session row</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+.x-page{margin:0;padding:36px 24px 72px;background:#09090b;color:#929292}
+.x-main{max-width:900px;margin:0 auto}
+.x-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:20px;padding-bottom:22px;border-bottom:1px solid #555}
+.x-title,.x-label,.x-control,.x-output{font:10px/1.5 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#929292}
+.x-title{margin:0;margin-right:auto;font-weight:400}
+.x-control{display:flex;gap:8px;align-items:center}
+.x-select{font:10px ui-monospace,monospace;color:#929292;background:transparent;border:1px solid #555;border-radius:0;padding:5px}
+.x-section{margin-top:32px}
+.x-label{margin:0 0 12px;font-weight:400}
+.x-output{display:block;margin-top:20px;min-height:15px}
+.x-rule{border:0;border-top:1px solid #555;margin:32px 0}
+.specimen{--ground:#09090b;--ink:#f4f4f5;--muted:#a1a1aa;--subtle:#98989f;--ghost:#75757b;--peer:#818cf8;--seam:rgba(255,255,255,.06);--hover:rgba(255,255,255,.045);--good:#4ade80;--warn:#fbbf24;--danger:#f87171;--accent:#f472b6;background:var(--ground);color:var(--ink);font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.5}
+.specimen[data-theme="light"]{--ground:#fcfcfd;--ink:#18181b;--muted:#52525b;--subtle:#575761;--ghost:#767680;--peer:#4f46e5;--seam:rgba(9,9,11,.1);--hover:rgba(9,9,11,.04);--good:#15803d;--warn:#a35f00;--danger:#dc2626}
+.specimen *{box-sizing:border-box}
+.specimen button{font:inherit;color:inherit;cursor:pointer}
+.specimen button:focus-visible{outline:2px solid var(--peer);outline-offset:-2px}
+.specimen [hidden]{display:none!important}
+.tool{width:100%;overflow:hidden;border:1px solid var(--seam);border-radius:6px;background:rgba(255,255,255,.025)}
+.header{display:flex;width:100%;align-items:center;gap:10px;text-align:left}
+.main{display:flex;flex:1;min-width:0;align-items:center;gap:10px;border:0;background:none;padding:8px 12px;text-align:left}
+.mark{width:16px;flex-shrink:0;text-align:center;font-size:13px;color:var(--peer)}
+.family{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--peer)}
+.target{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;color:var(--muted)}
+.name{font-weight:500;color:var(--ink)}
+.separator{color:var(--ghost)}
+.dot{width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--good)}
+.dot.pending{background:var(--accent)}
+.dot.warning{background:var(--warn)}
+.dot.error{background:var(--danger)}
+.open{flex-shrink:0;font-size:11px;color:var(--muted)}
+.main[data-open]:hover .name,.main[data-open]:hover .open{color:var(--peer)}
+.detail-button{flex-shrink:0;align-self:stretch;border:0;border-left:1px solid var(--seam);background:none;padding:0 10px;font-size:11px!important;color:var(--subtle)!important}
+.detail-button:hover{background:var(--hover)}
+.header:has(.detail-button){gap:0}
+.body{border-top:1px solid var(--seam);background:rgba(0,0,0,.28);padding:6px 12px 10px;font:11.5px/1.625 'DM Mono',monospace;color:var(--subtle);white-space:pre-wrap;overflow-wrap:anywhere}
+.note{border-top:1px solid var(--seam);padding:6px 12px;font-size:12px;color:var(--muted)}
+.note.warning{color:var(--warn)}
+.muted-state{font-size:11px;color:var(--muted);flex-shrink:0}
+.specimen[data-style="lines"] .tool{border:0;border-radius:0;background:none}
+.specimen[data-style="lines"] .header{border-radius:4px}
+.specimen[data-style="lines"] .header:hover{background:rgba(255,255,255,.04)}
+.specimen[data-style="lines"] .main{padding:2px 0}
+.specimen[data-style="lines"] .detail-button{border-left:0;margin-left:10px;padding:0 6px}
+.specimen[data-style="lines"] .body,.specimen[data-style="lines"] .note{margin-left:24px;border-top:0;border-left:1px solid var(--seam);padding:4px 0 8px 12px;background:none}
+@media(max-width:560px){.x-page{padding:24px 12px 48px}.x-toolbar{gap:12px}.x-title{flex-basis:100%}.detail-button{padding:0 8px}.main{gap:8px}.open{font-size:10px}}
+</style>
+</head>
+<body class="x-page">
+<main class="x-main">
+<header class="x-toolbar">
+<h1 class="x-title">Created peer / transcript row</h1>
+<label class="x-control">Style <select class="x-select" id="style"><option value="cards">Cards</option><option value="lines">Lines</option></select></label>
+<label class="x-control">Appearance <select class="x-select" id="theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+</header>
+<section class="x-section">
+<h2 class="x-label">Current / created</h2>
+<div class="specimen" data-style="cards" data-theme="dark">
+<div class="tool">
+<div class="header"><button class="main" data-details="current-body" aria-expanded="false" aria-controls="current-body"><span class="mark" aria-hidden="true">+</span><span class="family">Peer</span><span class="target">Check the example tests</span><span class="dot" role="img" aria-label="done"></span></button></div>
+<div class="body" id="current-body" hidden>Created Bear and sent it your instruction. It works in its own tab; if you asked to hear back, that arrives as a message, not here.</div>
+</div>
+</div>
+</section>
+<section class="x-section">
+<h2 class="x-label">Proposed / created</h2>
+<div class="specimen" data-style="cards" data-theme="dark">
+<div class="tool">
+<div class="header"><button class="main" data-open="Bear" aria-label="Open session Bear"><span class="mark" aria-hidden="true">+</span><span class="family">Peer</span><span class="target"><span class="name">Bear</span><span class="separator"> · </span>Check the example tests</span><span class="dot" role="img" aria-label="Session created"></span><span class="open" aria-hidden="true">Open →</span></button><button class="detail-button" data-details="created-body" aria-expanded="false" aria-controls="created-body" aria-label="Show creation details for Bear">Details <span aria-hidden="true">⌄</span></button></div>
+<div class="body" id="created-body" hidden>Prompt
+Check the example tests
+
+Result
+Created Bear and sent it your instruction. It works in its own tab; if you asked to hear back, that arrives as a message, not here.</div>
+</div>
+</div>
+</section>
+<output class="x-output" id="destination" aria-live="polite">Destination / —</output>
+<hr class="x-rule">
+<section class="x-section">
+<h2 class="x-label">Proposed / creating</h2>
+<div class="specimen" data-style="cards" data-theme="dark">
+<div class="tool">
+<div class="header"><button class="main" data-details="pending-body" aria-expanded="false" aria-controls="pending-body"><span class="mark" aria-hidden="true">+</span><span class="family">Peer</span><span class="target">Check the example tests</span><span class="muted-state">Creating…</span><span class="dot pending" role="img" aria-label="Creating session"></span></button></div>
+<div class="body" id="pending-body" hidden>{ "prompt": "Check the example tests" }</div>
+</div>
+</div>
+</section>
+<section class="x-section">
+<h2 class="x-label">Proposed / instruction not delivered</h2>
+<div class="specimen" data-style="cards" data-theme="dark">
+<div class="tool">
+<div class="header"><button class="main" data-open="Bear" aria-label="Open session Bear"><span class="mark" aria-hidden="true">+</span><span class="family">Peer</span><span class="target"><span class="name">Bear</span><span class="separator"> · </span>Check the example tests</span><span class="dot warning" role="img" aria-label="Session created, instruction not delivered"></span><span class="open" aria-hidden="true">Open →</span></button><button class="detail-button" data-details="partial-body" aria-expanded="false" aria-controls="partial-body" aria-label="Show creation details for Bear">Details <span aria-hidden="true">⌄</span></button></div>
+<div class="note warning">Session created. The instruction did not reach it.</div>
+<div class="body" id="partial-body" hidden>Prompt
+Check the example tests
+
+Result
+Created Bear, but your instruction did not reach it. Send it the instruction with SendToPeer.</div>
+</div>
+</div>
+</section>
+<section class="x-section">
+<h2 class="x-label">Proposed / session unavailable</h2>
+<div class="specimen" data-style="cards" data-theme="dark">
+<div class="tool">
+<div class="header"><button class="main" data-details="unavailable-body" aria-expanded="false" aria-controls="unavailable-body"><span class="mark" aria-hidden="true">+</span><span class="family">Peer</span><span class="target"><span class="name">Bear</span><span class="separator"> · </span>Check the example tests</span><span class="muted-state">Unavailable</span></button></div>
+<div class="body" id="unavailable-body" hidden>This session is no longer available.
+
+Prompt
+Check the example tests
+
+Result
+Created Bear and sent it your instruction. It works in its own tab; if you asked to hear back, that arrives as a message, not here.</div>
+</div>
+</div>
+</section>
+<section class="x-section">
+<h2 class="x-label">Proposed / creation unconfirmed</h2>
+<div class="specimen" data-style="cards" data-theme="dark">
+<div class="tool">
+<div class="header"><button class="main" data-details="unknown-body" aria-expanded="true" aria-controls="unknown-body"><span class="mark" aria-hidden="true">+</span><span class="family">Peer</span><span class="target">Check the example tests</span><span class="muted-state">Unconfirmed</span><span class="dot warning" role="img" aria-label="Creation unconfirmed"></span></button></div>
+<div class="body" id="unknown-body">The app did not answer in time, so it is not clear whether a peer was created. Check the peer list before creating another one.</div>
+</div>
+</div>
+</section>
+</main>
+<script>
+for (const key of ['style', 'theme']) {
+  document.getElementById(key).addEventListener('change', event => {
+    for (const specimen of document.querySelectorAll('.specimen')) {
+      specimen.dataset[key] = event.target.value;
+    }
+  });
+}
+for (const button of document.querySelectorAll('[data-details]')) {
+  button.addEventListener('click', () => {
+    const body = document.getElementById(button.dataset.details);
+    body.hidden = !body.hidden;
+    button.setAttribute('aria-expanded', String(!body.hidden));
+  });
+}
+for (const button of document.querySelectorAll('[data-open]')) {
+  button.addEventListener('click', () => {
+    document.getElementById('destination').textContent = `Destination / ${button.dataset.open}`;
+  });
+}
+</script>
+</body>
+</html>

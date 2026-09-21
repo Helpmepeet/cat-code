@@ -18,10 +18,10 @@ export function reduceUsageDashboard(state: UsageDashboardState, result: UsageCo
     return { snapshot: result.snapshot, status: 'ready' };
 }
 export function usageFailureMessage(code: UsageDashboardState['errorCode']): string {
-    if (code === 'resource-limit') return 'Usage history exceeded the processing limit. Another attempt will run automatically.';
-    if (code === 'timeout') return 'Updating usage took too long. Another attempt will run automatically.';
-    if (code === 'invalid-output') return 'The usage update could not be verified. Another attempt will run automatically.';
-    return 'Usage could not be loaded. Another attempt will run automatically.';
+    if (code === 'resource-limit') return 'Usage history exceeded the processing limit.';
+    if (code === 'timeout') return 'Usage update timed out.';
+    if (code === 'invalid-output') return 'Usage data could not be verified.';
+    return 'Usage could not be loaded.';
 }
 export const usageTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const usageShare = (t: UsageTokens): number | null => t.fresh + t.read + t.write > 0 ? t.read / (t.fresh + t.read + t.write) * 100 : null;

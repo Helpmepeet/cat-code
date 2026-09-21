@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-09-06
+Last refreshed: 2026-09-18
 
 ## Purpose
 
@@ -21,7 +21,7 @@ active local features.
 | Analytics API and gates | `src/services/analytics/index.ts`, `src/services/analytics/growthbook.ts` | `src/services/analytics/{sink,config,metadata}.ts`, analytics call sites | Public logging remains a compatibility boundary; inspect metadata redaction and gate/config fallbacks before changing a call site. |
 | Local telemetry and tracing | `src/utils/telemetry/instrumentation.ts`, `src/utils/telemetry/perfettoTracing.ts` | `src/utils/telemetry/{events,sessionTracing,betaSessionTracing}.ts`, `src/entrypoints/init.ts` | OTEL entrypoints are inert in this build; Perfetto remains the env-enabled local trace writer. |
 | Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. Turn lifecycle is priority-preserved and exempt from short rate dedupe; peer-routing records are metadata-only with no message-text field. |
-| Desktop usage statistics | `app/sidecar/statsDomain.ts`, `app/shared/protocol.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/{App,AccountsPage,AccountsUsageSection}.tsx`, `app/renderer/src/statsState.ts`, `src/utils/stats.ts` | The sidecar projects real transcript-derived aggregates into a redacted `stats.usage.snapshot`; renderer range changes are a closed `stats.query` verb for 7d or 30d. |
+| Desktop usage statistics and auto-mode diagnostics | `app/sidecar/statsDomain.ts`, `app/shared/{protocol,usageAutoMode}.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/{UsagePage,UsageAutoModeBars,UsageAutoModeBlockRate,UsageAutoModeFlow}.tsx`, `app/renderer/src/statsState.ts`, `src/utils/{stats,autoModeUsage}.ts`, `src/utils/permissions/autoModeObservation.ts` | The sidecar projects redacted transcript-derived aggregates. Auto-mode observations retain only typed decision metadata, then publish coverage-aware outcome, route, and category summaries; no tool input, rule text, transcript content, or identity reaches the renderer. |
 | Doctor, status, and validation | `src/commands/{doctor,status}/` | `src/screens/Doctor.tsx`, `src/components/Settings/Status.tsx`, `src/utils/doctorDiagnostic.ts`, `src/utils/status.tsx`, `src/utils/envValidation.ts` | `/doctor` and `/status` overlap but have distinct owners; settings and environment validation feed their displays. |
 | IDE diagnostics and debug/error logs | `src/services/diagnosticTracking.ts`, `src/utils/debug.ts` | `src/utils/{attachments,log,errorLogSink}.ts`, `src/components/DiagnosticsDisplay.tsx` | IDE diagnostics are local edit feedback; debug/error output has separate enablement, filtering, and persistence paths. |
 | Cost and terminal stats | `src/cost-tracker.ts`, `src/commands/stats/stats.tsx` | `src/components/Stats.tsx`, `src/utils/{stats,statsCache}.ts`, `src/context/stats.tsx` | Terminal `/stats` and cost tracking remain separate from desktop usage-stat projection. |
@@ -103,6 +103,7 @@ active local features.
 | Stats UI | `src/components/Stats.tsx` | Overview/models tabs, date-range switching, heatmap/charts, screenshot copy, async cache for range loads. |
 | In-session metrics | `src/context/stats.tsx` | `StatsProvider` exposes counters/gauges/timers/sets and persists `lastSessionMetrics` on process exit. |
 | Desktop usage statistics | `app/sidecar/statsDomain.ts` | The sidecar reads `aggregateClaudeCodeStatsForRange()` and sends redacted totals, daily model/activity data, cache metrics, and model names to the Accounts surface; no transcript text or credentials cross the boundary. |
+| Auto-mode diagnostic accounting | `src/utils/permissions/autoModeObservation.ts` | The initial automatic permission occurrence emits a closed metadata-only start/stage/end record. `src/utils/autoModeUsage.ts` validates and reduces retained records, preserves unavailable or partial coverage, and never treats malformed or unmatched records as a completed decision. `app/shared/usageAutoMode.ts` is the renderer-safe aggregate contract. |
 
 ## Tests And Validation
 
@@ -115,6 +116,7 @@ active local features.
 | Environment bounded ints | `src/utils/envValidation.ts` | `src/screens/Doctor.tsx` for `BASH_MAX_OUTPUT_LENGTH`, `TASK_MAX_OUTPUT_LENGTH`, and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` |
 | Doctor context warnings | `src/utils/doctorContextWarnings.ts` | `src/utils/analyzeContext.ts`, `src/utils/statusNoticeHelpers.ts`, permission shadow detection |
 | Desktop usage stats | `bun test app/sidecar/statsDomain.test.ts app/renderer/src/statsState.test.ts app/renderer/src/AccountsPage.test.tsx app/sidecar/sidecarServer.test.ts` | `app/sidecar/statsDomain.ts`, `app/renderer/src/statsState.ts` |
+| Auto-mode observation and usage reduction | `bun test src/utils/permissions/autoModeObservation.test.ts src/utils/autoModeUsage.test.ts app/renderer/src/usageAutoModeState.test.ts app/renderer/src/usageAutoModeFlowState.test.ts` | `src/utils/permissions/autoModeObservation.ts`, `src/utils/autoModeUsage.ts`, `app/shared/usageAutoMode.ts` |
 
 ## Traps And Stale Assumptions
 

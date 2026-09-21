@@ -139,8 +139,11 @@ separate session protocol and host control-plane contracts. Boundary work uses
   Runtime-narrow unknown shapes and keep closed-union handling exhaustive.
   When extending SDK message handling, update its projector and fixtures together.
 - User-visible text, including accessibility labels and tool descriptions,
-  contains no em dashes or internal engineering notes. Explain useful actions
-  and surprising states without repeating the user's selection.
+  contains no em dashes or internal engineering notes. Every string must add
+  unique, decision-relevant meaning. Do not repeat visible state or selections,
+  coach discoverable interactions, or narrate implementation and automatic work.
+  Show status text only when it changes what the user should do or how displayed
+  data should be interpreted.
   `app/renderer/src/userVisibleText.test.ts` enforces engineering-text exclusions;
   `§7-ok` is for a justified local exception, not a widened allowlist.
 - Comments explain constraints code cannot show. Avoid prose that silently

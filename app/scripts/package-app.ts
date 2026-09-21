@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url'
 
 import { SIDECAR_RUNTIME_ARGS, PACKAGED_SIDECAR_BINARY } from '../main/mainDecisions.js'
 import { scanPackagedBundle, formatBundleScanFindings } from './packagedBundleScan.js'
+import { buildPngIcnsFromIconset } from './pngIcns.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -225,14 +226,15 @@ function makeIcon(): string | null {
     encoding: 'utf8',
   })
   if (conversion.status !== 0 || !existsSync(icns)) {
-    // macOS 26 currently rejects otherwise-valid iconsets, including the one
-    // shipped by Electron. The stock Electron icon is a safe fallback; a
-    // platform icon-conversion quirk must not prevent testing the real bundle.
+    // macOS 26 currently rejects otherwise-valid iconsets, including one made
+    // by extracting Electron's own ICNS. Write the same PNG-backed ICNS format
+    // directly so the packaged app never silently inherits Electron's icon.
     process.stderr.write(
-      '[package] custom icon conversion unavailable; using the stock Electron icon\n',
+      '[package] iconutil unavailable; writing PNG-backed Cat Code icon\n',
     )
-    return null
+    writeFileSync(icns, buildPngIcnsFromIconset(iconset))
   }
+  rmSync(iconset, { recursive: true, force: true })
   return icns
 }
 

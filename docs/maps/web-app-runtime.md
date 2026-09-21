@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-09-14 against `src/app-runtime/`,
+Last refreshed: 2026-09-18 against `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `app/`, and related tests.
 
 Use this map for the Electron runtime-backed app-session path. It covers the
@@ -184,6 +184,17 @@ recorded Cat Code versions rather than reading the user's project commit.
 metadata-only execution measurements and individual-sample latency summaries.
 `UsageTiming.tsx` renders the Execution timing panel and recent session timelines;
 `usageTimingState.ts` handles interval layout, retry connections, and formatting.
+Automatic-permission observations begin in
+`src/utils/permissions/autoModeObservation.ts`, are reduced by
+`src/utils/autoModeUsage.ts`, and cross the app boundary only through
+`app/shared/usageAutoMode.ts`. `UsageAutoModeBars.tsx`,
+`UsageAutoModeBlockRate.tsx`, and `UsageAutoModeFlow.tsx` render retained
+outcomes, coverage-qualified command block rates, and decision routes. These
+surfaces must preserve unavailable and partial coverage rather than implying a
+zero or a complete history. The fixed section scope is Decision flow, Command
+block rate, Decisions over time, and Block reasons. Its command-rate numerator is
+initial policy-blocked command attempts and its denominator is recorded initial
+command attempts, never tool errors or matched results.
 `fitUsageDashboardSnapshot` reduces session/build detail independently of named
 models/tools when fitting the worker record. Counting version 13 invalidates
 older saved summaries while `index-v9.sqlite` rebuilds structured capability and

@@ -29,10 +29,11 @@ Reader: 64 KiB chunks, 4 MiB records, one open transcript at a time. Discovery:
 These are initial enforced budgets; fixture measurements are recorded with test
 results before activation. Count overflow aborts rather than rounding.
 
-Rollout uses a single main-owned CATCODE_USAGE_DASHBOARD=1 switch. Disabled means
+Rollout is enabled by default as of 2026-09-15. The single main-owned
+`CATCODE_USAGE_DASHBOARD=0` switch is retained as an emergency rollback; when set,
 Usage is Unavailable. Account workers and session frames are not authoritative
-publishers for this overview. Rollback disables the switch; it never restores old
-misleading totals or changes retained transcripts. No persisted usage migration.
+publishers for this overview. Rollback never restores old misleading totals or
+changes retained transcripts. No persisted usage migration.
 
 ## Persistent index amendment, 2026-09-13
 
@@ -196,20 +197,21 @@ source records. See [period delta semantics and evidence](../../reports/2026-09-
 
 ### 2026-09-16 metric colors
 
-Operator rejected the repeated pink chart palette. The dashboard now uses blue
-for total tokens/fresh input and hourly intensity, teal for cache and successful
-tool outcomes, amber for requests/cache writes, coral for errors, and violet for
-sessions/output. Model stacks and donut share a distinct categorical palette.
-Legend swatches, sparklines and trend markers follow those same roles. Percentage
-changes remain neutral because increased consumption is not inherently good or bad.
-Light theme uses darker series colors; dark theme uses lighter colors. Labels,
-exact values and keyboard controls remain available alongside color.
+Operator rejected the earlier monolithic pink chart palette and subsequent dull teal/green
+on the charts. Per operator direction, pink is adopted purposefully: vivid pink for
+Output tokens in the Token Flow stacked columns, and a 9-step rose-to-magenta intensity ramp
+for "Token volume by hour". The rest of the dashboard uses blue for fresh input / total tokens,
+vivid cyan for cache reads / prompt cache area trend / cached input sparkline, amber for
+requests / cache writes, coral for errors, violet for sessions, and clean emerald for successful
+tool executions. Model stacks and donut share a distinct categorical palette free of olive/murky
+greens. Comparison deltas ▲ and ▼ receive clear directional indicator colors: green for increases (▲)
+and red for decreases (▼). Legend swatches, sparklines and trend markers follow those same roles.
+Light theme uses darker series colors; dark theme uses lighter colors. Labels, exact values
+and keyboard controls remain available alongside color.
 
-Adapted with operator authorization: this supersedes the supplied reference's
-pink/wine palette. Native Cat Code Dev observations confirmed the token, cache,
-error, model, tool and heatmap colors in dark mode; light-mode visual acceptance
-remains open. Existing focused renderer checks: 33 passed, 0 failed. Renderer
-build passed. No data, backend or layout behavior changed.
+Adapted with operator authorization. Native Cat Code Dev observations confirmed chart and
+delta colors; light-mode visual acceptance remains open. Renderer checks passed; renderer build
+passed. No data, backend or layout behavior changed.
 
 ## Session investigation and configured-rate token cost, 2026-09-17
 

@@ -37,6 +37,10 @@ function themeCss(): string {
   return readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
 }
 
+function usageCss(): string {
+  return readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8')
+}
+
 /**
  * Reads a glass `background: light-dark(light, dark)` and reports whether EACH
  * half is actually translucent.
@@ -217,6 +221,16 @@ test('the repeated page ground is cleared in both appearances', () => {
   expect(rule).not.toBeNull()
   expect(rule?.[1]).toMatch(/background:\s*transparent;/)
   expect(rule?.[1]).not.toContain('light-dark')
+})
+
+test('the usage dashboard clears its page surface but keeps its cards in glass mode', () => {
+  const css = usageCss()
+  const page = css.match(/html\[data-glass='on'\] \.usage-page\s*\{([^}]*)\}/)
+
+  expect(page).not.toBeNull()
+  expect(page?.[1]).toMatch(/background:\s*transparent;/)
+  expect(css).toMatch(/\.usage-metric\s*\{[^}]*background:\s*var\(--usage-panel\);/)
+  expect(css).toMatch(/\.usage-panel\s*\{[^}]*background:\s*var\(--usage-panel\);/)
 })
 
 /**

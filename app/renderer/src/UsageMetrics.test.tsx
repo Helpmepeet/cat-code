@@ -19,6 +19,8 @@ test('each tile uses its matching prior metric and exposes the precise compariso
     expect(html).toContain('Tool requests: 20% decrease');
     expect(html).toContain('Cached input: 5 percentage points increase');
     expect(html).toContain('▲ 5 pp');
+    expect(html).toContain('usage-delta-up');
+    expect(html).toContain('usage-delta-down');
     expect(html).toContain('Compared with previous 7 days: 2026-08-31 00:00 to 2026-09-06 12:30 UTC');
 });
 

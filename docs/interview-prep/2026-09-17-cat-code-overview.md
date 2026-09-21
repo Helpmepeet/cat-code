@@ -87,6 +87,13 @@ skills, see [What the Model Sees](./2026-09-17-what-the-model-sees.md).
 For the evolution from inherited full-history replacement to Cat Code's current
 prefix-preserving design, see [Compaction](./2026-09-18-compaction.md).
 
+For how Cat Code balances autonomy and safety through an automated two-stage
+security monitor, see [Auto Mode](./2026-09-18-auto-mode.md).
+
+For collaboration between independent desktop sessions, including identity,
+delivery, loop protection, and compaction provenance, see
+[Peer Sessions](./2026-09-18-peer-sessions.md).
+
 ## Short interview introduction
 
 > Cat Code is my fork of Claude Code. I built it because I wanted to own and

@@ -1,4 +1,9 @@
-import { createUsagePublication, runUsageStatsWorker, USAGE_REFRESH_INTERVAL_MS } from './usageStatsRunner.js'
+import {
+  createUsagePublication,
+  isUsageDashboardEnabled,
+  runUsageStatsWorker,
+  USAGE_REFRESH_INTERVAL_MS,
+} from './usageStatsRunner.js'
 /**
  * Electron main process — the supervisor's client #1 (D6 pin 2).
  *
@@ -689,7 +694,7 @@ const usagePublication = createUsagePublication()
 let usageDriver: SingleFlightDriver | null = null
 let usageAbort: AbortController | null = null
 let usagePending = false
-const usageEnabled = process.env.CATCODE_USAGE_DASHBOARD === '1'
+const usageEnabled = isUsageDashboardEnabled()
 let accountsPoolDriver: SingleFlightDriver | null = null
 let accountProfileMutationInFlight = false
 let accountProfileMutationAbort: AbortController | null = null
