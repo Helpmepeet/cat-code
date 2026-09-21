@@ -18,7 +18,7 @@
   --usage-model-yellow:#f6c543;
   --usage-model-pink:#f077af;
   --usage-tokens:var(--usage-blue);
-  --usage-cache:light-dark(#0f766e,#2dd4bf);
+  --usage-cache:light-dark(#7c3aed,#a78bfa);
   --usage-requests:var(--usage-amber);
   --usage-errors:var(--usage-coral);
   --usage-sessions:var(--usage-violet);
