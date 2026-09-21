@@ -195,7 +195,6 @@ function copyRipgrep(): void {
 
 let cachedStamp: { commitId: string; buildId: string; dirty: boolean } | null = null
 function stamp(): { commitId: string; buildId: string; dirty: boolean } {
-  rmSync(iconset, { recursive: true, force: true })
   cachedStamp ??= buildStamp()
   return cachedStamp
 }
