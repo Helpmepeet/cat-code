@@ -34,7 +34,11 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(tree.container.querySelectorAll('.usage-flow-grid-line')).toHaveLength(4);
     expect(tree.container.querySelector('.usage-flow-chart')?.nextElementSibling?.classList.contains('usage-flow-legend')).toBe(true);
     expect(tree.container.querySelectorAll('.usage-flow-legend circle')).toHaveLength(3);
-    expect(tree.container.querySelector('.usage-flow-area')?.getAttribute('d')).toContain(' C');
+    expect(tree.container.querySelector('.usage-flow-chart')?.getAttribute('shape-rendering')).toBe('geometricPrecision');
+    const area = tree.container.querySelector('.usage-flow-area');
+    expect(area?.getAttribute('d')).toContain(' C');
+    expect(area?.getAttribute('stroke')).toBe(area?.getAttribute('fill'));
+    expect(area?.getAttribute('stroke-width')).toBe('0.35');
 
     const hits = tree.container.querySelectorAll<SVGGElement>('.usage-flow-hit');
     await act(async () => hits[0]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
