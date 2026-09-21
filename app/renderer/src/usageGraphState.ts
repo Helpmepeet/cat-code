@@ -1,4 +1,4 @@
-import type { UsageDay, UsageRangeSummary } from '../../shared/usageDashboard.js';
+import type { UsageCategory, UsageDay, UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { usageHasCacheWrites } from './usageTrendState.js';
 import { usageTotal } from './usageDashboardState.js';
 export type UsageFlowMode = 'type' | 'model';
@@ -25,11 +25,43 @@ export function usageChartTicks(start: string, endExclusive: string, width: numb
     return dates;
 }
 export function usageGraphColors(ids: readonly string[]): Record<string, string> {
-    const palette = ['var(--usage-model-purple)', 'var(--usage-model-blue)', 'var(--usage-model-orange)', 'var(--usage-model-yellow)', 'var(--usage-model-pink)', 'var(--usage-cyan)', 'light-dark(#2f9d74,#54d2a0)', 'light-dark(#4338ca,#818cf8)', 'var(--usage-coral)', 'var(--usage-other)'];
+    const palette = ['var(--usage-blue)', 'var(--usage-amber)', 'var(--usage-teal)', 'var(--usage-violet)', 'var(--usage-cyan)', 'var(--usage-coral)', 'light-dark(#697c22,#bbca70)', 'light-dark(#a54e88,#d897c5)', 'light-dark(#956343,#cdaa8b)', 'var(--usage-other)'];
     return Object.fromEntries([...new Set(ids)].map((id, i) => [id, palette[i % palette.length]!]));
 }
+type UsageModelIdentity = Pick<UsageCategory, 'id' | 'kind' | 'label'>;
+type UsageModelFamily = 'luna' | 'sol' | 'terra' | 'astra';
+function usageModelFamily(label: string): UsageModelFamily | null {
+    const parts = label.toLowerCase().split(/[^a-z0-9]+/);
+    return (['luna', 'sol', 'terra', 'astra'] as const).find(family => parts.includes(family)) ?? null;
+}
+export function usageModelColors(models: readonly UsageModelIdentity[]): Record<string, string> {
+    const familyColors: Record<UsageModelFamily, string> = {
+        luna: 'var(--usage-model-purple)',
+        sol: 'var(--usage-model-blue)',
+        terra: 'var(--usage-model-orange)',
+        astra: 'var(--usage-model-yellow)',
+    };
+    const fallback = ['var(--usage-cyan)', 'light-dark(#2f9d74,#54d2a0)', 'light-dark(#4338ca,#818cf8)', 'var(--usage-coral)', 'light-dark(#697c22,#bbca70)', 'light-dark(#a54e88,#d897c5)', 'light-dark(#956343,#cdaa8b)', 'var(--usage-teal)'];
+    const unique = [...new Map(models.map(model => [model.id, model])).values()].sort((a, b) => a.id.localeCompare(b.id));
+    let fallbackIndex = 0;
+    return Object.fromEntries(unique.map(model => {
+        if (model.kind === 'other') return [model.id, 'var(--usage-model-pink)'];
+        if (model.kind === 'unknown') return [model.id, 'var(--usage-other)'];
+        const family = usageModelFamily(model.label);
+        return [model.id, family ? familyColors[family] : fallback[fallbackIndex++ % fallback.length]!];
+    }));
+}
 export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hideReads: boolean) {
-    if (mode === 'model') return summary.models.map(model => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
+    if (mode === 'model') {
+        const familyOrder: Record<UsageModelFamily, number> = { luna: 0, sol: 1, terra: 2, astra: 3 };
+        return summary.models
+            .map((model, index) => {
+                const family = usageModelFamily(model.label);
+                return { model, index, order: model.kind === 'other' ? 100 : model.kind === 'unknown' ? 99 : family ? familyOrder[family] : 10 };
+            })
+            .sort((a, b) => a.order - b.order || a.index - b.index)
+            .map(({ model }) => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
+    }
     return ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
         .filter(([key]) => !(key === 'read' && hideReads) && !(key === 'write' && !usageHasCacheWrites(summary)))
         .map(([id, label, color]) => ({ id, label, color, total: summary.tokens[id], value: (day: UsageDay) => day.tokens[id] }));

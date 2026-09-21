@@ -8,7 +8,7 @@ import { UsageSessionContributors } from './UsageSessionContributors.js';
 import type { MergedSessionRow } from './sessionsCatalogState.js';
 import { usageBucketDays, usageBucketLabel, usageHasCacheWrites } from './usageTrendState.js';
 import { UsageMetrics } from './UsageMetrics.js';
-import { usageGraphColors } from './usageGraphState.js';
+import { usageModelColors } from './usageGraphState.js';
 import { UsageLatencyPanel } from './UsageTiming.js';
 import { UsageAutoMode } from './UsageAutoMode.js';
 import './usageDashboard.css';
@@ -51,7 +51,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const partial = snapshot?.coverage.state === 'partial';
     const stale = !!snapshot && (state.status === 'error' || now - Date.parse(snapshot.asOf) > 10 * 60000);
     const selected = summary?.days.find(d => d.date === selectedDate);
-    const colors = usageGraphColors([...new Set(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(r => [...r.models].sort((a, b) => usageTotal(b.tokens) - usageTotal(a.tokens)).map(m => m.id)) : [])]);
+    const colors = usageModelColors(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(r => r.models) : []);
     const unknown = state.status === 'loading' ? 'Loading' : 'Unavailable';
     const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0;
     return <main className="usage-page" aria-labelledby="usage-title"><div className="usage-content">

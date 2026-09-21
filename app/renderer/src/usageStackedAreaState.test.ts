@@ -18,14 +18,19 @@ test('stacked boundaries preserve totals without negative thickness or invalid c
         geometry.boundaries[layer]!.forEach((point, index) => {
             expect(point.y).toBeLessThanOrEqual(geometry.boundaries[layer - 1]![index]!.y);
         });
+        geometry.curves[layer]!.forEach((curve, index) => {
+            expect(curve.control1.y).toBeLessThanOrEqual(geometry.curves[layer - 1]![index]!.control1.y);
+            expect(curve.control2.y).toBeLessThanOrEqual(geometry.curves[layer - 1]![index]!.control2.y);
+        });
     }
     expect(geometry.paths.every(path => path.includes(' C') && !/NaN|Infinity/.test(path))).toBe(true);
 });
 
-test('bounded curves handle empty, single and duplicate points without false endpoint tapering', () => {
+test('Catmull-Rom curves preserve through-point tangents and do not taper endpoints', () => {
     expect(usageSmoothCurve([])).toBe('');
     expect(usageSmoothCurve([{ x: 4, y: 8 }])).toBe('M4,8');
-    expect(usageSmoothCurve([{ x: 0, y: 50 }, { x: 0, y: 40 }, { x: 10, y: 50 }])).toBe('M0,50 L0,40 C3.6,40 6.4,50 10,50');
+    expect(usageSmoothCurve([{ x: 0, y: 10 }, { x: 10, y: 0 }, { x: 20, y: 10 }])).toBe('M0,10 C1.333,8.667 7.333,0 10,0 C12.667,0 18.667,8.667 20,10');
+    expect(usageSmoothCurve([{ x: 0, y: 50 }, { x: 0, y: 40 }, { x: 10, y: 50 }])).not.toMatch(/NaN|Infinity/);
     const geometry = usageStackedAreaGeometry([
         { x: 0, values: [5] },
         { x: 5, values: [5] },

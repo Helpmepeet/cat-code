@@ -3,7 +3,7 @@ import { act } from 'react';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { UsageTokenFlow } from './UsageDashboardCharts.js';
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js';
-import { usageGraphColors } from './usageGraphState.js';
+import { usageFlowSeries, usageModelColors } from './usageGraphState.js';
 
 let harness: DomTestHarness;
 beforeAll(async () => { harness = await createDomTestHarness(); });
@@ -21,7 +21,7 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     const selected: string[] = [];
     const tree = await harness.mount(<UsageTokenFlow
         summary={summary}
-        colors={usageGraphColors(['model-a'])}
+        colors={usageModelColors(summary.models)}
         selected=""
         onSelect={date => selected.push(date)}
         partial={false}
@@ -55,4 +55,37 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(total()).toBe('105');
     expect(button('Hide cache reads').disabled).toBe(true);
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(1);
+});
+
+test('model families keep the reference colors and stacking order', () => {
+    const tokens = { fresh: 1, read: 0, write: 0, output: 0 };
+    const models = [
+        { id: 'terra', label: 'gpt-5.6-terra', kind: 'named' as const, tokens },
+        { id: 'other', label: 'Other', kind: 'other' as const, tokens },
+        { id: 'astra', label: 'gpt-6-astra', kind: 'named' as const, tokens },
+        { id: 'unknown', label: 'Unknown', kind: 'unknown' as const, tokens },
+        { id: 'sol', label: 'gpt-5.6-sol', kind: 'named' as const, tokens },
+        { id: 'luna', label: 'gpt-5.6-luna', kind: 'named' as const, tokens },
+    ];
+    const colors = usageModelColors(models);
+    expect(colors).toMatchObject({
+        luna: 'var(--usage-model-purple)',
+        sol: 'var(--usage-model-blue)',
+        terra: 'var(--usage-model-orange)',
+        astra: 'var(--usage-model-yellow)',
+        other: 'var(--usage-model-pink)',
+        unknown: 'var(--usage-other)',
+    });
+    const summary = {
+        models,
+        days: [],
+    } as unknown as Parameters<typeof usageFlowSeries>[0];
+    expect(usageFlowSeries(summary, colors, 'model', false).map(series => series.label)).toEqual([
+        'gpt-5.6-luna',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-6-astra',
+        'Unknown',
+        'Other',
+    ]);
 });
