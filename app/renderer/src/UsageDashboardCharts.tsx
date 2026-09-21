@@ -53,6 +53,13 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
         const projectedPeak = Math.max(0, ...summary.days.map(day => item.value(day))) / max * plotHeight;
         return projectedPeak > 0 && projectedPeak < 1;
     });
+    const selectedDay = summary.days.find(day => day.date === selected);
+    let selectedCumulative = 0;
+    const selectedPoints = selectedDay ? series.flatMap(item => {
+        const value = item.value(selectedDay);
+        selectedCumulative += value;
+        return value > 0 ? [{ id: item.id, color: item.color, y: bottom - selectedCumulative / max * plotHeight }] : [];
+    }) : [];
     const displayedTotal = series.reduce((sum, item) => sum + item.total, 0);
     const tooltipHeight = 32 + series.length * 20;
     return <>
@@ -77,11 +84,14 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
                     event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('[role="button"]')[next]?.focus();
                 }
             }}>
-                {selected === day.date && <><rect x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight} className="usage-flow-selected"/><line x1={slotCenter(day.date)} x2={slotCenter(day.date)} y1={top} y2={bottom} className="usage-flow-selection-line"/></>}
                 {usageTotal(day.tokens) === 0 && partial && <text x={slotCenter(day.date)} y={bottom - 8} textAnchor="middle" className="usage-axis">?</text>}
                 <rect className="usage-flow-hit-target" x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight + 8} fill="transparent"/>
             </g>;
         })}
+        {selectedDay && selectedPoints.length > 0 && <g className="usage-flow-selection-markers" pointerEvents="none" aria-hidden="true">
+            <line x1={slotCenter(selectedDay.date)} x2={slotCenter(selectedDay.date)} y1={Math.min(...selectedPoints.map(point => point.y))} y2={bottom} className="usage-flow-selection-line"/>
+            {selectedPoints.map(point => <circle key={point.id} cx={slotCenter(selectedDay.date)} cy={point.y} r="5.5" fill={point.color} className="usage-flow-selection-point"/>)}
+        </g>}
         {ticks.map((date, index) => <text key={date} x={left + usageDatePosition(summary, date) * width} y={height - 9} textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'} className="usage-axis">{usageChartDate(date, span > 365)}</text>)}
         {detail && <g className="usage-chart-tooltip" pointerEvents="none" aria-hidden="true" transform={`translate(${Math.max(0, Math.min(chart.width - 230, slotCenter(detail.date) + 10))},${top + 6})`}>
             <rect width="230" height={tooltipHeight} rx="7"/>

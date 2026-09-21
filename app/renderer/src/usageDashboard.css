@@ -167,8 +167,8 @@
 .usage-flow-controls { display:flex; gap:8px; flex-wrap:wrap; }
 .usage-flow-grid-line { stroke:var(--usage-grid); stroke-width:1; stroke-dasharray:4 5; vector-effect:non-scaling-stroke; }
 .usage-flow-area { pointer-events:none; }
-.usage-flow-selected { fill:var(--usage-selection); fill-opacity:.1; }
-.usage-flow-selection-line { stroke:var(--usage-selection); stroke-width:1; stroke-opacity:.65; stroke-dasharray:3 3; vector-effect:non-scaling-stroke; }
+.usage-flow-selection-line { stroke:#171719; stroke-width:3; stroke-linecap:round; vector-effect:non-scaling-stroke; }
+.usage-flow-selection-point { stroke:#171719; stroke-width:3; vector-effect:non-scaling-stroke; }
 .usage-flow-hit-target { stroke:transparent; stroke-width:2; vector-effect:non-scaling-stroke; }
 .usage-flow-hit:focus { outline:none; }
 .usage-flow-hit:focus-visible .usage-flow-hit-target { stroke:var(--color-text-primary); }

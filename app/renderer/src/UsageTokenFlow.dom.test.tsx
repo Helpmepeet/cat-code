@@ -69,6 +69,27 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(seriesButton('Cache reads').getAttribute('aria-pressed')).toBe('false');
 });
 
+test('selected day shows cumulative markers for each active stack', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    const summary = snapshot.ranges['7d'];
+    summary.tokens = { fresh: 10, read: 90, write: 0, output: 5 };
+    summary.cacheWriteReporting = 'unreported';
+    summary.days[0]!.tokens = { ...summary.tokens };
+    const tree = await harness.mount(<UsageTokenFlow summary={summary} colors={{}} selected={summary.days[0]!.date} onSelect={() => {}} partial={false}/>);
+
+    const line = tree.container.querySelector('.usage-flow-selection-line');
+    const points = [...tree.container.querySelectorAll('.usage-flow-selection-point')];
+    expect(line).not.toBeNull();
+    expect(points).toHaveLength(3);
+    expect(points.map(point => point.getAttribute('fill'))).toEqual([
+        'var(--usage-cache)',
+        'var(--usage-output)',
+        'var(--usage-fresh)',
+    ]);
+    expect(new Set(points.map(point => point.getAttribute('cx'))).size).toBe(1);
+    expect(points.every(point => point.getAttribute('r') === '5.5')).toBe(true);
+});
+
 test('subpixel model areas use a stable centerline without inflating the fill', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
