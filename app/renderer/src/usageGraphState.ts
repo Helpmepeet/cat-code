@@ -51,15 +51,22 @@ export function usageModelColors(models: readonly UsageModelIdentity[]): Record<
         return [model.id, family ? familyColors[family] : fallback[fallbackIndex++ % fallback.length]!];
     }));
 }
+function usageOutsideIn<T>(items: readonly T[], total: (item: T) => number): T[] {
+    const ranked = items
+        .map((item, index) => ({ item, index }))
+        .sort((a, b) => total(b.item) - total(a.item) || a.index - b.index)
+        .map(({ item }) => item);
+    const lower: T[] = [], upper: T[] = [];
+    ranked.forEach((item, index) => (index % 2 === 0 ? lower : upper).push(item));
+    return [...lower, ...upper.reverse()];
+}
 export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hideReads: boolean) {
     if (mode === 'model') {
-        const ranked = [...summary.models].sort((a, b) => usageTotal(b.tokens) - usageTotal(a.tokens) || a.id.localeCompare(b.id));
-        const lower: typeof ranked = [], upper: typeof ranked = [];
-        ranked.forEach((model, index) => (index % 2 === 0 ? lower : upper).push(model));
-        return [...lower, ...upper.reverse()]
+        return usageOutsideIn(summary.models, model => usageTotal(model.tokens))
             .map(model => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
     }
-    return ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
+    const types = ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
         .filter(([key]) => !(key === 'read' && hideReads) && !(key === 'write' && !usageHasCacheWrites(summary)))
         .map(([id, label, color]) => ({ id, label, color, total: summary.tokens[id], value: (day: UsageDay) => day.tokens[id] }));
+    return usageOutsideIn(types, type => type.total);
 }

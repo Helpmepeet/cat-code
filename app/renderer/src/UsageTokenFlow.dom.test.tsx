@@ -120,3 +120,21 @@ test('model families keep reference colors while range totals place small series
         'gpt-5.6-sol',
     ]);
 });
+
+test('token types use displayed range totals and reorder after cache reads are hidden', () => {
+    const summary = {
+        tokens: { fresh: 50, read: 100, write: 5, output: 10 },
+        cacheWriteReporting: 'reported',
+    } as unknown as Parameters<typeof usageFlowSeries>[0];
+    expect(usageFlowSeries(summary, {}, 'type', false).map(series => series.id)).toEqual([
+        'read',
+        'output',
+        'write',
+        'fresh',
+    ]);
+    expect(usageFlowSeries(summary, {}, 'type', true).map(series => series.id)).toEqual([
+        'fresh',
+        'write',
+        'output',
+    ]);
+});
