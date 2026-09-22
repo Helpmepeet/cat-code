@@ -23,6 +23,24 @@ test('range controls and chart keyboard selection expose matching UTC values wit
     expect(tree.container.querySelector('.usage-values table')?.querySelectorAll('tbody tr')).toHaveLength(30);
 });
 
+test('refresh requests new analytics data once and disables while a refresh is running', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    let refreshes = 0;
+    const ready = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }} onRefresh={() => { refreshes++; }}/>);
+    const refresh = ready.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
+    expect(refresh.textContent).toBe('Refresh');
+    expect(refresh.disabled).toBe(false);
+    await act(async () => refresh.click());
+    expect(refreshes).toBe(1);
+
+    const loading = await harness.mount(<UsagePage state={{ snapshot, status: 'loading' }} onRefresh={() => { refreshes++; }}/>);
+    const disabled = loading.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
+    expect(disabled.textContent).toBe('Refreshing…');
+    expect(disabled.disabled).toBe(true);
+    await act(async () => disabled.click());
+    expect(refreshes).toBe(1);
+});
+
 test('heatmap keyboard selection, tool error graph, and model donut expose recorded values', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];

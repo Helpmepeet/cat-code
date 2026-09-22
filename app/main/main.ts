@@ -104,6 +104,7 @@ import {
   CH_DELIVERY_HEALTH_PROBE,
   CH_DELIVERY_HEALTH_RESPONSE,
   CH_REFRESH_ACCOUNTS_POOL,
+  CH_REFRESH_USAGE_DASHBOARD,
   // Control plane (HC3 — fixed, per-method structured senders). `invoke`
   // channels return a typed HostResult; `pick-directory` returns a realpath or
   // null (the native picker, HC1); the host-event channel is a one-way stream.
@@ -1104,6 +1105,10 @@ function startAccountsPoolRefresh(): void {
  */
 function refreshAccountsPoolNow(): void {
   accountsPoolDriver?.refreshNow()
+}
+
+function refreshUsageDashboardNow(): void {
+  usageDriver?.refreshNow()
 }
 
 function isMainWindowSender(event: Pick<IpcMainEvent, 'sender'>): boolean {
@@ -2547,6 +2552,11 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {
     if (!isMainWindowSender(event)) return
     refreshAccountsPoolNow()
+  })
+
+  ipcMain.on(CH_REFRESH_USAGE_DASHBOARD, event => {
+    if (!isMainWindowSender(event)) return
+    refreshUsageDashboardNow()
   })
 
   ipcMain.on(CH_OPEN_LOGS, () => {

@@ -31,12 +31,13 @@ function UsagePanel({ title, children, wide = false, accent = 'tokens', classNam
 }) {
     return <section className={`usage-panel${wide ? ' usage-wide' : ''}${className ? ` ${className}` : ''}`}>{title && <h2 className="usage-panel-heading"><UsageIcon kind={accent}/>{title}</h2>}{children}</section>;
 }
-export function UsagePage({ state, selection, onSelectionChange, sessionRows = [], onOpenSession }: {
+export function UsagePage({ state, selection, onSelectionChange, sessionRows = [], onOpenSession, onRefresh }: {
     state: UsageDashboardState;
     selection?: UsageSelection;
     onSelectionChange?: (selection: UsageSelection) => void;
     sessionRows?: readonly MergedSessionRow[];
     onOpenSession?: (row: MergedSessionRow) => void;
+    onRefresh?: () => void;
 }) {
     const [localSelection, setLocalSelection] = useState(initialUsageSelection);
     const currentSelection = selection ?? localSelection;
@@ -51,8 +52,9 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const colors = usageModelColors(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(r => r.models) : []);
     const unknown = state.status === 'loading' ? 'Loading' : 'Unavailable';
     const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0;
+    const refreshing = state.status === 'loading';
     return <main className="usage-page" aria-labelledby="usage-title"><div className="usage-content">
-  <header className="usage-header"><div><h1 id="usage-title">Usage</h1></div><div className="usage-range" role="group" aria-label="Usage period">{(['7d', '30d', 'all'] as const).map(r => <button key={r} type="button" aria-pressed={r === range} onClick={() => setRange(r)}>{r === 'all' ? 'All' : r === '7d' ? '7 days' : '30 days'}</button>)}</div></header>
+  <header className="usage-header"><div><h1 id="usage-title">Usage</h1></div><div className="usage-header-actions">{onRefresh && <button className="usage-refresh" type="button" onClick={onRefresh} disabled={refreshing || unavailable}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}<div className="usage-range" role="group" aria-label="Usage period">{(['7d', '30d', 'all'] as const).map(r => <button key={r} type="button" aria-pressed={r === range} onClick={() => setRange(r)}>{r === 'all' ? 'All' : r === '7d' ? '7 days' : '30 days'}</button>)}</div></div></header>
   {snapshot && summary && !unavailable && <p className="usage-note usage-freshness"><span>{summary.startInclusive.slice(0, 10)} to {new Date(Date.parse(summary.endExclusive) - 86400000).toISOString().slice(0, 10)} UTC</span><span title={snapshot.asOf.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC')}>Updated {snapshot.asOf.slice(11, 16)} UTC</span></p>}
   <div className="usage-status" role="status">
    {unavailable ? 'Usage is unavailable.' : !snapshot ? (state.status === 'loading' ? 'Loading recorded usage…' : usageFailureMessage(state.errorCode)) : <>{partial && <p>Partial history. Totals may be incomplete.</p>}{!partial && empty && <p>No recorded usage in available history.</p>}</>}

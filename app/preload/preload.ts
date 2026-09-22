@@ -89,6 +89,7 @@ import {
   CH_DELIVERY_HEALTH_PROBE,
   CH_DELIVERY_HEALTH_RESPONSE,
   CH_REFRESH_ACCOUNTS_POOL,
+  CH_REFRESH_USAGE_DASHBOARD,
   // Control plane (HC3 — fixed, per-method senders).
   CH_HOST_CREATE,
   CH_HOST_CREATE_IN_WORKSPACE,
@@ -485,6 +486,10 @@ const bridge: CatCodeBridge = {
   refreshAccountsPool(): void {
     sendGuard.assertAllowed({ refreshAccountsPool: true })
     ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)
+  },
+  refreshUsageDashboard(): void {
+    sendGuard.assertAllowed({ refreshUsageDashboard: true })
+    ipcRenderer.send(CH_REFRESH_USAGE_DASHBOARD)
   },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })

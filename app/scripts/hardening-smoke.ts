@@ -216,6 +216,9 @@ async function runProductionHardeningSmoke(
       'signOutAccount',
       'ping',
       'refreshAccountsPool',
+      // Fixed, payload-free request to main's existing single-flight analytics
+      // driver. It adds no sidecar frame or renderer-authored query.
+      'refreshUsageDashboard',
       // Send-now is bound to an engine-minted queued prompt id and revalidated
       // by the sidecar before it can interrupt a turn.
       'forcePrompt',

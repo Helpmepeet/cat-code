@@ -4189,6 +4189,11 @@ export type CatCodeBridge = {
    * has no payload, starts no session, and never becomes sidecar vocabulary.
    */
   refreshAccountsPool(): void
+  /**
+   * Ask main's existing analytics driver to rebuild the retained-usage snapshot.
+   * This has no payload, starts no session, and never becomes sidecar vocabulary.
+   */
+  refreshUsageDashboard(): void
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>

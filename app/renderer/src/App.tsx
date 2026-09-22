@@ -4395,7 +4395,7 @@ export function App() {
           ) : activeView === 'goals' ? (
             <GoalsPage rows={selectThreadGoalRows(goalMemory, sessionCatalogRows)} />
           ) : activeView === 'usage' ? (
-            <UsagePage state={usageDashboard} selection={usageSelection} onSelectionChange={setUsageSelection} sessionRows={sessionCatalogRows} onOpenSession={openCatalogRow} />
+            <UsagePage state={usageDashboard} selection={usageSelection} onSelectionChange={setUsageSelection} sessionRows={sessionCatalogRows} onOpenSession={openCatalogRow} onRefresh={() => getBridge().refreshUsageDashboard()} />
           ) : activeView === 'accounts' ? (
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}

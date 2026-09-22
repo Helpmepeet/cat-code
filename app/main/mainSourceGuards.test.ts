@@ -137,6 +137,18 @@ test('the account-pool refresh channel has no payload and reuses the existing dr
   expect(refresh).not.toContain('forward(')
 })
 
+test('the usage refresh channel has no payload and reuses the existing driver', () => {
+  expect(source).toContain('CH_REFRESH_USAGE_DASHBOARD')
+  const refresh = region(
+    'ipcMain.on(CH_REFRESH_USAGE_DASHBOARD',
+    'ipcMain.on(CH_OPEN_LOGS',
+  )
+  expect(refresh).toContain('isMainWindowSender(event)')
+  expect(refresh).toContain('refreshUsageDashboardNow()')
+  expect(refresh).not.toContain('payload')
+  expect(refresh).not.toContain('forward(')
+})
+
 test('HC1: the picker hands back a token, never the path the user chose', () => {
   const pick = region(
     'ipcMain.handle(\n    CH_HOST_PICK_DIR',

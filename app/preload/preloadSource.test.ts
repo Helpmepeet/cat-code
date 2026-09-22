@@ -133,7 +133,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(45)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(46)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -150,6 +150,10 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'",
   )
   expect(source).toContain('refreshAccountsPool(): void')
+  expect(channels).toContain(
+    "export const CH_REFRESH_USAGE_DASHBOARD = 'catcode:refresh-usage-dashboard'",
+  )
+  expect(source).toContain('refreshUsageDashboard(): void')
   expect(channels).toContain("export const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'")
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
@@ -177,7 +181,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(47)
+  expect(names.length).toBe(48)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -318,6 +322,21 @@ test('the account-pool refresh sender is fixed and carries no renderer payload',
 
   expect(sender).toContain('sendGuard.assertAllowed({ refreshAccountsPool: true })')
   expect(sender).toContain('ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)')
+  expect(sender).not.toContain('payload')
+  expect(sender).not.toContain('ipcRenderer.invoke')
+})
+
+test('the usage refresh sender is fixed and carries no renderer payload', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('refreshUsageDashboard(): void {')
+  const end = source.indexOf('\n  },', start)
+  if (start < 0 || end <= start) {
+    throw new Error('preload.ts no longer exposes refreshUsageDashboard')
+  }
+  const sender = source.slice(start, end)
+
+  expect(sender).toContain('sendGuard.assertAllowed({ refreshUsageDashboard: true })')
+  expect(sender).toContain('ipcRenderer.send(CH_REFRESH_USAGE_DASHBOARD)')
   expect(sender).not.toContain('payload')
   expect(sender).not.toContain('ipcRenderer.invoke')
 })
