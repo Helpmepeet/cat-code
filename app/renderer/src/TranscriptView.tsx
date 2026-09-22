@@ -4320,9 +4320,13 @@ function ToolResultImagesBody({
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const preview =
     previewIndex === null ? null : (images[previewIndex] ?? null)
+  const gridClass =
+    images.length === 1
+      ? 'grid grid-cols-1 gap-2'
+      : 'grid grid-cols-1 gap-2 sm:grid-cols-2'
   return (
     <>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className={gridClass}>
         {images.map((image, index) => {
           const label =
             images.length === 1 ? 'Result image' : `Result image ${index + 1}`
