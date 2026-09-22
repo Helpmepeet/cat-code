@@ -81,6 +81,19 @@ function readRow(index: number): NestedToolUseRow {
   }
 }
 
+function imageReadRow(): NestedToolUseRow {
+  return {
+    ...readRow(0),
+    input: { file_path: '/repo/chart.png' },
+    result: {
+      content: '',
+      images: [{ mediaType: 'image/png', data: 'AAAA' }],
+      isError: false,
+      diff: null,
+    },
+  }
+}
+
 function reads(count: number): NestedToolUseRow[] {
   return Array.from({ length: count }, (_unused, index) => readRow(index))
 }
@@ -325,6 +338,43 @@ test('a sent image preview supports every dismiss route and restores thumbnail f
       '[role="dialog"][aria-label="Sent image preview"]',
     ),
   ).toBeNull()
+})
+
+test('a tool-result image opens the shared image preview', async () => {
+  const tree = await harness.mount(
+    createElement(TranscriptRowsView, { rows: [imageReadRow()] }),
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand result image"]',
+  )
+  expect(trigger).not.toBeNull()
+  expect(trigger?.querySelector('img')?.getAttribute('src')).toBe(
+    'data:image/png;base64,AAAA',
+  )
+  trigger?.focus()
+
+  await click(trigger)
+  await harness.nextFrame()
+
+  const dialog = document.body.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Result image preview"]',
+  )
+  expect(dialog).not.toBeNull()
+  expect(dialog?.querySelector('img')?.getAttribute('src')).toBe(
+    'data:image/png;base64,AAAA',
+  )
+
+  await act(async () => {
+    document.dispatchEvent(
+      new globalThis.KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+  expect(dialog?.isConnected).toBe(false)
+  expect(document.activeElement).toBe(trigger)
 })
 
 test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {

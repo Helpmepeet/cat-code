@@ -247,7 +247,7 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'assistant: web_search_tool_result block (P2-2 server-tool result — resolves srvtoolu_01Fix001 inline, no user reply; content is web_search_result sources, no text part — flattenToolResultContent yields an empty tool-card content string, see F6 Phase-4 flag)',
+      name: 'assistant: web_search_tool_result block (P2-2 server-tool result — resolves srvtoolu_01Fix001 inline, no user reply; content is web_search_result sources, no text or image part — projectToolResultContent yields an empty tool-card content string, see F6 Phase-4 flag)',
       anchor:
         'src/utils/messages.ts:3137 block-start family; src/utils/messages.ts:1306-1328 (orphan-if-unresolved proves results ride inline); real content shape src/services/api/codex-fetch-adapter.ts:2061-2074 ({title,url} sources, no text block)',
       reach: 'app-seam',

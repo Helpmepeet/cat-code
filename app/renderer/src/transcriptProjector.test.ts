@@ -2593,6 +2593,144 @@ test('a tool_use row is pending until its tool_result correlates, then resolves 
   expect(pendingRow.status).toBe('pending')
 })
 
+test('projects valid base64 raster images from mixed tool-result content', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_image_result',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_image_result',
+            name: 'Read',
+            input: { file_path: '/repo/chart.png' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0101',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_image_result',
+            content: [
+              { type: 'text', text: '1900 × 1018' },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: 'AAAA',
+                },
+              },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/webp',
+                  data: 'QUJDRA==',
+                },
+              },
+            ],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0102',
+      isReplay: true,
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.result).toEqual({
+    isError: false,
+    content: '1900 × 1018',
+    images: [
+      { mediaType: 'image/png', data: 'AAAA' },
+      { mediaType: 'image/webp', data: 'QUJDRA==' },
+    ],
+    diff: null,
+  })
+})
+
+test('drops malformed, remote, and non-raster tool-result image sources', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_bad_image_result',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_bad_image_result',
+            name: 'Read',
+            input: { file_path: '/repo/chart.svg' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0103',
+    }),
+  )
+  const result = {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_bad_image_result',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/svg+xml', data: 'AAAA' },
+            },
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: 'not base64' },
+            },
+            {
+              type: 'image',
+              source: { type: 'url', url: 'remote-image' },
+            },
+          ],
+          is_error: false,
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000c0104',
+  } as unknown as SDKMessage
+  state = projectServerFrame(state, messageFrame('session-1', result))
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.result).toEqual({
+    isError: false,
+    content: '',
+    diff: null,
+  })
+})
+
 test('an is_error tool_result resolves the card to the error status', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
@@ -2803,8 +2941,8 @@ test('a server-executed tool (server_tool_use) resolves via a result block ridin
   if (resolvedRow?.kind !== 'tool-use') throw new Error('expected tool-use row')
   expect(resolvedRow.status).toBe('success')
   // Real web_search_tool_result content is web_search_result sources
-  // ({title, url, ...}), not text blocks — flattenToolResultContent only
-  // keeps type:'text' parts, so this legitimately flattens to empty (F6
+  // ({title, url, ...}), not text or image blocks — projectToolResultContent
+  // keeps neither, so this legitimately projects to empty text (F6
   // Phase-4 flag: whether that's acceptable tool-card chrome is undecided).
   expect(resolvedRow.result?.content).toBe('')
 })

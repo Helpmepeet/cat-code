@@ -91,6 +91,7 @@ import {
   type ToolCardStatus,
   type ToolDiffProjection,
   type ToolFamily,
+  type ToolResultImageProjection,
   type ToolResultProjection,
   type UserImageSource,
 } from './transcriptProjector.js'
@@ -2737,6 +2738,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
 
   const content = row.result?.content ?? ''
   const isImageDone = row.toolFamily === 'imagegen' && row.status === 'success'
+  const hasResultImages = (row.result?.images?.length ?? 0) > 0
   const ack = toolAckForResult(row.result)
   const bashTail =
     row.toolFamily === 'bash' && ack === null ? bashTailForResult(row.result) : []
@@ -2759,7 +2761,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
         defaultExpanded={
-          toolsExpanded || row.status === 'error' || isImageDone
+          toolsExpanded || row.status === 'error' || isImageDone || hasResultImages
         }
         collapsedExtra={
           ack !== null ? (
@@ -4239,6 +4241,14 @@ function ToolCardBody({
       </pre>
     )
   }
+  if (row.result.images && row.result.images.length > 0) {
+    return (
+      <ToolResultImagesBody
+        content={content}
+        images={row.result.images}
+      />
+    )
+  }
   if (content.length === 0) {
     return (
       <div className="font-mono text-[11.5px] italic text-text-subtle">
@@ -4298,6 +4308,57 @@ function ToolCardBody({
         />
       )
   }
+}
+
+function ToolResultImagesBody({
+  content,
+  images,
+}: {
+  content: string
+  images: ToolResultImageProjection[]
+}) {
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  const preview =
+    previewIndex === null ? null : (images[previewIndex] ?? null)
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {images.map((image, index) => {
+          const label =
+            images.length === 1 ? 'Result image' : `Result image ${index + 1}`
+          return (
+            <button
+              type="button"
+              aria-label={`Expand ${label.toLowerCase()}`}
+              className="flex min-h-24 cursor-zoom-in items-center justify-center overflow-hidden rounded-lg border border-shell-seam bg-black/15 p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              key={`${index}:${image.mediaType}`}
+              onClick={() => setPreviewIndex(index)}
+            >
+              <img
+                alt={label}
+                className="max-h-80 max-w-full rounded-md object-contain"
+                decoding="async"
+                loading="lazy"
+                src={`data:${image.mediaType};base64,${image.data}`}
+              />
+            </button>
+          )
+        })}
+      </div>
+      {content.length > 0 ? (
+        <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-text-muted">
+          {content}
+        </pre>
+      ) : null}
+      {preview ? (
+        <ImagePreview
+          src={`data:${preview.mediaType};base64,${preview.data}`}
+          label="Result image preview"
+          onClose={() => setPreviewIndex(null)}
+        />
+      ) : null}
+    </>
+  )
 }
 
 function stringifyInput(input: Record<string, unknown>): string {

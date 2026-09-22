@@ -176,15 +176,16 @@ export type ToolCardStatus = 'pending' | 'success' | 'error' | 'cancelled'
  * (`diff` npm package hunk shape) — either FileEditTool's top-level
  * `filePath`+`structuredPatch` (`FileEditTool/types.ts:71-73`) or FilePatchTool /
  * `apply_patch`'s `files[]` envelope (`FilePatchTool/types.ts:138-172`). Narrowed
- * at runtime, never cast; anything else (Bash stdout, Read contents, …) surfaces
- * as plain `content` text with `diff: null`. Malformed/foreign shapes degrade to
- * `diff: null`, never crash.
+ * at runtime, never cast. Text and allowlisted base64 raster blocks from the
+ * result content are projected separately; malformed/foreign shapes degrade to
+ * plain text or no image, never crash.
  */
 export type ToolResultProjection = {
   isError: boolean
   /** Engine-minted cancellation status, never inferred from tool output text. */
   isCancelled?: true
   content: string
+  images?: ToolResultImageProjection[]
   diff: ToolDiffProjection | null
   generatedImage?: {
     filePath: string
@@ -281,6 +282,11 @@ export type ToolResultProjection = {
     appSessionId: SessionId
     failedStep?: 'ready' | 'prompt'
   }
+}
+
+export type ToolResultImageProjection = {
+  mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+  data: string
 }
 
 /**
@@ -2388,9 +2394,10 @@ function isToolResultBlockType(blockType: string): boolean {
  * Narrows one result block into the row-facing projection. `is_error` reads
  * straight off the block (`src/utils/queryHelpers.ts:478`:
  * `content.is_error !== true` is the engine's own read of this exact field).
- * `content` best-effort-flattens to display text without inventing formatting
- * the engine doesn't already produce; `diff` is populated only when
- * `toolUseResult` narrows to a FileEditTool-shaped structuredPatch.
+ * `content` best-effort-projects display text and allowlisted base64 raster
+ * images without inventing formatting the engine doesn't already produce;
+ * `diff` is populated only when `toolUseResult` narrows to a FileEditTool-shaped
+ * structuredPatch.
  */
 function projectToolResultBlock(
   block: Record<string, unknown>,
@@ -2408,7 +2415,7 @@ function projectToolResultBlock(
   return {
     isError: block.is_error === true,
     ...(isCancelled ? { isCancelled: true as const } : {}),
-    content: flattenToolResultContent(block.content),
+    ...projectToolResultContent(block.content),
     diff: extractDiffProjection(toolUseResult),
     ...extractGeneratedImageProjection(toolUseResult),
     ...(agentName !== null ? { agentName } : {}),
@@ -2582,18 +2589,63 @@ function normalizeAgentName(value: unknown): string | null {
   return normalized.length === 0 ? null : normalized
 }
 
-function flattenToolResultContent(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .flatMap(part => {
-      if (!isRecord(part)) return []
-      if (part.type === 'text' && typeof part.text === 'string') {
-        return [part.text]
-      }
-      return []
-    })
-    .join('\n')
+function projectToolResultContent(
+  content: unknown,
+): Pick<ToolResultProjection, 'content' | 'images'> {
+  if (typeof content === 'string') return { content }
+  if (!Array.isArray(content)) return { content: '' }
+
+  const text: string[] = []
+  const images: ToolResultImageProjection[] = []
+  for (const part of content) {
+    if (!isRecord(part)) continue
+    if (part.type === 'text' && typeof part.text === 'string') {
+      text.push(part.text)
+      continue
+    }
+    if (part.type !== 'image' || !isRecord(part.source)) continue
+    const source = part.source
+    if (
+      source.type !== 'base64' ||
+      !isToolResultImageMediaType(source.media_type) ||
+      typeof source.data !== 'string' ||
+      !isBase64Data(source.data)
+    ) {
+      continue
+    }
+    images.push({ mediaType: source.media_type, data: source.data })
+  }
+  return {
+    content: text.join('\n'),
+    ...(images.length === 0 ? {} : { images }),
+  }
+}
+
+function isToolResultImageMediaType(
+  value: unknown,
+): value is ToolResultImageProjection['mediaType'] {
+  return (
+    value === 'image/jpeg' ||
+    value === 'image/png' ||
+    value === 'image/gif' ||
+    value === 'image/webp'
+  )
+}
+
+function isBase64Data(value: string): boolean {
+  if (value.length === 0 || value.length % 4 !== 0) return false
+  let dataEnd = value.length
+  while (dataEnd > 0 && value.charCodeAt(dataEnd - 1) === 61) dataEnd--
+  if (value.length - dataEnd > 2) return false
+  for (let index = 0; index < dataEnd; index++) {
+    const code = value.charCodeAt(index)
+    const isAlphaNumeric =
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122)
+    if (!isAlphaNumeric && code !== 43 && code !== 47) return false
+  }
+  return true
 }
 
 /**
