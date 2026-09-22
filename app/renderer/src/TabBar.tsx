@@ -306,10 +306,44 @@ function Tab({
       title={`${descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
       aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${visual.needsAttention ? ', permission request waiting' : ''}`}
       draggable
-      onClick={() => onSelect(id)}
+      onPointerDown={event => {
+        console.log('[TabBar] pointerdown', title, {
+          x: event.clientX,
+          y: event.clientY,
+          activeElement: document.activeElement,
+        })
+      }}
       onDragStart={event => {
+        console.log('[TabBar] dragstart', title, {
+          activeElement: document.activeElement,
+        })
         event.dataTransfer.setData('text/sessionId', id)
         event.dataTransfer.effectAllowed = 'copyMove'
+      }}
+      onDragEnd={() => {
+        console.log('[TabBar] dragend', title, {
+          activeElement: document.activeElement,
+        })
+      }}
+      onPointerUp={() => {
+        console.log('[TabBar] pointerup', title, {
+          activeElement: document.activeElement,
+        })
+      }}
+      onClick={() => {
+        console.log('[TabBar] click', title, {
+          activeElement: document.activeElement,
+        })
+        onSelect(id)
+      }}
+      onFocus={() =>
+        console.log('[TabBar] focus', title, document.activeElement)
+      }
+      onBlur={event => {
+        console.log('[TabBar] blur', title, {
+          relatedTarget: event.relatedTarget,
+          activeElement: document.activeElement,
+        })
       }}
       onKeyDown={onKeyDown}
     >
