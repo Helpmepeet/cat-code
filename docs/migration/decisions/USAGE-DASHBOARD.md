@@ -37,18 +37,20 @@ changes retained transcripts. No persisted usage migration.
 
 ## Manual refresh, 2026-09-22
 
-The Analytics page exposes a Refresh button beside its period controls. It sends
-one payload-free, fixed preload request to Electron main. Main accepts the request
-only from the application window and calls `refreshNow()` on the existing
-single-flight usage driver. The renderer cannot provide a path, range, worker
-argument, or sidecar frame. Requests made while a collection is active coalesce
-into at most one follow-up run.
+The Analytics page exposes an icon-only refresh button beside its period controls.
+Its accessible label identifies the action without adding another visible word to
+the compact header. It sends one payload-free, fixed preload request to Electron
+main. Main accepts the request only from the application window and calls
+`refreshNow()` on the existing single-flight usage driver. The renderer cannot
+provide a path, range, worker argument, or sidecar frame. Requests made while a
+collection is active coalesce into at most one follow-up run.
 
-The button is disabled while collection is running and shows `Refreshing…`.
-Successful and failed results continue through the existing versioned host event,
-including last-good snapshot retention. The rollback-disabled state remains
-Unavailable and cannot request a refresh. This adds no engine protocol kind,
-snapshot field, persistence change, or account access.
+The button is disabled while collection is running and its icon spins, subject to
+the existing reduced-motion rule. Successful and failed results continue through
+the existing versioned host event, including last-good snapshot retention. The
+rollback-disabled state remains Unavailable and cannot request a refresh. This
+adds no engine protocol kind, snapshot field, persistence change, or account
+access.
 
 ## Persistent index amendment, 2026-09-13
 

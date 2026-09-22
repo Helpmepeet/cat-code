@@ -28,14 +28,19 @@ test('refresh requests new analytics data once and disables while a refresh is r
     let refreshes = 0;
     const ready = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }} onRefresh={() => { refreshes++; }}/>);
     const refresh = ready.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
-    expect(refresh.textContent).toBe('Refresh');
+    expect(refresh.textContent).toBe('');
+    expect(refresh.getAttribute('aria-label')).toBe('Refresh analytics data');
+    expect(refresh.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(refresh.querySelector('.animate-spin')).toBeNull();
     expect(refresh.disabled).toBe(false);
     await act(async () => refresh.click());
     expect(refreshes).toBe(1);
 
     const loading = await harness.mount(<UsagePage state={{ snapshot, status: 'loading' }} onRefresh={() => { refreshes++; }}/>);
     const disabled = loading.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
-    expect(disabled.textContent).toBe('Refreshing…');
+    expect(disabled.textContent).toBe('');
+    expect(disabled.getAttribute('aria-label')).toBe('Refreshing analytics data');
+    expect(disabled.querySelector('.animate-spin')).not.toBeNull();
     expect(disabled.disabled).toBe(true);
     await act(async () => disabled.click());
     expect(refreshes).toBe(1);
