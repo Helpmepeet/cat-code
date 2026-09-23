@@ -13,7 +13,7 @@ import { getAPIProvider, resolveRequestProvider, type APIProvider } from './prov
 
 // @[MODEL LAUNCH]: 'claude-opus-5' is a deliberate version pin, not an alias.
 // Re-point it (or add the successor beside it) when a newer Opus ships.
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'inherit'] as const
+export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-terra', 'gpt-6-luna', 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 export type AgentModelSelection = Exclude<AgentModelAlias, 'inherit'>
 
@@ -173,9 +173,9 @@ export function getAgentModelOptions(): AgentModelOption[] {
       description: 'GPT-6 Astra',
     },
     {
-      value: 'gpt-5.6-sol',
-      label: 'GPT-5.6 Sol',
-      description: 'Frontier GPT-5.6 option for complex professional work',
+      value: 'gpt-6-sol',
+      label: 'GPT-6 Sol',
+      description: 'Frontier GPT-6 option for complex professional work',
     },
     {
       value: 'gpt-5.6-terra',
@@ -183,9 +183,9 @@ export function getAgentModelOptions(): AgentModelOption[] {
       description: 'Balanced GPT-5.6 option for everyday agentic coding (preview)',
     },
     {
-      value: 'gpt-5.6-luna',
-      label: 'GPT-5.6 Luna',
-      description: 'Fast GPT-5.6 option for agentic coding (preview)',
+      value: 'gpt-6-luna',
+      label: 'GPT-6 Luna',
+      description: 'Fast GPT-6 option for agentic coding (preview)',
     },
     {
       value: 'inherit',

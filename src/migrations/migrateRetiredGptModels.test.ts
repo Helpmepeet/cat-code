@@ -9,9 +9,9 @@ import type { SettingsJson } from '../utils/settings/types.js'
  * - Claim: every user-owned retired GPT setting and runtime override migrates
  *   without clobbering current/colliding values, and a second run is a no-op.
  * - Exact pre-fix failure: an early return left all legacy model surfaces stale.
- * - Production entry point: `migrateRetiredGptModelsToGpt56`;
+ * - Production entry point: `migrateRetiredGptModels`;
  *   `runEngineMigrations` is covered by the source-string tripwire below.
- * - Test path: `src/migrations/migrateRetiredGptModelsToGpt56.test.ts`.
+ * - Test path: `src/migrations/migrateRetiredGptModels.test.ts`.
  * - Proof layer: helper/module-boundary functional; wiring tripwire is not it.
  * - Red/mutation evidence: an early-return mutation made three functional cases
  *   red while the source-string tripwire remained green; source was restored.
@@ -19,7 +19,7 @@ import type { SettingsJson } from '../utils/settings/types.js'
  *   unrelated override preservation, mixed state, runtime override, idempotence.
  * - UNVERIFIED: executable startup caller, real settings-file/process, DOM,
  *   GUI, credentialed-live.
- * - Commands and outcomes: focused suite passed 4/0; engine build passed.
+ * - Commands and outcomes: focused suite passed; engine build passed.
  */
 
 let userSettings: SettingsJson | null = null
@@ -75,8 +75,8 @@ mock.module('../bootstrap/state.js', () => ({
   },
 }))
 
-const { migrateRetiredGptModelsToGpt56 } = await import(
-  './migrateRetiredGptModelsToGpt56.js'
+const { migrateRetiredGptModels } = await import(
+  './migrateRetiredGptModels.js'
 )
 
 beforeEach(() => {
@@ -91,19 +91,21 @@ afterEach(() => {
   mock.restore()
 })
 
-describe('migrateRetiredGptModelsToGpt56', () => {
+describe('migrateRetiredGptModels', () => {
   test('reports a settings-write error so startup keeps the migration pending', () => {
-    userSettings = { model: 'gpt-5.4' }
+    userSettings = { model: 'gpt-5.6-sol' }
     updateError = new Error('settings lock unavailable')
 
-    expect(migrateRetiredGptModelsToGpt56()).toBe(updateError)
+    expect(migrateRetiredGptModels()).toBe(updateError)
     expect(mainLoopOverrideWrites).toEqual([])
   })
 
   test('remaps every user-owned model surface and de-duplicates the resulting allowlist', () => {
     userSettings = {
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-sol',
       availableModels: [
+        'gpt-6-sol',
+        'gpt-5.6-sol',
         'gpt-5.6-luna',
         'gpt-5.4',
         'gpt-5.3-codex',
@@ -112,6 +114,7 @@ describe('migrateRetiredGptModelsToGpt56', () => {
         'custom-model',
       ],
       modelOverrides: {
+        'gpt-5.6-sol': 'legacy-sol-override',
         'gpt-5.4': 'legacy-luna-override',
         'gpt-5.5': 'legacy-terra-override',
         'gpt-5.6-terra': 'existing-terra-override',
@@ -119,58 +122,64 @@ describe('migrateRetiredGptModelsToGpt56', () => {
       },
     }
 
-    migrateRetiredGptModelsToGpt56()
+    migrateRetiredGptModels()
 
     expect(updateCalls).toEqual([
       {
-        model: 'gpt-5.6-luna',
-        availableModels: ['gpt-5.6-luna', 'gpt-5.6-terra', 'custom-model'],
+        model: 'gpt-6-sol',
+        availableModels: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
         modelOverrides: {
-          'gpt-5.6-luna': 'legacy-luna-override',
+          'gpt-6-sol': 'legacy-sol-override',
+          'gpt-6-luna': 'legacy-luna-override',
           'gpt-5.6-terra': 'existing-terra-override',
           'custom-model': 'custom-override',
         },
       },
     ])
     expect(userSettings).toEqual({
-      model: 'gpt-5.6-luna',
-      availableModels: ['gpt-5.6-luna', 'gpt-5.6-terra', 'custom-model'],
+      model: 'gpt-6-sol',
+      availableModels: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
       modelOverrides: {
-        'gpt-5.6-luna': 'legacy-luna-override',
+        'gpt-6-sol': 'legacy-sol-override',
+        'gpt-6-luna': 'legacy-luna-override',
         'gpt-5.6-terra': 'existing-terra-override',
         'custom-model': 'custom-override',
       },
     })
   })
 
-  test('preserves mixed current settings while migrating the remaining retired values', () => {
+  test('preserves current successor overrides when colliding with retired model overrides', () => {
     userSettings = {
-      model: 'gpt-5.6-terra',
-      availableModels: ['gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.6-luna'],
+      model: 'gpt-5.6-luna',
+      availableModels: ['gpt-6-sol', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna'],
       modelOverrides: {
-        'gpt-5.6-luna': 'keep-current-luna',
-        'gpt-5.4-mini': 'retired-luna',
+        'gpt-6-sol': 'keep-current-sol',
+        'gpt-5.6-sol': 'retired-sol',
+        'gpt-6-luna': 'keep-current-luna',
+        'gpt-5.6-luna': 'retired-luna',
         'custom-model': 'keep-custom',
       },
     }
 
-    migrateRetiredGptModelsToGpt56()
+    migrateRetiredGptModels()
 
     expect(updateCalls).toEqual([
       {
-        model: 'gpt-5.6-terra',
-        availableModels: ['gpt-5.6-terra', 'gpt-5.6-luna'],
+        model: 'gpt-6-luna',
+        availableModels: ['gpt-6-sol', 'gpt-6-luna'],
         modelOverrides: {
-          'gpt-5.6-luna': 'keep-current-luna',
+          'gpt-6-sol': 'keep-current-sol',
+          'gpt-6-luna': 'keep-current-luna',
           'custom-model': 'keep-custom',
         },
       },
     ])
     expect(userSettings).toEqual({
-      model: 'gpt-5.6-terra',
-      availableModels: ['gpt-5.6-terra', 'gpt-5.6-luna'],
+      model: 'gpt-6-luna',
+      availableModels: ['gpt-6-sol', 'gpt-6-luna'],
       modelOverrides: {
-        'gpt-5.6-luna': 'keep-current-luna',
+        'gpt-6-sol': 'keep-current-sol',
+        'gpt-6-luna': 'keep-current-luna',
         'custom-model': 'keep-custom',
       },
     })
@@ -182,10 +191,10 @@ describe('migrateRetiredGptModelsToGpt56', () => {
       availableModels: ['gpt-5.5', 'gpt-5.6-terra'],
       modelOverrides: { 'gpt-5.5': 'legacy-terra-override' },
     }
-    mainLoopOverride = 'gpt-5.4[1m]'
+    mainLoopOverride = 'gpt-5.6-sol[1m]'
 
-    migrateRetiredGptModelsToGpt56()
-    migrateRetiredGptModelsToGpt56()
+    migrateRetiredGptModels()
+    migrateRetiredGptModels()
 
     expect(updateCalls).toEqual([
       {
@@ -196,8 +205,8 @@ describe('migrateRetiredGptModelsToGpt56', () => {
         },
       },
     ])
-    expect(mainLoopOverrideWrites).toEqual(['gpt-5.6-luna'])
-    expect(mainLoopOverride).toBe('gpt-5.6-luna')
+    expect(mainLoopOverrideWrites).toEqual(['gpt-6-sol'])
+    expect(mainLoopOverride).toBe('gpt-6-sol')
   })
 })
 
@@ -212,9 +221,9 @@ test('startup wiring tripwire keeps the migration owned by init', () => {
   )
 
   expect(ownerSource).toContain(
-    "import { migrateRetiredGptModelsToGpt56 } from './migrateRetiredGptModelsToGpt56.js'",
+    "import { migrateRetiredGptModels } from './migrateRetiredGptModels.js'",
   )
-  expect(ownerSource).toContain('const retiredGptError = migrateRetiredGptModelsToGpt56()')
+  expect(ownerSource).toContain('const retiredGptError = migrateRetiredGptModels()')
   expect(ownerSource).toContain('if (retiredGptError) return retiredGptError')
   expect(initSource).toContain('await runEngineMigrations()')
 })

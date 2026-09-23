@@ -925,10 +925,11 @@ export function getClassifierFallbackModel(
   if (!isClassifierFallbackError(error)) return undefined
 
   switch (model.toLowerCase()) {
+    case 'gpt-6-sol':
     case 'gpt-5.6-sol':
       return 'gpt-5.6-terra'
     case 'gpt-5.6-terra':
-      return 'gpt-5.6-luna'
+      return 'gpt-6-luna'
   }
 
   return undefined
@@ -1671,7 +1672,7 @@ function getClassifierModel(): string {
   // availability chain for routing past transient rate limits (see the
   // fallback-status comment below), NOT a capability ladder — the head of it
   // carries no implication of being the strongest.
-  return getAutoModeConfig()?.model ?? 'gpt-5.6-luna'
+  return getAutoModeConfig()?.model ?? 'gpt-6-luna'
 }
 
 function getClassifierMaxRetries(): number {

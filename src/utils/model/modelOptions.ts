@@ -247,13 +247,21 @@ function getHaikuOption(): ModelOption {
 }
 
 // OpenAI Codex model options
-function getGpt56SolOption(): ModelOption {
+function getGpt6AstraOption(): ModelOption {
   return {
-    value: 'gpt-5.6-sol',
-    label: 'GPT-5.6 Sol',
-    description: 'GPT-5.6 Sol · Frontier capability for complex professional work',
-    descriptionForModel:
-      'GPT-5.6 Sol - frontier model for complex professional work',
+    value: 'gpt-6-astra',
+    label: 'GPT-6 Astra',
+    description: 'GPT-6 Astra',
+    descriptionForModel: 'GPT-6 Astra',
+  }
+}
+
+function getGpt6SolOption(): ModelOption {
+  return {
+    value: 'gpt-6-sol',
+    label: 'GPT-6 Sol',
+    description: 'GPT-6 Sol · Complex coding and agentic workflows',
+    descriptionForModel: 'GPT-6 Sol - complex coding and agentic workflows',
   }
 }
 
@@ -267,22 +275,13 @@ function getGpt56TerraOption(): ModelOption {
   }
 }
 
-function getGpt56LunaOption(): ModelOption {
+function getGpt6LunaOption(): ModelOption {
   return {
-    value: 'gpt-5.6-luna',
-    label: 'GPT-5.6 Luna',
-    description: 'GPT-5.6 Luna · Fast and affordable agentic coding (preview)',
+    value: 'gpt-6-luna',
+    label: 'GPT-6 Luna',
+    description: 'GPT-6 Luna · Efficient model for focused/high-volume work',
     descriptionForModel:
-      'GPT-5.6 Luna - fast and affordable agentic coding model (preview)',
-  }
-}
-
-function getGpt6AstraOption(): ModelOption {
-  return {
-    value: 'gpt-6-astra',
-    label: 'GPT-6 Astra',
-    description: 'GPT-6 Astra',
-    descriptionForModel: 'GPT-6 Astra',
+      'GPT-6 Luna - efficient model for focused/high-volume work',
   }
 }
 
@@ -362,9 +361,9 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     const codexOptions: ModelOption[] = [
       getDefaultOptionForUser(),
       getGpt6AstraOption(),
-      getGpt56SolOption(),
+      getGpt6SolOption(),
       getGpt56TerraOption(),
-      getGpt56LunaOption(),
+      getGpt6LunaOption(),
     ]
     if (
       !isProviderSwitchLocked() &&
@@ -615,9 +614,9 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   ) {
     const gptModels = [
       getGpt6AstraOption(),
-      getGpt56SolOption(),
+      getGpt6SolOption(),
       getGpt56TerraOption(),
-      getGpt56LunaOption(),
+      getGpt6LunaOption(),
     ]
     for (const gpt of gptModels) {
       if (!options.some(existing => existing.value === gpt.value)) {

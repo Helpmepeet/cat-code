@@ -19,13 +19,13 @@ import { migrateLegacyOpusToCurrent } from './migrateLegacyOpusToCurrent.js'
 import { migrateOpusToOpus1m } from './migrateOpusToOpus1m.js'
 import { migrateReplBridgeEnabledToRemoteControlAtStartup } from './migrateReplBridgeEnabledToRemoteControlAtStartup.js'
 import { migrateRetiredClaude46ModelsToClaude5 } from './migrateRetiredClaude46ModelsToClaude5.js'
-import { migrateRetiredGptModelsToGpt56 } from './migrateRetiredGptModelsToGpt56.js'
+import { migrateRetiredGptModels } from './migrateRetiredGptModels.js'
 import { migrateSonnet1mToSonnet45 } from './migrateSonnet1mToSonnet45.js'
 import { migrateSonnet45ToSonnet46 } from './migrateSonnet45ToSonnet46.js'
 import { resetAutoModeOptInForDefaultOffer } from './resetAutoModeOptInForDefaultOffer.js'
 import { resetProToOpusDefault } from './resetProToOpusDefault.js'
 
-export const CURRENT_MIGRATION_VERSION = 15
+export const CURRENT_MIGRATION_VERSION = 16
 
 const MIGRATION_LOCK_STALE_MS = 5_000
 const MIGRATION_LOCK_UPDATE_MS = 1_000
@@ -77,7 +77,7 @@ function runVersionedMigrations(): Error | null {
   migrateSonnet1mToSonnet45()
   migrateLegacyOpusToCurrent()
 
-  const retiredGptError = migrateRetiredGptModelsToGpt56()
+  const retiredGptError = migrateRetiredGptModels()
   if (retiredGptError) return retiredGptError
   const retiredClaudeError = migrateRetiredClaude46ModelsToClaude5()
   if (retiredClaudeError) return retiredClaudeError

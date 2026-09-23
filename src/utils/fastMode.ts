@@ -165,7 +165,7 @@ export function getFastModeModelDisplay(): string {
  */
 export function getFastModeModel(): string {
   if (getAPIProvider() === 'openai') {
-    return 'gpt-5.6-sol'
+    return 'gpt-6-sol'
   }
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
 }
@@ -189,16 +189,22 @@ export function isFastModeSupportedByModel(
   if (!isFastModeEnabled()) {
     return false
   }
+  if (modelSetting === 'gpt-5.6-sol' || modelSetting === 'gpt-5.6-luna') {
+    return false
+  }
   const model = modelSetting ?? getDefaultMainLoopModelSetting()
   const parsedModel = parseUserSpecifiedModel(model)
   const normalizedModel = parsedModel.toLowerCase()
+  if (normalizedModel === 'gpt-5.6-sol' || normalizedModel === 'gpt-5.6-luna') {
+    return false
+  }
   return (
     normalizedModel.includes('opus-5') ||
     normalizedModel.includes('opus-4-6') ||
     normalizedModel.includes('fable-5') ||
-    normalizedModel === 'gpt-5.6-sol' ||
-    normalizedModel === 'gpt-5.6-terra' ||
-    normalizedModel === 'gpt-5.6-luna'
+    normalizedModel === 'gpt-6-sol' ||
+    normalizedModel === 'gpt-6-luna' ||
+    normalizedModel === 'gpt-5.6-terra'
   )
 }
 

@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-09-14
+Last refreshed: 2026-09-21
 
 ## Purpose
 
@@ -29,7 +29,7 @@ Read in this order for most prompt or instruction work:
 | Goal | Owner | Fallback order | Notes |
 |---|---|---|---|
 | Change normal default assistant behavior | `src/constants/prompts.ts` | `src/constants/{corePolicy,systemPromptSections}.ts`, `src/constants/promptStyles/gpt.ts`, `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | `getSystemPrompt()` builds the default prompt array. `corePolicy.ts` supplies the provider/mode-neutral action policy; GPT-specific sections remain in `promptStyles/gpt.ts`. |
-| Change GPT family calibration | `src/constants/promptStyle.ts` | `src/constants/prompts.ts`, `src/constants/promptStyles/gpt.ts`, `src/constants/promptAssembly.snapshot.test.ts` | Provider selects GPT style; exact `gpt-6-astra` model identity selects Astra calibration in doing-tasks, actions, and tone. Sol/Terra/Luna share the GPT-5.6 baseline. These static sections are rebuilt on model changes; dynamic sections do not depend on family. |
+| Change GPT family calibration | `src/constants/promptStyle.ts` | `src/constants/prompts.ts`, `src/constants/promptStyles/gpt.ts`, `src/constants/promptAssembly.snapshot.test.ts` | Provider selects GPT style; `getGptPromptFamily()` maps GPT-6 models (Astra, Sol, Luna) to the `'gpt-6'` family calibration (doing-tasks, actions, tone), while Terra retains the `'gpt-5.6'` baseline. These static sections are rebuilt on model changes; dynamic sections do not depend on family. |
 | Change prompt-section cache correctness | `src/constants/systemPromptSections.ts` | `src/constants/prompts.ts`, `src/utils/queryContext.ts`, `src/screens/REPL.tsx` | Cache entries are keyed by each section's captured inputs. Cache-breaking sections must not populate that cache; language intentionally remains session-stable until a cache-clearing transition. |
 | Change runtime prompt precedence | `src/utils/systemPrompt.ts` | `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/query.ts` | Effective branch order is override, coordinator, main-thread agent, custom, default. `appendSystemPrompt` appends unless override replaces everything. |
 | Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts` | `src/constants/corePolicy.ts`, `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. Its source-tier wrapper grants workflow/repository authority, never permission authority. |

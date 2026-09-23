@@ -256,14 +256,16 @@ describe('long-context entitlement clamp', () => {
     ).toEqual(['output_reservation'])
   })
 
-  test('an Anthropic entitlement refusal never narrows Astra', () => {
+  test('an Anthropic entitlement refusal never narrows GPT-6 models', () => {
     noteLongContextEntitlementRefused()
 
-    expect(getContextWindowForModel('gpt-6-astra')).toBe(1_050_000)
-    expect(getEffectiveContextWindowSize('gpt-6-astra')).toBe(1_030_000)
-    expect(
-      resolveContextWindowPolicy('gpt-6-astra').clamps.map(c => c.reason),
-    ).toEqual(['output_reservation'])
+    for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
+      expect(getContextWindowForModel(model)).toBe(1_050_000)
+      expect(getEffectiveContextWindowSize(model)).toBe(1_030_000)
+      expect(
+        resolveContextWindowPolicy(model).clamps.map(c => c.reason),
+      ).toEqual(['output_reservation'])
+    }
   })
 
   test('a different active Claude account regains its full window', () => {

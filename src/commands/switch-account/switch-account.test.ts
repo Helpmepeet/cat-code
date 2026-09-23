@@ -457,7 +457,7 @@ describe('/switch-account', () => {
 
     expect(result).toEqual({ type: 'text', value: 'Switched to codexone' })
     expect(getSessionProvider()).toBe('openai')
-    expect(getMainLoopModelOverride()).toBe('gpt-5.6-sol')
+    expect(getMainLoopModelOverride()).toBe('gpt-6-sol')
   })
 
   // This used to assert the effort was cleared. Crossing to Claude sets the

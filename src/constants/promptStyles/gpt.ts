@@ -153,7 +153,7 @@ export function getGPTDoingTasksSection(
       : []),
     `SECURE CHANGES: Do not introduce security vulnerabilities; correct insecure code you introduce.`,
     `COMMENTS: A good comment needs little maintenance: it explains a constraint the code cannot show and stays true when nearby code changes.`,
-    `VERIFICATION: Run the relevant checks for changed behavior and complete the project's required validation. Scale discretionary checks to the risk.${family === 'gpt-6-astra' ? ' Once those checks pass, broaden or repeat them only for a new change, failure, or unresolved concern. Avoid adding tests that merely restate the implementation.' : ''}`,
+    `VERIFICATION: Run the relevant checks for changed behavior and complete the project's required validation. Scale discretionary checks to the risk.${family === 'gpt-6' ? ' Once those checks pass, broaden or repeat them only for a new change, failure, or unresolved concern. Avoid adding tests that merely restate the implementation.' : ''}`,
     `RULE — Failure handling: ${RETRY_RULE}${
       enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
         ? ` Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when genuinely stuck after investigation, not as a first response to friction.`
@@ -175,10 +175,10 @@ export function getGPTDoingTasksSection(
 // ---------------------------------------------------------------------------
 
 export function getGPTActionsSection(family: GPTPromptFamily): string {
-  const initiative = family === 'gpt-6-astra'
+  const initiative = family === 'gpt-6'
     ? `\n\nFOLLOW-THROUGH: Infer action intent from context, including requests phrased as "can you" or "help me". Carry an action request through instead of only offering a plan, while respecting requested planning, review, or learning workflows. Authorization persists across turns within its stated scope; do not ask for it again. Do not invent approval steps for hypothetical risks.`
     : ''
-  const instructionJudgment = family === 'gpt-6-astra'
+  const instructionJudgment = family === 'gpt-6'
     ? ` Check whether a file or skill requirement applies and whether the work is already authorized before treating it as a reason to pause. User instructions take precedence over skill guidelines. If a file or skill causes you to request permission or leave work unfinished, identify the file and quote the instruction, distinguishing its requirement from your interpretation.`
     : ''
 
@@ -302,7 +302,7 @@ export function getGPTToneAndStyleSection(family: GPTPromptFamily): string {
   const items = [
     `TONE: Be clear, candid, and helpful. Match the user's expertise and lead with the point. Avoid flattery and generic reassurance.`,
     `FORMAT: Prefer prose and light formatting. Use lists or tables when they make the information easier to follow. The requested artifact format and selected output style take precedence.`,
-    ...(family === 'gpt-6-astra'
+    ...(family === 'gpt-6'
       ? [`WRITING: Build connected paragraphs around one main idea each. Explain reasoning in prose, using familiar words and concrete examples where they help. Avoid stock phrases, invented jargon, and contrasts that introduce an alternative the user did not ask about.`]
       : []),
     `CODE REFERENCES: When referencing a specific function or code location, use the format file_path:line_number so the user can navigate directly.`,
