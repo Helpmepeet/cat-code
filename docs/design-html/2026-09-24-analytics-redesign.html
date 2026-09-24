@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap">
+<style>
+:root{
+  color-scheme:light;
+  --ground:#e3e3e7; --label:#52525b; --frame-seam:rgba(9,9,11,.12);
+  --bg:#f7f6f6; --panel:#ffffff; --text:#18181b; --muted:#797580; --grid:#e8e5e6; --sec:#716a6e; --seam:rgba(9,9,11,.1);
+  --blue:#2563eb; --violet:#7c3aed; --pink:#db2777; --amber:#d97706; --green:#16a34a; --red:#dc2626; --slate:#64748b; --teal:#087f75;
+  --up:#16a34a; --down:#dc2626;
+  --m-purple:#8a52ee; --m-blue:#3b84f7; --m-orange:#ee7c38; --m-yellow:#f6c543; --m-pink:#f077af;
+  --h0:#fdf2f8; --h1:#fce7f3; --h2:#fbcfe8; --h3:#f9a8d4; --h4:#f472b6; --h5:#ec4899; --h6:#db2777; --h7:#be185d; --h8:#9d174d;
+  --acc:#bb3e84; --cache-soft:#c4b5fd;
+  --n1:#0f766e; --n2:#c2410c; --n3:#a16207; --n4:#4d7c0f; --n5:#71717a;
+  --acc-2:color-mix(in srgb,var(--acc) 38%,var(--panel));
+  --acc-soft:color-mix(in srgb,var(--acc) 12%,transparent);
+  --neutral:color-mix(in srgb,var(--sec) 45%,var(--panel));
+  --heat1:color-mix(in srgb,var(--acc) 20%,var(--panel));
+  --heat2:color-mix(in srgb,var(--acc) 44%,var(--panel));
+  --heat3:color-mix(in srgb,var(--acc) 70%,var(--panel));
+  --heat4:var(--acc);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#1b1b1f; --label:#a1a1aa; --frame-seam:rgba(255,255,255,.1);
+    --bg:#0a090b; --panel:#141215; --text:#f4f4f5; --muted:#938e99; --grid:#262227; --sec:#aaa1a7; --seam:rgba(255,255,255,.06);
+    --blue:#60a5fa; --violet:#a78bfa; --pink:#f472b6; --amber:#fbbf24; --green:#34d399; --red:#f87171; --slate:#94a3b8; --teal:#40c4aa;
+    --up:#4ade80; --down:#f87171;
+    --h0:#1f1219; --h1:#2a1420; --h2:#3d1a2e; --h3:#5c1f42; --h4:#831843; --h5:#9d174d; --h6:#be185d; --h7:#db2777; --h8:#f472b6;
+    --acc:#f472b6; --cache-soft:#4c3d7a;
+    --n1:#2dd4bf; --n2:#fb923c; --n3:#facc15; --n4:#a3e635; --n5:#a1a1aa;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#1b1b1f; --label:#a1a1aa; --frame-seam:rgba(255,255,255,.1);
+  --bg:#0a090b; --panel:#141215; --text:#f4f4f5; --muted:#938e99; --grid:#262227; --sec:#aaa1a7; --seam:rgba(255,255,255,.06);
+  --blue:#60a5fa; --violet:#a78bfa; --pink:#f472b6; --amber:#fbbf24; --green:#34d399; --red:#f87171; --slate:#94a3b8; --teal:#40c4aa;
+  --up:#4ade80; --down:#f87171;
+  --h0:#1f1219; --h1:#2a1420; --h2:#3d1a2e; --h3:#5c1f42; --h4:#831843; --h5:#9d174d; --h6:#be185d; --h7:#db2777; --h8:#f472b6;
+  --acc:#f472b6; --cache-soft:#4c3d7a;
+  --n1:#2dd4bf; --n2:#fb923c; --n3:#facc15; --n4:#a3e635; --n5:#a1a1aa;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--text);font:14px/1.45 'DM Sans',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;padding-inline:16px;padding-block:24px 48px}
+.mono,.seg,.card strong,.delta,.chip b,.dl dd,.big,.total,.ax,.heat,.num{font-family:'DM Mono',ui-monospace,Menlo,monospace}
+.compare{max-width:1400px;margin:0 auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+.col-label{margin:0 0 10px 2px;font:500 12px 'DM Mono',ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--label)}
+.frame{border:1px solid var(--frame-seam);border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.06),0 14px 34px -14px rgba(0,0,0,.22)}
+svg{display:block;width:100%;height:auto}
+
+.page{background:var(--bg);color:var(--text);padding:18px 18px 28px;display:flex;flex-direction:column;gap:14px}
+.head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.head h1{margin:0;font-size:19px;font-weight:600;letter-spacing:-.4px}
+.sub{margin:3px 0 0;font-size:12px;color:var(--sec)}
+.actions{display:flex;gap:8px;align-items:center}
+.refresh{width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--seam);border-radius:7px;background:var(--panel);color:var(--text)}
+.refresh svg{width:15px;height:15px}
+.seg{display:inline-flex;padding:3px;border:1px solid var(--seam);border-radius:7px;background:var(--panel)}
+.seg span{padding:6px 12px;font-size:12px;border-radius:5px;color:var(--sec);white-space:nowrap}
+.seg .on{background:var(--text);color:var(--panel)}
+.seg.sm{padding:2px}.seg.sm span{padding:4px 9px;font-size:11px}
+.fresh{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:-6px 0 0;font-size:12px;color:var(--sec)}
+.cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--seam);border:1px solid var(--seam);border-radius:10px;overflow:hidden}
+.card{background:var(--panel);padding:14px 14px 12px;min-width:0}
+.card h2{margin:0 0 8px;font:500 10px 'DM Mono',ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:var(--sec);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card strong{display:block;font-size:22px;line-height:1.12;letter-spacing:-.03em;font-weight:500}
+.foot{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:18px;margin-top:10px}
+.delta{font-size:11px;font-weight:500;white-space:nowrap}.up{color:var(--up)}.down{color:var(--down)}
+.spark{width:52px;height:18px;flex:none}
+.panel{background:var(--panel);border:1px solid var(--seam);border-radius:10px;padding:17px 17px 15px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.panel.flow{border-radius:14px;padding:22px 20px 18px}
+.panel.auto{padding-top:33px}
+.ph{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.ph p{margin:4px 0 0;font-size:12px;color:var(--sec)}
+.ph-r{display:flex;gap:8px;align-items:center}
+.eyebrow{margin:0;font:500 10.5px 'DM Mono',ui-monospace,monospace;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.total{display:flex;align-items:baseline;gap:6px;margin-top:4px}.total strong{font-size:26px;font-weight:600;letter-spacing:-.5px}.total span{font-size:12px;color:var(--sec)}
+.big{font-size:28px;font-weight:500;letter-spacing:-.5px;line-height:1}
+.h3{margin:0;font-size:14px;font-weight:600}.h3s{margin:0;font-size:13px;font-weight:550}
+.note{margin:0;font-size:12px;color:var(--sec);line-height:1.5}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+.two.alt{grid-template-columns:minmax(0,1fr) minmax(0,1.18fr)}
+.legend{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 10px;border:1px solid var(--seam);border-radius:999px;font-size:12px;color:var(--sec)}
+.chip i{width:9px;height:9px;border-radius:50%;flex:none}
+.chip b{font-size:11.5px;font-weight:500;color:var(--text)}
+.chip svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4}
+.pick{display:flex;gap:6px;flex-wrap:wrap}.pick span{font-size:11.5px;padding:3px 10px;border:1px solid var(--seam);border-radius:999px;color:var(--sec)}
+.pick .on{border-color:var(--red);color:var(--red);background:color-mix(in srgb,var(--red) 8%,transparent)}
+.toggle{font-size:11.5px;padding:3px 9px;border:1px solid var(--seam);border-radius:5px;color:var(--sec)}
+.dl{display:grid;gap:6px;margin:0;font-size:12px}
+.dl div{display:flex;justify-content:space-between;gap:8px}
+.dl dt{color:var(--sec);display:flex;align-items:center;gap:7px}
+.dl dt i{width:8px;height:8px;border-radius:2.5px;flex:none}
+.dl dd{margin:0}.dl small{margin-left:8px;color:var(--muted);font-size:11px}
+.tbl{font-size:11.5px;color:var(--sec);border:1px solid var(--seam);border-radius:999px;padding:3px 10px;white-space:nowrap}
+.lat{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid var(--seam);border-radius:8px;overflow:hidden;margin:0}
+.lat div{padding:10px 12px;border-right:1px solid var(--seam);border-bottom:1px solid var(--seam)}
+.lat dt{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lat dd{margin:2px 0 0;font-size:20px;font-weight:600}
+.tline{border:1px solid var(--seam);border-radius:8px;background:color-mix(in srgb,var(--grid) 45%,transparent);padding:8px;display:grid;gap:4px}
+.tline i{display:block;height:6px;border-radius:2px}
+.donut{display:grid;grid-template-columns:104px minmax(0,1fr);gap:14px;align-items:center}
+.donut text{font:600 11px 'DM Sans',sans-serif;fill:var(--sec)}
+.tools{display:grid;grid-template-columns:48px minmax(0,1fr) 42px;gap:8px 10px;align-items:center;font-size:12px}
+.tools .n{text-align:right}
+.stack{display:flex;height:9px;border-radius:3px;overflow:hidden}
+.stack i{display:block;height:100%}
+.ok{background:var(--green)}.er{background:var(--red)}.un{background:var(--slate)}
+.scroll{overflow-x:auto}.scroll svg{min-width:760px}
+.reasons{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;font-size:12px;align-items:center}
+.reasons .track{grid-column:1/-1;height:6px;border-radius:3px;background:var(--grid);overflow:hidden;margin-bottom:6px}
+.reasons .track i{display:block;height:100%;background:var(--red)}
+.ax{font-size:10px;fill:var(--muted)}.ax-on{fill:var(--acc);font-weight:500}
+.lab{font:11px 'DM Sans',sans-serif;fill:var(--sec);paint-order:stroke;stroke:var(--panel);stroke-width:3px;stroke-linejoin:round}
+.lab b,.labb{font-weight:600;fill:var(--text)}
+.gl{stroke:var(--grid)}.gl.d{stroke-dasharray:3 3}
+.heat{display:grid;grid-template-columns:46px repeat(24,minmax(0,1fr));gap:2px;font-size:9.5px;color:var(--muted)}
+.heat span{white-space:nowrap;line-height:1.3}
+.heat i{aspect-ratio:1;border-radius:2px;display:block}
+.hbar{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:var(--sec);flex-wrap:wrap}
+.hkey{display:flex;align-items:center;gap:3px}.hkey i{width:10px;height:10px;border-radius:2px;display:block}
+.h0{background:var(--h0)}.h1{background:var(--h1)}.h2{background:var(--h2)}.h3c{background:var(--h3)}.h4{background:var(--h4)}.h5{background:var(--h5)}.h6{background:var(--h6)}.h7{background:var(--h7)}.h8{background:var(--h8)}
+.z{box-shadow:inset 0 0 0 1px var(--seam)}.k1{background:var(--heat1)}.k2{background:var(--heat2)}.k3{background:var(--heat3)}.k4{background:var(--heat4)}
+.dhead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.btn{font-size:12px;border:1px solid var(--seam);background:var(--panel);border-radius:5px;padding:4px 10px;white-space:nowrap}
+.link{font-size:12px;color:var(--sec)}
+.figs{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12px;color:var(--sec);align-items:baseline}
+.figs strong{font-size:15px;color:var(--text);font-weight:600}
+.twrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{font-weight:500;font-size:11px;color:var(--muted);text-align:left;padding:7px 6px;border-bottom:1px solid var(--grid);white-space:nowrap}
+td{padding:7px 6px;border-bottom:1px solid var(--grid);white-space:nowrap}
+td.n,th.n{text-align:right;font-family:'DM Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wide{min-width:600px}
+.sortbar{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sec)}
+.sortbar span{border:1px solid var(--seam);border-radius:5px;padding:2px 8px}
+.openb{font-size:11px;border:1px solid var(--seam);border-radius:5px;padding:2px 8px}
+details.sm{font-size:12px;color:var(--sec)}details.sm summary{cursor:pointer}
+.day{border-top:1px solid var(--seam);padding-top:14px;display:flex;flex-direction:column;gap:10px}
+.day h3{margin:0;font-size:13px;font-weight:600}
+
+/* after: only what was agreed */
+.l .refresh{border-radius:999px}
+.l .seg{border-radius:999px}.l .seg span{border-radius:999px}
+.l .seg .on{background:var(--acc-soft);color:var(--acc);font-weight:500}
+.l .panel.auto{padding-top:17px}
+.l .two{align-items:stretch}
+.l .n1{background:var(--n1)}.l .n2{background:var(--n2)}.l .n3{background:var(--n3)}.l .n4{background:var(--n4)}.l .n5{background:var(--n5)}
+.warn{background:var(--amber)}
+
+@media (max-width:1060px){.compare{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:680px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.two,.two.alt{grid-template-columns:minmax(0,1fr)}.page{padding-inline:14px}}
+</style>
+</head>
+<body>
+<div class="compare">
+
+<section aria-label="Before">
+<p class="col-label">Before</p>
+<div class="frame"><div class="page">
+  <header class="head">
+    <h1>Usage</h1>
+    <div class="actions">
+      <span class="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg></span>
+      <span class="seg"><span class="on">7 days</span><span>30 days</span><span>All</span></span>
+    </div>
+  </header>
+  <p class="fresh"><span>2026-09-18 to 2026-09-24 UTC</span><span>Updated 14:05 UTC</span></p>
+
+  <div class="cards" data-cards="before"></div>
+
+  <div class="panel flow">
+    <div class="ph">
+      <div><p class="eyebrow">Token flow</p><div class="total num"><strong>1,189,402,117</strong><span>tokens</span></div></div>
+      <span class="seg sm"><span class="on">By type</span><span>By model</span></span>
+    </div>
+    <svg id="b-flow" aria-hidden="true"></svg>
+    <div class="legend" data-legend="before"></div>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <div class="ph"><div><p class="eyebrow">Prompt cache</p><p>Share of input tokens served from cache</p></div><span class="big num">79.6%</span></div>
+      <svg id="b-cache" aria-hidden="true"></svg>
+      <dl class="dl">
+        <div><dt><i style="background:var(--violet)"></i>Cache reads</dt><dd>910M<small>79.6%</small></dd></div>
+        <div><dt><i style="background:var(--blue)"></i>Fresh input</dt><dd>174M<small>15.2%</small></dd></div>
+        <div><dt><i style="background:var(--amber)"></i>Cache writes</dt><dd>59M<small>5.2%</small></dd></div>
+      </dl>
+    </div>
+    <div class="panel">
+      <div class="ph"><div><p class="eyebrow">Tool activity</p><p>Errors / results</p></div><div class="ph-r"><span class="seg sm"><span class="on">Error rate</span><span>Requests</span></span><span class="big num">3.1%</span></div></div>
+      <svg id="b-toolact" aria-hidden="true"></svg>
+      <dl class="dl">
+        <div><dt><i class="ok"></i>Successful</dt><dd>3,301<small>96.7%</small></dd></div>
+        <div><dt><i class="er"></i>Errors</dt><dd>106<small>3.1%</small></dd></div>
+        <div><dt><i class="un"></i>No matched result</dt><dd>5<small>0.1%</small></dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="eyebrow">Execution timing</p>
+    <dl class="lat">
+      <div><dt>p50 first text</dt><dd>1.8s</dd></div>
+      <div><dt>p95 first text</dt><dd>6.2s</dd></div>
+      <div><dt>p50 tool</dt><dd>0.4s</dd></div>
+      <div><dt>p95 tool</dt><dd>3.1s</dd></div>
+    </dl>
+    <div class="tline" aria-hidden="true">
+      <i style="width:62%;background:var(--violet)"></i>
+      <i style="width:38%;margin-left:20%;background:var(--blue)"></i>
+      <i style="width:24%;margin-left:48%;background:var(--amber)"></i>
+      <i style="width:44%;margin-left:30%;background:var(--teal)"></i>
+    </div>
+    <p class="note">Latest 20 events. Intervals share one wall-time scale, so overlaps remain visible.</p>
+  </div>
+
+  <div class="two alt">
+    <div class="panel">
+      <p class="eyebrow">Model usage</p>
+      <div class="donut">
+        <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-90 50 50)" fill="none" stroke-width="14">
+          <circle cx="50" cy="50" r="38" style="stroke:var(--m-purple)" stroke-dasharray="107.4 238.8"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--m-blue)" stroke-dasharray="59.7 238.8" stroke-dashoffset="-107.4"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--m-orange)" stroke-dasharray="35.8 238.8" stroke-dashoffset="-167.1"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--m-yellow)" stroke-dasharray="23.9 238.8" stroke-dashoffset="-202.9"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--m-pink)" stroke-dasharray="12 238.8" stroke-dashoffset="-226.8"/>
+        </g><text x="50" y="54" text-anchor="middle">5 tracked</text></svg>
+        <dl class="dl">
+          <div><dt><i style="background:var(--m-purple)"></i>Luna</dt><dd>535M<small>45%</small></dd></div>
+          <div><dt><i style="background:var(--m-blue)"></i>Sol</dt><dd>297M<small>25%</small></dd></div>
+          <div><dt><i style="background:var(--m-orange)"></i>Opus 5.5</dt><dd>178M<small>15%</small></dd></div>
+          <div><dt><i style="background:var(--m-yellow)"></i>Sonnet 5</dt><dd>119M<small>10%</small></dd></div>
+          <div><dt><i style="background:var(--m-pink)"></i>Other</dt><dd>59M<small>5%</small></dd></div>
+        </dl>
+      </div>
+      <p class="note">Other includes 3 model names.</p>
+    </div>
+    <div class="panel">
+      <p class="eyebrow">Tools</p>
+      <div class="legend" style="gap:12px;font-size:12px;color:var(--sec)"><span><i class="dot ok" style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px"></i>Successful</span><span><i class="er" style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px"></i>Error</span><span><i class="un" style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px"></i>Unmatched</span></div>
+      <div class="tools" data-tools></div>
+      <div class="ph"><h3 class="h3s">Error rate over time</h3><span class="toggle">Commits</span></div>
+      <div class="pick"><span class="on">Bash</span><span>Edit</span><span>Write</span></div>
+      <svg id="b-err" aria-hidden="true"></svg>
+      <p class="note">Cat Code build commit recorded for 2,904 of 3,412 selected tool requests.</p>
+      <details class="sm"><summary>Exact selected tool values</summary></details>
+    </div>
+  </div>
+
+  <div class="panel auto">
+    <h3 class="h3">Decision flow</h3>
+    <div class="scroll"><svg id="b-sankey" aria-hidden="true"></svg></div>
+    <details class="sm"><summary>Exact route values</summary></details>
+    <h3 class="h3s">Command block rate</h3>
+    <svg id="b-block" aria-hidden="true"></svg>
+    <details class="sm"><summary>Exact command block-rate values</summary></details>
+    <div class="two">
+      <div><h3 class="h3s">Decisions over time</h3><svg id="b-dec" aria-hidden="true"></svg><details class="sm"><summary>Exact decision values</summary></details></div>
+      <div><h3 class="h3s">Block reasons</h3><div class="reasons" data-reasons></div><details class="sm"><summary>Exact block-reason values</summary></details></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="eyebrow">Token volume by hour</p>
+    <div class="hbar"><span>Last 7 days · UTC</span><span class="hkey" id="b-key"></span></div>
+    <div class="heat" id="b-heat"></div>
+  </div>
+
+  <div class="panel">
+    <div class="dhead"><h2 class="h3">2026-09-22 UTC</h2><span class="btn">Clear selection</span></div>
+    <div class="figs"><span><strong>276M</strong> tokens</span><span><strong>9</strong> sessions</span><span><strong>604</strong> tool requests</span><span><strong>12</strong> errors</span></div>
+    <div class="sortbar">Sort shown sessions <span>Tokens ▾</span></div>
+    <div class="twrap"><table class="wide">
+      <thead><tr><th>Session</th><th>Models</th><th class="n">Tokens</th><th class="n">Est. token cost</th><th class="n">Tool requests</th><th class="n">Errors</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>Branch menu fix</td><td>Luna, Sol</td><td class="n">118,402,991</td><td class="n">$0.41873</td><td class="n">231</td><td class="n">5</td><td><span class="openb">Open</span></td></tr>
+        <tr><td>Usage drilldown</td><td>Luna</td><td class="n">84,117,020</td><td class="n">$0.29104</td><td class="n">166</td><td class="n">4</td><td><span class="openb">Open</span></td></tr>
+        <tr><td>Protocol tests</td><td>Opus 5.5</td><td class="n">40,338,715</td><td class="n">$0.13950</td><td class="n">97</td><td class="n">1</td><td><span class="openb">Open</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Showing 3 of 9 sessions ranked by tokens. Other sessions are included in day totals. Open a session to view its transcript.</p>
+    <p class="note">Estimated cost uses published API list prices for priced models and excludes cache writes; unpriced models are omitted, so the subtotal may be lower than actual spend.</p>
+  </div>
+
+  <details class="sm"><summary>Accessible values table</summary><p class="note">Transcript records include user, assistant, system and attachment records in main sessions.</p></details>
+</div></div>
+</section>
+
+<section aria-label="After">
+<p class="col-label">After</p>
+<div class="frame"><div class="page l">
+  <header class="head">
+    <div><h1>Analytics</h1><p class="sub">Sep 18 to 24 · Updated 9:05 PM</p></div>
+    <div class="actions">
+      <span class="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg></span>
+      <span class="seg"><span class="on">7 days</span><span>30 days</span><span>All</span></span>
+    </div>
+  </header>
+
+  <div class="cards" data-cards="after"></div>
+
+  <div class="panel flow">
+    <div class="ph">
+      <p class="eyebrow">Tokens</p>
+      <span class="seg sm"><span class="on">By type</span><span>By model</span></span>
+    </div>
+    <svg id="a-flow" aria-hidden="true"></svg>
+    <div class="legend" data-legend="after"></div>
+    <div class="day">
+      <div class="dhead"><h3>Tue, Sep 22</h3><span class="link">Clear</span></div>
+      <div class="figs"><span><strong>276M</strong> tokens</span><span><strong>9</strong> sessions</span><span><strong>604</strong> tool requests</span><span><strong>12</strong> errors</span></div>
+      <table>
+        <thead><tr><th>Session</th><th class="n">Tokens</th><th class="n">Est. cost</th></tr></thead>
+        <tbody>
+          <tr><td>Branch menu fix</td><td class="n">118M</td><td class="n">$0.42</td></tr>
+          <tr><td>Usage drilldown</td><td class="n">84M</td><td class="n">$0.29</td></tr>
+          <tr><td>Protocol tests</td><td class="n">40M</td><td class="n">$0.14</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="panel">
+      <div class="ph"><p class="eyebrow">Prompt cache</p><span class="big num">79.6%</span></div>
+      <svg id="a-cache" aria-hidden="true"></svg>
+      <dl class="dl">
+        <div><dt><i style="background:var(--cache-soft)"></i>Cache reads</dt><dd>910M</dd></div>
+        <div><dt><i style="background:var(--blue)"></i>Input</dt><dd>174M</dd></div>
+      </dl>
+    </div>
+    <div class="panel">
+      <div class="ph"><p class="eyebrow">Model usage</p></div>
+      <div class="donut">
+        <svg viewBox="0 0 100 100" aria-hidden="true"><g transform="rotate(-90 50 50)" fill="none" stroke-width="14">
+          <circle cx="50" cy="50" r="38" style="stroke:var(--n1)" stroke-dasharray="107.4 238.8"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--n2)" stroke-dasharray="59.7 238.8" stroke-dashoffset="-107.4"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--n3)" stroke-dasharray="35.8 238.8" stroke-dashoffset="-167.1"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--n4)" stroke-dasharray="23.9 238.8" stroke-dashoffset="-202.9"/>
+          <circle cx="50" cy="50" r="38" style="stroke:var(--n5)" stroke-dasharray="12 238.8" stroke-dashoffset="-226.8"/>
+        </g><text x="50" y="54" text-anchor="middle">5 models</text></svg>
+        <dl class="dl">
+          <div><dt><i class="n1"></i>Luna</dt><dd>535M<small>45%</small></dd></div>
+          <div><dt><i class="n2"></i>Sol</dt><dd>297M<small>25%</small></dd></div>
+          <div><dt><i class="n3"></i>Opus 5.5</dt><dd>178M<small>15%</small></dd></div>
+          <div><dt><i class="n4"></i>Sonnet 5</dt><dd>119M<small>10%</small></dd></div>
+          <div><dt><i class="n5"></i>Other</dt><dd>59M<small>5%</small></dd></div>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="ph"><p class="eyebrow">Tools</p></div>
+    <div class="legend" style="gap:12px;font-size:12px;color:var(--sec)"><span><i class="ok" style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px"></i>Successful</span><span><i class="er" style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px"></i>Error</span><span><i class="un" style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px"></i>No result</span></div>
+    <div class="tools" data-tools></div>
+    <div class="ph"><h3 class="h3s">Error rate over time</h3><span class="toggle">Commits</span></div>
+    <div class="pick"><span class="on">Bash</span><span>Edit</span><span>Write</span></div>
+    <svg id="a-err" aria-hidden="true"></svg>
+  </div>
+
+  <div class="panel">
+    <div class="ph"><p class="eyebrow">Activity by hour</p></div>
+    <div class="hbar"><span>Last 7 days</span><span class="hkey"><span>Less</span><i class="z"></i><i class="k1"></i><i class="k2"></i><i class="k3"></i><i class="k4"></i><span>More</span></span></div>
+    <div class="heat" id="a-heat"></div>
+  </div>
+
+  <div class="panel auto">
+    <div class="ph"><p class="eyebrow">Auto mode</p></div>
+    <h3 class="h3s">Decision flow</h3>
+    <svg id="a-sankey" aria-hidden="true"></svg>
+    <h3 class="h3s">Command block rate</h3>
+    <svg id="a-block" aria-hidden="true"></svg>
+    <div class="two">
+      <div><h3 class="h3s">Decisions over time</h3><svg id="a-dec" aria-hidden="true"></svg></div>
+      <div><h3 class="h3s">Block reasons</h3><div class="reasons" data-reasons></div></div>
+    </div>
+  </div>
+  <details class="sm"><summary>View as table</summary><div class="twrap" style="margin-top:10px"><table class="wide"><thead><tr><th>Day</th><th class="n">Input</th><th class="n">Cache</th><th class="n">Output</th><th class="n">Total</th><th class="n">Sessions</th><th class="n">Tool requests</th></tr></thead><tbody><tr><td>Fri 18</td><td class="n">22M</td><td class="n">128M</td><td class="n">6M</td><td class="n">156M</td><td class="n">8</td><td class="n">520</td></tr><tr><td>Sat 19</td><td class="n">30M</td><td class="n">170M</td><td class="n">8M</td><td class="n">208M</td><td class="n">9</td><td class="n">610</td></tr><tr><td>Sun 20</td><td class="n">18M</td><td class="n">96M</td><td class="n">5M</td><td class="n">119M</td><td class="n">5</td><td class="n">300</td></tr><tr><td>Mon 21</td><td class="n">0M</td><td class="n">0M</td><td class="n">0M</td><td class="n">0M</td><td class="n">0</td><td class="n">0</td></tr><tr><td>Tue 22</td><td class="n">41M</td><td class="n">224M</td><td class="n">11M</td><td class="n">276M</td><td class="n">9</td><td class="n">604</td></tr><tr><td>Wed 23</td><td class="n">35M</td><td class="n">192M</td><td class="n">9M</td><td class="n">236M</td><td class="n">10</td><td class="n">720</td></tr><tr><td>Thu 24</td><td class="n">28M</td><td class="n">159M</td><td class="n">7M</td><td class="n">194M</td><td class="n">7</td><td class="n">658</td></tr></tbody></table></div></details>
+</div></div>
+</section>
+
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var days=[18,19,20,21,22,23,24], wk=['Fri','Sat','Sun','Mon','Tue','Wed','Thu'];
+  var L={fresh:[22,30,18,0,41,35,28],read:[120,160,90,0,210,180,150],write:[8,10,6,0,14,12,9],out:[6,8,5,0,11,9,7]};
+  function put(el,w,h,s){el.setAttribute('viewBox','0 0 '+w+' '+h);el.innerHTML=s}
+  function smooth(pts){var d='M'+pts[0][0]+' '+pts[0][1];for(var i=1;i<pts.length;i++){var a=pts[i-1],b=pts[i],m=(a[0]+b[0])/2;d+=' C'+m+' '+a[1]+' '+m+' '+b[1]+' '+b[0]+' '+b[1]}return d}
+  function smoothBack(pts){var d='';for(var i=pts.length-1;i>0;i--){var a=pts[i],b=pts[i-1],m=(a[0]+b[0])/2;d+=' C'+m+' '+a[1]+' '+m+' '+b[1]+' '+b[0]+' '+b[1]}return d}
+
+  // cards
+  var spark={tokens:[156,208,119,0,276,236,194],sessions:[8,9,5,0,9,10,7],requests:[520,610,300,0,604,720,658],cache:[80,80,78.9,79.2,79.3,80.2]};
+  function sparkSvg(v,c){var mx=Math.max.apply(null,v),mn=Math.min.apply(null,v.concat([0]));if(c==='--violet')mn=Math.min.apply(null,v);var r=mx-mn||1;var p=v.map(function(x,i){return (1+i/(v.length-1)*50).toFixed(1)+','+(17-(x-mn)/r*15).toFixed(1)}).join(' ');return '<svg class="spark" viewBox="0 0 52 18" aria-hidden="true"><polyline points="'+p+'" fill="none" style="stroke:var('+c+')" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'}
+  function cards(after){
+    var items=[['Total tokens','1.2B','+12.4%','up','tokens','--blue'],['Per active day','198M','+9.8%','up',null,null],[after?'Sessions':'Sessions used','48','-3.1%','down','sessions','--violet'],['Tool requests','3,412','+8.0%','up','requests','--teal'],['Cached input','79.6%','+1.2 pts','up','cache','--violet']];
+    return items.map(function(it){return '<section class="card"><h2>'+it[0]+'</h2><strong>'+it[1]+'</strong><div class="foot"><span class="delta '+it[3]+'">'+it[2]+'</span>'+(it[4]?sparkSvg(spark[it[4]],it[5]):'')+'</div></section>'}).join('');
+  }
+  document.querySelector('[data-cards="before"]').innerHTML=cards(false);
+  document.querySelector('[data-cards="after"]').innerHTML=cards(true);
+
+  // token flow, smooth stacked area
+  function flow(el,opt){
+    var W=560,H=200,l=opt.yl?44:8,r=8,t=10,b=26,ih=H-t-b,max=300,n=7;
+    var x=function(i){return l+(i+.5)*(W-l-r)/n},y=function(v){return t+ih-v/max*ih},s='';
+    if(opt.sel!=null){var sw=(W-l-r)/n;s+='<rect x="'+(l+sw*opt.sel+3)+'" y="'+t+'" width="'+(sw-6)+'" height="'+ih+'" rx="6" style="fill:var(--acc-soft)"/>'}
+    (opt.yl?[0,100,200,300]:[0,100,200,300]).forEach(function(v){s+='<line x1="'+l+'" x2="'+(W-r)+'" y1="'+y(v)+'" y2="'+y(v)+'" class="gl'+(opt.dash?' d':'')+'"/>';if(opt.yl)s+='<text x="'+(l-8)+'" y="'+(y(v)+3)+'" text-anchor="end" class="ax">'+(v?v+'M':'0')+'</text>'});
+    var acc=[0,0,0,0,0,0,0];
+    opt.series.forEach(function(se){
+      var lo=acc.slice(),hi=acc.map(function(a,i){return a+se.v[i]});
+      var top=hi.map(function(v,i){return [x(i),y(v)]}),bot=lo.map(function(v,i){return [x(i),y(v)]});
+      s+='<path d="'+smooth(top)+' L'+bot[n-1][0]+' '+bot[n-1][1]+smoothBack(bot)+' Z" style="fill:var('+se.c+')" fill-opacity="'+(opt.op||.85)+'"/>';acc=hi;
+    });
+    days.forEach(function(d,i){s+='<text x="'+x(i)+'" y="'+(H-8)+'" text-anchor="middle" class="ax'+(opt.sel===i?' ax-on':'')+'">'+(opt.wk?wk[i]+' ':'Sep ')+d+'</text>'});
+    put(el,W,H,s);
+  }
+  flow($('b-flow'),{dash:true,series:[{v:L.fresh,c:'--blue'},{v:L.read,c:'--violet'},{v:L.write,c:'--amber'},{v:L.out,c:'--pink'}]});
+  var cache=L.read.map(function(v,i){return v+L.write[i]});
+  flow($('a-flow'),{yl:true,sel:4,wk:true,series:[{v:L.fresh,c:'--blue'},{v:cache,c:'--cache-soft'},{v:L.out,c:'--pink'}]});
+  function legend(items){return items.map(function(it){return '<span class="chip"><i style="background:var('+it[1]+')"></i>'+it[0]+'<b>'+it[2]+'</b><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.7-4 7.5-4 7.5 4 7.5 4-2.7 4-7.5 4-7.5-4-7.5-4Z"/><circle cx="10" cy="10" r="2"/></svg></span>'}).join('')}
+  document.querySelector('[data-legend="before"]').innerHTML=legend([['Fresh input','--blue','174M'],['Cache reads','--violet','910M'],['Cache writes','--amber','59M'],['Output','--pink','46M']]);
+  document.querySelector('[data-legend="after"]').innerHTML=legend([['Input','--blue','174M'],['Cache','--cache-soft','969M'],['Output','--pink','46M']]);
+
+  // small trend: area with a chosen baseline
+  function trend(el,v,o){
+    var W=300,H=110,l=o.l||34,r=6,t=8,b=20,ih=H-t-b,x=function(i){return l+i*(W-l-r)/6},y=function(p){return t+ih-(p-o.min)/(o.max-o.min)*ih},s='';
+    o.ticks.forEach(function(tk){s+='<line x1="'+l+'" x2="'+(W-r)+'" y1="'+y(tk[0])+'" y2="'+y(tk[0])+'" class="gl"/><text x="'+(l-5)+'" y="'+(y(tk[0])+3)+'" text-anchor="end" class="ax">'+tk[1]+'</text>'});
+    if(o.marks)o.marks.forEach(function(m){s+='<line x1="'+x(m)+'" x2="'+x(m)+'" y1="'+t+'" y2="'+(t+ih)+'" style="stroke:var(--violet)" stroke-dasharray="2 2"/>'});
+    var segs=[],cur=[];v.forEach(function(p,i){if(p==null){if(cur.length)segs.push(cur);cur=[]}else cur.push([x(i),y(p)])});if(cur.length)segs.push(cur);
+    segs.forEach(function(sg){if(o.fill&&sg.length>1)s+='<path d="'+smooth(sg)+' L'+sg[sg.length-1][0]+' '+y(o.min)+' L'+sg[0][0]+' '+y(o.min)+' Z" style="fill:var('+o.c+')" fill-opacity=".18"/>';s+='<path d="'+smooth(sg)+'" fill="none" style="stroke:var('+o.c+')" stroke-width="1.6"/>'});
+    if(o.sel!=null&&v[o.sel]!=null)s+='<line x1="'+x(o.sel)+'" x2="'+x(o.sel)+'" y1="'+t+'" y2="'+(t+ih)+'" style="stroke:var(--acc)" stroke-dasharray="3 3"/>';
+    days.forEach(function(d,i){if(i%2===0)s+='<text x="'+x(i)+'" y="'+(H-5)+'" text-anchor="middle" class="ax">'+(o.wk?wk[i]:'Sep '+d)+'</text>'});
+    put(el,W,H,s);
+  }
+  var cshare=[80,80,78.9,null,79.2,79.3,80.2];
+  trend($('b-cache'),cshare,{min:78.5,max:80.5,ticks:[[78.5,'78.5%'],[79.2,'79.2%'],[79.8,'79.8%'],[80.5,'80.5%']],c:'--violet',fill:true,l:40});
+  trend($('a-cache'),cshare,{min:0,max:100,ticks:[[0,'0%'],[50,'50%'],[100,'100%']],c:'--violet',fill:true,sel:4,wk:true});
+  trend($('b-toolact'),[3.9,4.6,4.0,null,2.1,2.8,3.3],{min:2,max:4.6,ticks:[[2,'2%'],[2.9,'2.9%'],[3.7,'3.7%'],[4.6,'4.6%']],c:'--red',fill:true});
+  var errv=[3.9,4.6,4.0,null,4.4,3.6,4.1];
+  trend($('b-err'),errv,{min:0,max:4.6,ticks:[[0,'0%'],[1.5,'1.5%'],[3.1,'3.1%'],[4.6,'4.6%']],c:'--red',marks:[1.5,4.2]});
+  trend($('a-err'),errv,{min:0,max:6,ticks:[[0,'0%'],[2,'2%'],[4,'4%'],[6,'6%']],c:'--red',marks:[1.5,4.2],sel:4,wk:true});
+  var blk=[2.1,5.8,3.2,null,6.7,4.0,2.9];
+  trend($('b-block'),blk,{min:0,max:6.7,ticks:[[0,'0%'],[2.2,'2.2%'],[4.5,'4.5%'],[6.7,'6.7%']],c:'--red'});
+  trend($('a-block'),blk,{min:0,max:8,ticks:[[0,'0%'],[4,'4%'],[8,'8%']],c:'--red',wk:true});
+
+  // tools
+  var tools=[['Bash',1204,48,2],['Read',842,5,1],['Edit',611,14,1],['Grep',402,0,0],['Write',188,2,1]];
+  var tmax=1204,th=tools.map(function(t){var ok=(t[1]-t[2]-t[3])/tmax*100,er=t[2]/tmax*100,un=t[3]/tmax*100;return '<span>'+t[0]+'</span><span class="stack"><i class="ok" style="width:'+ok+'%"></i><i class="er" style="width:'+er+'%"></i><i class="un" style="width:'+un+'%"></i></span><span class="n num">'+t[1].toLocaleString('en-US')+'</span>'}).join('');
+  document.querySelectorAll('[data-tools]').forEach(function(el){el.innerHTML=th});
+
+  // block reasons
+  var rs=[['Destructive command',14],['Network access',9],['Outside workspace',7],['Credential file',4]];
+  var rh=rs.map(function(r){return '<span>'+r[0]+'</span><span class="num">'+r[1]+'</span><span class="track"><i style="width:'+(r[1]/14*100)+'%"></i></span>'}).join('');
+  document.querySelectorAll('[data-reasons]').forEach(function(el){el.innerHTML=rh});
+
+  // decisions over time
+  var dec=[[160,5,6,4],[200,7,5,3],[120,3,4,2],[0,0,0,0],[230,8,6,5],[190,6,5,4],[170,5,4,3]];
+  function bars(el,o){
+    var W=o.w,H=o.h,l=o.l,t=12,b=o.b,ih=H-t-b,slot=(W-l-8)/7,max=260,s='';
+    [0,130,260].forEach(function(v){var gy=t+ih-v/max*ih;s+='<line x1="'+l+'" x2="'+(W-8)+'" y1="'+gy+'" y2="'+gy+'" class="gl"/><text x="'+(l-5)+'" y="'+(gy+3)+'" text-anchor="end" class="ax">'+v+'</text>'});
+    dec.forEach(function(r,i){var base=0,bx=l+slot*i+slot*.22;r.forEach(function(v,j){if(!v)return;var y1=t+ih-(base+v)/max*ih,y0=t+ih-base/max*ih;s+='<rect x="'+bx+'" y="'+y1+'" width="'+slot*.56+'" height="'+(y0-y1)+'" style="fill:var('+o.cols[j]+')"/>';base+=v});s+='<text x="'+(l+slot*i+slot/2)+'" y="'+(H-8)+'" text-anchor="middle" class="ax">'+o.lab(i)+'</text>'});
+    put(el,W,H,s);
+  }
+  bars($('b-dec'),{w:640,h:220,l:42,b:32,cols:['--green','--red','--violet','--slate'],lab:function(i){return '2026-09-'+days[i]}});
+  bars($('a-dec'),{w:300,h:150,l:30,b:22,cols:['--green','--red','--amber','--slate'],lab:function(i){return wk[i]}});
+
+  // decision flow
+  function band(x1,a1,b1,x2,a2,b2,c,op){var m=(x1+x2)/2;return '<path d="M'+x1+' '+a1+' C'+m+' '+a1+' '+m+' '+a2+' '+x2+' '+a2+' L'+x2+' '+b2+' C'+m+' '+b2+' '+m+' '+b1+' '+x1+' '+b1+' Z" style="fill:var('+c+')" fill-opacity="'+op+'"/>'}
+  function node(x,y,h,c){return '<rect x="'+x+'" y="'+y+'" width="10" height="'+Math.max(h,1.5)+'" rx="1" style="fill:var('+c+')"/>'}
+  function lab(x,y,t,anchor){return '<text x="'+x+'" y="'+y+'" class="lab"'+(anchor?' text-anchor="'+anchor+'"':'')+'>'+t+'</text>'}
+  (function(){
+    // today: only allowed routes and blocks after context review are drawn
+    var k=0.15,o=14,s='';
+    var A=[o,o+700*k,o+1100*k];
+    s+=band(18,A[0],A[1],740,o,o+700*k,'--green',.3);
+    s+=band(18,A[1],A[2],300,o+120,o+120+400*k,'--sec',.16);
+    s+=band(310,o+120,o+120+330*k,740,o+700*k,o+1030*k,'--green',.3);
+    s+=band(310,o+120+330*k,o+120+400*k,520,o+150,o+150+70*k,'--sec',.16);
+    s+=band(530,o+150,o+150+40*k,740,o+1030*k,o+1070*k,'--green',.3);
+    s+=band(530,o+150+40*k,o+150+70*k,740,o+184,o+184+30*k,'--red',.45);
+    s+=node(8,A[0],1100*k,'--sec')+node(300,o+120,400*k,'--sec')+node(520,o+150,70*k,'--sec')+node(740,o,1070*k,'--green')+node(740,o+184,30*k,'--red');
+    s+=lab(8,10,'Attempts')+lab(296,o+116,'Safety check','end')+lab(516,o+146,'Context review','end')+lab(736,10,'Approved','end')+lab(736,o+196,'Blocked','end');
+    put($('b-sankey'),760,o+200,s);
+  })();
+  (function(){
+    // fixed: every outcome is drawn, labels and colors match Decisions over time
+    var k=0.13,o=16,s='',X=[8,200,350,480];
+    var aA=o,aS=o+700*k,aE=aS+400*k,aC=aE+30*k,aEnd=aC+21*k;
+    var alT=o,blT=o+1066*k+12,erT=blT+34*k+12,caT=erT+30*k+12;
+    s+=band(18,aA,aS,X[3],alT,alT+700*k,'--green',.3);
+    s+=band(18,aS,aE,X[1],aS,aE,'--sec',.16);
+    s+=band(18,aE,aC,X[3],erT,erT+30*k,'--amber',.5);
+    s+=band(18,aC,aEnd,X[3],caT,caT+21*k,'--slate',.5);
+    var sA=aS,sB=sA+330*k,sC=sB+4*k;
+    s+=band(X[1]+10,sA,sB,X[3],alT+700*k,alT+1030*k,'--green',.3);
+    s+=band(X[1]+10,sB,sC,X[3],blT,blT+4*k,'--red',.5);
+    s+=band(X[1]+10,sC,aE,X[2],sC,aE,'--sec',.16);
+    var cA=sC,cB=cA+36*k;
+    s+=band(X[2]+10,cA,cB,X[3],alT+1030*k,alT+1066*k,'--green',.3);
+    s+=band(X[2]+10,cB,aE,X[3],blT+4*k,blT+34*k,'--red',.5);
+    s+=node(X[0],o,1151*k,'--sec')+node(X[1],aS,400*k,'--sec')+node(X[2],sC,66*k,'--sec');
+    s+=node(X[3],alT,1066*k,'--green')+node(X[3],blT,34*k,'--red')+node(X[3],erT,30*k,'--amber')+node(X[3],caT,21*k,'--slate');
+    s+=lab(8,11,'<tspan class="labb">Attempts</tspan> 1,151')+lab(X[1]-4,aS-4,'Safety check 400','end')+lab(X[2]-4,sC-4,'Context review 66','end');
+    s+=lab(X[3]+16,alT+70,'<tspan class="labb">Allowed</tspan> 1,066 · 93%')+lab(X[3]+16,blT+6,'<tspan class="labb">Blocked</tspan> 34 · 3%')+lab(X[3]+16,erT+6,'<tspan class="labb">Error</tspan> 30 · 3%')+lab(X[3]+16,caT+6,'<tspan class="labb">Cancelled</tspan> 21 · 2%');
+    put($('a-sankey'),640,caT+14,s);
+  })();
+
+  // heatmaps
+  var rnd=function(i){var x=Math.sin(i*12.9898+78.233)*43758.5453;return x-Math.floor(x)};
+  var F=[.8,.45,.3,0,1,.9,.7];
+  var V=F.map(function(f,d){var row=[];for(var h=0;h<24;h++){var on=h>=8&&h<=23,base=on?Math.sin(Math.PI*(h-8)/15):0,v=f*(base*.75+rnd(d*24+h)*.3);if(!on&&rnd(d*31+h)<.75)v=0;if(on&&rnd(d*17+h)<.08)v=0;row.push(v)}return row});
+  var M=Math.max.apply(null,[].concat.apply([],V));
+  function heat(el,rows,colLab,cell){var s='';V.forEach(function(row,d){s+='<span>'+rows[d]+'</span>';for(var h=0;h<24;h++)s+='<i class="'+cell(d,h)+'"></i>'});s+='<span></span>';for(var h=0;h<24;h++)s+='<span>'+colLab(h)+'</span>';el.innerHTML=s}
+  var hc=['h0','h1','h2','h3c','h4','h5','h6','h7','h8'];
+  heat($('b-heat'),days.map(function(d){return 'Sep '+d}),function(h){return h%6?'':String(h)},function(d,u){var v=V[d][(u+7)%24];return hc[v?1+Math.min(7,Math.floor(Math.sqrt(v/M)*8)):0]});
+  heat($('a-heat'),days.map(function(d,i){return wk[i]+' '+d}),function(h){return h%6?'':['12a','6a','12p','6p'][h/6]},function(d,h){var v=V[d][h];return v?'k'+(1+Math.min(3,Math.floor(v/M*4))):'z'});
+  var key='<span>Less</span>';hc.forEach(function(c){key+='<i class="'+c+'"></i>'});$('b-key').innerHTML=key+'<span>4.2M</span>';
+})();
+</script>
+</body>
+</html>
