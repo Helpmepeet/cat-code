@@ -10,7 +10,7 @@
 .usage-session-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
 .usage-session-actions .usage-session-open { white-space:nowrap; }
 .usage-session-timeline-toggle { border:1px solid var(--color-shell-seam); border-radius:5px; padding:5px 10px; color:var(--color-text-primary); font-size:12px; cursor:pointer; white-space:nowrap; }
-.usage-session-timeline-toggle:hover { background:var(--color-surface-hover); }
+.usage-session-timeline-toggle:hover { background:var(--color-shell-hover); }
 .usage-session-timeline-row > td { padding:0 8px 14px; text-align:left; }
 .usage-session-timeline { padding:12px 14px; border:1px solid var(--color-shell-seam); border-radius:8px; background:color-mix(in srgb,var(--usage-panel) 88%,var(--usage-selection)); }
 .usage-session-timeline h3 { margin:0 0 4px; color:var(--color-text-primary); font-size:12px; font-weight:500; }

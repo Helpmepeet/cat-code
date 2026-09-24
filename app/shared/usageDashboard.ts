@@ -133,7 +133,7 @@ export type UsageSessionContributor = {
     requests: number;
     results: number;
     errors: number;
-    /** Exact ranks across every contributor in the UTC day. */
+    /** Exact ranks across every contributor in the local calendar day. */
     rank?: { tokens: number; requests: number; errors: number };
     /** Required on validated snapshots; optional only for pre-grouping callers. */
     tokenCost?: UsageTokenCostEstimate;
@@ -146,10 +146,20 @@ export type UsageDayContributors = {
     omitted: number;
     items: UsageSessionContributor[];
 };
+export type UsageHour = {
+    /** Local hour represented by this elapsed-hour interval. Repeated during fall-back. */
+    hour: number;
+    /** UTC offset at the start of the interval. Distinguishes repeated local hours. */
+    offsetMinutes: number;
+    /** Exact interval start; present for daily seven-day buckets. */
+    startAt?: string;
+    requests: number;
+    /** Exclusive token totals supplied only for the seven-day window. */
+    tokens?: number;
+};
 export type UsageDay = {
-    hourlyRequests: number[];
-    /** Exclusive token totals per UTC hour, supplied only for the seven-day window. */
-    hourlyTokens?: number[];
+    /** Actual elapsed local-hour intervals for this day (23, 24, or 25 during DST). */
+    hours?: UsageHour[];
     /** Recorded outcomes matched to requests in this day or bucket. */
     results: number;
     errors: number;
@@ -167,7 +177,7 @@ export type UsageDay = {
     requests: number;
     contributors: UsageDayContributors;
 };
-/** Bounded accounting for the equal elapsed UTC interval immediately before a recent range. */
+/** Bounded accounting for the equal local calendar interval immediately before a recent range. */
 export type UsagePreviousPeriod = {
     startInclusive: string;
     endInclusive: string;
@@ -177,11 +187,15 @@ export type UsagePreviousPeriod = {
     requests: number;
     activeDays: number;
     cachedInputShare: number | null;
+    cacheWriteReporting: 'reported' | 'partial' | 'unreported' | 'unavailable';
 };
 export type UsageRangeSummary = {
     range: UsageWindow;
-    /** All uses sparse UTC buckets; absent means one calendar day. */
+    /** All uses sparse local-calendar buckets; absent means one calendar day. */
     bucketDays?: number;
+    /** Local calendar date keys covered by this range. */
+    startDate: string;
+    endDateExclusive: string;
     startInclusive: string;
     endExclusive: string;
     tokens: UsageTokens;
@@ -223,13 +237,13 @@ export type UsageCoverage = {
     identityConflicts: number;
 };
 export type UsageDashboardSnapshot = {
-    version: 1;
+    version: 2;
     metricVersion: 1;
-    countingVersion: 13;
+    countingVersion: 14;
     pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';
-    timezone: 'UTC';
+    timezone: string;
     asOf: string;
     computedAt: string;
     coverage: UsageCoverage;

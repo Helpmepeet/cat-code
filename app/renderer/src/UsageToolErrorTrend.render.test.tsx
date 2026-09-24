@@ -4,7 +4,7 @@ import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { UsageToolErrorTrend } from './UsageToolErrorTrend.js';
 
 const summary = {
-    range: '7d', startInclusive: '2026-09-07T00:00:00.000Z', endExclusive: '2026-09-14T00:00:00.000Z',
+    range: '7d', startInclusive: '2026-09-07T00:00:00.000Z', endExclusive: '2026-09-14T00:00:00.000Z', startDate: '2026-09-07', endDateExclusive: '2026-09-14',
     tools: [
         { id: 'read', kind: 'named', label: 'Read', requests: 3, results: 2, errors: 1 },
         { id: 'bash', kind: 'named', label: 'Bash', requests: 2, results: 0, errors: 0 },
@@ -24,15 +24,17 @@ test('renders an always-visible multi-tool graph with exact values and observed 
     expect(html).toContain('Days without matched results are gaps');
     expect(html).toContain('Observed Cat Code build 12345678');
     expect(html).toContain('Read: 1 error / 2 matched results');
-    expect(html).toContain('Cat Code build commit recorded for 2 of 5 selected tool requests.');
-    expect(html).toContain('Exact selected tool values');
+    expect(html).not.toContain('NaN');
+    expect(html).not.toContain('2026-09-07T08:00:00.000Z');
+    expect(html).toContain('0%');
     expect(html).not.toContain('All tools and result breakdown');
 });
 
-test('describes marker truncation without ranking omitted builds', () => {
+test('keeps omitted marker details out of the compact chart', () => {
     const truncated = structuredClone(summary) as UsageRangeSummary;
     truncated.days[0]!.tools[0]!.builds!.omitted = { count: 2, requests: 1, results: 0, errors: 0 };
     const html = renderToStaticMarkup(<UsageToolErrorTrend summary={truncated}/>);
-    expect(html).toContain('2 build markers are omitted.');
+    expect(html).toContain('Observed Cat Code build 12345678');
+    expect(html).not.toContain('2 build markers are omitted.');
     expect(html).not.toContain('less active build');
 });

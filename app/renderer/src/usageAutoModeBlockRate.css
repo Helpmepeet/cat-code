@@ -16,9 +16,6 @@
 .usage-auto-mode-block-rate-point:focus-visible .usage-auto-mode-block-rate-dot { stroke:var(--color-text-primary); stroke-width:2.5; }
 .usage-auto-mode-block-rate-readout { display:flex; flex-wrap:wrap; gap:4px 12px; min-height:18px; margin-top:4px; font-size:11px; }
 .usage-auto-mode-block-rate-readout span { color:var(--usage-secondary); font-family:var(--font-mono); }
-.usage-auto-mode-block-rate-values { margin-top:10px; }
-.usage-auto-mode-block-rate-values > summary { color:var(--usage-secondary); font-size:11px; cursor:pointer; }
-.usage-auto-mode-block-rate-values table { margin-top:8px; }
 @media(max-width:520px) {
   .usage-auto-mode-block-rate > header { display:block; }
   .usage-auto-mode-block-rate-headline { align-items:flex-start; margin-top:10px; text-align:left; }

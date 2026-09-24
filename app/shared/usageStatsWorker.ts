@@ -33,6 +33,50 @@ function addDays(s: string, n: number): string {
     d.setUTCDate(d.getUTCDate() + n);
     return d.toISOString().slice(0, 10);
 }
+function dateAt(timestamp: number, timezone: string): string {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(timestamp).map(part => [part.type, part.value]));
+    const year = Number(p.year) + (p.era === 'BC' ? -1 : 0);
+    return `${String(year).padStart(4, '0')}-${p.month}-${p.day}`;
+}
+function localMidnightAt(dateValue: string, timezone: string): number {
+    const [year, month, day] = dateValue.split('-').map(Number);
+    const base = new Date(0);
+    base.setUTCHours(0, 0, 0, 0);
+    base.setUTCFullYear(year!, month! - 1, day!);
+    const desired = base.getTime();
+    let guess = desired;
+    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+    for (let i = 0; i < 6; i++) {
+        const p = Object.fromEntries(formatter.formatToParts(guess).map(part => [part.type, part.value]));
+        const representedDate = new Date(0);
+        representedDate.setUTCHours(Number(p.hour), Number(p.minute), Number(p.second), 0);
+        representedDate.setUTCFullYear(Number(p.year) + (p.era === 'BC' ? -1 : 0), Number(p.month) - 1, Number(p.day));
+        const represented = representedDate.getTime();
+        const next = guess + desired - represented;
+        if (next === guess) break;
+        guess = next;
+    }
+    const parts = Object.fromEntries(formatter.formatToParts(guess).map(part => [part.type, part.value]));
+    if (dateAt(guess, timezone) === dateValue && parts.hour === '00' && parts.minute === '00') return guess;
+    let low = desired - 36 * 3600000, high = desired + 36 * 3600000;
+    while (low < high) {
+        const middle = low + Math.floor((high - low) / 2);
+        if (dateAt(middle, timezone) < dateValue) low = middle + 1;
+        else high = middle;
+    }
+    if (dateAt(low, timezone) === dateValue) return low;
+    throw new Error('Local date does not exist');
+}
+function zonedHour(timestamp: number, timezone: string): { hour: number; offsetMinutes: number } {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, hour: '2-digit', hourCycle: 'h23', timeZoneName: 'longOffset' }).formatToParts(timestamp).map(part => [part.type, part.value]));
+    const offset = /^GMT([+-])(\d{2}):(\d{2})$/.exec(p.timeZoneName ?? 'GMT+00:00');
+    const minutes = offset ? Number(offset[2]) * 60 + Number(offset[3]) : 0;
+    return { hour: Number(p.hour), offsetMinutes: offset?.[1] === '-' ? -minutes : minutes };
+}
+function validTimezone(value: unknown): value is string {
+    if (typeof value !== 'string' || value.length < 1 || value.length > 100) return false;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: value }); return true; } catch { return false; }
+}
 function autoCounts(value: unknown): boolean {
     return obj(value) && ownKeys(value, AUTO_OUTCOMES) && AUTO_OUTCOMES.every(key => safe(value[key]));
 }
@@ -44,8 +88,8 @@ function autoPopulation(value: unknown): boolean {
 }
 function autoMode(
     value: unknown,
-    start: string,
-    end: string,
+    startDate: string,
+    endDateExclusive: string,
     maxBuckets: number,
     bucketDays: number,
 ): boolean {
@@ -57,7 +101,7 @@ function autoMode(
     const bucketCommandCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
     const dates = new Set<string>();
     for (const bucket of value.buckets) {
-        if (!obj(bucket) || !ownKeys(bucket, ['date', 'allTools', 'commands']) || !date(bucket.date) || bucket.date < start.slice(0, 10) || bucket.date >= end.slice(0, 10) || (Date.parse(`${bucket.date}T00:00:00.000Z`) - Date.parse(start)) / 86400000 % bucketDays !== 0 || dates.has(bucket.date) || !autoPopulation(bucket.allTools) || !autoPopulation(bucket.commands)) return false;
+        if (!obj(bucket) || !ownKeys(bucket, ['date', 'allTools', 'commands']) || !date(bucket.date) || bucket.date < startDate || bucket.date >= endDateExclusive || (Date.parse(`${bucket.date}T00:00:00.000Z`) - Date.parse(`${startDate}T00:00:00.000Z`)) / 86400000 % bucketDays !== 0 || dates.has(bucket.date) || !autoPopulation(bucket.allTools) || !autoPopulation(bucket.commands)) return false;
         dates.add(bucket.date);
         const bucketAll = bucket.allTools as Record<string, unknown>, bucketCommands = bucket.commands as Record<string, unknown>;
         const outcomes = bucketAll.outcomes as Record<string, number>, commandOutcomes = bucketCommands.outcomes as Record<string, number>;
@@ -196,14 +240,12 @@ function contributor(v: unknown): boolean {
     return items.every((m) => tokenSum(m.tokens) <= tokenSum(v.tokens as UsageTokens)) && (['fresh', 'read', 'write', 'output'] as const).every(key => items.reduce((n, m) => n + m.tokens[key], 0) === (v.tokens as UsageTokens)[key]) && items.reduce((n, m) => n + m.tokenCost!.pricedTokens, 0) === contributorCost.pricedTokens && close(items.reduce((n, m) => n + m.tokenCost!.usd, 0), contributorCost.usd);
 }
 function day(v: unknown): v is UsageDay {
-    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', ...(v.hourlyTokens === undefined ? [] : ['hourlyTokens']), 'results', 'errors', 'tools', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests || !Array.isArray(v.tools) || v.tools.length > MAX_USAGE_TOOLS + 2 || !v.tools.every(dayTool) || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
+    if (!obj(v) || !ownKeys(v, ['date', ...(v.hours === undefined ? [] : ['hours']), 'results', 'errors', 'tools', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests || !Array.isArray(v.tools) || v.tools.length > MAX_USAGE_TOOLS + 2 || !v.tools.every(dayTool) || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
         return false;
     const dayToolIds = new Set<string>();
     if (v.tools.some(item => dayToolIds.has(item.id) || !dayToolIds.add(item.id)) || v.tools.reduce((sum, item) => sum + item.requests, 0) !== v.requests || v.tools.reduce((sum, item) => sum + item.results, 0) !== v.results || v.tools.reduce((sum, item) => sum + item.errors, 0) !== v.errors) return false;
     if ((v.cacheWriteReporting === 'unreported' || v.cacheWriteReporting === 'unavailable') && (v.tokens as UsageTokens).write !== 0)
         return false;
-    if (!Array.isArray(v.hourlyRequests) || v.hourlyRequests.length !== 24 || !v.hourlyRequests.every(safe) || !sumsSafe(...v.hourlyRequests) || v.hourlyRequests.reduce((n, x) => n + x, 0) !== v.requests) return false;
-    if (v.hourlyTokens !== undefined && (!Array.isArray(v.hourlyTokens) || v.hourlyTokens.length !== 24 || !v.hourlyTokens.every(safe) || !sumsSafe(...v.hourlyTokens) || v.hourlyTokens.reduce((n, x) => n + x, 0) !== tokenSum(v.tokens))) return false;
     const contributorIds = new Set<string>();
     const contributors = v.contributors.items as Record<string, unknown>[];
     const contributorTokenBuckets = (['fresh', 'read', 'write', 'output'] as const).map(key => contributors.reduce((n, c) => n + (c.tokens as UsageTokens)[key], 0));
@@ -228,45 +270,70 @@ function day(v: unknown): v is UsageDay {
         total: number;
     }).total, 0) === tokenSum(v.tokens);
 }
-function previousPeriod(v: unknown, range: '7d' | '30d', asOf: string): v is UsagePreviousPeriod {
-    if (!obj(v) || !ownKeys(v, ['startInclusive', 'endInclusive', 'tokens', 'sessions', 'records', 'requests', 'activeDays', 'cachedInputShare']) || !instant(v.startInclusive) || !instant(v.endInclusive) || !tokens(v.tokens) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.activeDays) || v.sessions > v.records)
+function validHours(value: UsageDay, timezone: string, withTokens: boolean, asOf: string): boolean {
+    const hours = value.hours;
+    if (!Array.isArray(hours) || hours.length < 23 || hours.length > 25) return false;
+    const expected: number[] = [];
+    const end = localMidnightAt(addDays(value.date, 1), timezone);
+    for (let at = localMidnightAt(value.date, timezone); at < end; at += 3600000) expected.push(at);
+    if (hours.length !== expected.length) return false;
+    let requests = 0, tokens = 0;
+    for (let i = 0; i < hours.length; i++) {
+        const item = hours[i] as unknown;
+        if (!obj(item) || !ownKeys(item, ['hour', 'offsetMinutes', 'startAt', 'requests', ...(withTokens ? ['tokens'] : [])]) || !Number.isInteger(item.hour) || typeof item.hour !== 'number' || item.hour < 0 || item.hour > 23 || !Number.isInteger(item.offsetMinutes) || typeof item.offsetMinutes !== 'number' || item.offsetMinutes < -840 || item.offsetMinutes > 840 || !instant(item.startAt) || Date.parse(item.startAt) !== expected[i] || !safe(item.requests) || withTokens && !safe(item.tokens)) return false;
+        const local = zonedHour(expected[i]!, timezone);
+        if (item.hour !== local.hour || item.offsetMinutes !== local.offsetMinutes) return false;
+        if (Date.parse(item.startAt) > Date.parse(asOf) && (item.requests !== 0 || (withTokens && item.tokens !== 0))) return false;
+        requests += item.requests as number;
+        if (withTokens) tokens += item.tokens as number;
+    }
+    return safe(requests) && requests === value.requests && (!withTokens || safe(tokens) && tokens === tokenSum(value.tokens));
+}
+function previousPeriod(v: unknown, range: '7d' | '30d', rangeStartDate: string, timezone: string): v is UsagePreviousPeriod {
+    if (!obj(v) || !ownKeys(v, ['startInclusive', 'endInclusive', 'tokens', 'sessions', 'records', 'requests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting']) || !instant(v.startInclusive) || !instant(v.endInclusive) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.activeDays) || v.sessions > v.records || (v.cacheWriteReporting === 'unreported' || v.cacheWriteReporting === 'unavailable') && v.tokens.write !== 0)
         return false;
     const days = range === '7d' ? 7 : 30;
-    const start = Date.parse(`${addDays(asOf.slice(0, 10), -(days * 2 - 1))}T00:00:00.000Z`);
-    const end = Date.parse(asOf) - days * 86400000;
+    const start = localMidnightAt(addDays(rangeStartDate, -days), timezone);
+    const end = localMidnightAt(rangeStartDate, timezone) - 1;
     if (v.startInclusive !== new Date(start).toISOString() || v.endInclusive !== new Date(end).toISOString() || v.activeDays > days || (v.activeDays === 0 && (v.records !== 0 || v.requests !== 0 || tokenSum(v.tokens) !== 0)))
         return false;
     const prompt = v.tokens.fresh + v.tokens.read + v.tokens.write;
     return v.cachedInputShare === null ? prompt === 0 : finite(v.cachedInputShare) && prompt > 0 && Math.abs(v.cachedInputShare - v.tokens.read / prompt * 100) <= 1e-9;
 }
-function range(v: unknown, asOf: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'timing', 'autoMode', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSummary {
+    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startDate', 'endDateExclusive', 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'timing', 'autoMode', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !date(v.startDate) || !date(v.endDateExclusive) || !instant(v.startInclusive) || !instant(v.endExclusive) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
     const all = v.range === 'all';
     if (all && v.previousPeriod !== undefined) return false;
-    if (v.range !== 'all' && v.previousPeriod !== undefined && !previousPeriod(v.previousPeriod, v.range, asOf)) return false;
+    if (v.range !== 'all' && v.previousPeriod !== undefined && !previousPeriod(v.previousPeriod, v.range, v.startDate as string, timezone)) return false;
     const n = v.range === '7d' ? 7 : 30;
     const bucketDays = v.bucketDays ?? 1;
     if (!safe(bucketDays) || bucketDays < 1 || (!all && v.bucketDays !== undefined)) return false;
-    const start = all ? v.startInclusive : `${addDays(asOf.slice(0, 10), -(n - 1))}T00:00:00.000Z`;
-    const end = `${addDays(asOf.slice(0, 10), 1)}T00:00:00.000Z`;
-    if (v.startInclusive !== start || v.endExclusive !== end || start >= end || bucketDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000) || (all ? v.days.length > MAX_USAGE_ALL_BUCKETS : v.days.length !== n) || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
+    const today = dateAt(Date.parse(asOf), timezone);
+    const expectedEndDate = addDays(today, 1);
+    const startDate = v.startDate as string, endDate = v.endDateExclusive as string;
+    const expectedStartDate = all ? startDate : addDays(today, -(n - 1));
+    const start = new Date(localMidnightAt(startDate, timezone)).toISOString();
+    const end = new Date(localMidnightAt(endDate, timezone)).toISOString();
+    const spanDays = (Date.parse(`${endDate}T00:00:00.000Z`) - Date.parse(`${startDate}T00:00:00.000Z`)) / 86400000;
+    if (startDate !== expectedStartDate || endDate !== expectedEndDate || v.startInclusive !== start || v.endExclusive !== end || start >= end || spanDays < 1 || bucketDays > spanDays || (all ? v.days.length > MAX_USAGE_ALL_BUCKETS : v.days.length !== n) || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
         return false;
-    if (!autoMode(v.autoMode, start, end, all ? MAX_USAGE_ALL_BUCKETS : n, bucketDays))
+    if (!autoMode(v.autoMode, startDate, endDate, all ? MAX_USAGE_ALL_BUCKETS : n, bucketDays))
         return false;
     const rangeToolIds = new Set((v.tools as UsageTool[]).map(item => item.id));
     const rangeToolsById = new Map((v.tools as UsageTool[]).map(item => [item.id, item]));
     for (let i = 0; i < v.days.length; i++) {
         const d = v.days[i] as UsageDay;
-        if ((v.range === '7d') !== (d.hourlyTokens !== undefined)) return false;
-        if (!all && d.date !== addDays(v.startInclusive.slice(0, 10), i)) return false;
-        if (all && (d.date < start.slice(0, 10) || d.date >= end.slice(0, 10) || i > 0 && d.date <= (v.days[i - 1] as UsageDay).date || (Date.parse(`${d.date}T00:00:00.000Z`) - Date.parse(start)) / 86400000 % bucketDays !== 0 || d.contributors.state !== 'unavailable')) return false;
-        const bucketStart = Date.parse(`${d.date}T00:00:00.000Z`);
-        const bucketEnd = Math.min(bucketStart + bucketDays * 86400000, Date.parse(v.endExclusive as string));
+        if ((v.range === '7d') !== (d.hours !== undefined)) return false;
+        if (!all && d.date !== addDays(startDate, i)) return false;
+        if (all && (d.date < startDate || d.date >= endDate || i > 0 && d.date <= (v.days[i - 1] as UsageDay).date || (Date.parse(`${d.date}T00:00:00.000Z`) - Date.parse(`${startDate}T00:00:00.000Z`)) / 86400000 % bucketDays !== 0 || d.contributors.state !== 'unavailable')) return false;
+        const bucketStart = localMidnightAt(d.date, timezone);
+        const bucketEnd = localMidnightAt(addDays(d.date, bucketDays), timezone);
         if (d.tools.some(tool => !rangeToolIds.has(tool.id) || tool.builds?.items.some(build => Date.parse(build.firstObservedAt) < bucketStart || Date.parse(build.firstObservedAt) >= bucketEnd || Date.parse(build.firstObservedAt) > Date.parse(asOf)))) return false;
-        if (d.contributors.items.some(contributor => contributor.timeline.items.some(item => Date.parse(item.startedAt) > Date.parse(asOf)))) return false;
+        if (d.contributors.items.some(contributor => contributor.timeline.items.some(item => dateAt(Date.parse(item.startedAt), timezone) !== d.date || Date.parse(item.startedAt) > Date.parse(asOf)))) return false;
+        if (d.hours && !validHours(d, timezone, v.range === '7d', asOf)) return false;
     }
-    if (all && (v.days.length === 0 ? start !== `${asOf.slice(0, 10)}T00:00:00.000Z` : (v.days[0] as UsageDay).date !== start.slice(0, 10))) return false;
+    if (all && v.days.some(d => d.date < startDate)) return false;
     const days = v.days as UsageDay[];
     const sum = (key: keyof UsageTokens): number => days.reduce((n: number, d: UsageDay) => n + d.tokens[key], 0);
     if (v.tokens.fresh !== sum('fresh') || v.tokens.read !== sum('read') || v.tokens.write !== sum('write') || v.tokens.output !== sum('output'))
@@ -279,8 +346,6 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
             : dayStates.has('reported') ? 'reported' : 'unreported';
     if (v.cacheWriteReporting !== reporting)
         return false;
-    if (bucketDays === 1 && days.some(d => d.date === asOf.slice(0, 10) && d.hourlyRequests.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
-    if (days.some(d => d.date === asOf.slice(0, 10) && d.hourlyTokens?.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
     for (const key of ['results', 'errors'] as const) {
         if (days.reduce((n, d) => n + d[key], 0) !== v.tools.reduce((n, t) => n + t[key], 0)) return false;
     }
@@ -291,7 +356,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     }
     const dailyRecords = days.reduce((n, d) => n + d.records, 0);
     const dailySessions = days.reduce((n, d) => n + d.sessions, 0);
-    if (v.requests !== v.identifiedRequests + v.fallbackRequests || v.requests !== days.reduce((n, d) => n + d.requests, 0) || v.records !== dailyRecords || v.sessions > v.records || v.sessions > dailySessions || v.sessions < Math.max(...days.map(d => d.sessions), 0) || days.some(d => d.sessions > d.records) || (bucketDays === 1 ? v.activeDays !== days.filter((d: UsageDay) => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length : v.activeDays < days.filter(d => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length || v.activeDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000)))
+    if (v.requests !== v.identifiedRequests + v.fallbackRequests || v.requests !== days.reduce((n, d) => n + d.requests, 0) || v.records !== dailyRecords || v.sessions > v.records || v.sessions > dailySessions || v.sessions < Math.max(...days.map(d => d.sessions), 0) || days.some(d => d.sessions > d.records) || (bucketDays === 1 ? v.activeDays !== days.filter((d: UsageDay) => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length : v.activeDays < days.filter(d => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length || v.activeDays > spanDays))
         return false;
     const modelTotals = v.models.map(m => tokenSum(m.tokens));
     const toolTotals = v.tools.map(t => t.requests);
@@ -316,7 +381,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 13 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 14 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];
@@ -326,7 +391,7 @@ function snapshot(v: unknown): v is UsageDashboardSnapshot {
     if (c.state === 'complete' && ((c.sourcesRead as number) !== (c.sourcesDiscovered as number) || losses.some(k => c[k] !== 0)))
         return false;
     const ranges = v.ranges as Record<string, unknown>;
-    if (!range(ranges.all, v.asOf) || (ranges.all as UsageRangeSummary).range !== 'all' || !range(ranges['7d'], v.asOf) || !range(ranges['30d'], v.asOf) || (ranges['7d'] as UsageRangeSummary).range !== '7d' || (ranges['30d'] as UsageRangeSummary).range !== '30d') return false;
+    if (!range(ranges.all, v.asOf, v.timezone as string) || (ranges.all as UsageRangeSummary).range !== 'all' || !range(ranges['7d'], v.asOf, v.timezone as string) || !range(ranges['30d'], v.asOf, v.timezone as string) || (ranges['7d'] as UsageRangeSummary).range !== '7d' || (ranges['30d'] as UsageRangeSummary).range !== '30d') return false;
     const all = ranges.all as UsageRangeSummary;
     for (const range of [ranges['7d'], ranges['30d']] as UsageRangeSummary[]) {
         const previous = range.previousPeriod;

@@ -2,6 +2,8 @@
 
 Reviewed September 24, 2026, at HEAD `102dfc0f`. Scope: report only. No code was changed.
 
+Implementation followed this review on September 24, 2026. The current Analytics page uses local-calendar aggregation, the five-card layout, the four agreed Auto mode display groups, and one bottom exact-values disclosure. The mockup below records the earlier visual review; the running page and its tests are the implementation reference.
+
 **The main problem is that Analytics has no hierarchy. It shows every chart it can compute at equal weight, then explains itself in small grey notes.** About 13 charts, five metric cards, six separate "exact values" disclosures, and up to seven partial-history warnings share one scrolling column. The page also runs its own palette of about 14 hues instead of the app's tokens. Some states are broken outright: hover and pressed backgrounds use an undefined CSS variable, and the auto-mode outcome colors are swapped between two adjacent charts.
 
 The agreed direction keeps the five summary cards and model donut, simplifies the palette and copy, and removes Tool activity and Execution timing.
@@ -10,7 +12,7 @@ The agreed direction keeps the five summary cards and model donut, simplifies th
 
 ## Decisions after review
 
-Agreed item by item on September 24, 2026, then updated after the follow-up review. Where these differ from recommendations further down, the decisions win. The mockup linked above predates the follow-up decisions and still needs revision.
+Agreed item by item on September 24, 2026, then updated after the follow-up review. Where these differ from recommendations further down, the decisions win. The mockup linked above predates the follow-up decisions and is retained as a review artifact.
 
 - **Header:**
   - The title becomes "Analytics".

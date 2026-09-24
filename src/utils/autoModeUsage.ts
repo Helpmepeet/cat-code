@@ -13,6 +13,7 @@ import {
   type AutoModeStage,
 } from './permissions/autoModeObservation.js'
 import { createHash } from 'node:crypto'
+import { addCalendarDays, localDateKey, localMidnight } from './usageWindow.js'
 import type {
   AutoModeUsageBucket,
   AutoModeUsageCoverage,
@@ -50,6 +51,7 @@ export type AutoModeUsageReductionInput = Readonly<{
   rangeStart: string
   rangeEnd: string
   cutoff: string
+  timezone?: string
 }>
 
 export type ProjectedAutoModeDiagnosticPayload =
@@ -451,6 +453,7 @@ function incrementOutcome(population: AutoModeUsagePopulation, outcome: AutoMode
  * durable identity storage remain outside this pure reducer.
  */
 export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoModeUsageSummary {
+  const timezone = input.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   const rangeStart = validTime(input.rangeStart)
   const rangeEnd = validTime(input.rangeEnd)
   const cutoff = validTime(input.cutoff)
@@ -533,7 +536,7 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
           scope: record.sourceScope,
           attemptId,
           timestamp,
-          date: new Date(timestamp).toISOString().slice(0, 10),
+          date: localDateKey(timestamp, timezone),
           toolKind: parsed.tool_kind,
           start: parsed,
           invalidTerminal: false,
@@ -644,8 +647,8 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
       continue
     }
 
-    const bucketStart = Date.parse(`${attempt.date}T00:00:00.000Z`)
-    const bucketEnd = Math.min(bucketStart + 86400000 - 1, rangeEnd)
+    const bucketStart = localMidnight(attempt.date, timezone)
+    const bucketEnd = Math.min(localMidnight(addCalendarDays(attempt.date, 1), timezone) - 1, rangeEnd)
     const bucket = buckets.get(attempt.date) ?? {
       date: attempt.date,
       allTools: population(coverageFor(sources, 'allTools', bucketStart, bucketEnd)),

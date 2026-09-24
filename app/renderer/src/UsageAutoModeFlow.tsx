@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { AutoModeUsageOutcome, AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
-import { autoModeAttempts, autoModeOverviewEdges, autoModeRouteEdges } from './usageAutoModeState.js'
+import type { AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
+import { AUTO_MODE_DISPLAY_GROUPS, autoModeAttempts, autoModeOverviewEdges, type AutoModeDisplayGroup } from './usageAutoModeState.js'
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js'
 import {
   layoutAutoModeFlow,
@@ -11,24 +11,16 @@ import {
 } from './usageAutoModeFlowState.js'
 import './usageAutoModeFlow.css'
 
-const OUTCOMES = new Set<AutoModeUsageOutcome>([
-  'allowed',
-  'policy_blocked',
-  'review_required',
-  'operational_error',
-  'cancelled',
-  'unknown_outcome',
-  'incomplete',
-])
+const GROUPS = new Set(['allowed', 'blocked', 'error', 'cancelled'])
 
-function linkOutcome(link: UsageAutoModeFlowLink): AutoModeUsageOutcome | null {
+function linkOutcome(link: UsageAutoModeFlowLink): AutoModeDisplayGroup | null {
   if (link.outcome) return link.outcome
-  return OUTCOMES.has(link.to as AutoModeUsageOutcome) ? link.to as AutoModeUsageOutcome : null
+  return GROUPS.has(link.to) ? link.to as AutoModeDisplayGroup : null
 }
 
 function usageAutoModeFlowLinkLabel(edge: UsageAutoModeFlowEdge, total: number): string {
   const percent = total ? usagePercent(edge.count / total * 100) : 'Not applicable'
-  return `${usageAutoModeFlowNodeLabel(edge.from)} to ${usageAutoModeFlowNodeLabel(edge.to)}: ${usageNumber(edge.count)} recorded ${edge.count === 1 ? 'attempt' : 'attempts'}, ${percent} of ${usageNumber(total)} normal completed decisions`
+  return `${usageAutoModeFlowNodeLabel(edge.from)} to ${usageAutoModeFlowNodeLabel(edge.to)}: ${usageNumber(edge.count)} recorded ${edge.count === 1 ? 'attempt' : 'attempts'}, ${percent} of ${usageNumber(total)} attempts`
 }
 
 function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
@@ -61,23 +53,11 @@ function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
   }
 }
 
-function ExactRouteValues({ edges, total }: { edges: UsageAutoModeFlowEdge[]; total: number }) {
-  return <details className="usage-auto-flow-values">
-    <summary>Exact route values</summary>
-    <div className="usage-table-scroll"><table>
-      <caption>Recorded automatic permission routes</caption>
-      <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Attempts</th><th scope="col">Share of all attempts</th></tr></thead>
-      <tbody>{edges.map(edge => <tr key={`${edge.from}\u0000${edge.to}`}><th scope="row">{usageAutoModeFlowNodeLabel(edge.from)}</th><td>{usageAutoModeFlowNodeLabel(edge.to)}</td><td>{usageNumber(edge.count)}</td><td>{usagePercent(edge.count / total * 100)}</td></tr>)}</tbody>
-    </table></div>
-  </details>
-}
-
 export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }) {
   const chart = useUsageChartWidth()
   const attempts = autoModeAttempts(summary)
-  const routeEdges = autoModeRouteEdges(summary)
   const overviewEdges = autoModeOverviewEdges(summary)
-  const layout = layoutAutoModeFlow(overviewEdges, Math.max(760, chart.width))
+  const layout = layoutAutoModeFlow(overviewEdges, chart.width)
   const [activeLinkId, setActiveLinkId] = useState<string | null>(null)
   const activeLink = layout?.links.find(link => link.id === activeLinkId) ?? null
 
@@ -96,15 +76,12 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
   if (!layout) {
     return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
       <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-      {summary.allTools.coverage.state === 'partial' && <p className="usage-note">Partial history</p>}
-      <p className="usage-note">No normal completed decisions</p>
-      <ExactRouteValues edges={routeEdges} total={attempts}/>
+      <p className="usage-note">No decisions</p>
     </section>
   }
 
   return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
     <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-    {summary.allTools.coverage.state === 'partial' && <p className="usage-note">Partial history</p>}
     <div className="usage-auto-flow-scroll">
       <svg
         ref={chart.ref}
@@ -113,7 +90,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         height={layout.height}
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         role="group"
-        aria-label={`Normal decision flow for ${usageNumber(layout.total)} recorded automatic permission attempts`}
+        aria-label={`Decision flow for ${usageNumber(layout.total)} recorded automatic permission attempts`}
         onMouseLeave={() => setActiveLinkId(null)}
       >
         {layout.links.map(link => {
@@ -139,7 +116,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         })}
         {layout.nodes.map(node => {
           const label = nodeLabelPosition(node)
-          const outcome = OUTCOMES.has(node.id as AutoModeUsageOutcome) ? node.id : ''
+          const outcome = GROUPS.has(node.id) ? node.id : ''
           return <g key={node.id}>
             <rect className={`usage-auto-flow-node usage-auto-flow-node-${outcome || node.id.toLowerCase().replaceAll(' ', '-')}`} x={node.x} y={node.y} width={node.width} height={node.height} rx="2">
               <title>{`${node.label}: ${usageNumber(Math.max(node.incoming, node.outgoing))} recorded attempts`}</title>
@@ -150,6 +127,8 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
       </svg>
     </div>
     {activeLink && <p className="usage-auto-flow-readout" role="status"><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} · {usagePercent(activeLink.count / layout.total * 100)}</p>}
-    <ExactRouteValues edges={routeEdges} total={attempts}/>
+    <ul className="usage-auto-flow-legend" aria-label="Decision outcomes">
+      {AUTO_MODE_DISPLAY_GROUPS.map(({ group, label }) => <li key={group} aria-label={group === 'error' ? 'Error. Includes review required, operational error, unknown outcome, and incomplete' : label} title={group === 'error' ? 'Includes review required, operational error, unknown outcome, and incomplete' : undefined}><i className={`usage-auto-flow-legend-${group}`} aria-hidden="true"/><span>{label}</span></li>)}
+    </ul>
   </section>
 }

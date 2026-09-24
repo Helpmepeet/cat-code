@@ -5,7 +5,7 @@ import { usageBucketDays, usageBucketLabel, usageDatePosition } from './usageTre
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { useUsageChartWidth, usageCompact, usageNumber, usageTotal } from './usageDashboardState.js';
 import { usageFlowSamples, usageStackedAreaGeometry } from './usageStackedAreaState.js';
-export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }: {
+export function UsageTokenFlow({ summary, colors, selected, onSelect }: {
     summary: UsageRangeSummary;
     colors: Record<string, string>;
     selected: string;
@@ -15,6 +15,7 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
     const [mode, setMode] = useState<UsageFlowMode>('type');
     const [hiddenSeries, setHiddenSeries] = useState<Record<UsageFlowMode, string[]>>({ type: [], model: [] });
     const [hovered, setHovered] = useState('');
+    const [focusedDate, setFocusedDate] = useState('');
     const clipId = `usage-flow-${useId().replaceAll(':', '')}`;
     const availableSeries = usageFlowSeries(summary, colors, mode);
     const hidden = new Set(hiddenSeries[mode]);
@@ -29,16 +30,17 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
     const detail = summary.days.find(day => day.date === hovered);
     const max = usageAxisCeiling(Math.max(1, ...summary.days.map(shownTotal)));
     const chart = useUsageChartWidth();
-    const narrow = chart.width < 560, left = 0, right = chart.width;
+    const narrow = chart.width < 560, left = 46, right = chart.width - 8;
     const height = narrow ? 250 : 300, bottom = height - 34, top = 10, plotHeight = bottom - top;
     const width = right - left;
-    const span = Math.max(1, (Date.parse(summary.endExclusive) - Date.parse(summary.startInclusive)) / 86400000);
+    const firstDay = Date.parse(`${summary.startDate}T00:00:00.000Z`);
+    const span = Math.max(1, (Date.parse(`${summary.endDateExclusive}T00:00:00.000Z`) - firstDay) / 86400000);
     const bucketDays = usageBucketDays(summary);
     const step = width * bucketDays / span;
-    const slotX = (date: string) => left + (Date.parse(`${date}T00:00:00.000Z`) - Date.parse(summary.startInclusive)) / 86400000 / span * width;
+    const slotX = (date: string) => left + (Date.parse(`${date}T00:00:00.000Z`) - firstDay) / 86400000 / span * width;
     const slotWidth = (date: string) => Math.min(step, right - slotX(date));
     const slotCenter = (date: string) => slotX(date) + slotWidth(date) / 2;
-    const ticks = usageChartTicks(summary.startInclusive, summary.endExclusive, width)
+    const ticks = usageChartTicks(summary.startDate, summary.endDateExclusive, width)
         .filter((_, index, all) => all.length <= (narrow ? 4 : 6) || index % Math.ceil(all.length / (narrow ? 4 : 6)) === 0 || index === all.length - 1);
     const samples = usageFlowSamples(summary, series);
     const areaSamples = samples.map(sample => ({ x: slotCenter(sample.date), values: sample.values }));
@@ -59,35 +61,35 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
         hoverCumulative += value;
         return value > 0 ? [{ id: item.id, label: item.label, color: item.color, value, y: bottom - hoverCumulative / max * plotHeight }] : [];
     }) : [];
-    const displayedTotal = series.reduce((sum, item) => sum + item.total, 0);
     const tooltipWidth = 190, tooltipHeight = 28 + hoverPoints.length * 18;
     const hoverX = detail ? slotCenter(detail.date) : 0;
     const tooltipX = Math.max(0, Math.min(chart.width - tooltipWidth, hoverX > chart.width / 2 ? hoverX - tooltipWidth - 14 : hoverX + 14));
     const tooltipY = Math.max(top, Math.min(bottom - tooltipHeight, (hoverPoints.length ? Math.min(...hoverPoints.map(point => point.y)) : top) - 18));
     return <>
-    <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Token flow</h2><div><strong>{usageNumber(displayedTotal)}</strong><span>tokens</span></div></div>
+    <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Tokens</h2></div>
       <div className="usage-flow-controls"><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div></div>
     </div>
     <svg className="usage-chart usage-flow-chart" shapeRendering="geometricPrecision" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${mode}${hidden.size ? `, ${hidden.size} hidden` : ''}`}>
         <defs><clipPath id={clipId}><rect x={left} y={top} width={width} height={plotHeight}/></clipPath></defs>
-        {[0, 1 / 3, 2 / 3, 1].map(fraction => <line key={fraction} x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-flow-grid-line"/>)}
+        {[0, 1 / 3, 2 / 3, 1].map(fraction => <g key={fraction}><line x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-flow-grid-line"/><text x={left - 8} y={bottom - fraction * plotHeight + 4} textAnchor="end" className="usage-axis">{usageCompact(Math.round(max * fraction))}</text></g>)}
+        {selected && summary.days.some(day => day.date === selected) && <rect x={slotX(selected)} y={top} width={slotWidth(selected)} height={plotHeight} className="usage-selected" aria-hidden="true"/>}
         <g clipPath={`url(#${clipId})`} className="usage-flow-areas" aria-hidden="true">
             {geometry.paths.map((path, index) => <path key={series[index]!.id} className="usage-flow-area" fill={series[index]!.color} d={path}/>)}
             {geometry.centerPaths.flatMap((paths, index) => thinSeries[index] ? paths.map((path, part) => <path key={`${series[index]!.id}:${part}`} className="usage-flow-thin-series" fill="none" stroke={series[index]!.color} strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" d={path}/>) : [])}
         </g>
         {summary.days.map((day, i) => {
-            return <g key={day.date} className="usage-flow-hit" role="button" tabIndex={0} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => setHovered(day.date)} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens${partial ? ', partial history' : ''}`} onClick={() => onSelect(day.date)} onKeyDown={event => {
+            return <g key={day.date} className="usage-flow-hit" role="button" tabIndex={focusedDate === day.date || (!focusedDate && (selected === day.date || (!selected && i === 0))) ? 0 : -1} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => { setFocusedDate(day.date); setHovered(day.date); }} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens`} onClick={() => onSelect(day.date)} onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(day.date); }
-                else if (event.key === 'Escape') setHovered('');
+                else if (event.key === 'Escape') { setHovered(''); onSelect(''); }
                 else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
                     event.preventDefault();
                     const next = Math.max(0, Math.min(summary.days.length - 1, i + (event.key === 'ArrowRight' ? 1 : -1)));
-                    onSelect(summary.days[next]!.date);
+                    setFocusedDate(summary.days[next]!.date);
                     event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('[role="button"]')[next]?.focus();
                 }
             }}>
-                {usageTotal(day.tokens) === 0 && partial && <text x={slotCenter(day.date)} y={bottom - 8} textAnchor="middle" className="usage-axis">?</text>}
                 <rect className="usage-flow-hit-target" x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight + 8} fill="transparent"/>
+                {selected === day.date && <rect x={slotX(day.date)} y={bottom + 4} width={slotWidth(day.date)} height={3} rx={1.5} className="usage-selection-underline" aria-hidden="true"/>}
             </g>;
         })}
         {detail && hoverPoints.length > 0 && <g className="usage-flow-hover-markers" pointerEvents="none" aria-hidden="true">
@@ -122,20 +124,4 @@ export function UsageCacheChart({ summary, partial, selected = '', onSelect = ()
     partial: boolean;
 }) {
     return <UsageAreaTrend summary={summary} metric="cache" partial={partial} selected={selected} onSelect={onSelect}/>;
-}
-export function UsageActivityRows({ summary, selected, onSelect, partial }: {
-    summary: UsageRangeSummary;
-    selected: string;
-    onSelect: (date: string) => void;
-    partial: boolean;
-}) {
-    return <>{(['sessions', 'requests'] as const).map(key => {
-            const max = Math.max(1, ...summary.days.map(d => d[key]));
-            return <div className="usage-activity-row" key={key}><div><span>{key === 'sessions' ? 'Sessions used' : 'Tool requests'}</span><small>0–{usageNumber(max)}</small></div><svg preserveAspectRatio="none" viewBox="0 0 600 72" aria-label={`${key === 'sessions' ? 'Sessions used' : 'Tool requests'}, separate scale from 0 to ${max}`}>
-   {summary.days.map((d, i) => <g key={d.date} tabIndex={0} role="button" aria-pressed={selected === d.date} aria-label={`${d.date}: ${d[key]} ${key}${partial ? ', partial history' : ''}`} onFocus={() => onSelect(d.date)} onClick={() => onSelect(d.date)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onSelect(d.date);
-            } }}><rect x={i * 600 / summary.days.length} y="0" width={600 / summary.days.length} height="60" fill="transparent"/><rect x={i * 600 / summary.days.length + 2} y={55 - d[key] / max * 50} width={Math.max(1, 600 / summary.days.length - 4)} height={d[key] / max * 50} className="usage-accent"/></g>)}
-  </svg></div>;
-        })}</>;
 }

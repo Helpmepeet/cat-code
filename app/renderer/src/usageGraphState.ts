@@ -1,5 +1,4 @@
 import type { UsageCategory, UsageDay, UsageRangeSummary } from '../../shared/usageDashboard.js';
-import { usageHasCacheWrites } from './usageTrendState.js';
 import { usageTotal } from './usageDashboardState.js';
 export type UsageFlowMode = 'type' | 'model';
 export function usageAxisCeiling(value: number): number {
@@ -12,7 +11,8 @@ export function usageChartDate(date: string, includeYear = false): string {
     return `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][parsed.getUTCMonth()]} ${parsed.getUTCDate()}${includeYear ? ` '${String(parsed.getUTCFullYear()).slice(-2)}` : ''}`;
 }
 export function usageChartTicks(start: string, endExclusive: string, width: number): string[] {
-    const first = Date.parse(start), days = Math.max(1, Math.round((Date.parse(endExclusive) - first) / 86400000));
+    // Date keys are local calendar days. UTC is used only for stable civil-day arithmetic.
+    const first = Date.parse(`${start}T00:00:00.000Z`), days = Math.max(1, Math.round((Date.parse(`${endExclusive}T00:00:00.000Z`) - first) / 86400000));
     const count = Math.max(2, Math.floor(width / (days > 365 ? 90 : 64)));
     const interval = Math.max(1, Math.ceil(days / count));
     const dates: string[] = [];
@@ -65,8 +65,10 @@ export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<strin
         return usageOutsideIn(summary.models.filter(model => !hidden.has(model.id)), model => usageTotal(model.tokens))
             .map(model => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
     }
-    const types = ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
-        .filter(([key]) => !hidden.has(key) && !(key === 'write' && !usageHasCacheWrites(summary)))
-        .map(([id, label, color]) => ({ id, label, color, total: summary.tokens[id], value: (day: UsageDay) => day.tokens[id] }));
+    const types = [
+        { id: 'output', label: 'Output', color: 'var(--usage-output)', total: summary.tokens.output, value: (day: UsageDay) => day.tokens.output },
+        { id: 'fresh', label: 'Input', color: 'var(--usage-fresh)', total: summary.tokens.fresh, value: (day: UsageDay) => day.tokens.fresh },
+        { id: 'cache', label: 'Cache', color: 'var(--usage-cache)', total: summary.tokens.read + summary.tokens.write, value: (day: UsageDay) => day.tokens.read + day.tokens.write },
+    ].filter(item => !hidden.has(item.id));
     return usageOutsideIn(types, type => type.total);
 }

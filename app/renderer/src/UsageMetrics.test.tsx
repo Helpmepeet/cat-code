@@ -6,8 +6,8 @@ import { UsageMetrics } from './UsageMetrics.js';
 const empty = await collectRetainedUsage([], '2026-09-13T12:30:00.000Z');
 function comparable() {
     const summary = structuredClone(empty.ranges['7d']);
-    Object.assign(summary, { tokens: { fresh: 60, read: 1140, write: 0, output: 0 }, activeDays: 3, sessions: 8, requests: 80, cachedInputShare: 95 });
-    summary.previousPeriod = { startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T12:30:00.000Z', tokens: { fresh: 100, read: 900, write: 0, output: 0 }, activeDays: 4, sessions: 10, records: 30, requests: 100, cachedInputShare: 90 };
+    Object.assign(summary, { tokens: { fresh: 60, read: 1140, write: 0, output: 0 }, activeDays: 3, sessions: 8, requests: 80, cachedInputShare: 95, cacheWriteReporting: 'reported' });
+    summary.previousPeriod = { startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T12:30:00.000Z', tokens: { fresh: 100, read: 900, write: 0, output: 0 }, activeDays: 4, sessions: 10, records: 30, requests: 100, cachedInputShare: 90, cacheWriteReporting: 'reported' };
     return summary;
 }
 
@@ -15,13 +15,13 @@ test('each tile uses its matching prior metric and exposes the precise compariso
     const html = renderToStaticMarkup(<UsageMetrics summary={comparable()} unknown="Loading" partial={false}/>);
     expect(html).toContain('Total tokens: 20% increase');
     expect(html).toContain('Per active day: 60% increase');
-    expect(html).toContain('Sessions used: 20% decrease');
+    expect(html).toContain('Sessions: 20% decrease');
     expect(html).toContain('Tool requests: 20% decrease');
     expect(html).toContain('Cached input: 5 percentage points increase');
     expect(html).toContain('▲ 5 pp');
     expect(html).toContain('usage-delta-up');
     expect(html).toContain('usage-delta-down');
-    expect(html).toContain('Compared with previous 7 days: 2026-08-31 00:00 to 2026-09-06 12:30 UTC');
+    expect(html).toContain('vs prior 7 days');
 });
 
 test('All, incomplete history, absent baseline and zero count baseline omit deltas', () => {
@@ -36,4 +36,14 @@ test('All, incomplete history, absent baseline and zero count baseline omit delt
     Reflect.deleteProperty(summary, 'previousPeriod');
     expect(render()).not.toContain('usage-metric-delta');
     expect(renderToStaticMarkup(<UsageMetrics unknown="Loading" partial={false}/>)).not.toContain('usage-metric-delta');
+});
+
+test('unreported cache writes suppress the share and its comparison', () => {
+    const summary = comparable();
+    summary.cacheWriteReporting = 'unreported';
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('<h2>Cached input</h2><strong>–</strong>');
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).not.toContain('Cached input: 5 percentage points increase');
+    summary.cacheWriteReporting = 'reported';
+    summary.previousPeriod!.cacheWriteReporting = 'unreported';
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).not.toContain('Cached input: 5 percentage points increase');
 });

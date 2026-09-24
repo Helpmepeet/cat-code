@@ -13,6 +13,27 @@ export const AUTO_MODE_OUTCOMES: readonly AutoModeUsageOutcome[] = [
   'incomplete',
 ]
 
+export const AUTO_MODE_DISPLAY_GROUPS = [
+  { group: 'allowed', label: 'Allowed', outcomes: ['allowed'] },
+  { group: 'blocked', label: 'Blocked', outcomes: ['policy_blocked'] },
+  { group: 'error', label: 'Error', outcomes: ['operational_error', 'review_required', 'unknown_outcome', 'incomplete'] },
+  { group: 'cancelled', label: 'Cancelled', outcomes: ['cancelled'] },
+] as const satisfies readonly { group: string; label: string; outcomes: readonly AutoModeUsageOutcome[] }[]
+
+export type AutoModeDisplayGroup = typeof AUTO_MODE_DISPLAY_GROUPS[number]['group']
+
+export function autoModeDisplayGroup(outcome: AutoModeUsageOutcome): AutoModeDisplayGroup {
+  return AUTO_MODE_DISPLAY_GROUPS.find(group => (group.outcomes as readonly string[]).includes(outcome))!.group
+}
+
+export function autoModeDisplayCounts(summary: AutoModeUsageSummary) {
+  return AUTO_MODE_DISPLAY_GROUPS.map(({ group, label, outcomes }) => ({
+    group,
+    label,
+    count: outcomes.reduce((total, outcome) => total + summary.allTools.outcomes[outcome], 0),
+  }))
+}
+
 export function autoModeAttempts(summary: AutoModeUsageSummary): number {
   return AUTO_MODE_OUTCOMES.reduce(
     (total, outcome) => total + summary.allTools.outcomes[outcome],
@@ -83,6 +104,18 @@ export function autoModeOutcomeSeries(summary: AutoModeUsageSummary) {
   }))
 }
 
+export function autoModeDisplaySeries(summary: AutoModeUsageSummary) {
+  const buckets = [...summary.buckets].sort((left, right) => left.date.localeCompare(right.date))
+  return AUTO_MODE_DISPLAY_GROUPS.map(({ group, label, outcomes }) => ({
+    group,
+    label,
+    points: buckets.map(bucket => ({
+      date: bucket.date,
+      count: outcomes.reduce((total, outcome) => total + bucket.allTools.outcomes[outcome], 0),
+    })),
+  }))
+}
+
 export function sortedAutoModeCategories(summary: AutoModeUsageSummary) {
   return [...summary.categories].sort((left, right) =>
     right.count - left.count || left.key.localeCompare(right.key),
@@ -101,8 +134,8 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
 }
 
 export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
-  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageOutcome; count: number }>()
-  const add = (from: string, to: string, count: number, outcome?: AutoModeUsageOutcome) => {
+  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeDisplayGroup; count: number }>()
+  const add = (from: string, to: string, count: number, outcome?: AutoModeDisplayGroup) => {
     const key = JSON.stringify([from, to])
     const edge = edges.get(key)
     if (edge) edge.count += count
@@ -110,22 +143,10 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   }
 
   for (const route of summary.routes) {
-    if (route.outcome === 'allowed') {
-      if (route.route === 'stage2') {
-        add('Attempts', 'Safety check', route.count)
-        add('Safety check', 'Context review', route.count)
-        add('Context review', 'Approved', route.count, 'allowed')
-      } else if (route.route === 'stage1') {
-        add('Attempts', 'Safety check', route.count)
-        add('Safety check', 'Approved', route.count, 'allowed')
-      } else if (route.route !== 'unknown') {
-        add('Attempts', 'Approved', route.count, 'allowed')
-      }
-    } else if (route.route === 'stage2' && route.outcome === 'policy_blocked') {
-      add('Attempts', 'Safety check', route.count)
-      add('Safety check', 'Context review', route.count)
-      add('Context review', 'Blocked', route.count, 'policy_blocked')
-    }
+    const routeNode = `Route: ${route.route}`
+    const group = autoModeDisplayGroup(route.outcome)
+    add('Attempts', routeNode, route.count)
+    add(routeNode, group, route.count, group)
   }
   return [...edges.values()].sort((left, right) =>
     left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || (left.outcome ?? '').localeCompare(right.outcome ?? ''),

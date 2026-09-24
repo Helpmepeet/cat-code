@@ -6,44 +6,40 @@ import { autoModeFlowConserves, layoutAutoModeFlow } from './usageAutoModeFlowSt
 
 const edges = autoModeOverviewEdges(reduceAutoModeUsage(hundredAttemptAutoModeFixture()))
 
-test('lays out the canonical decision path with conservation and a stable node order', () => {
+test('lays out every attempt through a route into a display group', () => {
   const layout = layoutAutoModeFlow(edges)
   expect(layout).not.toBeNull()
   expect(autoModeFlowConserves(edges)).toBe(true)
-  expect(layout!.total).toBe(87)
+  expect(layout!.total).toBe(100)
   expect(layout!.nodes.map(node => node.id)).toEqual([
-    'Attempts', 'Safety check', 'Context review', 'Approved', 'Blocked',
+    'Attempts', 'Route: base', 'Route: stage1', 'Route: stage2', 'allowed', 'blocked', 'error',
   ])
-  expect(layout!.nodes.map(node => [node.id, node.column])).toEqual([
-    ['Attempts', 0], ['Safety check', 1], ['Context review', 2], ['Approved', 3], ['Blocked', 3],
-  ])
+  expect(layout!.nodes.filter(node => node.column === 2).reduce((total, node) => total + node.incoming, 0)).toBe(100)
   expect(layout!.links.every(link => Math.abs(link.height - link.count * layout!.scale) < 0.000001)).toBe(true)
-  for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 3)) {
+  for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 2)) {
     expect(node.incoming).toBe(node.outgoing)
   }
   expect(layoutAutoModeFlow([...edges].reverse())!.nodes.map(node => node.id)).toEqual(layout!.nodes.map(node => node.id))
 })
 
-test('preserves rare route sizes without a visual minimum', () => {
+test('preserves rare outcome sizes without a visual minimum', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Safety check', count: 10 },
-    { from: 'Safety check', to: 'Context review', count: 10 },
-    { from: 'Context review', to: 'Approved', outcome: 'allowed', count: 9 },
-    { from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Route: base', count: 10 },
+    { from: 'Route: base', to: 'allowed', outcome: 'allowed', count: 9 },
+    { from: 'Route: base', to: 'error', outcome: 'error', count: 1 },
   ])
   expect(layout).not.toBeNull()
-  expect(layout!.links.find(link => link.to === 'Blocked')!.height).toBe(layout!.scale)
-  expect(layout!.links.find(link => link.from === 'Context review' && link.to === 'Approved')!.height).toBe(layout!.scale * 9)
+  expect(layout!.links.find(link => link.to === 'error')!.height).toBe(layout!.scale)
+  expect(layout!.links.find(link => link.from === 'Route: base' && link.to === 'allowed')!.height).toBe(layout!.scale * 9)
 })
 
-test('stacks the three approval paths without changing their values', () => {
+test('stacks routes and groups without changing their values', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Approved', outcome: 'allowed', count: 75 },
-    { from: 'Attempts', to: 'Safety check', count: 25 },
-    { from: 'Safety check', to: 'Approved', outcome: 'allowed', count: 20 },
-    { from: 'Safety check', to: 'Context review', count: 5 },
-    { from: 'Context review', to: 'Approved', outcome: 'allowed', count: 4 },
-    { from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Route: base', count: 75 },
+    { from: 'Attempts', to: 'Route: stage1', count: 25 },
+    { from: 'Route: base', to: 'allowed', outcome: 'allowed', count: 75 },
+    { from: 'Route: stage1', to: 'allowed', outcome: 'allowed', count: 24 },
+    { from: 'Route: stage1', to: 'blocked', outcome: 'blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
@@ -59,16 +55,15 @@ test('stacks the three approval paths without changing their values', () => {
   }
 })
 
-test('leaves readable vertical space between terminal nodes', () => {
+test('leaves readable vertical space between outcome nodes', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Safety check', count: 100 },
-    { from: 'Safety check', to: 'Context review', count: 100 },
-    { from: 'Context review', to: 'Approved', outcome: 'allowed', count: 99 },
-    { from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Route: stage2', count: 100 },
+    { from: 'Route: stage2', to: 'allowed', outcome: 'allowed', count: 99 },
+    { from: 'Route: stage2', to: 'blocked', outcome: 'blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
-  const nodes = layout!.nodes.filter(node => node.column === 3)
+  const nodes = layout!.nodes.filter(node => node.column === 2)
   for (let index = 1; index < nodes.length; index += 1) {
     const previous = nodes[index - 1]!
     expect(nodes[index]!.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(20)

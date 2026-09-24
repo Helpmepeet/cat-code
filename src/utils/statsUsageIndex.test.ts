@@ -52,7 +52,6 @@ test('cold accounting matches direct scan; warm restart reads no transcripts; ch
     const warm = await collectIndexedUsage(files, '2026-09-13T12:01:00.000Z', { ...opts(path), onReadSource: () => { reads++; } });
     expect(reads).toBe(0);
     const expectedWarm = structuredClone(first.ranges);
-    expectedWarm['7d'].previousPeriod!.endInclusive = '2026-09-06T12:01:00.000Z';
     expect(warm.ranges).toEqual(expectedWarm);
     await appendFile(file, JSON.stringify(row('c')) + '\n');
     const updated = await collectIndexedUsage(files, cutoff, { ...opts(path), onReadSource: () => { reads++; } });
@@ -60,7 +59,22 @@ test('cold accounting matches direct scan; warm restart reads no transcripts; ch
     const removed = await collectIndexedUsage([copy], cutoff, opts(path));
     expect(removed.ranges).toEqual((await collectRetainedUsage([copy], cutoff)).ranges);
 });
-test('future records and UTC rollover recalculate from index without rereading sources', async () => {
+
+test('timezone changes rebuild local buckets from the retained index without rereading transcripts', async () => {
+    const { path, file } = await fixture();
+    const observation = row('near-midnight', '2026-09-13T02:00:00.000Z', 7);
+    await writeFile(file, JSON.stringify(observation));
+    const utc = await collectIndexedUsage([file], cutoff, { ...opts(path), timezone: 'UTC' });
+    let reads = 0;
+    const local = await collectIndexedUsage([file], cutoff, { ...opts(path), timezone: 'America/New_York', onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+    expect(utc.timezone).toBe('UTC');
+    expect(local.timezone).toBe('America/New_York');
+    expect(utc.ranges['7d'].days.find(day => day.tokens.fresh > 0)!.date).toBe('2026-09-13');
+    expect(local.ranges['7d'].days.find(day => day.tokens.fresh > 0)!.date).toBe('2026-09-12');
+    expect(readSavedUsage(path)).toEqual(local);
+});
+test('future records and local calendar rollover recalculate from index without rereading sources', async () => {
     const { path, file } = await fixture();
     await writeFile(file, JSON.stringify(row('future', '2026-09-13T13:00:00.000Z')));
     expect((await collectIndexedUsage([file], cutoff, opts(path))).ranges['7d'].tokens.fresh).toBe(0);
@@ -74,7 +88,7 @@ test('future records and UTC rollover recalculate from index without rereading s
     expect(next.ranges.all.tokens.fresh).toBe(10);
     expect(next.ranges.all.startInclusive).toBe('2026-09-13T00:00:00.000Z');
 });
-test('warm indexed collection advances previous-period cutoffs without rereading sources', async () => {
+test('warm indexed collection preserves prior local calendar periods without rereading sources', async () => {
     const { path, file } = await fixture();
     await writeFile(file, [
         row('anchor', '2026-08-30T00:00:00.000Z', 1),
@@ -83,7 +97,7 @@ test('warm indexed collection advances previous-period cutoffs without rereading
         row('current', cutoff, 3),
     ].map(value => JSON.stringify(value)).join('\n'));
     const first = await collectIndexedUsage([file], cutoff, opts(path));
-    expect(first.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
+    expect(first.ranges['7d'].previousPeriod!.tokens.fresh).toBe(18);
     let reads = 0;
     const advanced = await collectIndexedUsage([file], '2026-09-13T13:00:00.000Z', { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
@@ -330,7 +344,7 @@ test('v8 grouped snapshots rebuild named categories from indexed records without
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(13);
+    expect(rebuilt.countingVersion).toBe(14);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);
@@ -362,9 +376,13 @@ test('older snapshots rebuild hourly tokens and daily outcomes from the index, t
     const result = { type: 'user', sessionId: 's', uuid: 'result', timestamp: cutoff, message: { content: [{ type: 'tool_result', tool_use_id: 'request', is_error: true }] } };
     await writeFile(file, [row('request', '2026-09-12T23:00:00.000Z', 25), result].map(item => JSON.stringify(item)).join('\n'));
     const original = await collectIndexedUsage([file], cutoff, opts(path));
-    const legacy = structuredClone(original);
+    const legacy = structuredClone(original) as any;
+    legacy.version = 1;
+    legacy.countingVersion = 13;
     for (const range of Object.values(legacy.ranges)) for (const day of range.days) {
-        delete day.hourlyTokens;
+        delete range.startDate;
+        delete range.endDateExclusive;
+        delete day.hours;
         delete (day as Partial<typeof day>).results;
         delete (day as Partial<typeof day>).errors;
     }
@@ -379,7 +397,7 @@ test('older snapshots rebuild hourly tokens and daily outcomes from the index, t
     expect(reads).toBe(0);
     expect(rebuilt.ranges).toEqual(original.ranges);
     expect(rebuilt.ranges['7d'].days.at(-2)).toMatchObject({ results: 1, errors: 1 });
-    expect(rebuilt.ranges['7d'].days.at(-2)!.hourlyTokens![23]).toBe(25);
+    expect(rebuilt.ranges['7d'].days.at(-2)!.hours!.find(hour => hour.hour === 23)!.tokens).toBe(25);
     const warm = await collectIndexedUsage([file], '2026-09-13T12:01:00.000Z', options);
     expect(reads).toBe(0);
     expect(warm.ranges).toEqual(rebuilt.ranges);

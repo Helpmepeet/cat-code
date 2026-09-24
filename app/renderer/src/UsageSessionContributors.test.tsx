@@ -20,9 +20,7 @@ test('partial estimates stay priced subtotals and distinguish tiny positive valu
         timeline: { state: 'unavailable', omitted: 0, items: [] },
     }] };
     const html = renderToStaticMarkup(<UsageSessionContributors contributors={contributors} rows={[]}/>);
-    expect(html).toContain('&lt;$0.00001');
-    expect(html).toContain('priced subtotal');
-    expect(html).toContain('&lt;100% token coverage');
-    expect(html).toContain('including the top 1 by tokens, tool requests, and recorded errors');
-    expect(html).toContain('estimates are not actual spend');
+    expect(html).toContain('&lt;$0.01');
+    expect(html).toContain('based on 9,996 of 10,000 tokens');
+    expect(html).toContain('Top 1 of 2 sessions. Day totals include all.');
 });

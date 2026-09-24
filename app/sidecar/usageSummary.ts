@@ -108,8 +108,9 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
             const tools = groupDayTools(day.tools);
             if (day.contributors.state === 'unavailable') return { ...day, tools, models: [...kept, ...(other ? [{ id: 'other', total: other }] : [])] };
             const ranked = withDayRanks([...day.contributors.items]);
-            const leadersPerMetric = Math.floor(contributorLimit / 3);
-            const selected = new Set(ranked.filter(item => item.rank && (item.rank.tokens <= leadersPerMetric || item.rank.requests <= leadersPerMetric || item.rank.errors <= leadersPerMetric)));
+            const tokenLeaders = contributorLimit >= 10 ? Math.min(10, contributorLimit) : Math.floor(contributorLimit / 3);
+            const otherLeaders = contributorLimit >= 10 ? Math.floor((contributorLimit - tokenLeaders) / 2) : Math.floor(contributorLimit / 3);
+            const selected = new Set(ranked.filter(item => item.rank && (item.rank.tokens <= tokenLeaders || item.rank.requests <= otherLeaders || item.rank.errors <= otherLeaders)));
             for (const item of [...ranked].filter(item => item.timeline.state !== 'unavailable').sort((a, b) => (b.timeline.items.at(-1)?.startedAt ?? '').localeCompare(a.timeline.items.at(-1)?.startedAt ?? '') || a.id.localeCompare(b.id))) {
                 if (selected.size >= contributorLimit) break;
                 selected.add(item);
