@@ -6,7 +6,7 @@
  * question from taking the whole region. A split workspace mounts a card per
  * pane, so only the active pane owns the keyboard. Accent marks picked answers;
  * the keyboard highlight and pointer hover use a neutral wash. In single-select,
- * moving the highlight onto an option picks it for Enter.
+ * arrow and digit shortcuts pick their destination; focus alone does not.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -43,8 +43,8 @@ function askKeysLive(card: HTMLElement | null, active: Element | null): boolean 
 
 /**
  * A pick keeps its accent under the pointer. The keyboard highlight is a
- * neutral wash; in single-select, moving it onto an option also picks that
- * option, so Enter sends the highlighted answer.
+ * neutral wash. Arrow and digit shortcuts synchronize a single-select pick
+ * with that highlight; Tab focus alone leaves the answer unchanged.
  */
 function rowTone(checked: boolean, active: boolean): string {
   if (checked) {
@@ -234,12 +234,27 @@ export function AskQuestionFlow({
     }
   }
 
+  function focusCursor(next: number) {
+    const target =
+      next < optionCount
+        ? cardRef.current?.querySelectorAll<HTMLButtonElement>(
+            'button[data-ask-option]',
+          )[next]
+        : cardRef.current?.querySelector<HTMLButtonElement>(
+            'button[data-ask-other]',
+          )
+    target?.focus()
+  }
+
   function moveCursor(next: number) {
     setCursor(next)
     if (q && !q.multiSelect && next < optionCount) {
       updateDraft(() => ({ optionIndices: [next], other: '' }))
       setOtherActive(false)
     }
+    // Space is native button activation when a row has focus. Keep that focus
+    // on the highlighted row so Space never clicks the previous option.
+    focusCursor(next)
   }
 
   function setOtherText(value: string) {
@@ -311,18 +326,19 @@ export function AskQuestionFlow({
       if (!inCard && !permissionKeysAreLive(event.target)) return
 
       // Containment claims the NAVIGATION keys. Footer controls keep their own
-      // activation keys, and option rows keep Space. Enter on an option row is
-      // deliberately claimed by the flow: clicking an answer and pressing Enter
-      // submits it instead of toggling it off.
+      // activation keys, and option rows keep Space. Enter on an option row or
+      // Other is claimed by the flow so it submits or opens the freeform field
+      // without triggering the button's native click.
       if (inCard && CONTROL_ACTIVATION_KEYS.has(event.key)) {
         const control = element.closest(CARD_CONTROL_SELECTOR)
         const optionRow = element.closest('[data-ask-option]')
-        const flowClaimsOptionEnter =
-          event.key === 'Enter' && optionRow !== null
+        const flowClaimsRowEnter =
+          event.key === 'Enter' &&
+          (optionRow !== null || control?.matches('[data-ask-other]') === true)
         if (
           control !== null &&
           control !== otherInputRef.current &&
-          !flowClaimsOptionEnter
+          !flowClaimsRowEnter
         ) {
           return
         }
@@ -374,6 +390,7 @@ export function AskQuestionFlow({
           event.preventDefault()
           setCursor(index)
           toggleOption(index)
+          focusCursor(index)
         } else if (index === otherIndex) {
           event.preventDefault()
           setCursor(otherIndex)
@@ -520,10 +537,11 @@ export function AskQuestionFlow({
               key={i}
               onClick={() => toggleOption(i)}
               role={q.multiSelect ? 'checkbox' : 'radio'}
-              // Focus is keyboard intent; in single-select it also picks the
-              // focused option so its highlight matches what Enter will send.
+              // Focus moves the highlight. Arrow and digit shortcuts pick;
+              // simply tabbing into the group does not choose an answer.
               onFocus={() => {
-                moveCursor(i)
+                setCursor(i)
+                setOtherActive(false)
               }}
               onMouseEnter={() => setHoverIndex(i)}
               onMouseLeave={() => setHoverIndex(null)}
@@ -598,6 +616,7 @@ export function AskQuestionFlow({
           ) : (
             <button
               className="flex-1 cursor-pointer bg-transparent text-left text-[13px] leading-[17px] text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default"
+              data-ask-other
               disabled={submitted}
               onClick={() => setOtherActive(true)}
               type="button"

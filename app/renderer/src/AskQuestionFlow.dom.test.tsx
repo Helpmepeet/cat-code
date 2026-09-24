@@ -176,9 +176,8 @@ function buttonWithText(card: HTMLElement, text: string): HTMLButtonElement {
 
 /**
  * What the row's checkbox/radio marker shows: '✓' when the option is part of
- * the answer, empty when it is not. The digit moved out of the marker and onto
- * a keycap at the row's other end, so the marker now carries ONLY the chosen
- * state — which is the whole point of the 2026-08-23 vocabulary change.
+ * the answer, empty when it is not. The digit sits at the row's other end, so
+ * the marker carries only the chosen state.
  */
 function markerText(row: HTMLElement): string {
   return row.querySelector('[data-ask-marker]')?.textContent?.trim() ?? ''
@@ -324,6 +323,56 @@ test('single-select has one option tab stop', async () => {
   expect(optionRows(card).map(row => row.tabIndex)).toEqual([-1, 0, -1])
 })
 
+test('Tab focus alone does not choose a single-select answer', async () => {
+  const { card } = await mountFlow()
+  const first = optionRows(card)[0]!
+  await focusIn(first)
+
+  expect(document.activeElement).toBe(first)
+  expect(first.getAttribute('data-ask-active')).toBe('true')
+  expect(checkedState(first)).toBe('false')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+})
+
+test('arrow navigation focuses the row whose Space action will run', async () => {
+  for (const questions of [SINGLE, MULTI]) {
+    const { card, calls, tree } = await mountFlow(questions)
+    const first = optionRows(card)[0]!
+    await focusIn(first)
+    await press(first, 'ArrowDown')
+
+    const second = optionRows(card)[1]!
+    expect(second.getAttribute('data-ask-active')).toBe('true')
+    expect(document.activeElement === second).toBe(true)
+    const space = await press(second, ' ')
+    // DOM test events do not synthesize the browser's Space -> click default.
+    if (!space.defaultPrevented) {
+      await act(async () => second.click())
+    }
+    expect(checkedState(second)).toBe('true')
+    expect(checkedState(first)).toBe('false')
+
+    await press(second, 'Enter')
+    expect(calls.answers).toEqual([[{ optionIndices: [1] }]])
+    await tree.unmount()
+  }
+})
+
+test('digit shortcuts focus the option they choose or toggle', async () => {
+  for (const questions of [SINGLE, MULTI]) {
+    const { card, tree } = await mountFlow(questions)
+    const first = optionRows(card)[0]!
+    await focusIn(first)
+    await press(first, '2')
+
+    const second = optionRows(card)[1]!
+    expect(second.getAttribute('data-ask-active')).toBe('true')
+    expect(document.activeElement === second).toBe(true)
+    expect(checkedState(second)).toBe('true')
+    await tree.unmount()
+  }
+})
+
 test('Enter on the Other row opens its field without answering', async () => {
   const { card, calls } = await mountFlow()
   for (let i = 0; i < optionRows(card).length; i += 1) {
@@ -332,6 +381,20 @@ test('Enter on the Other row opens its field without answering', async () => {
   expect(card.querySelector('div[data-ask-active="true"]')).not.toBe(null)
 
   await press(card, 'Enter')
+  expect(card.querySelector('input')).not.toBe(null)
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('arrowing onto Other focuses its button and Enter opens the field', async () => {
+  const { card, calls } = await mountFlow()
+  const last = optionRows(card)[2]!
+  await focusIn(last)
+  await press(last, 'ArrowDown')
+
+  const other = card.querySelector<HTMLButtonElement>('button[data-ask-other]')
+  expect(other).not.toBe(null)
+  expect(document.activeElement).toBe(other)
+  await press(other!, 'Enter')
   expect(card.querySelector('input')).not.toBe(null)
   expect(calls.answers).toHaveLength(0)
 })
