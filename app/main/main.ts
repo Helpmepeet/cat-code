@@ -64,7 +64,14 @@ import {
   type HostResult,
   type SaveTextResult,
   type SessionDescriptor,
+  type SwitchWorkspaceBranchResult,
+  type WorkspaceBranches,
 } from '../shared/hostApi.js'
+import {
+  gitRoot,
+  listWorkspaceBranches,
+  switchWorkspaceBranch,
+} from './workspaceBranches.js'
 import {
   DEBUG_SHELL_STATE_CHANNEL,
   DEBUG_STATE_VERSION,
@@ -110,6 +117,8 @@ import {
   // null (the native picker, HC1); the host-event channel is a one-way stream.
   CH_HOST_CREATE,
   CH_HOST_CREATE_IN_WORKSPACE,
+  CH_HOST_LIST_BRANCHES,
+  CH_HOST_SWITCH_BRANCH,
   CH_HOST_RESTORE,
   CH_HOST_CLOSE,
   CH_HOST_SET_PEER_WAKE_BLOCKED,
@@ -628,6 +637,12 @@ let markRendererDocumentReady: ((documentId: string) => void) | null = null
 let disposeRendererRecovery: (() => void) | null = null
 const replayFlushTimers = new Map<SessionId, ReturnType<typeof setTimeout>>()
 const restoringSessions = new Set<SessionId>()
+// A host row records lastMessageSentAt only after a turn result. Branch
+// switching must also refuse the interval from accepted submit to result.
+const sessionsWithSubmit = new Set<SessionId>()
+// Set before the first asynchronous Git read. All prompt paths consult this
+// while an empty session is being moved to another branch.
+const switchingSessionIds = new Set<SessionId>()
 
 function scheduleReplayFlush(sessionId: SessionId): void {
   if (replayFlushTimers.has(sessionId)) return
@@ -2007,9 +2022,15 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
 function wireHostEvents(h: Host): void {
   h.subscribe(event => {
     sendHostEvent(event)
+    // The durable row now carries the completed turn; the in-memory pre-result
+    // marker is needed only while that row still reads null.
+    if (event.type === 'session-status' && event.session.lastMessageSentAt !== null) {
+      sessionsWithSubmit.delete(event.session.appSessionId)
+    }
     // IS-A delete-on-reap: a row that left the live∪restorable set (reaped or its
     // engineSessionId cleared) must not keep an at-rest transcript cache.
     if (event.type === 'session-removed') {
+      sessionsWithSubmit.delete(event.appSessionId)
       deleteCache(TRANSCRIPT_CACHE_DIR, event.appSessionId)
       // HOST-REQUEST-PLANE §5 — every per-row and per-pair peer store is
       // cleared on reap. They are in-memory only, so this is not persistence
@@ -2816,6 +2837,9 @@ function registerHostControlPlane(): void {
         sessionId,
       )
       if (!host) return Promise.resolve(noHost<void>())
+      if (switchingSessionIds.has(sessionId)) {
+        return Promise.resolve({ ok: false, error: { code: 'branch_unavailable', message: 'Wait for the branch switch to finish before closing this chat.' } })
+      }
       return host.closeSession(sessionId)
     },
   )
@@ -2897,6 +2921,93 @@ function registerHostControlPlane(): void {
       // exactly as restoreSession sources a cwd, and spawns a FRESH session there.
       // A fresh create takes no replay-coalescing (no transcript to replay).
       return host.createSessionInWorkspace(String(appSessionId))
+    },
+  )
+
+  const switchingGitRoots = new Set<string>()
+  ipcMain.handle(
+    CH_HOST_LIST_BRANCHES,
+    (_e, appSessionId: unknown): Promise<HostResult<WorkspaceBranches>> => {
+      const descriptor = host?.listSessions().find(row => row.appSessionId === appSessionId)
+      if (!descriptor) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Session not found.' } })
+      return listWorkspaceBranches(descriptor.cwd)
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_SWITCH_BRANCH,
+    async (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> => {
+      const h = host
+      const descriptor = h?.listSessions().find(row => row.appSessionId === appSessionId)
+      if (!h || !descriptor) return { ok: false, error: { code: 'session_not_found', message: 'Session not found.' } }
+      if (switchingSessionIds.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
+      if (descriptor.status !== 'ready') return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this session to connect before switching branches.' } }
+      if (descriptor.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new chat to choose another branch.' } }
+      if (typeof branch !== 'string' || branch.length === 0 || branch.length > 255) {
+        return { ok: false, error: { code: 'branch_unavailable', message: 'Choose a local branch from the list.' } }
+      }
+      switchingSessionIds.add(descriptor.appSessionId)
+      try {
+        const root = await gitRoot(descriptor.cwd)
+        if (!root) return { ok: false, error: { code: 'branch_unavailable', message: 'This project is not a Git repository.' } }
+        if (switchingGitRoots.has(root)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
+        switchingGitRoots.add(root)
+        let checkoutMoved = false
+        try {
+          // This gate is synchronous with Host.reserveSpawn. A spawn admitted
+          // before it is visible through pendingSpawns; one after it waits.
+          if (!h.beginBranchSwitch()) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for the other chat to finish opening, then try again.' } }
+          let switched: Awaited<ReturnType<typeof switchWorkspaceBranch>>
+          try {
+            const fresh = h.listSessions().find(row => row.appSessionId === descriptor.appSessionId)
+            if (fresh?.status !== 'ready' || fresh.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) {
+              return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new empty chat to choose another branch.' } }
+            }
+            const liveRecords = supervisor?.listSessions() ?? []
+            const otherLiveCwds = h.listSessions()
+              .filter(row => row.appSessionId !== descriptor.appSessionId && isSessionLive(liveRecords, row.appSessionId))
+              .map(row => row.cwd)
+            switched = await switchWorkspaceBranch(descriptor.cwd, branch, otherLiveCwds)
+            checkoutMoved = switched.ok || 'branchChanged' in switched
+          } finally {
+            h.endBranchSwitch()
+          }
+          if (!switched.ok) {
+            if ('branchChanged' in switched) await h.closeSession(descriptor.appSessionId)
+            return switched
+          }
+          // A checkout can remove the tracked subdirectory this session used.
+          // Main owns the validated Git root, so a fresh chat can still open.
+          const replacementCwd = validateCwd(descriptor.cwd).ok ? descriptor.cwd : root
+          const created = replacementCwd === descriptor.cwd
+            ? await h.createSessionInWorkspace(descriptor.appSessionId)
+            : await h.createSession({ cwd: root })
+          const closed = await h.closeSession(descriptor.appSessionId)
+          if (!created.ok) {
+            return {
+              ok: false, branchChanged: true,
+              error: { ...created.error, message: `Branch switched to ${branch}, but a new chat could not start. Open a new chat in this project. ${created.error.message}` },
+            }
+          }
+          if (!closed.ok) {
+            return { ok: false, branchChanged: true, error: { ...closed.error, message: `Branch switched to ${branch} and a new chat opened, but the previous chat could not close. ${closed.error.message}` } }
+          }
+          return created
+        } catch (error) {
+          logLegacyDiagnostic(`branch switch handoff failed: ${errText(error)}`, 'host', 'main')
+          if (checkoutMoved) {
+            // Never leave the old branch-cached engine running after HEAD moved,
+            // even if a registry write or replacement spawn throws.
+            await h.closeSession(descriptor.appSessionId).catch(() => undefined)
+            return { ok: false, branchChanged: true, error: { code: 'branch_unavailable', message: `Branch switched to ${branch}, but the chat handoff failed. Check open chats before continuing.` } }
+          }
+          return { ok: false, error: { code: 'branch_unavailable', message: 'Could not switch branches. Try again.' } }
+        } finally {
+          switchingGitRoots.delete(root)
+        }
+      } finally {
+        switchingSessionIds.delete(descriptor.appSessionId)
+      }
     },
   )
 
@@ -3474,6 +3585,9 @@ function handOff(
   audience: 'renderer' | 'internal',
 ): ErrorFrame['code'] | null {
   if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
+  if (switchingSessionIds.has(sessionId) && (message.type === 'app.submit' || message.type === 'peer.deliver')) {
+    return 'session_not_ready'
+  }
   message = stampHistoryViewAnchor(
     message,
     attachmentGate.viewAnchorUuid(sessionId),
@@ -3499,6 +3613,7 @@ function handOff(
   }
   try {
     supervisor.send(sessionId, message)
+    if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
     return null
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error)

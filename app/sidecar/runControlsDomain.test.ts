@@ -363,13 +363,12 @@ test('a row resolves its selection to a model id before reading its effort level
 
   // A canonical id needs no resolution and pins the engine's own table, which is
   // keyed on this exact string (`getSupportedEffortLevels`, src/utils/effort.ts).
-  expect(effortOptionsForSelection('gpt-5.6-sol')).toEqual([
+  expect(effortOptionsForSelection('gpt-6-sol')).toEqual([
     'low',
     'medium',
     'high',
     'xhigh',
     'max',
-    'ultra',
   ])
 })
 

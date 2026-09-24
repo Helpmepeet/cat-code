@@ -22,12 +22,9 @@
  * is the one blessed §0 width-only exception, per P4-5).
  *
  * §0 deviations (WELCOME-LAUNCHER §3 keep/cut + seam limits), flagged not dropped:
- *  - Branch chooser + "New worktree" start-in option: CUT/deferred (D5 Q2) — absent.
- *    With the chooser gone, "Start in" reported a constant, so the session
- *    variant now reads the one real variable it has: `sandboxed` off this
- *    session's `diagnostics.snapshot` (operator, 2026-08-02). §0 adapted: the
- *    prototype's axis was checkout-vs-worktree, and worktree creation does not
- *    exist here to be reported on.
+ *  - The launcher's branch chooser and "New worktree" option were deferred in
+ *    D5 Q2. The in-session empty state now offers local branch switching before
+ *    a prompt; "Start in" still reads sandboxing from `diagnostics.snapshot`.
  *  - Project (session variant) shows the workspace NAME, not the raw cwd. §0
  *    adapted: the prototype shows a short `~/project` (`Welcome.jsx:231`) and
  *    the renderer has no home-directory seam to build one, while a full path
@@ -46,7 +43,7 @@
  * it.
  */
 
-import { type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
 import { shouldShowFirstRunOAuth } from './appModel.js'
 import {
   handleMenuRovingKeyDown,
@@ -66,6 +63,7 @@ import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+import type { HostResult, WorkspaceBranches } from '../../shared/hostApi.js'
 
 const welcomeCats = [
   sleepingCat,
@@ -114,10 +112,14 @@ type WelcomeScreenProps =
       variant: 'session'
       /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
       cwd: string | null
-      /** The session's git branch, read-only. App reads it from this session's
+      /** The session's git branch. App reads it from this session's
        * own `diagnostics.snapshot` (`getBranch()` at spawn), falling back to the
        * session log's `gitBranch`; null outside a git repo or on a detached HEAD. */
       branch: string | null
+      /** Git is read through the host-owned workspace, never a renderer path. */
+      onListBranches?: () => Promise<HostResult<WorkspaceBranches>>
+      /** Returns an error to show in place, or null after opening a new session. */
+      onSwitchBranch?: (branch: string) => Promise<string | null>
       /** Whether this session's tools run sandboxed (`diagnostics.snapshot`).
        * The "Start in" column's only real variable, now that the launcher's
        * worktree option is cut. */
@@ -186,8 +188,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               </MetaCol>
               <div className="w-px bg-shell-seam" />
               <MetaCol icon={<MonitorIcon />} label="Start in">
-                {/* The prototype's chooser is CUT with its worktree option (D5 Q2),
-                    so this reads the one thing about where a session runs that is
+                {/* This reads the one thing about where a session runs that is
                     genuinely variable: whether its tools are sandboxed
                     (`diagnostics.snapshot`). The launcher has no session to ask,
                     so it states the plain default. */}
@@ -197,17 +198,23 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                     : 'Locally'}
                 </span>
               </MetaCol>
-              {/* Branch is a SESSION-variant column only: read-only (HC1), the real
-                  `gitBranch` from the session log (absent outside a repo / pre-catalog).
-                  The launcher's interactive branch chooser was CUT (D5, worktree
-                  option cut), so it keeps 3 columns. */}
+              {/* Branch is available once a session fixes the project path. The
+                  host resolves that path from the session id for Git actions. */}
               {props.variant === 'session' ? (
                 <>
                   <div className="w-px bg-shell-seam" />
                   <MetaCol icon={<BranchIcon />} label="Branch">
-                    <span className="truncate font-mono text-[13px] text-text-muted">
-                      {props.branch ?? 'none'}
-                    </span>
+                    {props.onListBranches && props.onSwitchBranch ? (
+                      <BranchPicker
+                        branch={props.branch}
+                        onList={props.onListBranches}
+                        onSwitch={props.onSwitchBranch}
+                      />
+                    ) : (
+                      <span className="truncate font-mono text-[13px] text-text-muted">
+                        {props.branch ?? 'none'}
+                      </span>
+                    )}
                   </MetaCol>
                 </>
               ) : null}
@@ -225,12 +232,147 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
   )
 }
 
+function BranchPicker({
+  branch,
+  onList,
+  onSwitch,
+}: {
+  branch: string | null
+  onList: () => Promise<HostResult<WorkspaceBranches>>
+  onSwitch: (branch: string) => Promise<string | null>
+}) {
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const [branches, setBranches] = useState<WorkspaceBranches | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<{
+    top: number
+    left: number
+    width: number
+    maxHeight: number
+  } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    let request = 0
+    const refresh = () => {
+      const ownRequest = ++request
+      setLoading(true)
+      setBranches(null)
+      setError(null)
+      void onList().then(result => {
+        if (!active || ownRequest !== request) return
+        if (result.ok) setBranches(result.value)
+        else setError(result.error.message)
+      }).catch(() => {
+        if (active && ownRequest === request) setError('Could not read branches for this project.')
+      }).finally(() => {
+        if (active && ownRequest === request) setLoading(false)
+      })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => { active = false; window.removeEventListener('focus', refresh) }
+  }, [onList, open])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const trigger = triggerRef.current
+      const menu = ref.current?.querySelector<HTMLElement>('[role="menu"]')
+      if (!trigger || !menu) return
+      const rect = trigger.getBoundingClientRect()
+      const gap = 6
+      const margin = 8
+      const width = Math.min(300, window.innerWidth - margin * 2)
+      const below = Math.max(0, window.innerHeight - rect.bottom - gap - margin)
+      const above = Math.max(0, rect.top - gap - margin)
+      const desiredHeight = Math.min(320, menu.scrollHeight || 320)
+      const placeAbove = below < desiredHeight && above > below
+      const available = placeAbove ? above : below
+      const maxHeight = Math.min(320, available)
+      setMenuPosition({
+        top: placeAbove ? rect.top - gap - Math.min(desiredHeight, maxHeight) : rect.bottom + gap,
+        left: Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin)),
+        width,
+        maxHeight,
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    document.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      document.removeEventListener('scroll', place, true)
+    }
+  }, [open, branches, error, loading, ref, triggerRef])
+
+  const current = loading ? 'Checking…' : error ? 'Unavailable' : branches ? branches.current ?? 'Detached HEAD' : branch ?? 'none'
+  const sessionBranchStale = branches !== null && branch !== null && branches.current !== branch
+  return (
+    <div ref={ref} className="relative inline-block max-w-full">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={`Choose Git branch. Current branch: ${current}${sessionBranchStale ? `. This chat started on ${branch}` : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+        className="inline-flex max-w-full items-center gap-1.5 rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <span className="truncate font-mono text-[13px] text-text-muted">{current}</span>
+        {sessionBranchStale ? <span className="text-tone-warn" title={`This chat started on ${branch}. Start a fresh chat to use ${branches?.current ?? 'this checkout'}.`}>!</span> : null}
+        <ChevronIcon open={open} />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Local Git branches"
+          onKeyDown={handleMenuRovingKeyDown}
+          className="fixed z-[71] overflow-y-auto rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
+          style={menuPosition ? menuPosition : { visibility: 'hidden' }}
+        >
+          {error ? <p className="px-2.5 py-2 text-[12px] text-tone-danger">{error}</p> : null}
+          {loading ? <p className="px-2.5 py-2 text-[12px] text-text-subtle">Loading branches…</p> : null}
+          {branches?.branches.map(name => (
+            <button
+              key={name}
+              type="button"
+              role="menuitemradio"
+              aria-checked={name === branches.current}
+              disabled={pending}
+              onClick={() => {
+                if (name === branches.current && !sessionBranchStale) {
+                  close()
+                  return
+                }
+                setPending(true)
+                setError(null)
+                void onSwitch(name).then(message => {
+                  if (message) setError(message)
+                  else close()
+                }).catch(() => setError('Could not switch branches.')).finally(() => setPending(false))
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[12px] text-text-primary hover:bg-white/[0.045] disabled:opacity-50"
+            >
+              <span className="min-w-0 flex-1 truncate" title={name}>{name}</span>
+              {name === branches.current ? <span className="text-accent">✓</span> : null}
+            </button>
+          ))}
+          {branches?.dirty ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-tone-warn">Commit or stash local changes before switching.</p> : null}
+          {sessionBranchStale ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-tone-warn">This chat started on {branch}. Select {branches?.current ?? 'the current branch'} to open a fresh chat on the current checkout.</p> : null}
+          {branches ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-text-subtle">Switching closes this empty chat and opens a new one.</p> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * In-session read-only project context (the `'session'` variant). The cwd is
  * fixed at session-create (HC1 — the renderer authors no path), so this is plain
- * text, never the launcher's interactive ProjectPicker. Branch is NOT carried on
- * the SessionDescriptor wire (`app/shared/hostApi.ts:68` has `cwd`, no branch),
- * so it is omitted rather than fabricated (§0 deferred).
+ * text, never the launcher's interactive ProjectPicker.
  */
 function SessionProject({ cwd }: { cwd: string | null }) {
   // The NAME, not the raw path: a full cwd truncates mid-path in this column

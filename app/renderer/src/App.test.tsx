@@ -1563,13 +1563,13 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
 
   // The composer's three consumers all read the SAME gate object, so
   // "typeable" can never drift apart from "sendable" again.
-  expect(paneSource).toContain('const composerReadOnly = !composerGate.editable')
+  expect(paneSource).toContain('const composerReadOnly = branchSwitchPending || !composerGate.editable')
   expect(paneSource).toContain('readOnly={composerReadOnly}')
   // Whitespace-normalised: the assertion is about which gate the send button
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={ branchSwitchPending || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
   expect(paneSource).toContain(
     'attachDisabled={!composerGate.editable || preparingImage || pickingFile}',

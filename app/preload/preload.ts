@@ -51,6 +51,8 @@ import type {
   SaveTextInput,
   SaveTextResult,
   SessionDescriptor,
+  SwitchWorkspaceBranchResult,
+  WorkspaceBranches,
 } from '../shared/hostApi.js'
 import type { DebugRendererSnapshot } from '../shared/debugState.js'
 import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
@@ -93,6 +95,8 @@ import {
   // Control plane (HC3 — fixed, per-method senders).
   CH_HOST_CREATE,
   CH_HOST_CREATE_IN_WORKSPACE,
+  CH_HOST_LIST_BRANCHES,
+  CH_HOST_SWITCH_BRANCH,
   CH_HOST_RESTORE,
   CH_HOST_CLOSE,
   CH_HOST_SET_PEER_WAKE_BLOCKED,
@@ -561,6 +565,14 @@ const bridge: CatCodeBridge = {
     return ipcRenderer.invoke(CH_HOST_CREATE_IN_WORKSPACE, appSessionId) as Promise<
       HostResult<SessionDescriptor>
     >
+  },
+  listWorkspaceBranches(appSessionId: SessionId): Promise<HostResult<WorkspaceBranches>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_LIST_BRANCHES, appSessionId) as Promise<HostResult<WorkspaceBranches>>
+  },
+  switchWorkspaceBranch(appSessionId: SessionId, branch: string): Promise<SwitchWorkspaceBranchResult> {
+    sendGuard.assertAllowed({ appSessionId, branch })
+    return ipcRenderer.invoke(CH_HOST_SWITCH_BRANCH, appSessionId, branch) as Promise<SwitchWorkspaceBranchResult>
   },
   previewSession(appSessionId: SessionId): Promise<TranscriptCache | null> {
     // IS-A — instant session open. Modeled exactly on restoreSession: id-only,

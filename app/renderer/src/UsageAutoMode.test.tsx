@@ -14,7 +14,7 @@ test('uses the selected range summary and preserves chart order before the heatm
     autoMode.allTools.outcomes.allowed = attempts
     autoMode.routes = [{ route: 'base', outcome: 'allowed', count: attempts }]
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot: selectedSnapshot, status: 'ready' }} selection={{ range, date: '' }}/>)
-    expect(html).toContain(`Decision flow for ${attempts} recorded automatic permission attempts`)
+    expect(html).toContain(`Normal decision flow for ${attempts} recorded automatic permission attempts`)
     expect(html.indexOf('Decision flow')).toBeLessThan(html.indexOf('Token volume by hour'))
     expect(html.indexOf('Decision flow')).toBeLessThan(html.indexOf('Command block rate'))
     expect(html.indexOf('Command block rate')).toBeLessThan(html.indexOf('Decisions over time'))

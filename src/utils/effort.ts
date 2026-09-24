@@ -89,6 +89,8 @@ export function modelSupportsMaxEffort(model: string): boolean {
     return true
   }
   if (
+    m === 'gpt-6-sol' ||
+    m === 'gpt-6-luna' ||
     m === 'gpt-5.6-sol' ||
     m === 'gpt-5.6-terra' ||
     m === 'gpt-5.6-luna' ||
@@ -104,13 +106,13 @@ export function modelSupportsMaxEffort(model: string): boolean {
 
 export function getSupportedEffortLevels(model: string): readonly EffortLevel[] {
   const m = model.toLowerCase()
+  if (m === 'gpt-6-astra' || m === 'gpt-6-sol' || m === 'gpt-6-luna') {
+    return ['low', 'medium', 'high', 'xhigh', 'max']
+  }
   if (m === 'gpt-5.6-sol' || m === 'gpt-5.6-terra') {
     return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
   }
   if (m === 'gpt-5.6-luna') {
-    return ['low', 'medium', 'high', 'xhigh', 'max']
-  }
-  if (m === 'gpt-6-astra') {
     return ['low', 'medium', 'high', 'xhigh', 'max']
   }
   if (m.includes('codex')) {
@@ -409,14 +411,16 @@ export function getDefaultEffortForModel(
   // that can greatly affect model quality and bashing.
 
   // Sol and Terra default to medium reasoning. Luna stays low to preserve the
-  // retired GPT-5.4 Mini fast/cost-sensitive slot's low-latency intent.
+  // fast/cost-sensitive slot's low-latency intent.
+  const lowerModel = model.toLowerCase()
   if (
-    model.toLowerCase() === 'gpt-5.6-sol' ||
-    model.toLowerCase() === 'gpt-5.6-terra'
+    lowerModel === 'gpt-6-sol' ||
+    lowerModel === 'gpt-5.6-sol' ||
+    lowerModel === 'gpt-5.6-terra'
   ) {
     return 'medium'
   }
-  if (model.toLowerCase() === 'gpt-5.6-luna') return 'low'
+  if (lowerModel === 'gpt-6-luna' || lowerModel === 'gpt-5.6-luna') return 'low'
 
   // Opus 5 and Fable 5 default to medium effort
   if (model.toLowerCase().includes('opus-5') || model.toLowerCase().includes('fable-5')) {

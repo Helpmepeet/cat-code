@@ -95,7 +95,7 @@ test('uses a randomized packaged cat image rather than embedding the hero as SVG
   expect(source).not.toContain('function NeonCat()')
 })
 
-test('the branch chooser + worktree option are CUT (absent)', () => {
+test('the projectless launcher has no branch choice or worktree option', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
@@ -588,7 +588,7 @@ test('the Codex table degrades honestly when no pool snapshot exists', () => {
   expect(html).toContain('No Codex account data')
 })
 
-test("the 'session' variant shows a read-only cwd project (no picker) + the real Codex table", () => {
+test("the 'session' variant shows its fixed cwd and Git branch with the real Codex table", () => {
   // Chat.jsx:1272 renders the SAME WelcomeScreen when the session is empty. HC1:
   // the cwd is fixed at session-create, so Project is read-only context, not the
   // interactive picker, and no recents launcher appears.
@@ -611,7 +611,7 @@ test("the 'session' variant shows a read-only cwd project (no picker) + the real
   // the whole path one hover away.
   expect(html).toContain('title="/Users/me/cat-code"')
   expect(html).toContain('>cat-code<')
-  // The real git branch is shown read-only in its own meta column.
+  // The real git branch is shown in its own meta column.
   expect(html).toContain('Branch')
   expect(html).toContain('feature/login')
   // No interactive project picker button and no recents launcher in-session.

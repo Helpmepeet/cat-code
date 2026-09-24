@@ -59,7 +59,7 @@ export function getSmallFastModel(): ModelName {
  */
 export function getSmallFastModelForProvider(): ModelName {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt56luna
+    return getModelStrings().gpt6luna
   }
   return getSmallFastModel()
 }
@@ -75,9 +75,11 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
 }
 
 const RETIRED_GPT_MODEL_REPLACEMENTS: Record<string, ModelName> = {
-  'gpt-5.4': 'gpt-5.6-luna',
-  'gpt-5.3-codex': 'gpt-5.6-luna',
-  'gpt-5.4-mini': 'gpt-5.6-luna',
+  'gpt-5.6-sol': 'gpt-6-sol',
+  'gpt-5.6-luna': 'gpt-6-luna',
+  'gpt-5.4': 'gpt-6-luna',
+  'gpt-5.3-codex': 'gpt-6-luna',
+  'gpt-5.4-mini': 'gpt-6-luna',
   'gpt-5.5': 'gpt-5.6-terra',
 }
 
@@ -309,7 +311,7 @@ export function getRuntimeMainLoopModel(params: {
  * honours through `getModelStrings()`.
  */
 export function getDefaultCodexModel(): ModelName {
-  return getModelStrings().gpt56sol
+  return getModelStrings().gpt6sol
 }
 
 /**
@@ -422,6 +424,15 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
     return 'claude-3-haiku'
   }
   // OpenAI GPT models
+  if (name.includes('gpt-6-astra')) {
+    return 'gpt-6-astra'
+  }
+  if (name.includes('gpt-6-sol')) {
+    return 'gpt-6-sol'
+  }
+  if (name.includes('gpt-6-luna')) {
+    return 'gpt-6-luna'
+  }
   if (name.includes('gpt-5.6-sol')) {
     return 'gpt-5.6-sol'
   }
@@ -430,9 +441,6 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   }
   if (name.includes('gpt-5.6-luna')) {
     return 'gpt-5.6-luna'
-  }
-  if (name.includes('gpt-6-astra')) {
-    return 'gpt-6-astra'
   }
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {
@@ -460,7 +468,7 @@ export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-5.6 Sol · Frontier model with 1M context'
+    return 'GPT-6 Sol · Frontier model with 1.05M context'
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {
@@ -532,6 +540,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.6-terra') return 'GPT 5.6 Terra'
     if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
     if (model === 'gpt-6-astra') return 'GPT 6 Astra'
+    if (model === 'gpt-6-sol') return 'GPT 6 Sol'
+    if (model === 'gpt-6-luna') return 'GPT 6 Luna'
     if (model === 'gpt-5.2') return 'GPT 5.2'
     return model
   }
@@ -587,6 +597,10 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'GPT-5.6 Luna'
     case getModelStrings().gpt6astra:
       return 'GPT-6 Astra'
+    case getModelStrings().gpt6sol:
+      return 'GPT-6 Sol'
+    case getModelStrings().gpt6luna:
+      return 'GPT-6 Luna'
     default:
       return null
   }
@@ -841,6 +855,15 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return 'Claude 3.5 Haiku'
   }
   // OpenAI Codex models
+  if (canonical.includes('gpt-6-astra')) {
+    return 'GPT-6 Astra'
+  }
+  if (canonical.includes('gpt-6-sol')) {
+    return 'GPT-6 Sol'
+  }
+  if (canonical.includes('gpt-6-luna')) {
+    return 'GPT-6 Luna'
+  }
   if (canonical.includes('gpt-5.6-sol')) {
     return 'GPT-5.6 Sol'
   }
@@ -849,9 +872,6 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   }
   if (canonical.includes('gpt-5.6-luna')) {
     return 'GPT-5.6 Luna'
-  }
-  if (canonical.includes('gpt-6-astra')) {
-    return 'GPT-6 Astra'
   }
   return undefined
 }

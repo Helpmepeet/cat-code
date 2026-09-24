@@ -501,6 +501,53 @@ test('P4-18b: a Read tool card renders a workspace-relative path', () => {
   expect(html).toContain('aria-label="running"')
 })
 
+test('a successful tool-result image renders expanded with companion text', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Read',
+      toolFamily: 'read',
+      input: { file_path: '/repo/chart.png' },
+      status: 'success',
+      result: {
+        content: '1900 × 1018',
+        images: [{ mediaType: 'image/png', data: 'AAAA' }],
+        isError: false,
+        diff: null,
+      },
+    }),
+    '/repo',
+  )
+
+  expect(html).toContain('aria-expanded="true"')
+  expect(html).toContain('aria-label="Expand result image"')
+  expect(html).toContain('alt="Result image"')
+  expect(html).toContain('data:image/png;base64,AAAA')
+  expect(html).toContain('1900 × 1018')
+  expect(html).toContain('class="grid grid-cols-1 gap-2"')
+  expect(html).not.toContain('grid-cols-1 gap-2 sm:grid-cols-2')
+})
+
+test('multiple tool-result images use the compact two-column layout', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Read',
+      toolFamily: 'read',
+      status: 'success',
+      result: {
+        content: '',
+        images: [
+          { mediaType: 'image/png', data: 'AAAA' },
+          { mediaType: 'image/webp', data: 'QUJDRA==' },
+        ],
+        isError: false,
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('grid grid-cols-1 gap-2 sm:grid-cols-2')
+})
+
 test('file tool cards share a workspace-relative path label', () => {
   const path = '/repo/src/shared.ts'
   const html = renderToStaticMarkup(

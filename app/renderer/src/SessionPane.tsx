@@ -14,6 +14,7 @@
 
 import {
   useContext,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -195,6 +196,8 @@ export function SessionPane({
   turnStartedAt = null,
   activeDescriptor,
   branch,
+  branchSwitchPending = false,
+  onSwitchBranch,
   sandboxed,
   activeLog,
   activeSessionId,
@@ -267,6 +270,10 @@ export function SessionPane({
   transcript,
   transportError,
 }: SessionPaneProps) {
+  const listBranches = useCallback(
+    () => getBridge().listWorkspaceBranches(activeSessionId ?? ''),
+    [activeSessionId],
+  )
   const toast = useToast()
   const [previewImageId, setPreviewImageId] = useState<number | null>(null)
   const previewImage =
@@ -602,7 +609,7 @@ export function SessionPane({
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
-  const composerReadOnly = !composerGate.editable
+  const composerReadOnly = branchSwitchPending || !composerGate.editable
   // A named session is addressed by its own name (PEER-SESSIONS §6): the user
   // is talking to Bear, not to "Cat Code" in general, and the name is what its
   // peers use for it too. A row with no name (one that predates the field and
@@ -1159,6 +1166,11 @@ export function SessionPane({
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
             branch={branch}
+            onListBranches={onSwitchBranch ? listBranches : undefined}
+            onSwitchBranch={onSwitchBranch ? branchName => {
+              if (preparingImage || pickingFile) return Promise.resolve('Wait for the attachment to finish before switching branches.')
+              return onSwitchBranch(branchName)
+            } : undefined}
             sandboxed={sandboxed}
             restorePhase={restorePhase}
             revealHidden={revealHidden}
@@ -1465,6 +1477,8 @@ export function SessionPane({
       <form
         aria-keyshortcuts="ArrowUp ArrowDown"
         aria-label="Composer"
+        aria-busy={branchSwitchPending}
+        inert={branchSwitchPending}
         // `shrink-0`: the one child of the dock that never gives. A multi-line
         // draft would otherwise be squeezed back toward a single line before
         // the panel scroller above had finished giving up its own height.
@@ -1472,6 +1486,10 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (branchSwitchPending) {
+            event.preventDefault()
+            return
+          }
           if (preparingImage) {
             event.preventDefault()
             toast('Wait for the image to finish attaching.', { tone: 'info' })
@@ -1645,6 +1663,7 @@ export function SessionPane({
               title="Send"
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
+                branchSwitchPending ||
                 !composerGate.editable ||
                 preparingImage ||
                 (prompt.trim().length === 0 &&
@@ -1989,9 +2008,12 @@ type SessionPaneProps = {
   turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
-  /** Read-only git branch for the empty-state meta strip — this session's own
+  /** Git branch for the empty-state meta strip — this session's own
    * `diagnostics.snapshot`, falling back to the session log's `gitBranch`. */
   branch: string | null
+  /** Freeze unsent input while main changes this session's checkout. */
+  branchSwitchPending?: boolean
+  onSwitchBranch?: (branch: string) => Promise<string | null>
   /** Whether this session's tools run sandboxed (`diagnostics.snapshot`), read by
    * the empty-state meta strip's "Start in" column. */
   sandboxed?: boolean

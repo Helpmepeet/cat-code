@@ -453,6 +453,31 @@ export function Sidebar({
     [],
   )
   useEffect(() => {
+    if (typeof document === 'undefined') return
+
+    const onFocusIn = (event: FocusEvent) => {
+      console.log('[Document] focusin', {
+        target: event.target,
+        relatedTarget: event.relatedTarget,
+        activeElement: document.activeElement,
+      })
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      console.log('[Document] focusout', {
+        target: event.target,
+        relatedTarget: event.relatedTarget,
+        activeElement: document.activeElement,
+      })
+    }
+
+    document.addEventListener('focusin', onFocusIn, true)
+    document.addEventListener('focusout', onFocusOut, true)
+    return () => {
+      document.removeEventListener('focusin', onFocusIn, true)
+      document.removeEventListener('focusout', onFocusOut, true)
+    }
+  }, [])
+  useEffect(() => {
     asideRef.current?.style.setProperty(
       '--sidebar-expanded-width',
       `${sidebarWidth}px`,
@@ -753,6 +778,11 @@ export function Sidebar({
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
         onFocusCapture={event => {
+          console.log('[Sidebar] focus capture', {
+            target: event.target,
+            relatedTarget: event.relatedTarget,
+            activeElement: document.activeElement,
+          })
           const target = event.target
           const focusedNavId =
             target instanceof HTMLElement

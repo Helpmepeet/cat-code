@@ -258,7 +258,7 @@ describe('codex-fetch-adapter', () => {
   // A Claude small-fast model on the OpenAI path is remapped to the GPT mini.
   // This is the route the away-summary / hook / skill-improvement side-calls
   // take (they pass claude-haiku-* and rely on the adapter's remap).
-  test('translateToCodexBody remaps claude-haiku to gpt-5.6-luna', () => {
+  test('translateToCodexBody remaps claude-haiku to gpt-6-luna', () => {
     const { codexModel } = translateToCodexBody({
       model: 'claude-haiku-4-5-20251001',
       tools: [],
@@ -267,7 +267,7 @@ describe('codex-fetch-adapter', () => {
         inputMessages: [],
       },
     })
-    expect(codexModel).toBe('gpt-5.6-luna')
+    expect(codexModel).toBe('gpt-6-luna')
   })
 
   test('translateToCodexBody sets service_tier="priority" when speed=fast', () => {
@@ -1086,7 +1086,9 @@ describe('codex-fetch-adapter', () => {
     expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('mapEffortToCodex maps explicit minimal to none for GPT-5.6 Terra and Luna', () => {
+  test('mapEffortToCodex maps explicit minimal to none for GPT-6 Sol/Luna and GPT-5.6 Terra', () => {
+    expect(mapEffortToCodex('minimal', 'gpt-6-sol')).toBe('none')
+    expect(mapEffortToCodex('minimal', 'gpt-6-luna')).toBe('none')
     expect(mapEffortToCodex('minimal', 'gpt-5.6-terra')).toBe('none')
     expect(mapEffortToCodex('minimal', 'gpt-5.6-luna')).toBe('none')
   })
@@ -1097,13 +1099,13 @@ describe('codex-fetch-adapter', () => {
     expect(mapEffortToCodex('ultra', 'gpt-6-astra')).toBeUndefined()
   })
 
-  test('mapEffortToCodex preserves supported GPT-5.6 reasoning levels', () => {
-    expect(mapEffortToCodex('xhigh', 'gpt-5.6-sol')).toBe('xhigh')
-    expect(mapEffortToCodex('max', 'gpt-5.6-sol')).toBe('max')
-    expect(mapEffortToCodex('ultra', 'gpt-5.6-sol')).toBe('ultra')
+  test('mapEffortToCodex preserves supported reasoning levels', () => {
+    expect(mapEffortToCodex('xhigh', 'gpt-6-sol')).toBe('xhigh')
+    expect(mapEffortToCodex('max', 'gpt-6-sol')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-6-sol')).toBeUndefined()
     expect(mapEffortToCodex('ultra', 'gpt-5.6-terra')).toBe('ultra')
-    expect(mapEffortToCodex('max', 'gpt-5.6-luna')).toBe('max')
-    expect(mapEffortToCodex('ultra', 'gpt-5.6-luna')).toBeUndefined()
+    expect(mapEffortToCodex('max', 'gpt-6-luna')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-6-luna')).toBeUndefined()
   })
 
   test('translateToCodexBody merges web search sources include with reasoning include', () => {
@@ -4452,7 +4454,7 @@ describe('codex tool-result truncation (Item 2)', () => {
 describe('codex request-start diagnostic', () => {
   const streamingBody = JSON.stringify({
     stream: true,
-    model: 'claude-sonnet-4-6', // maps to gpt-5.6-luna
+    model: 'claude-sonnet-4-6', // maps to gpt-6-luna
     _openaiInstructionAssembly: { instructions: 'Be precise.', inputMessages: [] },
   })
 
@@ -4513,7 +4515,7 @@ describe('codex request-start diagnostic', () => {
         mode: 'websocket',
         conversation_id_prefix: conv.slice(0, 8),
         account_id_prefix: accountId.slice(0, 8),
-        model: 'gpt-5.6-luna',
+        model: 'gpt-6-luna',
       })
       // The end-of-stream record is exactly what a hung request never writes.
       expect(surfaceSpy).not.toHaveBeenCalled()
@@ -4558,7 +4560,7 @@ describe('codex request-start diagnostic', () => {
         mode: 'http',
         conversation_id_prefix: conv.slice(0, 8),
         account_id_prefix: accountId.slice(0, 8),
-        model: 'gpt-5.6-luna',
+        model: 'gpt-6-luna',
       })
     } finally {
       startSpy.mockRestore()
@@ -4616,14 +4618,14 @@ describe('mapClaudeModelToCodex', () => {
     // The regression this locks: `opus` used to land on Terra, the MIDDLE rung,
     // so naming the most capable model got you less than naming nothing (which
     // inherits the session default, Sol).
-    expect(mapClaudeModelToCodex('opus')).toBe('gpt-5.6-sol')
-    expect(mapClaudeModelToCodex('claude-opus-5')).toBe('gpt-5.6-sol')
-    expect(mapClaudeModelToCodex('claude-opus-4-6[1m]')).toBe('gpt-5.6-sol')
+    expect(mapClaudeModelToCodex('opus')).toBe('gpt-6-sol')
+    expect(mapClaudeModelToCodex('claude-opus-5')).toBe('gpt-6-sol')
+    expect(mapClaudeModelToCodex('claude-opus-4-6[1m]')).toBe('gpt-6-sol')
   })
 
   test('maps the cheaper Claude tiers to Luna', () => {
     for (const model of ['sonnet', 'claude-sonnet-5', 'haiku', 'claude-haiku-4-5']) {
-      expect(mapClaudeModelToCodex(model)).toBe('gpt-5.6-luna')
+      expect(mapClaudeModelToCodex(model)).toBe('gpt-6-luna')
     }
   })
 
@@ -4636,14 +4638,23 @@ describe('mapClaudeModelToCodex', () => {
     expect(mapClaudeModelToCodex('some-unrecognized-model')).toBe('gpt-5.6-terra')
   })
 
-  test('passes a Codex model through untouched', () => {
+  test('passes a recognized Codex model through untouched', () => {
     for (const model of [
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
       'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-5.6-terra',
+      'gpt-6-luna',
     ]) {
       expect(mapClaudeModelToCodex(model)).toBe(model)
     }
+  })
+
+  test('remaps retired GPT models before checking recognized Codex models', () => {
+    expect(mapClaudeModelToCodex('gpt-5.6-sol')).toBe('gpt-6-sol')
+    expect(mapClaudeModelToCodex('gpt-5.6-luna')).toBe('gpt-6-luna')
+    expect(mapClaudeModelToCodex('gpt-5.4')).toBe('gpt-6-luna')
+    expect(mapClaudeModelToCodex('gpt-5.3-codex')).toBe('gpt-6-luna')
+    expect(mapClaudeModelToCodex('gpt-5.4-mini')).toBe('gpt-6-luna')
+    expect(mapClaudeModelToCodex('gpt-5.5')).toBe('gpt-5.6-terra')
   })
 })

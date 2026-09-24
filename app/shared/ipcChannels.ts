@@ -58,6 +58,8 @@ export const CH_REFRESH_USAGE_DASHBOARD = 'catcode:refresh-usage-dashboard'
 // one-way stream. ---
 export const CH_HOST_CREATE = 'catcode:host:create'
 export const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
+export const CH_HOST_LIST_BRANCHES = 'catcode:host:list-branches'
+export const CH_HOST_SWITCH_BRANCH = 'catcode:host:switch-branch'
 export const CH_HOST_RESTORE = 'catcode:host:restore'
 export const CH_HOST_CLOSE = 'catcode:host:close'
 // PEER-SESSIONS §6 — the user's "don't let peers reopen this session" decision.

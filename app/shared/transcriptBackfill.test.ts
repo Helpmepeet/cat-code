@@ -234,6 +234,59 @@ test('a tool_reference nested in tool_result validates, and a malformed one does
   ).toBeNull()
 })
 
+test('a base64 raster image nested in tool_result survives backfill validation', () => {
+  const frame = eventFrame() as Extract<ServerFrame, { kind: 'event' }>
+  const withImage = (source: unknown) => ({
+    type: 'session',
+    appSessionId: APP_ID,
+    engineSessionId: ENGINE_ID,
+    frames: [
+      {
+        ...frame,
+        event: {
+          type: 'message',
+          message: {
+            type: 'user',
+            session_id: ENGINE_ID,
+            uuid: '44444444-4444-4444-8444-444444444444',
+            parent_tool_use_id: null,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'toolu_image_result',
+                  content: [{ type: 'image', source }],
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    runFacts: NO_RUN_FACTS,
+  })
+
+  expect(
+    parseTranscriptBackfillResult(
+      withImage({
+        type: 'base64',
+        media_type: 'image/png',
+        data: 'AAAA',
+      }),
+    ),
+  ).not.toBeNull()
+  expect(
+    parseTranscriptBackfillResult(
+      withImage({
+        type: 'base64',
+        media_type: 'image/svg+xml',
+        data: 'AAAA',
+      }),
+    ),
+  ).toBeNull()
+})
+
 test('backfill result rejects discriminant-only and unsupported SDK messages', () => {
   for (const message of [
     { type: 'user', session_id: ENGINE_ID },

@@ -217,6 +217,20 @@ export type HostErrorCode =
    * clears the state. One code that means "stop waiting, this one is stuck".
    */
   | 'session_unreachable'
+  /** Git branch inspection or a safe checkout was refused. */
+  | 'branch_unavailable'
+
+/** Local branches for a host-validated session workspace. */
+export type WorkspaceBranches = {
+  current: string | null
+  branches: string[]
+  dirty: boolean
+}
+
+/** A failed spawn can follow a successful checkout, so callers must know it moved. */
+export type SwitchWorkspaceBranchResult =
+  | HostResult<SessionDescriptor>
+  | { ok: false; branchChanged: true; error: HostError }
 
 /** A typed host failure — never a bare thrown string (REGISTRY.md §6.1). */
 export type HostError = {

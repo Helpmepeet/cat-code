@@ -714,6 +714,39 @@ test('createSession reports spawn_failed when the supervisor throws, and marks t
  * HC4 — session_limit (rate cap + row cap)
  * ------------------------------------------------------------------------- */
 
+test('branch switch admission blocks concurrent spawns and releases cleanly', async () => {
+  const h = makeHost()
+  expect(h.host.beginBranchSwitch()).toBe(true)
+  expect(h.host.beginBranchSwitch()).toBe(false)
+  const blocked = await h.host.createSession({ cwd: h.cwd })
+  expect(blocked.ok).toBe(false)
+  if (!blocked.ok) expect(blocked.error.code).toBe('branch_unavailable')
+  h.host.endBranchSwitch()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+})
+
+test('branch switch admission waits for a previously reserved spawn', async () => {
+  const h = makeHost()
+  const originalUpsert = h.registry.upsertOnSpawn.bind(h.registry)
+  let releasePersist!: () => void
+  let enteredPersist!: () => void
+  const heldPersist = new Promise<void>(resolve => { releasePersist = resolve })
+  const entered = new Promise<void>(resolve => { enteredPersist = resolve })
+  h.registry.upsertOnSpawn = async input => {
+    enteredPersist()
+    await heldPersist
+    return originalUpsert(input)
+  }
+  const creating = h.host.createSession({ cwd: h.cwd })
+  await entered
+  expect(h.host.beginBranchSwitch()).toBe(false)
+  releasePersist()
+  expect((await creating).ok).toBe(true)
+  expect(h.host.beginBranchSwitch()).toBe(true)
+  h.host.endBranchSwitch()
+})
+
 test('createSession enforces the spawn rate cap (HC4 → session_limit)', async () => {
   const h = makeHost()
   // Fill the window.

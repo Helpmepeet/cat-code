@@ -173,35 +173,41 @@ describe('assembled system prompt', () => {
     expect(prompt).not.toContain('/Users/')
   })
 
-  // The shipped 5.6 templates are identical. Preserve that equivalence while
-  // pinning the generation-specific differences in the following test.
-  test('Sol, Terra and Luna receive byte-identical instructions', async () => {
-    const baseline = normalizeModelIdentity(
-      await assemble(FULL_TOOLS, 'gpt-5.6-terra'),
+  // The shipped GPT-6 family templates are identical. Preserve that equivalence while
+  // pinning the generation-specific differences from the GPT-5.6 baseline.
+  test('GPT-6 family (Astra, Sol, Luna) receive byte-identical instructions', async () => {
+    const astra = normalizeModelIdentity(
+      await assemble(FULL_TOOLS, 'gpt-6-astra'),
     )
-    for (const model of ['gpt-5.6-sol', 'gpt-5.6-luna']) {
+    for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
       const prompt = normalizeModelIdentity(await assemble(FULL_TOOLS, model))
-      expect({ model, prompt }).toEqual({ model, prompt: baseline })
+      expect({ model, prompt }).toEqual({ model, prompt: astra })
     }
   })
 
-  test('Astra differs only in task execution, actions and tone, with shared contracts intact', async () => {
+  test('GPT-6 family differs only in task execution, actions and tone from GPT-5.6 baseline, with shared contracts intact', async () => {
     const baseline = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-5.6-terra'))
     const astra = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6-astra'))
+    const sol = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6-sol'))
+    const luna = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6-luna'))
     const sharedSections = (prompt: string) => prompt.split(/(?=^# )/m).filter(
       section => !/^# (Getting Work Done|Acting and Asking|Tone and Style)\n/.test(section),
     )
     expect(sharedSections(astra)).toEqual(sharedSections(baseline))
-    for (const calibration of [
-      'Once those checks pass, broaden or repeat them only',
-      'FOLLOW-THROUGH: Infer action intent from context',
-      'Check whether a file or skill requirement applies',
-      'WRITING: Build connected paragraphs',
-    ]) {
-      expect(astra).toContain(calibration)
-      expect(baseline).not.toContain(calibration)
+    expect(sharedSections(sol)).toEqual(sharedSections(baseline))
+    expect(sharedSections(luna)).toEqual(sharedSections(baseline))
+    for (const gpt6Prompt of [astra, sol, luna]) {
+      for (const calibration of [
+        'Once those checks pass, broaden or repeat them only',
+        'FOLLOW-THROUGH: Infer action intent from context',
+        'Check whether a file or skill requirement applies',
+        'WRITING: Build connected paragraphs',
+      ]) {
+        expect(gpt6Prompt).toContain(calibration)
+        expect(baseline).not.toContain(calibration)
+      }
     }
-    for (const prompt of [baseline, astra]) {
+    for (const prompt of [baseline, astra, sol, luna]) {
       for (const contract of [
         getCyberPolicyInstruction(), TOOL_OUTPUT_IS_DATA_RULE, RUNTIME_METADATA_RULE,
         PROMPT_INJECTION_RULE, HOOK_AUTHORITY_RULE, PROJECT_INSTRUCTION_AUTHORITY_RULE,
@@ -232,10 +238,20 @@ describe('assembled system prompt', () => {
     expect(first).toContain('AGENT TOOL:')
   })
 
-  test('family selection matches exact transport identity, including malformed Astra names', async () => {
-    for (const model of ['gpt-6-astra', 'GPT-6-ASTRA', 'gpt-6-astra ', 'gpt-6-astra-future', 'claude-opus-5']) {
-      const expected = mapClaudeModelToCodex(model) === 'gpt-6-astra'
-      expect(getGPTPromptFamily(model) === 'gpt-6-astra').toBe(expected)
+  test('family selection matches exact transport identity, including malformed names', async () => {
+    for (const model of [
+      'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-6-luna',
+      'GPT-6-ASTRA',
+      'gpt-6-astra ',
+      'gpt-6-astra-future',
+      'gpt-5.6-terra',
+      'gpt-5.6-sol',
+      'claude-opus-5',
+    ]) {
+      const expected = model === 'gpt-6-astra' || model === 'gpt-6-sol' || model === 'gpt-6-luna'
+      expect(getGPTPromptFamily(model) === 'gpt-6').toBe(expected)
       const prompt = (await getSystemPrompt(MINIMAL_TOOLS, model, [], [], 'openai')).join('\n')
       expect(prompt.includes('FOLLOW-THROUGH:')).toBe(expected)
     }

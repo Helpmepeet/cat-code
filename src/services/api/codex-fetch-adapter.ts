@@ -69,6 +69,7 @@ import { getAllBaseTools } from '../../tools.js'
 import { isFilePatchToolName } from '../../tools/FilePatchTool/constants.js'
 import { findToolByName } from '../../Tool.js'
 import { safeParseJSON } from '../../utils/json.js'
+import { remapRetiredGptModel } from '../../utils/model/model.js'
 
 // ── Session-level IDs for cache routing ───────────────────────────────
 // OpenAI's ChatGPT backend uses these headers to route requests to the
@@ -633,9 +634,9 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 Astra' },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Frontier model for complex professional work' },
+  { id: 'gpt-6-sol', label: 'GPT-6 Sol', description: 'Frontier model for complex professional work' },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'Balanced agentic coding model (preview)' },
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
   { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Codex coding model' },
   { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
@@ -664,10 +665,11 @@ export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
  */
 export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
-  if (isCodexModel(claudeModel)) return claudeModel
-  const lower = claudeModel.toLowerCase()
-  if (lower.includes('opus')) return 'gpt-5.6-sol'
-  if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-5.6-luna'
+  const remapped = remapRetiredGptModel(claudeModel)
+  if (isCodexModel(remapped)) return remapped
+  const lower = remapped.toLowerCase()
+  if (lower.includes('opus')) return 'gpt-6-sol'
+  if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-6-luna'
   return DEFAULT_CODEX_MODEL
 }
 
@@ -1503,14 +1505,22 @@ export function mapEffortToCodex(
   if (e === 'minimal') {
     const model = codexModel.toLowerCase()
     if (model === 'gpt-6-astra') return 'low'
-    // Cat Code's `minimal` means disabled thinking. GPT-5.6 models expose
-    // `none`, which preserves the former GPT-5.4 Mini low-latency path.
-    if (model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna') return 'none'
+    // Cat Code's `minimal` means disabled thinking. GPT-5.6 / GPT-6 models expose
+    // `none`, which preserves the former low-latency path.
+    if (
+      model === 'gpt-6-sol' ||
+      model === 'gpt-6-luna' ||
+      model === 'gpt-5.6-sol' ||
+      model === 'gpt-5.6-terra' ||
+      model === 'gpt-5.6-luna'
+    ) return 'none'
     return 'minimal'
   }
   if (e === 'max') {
     const model = codexModel.toLowerCase()
     return (
+      model === 'gpt-6-sol' ||
+      model === 'gpt-6-luna' ||
       model === 'gpt-5.6-sol' ||
       model === 'gpt-5.6-terra' ||
       model === 'gpt-5.6-luna' ||
@@ -1523,7 +1533,7 @@ export function mapEffortToCodex(
   }
   if (e === 'ultra') {
     const model = codexModel.toLowerCase()
-    return model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra'
+    return model === 'gpt-5.6-terra'
       ? 'ultra'
       : undefined
   }

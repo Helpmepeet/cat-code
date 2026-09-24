@@ -162,6 +162,9 @@ export class Host implements HostApi {
   private spawnTimes: Array<{ token: string; timestamp: number }> = []
   /** Live slots admitted before the supervisor has registered its child. */
   private pendingLiveSlots = 0
+  /** All unfinished spawn reservations, including restarts that reuse a slot. */
+  private pendingSpawns = 0
+  private branchSwitching = false
   /** One restore owns a registry id from validation through child registration. */
   private readonly restoring = new Set<SessionId>()
 
@@ -1057,9 +1060,23 @@ export class Host implements HostApi {
    * HC4 — spawn limits
    * --------------------------------------------------------------------- */
 
+  /** Hold all new spawns while a checkout moves the files under live sessions. */
+  beginBranchSwitch(): boolean {
+    if (this.branchSwitching || this.pendingSpawns > 0) return false
+    this.branchSwitching = true
+    return true
+  }
+
+  endBranchSwitch(): void {
+    this.branchSwitching = false
+  }
+
   private reserveSpawn(consumesLive: boolean):
     | { ok: true; token: string; consumesLive: boolean }
     | { ok: false; result: HostResult<never> } {
+    if (this.branchSwitching) {
+      return { ok: false, result: hostError('branch_unavailable', 'A branch switch is in progress. Try again shortly.') }
+    }
     // Concurrency bound: live engine processes. Deliberately NOT the registry's
     // row bound (`MAX_REGISTRY_SESSIONS`) — that one covers live + terminal rows
     // and is a file-growth backstop, so tying process concurrency to it meant
@@ -1085,15 +1102,18 @@ export class Host implements HostApi {
     }
     const reservation = { ok: true as const, token: randomUUID(), consumesLive }
     this.spawnTimes.push({ token: reservation.token, timestamp: now })
+    this.pendingSpawns += 1
     if (consumesLive) this.pendingLiveSlots += 1
     return reservation
   }
 
   private commitSpawnReservation(reservation: SpawnReservation): void {
+    this.pendingSpawns -= 1
     if (reservation.consumesLive) this.pendingLiveSlots -= 1
   }
 
   private releaseSpawnReservation(reservation: SpawnReservation): void {
+    this.pendingSpawns -= 1
     if (reservation.consumesLive) this.pendingLiveSlots -= 1
     this.spawnTimes = this.spawnTimes.filter(entry => entry.token !== reservation.token)
   }
