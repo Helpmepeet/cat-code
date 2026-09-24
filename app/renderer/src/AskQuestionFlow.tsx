@@ -135,11 +135,14 @@ export function AskQuestionFlow({
   const otherText = draft.other
   /** The freeform row is an ANSWER once it carries text, so it shows as one. */
   const otherFilled = draft.other.trim().length > 0
+  // Opening Other is a provisional visual choice. Keep the previous draft until
+  // text replaces it, so Escape can still restore the option the user had.
+  const otherEditing = otherActive && !q?.multiSelect && !otherFilled
   // Counts the freeform row too, or the line reads "2 selected" under three
   // rows drawn as chosen.
   const selectedCount = draft.optionIndices.length + (otherFilled ? 1 : 0)
   const canAdvance =
-    draft.optionIndices.length > 0 || otherText.trim().length > 0
+    !otherEditing && (draft.optionIndices.length > 0 || otherFilled)
   const isLast = qi >= questions.length - 1
 
   // Reset per-question transient UI when the step changes (committed answers in
@@ -436,7 +439,7 @@ export function AskQuestionFlow({
   return (
     <section
       aria-labelledby={titleId}
-      className="overflow-hidden rounded-xl border border-white/[0.08] bg-[light-dark(#ffffff,#141416)] shadow-[var(--elev-popover),0_0_0_1px_var(--card-ring)] focus:outline-none"
+      className="overflow-hidden rounded-xl border border-white/[0.08] bg-[light-dark(#ffffff,#141416)] focus:outline-none"
       // Focus events bubble, so these fire for the card AND every control in
       // it — which is exactly the containment rule the key handler applies.
       onBlur={event =>
@@ -526,7 +529,7 @@ export function AskQuestionFlow({
       >
         {q.options.map((option, i) => {
           const active = cursor === i && !otherActive
-          const checked = draft.optionIndices.includes(i)
+          const checked = !otherEditing && draft.optionIndices.includes(i)
           return (
             <button
               aria-checked={checked}
@@ -579,7 +582,7 @@ export function AskQuestionFlow({
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
           className={`flex items-start gap-2.5 rounded-lg px-2 py-[5px] ${rowTone(
-            otherFilled,
+            otherFilled || otherEditing,
             cursor === otherIndex,
           )}`}
           data-ask-active={cursor === otherIndex ? 'true' : undefined}

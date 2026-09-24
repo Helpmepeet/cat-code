@@ -399,6 +399,28 @@ test('arrowing onto Other focuses its button and Enter opens the field', async (
   expect(calls.answers).toHaveLength(0)
 })
 
+test('clicking Other moves the single-select tint before any text is typed', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, '3')
+  const selected = optionRows(card)[2]!
+  expect(checkedState(selected)).toBe('true')
+
+  const otherButton = card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+  await act(async () => otherButton.click())
+  const otherRow = card.querySelector('input')?.parentElement as HTMLElement
+  expect(otherRow).toBeTruthy()
+  expect(otherRow.className).toContain('bg-accent')
+  expect(selected.className).not.toContain('bg-accent')
+  expect(checkedState(selected)).toBe('false')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+
+  const input = card.querySelector('input')!
+  await press(input, 'Enter')
+  expect(calls.answers).toHaveLength(0)
+  await press(input, 'Escape')
+  expect(checkedState(optionRows(card)[2]!)).toBe('true')
+})
+
 test('hover previews an option, then restores the highlighted preview', async () => {
   const { card } = await mountFlow([ALL_TYPES[2]!])
   expect(card.textContent).toContain('return early')

@@ -129,6 +129,12 @@ test('the card body is a bounded scroller', () => {
   expect(html).not.toContain('bg-[#0d0d0f]')
 })
 
+test('the card has one border without an outer shadow ring', () => {
+  const sectionClass = render(SINGLE).match(/<section[^>]*class="([^"]*)"/)?.[1]
+  expect(sectionClass).toContain('border-white/[0.08]')
+  expect(sectionClass).not.toContain('shadow-')
+})
+
 test('the header names this question and counts what is queued behind it', () => {
   // Only past one: a lone question must not imply something follows it.
   expect(render(SINGLE, true, 1)).not.toContain('pending')
