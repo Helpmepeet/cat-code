@@ -64,7 +64,14 @@ import {
   type HostResult,
   type SaveTextResult,
   type SessionDescriptor,
+  type SwitchWorkspaceBranchResult,
+  type WorkspaceBranches,
 } from '../shared/hostApi.js'
+import {
+  gitRoot,
+  listWorkspaceBranches,
+  switchWorkspaceBranch,
+} from './workspaceBranches.js'
 import {
   DEBUG_SHELL_STATE_CHANNEL,
   DEBUG_STATE_VERSION,
@@ -109,6 +116,8 @@ import {
   // null (the native picker, HC1); the host-event channel is a one-way stream.
   CH_HOST_CREATE,
   CH_HOST_CREATE_IN_WORKSPACE,
+  CH_HOST_LIST_BRANCHES,
+  CH_HOST_SWITCH_BRANCH,
   CH_HOST_RESTORE,
   CH_HOST_CLOSE,
   CH_HOST_SET_PEER_WAKE_BLOCKED,
@@ -627,6 +636,9 @@ let markRendererDocumentReady: ((documentId: string) => void) | null = null
 let disposeRendererRecovery: (() => void) | null = null
 const replayFlushTimers = new Map<SessionId, ReturnType<typeof setTimeout>>()
 const restoringSessions = new Set<SessionId>()
+// A host row records lastMessageSentAt only after a turn result. Branch
+// switching must also refuse the interval from accepted submit to result.
+const sessionsWithSubmit = new Set<SessionId>()
 
 function scheduleReplayFlush(sessionId: SessionId): void {
   if (replayFlushTimers.has(sessionId)) return
@@ -2136,6 +2148,8 @@ function registerIpcHandlers(): void {
     // waiting for a frame that cannot come.
     if (failure !== null) {
       answerUnforwardedSubmit(arg.sessionId, options?.submitId, failure)
+    } else {
+      sessionsWithSubmit.add(arg.sessionId)
     }
   })
 
@@ -2887,6 +2901,58 @@ function registerHostControlPlane(): void {
       // exactly as restoreSession sources a cwd, and spawns a FRESH session there.
       // A fresh create takes no replay-coalescing (no transcript to replay).
       return host.createSessionInWorkspace(String(appSessionId))
+    },
+  )
+
+  const switchingGitRoots = new Set<string>()
+  ipcMain.handle(
+    CH_HOST_LIST_BRANCHES,
+    (_e, appSessionId: unknown): Promise<HostResult<WorkspaceBranches>> => {
+      const descriptor = host?.listSessions().find(row => row.appSessionId === appSessionId)
+      if (!descriptor) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Session not found.' } })
+      return listWorkspaceBranches(descriptor.cwd)
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_SWITCH_BRANCH,
+    async (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> => {
+      const h = host
+      const descriptor = h?.listSessions().find(row => row.appSessionId === appSessionId)
+      if (!h || !descriptor) return { ok: false, error: { code: 'session_not_found', message: 'Session not found.' } }
+      if (descriptor.status !== 'ready') return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this session to connect before switching branches.' } }
+      if (descriptor.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new chat to choose another branch.' } }
+      if (typeof branch !== 'string' || branch.length === 0 || branch.length > 255) {
+        return { ok: false, error: { code: 'branch_unavailable', message: 'Choose a local branch from the list.' } }
+      }
+      const root = await gitRoot(descriptor.cwd)
+      if (!root) return { ok: false, error: { code: 'branch_unavailable', message: 'This project is not a Git repository.' } }
+      if (switchingGitRoots.has(root)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
+      switchingGitRoots.add(root)
+      try {
+        const otherLiveCwds = h.listSessions()
+          .filter(row => row.appSessionId !== appSessionId && (row.status === 'ready' || row.status === 'spawning'))
+          .map(row => row.cwd)
+        const switched = await switchWorkspaceBranch(descriptor.cwd, branch, otherLiveCwds)
+        if (!switched.ok) return switched
+        const created = await h.createSessionInWorkspace(descriptor.appSessionId)
+        if (!created.ok) {
+          // The old engine cached the previous branch. Do not leave that pane
+          // active against a checkout that now names a different branch.
+          await h.closeSession(descriptor.appSessionId)
+          return {
+            ok: false,
+            branchChanged: true,
+            error: {
+              ...created.error,
+              message: `Branch switched to ${branch}, but a new chat could not start. Open a new chat in this project. ${created.error.message}`,
+            },
+          }
+        }
+        return created
+      } finally {
+        switchingGitRoots.delete(root)
+      }
     },
   )
 

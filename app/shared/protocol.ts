@@ -72,6 +72,8 @@ import type {
   SaveTextInput,
   SaveTextResult,
   SessionDescriptor,
+  SwitchWorkspaceBranchResult,
+  WorkspaceBranches,
 } from './hostApi.js'
 import type { DebugRendererSnapshot } from './debugState.js'
 import type {
@@ -4259,6 +4261,13 @@ export type CatCodeBridge = {
   createSessionInWorkspace(
     appSessionId: SessionId,
   ): Promise<HostResult<SessionDescriptor>>
+  /** Read local Git branches from a host-owned session workspace. */
+  listWorkspaceBranches(appSessionId: SessionId): Promise<HostResult<WorkspaceBranches>>
+  /** Switch checkout and start a fresh session on the selected local branch. */
+  switchWorkspaceBranch(
+    appSessionId: SessionId,
+    branch: string,
+  ): Promise<SwitchWorkspaceBranchResult>
   /**
    * Instant session open (M2) — fetch a dead session's cached transcript by id,
    * read-only, WITHOUT spawning a sidecar. Modeled exactly on `restoreSession`:

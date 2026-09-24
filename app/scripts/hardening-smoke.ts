@@ -245,6 +245,8 @@ async function runProductionHardeningSmoke(
       'closeSession',
       'createSession',
       'createSessionInWorkspace',
+      'listWorkspaceBranches',
+      'switchWorkspaceBranch',
       'listSessions',
       // SESSIONS-UNIFICATION (2026-07-20) — open a terminal-created session by its
       // engine id (HC3 fixed sender; renderer authors no cwd, HC1).

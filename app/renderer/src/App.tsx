@@ -2595,6 +2595,37 @@ export function App() {
     }
   }, [navigateAfterClosedSession, releasePendingSubmit])
 
+  const switchBranchForSession = useCallback(async (
+    sessionId: SessionId,
+    branch: string,
+  ): Promise<string | null> => {
+    if (
+      selectPromptDraft(promptDrafts, sessionId).trim() ||
+      selectSessionPasteList(pasteState, sessionId).length > 0 ||
+      selectImageAttachments(imageAttachmentState, sessionId).length > 0 ||
+      selectFileAttachment(fileAttachmentState, sessionId)
+    ) {
+      return 'Remove your draft and attachments before switching branches.'
+    }
+    try {
+      const result = await getBridge().switchWorkspaceBranch(sessionId, branch)
+      if (!result.ok) {
+        if ('branchChanged' in result) {
+          setShellError(result.error.message)
+          return null
+        }
+        return result.error.message
+      }
+      // The engine caches its branch at spawn. The host starts a fresh process
+      // after Git switches; retire the empty old session before focusing it.
+      await closeTab(sessionId)
+      focusCreatedSession(result.value.appSessionId)
+      return null
+    } catch (error) {
+      return errorMessage(error)
+    }
+  }, [closeTab, focusCreatedSession, promptDrafts, pasteState, imageAttachmentState, fileAttachmentState])
+
   const setPeerWakeBlocked = useCallback(
     async (sessionId: SessionId, blocked: boolean) => {
       // PEER-SESSIONS §6 — the user's one control over the ruling that a peer
@@ -3515,6 +3546,7 @@ export function App() {
                 onPreviewEngage={() => engagePreview(sessionId)}
                 previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
+	            onSwitchBranch={descriptor?.status === 'ready' ? branch => switchBranchForSession(sessionId, branch) : undefined}
 	            sandboxed={panelSandboxed}
 	            model={rail.model}
 	            modelLabel={rail.modelLabel}

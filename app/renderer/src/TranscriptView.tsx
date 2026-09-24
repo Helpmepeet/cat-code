@@ -42,7 +42,7 @@ import {
 import Markdown from 'react-markdown'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
-import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
+import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import {
@@ -335,6 +335,8 @@ export const TranscriptView = memo(function TranscriptView({
   accountsUsagePending = false,
   cwd,
   branch,
+  onListBranches,
+  onSwitchBranch,
   sandboxed,
   restorePhase,
   revealHidden,
@@ -358,6 +360,8 @@ export const TranscriptView = memo(function TranscriptView({
   accountsUsagePending?: boolean
   cwd?: string | null
   branch?: string | null
+  onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
+  onSwitchBranch?: (branch: string) => Promise<string | null>
   /** Whether this session's tools run sandboxed, read by the empty state's
    * "Start in" column. */
   sandboxed?: boolean
@@ -405,6 +409,8 @@ export const TranscriptView = memo(function TranscriptView({
       accountsUsagePending={accountsUsagePending}
       cwd={cwd ?? null}
       branch={branch ?? null}
+      onListBranches={onListBranches}
+      onSwitchBranch={onSwitchBranch}
       sandboxed={sandboxed ?? false}
       restorePhase={restorePhase ?? null}
       loadEarlierPending={loadEarlierPending ?? false}
@@ -428,6 +434,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   accountsUsagePending = false,
   cwd = null,
   branch = null,
+  onListBranches,
+  onSwitchBranch,
   sandboxed = false,
   restorePhase = null,
   loadEarlierPending = false,
@@ -451,6 +459,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   accountsUsagePending?: boolean
   cwd?: string | null
   branch?: string | null
+  onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
+  onSwitchBranch?: (branch: string) => Promise<string | null>
   sandboxed?: boolean
   restorePhase?: RestorePhase | null
   loadEarlierPending?: boolean
@@ -541,6 +551,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           variant="session"
           cwd={cwd}
           branch={branch}
+          onListBranches={onListBranches}
+          onSwitchBranch={onSwitchBranch}
           sandboxed={sandboxed}
           accounts={accounts}
           accountsUsagePending={accountsUsagePending}

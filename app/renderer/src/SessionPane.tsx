@@ -14,6 +14,7 @@
 
 import {
   useContext,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -195,6 +196,7 @@ export function SessionPane({
   turnStartedAt = null,
   activeDescriptor,
   branch,
+  onSwitchBranch,
   sandboxed,
   activeLog,
   activeSessionId,
@@ -267,6 +269,10 @@ export function SessionPane({
   transcript,
   transportError,
 }: SessionPaneProps) {
+  const listBranches = useCallback(
+    () => getBridge().listWorkspaceBranches(activeSessionId ?? ''),
+    [activeSessionId],
+  )
   const toast = useToast()
   const [previewImageId, setPreviewImageId] = useState<number | null>(null)
   const previewImage =
@@ -1159,6 +1165,8 @@ export function SessionPane({
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
             branch={branch}
+            onListBranches={onSwitchBranch ? listBranches : undefined}
+            onSwitchBranch={onSwitchBranch}
             sandboxed={sandboxed}
             restorePhase={restorePhase}
             revealHidden={revealHidden}
@@ -1989,9 +1997,10 @@ type SessionPaneProps = {
   turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
-  /** Read-only git branch for the empty-state meta strip — this session's own
+  /** Git branch for the empty-state meta strip — this session's own
    * `diagnostics.snapshot`, falling back to the session log's `gitBranch`. */
   branch: string | null
+  onSwitchBranch?: (branch: string) => Promise<string | null>
   /** Whether this session's tools run sandboxed (`diagnostics.snapshot`), read by
    * the empty-state meta strip's "Start in" column. */
   sandboxed?: boolean
