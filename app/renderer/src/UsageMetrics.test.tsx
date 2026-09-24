@@ -47,3 +47,14 @@ test('unreported cache writes suppress the share and its comparison', () => {
     summary.previousPeriod!.cacheWriteReporting = 'unreported';
     expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).not.toContain('Cached input: 5 percentage points increase');
 });
+test('per-active-day tile plots the running average for daily ranges', () => {
+    const summary = comparable();
+    summary.days[0]!.tokens.fresh = 10;
+    summary.days[1]!.tokens.fresh = 30;
+    summary.days[0]!.records = 1;
+    summary.days[1]!.records = 1;
+    const html = renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>);
+    const tile = html.match(/<section class="usage-metric usage-metric-tokens"><h2>Per active day<\/h2>[\s\S]*?<\/section>/)?.[0];
+    expect(tile).toContain('<polyline points=');
+    expect(tile).toContain('1,9.5');
+});

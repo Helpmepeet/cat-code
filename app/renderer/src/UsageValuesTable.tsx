@@ -4,6 +4,7 @@ import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { autoModeCommandRatePoints } from './usageAutoModeState.js';
 import { usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
 import { usageBucketLabel } from './usageTrendState.js';
+import { usageHourLabel } from './usageGraphState.js';
 
 const outcomes: readonly { key: AutoModeUsageOutcome; label: string }[] = [
     { key: 'allowed', label: 'Allowed' },
@@ -56,7 +57,7 @@ export function UsageValuesTable({ summary, hourlySummary, asOf, timezone, parti
             </table></div>}</section>
             {hourlySummary.days.some(day => day.hours?.length) && <section><h2>Activity by hour</h2><div className="usage-table-scroll"><table>
                 <caption>Recorded activity by local hour</caption><thead><tr><th scope="col">Day</th><th scope="col">Hour</th><th scope="col">UTC offset</th><th scope="col">Tokens</th><th scope="col">Tool requests</th></tr></thead>
-                <tbody>{hourlySummary.days.flatMap(day => (day.hours ?? []).map((hour, index) => { const future = !!hour.startAt && Date.parse(hour.startAt) > Date.parse(asOf); return <tr key={`${day.date}:${index}`}><th scope="row">{day.date}</th><td>{String(hour.hour).padStart(2, '0')}:00</td><td>{hour.offsetMinutes >= 0 ? '+' : '−'}{String(Math.floor(Math.abs(hour.offsetMinutes) / 60)).padStart(2, '0')}:{String(Math.abs(hour.offsetMinutes) % 60).padStart(2, '0')}</td><Cell value={hour.tokens ?? 0} available={!future && hour.tokens !== undefined}/><Cell value={hour.requests} available={!future}/></tr>; }))}</tbody>
+                <tbody>{hourlySummary.days.flatMap(day => (day.hours ?? []).map((hour, index) => { const future = !!hour.startAt && Date.parse(hour.startAt) > Date.parse(asOf); return <tr key={`${day.date}:${index}`}><th scope="row">{day.date}</th><td>{usageHourLabel(hour)}</td><td>{hour.offsetMinutes >= 0 ? '+' : '−'}{String(Math.floor(Math.abs(hour.offsetMinutes) / 60)).padStart(2, '0')}:{String(Math.abs(hour.offsetMinutes) % 60).padStart(2, '0')}</td><Cell value={hour.tokens ?? 0} available={!future && hour.tokens !== undefined}/><Cell value={hour.requests} available={!future}/></tr>; }))}</tbody>
             </table></div></section>}
             <section><h2>Auto mode</h2><div className="usage-table-scroll"><table>
                 <caption>Raw decision outcomes by local period</caption><thead><tr><th scope="col">Period</th><th scope="col">Coverage</th>{outcomes.map(outcome => <th scope="col" key={outcome.key}>{outcome.label}</th>)}</tr></thead>

@@ -36,6 +36,9 @@ test('D1/V1: cold usage worker reads retained history with broken account storag
         const cached = await runUsageStatsWorker({ command: process.execPath, args: ['run', join(import.meta.dir, 'usageStatsWorker.ts'), '--bare', '--cached'], cwd: join(import.meta.dir, '../..'), env: { HOME: join(root, 'home'), CLAUDE_CONFIG_DIR: join(root, 'config'), CLAUDE_CODE_SIMPLE: '1' }, timeoutMs: 5000 });
         expect(cached).toEqual(result);
         console.info(`usage saved worker: ${Math.round(performance.now() - cachedStart)} ms`);
+        const otherTimezone = result.type === 'usage' && result.snapshot.timezone === 'Pacific/Honolulu' ? 'UTC' : 'Pacific/Honolulu';
+        const changedZone = await runUsageStatsWorker({ command: process.execPath, args: ['run', join(import.meta.dir, 'usageStatsWorker.ts'), '--bare', '--cached'], cwd: join(import.meta.dir, '../..'), env: { HOME: join(root, 'home'), CLAUDE_CONFIG_DIR: join(root, 'config'), CLAUDE_CODE_SIMPLE: '1', TZ: otherTimezone }, timeoutMs: 5000 });
+        expect(changedZone).toEqual({ type: 'error', version: 1, code: 'unavailable' });
     }
     finally {
         await rm(root, { recursive: true, force: true });

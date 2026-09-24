@@ -28,18 +28,11 @@ test('contributors are ranked and truncated with explicit omitted counts', () =>
     const summary: UsageRangeSummary = { range: '7d', startDate: '2026-09-13', endDateExclusive: '2026-09-14', startInclusive: '', endExclusive: '', tokens: { ...emptyTokens(), fresh: 300 }, sessions: 25, records: 25, requests: 110, identifiedRequests: 110, fallbackRequests: 0, activeDays: 1, cachedInputShare: 0, cacheWriteReporting: 'reported', models: [], tools: [], days: [{ date: '2026-09-13', results: 10, errors: 10, tools: [], tokens: { ...emptyTokens(), fresh: 300 }, cacheWriteReporting: 'reported', models: [], sessions: 25, records: 25, requests: 110, contributors: { state: 'full', omitted: 0, items } }], timing, autoMode, detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
     const grouped = groupUsageSummary(summary);
     expect(grouped.days[0]!.contributors).toMatchObject({ state: 'truncated', omitted: 5 });
-    expect(grouped.days[0]!.contributors.items.map(item => item.id)).toContain('session-0');
-    expect(grouped.days[0]!.contributors.items.map(item => item.id)).toContain('session-1');
-    for (let rank = 1; rank <= 10; rank++) expect(grouped.days[0]!.contributors.items.some(item => item.rank?.tokens === rank)).toBe(true);
-    for (const metric of ['tokens', 'requests', 'errors'] as const) {
-        const ranks = new Set(grouped.days[0]!.contributors.items.map(item => item.rank![metric]));
-        for (let rank = 1; rank <= 6; rank++) expect(ranks.has(rank)).toBe(true);
-    }
+    expect(grouped.days[0]!.contributors.items.map(item => item.rank?.tokens)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+    expect(grouped.days[0]!.contributors.items.map(item => item.id)).not.toContain('session-0');
     expect(groupUsageSummary(grouped).days[0]!.contributors).toMatchObject({ state: 'truncated', omitted: 5 });
     const fallback = groupUsageSummary(grouped, 8, 10, 5).days[0]!.contributors;
-    expect(fallback.items.map(item => item.id)).toEqual(expect.arrayContaining(['session-24', 'session-0', 'session-1']));
-    expect(fallback.items.find(item => item.id === 'session-0')!.rank!.requests).toBe(1);
-    expect(fallback.items.find(item => item.id === 'session-1')!.rank!.errors).toBe(1);
+    expect(fallback.items.map(item => item.rank?.tokens)).toEqual([1, 2, 3, 4, 5]);
     expect(fallback.items.find(item => item.id === 'session-24')!.timeline).toMatchObject({ state: 'truncated', omitted: 11 });
     expect(fallback.items.find(item => item.id === 'session-24')!.timeline.items.map(item => item.id)).toEqual(['event-11']);
 });

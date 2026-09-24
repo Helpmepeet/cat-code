@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { UsageDay, UsageHour, UsageRangeSummary } from '../../shared/usageDashboard.js';
-import { usageChartDate } from './usageGraphState.js';
+import { usageChartDate, usageHourLabel } from './usageGraphState.js';
 import { useUsageChartWidth, usageNumber } from './usageDashboardState.js';
 
 type HeatCell = { day: UsageDay; dayIndex: number; slot: UsageHour };
@@ -44,7 +44,7 @@ export function UsageHeatmap({ summary, asOf, onSelect, selected = '', selectedB
         target.ownerSVGElement?.querySelectorAll<SVGGElement>('.usage-heat-cell')[next]?.focus();
     };
     return <>
-        <div className="usage-chart-toolbar"><span>Last 7 days</span><div className="usage-heat-key" aria-label={`Intensity from fewer to more ${noun}`}><span>Less</span>{[0, 1, 2, 3, 4].map(level => <i key={level} className={`usage-heat-${level}`}/>)}<span>More</span></div></div>
+        <div className="usage-chart-toolbar"><span>Last 7 days</span><div className="usage-heat-key" aria-label={`Intensity from fewer to more ${noun}`}><span>Less</span>{[0, 1, 2, 3, 4, 5].map(level => <i key={level} className={`usage-heat-${level}`}/>)}<span>More</span></div></div>
         <svg ref={chart.ref} className="usage-heatmap usage-heatmap-week" viewBox={`0 0 ${width} ${height}`} role="group" aria-label={`Hourly ${noun} by local day`} onMouseLeave={() => setHovered(null)}>
             {summary.days.map((day, dayIndex) => <g key={day.date}>
                 <text x={left - 9} y={y(dayIndex) + size / 2 + 4} textAnchor="end" className="usage-axis">{usageChartDate(day.date)}</text>
@@ -55,9 +55,9 @@ export function UsageHeatmap({ summary, asOf, onSelect, selected = '', selectedB
                         const index = cells.findIndex(cell => cell.dayIndex === dayIndex && cell.slot === slot);
                         const isFuture = future(slot);
                         const count = value(slot);
-                        const level = count === 0 ? 0 : Math.min(4, Math.max(1, Math.ceil(count / max * 4)));
+                        const level = count === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(count / max * 5)));
                         const splitWidth = (size - Math.max(0, slots.length - 1)) / slots.length;
-                        return <g key={`${hour}:${slot.offsetMinutes}:${repeat}`} className="usage-heat-cell" role="button" tabIndex={active === index ? 0 : -1} aria-pressed={isSelectedDay(day.date)} aria-label={`${day.date} ${String(hour).padStart(2, '0')}:00 ${offsetLabel(slot.offsetMinutes)}: ${isFuture ? 'not yet recorded' : `${usageNumber(count)} ${noun}`}`}
+                        return <g key={`${hour}:${slot.offsetMinutes}:${repeat}`} className="usage-heat-cell" role="button" tabIndex={active === index ? 0 : -1} aria-pressed={isSelectedDay(day.date)} aria-label={`${day.date} ${usageHourLabel(slot)} ${offsetLabel(slot.offsetMinutes)}: ${isFuture ? 'not yet recorded' : `${usageNumber(count)} ${noun}`}`}
                             onMouseEnter={() => setHovered(index)} onFocus={() => { setActive(index); setHovered(index); }} onBlur={() => setHovered(null)}
                             onClick={() => onSelect(day.date)} onKeyDown={event => {
                                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(day.date); }
@@ -72,6 +72,6 @@ export function UsageHeatmap({ summary, asOf, onSelect, selected = '', selectedB
             </g>)}
             {[0, 6, 12, 18].map(hour => <text key={hour} x={x(hour) + size / 2} y={height - 5} textAnchor="middle" className="usage-axis">{['12a', '6a', '12p', '6p'][hour / 6]}</text>)}
         </svg>
-        {shown && <div className="usage-interaction-readout" role="status"><strong>{usageChartDate(shown.day.date)} · {String(shown.slot.hour).padStart(2, '0')}:00 {offsetLabel(shown.slot.offsetMinutes)}</strong><span>{future(shown.slot) ? 'Not yet recorded' : `${usageNumber(value(shown.slot))} ${noun}${metric === 'tokens' ? `, ${usageNumber(shown.slot.requests)} tool requests` : ''}`}</span></div>}
+        {shown && <div className="usage-interaction-readout" role="status"><strong>{usageChartDate(shown.day.date)} · {usageHourLabel(shown.slot)} {offsetLabel(shown.slot.offsetMinutes)}</strong><span>{future(shown.slot) ? 'Not yet recorded' : `${usageNumber(value(shown.slot))} ${noun}${metric === 'tokens' ? `, ${usageNumber(shown.slot.requests)} tool requests` : ''}`}</span></div>}
     </>;
 }

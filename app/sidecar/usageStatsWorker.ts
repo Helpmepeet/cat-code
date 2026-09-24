@@ -10,7 +10,9 @@ runDisposableWorker('usage-worker', async () => {
             const { readSavedUsage } = await import('../../src/utils/statsUsageIndex.js');
             const { parseUsageCollectionResult } = await import('../shared/usageStatsWorker.js');
             const snapshot = readSavedUsage();
-            result = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot }) ?? { type: 'error', version: 1, code: 'unavailable' };
+            result = snapshot?.timezone === Intl.DateTimeFormat().resolvedOptions().timeZone
+                ? parseUsageCollectionResult({ type: 'usage', version: 1, snapshot }) ?? { type: 'error', version: 1, code: 'unavailable' }
+                : { type: 'error', version: 1, code: 'unavailable' };
         } else {
             await bootstrapWorkerEngine();
             const { collectUsageDashboard } = await import('./statsDomain.js');

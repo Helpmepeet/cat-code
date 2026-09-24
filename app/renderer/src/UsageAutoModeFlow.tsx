@@ -58,7 +58,9 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
   const attempts = autoModeAttempts(summary)
   const overviewEdges = autoModeOverviewEdges(summary)
   const layout = layoutAutoModeFlow(overviewEdges, chart.width)
-  const [activeLinkId, setActiveLinkId] = useState<string | null>(null)
+  const [previewLinkId, setPreviewLinkId] = useState<string | null>(null)
+  const [pinnedLinkId, setPinnedLinkId] = useState<string | null>(null)
+  const activeLinkId = previewLinkId ?? pinnedLinkId
   const activeLink = layout?.links.find(link => link.id === activeLinkId) ?? null
 
   if (summary.allTools.coverage.state === 'unavailable') {
@@ -91,7 +93,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         role="group"
         aria-label={`Decision flow for ${usageNumber(layout.total)} recorded automatic permission attempts`}
-        onMouseLeave={() => setActiveLinkId(null)}
+        onMouseLeave={() => setPreviewLinkId(null)}
       >
         {layout.links.map(link => {
           const outcome = linkOutcome(link)
@@ -106,11 +108,17 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
               strokeWidth={Math.max(12, link.height)}
               pointerEvents="all"
               tabIndex={0}
-              role="img"
+              role="button"
               aria-label={label}
-              onMouseEnter={() => setActiveLinkId(link.id)}
-              onFocus={() => setActiveLinkId(link.id)}
-              onBlur={() => setActiveLinkId(null)}
+              aria-pressed={pinnedLinkId === link.id}
+              onMouseEnter={() => setPreviewLinkId(link.id)}
+              onFocus={() => setPreviewLinkId(link.id)}
+              onBlur={() => setPreviewLinkId(null)}
+              onClick={() => { setPinnedLinkId(current => current === link.id ? null : link.id); setPreviewLinkId(null) }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPinnedLinkId(current => current === link.id ? null : link.id); setPreviewLinkId(null) }
+                else if (event.key === 'Escape') { event.preventDefault(); setPinnedLinkId(null); setPreviewLinkId(null) }
+              }}
             ><title>{label}</title></path>
           </g>
         })}
@@ -126,7 +134,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         })}
       </svg>
     </div>
-    {activeLink && <p className="usage-auto-flow-readout" role="status"><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} · {usagePercent(activeLink.count / layout.total * 100)}</p>}
+    {activeLink && <div className="usage-auto-flow-readout" role="status"><p><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} · {usagePercent(activeLink.count / layout.total * 100)}</p>{pinnedLinkId && <button type="button" onClick={() => { setPinnedLinkId(null); setPreviewLinkId(null) }}>Clear selection</button>}</div>}
     <ul className="usage-auto-flow-legend" aria-label="Decision outcomes">
       {AUTO_MODE_DISPLAY_GROUPS.map(({ group, label }) => <li key={group} aria-label={group === 'error' ? 'Error. Includes review required, operational error, unknown outcome, and incomplete' : label} title={group === 'error' ? 'Includes review required, operational error, unknown outcome, and incomplete' : undefined}><i className={`usage-auto-flow-legend-${group}`} aria-hidden="true"/><span>{label}</span></li>)}
     </ul>

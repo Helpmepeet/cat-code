@@ -7,9 +7,16 @@ export function UsageMetrics({ summary, unknown, partial }: { summary?: UsageRan
     const average = (tokens: UsageRangeSummary['tokens'], activeDays: number) => activeDays ? usageTotal(tokens) / activeDays : 0;
     const delta = (current: number | null, baseline: number | null | undefined, points = false) => previous ? usageMetricDelta(current, baseline ?? null, points ? 'points' : 'percent') : null;
     const comparison = previous ? `vs prior ${summary?.range === '7d' ? '7' : '30'} days` : '';
+    let runningTokens = 0, runningActiveDays = 0;
+    const activeDaySeries = summary?.range === 'all' ? [] : summary?.days.map(day => {
+        const dayTokens = usageTotal(day.tokens);
+        runningTokens += dayTokens;
+        if (dayTokens > 0 || day.requests > 0 || day.records > 0 || day.sessions > 0) runningActiveDays++;
+        return runningActiveDays ? runningTokens / runningActiveDays : 0;
+    }) ?? [];
     const items = [
         { kind: 'tokens', label: 'Total tokens', delta: delta(summary ? usageTotal(summary.tokens) : null, previous ? usageTotal(previous.tokens) : null), value: summary ? usageCompact(usageTotal(summary.tokens)) : unknown, series: summary?.days.map(day => usageTotal(day.tokens)) ?? [] },
-        { kind: 'tokens', label: 'Per active day', delta: delta(summary ? average(summary.tokens, summary.activeDays) : null, previous ? average(previous.tokens, previous.activeDays) : null), value: summary ? usageCompact(summary.activeDays ? usageTotal(summary.tokens) / summary.activeDays : 0) : unknown, series: [] },
+        { kind: 'tokens', label: 'Per active day', delta: delta(summary ? average(summary.tokens, summary.activeDays) : null, previous ? average(previous.tokens, previous.activeDays) : null), value: summary ? usageCompact(summary.activeDays ? usageTotal(summary.tokens) / summary.activeDays : 0) : unknown, series: activeDaySeries },
         { kind: 'sessions', label: 'Sessions', delta: delta(summary?.sessions ?? null, previous?.sessions), value: summary ? usageNumber(summary.sessions) : unknown, series: summary?.days.map(day => day.sessions) ?? [] },
         { kind: 'requests', label: 'Tool requests', delta: delta(summary?.requests ?? null, previous?.requests), value: summary ? usageNumber(summary.requests) : unknown, series: summary?.days.map(day => day.requests) ?? [] },
         { kind: 'cache', label: 'Cached input', delta: cacheMeasured && previous?.cacheWriteReporting === 'reported' ? delta(summary?.cachedInputShare ?? null, previous.cachedInputShare, true) : null, value: summary ? cacheMeasured ? usagePercent(summary.cachedInputShare!) : '–' : unknown, series: cacheMeasured ? summary?.days.filter(day => day.cacheWriteReporting === 'reported').map(day => usageShare(day.tokens)).filter((value): value is number => value !== null) ?? [] : [] },

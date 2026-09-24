@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test';
 import { MAX_USAGE_LABEL_BYTES, MAX_USAGE_RECORD_BYTES } from './usageDashboard.js';
 import { parseUsageCollectionLine, parseUsageCollectionResult } from './usageStatsWorker.js';
+import { collectRetainedUsage } from '../../src/utils/statsUsage.js';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const tokens = { fresh: 4, read: 2, write: 1, output: 3 };
 const tokenCost = { usd: 0.00006, pricedTokens: 10 };
 const timing = { models: { state: 'unavailable', logicalCalls: 0, retriedCalls: 0, streamingAttempts: 0, outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, responseDuration: { samples: 0, p50Ms: null, p95Ms: null }, firstText: { samples: 0, p50Ms: null, p95Ms: null } }, tools: { state: 'unavailable', outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, duration: { samples: 0, p50Ms: null, p95Ms: null } } };
@@ -20,6 +24,32 @@ test('accepts a valid three-range snapshot and JSON line', () => {
     const value = usage();
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
     expect(parseUsageCollectionLine(JSON.stringify(value))?.type).toBe('usage');
+});
+test('accepts real 22-hour and 26-hour local days', async () => {
+    for (const [asOf, date, hours] of [
+        ['2026-03-29T12:00:00.000Z', '2026-03-29', 22],
+        ['2025-10-26T12:00:00.000Z', '2025-10-26', 26],
+    ] as const) {
+        const actual = await collectRetainedUsage([], asOf, { timezone: 'Antarctica/Troll' });
+        expect(actual.ranges['7d'].days.find(day => day.date === date)?.hours).toHaveLength(hours);
+        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: actual })?.type).toBe('usage');
+    }
+});
+test('keeps a cross-UTC-midnight timeline in its local day', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'usage-local-day-'));
+    try {
+        const at = '2026-09-13T18:00:00.000Z';
+        const rows = [
+            { type: 'assistant', sessionId: 's', uuid: 'a', timestamp: at, message: { id: 'a', model: 'm', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: 'tool_use', id: 't', name: 'Bash' }] } },
+            { type: 'system', subtype: 'tool_execution_start', sessionId: 's', uuid: 'start', timestamp: at, schema_version: 1, tool_use_id: 't' },
+        ];
+        const file = join(directory, 'session.jsonl');
+        await writeFile(file, rows.map(row => JSON.stringify(row)).join('\n'));
+        const actual = await collectRetainedUsage([file], '2026-09-14T05:00:00.000Z', { timezone: 'Asia/Bangkok' });
+        const day = actual.ranges['7d'].days.find(item => item.date === '2026-09-14');
+        expect(day?.contributors.items[0]?.timeline.items.some(item => item.startedAt === at)).toBe(true);
+        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: actual })?.type).toBe('usage');
+    } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test('accepts excluded timing records without marking token and tool coverage partial', () => {
     const value = usage();

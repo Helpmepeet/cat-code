@@ -1,4 +1,4 @@
-import type { UsageCategory, UsageDay, UsageRangeSummary } from '../../shared/usageDashboard.js';
+import type { UsageCategory, UsageDay, UsageHour, UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { usageTotal } from './usageDashboardState.js';
 export type UsageFlowMode = 'type' | 'model';
 export function usageAxisCeiling(value: number): number {
@@ -9,6 +9,10 @@ export function usageAxisCeiling(value: number): number {
 export function usageChartDate(date: string, includeYear = false): string {
     const parsed = new Date(`${date}T00:00:00.000Z`);
     return `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][parsed.getUTCMonth()]} ${parsed.getUTCDate()}${includeYear ? ` '${String(parsed.getUTCFullYear()).slice(-2)}` : ''}`;
+}
+export function usageHourLabel(slot: UsageHour): string {
+    const minute = slot.startAt ? new Date(Date.parse(slot.startAt) + slot.offsetMinutes * 60000).getUTCMinutes() : 0;
+    return `${String(slot.hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 export function usageChartTicks(start: string, endExclusive: string, width: number): string[] {
     // Date keys are local calendar days. UTC is used only for stable civil-day arithmetic.

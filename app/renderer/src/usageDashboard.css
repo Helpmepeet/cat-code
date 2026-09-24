@@ -147,10 +147,11 @@ html[data-glass='on'] .usage-page { background:transparent; }
 .usage-heat-key { display:flex; align-items:center; gap:4px; }
 .usage-heat-key i { display:block; width:10px; height:10px; border-radius:2px; }
 .usage-heat-0 { fill:var(--color-surface-panel); background:var(--color-surface-panel); }
-.usage-heat-1 { fill:color-mix(in srgb,var(--color-accent) 20%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 20%,var(--usage-panel)); }
-.usage-heat-2 { fill:color-mix(in srgb,var(--color-accent) 44%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 44%,var(--usage-panel)); }
-.usage-heat-3 { fill:color-mix(in srgb,var(--color-accent) 70%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 70%,var(--usage-panel)); }
-.usage-heat-4 { fill:var(--color-accent); background:var(--color-accent); }
+.usage-heat-1 { fill:color-mix(in srgb,var(--color-accent) 18%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 18%,var(--usage-panel)); }
+.usage-heat-2 { fill:color-mix(in srgb,var(--color-accent) 36%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 36%,var(--usage-panel)); }
+.usage-heat-3 { fill:color-mix(in srgb,var(--color-accent) 56%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 56%,var(--usage-panel)); }
+.usage-heat-4 { fill:color-mix(in srgb,var(--color-accent) 78%,var(--usage-panel)); background:color-mix(in srgb,var(--color-accent) 78%,var(--usage-panel)); }
+.usage-heat-5 { fill:var(--color-accent); background:var(--color-accent); }
 .usage-heat-future { fill:none; stroke:var(--color-shell-seam); stroke-dasharray:2 2; }
 .usage-heat-missing { fill:none; stroke:var(--color-text-subtle); stroke-dasharray:2 2; }
 .usage-heat-selected { stroke:var(--color-text-primary); stroke-width:1.5px; }

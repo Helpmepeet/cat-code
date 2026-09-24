@@ -14,11 +14,17 @@
 .usage-tool-error-grid { stroke:var(--color-shell-seam); stroke-width:1; }
 .usage-tool-error-line { fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .usage-tool-error-series circle { fill:var(--usage-panel); stroke-width:2; }
+.usage-tool-error-series g[role=button] { cursor:pointer; }
+.usage-tool-error-series g[role=button]:focus-visible { outline:none; }
+.usage-tool-error-series g[role=button]:focus-visible circle { stroke-width:4; }
+.usage-tool-error-series g[aria-pressed=true] circle { stroke-width:4; }
 .usage-tool-build-marker path { stroke:var(--usage-panel); stroke-width:1; }
 .usage-tool-build-marker:focus { outline:none; }
 .usage-tool-build-marker:focus-visible path { stroke:var(--color-text-primary); stroke-width:2; }
+.usage-tool-build-marker[aria-pressed=true] path { stroke:var(--color-text-primary); stroke-width:2; }
 .usage-tool-error-readout { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; min-height:18px; margin-top:4px; font-size:11px; }
 .usage-tool-error-readout span { color:var(--usage-secondary); font-family:var(--font-mono); }
+.usage-tool-error-readout button { color:var(--color-text-primary); text-decoration:underline; cursor:pointer; }
 .usage-tool-error-values { margin-top:10px; }
 .usage-tool-error-values > summary { color:var(--usage-secondary); font-size:11px; cursor:pointer; }
 .usage-tool-error-values table { margin-top:8px; }

@@ -3,6 +3,9 @@ import { act } from 'react';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js';
 import { UsagePage } from './UsagePage.js';
+import type { UsageSelection } from './usageDashboardState.js';
+import { usageProjectId } from '../../shared/usageDashboard.js';
+import { useState } from 'react';
 
 let harness: DomTestHarness;
 beforeAll(async () => { harness = await createDomTestHarness(); });
@@ -88,6 +91,64 @@ test('refresh reports failure while retaining saved analytics', async () => {
     expect(tree.container.querySelector('.usage-flow-chart')).not.toBeNull();
     await act(async () => button.click());
     expect(refreshes).toBe(1);
+});
+test('refresh is disabled while analytics is loading', async () => {
+    const snapshot = await recordedSnapshot();
+    let refreshes = 0;
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'loading' }} onRefresh={() => refreshes++}/>);
+    const button = tree.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe('Refreshing analytics');
+    await act(async () => button.click());
+    expect(refreshes).toBe(0);
+});
+
+test('controlled period and day restore on remount and clear on period change', async () => {
+    const snapshot = await recordedSnapshot();
+    function Container() {
+        const [shown, setShown] = useState(true);
+        const [selection, setSelection] = useState<UsageSelection>({ range: '7d', date: snapshot.ranges['7d'].days[0]!.date });
+        return <><button onClick={() => setShown(!shown)}>Toggle page</button>{shown && <UsagePage state={{ snapshot, status: 'ready' }} selection={selection} onSelectionChange={setSelection}/>}</>;
+    }
+    const tree = await harness.mount(<Container/>);
+    const toggle = tree.container.querySelector<HTMLButtonElement>('button')!;
+    await act(async () => toggle.click());
+    await act(async () => toggle.click());
+    expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('123 tokens');
+    await act(async () => [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '30 days')!.click());
+    expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
+});
+
+test('selected contributor opens its matching catalog session', async () => {
+    const snapshot = await recordedSnapshot();
+    const day = snapshot.ranges['7d'].days[0]!;
+    const sessionId = '78e4ba38-e439-4c21-aa04-8e1546fddfe2';
+    const row = { sessionId, appSessionId: null, cwd: '/work/project', cwdExists: true, title: 'Investigate usage', displayLabel: 'Investigate usage', name: null, live: false, restorable: false, parked: false, status: 'history' as const, inRegistry: false, modifiedAtMs: 0, createdAtMs: 0, lastMessageSentAt: null, transcriptActivityAtMs: null, gitBranch: null, tag: null, mode: null, agentSetting: null, prNumber: null, prRepository: null };
+    day.contributors = { state: 'truncated', omitted: 1, items: [{ id: 'session-a', engineSessionId: sessionId, project: { id: usageProjectId(row.cwd), label: 'project' }, tokens: { fresh: 123, read: 0, write: 0, output: 0 }, requests: 0, results: 0, errors: 0, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { usd: 0, pricedTokens: 0 }, models: [], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] };
+    const opened: string[] = [];
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }} sessionRows={[row]} onOpenSession={item => opened.push(item.sessionId)}/>);
+    await act(async () => tree.container.querySelector<SVGGElement>('.usage-flow-hit')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('Investigate usage');
+    await act(async () => tree.container.querySelector<HTMLButtonElement>('.usage-session-name')!.click());
+    expect(opened).toEqual([sessionId]);
+});
+
+test('model slices remain keyboard operable', async () => {
+    const snapshot = await recordedSnapshot();
+    const summary = snapshot.ranges['7d'];
+    summary.tokens.fresh = 10_000;
+    summary.days[0]!.tokens.fresh = 10_000;
+    summary.models = [
+        { id: 'tiny', kind: 'named', label: 'Tiny', tokens: { fresh: 1, read: 0, write: 0, output: 0 }, tokenCost: { usd: 0, pricedTokens: 0 } },
+        { id: 'large', kind: 'named', label: 'Large', tokens: { fresh: 9_999, read: 0, write: 0, output: 0 }, tokenCost: { usd: 0, pricedTokens: 0 } },
+    ];
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const slice = [...tree.container.querySelectorAll<SVGElement>('.usage-model-donut [role="button"]')].find(item => item.getAttribute('aria-label')?.includes('Tiny'))!;
+    await act(async () => slice.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(slice.getAttribute('aria-pressed')).toBe('true');
+    expect(tree.container.querySelector('.usage-details-donut-center')?.textContent).toContain('Tiny');
+    await act(async () => slice.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(slice.getAttribute('aria-pressed')).toBe('false');
 });
 
 test('heatmap selection in All resolves to its local aggregate bucket', async () => {

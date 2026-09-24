@@ -260,7 +260,6 @@ function day(v: unknown): v is UsageDay {
         const count = contributors.reduce((n, c) => n + (c[key] as number), 0);
         if (count > (v[key] as number) || v.contributors.state === 'full' && count !== v[key]) return false;
     }
-    if (contributors.some(contributor => ((contributor.timeline as { items: { startedAt: string }[] }).items).some(item => item.startedAt.slice(0, 10) !== v.date))) return false;
     if (contributors.some(c => contributorIds.has(c.id as string) || !contributorIds.add(c.id as string)) || v.contributors.state === 'full' && v.contributors.omitted !== 0 || v.contributors.state === 'truncated' && v.contributors.omitted === 0 || v.contributors.state === 'unavailable' && (v.contributors.items.length !== 0 || v.contributors.omitted !== 0) || contributorTokenBuckets.some((value, index) => value > dayTokenBuckets[index]!) || contributorRequests > (v.requests as number) || v.contributors.state === 'full' && (contributorTokenBuckets.some((value, index) => value !== dayTokenBuckets[index]) || contributorRequests !== v.requests)) return false;
     const ids = new Set<string>();
     const models = v.models;
@@ -272,7 +271,7 @@ function day(v: unknown): v is UsageDay {
 }
 function validHours(value: UsageDay, timezone: string, withTokens: boolean, asOf: string): boolean {
     const hours = value.hours;
-    if (!Array.isArray(hours) || hours.length < 23 || hours.length > 25) return false;
+    if (!Array.isArray(hours) || hours.length < 1 || hours.length > 48) return false;
     const expected: number[] = [];
     const end = localMidnightAt(addDays(value.date, 1), timezone);
     for (let at = localMidnightAt(value.date, timezone); at < end; at += 3600000) expected.push(at);

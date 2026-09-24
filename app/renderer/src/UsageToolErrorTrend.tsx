@@ -11,6 +11,7 @@ type Active = { kind: 'point'; toolId: string; point: UsageToolErrorPoint } | { 
 
 const exactRate = (errors: number, results: number) => results ? usagePercent(errors / results * 100) : 'No matched results';
 const countLabel = (value: number, singular: string) => `${usageNumber(value)} ${singular}${value === 1 ? '' : 's'}`;
+const markerKey = (marker: BuildMarker) => `${marker.date}:${marker.sha}:${marker.dirty}`;
 
 export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRangeSummary; timezone?: string }) {
     const observedTime = (at: string) => new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(at));
@@ -40,6 +41,7 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
     const colors = usageGraphColors(summary.tools.map(tool => tool.id));
     const chart = useUsageChartWidth();
     const [active, setActive] = useState<Active>(null);
+    const [pinned, setPinned] = useState<Active>(null);
     const [showBuilds, setShowBuilds] = useState(true);
     const [focusedMarker, setFocusedMarker] = useState(0);
     const height = chart.width < 360 ? 156 : 176, top = 24, bottom = height - 25, left = 42, right = chart.width - 10;
@@ -55,7 +57,11 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
         const base = current.filter(item => summary.tools.some(tool => tool.id === item));
         return base.includes(id) ? base.filter(item => item !== id) : [...base, id];
     });
-    const activeTool = active?.kind === 'point' ? summary.tools.find(tool => tool.id === active.toolId) : null;
+    const pinnedPoint = pinned?.kind === 'point' ? series.find(item => item.id === pinned.toolId)?.points.find(point => point.date === pinned.point.date) : null;
+    const pinnedBuild = pinned?.kind === 'build' && showBuilds ? buildMarkers.find(marker => markerKey(marker) === markerKey(pinned.marker)) : null;
+    const shown = active ?? (pinned?.kind === 'point' && pinnedPoint ? { kind: 'point' as const, toolId: pinned.toolId, point: pinnedPoint } : pinnedBuild ? { kind: 'build' as const, marker: pinnedBuild } : null);
+    const activeTool = shown?.kind === 'point' ? summary.tools.find(tool => tool.id === shown.toolId) : null;
+    const pin = (item: Exclude<Active, null>) => { setPinned(current => current?.kind === item.kind && (item.kind === 'point' && current.kind === 'point' ? current.toolId === item.toolId && current.point.date === item.point.date : item.kind === 'build' && current.kind === 'build' && markerKey(current.marker) === markerKey(item.marker)) ? null : item); setActive(null); };
 
     return <section className="usage-tool-error-trend" aria-labelledby="usage-tool-error-title">
         <header><div><h3 id="usage-tool-error-title">Error rate over time</h3><p>Recorded errors / matched results</p></div>{buildMarkers.length > 0 && <button type="button" className="usage-tool-build-toggle" aria-pressed={showBuilds} onClick={() => setShowBuilds(value => !value)}><i aria-hidden="true"/>Commits</button>}</header>
@@ -66,21 +72,23 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
             {Array.from({ length: tickCount + 1 }, (_, index) => ceiling * index / tickCount).map(value => <g key={value}><text x={left - 7} y={y(value) + 4} textAnchor="end" className="usage-axis">{value}%</text><line x1={left} x2={right} y1={y(value)} y2={y(value)} className="usage-tool-error-grid"/></g>)}
             {series.map(item => <g key={item.id} className="usage-tool-error-series">
                 {usageToolErrorSegments(item.points).map((segment, index) => <path key={index} d={segment.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.date)},${y(point.rate!)}`).join(' ')} className="usage-tool-error-line" stroke={colors[item.id]}/>)}
-                {item.points.filter(point => point.rate !== null).map(point => <g key={point.date} aria-hidden="true"
-                    onMouseEnter={() => setActive({ kind: 'point', toolId: item.id, point })} onMouseLeave={() => setActive(null)}>
+                {item.points.filter(point => point.rate !== null).map(point => <g key={point.date} role="button" tabIndex={0} aria-pressed={pinned?.kind === 'point' && pinned.toolId === item.id && pinned.point.date === point.date} aria-label={`${item.label}: ${usagePercent(point.rate!)} on ${usageBucketLabel(summary, point.date)}. ${countLabel(point.errors, 'error')} / ${countLabel(point.results, 'matched result')}.`}
+                    onMouseEnter={() => setActive({ kind: 'point', toolId: item.id, point })} onMouseLeave={() => setActive(null)} onFocus={() => setActive({ kind: 'point', toolId: item.id, point })} onBlur={() => setActive(null)} onClick={() => pin({ kind: 'point', toolId: item.id, point })} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pin({ kind: 'point', toolId: item.id, point }); } else if (event.key === 'Escape') { setActive(null); setPinned(null); } }}>
                     <title>{`${item.label}: ${usagePercent(point.rate!)} on ${usageBucketLabel(summary, point.date)}`}</title><circle cx={x(point.date)} cy={y(point.rate!)} r={active?.kind === 'point' && active.toolId === item.id && active.point.date === point.date ? 4.5 : 3} stroke={colors[item.id]}/>
                 </g>)}
             </g>)}
             {showBuilds && buildMarkers.map((marker, index) => { const lane = buildMarkerLanes.get(marker)!; const toolSummary = marker.tools.map(tool => `${tool.label}: ${countLabel(tool.build.errors, 'error')} / ${countLabel(tool.build.results, 'matched result')}`).join(', '); return <g key={`${marker.date}:${marker.sha}:${marker.dirty}`} className="usage-tool-build-marker" tabIndex={index === markerFocus ? 0 : -1} aria-label={`Observed Cat Code build ${marker.sha.slice(0, 8)}${marker.dirty ? ' dirty' : ''}, first selected tool request recorded ${observedTime(marker.firstObservedAt)}, ${toolSummary}`}
-                transform={`translate(${x(marker.date) + Math.floor(lane / 4) * 5},${top + 4 + lane % 4 * 6})`} onMouseEnter={() => setActive({ kind: 'build', marker })} onMouseLeave={() => setActive(null)} onFocus={() => { setFocusedMarker(index); setActive({ kind: 'build', marker }); }} onBlur={() => setActive(null)} onKeyDown={event => {
+                role="button" aria-pressed={pinned?.kind === 'build' && markerKey(pinned.marker) === markerKey(marker)} transform={`translate(${x(marker.date) + Math.floor(lane / 4) * 5},${top + 4 + lane % 4 * 6})`} onMouseEnter={() => setActive({ kind: 'build', marker })} onMouseLeave={() => setActive(null)} onFocus={() => { setFocusedMarker(index); setActive({ kind: 'build', marker }); }} onBlur={() => setActive(null)} onClick={() => pin({ kind: 'build', marker })} onKeyDown={event => {
                     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const next = Math.max(0, Math.min(buildMarkers.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))); setFocusedMarker(next); event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('.usage-tool-build-marker')[next]?.focus(); }
+                    else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pin({ kind: 'build', marker }); }
+                    else if (event.key === 'Escape') { setActive(null); setPinned(null); }
                 }}>
                 <title>{`Observed Cat Code build ${marker.sha.slice(0, 8)}${marker.dirty ? ' dirty' : ''}`}</title><path d="M0 -3 L3 0 L0 3 L-3 0 Z" fill={colors[marker.tools[0]!.id]}/>
             </g>; })}
             {ticks.map((date, index) => <text key={date} x={x(date)} y={height - 3} textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'} className="usage-axis">{usageChartDate(date, includeYear)}</text>)}
         </svg>
         {!series.length ? <p className="usage-note">Select a tool to plot its recorded error rate.</p> : !series.some(item => item.points.some(point => point.results > 0)) ? <p className="usage-note">No matched results for the selected tools in this period.</p> : null}
-        {active?.kind === 'point' && activeTool && <div className="usage-tool-error-readout" role="status"><strong>{activeTool.label}, {usageBucketLabel(summary, active.point.date)}</strong><span>{countLabel(active.point.errors, 'error')} / {countLabel(active.point.results, 'matched result')} ({exactRate(active.point.errors, active.point.results)}), {countLabel(active.point.requests, 'request')}</span></div>}
-        {active?.kind === 'build' && <div className="usage-tool-error-readout" role="status"><strong>Cat Code build {active.marker.sha.slice(0, 8)}{active.marker.dirty ? ' dirty' : ''}, {usageBucketLabel(summary, active.marker.date)}</strong><span>First selected tool request recorded {observedTime(active.marker.firstObservedAt)}; {active.marker.tools.map(tool => `${tool.label}: ${usageNumber(tool.build.errors)} / ${usageNumber(tool.build.results)} (${exactRate(tool.build.errors, tool.build.results)})`).join(', ')}</span></div>}
+        {shown?.kind === 'point' && activeTool && <div className="usage-tool-error-readout" role="status"><strong>{activeTool.label}, {usageBucketLabel(summary, shown.point.date)}</strong><span>{countLabel(shown.point.errors, 'error')} / {countLabel(shown.point.results, 'matched result')} ({exactRate(shown.point.errors, shown.point.results)}), {countLabel(shown.point.requests, 'request')}</span>{pinned && <button type="button" onClick={() => { setActive(null); setPinned(null); }}>Clear selection</button>}</div>}
+        {shown?.kind === 'build' && <div className="usage-tool-error-readout" role="status"><strong>Cat Code build {shown.marker.sha.slice(0, 8)}{shown.marker.dirty ? ' dirty' : ''}, {usageBucketLabel(summary, shown.marker.date)}</strong><span>First selected tool request recorded {observedTime(shown.marker.firstObservedAt)}; {shown.marker.tools.map(tool => `${tool.label}: ${usageNumber(tool.build.errors)} / ${usageNumber(tool.build.results)} (${exactRate(tool.build.errors, tool.build.results)})`).join(', ')}</span>{pinned && <button type="button" onClick={() => { setActive(null); setPinned(null); }}>Clear selection</button>}</div>}
     </section>;
 }

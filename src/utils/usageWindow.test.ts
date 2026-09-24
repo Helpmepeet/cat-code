@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { localDayHours, usageTimestampEligible, usageWindow } from './usageWindow.js';
+import { usageHourLabel } from '../../app/renderer/src/usageGraphState.js';
 test('local calendar windows preserve date count and instant bounds across zones', () => {
     for (const tz of ['UTC', 'America/New_York', 'Europe/Berlin', 'Asia/Kathmandu', 'Pacific/Auckland']) {
         for (const asOf of ['2025-11-03T00:30:00.000Z', '2025-03-10T00:30:00.000Z', '2026-01-01T00:30:00.000Z', '2024-03-01T00:30:00.000Z']) {
@@ -32,4 +33,10 @@ test('local hour slots preserve skipped and repeated DST hours', () => {
     expect(repeated).toHaveLength(2);
     expect(repeated[0]!.offsetMinutes).not.toBe(repeated[1]!.offsetMinutes);
     expect(localDayHours('2025-11-02', 'America/New_York', false).every(hour => hour.tokens === undefined)).toBe(true);
+});
+test('half-hour DST slots keep the displayed local minute', () => {
+    const hours = localDayHours('2026-10-04', 'Australia/Lord_Howe', true);
+    expect(hours).toHaveLength(24);
+    expect(hours.find(hour => hour.hour === 2)).toMatchObject({ offsetMinutes: 660 });
+    expect(usageHourLabel(hours.find(hour => hour.hour === 2)!)).toBe('02:30');
 });
