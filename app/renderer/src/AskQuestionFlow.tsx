@@ -8,10 +8,8 @@
  * (decisions/ASK-USER-QUESTION-ANSWER.md); the renderer authors ONLY option
  * INDICES + the freeform text — the sidecar re-attaches the engine's own labels.
  *
- * Accent: the whole flow reads in the app's pink accent, which IS the
- * prototype's `ASK_ACCENT` (`#f472b6` == `theme.css --accent`), so every accent
- * shade is a static `accent` utility — no interpolated colour classes (the
- * Tailwind v4 dynamic-class trap).
+ * Accent marks picked answers. The keyboard highlight is neutral, so an
+ * unchosen row never looks like another answer.
  *
  * Container: the prototype's `AskQuestionFlow` renders a bare `<div>` and gets
  * ALL of its chrome from the `PermissionQueue` card hosting it
@@ -34,9 +32,8 @@
  *
  * Selection vocabulary (2026-08-23): an option row draws its CHOSEN state and
  * its CURSOR state on two separate channels — see `rowTone` and `markerClass`.
- * The two used to share one channel with the cursor painted louder, so the
- * brightest row on the card was whichever one the mouse was over and a picked
- * answer dimmed as soon as the pointer left it.
+ * In single-select, keyboard navigation also moves the pick, so the highlighted
+ * option is the answer Enter sends. Hover only changes the preview and wash.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -49,8 +46,6 @@ import {
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
 import { permissionKeysAreLive } from './permissionPromptModel.js'
-
-/** One question's in-progress answer: engine-option indices + freeform text. */
 
 /**
  * Keys a focused control acts on ITSELF. Footer buttons keep both activation
@@ -74,28 +69,25 @@ function askKeysLive(card: HTMLElement | null, active: Element | null): boolean 
 }
 
 /**
- * Row tint. CHOSEN must outrank WHERE-THE-POINTER-IS, or the loudest thing on
- * the card is whatever the mouse is passing over — which is what made a
- * multi-select read as unselectable in live use (the two were `bg-accent/10`
- * for the cursor against `bg-accent/5` for a pick, so moving the mouse away
- * from an answer visibly dimmed it). Both states stay in the accent so the
- * cursor still shows a single-select which row one Enter would submit.
+ * A pick keeps its accent under the pointer. The keyboard highlight is a
+ * neutral wash; in single-select, moving it onto an option also picks that
+ * option, so Enter sends the highlighted answer.
  */
 function rowTone(checked: boolean, active: boolean): string {
   if (checked) {
     return active
-      ? 'border-accent/70 bg-accent/[0.16]'
-      : 'border-accent/50 bg-accent/[0.11]'
+      ? 'bg-accent/[0.16]'
+      : 'bg-accent/[0.11]'
   }
-  return active ? 'border-accent/25 bg-accent/[0.05]' : 'border-transparent'
+  return active
+    ? 'bg-text-primary/[0.05] hover:bg-text-primary/[0.05]'
+    : 'hover:bg-text-primary/[0.05]'
 }
 
 /**
- * The marker carries the categorical half of the signal: an EMPTY outlined box
- * against a FILLED accent one. Alpha steps are a matter of degree and were
- * missed; empty-versus-filled is not. Its shape is the only place the flow says
- * how many answers are allowed without words — square for multi-select, round
- * for single — which is why the row number moved out of it and onto a keycap.
+ * A filled accent marker means picked. An empty marker has a neutral border,
+ * including on the highlighted row. The shape distinguishes radio from
+ * checkbox without relying on color.
  */
 function markerClass(
   multiSelect: boolean,
@@ -106,7 +98,7 @@ function markerClass(
   const tone = checked
     ? 'border-accent bg-accent text-on-fill'
     : active
-      ? 'border-accent/60 bg-transparent'
+      ? 'border-text-primary/50 bg-transparent'
       : 'border-text-primary/30 bg-transparent'
   return `mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border font-mono text-[9px] font-semibold leading-none ${shape} ${tone}`
 }
@@ -153,6 +145,7 @@ export function AskQuestionFlow({
     questions.map(() => ({ optionIndices: [], other: '' })),
   )
   const [cursor, setCursor] = useState(0)
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
   const [otherActive, setOtherActive] = useState(false)
   const otherInputRef = useRef<HTMLInputElement>(null)
   const cardRef = useRef<HTMLElement>(null)
@@ -180,6 +173,7 @@ export function AskQuestionFlow({
   // `answers` persist — the flow only advances forward, like the prototype).
   useEffect(() => {
     setCursor(0)
+    setHoverIndex(null)
     setOtherActive(false)
   }, [qi])
 
@@ -267,6 +261,14 @@ export function AskQuestionFlow({
     }
   }
 
+  function moveCursor(next: number) {
+    setCursor(next)
+    if (q && !q.multiSelect && next < optionCount) {
+      updateDraft(() => ({ optionIndices: [next], other: '' }))
+      setOtherActive(false)
+    }
+  }
+
   function setOtherText(value: string) {
     // Single-select: typing a freeform answer clears the option pick; multi keeps it.
     updateDraft(current => ({
@@ -276,6 +278,10 @@ export function AskQuestionFlow({
   }
 
   function advance() {
+    if (cursor === otherIndex && !otherActive && !otherText.trim()) {
+      setOtherActive(true)
+      return
+    }
     let nextAnswers = answers
     if (!canAdvance) {
       // A single-select cursor is an implicit default for one-Enter submission.
@@ -413,12 +419,12 @@ export function AskQuestionFlow({
       }
       if (key === 'ArrowDown' || key === 'j' || (event.ctrlKey && key === 'n')) {
         event.preventDefault()
-        setCursor(c => (c + 1) % rowCount)
+        moveCursor((cursor + 1) % rowCount)
         return
       }
       if (key === 'ArrowUp' || key === 'k' || (event.ctrlKey && key === 'p')) {
         event.preventDefault()
-        setCursor(c => (c - 1 + rowCount) % rowCount)
+        moveCursor((cursor - 1 + rowCount) % rowCount)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -426,9 +432,11 @@ export function AskQuestionFlow({
   })
 
   if (!q) return null
+  const previewIndex = hoverIndex ?? cursor
   const focusedPreview =
-    cursor < optionCount ? q.options[cursor]?.preview ?? null : null
+    previewIndex < optionCount ? q.options[previewIndex]?.preview ?? null : null
   const titleId = `ask-question-${requestId}`
+  const tabStop = draft.optionIndices[0] ?? (cursor < optionCount ? cursor : 0)
   // The sibling card's honesty rule (P4-43, PARITY-LEDGER §7): never advertise
   // a key that will not fire. An inactive pane registers no listener, and a card
   // behind a modal deliberately does not take focus.
@@ -523,31 +531,32 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Options — label + description, radio/checkbox marker, preview badge */}
-      <div className="mt-1.5 flex flex-col gap-0.5">
+      <div
+        aria-labelledby={q.multiSelect ? undefined : titleId}
+        className="mt-1.5 flex flex-col gap-0.5"
+        role={q.multiSelect ? undefined : 'radiogroup'}
+      >
         {q.options.map((option, i) => {
           const active = cursor === i && !otherActive
           const checked = draft.optionIndices.includes(i)
           return (
             <button
               aria-checked={checked}
-              className={`flex w-full cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
+              className={`flex w-full cursor-pointer items-start gap-2 rounded-lg px-2.5 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
               data-ask-active={active ? 'true' : undefined}
               data-ask-option
               disabled={submitted}
               key={i}
               onClick={() => toggleOption(i)}
               role={q.multiSelect ? 'checkbox' : 'radio'}
-              // Tab-focusing a row must move the cursor onto it, or the focus
-              // ring and the cursor ring sit on different rows and space
-              // toggles the one the user is NOT looking at.
+              // Focus is keyboard intent; in single-select it also picks the
+              // focused option so its highlight matches what Enter will send.
               onFocus={() => {
-                setCursor(i)
-                setOtherActive(false)
+                moveCursor(i)
               }}
-              onMouseEnter={() => {
-                setCursor(i)
-                setOtherActive(false)
-              }}
+              onMouseEnter={() => setHoverIndex(i)}
+              onMouseLeave={() => setHoverIndex(null)}
+              tabIndex={q.multiSelect ? undefined : i === tabStop ? 0 : -1}
               type="button"
             >
               <span
@@ -578,13 +587,14 @@ export function AskQuestionFlow({
 
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
-          className={`flex items-center gap-2 rounded-lg border px-2.5 py-1 ${rowTone(
+          className={`flex items-center gap-2 rounded-lg px-2.5 py-1 ${rowTone(
             otherFilled,
             cursor === otherIndex,
           )}`}
           data-ask-active={cursor === otherIndex ? 'true' : undefined}
           onFocus={() => setCursor(otherIndex)}
-          onMouseEnter={() => setCursor(otherIndex)}
+          onMouseEnter={() => setHoverIndex(otherIndex)}
+          onMouseLeave={() => setHoverIndex(null)}
         >
           <span
             className={markerClass(

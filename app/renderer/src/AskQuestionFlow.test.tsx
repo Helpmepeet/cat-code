@@ -109,8 +109,9 @@ test('the active pane can be focused at all, and an inactive one cannot', () => 
   // pane listens. `tabIndex={-1}` is never a TAB stop either way; what it
   // controls is programmatic focusability, so its absence is what stops the
   // mount effect from taking the keyboard onto a card nothing listens for.
-  expect(render(SINGLE)).toContain('tabindex="-1"')
-  expect(render(SINGLE, false)).not.toContain('tabindex')
+  expect(render(SINGLE)).toMatch(/<section[^>]*tabindex="-1"/)
+  // The radio group's roving tab stop is separate from card focusability.
+  expect(render(SINGLE, false)).not.toMatch(/<section[^>]*tabindex/)
 })
 
 test('the card body is a bounded scroller', () => {
@@ -252,11 +253,14 @@ test('an option row is a real checkbox or radio, empty until it is chosen', () =
 })
 
 test('a chosen row outranks the cursor row', () => {
-  // `rowTone`: the cursor is the WEAKER accent step. It was the stronger one,
-  // so the brightest row on the card was whichever the mouse was passing over.
+  // An unchosen keyboard highlight is neutral. A chosen row uses accent even
+  // when it is no longer highlighted, and hover cannot replace that tint.
   const html = render(SINGLE)
-  expect(html).toContain('border-accent/25 bg-accent/[0.05]') // cursor, unchosen
-  expect(html).not.toContain('border-accent/45 bg-accent/10') // the old cursor tint
+  expect(html).toContain('bg-text-primary/[0.05]')
+  expect(html).not.toContain('border-accent/25 bg-accent/[0.05]')
+  const source = readFileSync(new URL('./AskQuestionFlow.tsx', import.meta.url), 'utf8')
+  expect(source).toContain("? 'bg-accent/[0.16]'")
+  expect(source).toContain(": 'bg-accent/[0.11]'")
 })
 
 test('every option row can be clicked, and says so', () => {

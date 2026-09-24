@@ -264,6 +264,98 @@ test('one Enter selects the highlighted option and submits', async () => {
   expect(calls.answers[0]).toEqual([{ optionIndices: [0] }])
 })
 
+test('arrows move a single-select pick before Enter submits it', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, '1')
+  await press(card, 'ArrowDown')
+  await press(card, 'ArrowDown')
+
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [2] }]])
+  const rows = optionRows(card)
+  expect(checkedState(rows[2]!)).toBe('true')
+  expect(markerText(rows[2]!)).toBe('✓')
+  expect(checkedState(rows[0]!)).toBe('false')
+})
+
+test('hover does not move the highlight or change what Enter sends', async () => {
+  const { card, calls } = await mountFlow()
+  const rows = optionRows(card)
+  await act(async () => {
+    rows[2]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+
+  expect(optionRows(card)[0]!.getAttribute('data-ask-active')).toBe('true')
+  expect(optionRows(card)[2]!.getAttribute('data-ask-active')).toBe(null)
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [0] }]])
+})
+
+test('hover keeps the Other field open, focused, and unchanged', async () => {
+  const { card } = await mountFlow()
+  await press(card, 'o')
+  const input = card.querySelector('input') as HTMLInputElement
+  await act(async () => {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set
+    setValue?.call(input, 'my own answer')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(document.activeElement).toBe(input)
+  expect(input.value).toBe('my own answer')
+  await act(async () => {
+    optionRows(card)[0]!.dispatchEvent(
+      new MouseEvent('mouseover', { bubbles: true }),
+    )
+  })
+
+  expect(card.querySelector('input') === input).toBe(true)
+  expect(document.activeElement).toBe(input)
+  expect(input.value).toBe('my own answer')
+})
+
+test('single-select has one option tab stop', async () => {
+  const { card } = await mountFlow()
+  expect(optionRows(card).map(row => row.tabIndex)).toEqual([0, -1, -1])
+
+  await press(card, '2')
+  expect(optionRows(card).map(row => row.tabIndex)).toEqual([-1, 0, -1])
+})
+
+test('Enter on the Other row opens its field without answering', async () => {
+  const { card, calls } = await mountFlow()
+  for (let i = 0; i < optionRows(card).length; i += 1) {
+    await press(card, 'ArrowDown')
+  }
+  expect(card.querySelector('div[data-ask-active="true"]')).not.toBe(null)
+
+  await press(card, 'Enter')
+  expect(card.querySelector('input')).not.toBe(null)
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('hover previews an option, then restores the highlighted preview', async () => {
+  const { card } = await mountFlow([ALL_TYPES[2]!])
+  expect(card.textContent).toContain('return early')
+
+  await act(async () => {
+    optionRows(card)[2]!.dispatchEvent(
+      new MouseEvent('mouseover', { bubbles: true }),
+    )
+  })
+  expect(card.textContent).toContain('use a ternary')
+
+  await act(async () => {
+    optionRows(card)[2]!.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true }),
+    )
+  })
+  expect(card.textContent).toContain('return early')
+  expect(card.textContent).not.toContain('use a ternary')
+})
+
 test('one Enter per single-select step selects each highlighted option and advances', async () => {
   const { card, calls } = await mountFlow(TWO_QUESTIONS)
   await press(card, 'Enter')
