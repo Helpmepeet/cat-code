@@ -4,19 +4,20 @@ Reviewed September 24, 2026, at HEAD `102dfc0f`. Scope: report only. No code was
 
 **The main problem is that Analytics has no hierarchy. It shows every chart it can compute at equal weight, then explains itself in small grey notes.** About 13 charts, five metric cards, six separate "exact values" disclosures, and up to seven partial-history warnings share one scrolling column. The page also runs its own palette of about 14 hues instead of the app's tokens. Some states are broken outright: hover and pressed backgrounds use an undefined CSS variable, and the auto-mode outcome colors are swapped between two adjacent charts.
 
-Most of the fix is removal: one headline, one palette, one heading style, one warning, and the diagnostic panels collapsed.
+The agreed direction keeps the five summary cards and model donut, simplifies the palette and copy, and removes Tool activity and Execution timing.
 
 [Before and after mockup](../design-html/2026-09-24-analytics-redesign.html)
 
 ## Decisions after review
 
-Agreed item by item on September 24, 2026. Where these differ from the recommendations further down, the decisions win.
+Agreed item by item on September 24, 2026, then updated after the follow-up review. Where these differ from recommendations further down, the decisions win. The mockup linked above predates the follow-up decisions and still needs revision.
 
 - **Header:**
   - The title becomes "Analytics".
   - The date line moves under the title, in local time ("Sep 18 to 24 · Updated 9:05 PM").
   - The refresh button is round, and the range buttons are pills with an accent tint on the selected one.
   - There is no partial-history message anywhere.
+  - If the saved snapshot is from another day, include the date in "Updated". A failed refresh must be apparent at the refresh control while the old snapshot remains visible.
 - **Summary cards:** keep all five, with their trend lines, green and red change figures, and card boxes. Rename "Sessions used" to "Sessions".
 - **Token chart:**
   - Keep the smooth stacked area.
@@ -24,17 +25,20 @@ Agreed item by item on September 24, 2026. Where these differ from the recommend
   - Use three types (Input, Cache, Output) in blue for Input, pale violet for Cache (light `#c4b5fd`, dark `#4c3d7a`), and pink for Output, and label the gridlines. Cache is about 80% of the chart, so it gets the quietest color. The Prompt cache "Cache reads" swatch uses the same pale violet.
   - Mark the selected day with a highlight band, and show its details directly under the chart, headed "Tue, Sep 22" with a "Clear" link.
   - The session table keeps Session, Tokens, and Est. cost, with short numbers.
+  - Session names open their sessions. Show up to ten contributors; if the list is truncated, label it "Top N of M sessions" and keep day totals based on all sessions. The mockup's nine-session day should show nine rows, not an unexplained three.
 - **Exact-value tables:**
   - Remove the per-panel "Exact … values" sections: route, command block rate, decision, block reason, and selected tool.
   - Replace "Accessible values table" with one collapsed "View as table" at the bottom of the page.
-  - There are no per-panel Table buttons, because hovering the chart, the legend totals, and the selected-day details already give exact numbers.
-  - The tests that check for the removed sections need updating.
-- **Prompt cache:** keep the trend chart, drawn from 0%. Drop the subtitle, and keep two rows, Cache reads and Input.
+  - There are no per-panel Table buttons. The chart, legend, and selected-day figures use compact numbers, so the bottom disclosure must provide full-precision values for every displayed chart and its underlying series. Group tables by chart within that one disclosure, including daily tokens by type and model, prompt cache, models, tools and tool outcomes, hourly activity, and auto-mode routes, outcomes, command block rate, and reasons.
+  - Chart inspection also needs keyboard and touch access. Use native controls, visible focus, meaningful headings, and a consistent selection and Clear action in the implementation; the static mockup does not demonstrate these.
+  - Move tests for removed per-panel tables to the consolidated disclosure. Preserve exceptional-only auto-mode cases and full-precision assertions.
+- **Prompt cache:** keep the trend chart, drawn from 0%. Drop the subtitle, and show three rows: Cache reads, Cache writes, and Input. "Input" means uncached input. The percentage is cache reads divided by uncached input plus cache reads plus cache writes; the token chart's Cache series combines reads and writes. Show the definition accessibly without restoring a long subtitle. Unknown cache writes and any percentage that depends on them are unavailable, not zero.
 - **Removed:** the Tool activity panel and the Execution timing panel.
-- **Model usage:** keep the donut, with model colors that no longer clash with the token colors, "5 models" in the centre, and no footnote.
-- **Tools:** keep the bars and Error rate over time, with round-number ticks and no build-coverage note.
-- **Heatmap:** titled "Activity by hour", using local hours and five steps with a distinct zero, in the accent color, with a Less/More key.
-- **Auto mode:** give the panel a title. Keep Decision flow and fix it: draw every outcome, use one denominator, fit the width, and use the same labels and colors as Decisions over time. Keep Command block rate, Decisions over time, and Block reasons.
+- **Model usage:** keep the donut, with model colors that no longer clash with the token colors, the count of distinct real models in the centre, and no footnote. "Other" is a grouped slice, not a model; its presence must not inflate the count.
+- **Tools:** keep the bars and Error rate over time, with round-number ticks and no build-coverage note. Add an Other bar when needed so the bars reconcile with the Tool requests card.
+- **Heatmap and dates:** title the heatmap "Activity by hour", use local calendar days and hours throughout Analytics, and show five accent-color steps with a distinct zero and a Less/More key. Selection from the heatmap keeps the current range. A local hour selected across midnight must resolve to the same local day in the token chart and session details. The data aggregation must handle timezone changes and 23- or 25-hour daylight-saving days; changing labels alone is insufficient.
+- **Unavailable data:** use a dash for values that cannot be calculated and zero only for a confirmed zero. Leave future heatmap hours blank, distinct from past zero activity. If no usable data exists, show an empty or error state rather than charts filled with zeros. Do not restore a partial-history banner or repeat partial-history notes.
+- **Auto mode:** give the panel a title. Keep Decision flow, Command block rate, Decisions over time, and Block reasons. Show four display groups with the same labels and colors in the flow, bars, and legend: Allowed (`allowed`), Blocked (`policy_blocked`), Error (`operational_error`, `review_required`, `unknown_outcome`, `incomplete`), and Cancelled (`cancelled`). The Error group is a display simplification, not a claim that every included raw outcome is an operational error; explain its composition on inspection and expose the seven raw counts in "View as table". Decision flow and Decisions over time must account for all attempts and calculate any displayed percentages using all attempts as their shared denominator. Fit the flow to the available width. This requires changes to graph/state construction, not just colors.
 
 ## How this was reviewed
 
@@ -82,7 +86,7 @@ Every panel uses the same `UsagePanel` component. The only variation is `wide`, 
 | `operational_error` | violet | slate | n/a |
 | `cancelled` | slate | violet | amber |
 
-**Fix:** define one `--usage-outcome-<name>` set in one place and use it everywhere.
+**Fix:** define one color for each of the four agreed display groups and use it consistently in Decision flow, Decisions over time, and their legend. Keep the seven raw outcomes distinct in the exact table.
 
 ### 3. Clicking a day shows the result far down the page. Verified.
 
@@ -142,7 +146,7 @@ This contradicts the design in `docs/reports/2026-09-16-usage-session-drilldown.
   - Token flow's tooltip is hard-coded dark (`#171719`) even in light mode. The other two tooltips use panel colors, and the three have 8, 7, and 6px radii.
   - The hover-dot ring `#171719` is a heavy black ring in light mode and invisible (1.04:1) in dark.
 
-**Fix:** use one validated categorical palette of six to eight `light-dark()` tokens. Keep token-type hues out of the model palette, and keep red, green, and amber for status only. Map the page onto the app's tokens: `--color-surface-raised` for panels, `--color-text-muted` and `--color-text-subtle` for text, `--color-tone-*` for status, and `--color-accent` for selection and the heatmap base. Give the heatmap five `color-mix()` steps and a distinct zero. Build one tooltip style from tokens.
+**Fix:** use one validated categorical palette of six to eight `light-dark()` tokens. Keep token-type hues out of the model palette, and retain the agreed red and green change figures on summary cards. Map the page onto the app's tokens: `--color-surface-raised` for panels, `--color-text-muted` and `--color-text-subtle` for text, `--color-tone-*` for status, and `--color-accent` for selection and the heatmap base. Give the heatmap five `color-mix()` steps and a distinct zero. Build one tooltip style from tokens.
 
 ## Typography, spacing, and layout
 
@@ -201,7 +205,7 @@ When history is partial, all of these can render at once:
 
 On top of that, "Unavailable" replaces the cache value in the metric card, the Prompt cache headline, and every table row. "?" marks sit on the Token flow zero days. The suffix ", partial history" is appended to every chart hotspot's `aria-label`, including all 168 heatmap cells.
 
-**Fix:** keep one banner beside the freshness line: *"Some history is missing. Totals may be low and cache share is hidden."* Hide the values it affects rather than printing "Unavailable". Delete the other notes and the label suffixes.
+**Fix:** remove all partial-history banners, notes, and repeated label suffixes. Represent affected values with a dash and an accessible unavailable reason; never turn missing data into zero. Keep the snapshot's update time visible, and identify a failed refresh at the refresh control.
 
 ### Implementation narration to delete
 
@@ -230,7 +234,7 @@ On top of that, "Unavailable" replaces the cache value in the metric card, the P
   - Costs run to five decimals ("<$0.00001").
   - Text columns such as Tool are right-aligned.
 
-**Fix:** show timestamps in local time. Keep day buckets in UTC but say it once ("Days in UTC"). Use one date style ("Sep 18", "Sep 1 to 7"). Show the date or a relative age when `asOf` is not today. Show costs to the cent.
+**Fix:** group and show days and hours in local time throughout the page. Use one date style ("Sep 18", "Sep 1 to 7"). Show the date or a relative age when `asOf` is not today. Show costs to the cent. The aggregation and selection contract must change with the labels; a fixed UTC-to-local hour rotation is insufficient across midnight and daylight-saving changes.
 
 ### One concept, one name
 
@@ -267,29 +271,28 @@ On top of that, "Unavailable" replaces the cache value in the metric card, the P
   - Model share appears three times: the Token flow legend, the donut, and the donut key.
   - Error rate is charted twice.
   - The bucket note ("N-day totals") can appear three times.
-- **The five exact-value disclosures all have different names,** while the heatmap, timing, and donut have none. A single Chart / Table toggle per panel would replace them and the page-bottom table.
+- **The five exact-value disclosures all have different names,** while the heatmap and donut have none. Replace them with the agreed single bottom "View as table" disclosure, with full-precision sections for every retained chart.
 
-## Proposed page structure
+## Page structure after decisions
 
-1. **Header:** one page name, range control, refresh, and "Sep 18 to 24 · Updated 9:05 PM". Show one partial-history banner only when it applies.
-2. **Headline row:** total tokens large, with a visible delta ("+12% vs prior 7 days" in a neutral color). Sessions and per-active-day figures beside it, smaller. Drop the Cached input card, since Prompt cache already shows it.
-3. **Token flow** with a persistent selected band.
-4. **Selected day, directly under Token flow:** figures and the session table. In All, add the 30-day note and action.
-5. **Model usage | Prompt cache** side by side. Replace the donut with the ranked list its key already provides.
-6. **Tools:** requests by tool by default, error rate as a toggle. One error chart, not two.
-7. **Hourly heatmap:** follows the page selection and never switches the range.
-8. **Diagnostics, collapsed by default and remembered:** execution timing, error rate with Commits, and a titled "Auto mode" panel led by a stat row (attempts, % allowed, % blocked, needs review), then decisions over time and block reasons. Show the sankey only after its denominators are fixed.
-9. **A Chart / Table toggle on every panel,** replacing the page-bottom tables.
+1. **Header:** Analytics, local date range and update time, round refresh control, and pill range control. No partial-history message.
+2. **Five summary cards:** keep the boxed cards, trend lines, and red/green change figures.
+3. **Tokens:** stacked area with a selected-day band and three token types. Put selected-day figures and session contributors directly below the chart.
+4. **Prompt cache and Model usage:** retain the cache trend with three explanatory rows and the donut with a real-model count.
+5. **Tools:** request bars, including Other when needed, and Error rate over time.
+6. **Activity by hour:** local-day and local-hour heatmap, coordinated with the current range and selected day.
+7. **Auto mode:** titled panel with Decision flow, Command block rate, Decisions over time, and Block reasons. Use the four agreed display groups and reconcile all counts.
+8. **View as table:** one collapsed disclosure at the bottom, with full-precision sections for the retained charts and raw auto-mode outcomes.
 
 ## Suggested order of work
 
 | Step | Scope | Size |
 | --- | --- | --- |
-| 1 | Broken states: the undefined hover token, one outcome color map, day detail under Token flow with a visible band, the heatmap range switch, the denominators, measuring the width of the decision bars | Small, CSS plus a few TSX lines |
-| 2 | Copy diet: one partial-history banner, local time and one date style, the vocabulary table, deleting the narration | Small to medium; update the string tests |
-| 3 | Palette and tokens: one `light-dark()` palette, app surfaces, neutrals, tones and accent, status-only red and green, the heatmap ramp, one tooltip style | Medium |
-| 4 | Type and layout: panel titles, one heading style, the type scale, stretched rows, no `min-width`, one radius and padding | Medium |
-| 5 | Restructure: the headline row, a collapsed Diagnostics group, per-panel table toggles, keyboard model | Larger; needs GUI verification |
+| 1 | Broken states: the undefined hover token, day detail under Tokens with a visible band, the heatmap range switch, and measured chart width | Renderer and CSS work |
+| 2 | Data contracts: local-day aggregation and selection, four auto-mode display groups over seven raw outcomes, conserved flow counts, and one denominator | Data/state and graph work; verify timezone and exceptional-only histories |
+| 3 | Copy diet: remove partial-history messages, handle unavailable and stale values, use local dates and one vocabulary, and delete narration | Renderer and state work; update string tests |
+| 4 | Palette and tokens: one `light-dark()` palette, app surfaces, neutrals, tones and accent, the heatmap ramp, and one tooltip style | Renderer and CSS work |
+| 5 | Layout and access: headings, chart sizing, five cards, three cache rows, one exact-values disclosure, and keyboard/touch inspection | Renderer work; needs GUI and accessibility verification |
 
 ## Also noticed
 
