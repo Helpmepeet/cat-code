@@ -5,8 +5,9 @@
  * The dock scrolls its panel region, while this card's height ceiling keeps one
  * question from taking the whole region. A split workspace mounts a card per
  * pane, so only the active pane owns the keyboard. Accent marks picked answers;
- * the keyboard highlight and pointer hover use a neutral wash. In single-select,
- * arrow and digit shortcuts pick their destination; focus alone does not.
+ * the keyboard highlight uses a neutral wash. Hovering the single-select Other
+ * row previews it as a provisional choice. Arrow and digit shortcuts pick their
+ * destination; focus alone does not.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -42,9 +43,9 @@ function askKeysLive(card: HTMLElement | null, active: Element | null): boolean 
 }
 
 /**
- * A pick keeps its accent under the pointer. The keyboard highlight is a
- * neutral wash. Arrow and digit shortcuts synchronize a single-select pick
- * with that highlight; Tab focus alone leaves the answer unchanged.
+ * A pick or provisional Other choice gets the accent. The keyboard highlight
+ * is a neutral wash. Arrow and digit shortcuts synchronize a single-select
+ * pick with that highlight; Tab focus alone leaves the answer unchanged.
  */
 function rowTone(checked: boolean, active: boolean): string {
   if (checked) {
@@ -56,9 +57,9 @@ function rowTone(checked: boolean, active: boolean): string {
 }
 
 /**
- * A filled accent marker means picked. An empty marker has a neutral border,
- * including on the highlighted row. The shape distinguishes radio from
- * checkbox without relying on color.
+ * A filled accent marker means picked or provisionally on Other. An empty
+ * marker has a neutral border, including on the highlighted row. The shape
+ * distinguishes radio from checkbox without relying on color.
  */
 function markerClass(
   multiSelect: boolean,
@@ -135,14 +136,14 @@ export function AskQuestionFlow({
   const otherText = draft.other
   /** The freeform row is an ANSWER once it carries text, so it shows as one. */
   const otherFilled = draft.other.trim().length > 0
-  // Opening Other is a provisional visual choice. Keep the previous draft until
-  // text replaces it, so Escape can still restore the option the user had.
-  const otherEditing = otherActive && !q?.multiSelect && !otherFilled
+  // Hovering or opening Other previews it as the single-select choice. Keep the
+  // previous draft until text replaces it, so leaving restores the old option.
+  const otherPending =
+    !q?.multiSelect && !otherFilled && (otherActive || hoverIndex === otherIndex)
   // Counts the freeform row too, or the line reads "2 selected" under three
   // rows drawn as chosen.
   const selectedCount = draft.optionIndices.length + (otherFilled ? 1 : 0)
-  const canAdvance =
-    !otherEditing && (draft.optionIndices.length > 0 || otherFilled)
+  const canAdvance = !otherPending && (draft.optionIndices.length > 0 || otherFilled)
   const isLast = qi >= questions.length - 1
 
   // Reset per-question transient UI when the step changes (committed answers in
@@ -269,7 +270,11 @@ export function AskQuestionFlow({
   }
 
   function advance() {
-    if (cursor === otherIndex && !otherActive && !otherText.trim()) {
+    if (
+      (cursor === otherIndex || otherPending) &&
+      !otherActive &&
+      !otherText.trim()
+    ) {
       setOtherActive(true)
       return
     }
@@ -529,7 +534,7 @@ export function AskQuestionFlow({
       >
         {q.options.map((option, i) => {
           const active = cursor === i && !otherActive
-          const checked = !otherEditing && draft.optionIndices.includes(i)
+          const checked = !otherPending && draft.optionIndices.includes(i)
           return (
             <button
               aria-checked={checked}
@@ -545,6 +550,7 @@ export function AskQuestionFlow({
               onFocus={() => {
                 setCursor(i)
                 setOtherActive(false)
+                setHoverIndex(null)
               }}
               onMouseEnter={() => setHoverIndex(i)}
               onMouseLeave={() => setHoverIndex(null)}
@@ -582,7 +588,7 @@ export function AskQuestionFlow({
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
           className={`flex items-start gap-2.5 rounded-lg px-2 py-[5px] ${rowTone(
-            otherFilled || otherEditing,
+            otherFilled || otherPending,
             cursor === otherIndex,
           )}`}
           data-ask-active={cursor === otherIndex ? 'true' : undefined}
@@ -593,12 +599,12 @@ export function AskQuestionFlow({
           <span
             className={markerClass(
               q.multiSelect,
-              otherFilled,
+              otherFilled || otherPending,
               cursor === otherIndex,
             )}
             data-ask-marker
           >
-            {otherFilled ? '✓' : ''}
+            {otherFilled || otherPending ? '✓' : ''}
           </span>
           {otherActive ? (
             <input

@@ -410,6 +410,7 @@ test('clicking Other moves the single-select tint before any text is typed', asy
   const otherRow = card.querySelector('input')?.parentElement as HTMLElement
   expect(otherRow).toBeTruthy()
   expect(otherRow.className).toContain('bg-accent')
+  expect(markerText(otherRow)).toBe('✓')
   expect(selected.className).not.toContain('bg-accent')
   expect(checkedState(selected)).toBe('false')
   expect(buttonWithText(card, 'Submit').disabled).toBe(true)
@@ -419,6 +420,52 @@ test('clicking Other moves the single-select tint before any text is typed', asy
   expect(calls.answers).toHaveLength(0)
   await press(input, 'Escape')
   expect(checkedState(optionRows(card)[2]!)).toBe('true')
+})
+
+test('hovering Other previews its pink row and mark without submitting the old pick', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, '3')
+  const selected = optionRows(card)[2]!
+  const other = card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+  const otherRow = other.parentElement!
+
+  await act(async () => {
+    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+  expect(otherRow.className).toContain('bg-accent')
+  expect(markerText(otherRow)).toBe('✓')
+  expect(checkedState(selected)).toBe('false')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+
+  await act(async () => {
+    other.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: card }),
+    )
+  })
+  expect(markerText(otherRow)).toBe('')
+  expect(checkedState(selected)).toBe('true')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(false)
+
+  await act(async () => {
+    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+  await press(card, 'Enter')
+  expect(card.querySelector('input')).not.toBe(null)
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('a digit pick overrides the Other hover preview', async () => {
+  const { card, calls } = await mountFlow()
+  const other = card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+  await act(async () => {
+    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+
+  await press(card, '2')
+  expect(markerText(other.parentElement!)).toBe('')
+  expect(checkedState(optionRows(card)[1]!)).toBe('true')
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [1] }]])
 })
 
 test('hover previews an option, then restores the highlighted preview', async () => {
