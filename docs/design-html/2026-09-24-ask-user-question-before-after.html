@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question Card Redesign</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* App tokens, copied from app/renderer/src/theme.css (dark :root, light html[data-appearance='light']). */
+:root{
+  color-scheme:dark;
+  --app-bg:#09090b; --card-bg:#141416;
+  --accent:#f472b6; --accent-rgb:244 114 182;
+  --tp-rgb:244 244 245; --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f; --text-faint:#838389; --text-ghost:#75757b;
+  --seam:rgba(255,255,255,.06); --white-rgb:255 255 255; --black-rgb:0 0 0;
+  --on-fill:#09090b; --on-fill-rgb:9 9 11;
+  --info:#60a5fa; --info-rgb:96 165 250;
+  --elev-popover:0 14px 38px rgba(0,0,0,.5); --card-ring:rgba(0,0,0,.4);
+  --x-ground:#151518; --x-line:rgba(255,255,255,.08); --x-ink:#8a8a92; --x-dim:#5f5f66; --x-hi:#c4c4cb;
+  --sans:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --app-bg:#fcfcfd; --card-bg:#ffffff;
+  --accent:#bb3e84; --accent-rgb:187 62 132;
+  --tp-rgb:24 24 27; --text-primary:#18181b; --text-muted:#52525b; --text-subtle:#575761; --text-faint:#6a6a74; --text-ghost:#767680;
+  --seam:rgba(9,9,11,.1); --white-rgb:24 24 27; --black-rgb:230 230 234;
+  --on-fill:#ffffff; --on-fill-rgb:255 255 255;
+  --info:#2563eb; --info-rgb:37 99 235;
+  --elev-popover:0 10px 26px rgba(24,24,27,.12),0 2px 5px rgba(24,24,27,.08); --card-ring:rgba(24,24,27,.1);
+  --x-ground:#ececef; --x-line:rgba(9,9,11,.1); --x-ink:#5a5a63; --x-dim:#8a8a93; --x-hi:#27272a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--x-ground);color:var(--text-primary);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+h2,p,pre{margin:0}
+
+/* ---------- page chrome (x-), never inside a specimen ---------- */
+.x-bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:10px 16px;background:var(--x-ground);border-bottom:1px solid var(--x-line)}
+.x-name{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--x-ink)}
+.x-tabs{display:flex;gap:2px;margin-left:auto}
+.x-tab{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--x-dim);background:none;border:none;border-bottom:1px solid transparent;padding:4px 9px;cursor:pointer}
+.x-tab[aria-pressed="true"]{color:var(--x-hi);border-bottom-color:var(--x-hi)}
+.x-wrap{max-width:1640px;margin:0 auto;padding:0 16px 96px}
+.x-intro{max-width:760px;padding:28px 0 4px;font-size:13px;line-height:1.6;color:var(--x-ink)}
+.x-intro b{color:var(--x-hi);font-weight:600}
+.x-sec{padding-top:36px}
+.x-sechead{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;border-top:1px solid var(--x-line);padding-top:9px;margin-bottom:16px}
+.x-id{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--x-hi)}
+.x-note{font-size:12px;color:var(--x-ink)}
+.x-pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:20px}
+.x-pose{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--x-dim);margin:0 0 7px}
+.x-pose b{color:var(--x-ink);font-weight:500}
+.x-h{color:var(--x-ink)}
+.x-h.x-short{color:var(--x-hi)}
+.x-stage{background:var(--app-bg);border:1px solid var(--x-line);border-radius:10px;padding:28px 24px}
+.x-list{counter-reset:n;display:grid;gap:0;border:1px solid var(--x-line);border-radius:10px;overflow:hidden;background:var(--app-bg)}
+.x-li{display:grid;grid-template-columns:36px minmax(0,1fr) minmax(0,1fr);gap:0 16px;padding:12px 16px;border-top:1px solid var(--x-line);font-size:13px;line-height:1.55}
+.x-li:first-child{border-top:none}
+.x-li.x-lh{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--x-dim);padding:9px 16px}
+.x-num{font-family:var(--mono);font-size:12px;color:var(--x-hi)}
+.x-now{color:var(--text-subtle)}
+.x-new{color:var(--text-primary)}
+.x-li b{font-weight:600}
+@media (max-width:640px){
+  .x-li{grid-template-columns:28px minmax(0,1fr)}
+  .x-li .x-new{grid-column:2}
+  .x-li.x-lh{display:none}
+  .x-li .x-now::before{content:'Now: ';color:var(--x-dim)}
+  .x-li .x-new::before{content:'Mockup: ';color:var(--x-dim)}
+  .x-stage{padding:20px 12px}
+}
+
+/* ================= BEFORE: ported from AskQuestionFlow.tsx class by class ================= */
+/* section: rounded-xl border border-accent/[0.22] bg-[light-dark(#fff,#141416)] shadow-[var(--elev-popover),0_0_0_1px_var(--card-ring)] */
+.b-card{overflow:hidden;border-radius:12px;border:1px solid rgb(var(--accent-rgb)/.22);background:var(--card-bg);box-shadow:var(--elev-popover),0 0 0 1px var(--card-ring)}
+.b-body{padding:10px 16px}                                             /* px-4 py-2.5 */
+.b-kick{display:flex;align-items:center;gap:8px}                       /* flex items-center gap-2 */
+.b-glyph{display:flex;color:var(--accent)}
+.b-kword{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--accent)}
+.b-pend{margin-left:auto;font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums;color:var(--text-faint)}
+.b-pend b{color:var(--text-muted);font-weight:700}
+.b-hrow{margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.b-chip{border-radius:4px;border:1px solid rgb(var(--accent-rgb)/.3);background:rgb(var(--accent-rgb)/.1);padding:2px 6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.025em;color:var(--accent)}
+.b-step{margin-left:auto;display:flex;align-items:center;gap:4px}
+.b-dot{width:6px;height:6px;border-radius:999px;background:rgb(var(--tp-rgb)/.15)}
+.b-dot.cur{background:var(--accent)}
+.b-dot.done{background:rgb(var(--accent-rgb)/.4)}
+.b-stepn{margin-left:4px;font-family:var(--mono);font-size:10px;color:var(--text-faint)}
+.b-q{margin-top:6px;font-size:14px;font-weight:600;line-height:1.375;color:var(--text-primary)}
+.b-multi{margin-top:4px;font-size:11px;line-height:1.375;color:var(--text-subtle)}
+.b-opts{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+/* flex w-full items-start gap-2 rounded-lg border px-2.5 py-1 text-left */
+.b-row{display:flex;width:100%;align-items:flex-start;gap:8px;border-radius:8px;border:1px solid transparent;padding:4px 10px;cursor:pointer}
+.b-row.b-other{align-items:center}
+.b-row.t-ca{border-color:rgb(var(--accent-rgb)/.7);background:rgb(var(--accent-rgb)/.16)}
+.b-row.t-c{border-color:rgb(var(--accent-rgb)/.5);background:rgb(var(--accent-rgb)/.11)}
+.b-row.t-a{border-color:rgb(var(--accent-rgb)/.25);background:rgb(var(--accent-rgb)/.05)}
+.b-mark{margin-top:2px;display:flex;width:16px;height:16px;flex-shrink:0;align-items:center;justify-content:center;border:1px solid rgb(var(--tp-rgb)/.3);font-family:var(--mono);font-size:9px;font-weight:600;line-height:1}
+.b-mark.rd{border-radius:999px}
+.b-mark.sq{border-radius:5px}
+.b-mark.m-a{border-color:rgb(var(--accent-rgb)/.6)}
+.b-mark.m-c{border-color:var(--accent);background:var(--accent);color:var(--on-fill)}
+.b-text{min-width:0;flex:1}
+.b-label{display:block;font-size:12px;font-weight:500;line-height:1.375;color:var(--text-primary)}
+.b-desc{display:block;margin-top:2px;font-size:11px;line-height:1.375;color:var(--text-subtle)}
+.b-pv{margin-top:2px;flex-shrink:0;border-radius:4px;background:rgb(var(--info-rgb)/.1);padding:0 6px;font-size:9px;font-weight:600;color:var(--info)}
+.b-cap{margin-top:2px;flex-shrink:0;border-radius:4px;border:1px solid var(--seam);padding:0 4px;font-family:var(--mono);font-size:9px;line-height:15px;color:var(--text-faint)}
+.b-otherbtn{flex:1;font-size:12px;line-height:16px;color:var(--text-muted)}
+.b-input{flex:1;min-width:0;font-size:12px;line-height:16px;color:var(--text-primary)}
+.b-well{margin-top:6px;border-radius:8px;border:1px solid rgb(var(--info-rgb)/.2);background:rgb(var(--black-rgb)/.3);padding:6px 12px}
+.b-wellh{margin-bottom:4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--info)}
+.b-pre{white-space:pre-wrap;font-family:var(--mono);font-size:11px;line-height:1.625;color:var(--text-muted)}
+.b-foot{margin-top:8px;display:flex;align-items:center;gap:12px;border-top:1px solid var(--seam);padding-top:8px}
+.b-submit{display:inline-flex;align-items:center;gap:6px;border-radius:6px;background:var(--accent);padding:4px 12px;font-size:12px;line-height:16px;font-weight:600;color:var(--on-fill)}
+.b-submit.off{background:rgb(var(--tp-rgb)/.06);color:var(--text-faint)}
+.b-enter{border-radius:4px;border:1px solid rgb(var(--on-fill-rgb)/.35);padding:0 4px;font-family:var(--mono);font-size:9px;line-height:1}
+.b-cancel{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-subtle)}
+.b-esc{border-radius:4px;border:1px solid var(--text-ghost);padding:0 4px;font-family:var(--mono);font-size:9px;line-height:1;color:var(--text-faint)}
+
+/* ================= AFTER: same elements, same order ================= */
+.a-card{overflow:hidden;border-radius:12px;border:1px solid rgb(var(--white-rgb)/.08);background:var(--card-bg);box-shadow:var(--elev-popover),0 0 0 1px var(--card-ring)}
+.a-body{padding:12px 16px 10px}
+.a-head{display:flex;align-items:center;gap:8px;height:15px}
+.a-glyph{display:flex;color:var(--accent)}
+.a-kword{font-size:10px;line-height:15px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--accent)}
+.a-meta{margin-left:auto;display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--text-faint)}
+.a-meta b{color:var(--text-muted);font-weight:500}
+.a-step{display:flex;align-items:center;gap:4px}
+.a-dot{width:6px;height:6px;border-radius:999px;background:rgb(var(--tp-rgb)/.15)}
+.a-dot.cur{background:var(--accent)}
+.a-dot.done{background:rgb(var(--accent-rgb)/.4)}
+.a-stepn{margin-left:3px}
+.a-sep{width:1px;height:10px;background:var(--seam)}
+.a-q{margin-top:6px;font-size:15px;font-weight:600;line-height:20px;color:var(--text-primary)}
+.a-multi{margin-top:2px;font-size:12px;line-height:16px;color:var(--text-subtle)}
+.a-opts{margin:8px -8px 0;display:flex;flex-direction:column;gap:2px}
+.a-row{display:flex;align-items:flex-start;gap:10px;border-radius:8px;padding:5px 8px;cursor:pointer}
+.a-row.t-a{background:rgb(var(--tp-rgb)/.05)}
+.a-row.t-c{background:rgb(var(--accent-rgb)/.1)}
+.a-row.t-ca{background:rgb(var(--accent-rgb)/.14)}
+.a-mark{margin-top:1px;display:flex;width:16px;height:16px;flex-shrink:0;align-items:center;justify-content:center;border:1px solid rgb(var(--tp-rgb)/.28);font-family:var(--mono);font-size:10px;font-weight:600;line-height:1}
+.a-mark.rd{border-radius:999px}
+.a-mark.sq{border-radius:5px}
+.a-mark.m-a{border-color:rgb(var(--tp-rgb)/.5)}
+.a-mark.m-c{border-color:var(--accent);background:var(--accent);color:var(--on-fill)}
+.a-text{min-width:0;flex:1}
+.a-label{display:block;font-size:13px;font-weight:500;line-height:17px;color:var(--text-primary)}
+.a-desc{display:block;margin-top:1px;font-size:12px;line-height:16px;color:var(--text-subtle)}
+.a-pv{margin-top:1.5px;flex-shrink:0;border-radius:4px;background:rgb(var(--info-rgb)/.1);padding:0 6px;font-size:10px;line-height:14px;font-weight:600;color:var(--info)}
+.a-cap{flex-shrink:0;min-width:10px;text-align:right;font-family:var(--mono);font-size:10.5px;line-height:17px;color:var(--text-ghost)}
+.a-row.t-a .a-cap,.a-row.t-ca .a-cap{color:var(--text-muted)}
+.a-otherlbl{flex:1;font-size:13px;line-height:17px;color:var(--text-muted)}
+.a-field{flex:1;min-width:0;margin:-3px 0;border-radius:6px;border:1px solid rgb(var(--white-rgb)/.1);background:rgb(var(--black-rgb)/.3);padding:2px 8px;font-size:13px;line-height:17px;color:var(--text-primary)}
+.a-well{margin-top:6px;border-radius:9px;border:1px solid rgb(var(--white-rgb)/.07);background:rgb(var(--black-rgb)/.3);padding:7px 11px}
+.a-wellh{margin-bottom:4px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-faint)}
+.a-pre{white-space:pre-wrap;font-family:var(--mono);font-size:11px;line-height:1.55;color:var(--text-muted)}
+.a-foot{margin-top:8px;display:flex;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid var(--seam);padding-top:8px}
+.a-cancel{display:inline-flex;align-items:center;gap:6px;border-radius:6px;padding:4px 8px;font-size:12px;line-height:16px;color:var(--text-subtle)}
+.a-esc{border-radius:4px;border:1px solid var(--text-ghost);padding:0 4px;font-family:var(--mono);font-size:9.5px;line-height:14px;color:var(--text-faint)}
+.a-submit{display:inline-flex;align-items:center;gap:7px;border-radius:6px;background:var(--accent);padding:4px 12px;font-size:12px;line-height:16px;font-weight:600;color:var(--on-fill)}
+.a-submit.off{background:rgb(var(--tp-rgb)/.06);color:var(--text-faint)}
+.a-enter{border-radius:4px;border:1px solid rgb(var(--on-fill-rgb)/.35);padding:0 4px;font-family:var(--mono);font-size:9.5px;line-height:14px}
+.a-submit.off .a-enter{border-color:rgb(var(--tp-rgb)/.15)}
+
+.caret{display:inline-block;width:1px;height:1.1em;margin-left:1px;vertical-align:-2px;background:var(--accent);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.caret{animation:none}}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <span class="x-name">Question card &middot; before and after</span>
+  <span class="x-tabs" role="group" aria-label="Appearance">
+    <button class="x-tab" data-theme-pick="dark" type="button">Dark</button>
+    <button class="x-tab" data-theme-pick="light" type="button">Light</button>
+  </span>
+</div>
+
+<div class="x-wrap">
+  <p class="x-intro"><b>Before</b> is ported from <code>AskQuestionFlow.tsx</code> class by class, with the dark and light token values from <code>theme.css</code>. <b>After</b> keeps every element in the same order: kicker, question, option rows, Other, preview, and footer. The numbered list at the bottom matches the changes.</p>
+  <div id="scenes"></div>
+
+  <section class="x-sec">
+    <div class="x-sechead"><span class="x-id">Changes</span><span class="x-note">Answer yes or no per number</span></div>
+    <div class="x-list" id="changes"></div>
+  </section>
+</div>
+
+<script>
+const GLYPH = '<svg aria-hidden="true" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" viewBox="0 0 24 24" width="13"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const LAYOUT_PREVIEW =
+`+-----------+---------------------+
+| General   | Appearance          |
+| Models    |   Theme      Dark   |
+| Accounts  |   Accent     Pink   |
+| Usage     |   Font size  13     |
++-----------+---------------------+`;
+
+const SCENES = [
+  {
+    id: '1', title: 'Just asked', note: 'Single select. Nothing picked yet, the cursor starts on the first row.',
+    q: { header: 'Date library', question: 'Which library should we use for date formatting?', multiSelect: false, options: [
+      { label: 'date-fns (Recommended)', description: 'Tree-shakeable functions with no global locale state.' },
+      { label: 'Day.js', description: 'A 2 kB core with plugins and a Moment-style API.' },
+      { label: 'Luxon', description: 'Built on Intl, with the strongest time zone support.' },
+    ]},
+    chosen: [], cursor: 0,
+  },
+  {
+    id: '2', title: 'Picked, mouse elsewhere', note: 'Single select. Row 1 is picked and the pointer rests on row 3. Today both rows are pink and Enter sends row 1, which is the bug in the fix plan. After the fix, hover is only a grey wash.',
+    q: { header: 'Date library', question: 'Which library should we use for date formatting?', multiSelect: false, options: [
+      { label: 'date-fns (Recommended)', description: 'Tree-shakeable functions with no global locale state.' },
+      { label: 'Day.js', description: 'A 2 kB core with plugins and a Moment-style API.' },
+      { label: 'Luxon', description: 'Built on Intl, with the strongest time zone support.' },
+    ]},
+    chosen: [0], cursor: 2,
+  },
+  {
+    id: '3', title: 'Multi select, step 2 of 3', note: 'Two rows picked, the cursor on a third, and a permission card queued behind.',
+    q: { header: 'Checks', question: 'Which checks should run before the commit?', multiSelect: true, options: [
+      { label: 'Unit tests', description: 'bun test on the changed test files.' },
+      { label: 'Typecheck', description: 'Desktop and sidecar typecheck.' },
+      { label: 'Renderer build', description: 'Catches Fast Refresh boundary errors.' },
+      { label: 'Hardening suite', description: 'Launches Electron and takes about four minutes.' },
+    ]},
+    steps: { count: 3, index: 1, answered: [true, false, false] }, pending: 2,
+    chosen: [0, 1], cursor: 2,
+  },
+  {
+    id: '4', title: 'Option with a preview', note: 'The cursor is on an option that carries a preview, so the preview well shows.',
+    q: { header: 'Layout', question: 'Which layout should the settings page use?', multiSelect: false, options: [
+      { label: 'Sidebar sections', description: 'Section list on the left, one section at a time.', preview: LAYOUT_PREVIEW },
+      { label: 'Single scroll', description: 'Every section on one long page.', preview: 'General\nAppearance\nModels\nAccounts' },
+      { label: 'Tabs', description: 'A tab strip across the top.' },
+    ]},
+    chosen: [], cursor: 0,
+  },
+  {
+    id: '5', title: 'Typing an Other answer', note: 'The freeform row is open and has text, so it counts as the answer.',
+    q: { header: 'Branch', question: 'Where should this work land?', multiSelect: false, options: [
+      { label: 'Current branch (main)', description: 'Commit on top of the shared branch.' },
+      { label: 'New branch', description: 'Branch from main and leave main untouched.' },
+    ]},
+    chosen: [], cursor: 2, otherActive: true, otherText: 'a worktree off release/2.4',
+  },
+];
+
+function derive(s) {
+  const n = s.q.options.length;
+  const otherText = s.otherText || '';
+  const otherFilled = otherText.trim().length > 0;
+  return {
+    n, otherText, otherFilled, otherActive: !!s.otherActive,
+    selectedCount: s.chosen.length + (otherFilled ? 1 : 0),
+    canAdvance: s.chosen.length > 0 || otherFilled,
+    isLast: !s.steps || s.steps.index >= s.steps.count - 1,
+    preview: s.cursor < n ? (s.q.options[s.cursor].preview || null) : null,
+  };
+}
+const tone = (checked, active) => checked ? (active ? 't-ca' : 't-c') : (active ? 't-a' : '');
+const mtone = (checked, active) => checked ? 'm-c' : (active ? 'm-a' : '');
+const dots = (s, p) => s.steps.answered.map((done, i) =>
+  `<span class="${p}-dot${i === s.steps.index ? ' cur' : done ? ' done' : ''}"></span>`).join('');
+
+function before(s) {
+  const d = derive(s), q = s.q, shape = q.multiSelect ? 'sq' : 'rd';
+  let h = '<section class="b-card"><div class="b-body">';
+  h += `<div class="b-kick"><span class="b-glyph">${GLYPH}</span><span class="b-kword">Question</span>`;
+  if (s.pending > 1) h += `<span class="b-pend"><b>${s.pending}</b> pending</span>`;
+  h += '</div><div class="b-hrow">';
+  h += `<span class="b-chip">${esc(q.header || 'Question')}</span>`;
+  if (s.steps) h += `<span class="b-step">${dots(s, 'b')}<span class="b-stepn">${s.steps.index + 1}/${s.steps.count}</span></span>`;
+  h += `</div><h2 class="b-q">${esc(q.question)}</h2>`;
+  if (q.multiSelect) h += `<p class="b-multi">${d.selectedCount > 0 ? d.selectedCount + ' selected' : 'Pick as many as you like'}</p>`;
+  h += '<div class="b-opts">';
+  q.options.forEach((o, i) => {
+    const active = s.cursor === i && !d.otherActive, checked = s.chosen.includes(i);
+    h += `<div class="b-row ${tone(checked, active)}"><span class="b-mark ${shape} ${mtone(checked, active)}">${checked ? '&#10003;' : ''}</span>`;
+    h += `<span class="b-text"><span class="b-label">${esc(o.label)}</span>${o.description ? `<span class="b-desc">${esc(o.description)}</span>` : ''}</span>`;
+    if (o.preview) h += '<span class="b-pv">preview</span>';
+    if (i < 9) h += `<span class="b-cap">${i + 1}</span>`;
+    h += '</div>';
+  });
+  const oc = s.cursor === d.n;
+  h += `<div class="b-row b-other ${tone(d.otherFilled, oc)}"><span class="b-mark ${shape} ${mtone(d.otherFilled, oc)}">${d.otherFilled ? '&#10003;' : ''}</span>`;
+  h += d.otherActive
+    ? `<span class="b-input">${esc(d.otherText)}<i class="caret"></i></span>`
+    : `<span class="b-otherbtn">${d.otherFilled ? esc(d.otherText) : 'Other&hellip;'}</span>`;
+  h += `<span class="b-cap">${d.n < 9 ? d.n + 1 : 'o'}</span></div></div>`;
+  if (d.preview) h += `<div class="b-well"><div class="b-wellh">Preview</div><pre class="b-pre">${esc(d.preview)}</pre></div>`;
+  h += `<div class="b-foot"><span class="b-submit${d.canAdvance ? '' : ' off'}">${d.isLast ? 'Submit' : 'Next question'}<span class="b-enter">&crarr;</span></span>`;
+  h += '<span class="b-cancel">Cancel<span class="b-esc">esc</span></span></div>';
+  return h + '</div></section>';
+}
+
+function after(s) {
+  const d = derive(s), q = s.q, shape = q.multiSelect ? 'sq' : 'rd';
+  let h = '<section class="a-card"><div class="a-body">';
+  h += `<div class="a-head"><span class="a-glyph">${GLYPH}</span><span class="a-kword">${esc(q.header || 'Question')}</span>`;
+  const meta = [];
+  if (s.steps) meta.push(`<span class="a-step">${dots(s, 'a')}<span class="a-stepn">${s.steps.index + 1}/${s.steps.count}</span></span>`);
+  if (s.pending > 1) meta.push(`<span><b>${s.pending}</b> pending</span>`);
+  if (meta.length) h += `<span class="a-meta">${meta.join('<span class="a-sep"></span>')}</span>`;
+  h += `</div><h2 class="a-q">${esc(q.question)}</h2>`;
+  if (q.multiSelect) h += `<p class="a-multi">${d.selectedCount > 0 ? d.selectedCount + ' selected' : 'Pick as many as you like'}</p>`;
+  h += '<div class="a-opts">';
+  q.options.forEach((o, i) => {
+    const active = s.cursor === i && !d.otherActive, checked = s.chosen.includes(i);
+    h += `<div class="a-row ${tone(checked, active)}"><span class="a-mark ${shape} ${mtone(checked, active)}">${checked ? '&#10003;' : ''}</span>`;
+    h += `<span class="a-text"><span class="a-label">${esc(o.label)}</span>${o.description ? `<span class="a-desc">${esc(o.description)}</span>` : ''}</span>`;
+    if (o.preview) h += '<span class="a-pv">preview</span>';
+    if (i < 9) h += `<span class="a-cap">${i + 1}</span>`;
+    h += '</div>';
+  });
+  const oc = s.cursor === d.n;
+  h += `<div class="a-row ${tone(d.otherFilled, oc)}"><span class="a-mark ${shape} ${mtone(d.otherFilled, oc)}">${d.otherFilled ? '&#10003;' : ''}</span>`;
+  h += d.otherActive
+    ? `<span class="a-field">${esc(d.otherText)}<i class="caret"></i></span>`
+    : `<span class="a-otherlbl">${d.otherFilled ? esc(d.otherText) : 'Other&hellip;'}</span>`;
+  h += `<span class="a-cap">${d.n < 9 ? d.n + 1 : 'o'}</span></div></div>`;
+  if (d.preview) h += `<div class="a-well"><div class="a-wellh">Preview</div><pre class="a-pre">${esc(d.preview)}</pre></div>`;
+  h += '<div class="a-foot"><span class="a-cancel">Cancel<span class="a-esc">esc</span></span>';
+  h += `<span class="a-submit${d.canAdvance ? '' : ' off'}">${d.isLast ? 'Submit' : 'Next question'}<span class="a-enter">&crarr;</span></span></div>`;
+  return h + '</div></section>';
+}
+
+document.getElementById('scenes').innerHTML = SCENES.map(s => `
+  <section class="x-sec">
+    <div class="x-sechead"><span class="x-id">${s.id} &middot; ${esc(s.title)}</span><span class="x-note">${esc(s.note)}</span></div>
+    <div class="x-pair">
+      <div><p class="x-pose"><b>Before</b> &middot; today <span class="x-h" data-h="b"></span></p><div class="x-stage">${before(s)}</div></div>
+      <div><p class="x-pose"><b>After</b> &middot; mockup <span class="x-h" data-h="a"></span></p><div class="x-stage">${after(s)}</div></div>
+    </div>
+  </section>`).join('');
+
+const CHANGES = [
+  ['Two label rows above the question: a pink <b>QUESTION</b> kicker, then a pink header pill.', 'One row. The question&rsquo;s own header is the kicker next to the glyph. Step dots and the pending count move to the right end of that row.'],
+  ['Pink on the card border, the kicker, the pill, every row ring, the markers, and Submit.', 'Neutral card border. Pink stays on the kicker, picked answers, and Submit.'],
+  ['The cursor row and a picked row are both pink rings, one fainter than the other.', 'Cursor is a grey wash. Pink always means picked. No rings on rows.'],
+  ['Question 14px, option labels 12px, descriptions 11px.', 'Question 15px, labels 13px, descriptions 12px, on tighter line heights.'],
+  ['A whole row for the header pill, and a 1px ring around every row.', 'Rows keep today&rsquo;s height without the ring. Dropping the pill row pays for the larger text, so the card is shorter in every state. Heights are measured above each card.'],
+  ['Markers sit 10px right of the question text. The Other marker is 2px lower than its text.', 'Row tint extends into the card padding, so markers line up with the question&rsquo;s left edge. Other aligns like every other row.'],
+  ['A bordered keycap on every row.', 'A plain faint digit that brightens on the cursor row. Footer <b>esc</b> and <b>&crarr;</b> chips unchanged.'],
+  ['&ldquo;Other&hellip;&rdquo; is smaller than the labels, and typing shows no field, only text and a caret on the row.', 'Same size as the labels. Typing shows an inset field.'],
+  ['Preview well has a blue border and a blue heading.', 'Uses the permission card&rsquo;s well style: neutral border, faint heading. The blue <b>preview</b> badge on the row stays.'],
+  ['Submit on the left, Cancel pushed to the far right.', 'Both on the right: Cancel, then Submit, so the main action is last in reading order.'],
+];
+document.getElementById('changes').innerHTML =
+  '<div class="x-li x-lh"><span>#</span><span>Now</span><span>Mockup</span></div>' +
+  CHANGES.map(([now, next], i) => `<div class="x-li"><span class="x-num">${i + 1}</span><span class="x-now">${now}</span><span class="x-new">${next}</span></div>`).join('');
+
+function measure() {
+  document.querySelectorAll('.x-pair').forEach(pair => {
+    const [b, a] = pair.querySelectorAll('.b-card, .a-card');
+    const hb = Math.round(b.getBoundingClientRect().height), ha = Math.round(a.getBoundingClientRect().height);
+    pair.querySelector('[data-h="b"]').textContent = '\u00b7 ' + hb + 'px';
+    const out = pair.querySelector('[data-h="a"]');
+    const d = hb - ha;
+    out.textContent = '\u00b7 ' + ha + 'px' + (d > 0 ? ', ' + d + 'px shorter' : d < 0 ? ', ' + (-d) + 'px taller' : ', same height');
+    out.classList.toggle('x-short', d >= 0);
+  });
+}
+document.fonts.ready.then(measure);
+new ResizeObserver(measure).observe(document.getElementById('scenes'));
+addEventListener('resize', measure);
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.querySelectorAll('[data-theme-pick]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themePick === t)));
+  try { localStorage.setItem('ask-mockup-theme', t); } catch (e) {}
+}
+let saved = null;
+try { saved = localStorage.getItem('ask-mockup-theme'); } catch (e) {}
+setTheme(saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+document.querySelectorAll('[data-theme-pick]').forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
+</script>
+</body>
+</html>
