@@ -43,7 +43,7 @@
  * it.
  */
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
 import { shouldShowFirstRunOAuth } from './appModel.js'
 import {
   handleMenuRovingKeyDown,
@@ -246,6 +246,12 @@ function BranchPicker({
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<{
+    top: number
+    left: number
+    width: number
+    maxHeight: number
+  } | null>(null)
 
   useEffect(() => {
     let active = true
@@ -270,6 +276,38 @@ function BranchPicker({
     return () => { active = false; window.removeEventListener('focus', refresh) }
   }, [onList, open])
 
+  useLayoutEffect(() => {
+    if (!open) return
+    const place = () => {
+      const trigger = triggerRef.current
+      const menu = ref.current?.querySelector<HTMLElement>('[role="menu"]')
+      if (!trigger || !menu) return
+      const rect = trigger.getBoundingClientRect()
+      const gap = 6
+      const margin = 8
+      const width = Math.min(300, window.innerWidth - margin * 2)
+      const below = Math.max(0, window.innerHeight - rect.bottom - gap - margin)
+      const above = Math.max(0, rect.top - gap - margin)
+      const desiredHeight = Math.min(320, menu.scrollHeight || 320)
+      const placeAbove = below < desiredHeight && above > below
+      const available = placeAbove ? above : below
+      const maxHeight = Math.min(320, available)
+      setMenuPosition({
+        top: placeAbove ? rect.top - gap - Math.min(desiredHeight, maxHeight) : rect.bottom + gap,
+        left: Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin)),
+        width,
+        maxHeight,
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    document.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      document.removeEventListener('scroll', place, true)
+    }
+  }, [open, branches, error, loading, ref, triggerRef])
+
   const current = loading ? 'Checking…' : error ? 'Unavailable' : branches ? branches.current ?? 'Detached HEAD' : branch ?? 'none'
   const sessionBranchStale = branches !== null && branch !== null && branches.current !== branch
   return (
@@ -292,7 +330,8 @@ function BranchPicker({
           role="menu"
           aria-label="Local Git branches"
           onKeyDown={handleMenuRovingKeyDown}
-          className="absolute right-0 top-[calc(100%+6px)] z-30 max-h-[320px] w-[300px] overflow-y-auto rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
+          className="fixed z-[71] overflow-y-auto rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
+          style={menuPosition ? menuPosition : { visibility: 'hidden' }}
         >
           {error ? <p className="px-2.5 py-2 text-[12px] text-tone-danger">{error}</p> : null}
           {loading ? <p className="px-2.5 py-2 text-[12px] text-text-subtle">Loading branches…</p> : null}

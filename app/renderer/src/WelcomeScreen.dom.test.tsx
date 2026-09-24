@@ -73,3 +73,32 @@ test('opening the picker refreshes an externally changed branch before selection
   await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.click())
   expect(chosen).toEqual(['feature/login'])
 })
+
+test('the branch menu escapes the welcome scroller and flips above near the window edge', async () => {
+  const tree = await harness.mount(
+    <WelcomeScreen
+      variant="session"
+      cwd="/work/cat-code"
+      branch="main"
+      accounts={null}
+      onListBranches={async () => ({ ok: true, value: { current: 'main', branches: ['feature/login', 'main'], dirty: false } })}
+      onSwitchBranch={async () => null}
+    />,
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>('[aria-label^="Choose Git branch"]')!
+  let anchorTop = window.innerHeight - 90
+  trigger.getBoundingClientRect = () => ({
+    x: 350, y: anchorTop, left: 350, right: 430,
+    top: anchorTop, bottom: anchorTop + 30,
+    width: 80, height: 30, toJSON: () => ({}),
+  })
+  await act(async () => trigger.click())
+  const menu = tree.container.querySelector<HTMLElement>('[role="menu"]')!
+  expect(menu.classList.contains('fixed')).toBe(true)
+  expect(Number.parseFloat(menu.style.top)).toBeLessThan(anchorTop)
+  expect(Number.parseFloat(menu.style.maxHeight)).toBeGreaterThan(0)
+  anchorTop = 70
+  await act(async () => { document.dispatchEvent(new Event('scroll')) })
+  expect(menu.style.top).toBe('106px')
+  expect(Number.parseFloat(menu.style.maxHeight)).toBe(320)
+})
