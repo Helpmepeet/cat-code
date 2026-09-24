@@ -548,6 +548,7 @@ export function App() {
     useState<ImageAttachmentState>(createImageAttachmentState)
   const [fileAttachmentState, setFileAttachmentState] =
     useState<FileAttachmentState>(createFileAttachmentState)
+  const [branchSwitchPendingSessions, setBranchSwitchPendingSessions] = useState<ReadonlySet<SessionId>>(() => new Set())
   const [composerFocusRequests, setComposerFocusRequests] = useState<
     Partial<Record<SessionId, number>>
   >({})
@@ -2599,14 +2600,18 @@ export function App() {
     sessionId: SessionId,
     branch: string,
   ): Promise<string | null> => {
+    if (selectPendingSubmit(pendingSubmitsRef.current, sessionId) !== null) {
+      return 'This chat has a pending prompt. Start a new chat to choose another branch.'
+    }
     if (
-      selectPromptDraft(promptDrafts, sessionId).trim() ||
+      selectPromptDraft(promptDraftsRef.current, sessionId).length > 0 ||
       selectSessionPasteList(pasteState, sessionId).length > 0 ||
       selectImageAttachments(imageAttachmentState, sessionId).length > 0 ||
       selectFileAttachment(fileAttachmentState, sessionId)
     ) {
       return 'Remove your draft and attachments before switching branches.'
     }
+    setBranchSwitchPendingSessions(current => new Set(current).add(sessionId))
     try {
       const result = await getBridge().switchWorkspaceBranch(sessionId, branch)
       if (!result.ok) {
@@ -2616,15 +2621,20 @@ export function App() {
         }
         return result.error.message
       }
-      // The engine caches its branch at spawn. The host starts a fresh process
-      // after Git switches; retire the empty old session before focusing it.
-      await closeTab(sessionId)
+      // Main closes the old sidecar before this result is returned. The new
+      // session has a fresh engine snapshot for the selected branch.
       focusCreatedSession(result.value.appSessionId)
       return null
     } catch (error) {
       return errorMessage(error)
+    } finally {
+      setBranchSwitchPendingSessions(current => {
+        const next = new Set(current)
+        next.delete(sessionId)
+        return next
+      })
     }
-  }, [closeTab, focusCreatedSession, promptDrafts, pasteState, imageAttachmentState, fileAttachmentState])
+  }, [focusCreatedSession, pasteState, imageAttachmentState, fileAttachmentState])
 
   const setPeerWakeBlocked = useCallback(
     async (sessionId: SessionId, blocked: boolean) => {
@@ -3546,6 +3556,7 @@ export function App() {
                 onPreviewEngage={() => engagePreview(sessionId)}
                 previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
+	            branchSwitchPending={branchSwitchPendingSessions.has(sessionId)}
 	            onSwitchBranch={descriptor?.status === 'ready' ? branch => switchBranchForSession(sessionId, branch) : undefined}
 	            sandboxed={panelSandboxed}
 	            model={rail.model}

@@ -49,3 +49,27 @@ test('a failed switch leaves the picker open with a reason', async () => {
   expect(tree.container.querySelector('[role="menu"]')).not.toBeNull()
   expect(tree.container.textContent).toContain('Commit or stash local changes')
 })
+
+test('opening the picker refreshes an externally changed branch before selection', async () => {
+  let current = 'main'
+  const chosen: string[] = []
+  const tree = await harness.mount(
+    <WelcomeScreen
+      variant="session"
+      cwd="/work/cat-code"
+      branch="main"
+      accounts={null}
+      onListBranches={async () => ({ ok: true, value: { current, branches: ['feature/login', 'main'], dirty: false } })}
+      onSwitchBranch={async branch => { chosen.push(branch); return null }}
+    />,
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>('[aria-label^="Choose Git branch"]')!
+  expect(trigger.textContent).toContain('main')
+  current = 'feature/login'
+  await act(async () => trigger.click())
+  expect(trigger.textContent).toContain('feature/login')
+  expect(tree.container.querySelector('[aria-checked="true"]')?.textContent).toContain('feature/login')
+  expect(tree.container.textContent).toContain('This chat started on main')
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.click())
+  expect(chosen).toEqual(['feature/login'])
+})

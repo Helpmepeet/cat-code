@@ -244,37 +244,47 @@ function BranchPicker({
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   const [branches, setBranches] = useState<WorkspaceBranches | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState(false)
 
   useEffect(() => {
     let active = true
-    void onList().then(result => {
-      if (!active) return
-      if (result.ok) {
-        setBranches(result.value)
-        setError(null)
-      } else {
-        setError(result.error.message)
-      }
-    }).catch(() => {
-      if (active) setError('Could not read branches for this project.')
-    })
-    return () => { active = false }
-  }, [onList])
+    let request = 0
+    const refresh = () => {
+      const ownRequest = ++request
+      setLoading(true)
+      setBranches(null)
+      setError(null)
+      void onList().then(result => {
+        if (!active || ownRequest !== request) return
+        if (result.ok) setBranches(result.value)
+        else setError(result.error.message)
+      }).catch(() => {
+        if (active && ownRequest === request) setError('Could not read branches for this project.')
+      }).finally(() => {
+        if (active && ownRequest === request) setLoading(false)
+      })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => { active = false; window.removeEventListener('focus', refresh) }
+  }, [onList, open])
 
-  const current = branches ? branches.current ?? 'Detached HEAD' : branch ?? 'none'
+  const current = loading ? 'Checking…' : error ? 'Unavailable' : branches ? branches.current ?? 'Detached HEAD' : branch ?? 'none'
+  const sessionBranchStale = branches !== null && branch !== null && branches.current !== branch
   return (
     <div ref={ref} className="relative inline-block max-w-full">
       <button
         ref={triggerRef}
         type="button"
-        aria-label={`Choose Git branch. Current branch: ${current}`}
+        aria-label={`Choose Git branch. Current branch: ${current}${sessionBranchStale ? `. This chat started on ${branch}` : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
         className="inline-flex max-w-full items-center gap-1.5 rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
         <span className="truncate font-mono text-[13px] text-text-muted">{current}</span>
+        {sessionBranchStale ? <span className="text-tone-warn" title={`This chat started on ${branch}. Start a fresh chat to use ${branches?.current ?? 'this checkout'}.`}>!</span> : null}
         <ChevronIcon open={open} />
       </button>
       {open ? (
@@ -285,7 +295,7 @@ function BranchPicker({
           className="absolute right-0 top-[calc(100%+6px)] z-30 max-h-[320px] w-[300px] overflow-y-auto rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
         >
           {error ? <p className="px-2.5 py-2 text-[12px] text-tone-danger">{error}</p> : null}
-          {!branches && !error ? <p className="px-2.5 py-2 text-[12px] text-text-subtle">Loading branches…</p> : null}
+          {loading ? <p className="px-2.5 py-2 text-[12px] text-text-subtle">Loading branches…</p> : null}
           {branches?.branches.map(name => (
             <button
               key={name}
@@ -294,7 +304,7 @@ function BranchPicker({
               aria-checked={name === branches.current}
               disabled={pending}
               onClick={() => {
-                if (name === branches.current) {
+                if (name === branches.current && !sessionBranchStale) {
                   close()
                   return
                 }
@@ -312,6 +322,7 @@ function BranchPicker({
             </button>
           ))}
           {branches?.dirty ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-tone-warn">Commit or stash local changes before switching.</p> : null}
+          {sessionBranchStale ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-tone-warn">This chat started on {branch}. Select {branches?.current ?? 'the current branch'} to open a fresh chat on the current checkout.</p> : null}
           {branches ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-text-subtle">Switching closes this empty chat and opens a new one.</p> : null}
         </div>
       ) : null}
