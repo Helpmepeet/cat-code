@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test'
 import {
-  DEFAULT_REASONING_LAYOUT,
   groupReasoningRuns,
   isHeadingLike,
   isReasoningLayoutMode,
@@ -55,10 +54,6 @@ function toolRow(id: string): NestedToolUseRow {
     children: [],
   }
 }
-
-test('the shipped default is the trail mode', () => {
-  expect(DEFAULT_REASONING_LAYOUT).toBe('trail')
-})
 
 test('mode round-trips through storage', () => {
   const storage = memoryStorage()

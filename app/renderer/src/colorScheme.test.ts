@@ -1,18 +1,14 @@
 /**
  * The parts of the appearance preference that are pure: the stored choice, the
- * resolution of `system` against the OS, the stamp, and the stylesheet that
- * gives the stamped attribute something to mean.
+ * resolution of `system` against the OS, and the stylesheet that gives the
+ * stamped attribute something to mean.
  *
- * The stamp path takes an injected root (`colorScheme.ts` `AppearanceRoot`), so
- * this stays an SSR-only suite like the rest of the renderer's preference tests.
- * The runtime half lives in `ColorSchemeProvider.dom.test.ts`, because an SSR
- * suite cannot tell a working provider from one that never stamps anything.
+ * `ColorSchemeProvider.dom.test.ts` owns the real document stamp and provider
+ * subscription path.
  */
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'fs'
 import {
-  APPEARANCE_ATTRIBUTE,
-  applyAppearance,
   COLOR_SCHEME_KEYS,
   COLOR_SCHEME_STORAGE_KEY,
   DEFAULT_COLOR_SCHEME,
@@ -25,14 +21,6 @@ import {
   memoryStorage as storage,
   throwingStorage,
 } from './viewPreferenceStorageFixture.js'
-
-function fakeRoot() {
-  const attributes = new Map<string, string>()
-  return {
-    attributes,
-    setAttribute: (name: string, value: string) => void attributes.set(name, value),
-  }
-}
 
 function themeCss(): string {
   return readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
@@ -93,20 +81,6 @@ test('only the system choice follows the operating system', () => {
   expect(resolveAppearance('light', false)).toBe('light')
   expect(resolveAppearance('dark', true)).toBe('dark')
   expect(resolveAppearance('dark', false)).toBe('dark')
-})
-
-/**
- * Both values are stamped, unlike `data-glass`. Only `light` has rules, but a
- * document carrying no attribute at all would be indistinguishable from one
- * whose provider has not run, and that ambiguity is what this asserts away.
- */
-test('the stamp always states which appearance is live', () => {
-  const root = fakeRoot()
-  applyAppearance(root, 'light')
-  expect(root.attributes.get(APPEARANCE_ATTRIBUTE)).toBe('light')
-  applyAppearance(root, 'dark')
-  expect(root.attributes.get(APPEARANCE_ATTRIBUTE)).toBe('dark')
-  expect(() => applyAppearance(null, 'light')).not.toThrow()
 })
 
 /**

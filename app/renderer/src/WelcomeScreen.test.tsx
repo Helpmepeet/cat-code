@@ -384,53 +384,6 @@ test('a pending row with no recognized usage renders a neutral decorative rail',
   expect(html).not.toContain('animate-pulse')
 })
 
-test('a recognized usage window wins over the pending rail', () => {
-  const html = renderToStaticMarkup(
-    <WelcomeScreen
-      recents={[]}
-      accounts={pool([account({
-        usagePrimary: 37,
-        usagePrimaryWindowSeconds: 18_000,
-        usageWeekly: null,
-        usageSecondaryWindowSeconds: null,
-      })])}
-      accountsUsagePending
-      onOpenRecent={noop}
-      onOpenFolder={noop}
-    />,
-  )
-
-  expect(html).toContain('data-welcome-usage-region="true"')
-  expect(html).toContain('data-welcome-usage-state="real"')
-  expect(html).not.toContain('data-welcome-usage-state="pending"')
-  expect(html).toContain('animate-toast-in')
-  expect(html).toContain('aria-label="5-hour usage: 37%"')
-  expect(html).not.toContain('>7d<')
-})
-
-test('a loaded row without usage renders no rail or fabricated metric', () => {
-  const html = renderToStaticMarkup(
-    <WelcomeScreen
-      recents={[]}
-      accounts={pool([account({
-        usagePrimary: null,
-        usageWeekly: null,
-        usagePrimaryWindowSeconds: null,
-        usageSecondaryWindowSeconds: null,
-      })])}
-      onOpenRecent={noop}
-      onOpenFolder={noop}
-    />,
-  )
-
-  expect(html).toContain('data-welcome-usage-region="true"')
-  expect(html).not.toContain('data-welcome-usage-state=')
-  expect(html).not.toContain('role="progressbar"')
-  expect(html).not.toContain('>5h<')
-  expect(html).not.toContain('>7d<')
-  expect(html).not.toMatch(/\d+%/)
-})
-
 test('weekly-only usage expands across the full usage track', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen

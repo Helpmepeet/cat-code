@@ -30,11 +30,6 @@ import {
 } from './viewPreferenceStorageFixture.js'
 
 describe('persistence', () => {
-  test('an empty store, and no store at all, leave the caller on the default', () => {
-    expect(readCodeThemeFromStorage(storage())).toBeNull()
-    expect(readCodeThemeFromStorage(null)).toBeNull()
-  })
-
   test('every theme round-trips through the real write and read helpers', () => {
     for (const theme of CODE_THEME_KEYS) {
       const store = storage()

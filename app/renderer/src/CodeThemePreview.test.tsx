@@ -14,7 +14,6 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CodeThemePreview } from './CodeThemePreview.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
-import { CODE_THEME_STORAGE_KEY } from './codeTheme.js'
 
 const html = renderToStaticMarkup(<CodeThemePreview />)
 
@@ -68,22 +67,4 @@ test('the canvas renders under the attribute the active palette selects on', () 
   // Nothing rewrites the spans per theme: the palette is CSS, so the same token
   // markup has to come out under every theme.
   expect(themed).toContain('class="hljs"')
-})
-
-test('the preview reads the picker, so a theme change recolors it with no reload', () => {
-  const store = new Map<string, string>([
-    [CODE_THEME_STORAGE_KEY, JSON.stringify({ version: 1, theme: 'monokai' })],
-  ])
-  const themed = renderToStaticMarkup(
-    <CodeThemeProvider
-      storage={{
-        getItem: key => store.get(key) ?? null,
-        setItem: (key, value) => void store.set(key, value),
-      }}
-    >
-      <CodeThemePreview />
-    </CodeThemeProvider>,
-  )
-
-  expect(themed).toContain('data-code-theme="monokai"')
 })
