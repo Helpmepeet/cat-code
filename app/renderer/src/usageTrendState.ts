@@ -16,8 +16,8 @@ export function usageDatePosition(summary: UsageRangeSummary, date: string): num
     const first = civilDay(summary.startDate), last = civilDay(summary.endDateExclusive) - DAY_MS;
     return last === first ? 0.5 : (civilDay(date) - first) / (last - first);
 }
-export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | 'requests' | 'errors'): UsageTrendPoint[] {
-    const values = new Map(summary.days.map(day => [day.date, metric === 'cache' ? day.cacheWriteReporting === 'reported' ? usageShare(day.tokens) : null : metric === 'errors' ? day.results ? day.errors / day.results * 100 : null : day.requests]));
+export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | 'cacheReads' | 'requests' | 'errors'): UsageTrendPoint[] {
+    const values = new Map(summary.days.map(day => [day.date, metric === 'cache' ? day.cacheWriteReporting === 'reported' ? usageShare(day.tokens) : null : metric === 'cacheReads' ? day.tokens.read : metric === 'errors' ? day.results ? day.errors / day.results * 100 : null : day.requests]));
     const step = usageBucketDays(summary) * DAY_MS;
     const first = civilDay(summary.startDate), last = civilDay(summary.endDateExclusive) - DAY_MS;
     // Two boundary points describe even very long empty spans without allocating every day.
@@ -25,13 +25,13 @@ export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | '
     for (const day of summary.days) {
         const time = civilDay(day.date);
         if (time - previous > step) {
-            for (const boundary of [previous + step, time - step]) values.set(dayKey(boundary), metric === 'requests' ? 0 : null);
+            for (const boundary of [previous + step, time - step]) values.set(dayKey(boundary), metric === 'requests' || metric === 'cacheReads' ? 0 : null);
         }
         previous = time;
     }
     const finalBucket = first + Math.floor((last - first) / step) * step;
     if (previous < finalBucket) {
-        for (const boundary of [previous + step, finalBucket]) values.set(dayKey(boundary), metric === 'requests' ? 0 : null);
+        for (const boundary of [previous + step, finalBucket]) values.set(dayKey(boundary), metric === 'requests' || metric === 'cacheReads' ? 0 : null);
     }
     return [...values].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value }));
 }

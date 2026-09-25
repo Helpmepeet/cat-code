@@ -52,7 +52,8 @@ test('partial coverage retains visible counts without history banners or an unqu
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
     expect(html).toContain('123');
     expect(html).not.toContain('Partial history');
-    expect(html).toContain('Cached input share unavailable');
+    expect(html).toContain('Cache reads over time');
+    expect(html).not.toContain('Cached input share,');
 });
 
 test('refresh failure retains saved values and exposes retry', () => {
@@ -83,13 +84,15 @@ test('cache writes distinguish unavailable, measured zero, and known partial cou
     range.cacheWriteReporting = 'reported';
     range.tokens.fresh = 10;
     range.cachedInputShare = 0;
-    expect(renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>)).toContain('Cache writes</dt><dd title="0">0');
+    const measuredHtml = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
+    expect(measuredHtml).toContain('Cache writes</dt><dd title="0">0');
+    expect(measuredHtml).toContain('Cached input share, 0 to 100 percent');
     range.cacheWriteReporting = 'partial';
     range.tokens.write = 125;
     expect(renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>)).toContain('Cache writes</dt><dd title="125 reported">125 reported');
 });
 
-test('reported cache days remain visible when another day lacks cache-write data', () => {
+test('cache reads remain visible when cache-write reporting is mixed', () => {
     const range = structuredClone(snapshot.ranges['7d']);
     range.cacheWriteReporting = 'partial';
     range.cachedInputShare = null;
@@ -97,9 +100,24 @@ test('reported cache days remain visible when another day lacks cache-write data
     range.days[0]!.tokens = { fresh: 10, read: 90, write: 0, output: 0 };
     range.days[1]!.cacheWriteReporting = 'unreported';
     const html = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
-    expect(html).toContain('Cache share unavailable');
+    expect(html).toContain('Cache reads over time');
     expect(html).toContain('usage-area-line');
-    expect(html).toContain('Cached input share');
+    expect(html).toContain('Cache reads, 0 to');
+});
+
+test('cache-read history stays plotted when cache writes are unreported', () => {
+    const range = structuredClone(snapshot.ranges['7d']);
+    range.cacheWriteReporting = 'unreported';
+    range.cachedInputShare = null;
+    range.tokens.read = 3_000;
+    range.days[0]!.tokens.read = 1_000;
+    range.days[1]!.tokens.read = 2_000;
+    const html = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
+    expect(html).toContain('Cache reads over time');
+    expect(html).toContain('Cache reads, 0 to');
+    expect(html).toContain('1,000 cache-read tokens');
+    expect(html).toMatch(/<path d="[^"]+" class="usage-area-line"/);
+    expect(html).not.toContain('Cached input share unavailable');
 });
 
 test('missing contributor details do not erase recorded daily totals', () => {
