@@ -12,6 +12,7 @@
 .usage-details-donut-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none; text-align:center; }
 .usage-details-donut-center span { max-width:96px; overflow:hidden; color:var(--usage-secondary); font:11px/1.2 var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
 .usage-details-donut-center strong { margin-top:5px; font:500 25px/1 var(--font-mono); letter-spacing:-.025em; }
+.usage-details-donut-center > strong:only-child { font:500 18px/1.15 var(--font-sans); letter-spacing:-.01em; }
 .usage-details-donut-center small { margin-top:4px; color:var(--usage-secondary); font:11px/1.2 var(--font-mono); }
 .usage-model-key.usage-details-model-key { gap:0; }
 .usage-model-key.usage-details-model-key li + li { border-top:1px solid var(--color-shell-seam); }
