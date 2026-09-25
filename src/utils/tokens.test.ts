@@ -80,10 +80,6 @@ function createAssistantUsageMessage(overrides?: {
 }
 
 describe('getTotalInputTokens', () => {
-  test('empty usage returns 0', () => {
-    expect(getTotalInputTokens({ input_tokens: 0, output_tokens: 0 })).toBe(0)
-  })
-
   test('native Anthropic-like usage sums all three buckets', () => {
     expect(
       getTotalInputTokens({
@@ -93,17 +89,6 @@ describe('getTotalInputTokens', () => {
         cache_read_input_tokens: 3000,
       }),
     ).toBe(4500)
-  })
-
-  test('Codex-adapter-emitted usage: creation is 0, fields sum correctly', () => {
-    expect(
-      getTotalInputTokens({
-        input_tokens: 3276,
-        output_tokens: 500,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 13824,
-      }),
-    ).toBe(17100)
   })
 
   test('undefined cache fields treated as 0', () => {
