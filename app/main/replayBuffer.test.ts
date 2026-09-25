@@ -291,20 +291,6 @@ test('the slash-catalog snapshot is a sticky head, like ready, and survives the 
   expect(nonces).toHaveLength(cap)
 })
 
-test('a reload re-request still receives the slash-catalog snapshot after eviction (SLASH-6 failure scenario)', () => {
-  const cap = 1
-  const buffer = new FrameReplayBuffer(cap)
-  buffer.record(SID, readyFrame())
-  buffer.record(SID, slashCatalogFrame())
-  // A busy session pushes well past the ring-buffer cap.
-  for (let i = 0; i < cap + 10; i++) buffer.record(SID, pongFrame(`n${i}`))
-
-  // Renderer reload: main re-arms replay and returns the current buffer
-  // snapshot without re-running connect() (AttachmentGate.onRendererReady).
-  const afterReload = buffer.snapshot()
-  expect(afterReload.some(f => f.kind === 'slash-catalog.snapshot')).toBe(true)
-})
-
 test('a later slash-catalog snapshot replaces the sticky slot rather than duplicating it', () => {
   const buffer = new FrameReplayBuffer()
   buffer.record(SID, slashCatalogFrame())

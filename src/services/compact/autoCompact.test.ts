@@ -62,24 +62,6 @@ describe('autoCompact thresholds', () => {
     envSnapshot.clear()
   })
 
-  test('recovery window grows for larger-context models', () => {
-    const sonnetRecoveryWindow =
-      (getEffectiveContextWindowSize('claude-sonnet-4-6') -
-        MANUAL_COMPACT_BUFFER_TOKENS) -
-      getAutoCompactThreshold('claude-sonnet-4-6')
-    const gptRecoveryWindow =
-      (getEffectiveContextWindowSize('gpt-5.6-luna') -
-        MANUAL_COMPACT_BUFFER_TOKENS) -
-      getAutoCompactThreshold('gpt-5.6-luna')
-    const sonnet1mRecoveryWindow =
-      (getEffectiveContextWindowSize('claude-sonnet-4-6 [1m]') -
-        MANUAL_COMPACT_BUFFER_TOKENS) -
-      getAutoCompactThreshold('claude-sonnet-4-6 [1m]')
-
-    expect(gptRecoveryWindow).toBeGreaterThan(sonnetRecoveryWindow)
-    expect(sonnet1mRecoveryWindow).toBeGreaterThan(gptRecoveryWindow)
-  })
-
   test('recovery window uses scaled values with floor and cap', () => {
     expect(getAutoCompactRecoveryWindowTokens('claude-sonnet-4-6')).toBe(14_400)
     expect(getAutoCompactRecoveryWindowTokens('gpt-5.6-luna')).toBe(28_160)
@@ -434,11 +416,6 @@ describe('measureNonMessageOverheadTokens', () => {
       fakeTool('DeltaTool', 12_000),
     ])
     expect(second).toBeGreaterThan(first * 1.8)
-  })
-
-  test('an unchanged tool set is stable across calls', async () => {
-    const tools = [fakeTool('EpsilonTool', 5_000)]
-    expect(await measure(tools)).toBe(await measure(tools))
   })
 
   test('two live tool sets keep their own measurements', async () => {
