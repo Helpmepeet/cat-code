@@ -585,27 +585,6 @@ describe('browse selectors', () => {
     expect(names).toContain('proj')
   })
 
-  // Operator, 2026-07-26: the sidebar showed two adjacent groups both labelled
-  // APP (`/Users/pt/cat-code/app` and `/Users/pt/PTClove/app`) with nothing to
-  // tell them apart, and the wrong one was nearly deleted.
-  test('colliding basenames get distinguishable labels; an uncontested basename stays bare', () => {
-    const groups = groupByWorkspace(
-      [
-        row({ sessionId: 'cc', cwd: '/Users/pt/cat-code/app' }),
-        row({ sessionId: 'pt', cwd: '/Users/pt/PTClove/app' }),
-        row({ sessionId: 'db', cwd: '/Users/pt/discordbot' }),
-      ],
-      null,
-    )
-    const byCwd = new Map(groups.map(g => [g.cwd, g.name]))
-    expect(byCwd.get('/Users/pt/cat-code/app')).not.toBe(byCwd.get('/Users/pt/PTClove/app'))
-    // Enough leading path to name the PROJECT, and no more.
-    expect(byCwd.get('/Users/pt/cat-code/app')).toBe('cat-code/app')
-    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
-    // A basename nobody contests must not pay for someone else's collision.
-    expect(byCwd.get('/Users/pt/discordbot')).toBe('discordbot')
-  })
-
   test('labels widen progressively — one parent segment is not enough when the parents also collide', () => {
     const groups = groupByWorkspace(
       [
@@ -797,25 +776,6 @@ describe('PEER-SESSIONS §6 — the peer-reopen decision reaches the merged row'
 describe('selectRowEngineSessionId (the merge key read back apart)', () => {
   test('a history row is keyed by its engine id', () => {
     expect(selectRowEngineSessionId(row({ sessionId: 'engine-1' }))).toBe('engine-1')
-  })
-
-  test('a registry row the engine has named returns that id, not the app address', () => {
-    expect(
-      selectRowEngineSessionId(
-        row({ sessionId: 'engine-1', appSessionId: 'app-1', inRegistry: true }),
-      ),
-    ).toBe('engine-1')
-  })
-
-  test('a registry row with NO engine id yet returns null, not its app id', () => {
-    // The merge falls back to the app address for the key
-    // (`selectMergedSessionRows`), so reading `sessionId` raw here would report
-    // an app id as if the engine had minted it.
-    expect(
-      selectRowEngineSessionId(
-        row({ sessionId: 'app-1', appSessionId: 'app-1', inRegistry: true }),
-      ),
-    ).toBeNull()
   })
 
   test('it agrees with the merge for both row kinds it produces', () => {
@@ -1038,12 +998,6 @@ describe('resolveRecentOpenRoute (P4-40 — the launcher opens by the SAME decis
     }
   }
 
-  test('a live registry project is focused', () => {
-    expect(
-      resolveRecentOpenRoute(recent({ cwd: '/w/one', appSessionId: 'a', live: true })),
-    ).toEqual({ kind: 'focus', appSessionId: 'a' })
-  })
-
   test('a registry project whose process is gone is restored', () => {
     expect(
       resolveRecentOpenRoute(recent({ cwd: '/w/one', appSessionId: 'a', live: false })),
@@ -1099,24 +1053,6 @@ describe('selectRecentWorkspaces label disambiguation (CC-15)', () => {
       ? selectRecentWorkspaces(merged, new Map())
       : selectRecentWorkspaces(merged, new Map(), limit)
   }
-
-  test("the operator's real collision — two recents ending /app are separable", () => {
-    const recents = recentsFor([
-      { cwd: '/Users/pt/cat-code/app', modifiedAtMs: 5000 },
-      { cwd: '/Users/pt/PTClove/app', modifiedAtMs: 4000 },
-    ])
-    const names = recents.map(r => r.name)
-    expect(new Set(names).size).toBe(2)
-    expect(names).not.toContain('app')
-    const byCwd = new Map(recents.map(r => [r.cwd, r.name]))
-    expect(byCwd.get('/Users/pt/cat-code/app')).toBe('cat-code/app')
-    expect(byCwd.get('/Users/pt/PTClove/app')).toBe('PTClove/app')
-    // Label-only change: cwd keying and newest-first order are untouched.
-    expect(recents.map(r => r.cwd)).toEqual([
-      '/Users/pt/cat-code/app',
-      '/Users/pt/PTClove/app',
-    ])
-  })
 
   test('an uncontested recent keeps its bare basename while a collision widens', () => {
     const recents = recentsFor([

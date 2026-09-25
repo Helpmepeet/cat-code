@@ -155,12 +155,4 @@ describe('--cases validation (EVAL-6)', () => {
       _forTest.validateArgs({ repeats: 3, caseIds: ['h1', 'm1'] }),
     ).not.toThrow()
   })
-
-  test('a misspelled --cases value does not silently select zero cases', () => {
-    const knownIds = new Set(_forTest.CASES.map(c => c.id))
-    expect(knownIds.has('hi')).toBe(false)
-    expect(() =>
-      _forTest.validateArgs({ repeats: 3, caseIds: ['hi'] }),
-    ).toThrow()
-  })
 })

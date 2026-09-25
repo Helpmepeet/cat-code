@@ -12,7 +12,6 @@ import {
   reduceSubmitAnswers,
   RETAINED_SUBMIT_CAP,
   selectRetainedSubmit,
-  selectSubmitAnswer,
 } from './composerState.js'
 import {
   applyMention,
@@ -1496,31 +1495,6 @@ describe('D5 — a refused submit comes back, images included', () => {
     expect(reduceRetainedSubmitSettled(state, S1, 'sub-2')).toBe(state)
   })
 
-  test('only a submit answer is an answer', () => {
-    expect(selectSubmitAnswer(submitAnswerFrame(S1, 'sub-1', false))).toEqual({
-      submitId: 'sub-1',
-      accepted: false,
-    })
-    expect(selectSubmitAnswer(submitAnswerFrame(S1, 'sub-1', true))).toEqual({
-      submitId: 'sub-1',
-      accepted: true,
-    })
-    // Every frame the old reading leaned on. Each of these settled a retained
-    // submit before, and each has producers that have nothing to do with one.
-    expect(selectSubmitAnswer(userMessageFrame(S1))).toBeNull()
-    expect(selectSubmitAnswer(errorFrame(S1))).toBeNull()
-    expect(selectSubmitAnswer(stagedSnapshotFrame(S1))).toBeNull()
-    expect(selectSubmitAnswer(turnStatusFrame(S1, false))).toBeNull()
-    expect(
-      selectSubmitAnswer({
-        kind: 'lifecycle',
-        protocolVersion: 2,
-        sessionId: S1,
-        status: 'exited',
-      } as ServerFrame),
-    ).toBeNull()
-  })
-
   test('a realistic mid-turn batch restores the submit that was actually refused', () => {
     // THE REGRESSION THIS FILE EXISTS FOR, and it is only visible against a real
     // frame sequence. Two submits are outstanding; the first was staged into the
@@ -1547,6 +1521,12 @@ describe('D5 — a refused submit comes back, images included', () => {
       toolResultFrame(S1),
       stagedSnapshotFrame(S1),
       turnStatusFrame(S1, false),
+      {
+        kind: 'lifecycle',
+        protocolVersion: 2,
+        sessionId: S1,
+        status: 'exited',
+      } as ServerFrame,
       submitAnswerFrame(S1, 'sub-refused', false),
     ]
     const outcome = reduceSubmitAnswers(state, batch)

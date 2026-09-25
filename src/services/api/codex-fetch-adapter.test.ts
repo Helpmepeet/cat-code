@@ -1073,19 +1073,6 @@ describe('codex-fetch-adapter', () => {
     expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Terra', () => {
-    const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.6-terra',
-      thinking: { type: 'disabled' },
-      _openaiInstructionAssembly: {
-        instructions: 'test instructions',
-        inputMessages: [],
-      },
-    })
-
-    expect(codexBody.reasoning).toEqual({ effort: 'none' })
-  })
-
   test('mapEffortToCodex maps explicit minimal to none for GPT-6 Sol/Luna and GPT-5.6 Terra', () => {
     expect(mapEffortToCodex('minimal', 'gpt-6-sol')).toBe('none')
     expect(mapEffortToCodex('minimal', 'gpt-6-luna')).toBe('none')

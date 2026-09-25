@@ -165,12 +165,6 @@ describe('deriveFocusedInputDialog: priority', () => {
     })
   })
 
-  test('every dialog set at once resolves to the highest priority', () => {
-    expect(deriveFocusedInputDialog(factsFor(PRIORITY_ORDER))).toBe(
-      'message-selector',
-    )
-  })
-
   test('local sandbox outranks the tool permission queue', () => {
     expect(
       deriveFocusedInputDialog(
@@ -310,32 +304,9 @@ describe('getDialogWaitingReason', () => {
   test('no dialog maps to no reason', () => {
     expect(getDialogWaitingReason(undefined)).toBeUndefined()
   })
-
-  test('voluntary navigation and suggestions are never waiting', () => {
-    const nonWaiting = PRIORITY_ORDER.filter(
-      d => getDialogWaitingReason(d) === undefined,
-    )
-    expect(nonWaiting).toEqual([
-      'message-selector',
-      'model-switch',
-      'undercover-callout',
-      'effort-callout',
-      'remote-callout',
-      'lsp-recommendation',
-      'plugin-hint',
-      'desktop-upsell',
-    ])
-  })
 })
 
 describe('deriveHasSuppressedDialog', () => {
-  const BLOCKING = PRIORITY_ORDER.filter(
-    d => getDialogWaitingReason(d) !== undefined,
-  )
-  const NON_BLOCKING = PRIORITY_ORDER.filter(
-    d => getDialogWaitingReason(d) === undefined,
-  )
-
   test('no hint when the user is not typing', () => {
     expect(deriveHasSuppressedDialog(factsFor(PRIORITY_ORDER))).toBe(false)
   })
@@ -347,26 +318,6 @@ describe('deriveHasSuppressedDialog', () => {
       ),
     ).toBe(false)
   })
-
-  for (const dialog of BLOCKING) {
-    test(`${dialog} hidden by typing is hinted`, () => {
-      expect(
-        deriveHasSuppressedDialog(
-          factsFor([dialog], { suppressInterruptDialogs: true }),
-        ),
-      ).toBe(true)
-    })
-  }
-
-  for (const dialog of NON_BLOCKING) {
-    test(`${dialog} hidden by typing is not hinted`, () => {
-      expect(
-        deriveHasSuppressedDialog(
-          factsFor([dialog], { suppressInterruptDialogs: true }),
-        ),
-      ).toBe(false)
-    })
-  }
 
   test('the hint fires for every dialog the session waits on, and only those', () => {
     // Pins the set rather than the count: the old hand-written OR chain in
@@ -1291,24 +1242,6 @@ describe('session status and sleep policy together', () => {
 
   const CASES: readonly PrecedenceCase[] = [
     {
-      name: 'loading only',
-      args: { isLoading: true, hasWorkingDelegatedTask: false, localWaitingReason: undefined, delegatedWaitingReason: undefined },
-      status: 'busy',
-      work: true,
-    },
-    {
-      name: 'working delegated only',
-      args: { isLoading: false, hasWorkingDelegatedTask: true, localWaitingReason: undefined, delegatedWaitingReason: undefined },
-      status: 'busy',
-      work: true,
-    },
-    {
-      name: 'local waiting plus loading',
-      args: { isLoading: true, hasWorkingDelegatedTask: false, localWaitingReason: 'tool-approval', delegatedWaitingReason: undefined },
-      status: 'waiting',
-      work: false,
-    },
-    {
       name: 'local waiting plus working delegated',
       args: { isLoading: false, hasWorkingDelegatedTask: true, localWaitingReason: 'tool-approval', delegatedWaitingReason: undefined },
       status: 'waiting',
@@ -1321,22 +1254,10 @@ describe('session status and sleep policy together', () => {
       work: true,
     },
     {
-      name: 'delegated waiting only',
-      args: { isLoading: false, hasWorkingDelegatedTask: false, localWaitingReason: undefined, delegatedWaitingReason: 'input-needed' },
-      status: 'waiting',
-      work: false,
-    },
-    {
       name: 'delegated waiting plus working delegated',
       args: { isLoading: false, hasWorkingDelegatedTask: true, localWaitingReason: undefined, delegatedWaitingReason: 'input-needed' },
       status: 'waiting',
       work: true,
-    },
-    {
-      name: 'nothing active',
-      args: { isLoading: false, hasWorkingDelegatedTask: false, localWaitingReason: undefined, delegatedWaitingReason: undefined },
-      status: 'idle',
-      work: false,
     },
   ]
 

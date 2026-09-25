@@ -1494,17 +1494,6 @@ describe('isSessionLive (HOST-REQUEST-PLANE — liveness, not membership)', () =
     expect(isSessionLive([], 'ready-1')).toBe(false)
   })
 
-  test('the predicate agrees with the host own liveness rule', () => {
-    // `Host.liveCount()` counts exactly `!isTerminalStatus`. If these two drift,
-    // the control plane and the peer plane disagree about which sessions exist.
-    for (const status of ['spawning', 'connecting', 'ready', 'disconnected'] as const) {
-      expect(isLiveSidecarStatus(status)).toBe(true)
-    }
-    for (const status of ['exited', 'failed'] as const) {
-      expect(isLiveSidecarStatus(status)).toBe(false)
-    }
-  })
-
   test('EXISTENCE is not readiness, over all six statuses', () => {
     // The whole reason there are two predicates. `isLiveSidecarStatus` answers
     // whether a session exists and must keep agreeing with `Host.liveCount()`;

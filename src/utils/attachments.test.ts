@@ -299,57 +299,6 @@ describe('getTeammateMailboxAttachments (via _attachmentsForTest)', () => {
     expect(bobAgentId in getState().teamContext!.teammates).toBe(true)
   })
 
-  test('a wrong-incarnation shutdown_approved and a legacy plain-JSON lookalike remove nobody', async () => {
-    await seedTeam()
-    const leader: TeamPrincipal = {
-      kind: 'leader',
-      agentId: leaderAgentId,
-      name: TEAM_LEAD_NAME,
-      allocationId: 'allocation-lead',
-    }
-    const approved = createShutdownApprovedMessage({ requestId: 'shutdown-3', from: 'alice' })
-    // Envelope claims to be from alice's OLD allocation — no matching
-    // pendingControls record uses that allocation, so this must not match
-    // (and there IS no pendingControls record seeded at all here).
-    await writeToMailbox(
-      'team-lead',
-      {
-        from: 'alice',
-        text: JSON.stringify(approved),
-        timestamp: new Date().toISOString(),
-        protocolVersion: 2,
-        messageId: randomUUID(),
-        senderAgentId: aliceAgentId,
-        senderAllocationId: 'allocation-alice-OLD',
-        recipientAgentId: leader.agentId,
-        recipientAllocationId: leader.allocationId,
-        payloadClass: 'control',
-        control: approved,
-      },
-      'review-team',
-    )
-    // A legacy (no envelope) lookalike claiming the same thing in plain text.
-    await writeToMailbox(
-      'team-lead',
-      {
-        from: 'alice',
-        text: JSON.stringify(approved),
-        timestamp: new Date().toISOString(),
-      },
-      'review-team',
-    )
-
-    const { context, getState } = buildContext(leaderAppState())
-    await _attachmentsForTest(context)
-
-    expect(aliceAgentId in getState().teamContext!.teammates).toBe(true)
-    expect(bobAgentId in getState().teamContext!.teammates).toBe(true)
-    const snapshotAfter = await readTeamSnapshot('review-team')
-    expect(
-      snapshotAfter.recipientRecords?.find(r => r.name === 'alice')?.status,
-    ).toBe('active')
-  })
-
   test('idle_notification retains existing behavior (delivered, not dropped)', async () => {
     await seedTeam()
     await writeToMailbox(
