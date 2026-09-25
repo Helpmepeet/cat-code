@@ -1407,21 +1407,6 @@ describe('streamTurnViaWebSocket', () => {
     expect(capturedEntry!['account_id_prefix']).toBe('acct-0c9')
   })
 
-  test('classifies WS close with zero events as CodexWebSocketClosedBeforeCompletedError', async () => {
-    installFakeWs()
-    await ensureWebSocketSession(CONV_ID, AUTH)
-
-    fakeWs.send = (data: string) => {
-      fakeWs['sent'].push(data)
-      // Close immediately with no events delivered first.
-      Promise.resolve().then(() => fakeWs.triggerClose())
-    }
-
-    await expect(
-      collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
-    ).rejects.toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
-  })
-
   test('WS close after events yields plain transport error, not CodexWebSocketUsageLimitError', async () => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)

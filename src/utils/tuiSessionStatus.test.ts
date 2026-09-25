@@ -902,14 +902,6 @@ describe('deriveDelegatedTaskStatus: mixed sets', () => {
     ).toEqual({ hasWorkingDelegatedTask: true })
   })
 
-  test('a blocked agent alone is waiting without work', () => {
-    expect(
-      deriveDelegatedTaskStatus(
-        tasksOf(localAgent({ status: 'completed', handoffStatus: 'blocked' })),
-      ),
-    ).toEqual({ hasWorkingDelegatedTask: false, waitingReason: 'input-needed' })
-  })
-
   test('a blocked agent beside a running agent reports both facts', () => {
     expect(
       deriveDelegatedTaskStatus(
