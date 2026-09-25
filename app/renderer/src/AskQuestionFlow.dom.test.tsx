@@ -685,3 +685,29 @@ test('unmounting hands the keyboard back to whatever had it', async () => {
   expect(document.activeElement).toBe(before)
   before.remove()
 })
+
+test('deactivating a pane releases focus from its question option', async () => {
+  const previous = document.createElement('button')
+  document.body.appendChild(previous)
+  await focusIn(previous)
+
+  const calls: Calls = { answers: [], cancels: 0 }
+  const props = {
+    onAnswer: (answers: AskUserQuestionAnswer[]) => calls.answers.push(answers),
+    onCancel: () => { calls.cancels += 1 },
+    questions: SINGLE,
+    requestId: 'perm-switch',
+  }
+  const tree = await harness.mount(<AskQuestionFlow {...props} isActivePane />)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  const card = tree.container.querySelector('section') as HTMLElement
+  const option = optionRows(card)[1]!
+  await focusIn(option)
+  expect(document.activeElement).toBe(option)
+
+  await tree.render(<AskQuestionFlow {...props} isActivePane={false} />)
+  expect(document.activeElement).toBe(previous)
+  await press(previous, 'Enter')
+  expect(calls.answers).toHaveLength(0)
+  previous.remove()
+})

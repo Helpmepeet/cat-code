@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality } from './statsReader.js';
 import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
-import { localDateKey } from './usageWindow.js';
+import { localDateKey, shiftLocalCalendarDays } from './usageWindow.js';
 import { projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
@@ -168,16 +168,26 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             }
         }
         const hasRecordBetween = (start: number, end: number) => db.query('SELECT 1 FROM records WHERE timestamp > ? AND timestamp <= ? LIMIT 1').get(start, end);
-        const newlyEligible = saved && hasRecordBetween(Date.parse(saved.asOf), Date.parse(asOf));
         const timezone = options.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const newlyEligible = saved && hasRecordBetween(Date.parse(saved.asOf), Date.parse(asOf));
+        const newlyEligibleComparison = saved && ([7, 30] as const).some(days =>
+            hasRecordBetween(
+                shiftLocalCalendarDays(Date.parse(saved.asOf), -days, timezone),
+                shiftLocalCalendarDays(Date.parse(asOf), -days, timezone),
+            ),
+        );
         let snapshot: UsageDashboardSnapshot;
-        // Within one local calendar day, totals remain valid until a new record
-        // crosses the current cutoff. Prior calendar windows have fixed boundaries.
-        if (!changed && saved && saved.timezone === timezone && asOf >= saved.asOf && localDateKey(Date.parse(asOf), timezone) === localDateKey(Date.parse(saved.asOf), timezone) && !newlyEligible) {
+        // Within one local day, reuse totals only while both current and prior
+        // observed cutoffs have admitted no additional records.
+        if (!changed && saved && saved.timezone === timezone && asOf >= saved.asOf && localDateKey(Date.parse(asOf), timezone) === localDateKey(Date.parse(saved.asOf), timezone) && !newlyEligible && !newlyEligibleComparison) {
             snapshot = structuredClone(saved);
             snapshot.asOf = asOf;
             snapshot.computedAt = new Date().toISOString();
             snapshot.snapshotId = randomUUID();
+            for (const days of [7, 30] as const) {
+                const prior = snapshot.ranges[days === 7 ? '7d' : '30d'].previousPeriod;
+                if (prior) prior.endInclusive = new Date(shiftLocalCalendarDays(Date.parse(asOf), -days, timezone)).toISOString();
+            }
         } else {
             const get = db.query<{ value: string }, [string, string]>('SELECT value FROM identities WHERE kind=? AND key=?');
             const put = db.query('INSERT OR REPLACE INTO identities VALUES (?,?,?)');

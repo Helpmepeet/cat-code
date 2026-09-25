@@ -75,6 +75,24 @@ export function localHourParts(timestamp: number, timeZone: string): { hour: num
     return { hour: Number(parts.hour), offsetMinutes: offset?.[1] === '-' ? -magnitude : magnitude };
 }
 
+/** Shift a cutoff by calendar days while keeping its local wall-clock time. */
+export function shiftLocalCalendarDays(timestamp: number, days: number, timeZone: string): number {
+    const base = timestamp + days * 86400000;
+    const currentOffset = localHourParts(timestamp, timeZone).offsetMinutes;
+    let guess = base, previous = Number.NaN;
+    for (let attempt = 0; attempt < 6; attempt++) {
+        const targetOffset = localHourParts(guess, timeZone).offsetMinutes;
+        const next = base + (currentOffset - targetOffset) * 60000;
+        if (next === guess) return next;
+        // A target wall time in a spring-forward gap has no exact instant.
+        // Choose the first real time after the gap instead of oscillating.
+        if (next === previous) return Math.max(guess, next);
+        previous = guess;
+        guess = next;
+    }
+    return guess;
+}
+
 export function localDayHours(date: string, timeZone: string, withTokens: boolean): UsageHour[] {
     const start = localMidnight(date, timeZone);
     const end = localMidnight(addCalendarDays(date, 1), timeZone);

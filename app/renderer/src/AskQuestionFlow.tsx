@@ -205,7 +205,7 @@ export function AskQuestionFlow({
       // left the keyboard on <body>. Restore when we still hold focus, or when
       // it fell to the body because our node went away.
       const active = document.activeElement
-      if (active === node || active === null || active === document.body) {
+      if (active === node || node.contains(active) || active === null || active === document.body) {
         previous.focus()
       }
     }

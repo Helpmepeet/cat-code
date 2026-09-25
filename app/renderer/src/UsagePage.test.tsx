@@ -4,7 +4,7 @@ import { UsagePage } from './UsagePage.js';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { initialUsageDashboardState, reduceUsageDashboard } from './usageDashboardState.js';
 import { usageGraphColors } from './usageGraphState.js';
-import { UsageModelDonut } from './UsageOverviewDetails.js';
+import { UsageCacheSummary, UsageModelDonut } from './UsageOverviewDetails.js';
 
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 function populated() {
@@ -21,6 +21,13 @@ test('loading, failure and confirmed empty history are distinct', () => {
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     expect(html).toContain('No recorded activity in this period.');
     expect(html).not.toContain('usage-flow-chart');
+
+    const incomplete = structuredClone(snapshot);
+    incomplete.coverage.state = 'partial';
+    incomplete.coverage.parseErrors = 1;
+    const partialHtml = renderToStaticMarkup(<UsagePage state={{ snapshot: incomplete, status: 'ready' }}/>);
+    expect(partialHtml).toContain('Activity for this period is incomplete.');
+    expect(partialHtml).not.toContain('No recorded activity in this period.');
 });
 
 test('auto-mode attempts count as activity even without token records', () => {
@@ -77,6 +84,19 @@ test('cache writes remain visible as unavailable or measured zero', async () => 
     range.tokens.fresh = 10;
     range.cachedInputShare = 0;
     expect(renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>)).toContain('Cache writes</dt><dd title="0">0');
+});
+
+test('reported cache days remain visible when another day lacks cache-write data', () => {
+    const range = structuredClone(snapshot.ranges['7d']);
+    range.cacheWriteReporting = 'partial';
+    range.cachedInputShare = null;
+    range.days[0]!.cacheWriteReporting = 'reported';
+    range.days[0]!.tokens = { fresh: 10, read: 90, write: 0, output: 0 };
+    range.days[1]!.cacheWriteReporting = 'unreported';
+    const html = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
+    expect(html).toContain('Cache share unavailable');
+    expect(html).toContain('usage-area-line');
+    expect(html).toContain('Cached input share');
 });
 
 test('missing contributor details do not erase recorded daily totals', () => {

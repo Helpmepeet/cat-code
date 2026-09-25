@@ -2,7 +2,7 @@ import { usageCategory as category } from './usageCategory.js';
 import { basename, dirname, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readStatsRecords, type StatsRecord } from './statsReader.js';
-import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, localMidnight, usageWindow, usageTimestampEligible } from './usageWindow.js';
+import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, localMidnight, shiftLocalCalendarDays, usageWindow, usageTimestampEligible } from './usageWindow.js';
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts } from './modelCostRates.js';
@@ -225,7 +225,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const current = usageWindow(days, asOf, timezone);
         const priorStart = addCalendarDays(current.startDate, -days);
         const start = localMidnight(priorStart, timezone);
-        const end = Date.parse(current.startInclusive) - 1;
+        const end = shiftLocalCalendarDays(cutoff, -days, timezone);
         return { days, start, end, sessions: new Set(), activeDays: new Set(), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, summary: {
             startInclusive: new Date(start).toISOString(), endInclusive: new Date(end).toISOString(),
             tokens: zero(), sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
@@ -1140,5 +1140,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 14, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 15, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

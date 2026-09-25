@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { localDayHours, usageTimestampEligible, usageWindow } from './usageWindow.js';
+import { localDayHours, shiftLocalCalendarDays, usageTimestampEligible, usageWindow } from './usageWindow.js';
 import { usageHourLabel } from '../../app/renderer/src/usageGraphState.js';
 test('local calendar windows preserve date count and instant bounds across zones', () => {
     for (const tz of ['UTC', 'America/New_York', 'Europe/Berlin', 'Asia/Kathmandu', 'Pacific/Auckland']) {
@@ -39,4 +39,11 @@ test('half-hour DST slots keep the displayed local minute', () => {
     expect(hours).toHaveLength(24);
     expect(hours.find(hour => hour.hour === 2)).toMatchObject({ offsetMinutes: 660 });
     expect(usageHourLabel(hours.find(hour => hour.hour === 2)!)).toBe('02:30');
+});
+test('shifted comparison cutoffs preserve local wall time across DST', () => {
+    const zone = 'America/New_York';
+    expect(new Date(shiftLocalCalendarDays(Date.parse('2026-03-10T16:30:00.000Z'), -7, zone)).toISOString()).toBe('2026-03-03T17:30:00.000Z');
+    expect(new Date(shiftLocalCalendarDays(Date.parse('2025-11-04T17:30:00.000Z'), -7, zone)).toISOString()).toBe('2025-10-28T16:30:00.000Z');
+    // The missing 02:30 at spring-forward resolves to the first real 03:30.
+    expect(new Date(shiftLocalCalendarDays(Date.parse('2025-03-16T06:30:00.000Z'), -7, zone)).toISOString()).toBe('2025-03-09T07:30:00.000Z');
 });

@@ -450,12 +450,12 @@ test('previous periods use local calendar bounds and canonical distinct-session 
     ]);
     const previous = (await collectRetainedUsage([path], asOf)).ranges['7d'].previousPeriod!;
     expect(previous).toMatchObject({
-        startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T23:59:59.999Z',
-        tokens: { fresh: 130, read: 9, write: 12, output: 6 }, sessions: 1, records: 3, requests: 3, activeDays: 2,
+        startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T12:00:00.000Z',
+        tokens: { fresh: 30, read: 6, write: 8, output: 4 }, sessions: 1, records: 2, requests: 2, activeDays: 2,
     });
-    expect(previous.cachedInputShare).toBe(9 / 151 * 100);
+    expect(previous.cachedInputShare).toBe(6 / 44 * 100);
     expect((await collectRetainedUsage([path], asOf)).ranges['30d'].previousPeriod).toMatchObject({
-        startInclusive: '2026-07-16T00:00:00.000Z', endInclusive: '2026-08-14T23:59:59.999Z',
+        startInclusive: '2026-07-16T00:00:00.000Z', endInclusive: '2026-08-14T12:00:00.000Z',
         tokens: { fresh: 11, read: 6, write: 8, output: 4 }, sessions: 1, requests: 2, activeDays: 2,
     });
     expect((await collectRetainedUsage([path], asOf)).ranges.all.previousPeriod).toBeUndefined();

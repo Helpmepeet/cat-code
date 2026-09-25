@@ -1,5 +1,6 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, } from './usageDashboard.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
+import { shiftLocalCalendarDays } from '../../src/utils/usageWindow.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -288,12 +289,12 @@ function validHours(value: UsageDay, timezone: string, withTokens: boolean, asOf
     }
     return safe(requests) && requests === value.requests && (!withTokens || safe(tokens) && tokens === tokenSum(value.tokens));
 }
-function previousPeriod(v: unknown, range: '7d' | '30d', rangeStartDate: string, timezone: string): v is UsagePreviousPeriod {
+function previousPeriod(v: unknown, range: '7d' | '30d', rangeStartDate: string, asOf: string, timezone: string): v is UsagePreviousPeriod {
     if (!obj(v) || !ownKeys(v, ['startInclusive', 'endInclusive', 'tokens', 'sessions', 'records', 'requests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting']) || !instant(v.startInclusive) || !instant(v.endInclusive) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.activeDays) || v.sessions > v.records || (v.cacheWriteReporting === 'unreported' || v.cacheWriteReporting === 'unavailable') && v.tokens.write !== 0)
         return false;
     const days = range === '7d' ? 7 : 30;
     const start = localMidnightAt(addDays(rangeStartDate, -days), timezone);
-    const end = localMidnightAt(rangeStartDate, timezone) - 1;
+    const end = shiftLocalCalendarDays(Date.parse(asOf), -days, timezone);
     if (v.startInclusive !== new Date(start).toISOString() || v.endInclusive !== new Date(end).toISOString() || v.activeDays > days || (v.activeDays === 0 && (v.records !== 0 || v.requests !== 0 || tokenSum(v.tokens) !== 0)))
         return false;
     const prompt = v.tokens.fresh + v.tokens.read + v.tokens.write;
@@ -304,7 +305,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
         return false;
     const all = v.range === 'all';
     if (all && v.previousPeriod !== undefined) return false;
-    if (v.range !== 'all' && v.previousPeriod !== undefined && !previousPeriod(v.previousPeriod, v.range, v.startDate as string, timezone)) return false;
+    if (v.range !== 'all' && v.previousPeriod !== undefined && !previousPeriod(v.previousPeriod, v.range, v.startDate as string, asOf, timezone)) return false;
     const n = v.range === '7d' ? 7 : 30;
     const bucketDays = v.bucketDays ?? 1;
     if (!safe(bucketDays) || bucketDays < 1 || (!all && v.bucketDays !== undefined)) return false;
@@ -380,7 +381,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 14 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 15 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];
