@@ -112,12 +112,37 @@ test('subpixel model areas use a stable centerline without inflating the fill', 
     summary.days[0]!.models = [{ id: 'luna', total: big.fresh }, { id: 'astra', total: tiny.fresh }];
     const tree = await harness.mount(<UsageTokenFlow summary={summary} colors={usageModelColors(summary.models)} selected="" onSelect={() => {}} partial={false}/>);
     await act(async () => Array.from(tree.container.querySelectorAll('button')).find(button => button.textContent === 'By model')!.click());
+    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(button => button.textContent === 'All models')!.click());
 
     const indicator = tree.container.querySelector('.usage-flow-thin-series');
     expect(indicator?.getAttribute('stroke')).toBe('var(--usage-model-yellow)');
     expect(indicator?.getAttribute('stroke-width')).toBe('1');
     expect(indicator?.getAttribute('stroke-linecap')).toBe('round');
     expect(tree.container.querySelector('[fill="var(--usage-model-yellow)"]')?.hasAttribute('stroke')).toBe(false);
+});
+
+test('current model chart keeps GPT-6 usage visible and reveals retired model history on demand', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    const summary = snapshot.ranges['7d'];
+    const models = [
+        { id: 'old-sol', label: 'gpt-5.6-sol', kind: 'named' as const, tokens: { fresh: 1000, read: 0, write: 0, output: 0 } },
+        { id: 'old-luna', label: 'gpt-5.6-luna', kind: 'named' as const, tokens: { fresh: 900, read: 0, write: 0, output: 0 } },
+        { id: 'new-sol', label: 'gpt-6-sol', kind: 'named' as const, tokens: { fresh: 100, read: 0, write: 0, output: 0 } },
+        { id: 'new-luna', label: 'gpt-6-luna', kind: 'named' as const, tokens: { fresh: 50, read: 0, write: 0, output: 0 } },
+    ];
+    summary.models = models;
+    summary.tokens.fresh = 2050;
+    summary.days[0]!.models = models.map(model => ({ id: model.id, total: model.tokens.fresh }));
+    const tree = await harness.mount(<UsageTokenFlow summary={summary} colors={usageModelColors(models)} selected="" onSelect={() => {}} partial={false}/>);
+    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(button => button.textContent === 'By model')!.click());
+    const legend = () => tree.container.querySelector('.usage-flow-legend')!.textContent!;
+    expect(legend()).toContain('gpt-6-sol');
+    expect(legend()).toContain('gpt-6-luna');
+    expect(legend()).not.toContain('gpt-5.6-sol');
+    expect(legend()).not.toContain('gpt-5.6-luna');
+    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(button => button.textContent === 'All models')!.click());
+    expect(legend()).toContain('gpt-5.6-sol');
+    expect(legend()).toContain('gpt-5.6-luna');
 });
 
 test('model families keep reference colors while range totals place small series inward', () => {

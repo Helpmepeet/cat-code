@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
+import { isRetiredUsageModel } from '../../shared/usageModelStatus.js';
 import { UsageAreaTrend } from './UsageAreaTrend.js';
 import { UsageCacheChart } from './UsageDashboardCharts.js';
 import { UsageToolErrorTrend } from './UsageToolErrorTrend.js';
@@ -28,18 +29,22 @@ function share(value: number, total: number) { return usagePercent(total ? value
 export function UsageModelDonut({ summary, colors }: { summary: UsageRangeSummary; colors: Record<string, string> }) {
     const [selected, setSelected] = useState('');
     const [hovered, setHovered] = useState('');
-    const total = usageTotal(summary.tokens), active = summary.models.find(model => model.id === (hovered || selected));
-    const modelCount = summary.models.filter(model => model.kind === 'named').length + summary.detail.omittedModels;
+    const [showAllModels, setShowAllModels] = useState(false);
+    const hasRetiredModels = summary.models.some(isRetiredUsageModel);
+    const models = hasRetiredModels && !showAllModels ? summary.models.filter(model => !isRetiredUsageModel(model)) : summary.models;
+    const total = models.reduce((sum, model) => sum + usageTotal(model.tokens), 0);
+    const active = models.find(model => model.id === (hovered || selected));
+    const modelCount = models.filter(model => model.kind === 'named').length + (showAllModels || !hasRetiredModels ? summary.detail.omittedModels : 0);
     const select = (id: string) => setSelected(current => current === id ? '' : id);
-    return <div className="usage-model-mix usage-details-model-mix">
+    return <>{hasRetiredModels && <div className="usage-range usage-model-scope" role="group" aria-label="Model history"><button type="button" aria-pressed={!showAllModels} onClick={() => setShowAllModels(false)}>Current</button><button type="button" aria-pressed={showAllModels} onClick={() => setShowAllModels(true)}>All models</button></div>}<div className="usage-model-mix usage-details-model-mix">
         <div className={`usage-details-donut${active ? ' is-active' : ''}`}>
-            <svg className="usage-model-donut" viewBox="-6 -6 196 196" role="group" aria-label={`Model usage: ${usageNumber(total)} tokens`}>
-                {donutArcs(summary, total).map(({ model, share: modelShare, path }) => <path key={model.id} d={path} fill={colors[model.id]} className={`${active && active.id !== model.id ? 'usage-model-muted' : ''}${selected === model.id ? ' usage-model-selected' : ''}`} tabIndex={0} role="button" aria-label={`${model.label}: ${usageNumber(usageTotal(model.tokens))} tokens, ${usagePercent(modelShare * 100)}`} aria-pressed={selected === model.id} onMouseEnter={() => setHovered(model.id)} onMouseLeave={() => setHovered('')} onFocus={() => setHovered(model.id)} onBlur={() => setHovered('')} onClick={() => select(model.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(model.id); } else if (event.key === 'Escape') { setSelected(''); setHovered(''); } }}/>)}
+            <svg className="usage-model-donut" viewBox="-6 -6 196 196" role="group" aria-label={`${hasRetiredModels && !showAllModels ? 'Current model usage' : 'Model usage'}: ${usageNumber(total)} tokens`}>
+                {donutArcs({ ...summary, models }, total).map(({ model, share: modelShare, path }) => <path key={model.id} d={path} fill={colors[model.id]} className={`${active && active.id !== model.id ? 'usage-model-muted' : ''}${selected === model.id ? ' usage-model-selected' : ''}`} tabIndex={0} role="button" aria-label={`${model.label}: ${usageNumber(usageTotal(model.tokens))} tokens, ${usagePercent(modelShare * 100)}`} aria-pressed={selected === model.id} onMouseEnter={() => setHovered(model.id)} onMouseLeave={() => setHovered('')} onFocus={() => setHovered(model.id)} onBlur={() => setHovered('')} onClick={() => select(model.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(model.id); } else if (event.key === 'Escape') { setSelected(''); setHovered(''); } }}/>)}
             </svg>
             <div className="usage-details-donut-center" aria-hidden="true">{active ? <><span>{active.label}</span><strong>{share(usageTotal(active.tokens), total)}</strong><small>{usageCompact(usageTotal(active.tokens))} tokens</small></> : <strong>{modelCount} {modelCount === 1 ? 'model' : 'models'}</strong>}</div>
         </div>
-        <ul className="usage-model-key usage-details-model-key">{summary.models.map(model => { const value = usageTotal(model.tokens); return <li key={model.id}><button type="button" aria-pressed={selected === model.id} className={active && active.id !== model.id ? 'usage-model-muted' : ''} onMouseEnter={() => setHovered(model.id)} onMouseLeave={() => setHovered('')} onFocus={() => setHovered(model.id)} onBlur={() => setHovered('')} onClick={() => select(model.id)}><svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2.5" fill={colors[model.id]}/></svg><span>{model.label}</span><b title={`${usageNumber(value)} tokens`}>{usageCompact(value)}</b><small>{share(value, total)}</small></button></li>; })}</ul>
-    </div>;
+        <ul className="usage-model-key usage-details-model-key">{models.map(model => { const value = usageTotal(model.tokens); return <li key={model.id}><button type="button" aria-pressed={selected === model.id} className={active && active.id !== model.id ? 'usage-model-muted' : ''} onMouseEnter={() => setHovered(model.id)} onMouseLeave={() => setHovered('')} onFocus={() => setHovered(model.id)} onBlur={() => setHovered('')} onClick={() => select(model.id)}><svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2.5" fill={colors[model.id]}/></svg><span>{model.label}</span><b title={`${usageNumber(value)} tokens`}>{usageCompact(value)}</b><small>{share(value, total)}</small></button></li>; })}</ul>
+    </div>{hasRetiredModels && models.length === 0 && <p className="usage-note">No current model usage in this period.</p>}</>;
 }
 
 function DetailValue({ color, label, value, total, title }: { color: string; label: string; value: string; total?: string; title?: string }) {

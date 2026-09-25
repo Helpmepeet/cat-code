@@ -4,6 +4,7 @@
 .usage-details-card-header p { margin:3px 0 0; color:var(--usage-secondary); font-size:11.5px; line-height:1.4; }
 .usage-details-card-header > strong,.usage-details-tool-metric > strong { font:500 32px/1 var(--font-mono); letter-spacing:-.035em; white-space:nowrap; }
 .usage-details-tool-metric { display:flex; flex-wrap:wrap; align-items:flex-start; gap:10px; }
+.usage-model-scope { justify-content:flex-end; }
 .usage-model-mix.usage-details-model-mix { grid-template-columns:minmax(0,190px) minmax(0,1fr); gap:20px; margin-top:10px; }
 .usage-details-donut { position:relative; }
 .usage-details-donut path { cursor:pointer; transition:opacity .15s; }

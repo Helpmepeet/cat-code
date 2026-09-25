@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { emptyTokens, groupUsageSummary, usageCategory } from './usageSummary.js';
+import { collectRetainedUsage } from '../../src/utils/statsUsage.js';
 import type { UsageRangeSummary } from '../shared/usageDashboard.js';
 const timing = { models: { state: 'unavailable' as const, logicalCalls: 0, retriedCalls: 0, streamingAttempts: 0, outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, responseDuration: { samples: 0, p50Ms: null, p95Ms: null }, firstText: { samples: 0, p50Ms: null, p95Ms: null } }, tools: { state: 'unavailable' as const, outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, duration: { samples: 0, p50Ms: null, p95Ms: null } } };
 const autoMode = { allTools: { outcomes: { allowed: 0, policy_blocked: 0, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 }, coverage: { state: 'unavailable' as const, invalidRecords: 0, orphanRecords: 0 } }, commands: { outcomes: { allowed: 0, policy_blocked: 0, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 }, coverage: { state: 'unavailable' as const, invalidRecords: 0, orphanRecords: 0 } }, buckets: [], routes: [], categories: [] };
@@ -19,6 +20,22 @@ test('grouping preserves exact daily/model/tool totals and distinguishes reserve
     expect(usageCategory('模型'.repeat(500)).label.length).toBeGreaterThan(0);
     expect(Buffer.byteLength(usageCategory('模型'.repeat(500)).label)).toBeLessThanOrEqual(160);
     expect(usageCategory('x'.repeat(200) + 'a').id).not.toBe(usageCategory('x'.repeat(200) + 'b').id);
+});
+
+test('bounded model summaries retain current and historical Sol and Luna separately', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    const summary = snapshot.ranges['7d'];
+    const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna'];
+    summary.models = names.map((name, index) => ({ ...usageCategory(name), tokens: { ...emptyTokens(), fresh: index < 10 ? 1000 : 10 } }));
+    summary.tokens.fresh = 10_040;
+    summary.days[0]!.tokens.fresh = 10_040;
+    summary.days[0]!.models = summary.models.map(model => ({ id: model.id, total: model.tokens.fresh }));
+    const grouped = groupUsageSummary(summary);
+    for (const name of ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna']) {
+        expect(grouped.models.find(model => model.label === name)?.tokens.fresh).toBe(10);
+    }
+    expect(grouped.models.reduce((total, model) => total + model.tokens.fresh, 0)).toBe(10_040);
+    expect(grouped.days[0]!.models.reduce((total, model) => total + model.total, 0)).toBe(10_040);
 });
 
 test('contributors are ranked and truncated with explicit omitted counts', () => {

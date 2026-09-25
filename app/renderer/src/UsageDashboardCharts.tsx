@@ -3,6 +3,7 @@ import { usageAxisCeiling, usageChartDate, usageChartTicks, usageFlowSeries, typ
 import { UsageAreaTrend } from './UsageAreaTrend.js';
 import { usageBucketDays, usageBucketLabel, usageDatePosition } from './usageTrendState.js';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
+import { isRetiredUsageModel } from '../../shared/usageModelStatus.js';
 import { useUsageChartWidth, usageCompact, usageNumber, usageTotal } from './usageDashboardState.js';
 import { usageFlowSamples, usageStackedAreaGeometry } from './usageStackedAreaState.js';
 export function UsageTokenFlow({ summary, colors, selected, onSelect }: {
@@ -13,13 +14,19 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect }: {
     partial: boolean;
 }) {
     const [mode, setMode] = useState<UsageFlowMode>('type');
+    const [showAllModels, setShowAllModels] = useState(false);
     const [hiddenSeries, setHiddenSeries] = useState<Record<UsageFlowMode, string[]>>({ type: [], model: [] });
     const [hovered, setHovered] = useState('');
     const [focusedDate, setFocusedDate] = useState('');
     const clipId = `usage-flow-${useId().replaceAll(':', '')}`;
-    const availableSeries = usageFlowSeries(summary, colors, mode);
+    const hasRetiredModels = summary.models.some(isRetiredUsageModel);
+    const scopeLabel = mode === 'model' && hasRetiredModels ? showAllModels ? 'all models' : 'current models' : mode;
+    const modelSummary = mode === 'model' && hasRetiredModels && !showAllModels
+        ? { ...summary, models: summary.models.filter(model => !isRetiredUsageModel(model)) }
+        : summary;
+    const availableSeries = usageFlowSeries(modelSummary, colors, mode);
     const hidden = new Set(hiddenSeries[mode]);
-    const series = usageFlowSeries(summary, colors, mode, hidden);
+    const series = usageFlowSeries(modelSummary, colors, mode, hidden);
     const toggleSeries = (id: string) => setHiddenSeries(current => {
         const next = new Set(current[mode]);
         if (next.has(id)) next.delete(id);
@@ -67,9 +74,9 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect }: {
     const tooltipY = Math.max(top, Math.min(bottom - tooltipHeight, (hoverPoints.length ? Math.min(...hoverPoints.map(point => point.y)) : top) - 18));
     return <>
     <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Tokens</h2></div>
-      <div className="usage-flow-controls"><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div></div>
+      <div className="usage-flow-controls"><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div>{mode === 'model' && hasRetiredModels && <div className="usage-range" role="group" aria-label="Model history"><button type="button" aria-pressed={!showAllModels} onClick={() => setShowAllModels(false)}>Current</button><button type="button" aria-pressed={showAllModels} onClick={() => setShowAllModels(true)}>All models</button></div>}</div>
     </div>
-    <svg className="usage-chart usage-flow-chart" shapeRendering="geometricPrecision" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${mode}${hidden.size ? `, ${hidden.size} hidden` : ''}`}>
+    <svg className="usage-chart usage-flow-chart" shapeRendering="geometricPrecision" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${scopeLabel}${hidden.size ? `, ${hidden.size} hidden` : ''}`}>
         <defs><clipPath id={clipId}><rect x={left} y={top} width={width} height={plotHeight}/></clipPath></defs>
         {[0, 1 / 3, 2 / 3, 1].map(fraction => <g key={fraction}><line x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-flow-grid-line"/><text x={left - 8} y={bottom - fraction * plotHeight + 4} textAnchor="end" className="usage-axis">{usageCompact(Math.round(max * fraction))}</text></g>)}
         {selected && summary.days.some(day => day.date === selected) && <rect x={slotX(selected)} y={top} width={slotWidth(selected)} height={plotHeight} className="usage-selected" aria-hidden="true"/>}
@@ -78,7 +85,7 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect }: {
             {geometry.centerPaths.flatMap((paths, index) => thinSeries[index] ? paths.map((path, part) => <path key={`${series[index]!.id}:${part}`} className="usage-flow-thin-series" fill="none" stroke={series[index]!.color} strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" d={path}/>) : [])}
         </g>
         {summary.days.map((day, i) => {
-            return <g key={day.date} className="usage-flow-hit" role="button" tabIndex={focusedDate === day.date || (!focusedDate && (selected === day.date || (!selected && i === 0))) ? 0 : -1} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => { setFocusedDate(day.date); setHovered(day.date); }} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens`} onClick={() => onSelect(day.date)} onKeyDown={event => {
+            return <g key={day.date} className="usage-flow-hit" role="button" tabIndex={focusedDate === day.date || (!focusedDate && (selected === day.date || (!selected && i === 0))) ? 0 : -1} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => { setFocusedDate(day.date); setHovered(day.date); }} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens${mode === 'model' && hasRetiredModels && !showAllModels ? ' from current models' : ''}`} onClick={() => onSelect(day.date)} onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(day.date); }
                 else if (event.key === 'Escape') { setHovered(''); onSelect(''); }
                 else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
@@ -106,6 +113,7 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect }: {
             </g>)}
         </g>}
     </svg>
+    {mode === 'model' && !showAllModels && hasRetiredModels && availableSeries.length === 0 && <p className="usage-note">No current model usage in this period.</p>}
     <div className="usage-legend usage-flow-legend" aria-label="Token flow series">{availableSeries.map(item => {
         const shown = !hidden.has(item.id);
         return <button key={item.id} className="usage-flow-series-toggle" type="button" aria-pressed={shown} aria-label={`${shown ? 'Hide' : 'Show'} ${item.label}`} onClick={() => toggleSeries(item.id)}>

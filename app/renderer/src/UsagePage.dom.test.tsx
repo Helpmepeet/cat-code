@@ -156,6 +156,27 @@ test('model slices remain keyboard operable', async () => {
     expect(slice.getAttribute('aria-pressed')).toBe('false');
 });
 
+test('model usage keeps retired Sol and Luna available in All models', async () => {
+    const snapshot = await recordedSnapshot();
+    const summary = snapshot.ranges['7d'];
+    const names = ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna'];
+    summary.models = names.map((label, index) => ({ id: label, label, kind: 'named', tokens: { fresh: 1000 - index * 200, read: 0, write: 0, output: 0 } }));
+    summary.tokens.fresh = 2800;
+    summary.days[0]!.tokens.fresh = 2800;
+    summary.days[0]!.models = summary.models.map(model => ({ id: model.id, total: model.tokens.fresh }));
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const key = () => tree.container.querySelector('.usage-model-key')!.textContent!;
+    expect(key()).toContain('gpt-6-sol');
+    expect(key()).toContain('gpt-6-luna');
+    expect(key()).not.toContain('gpt-5.6-sol');
+    expect(key()).not.toContain('gpt-5.6-luna');
+    const all = tree.container.querySelector<HTMLButtonElement>('.usage-model-scope button:last-child')!;
+    await act(async () => all.click());
+    expect(key()).toContain('gpt-5.6-sol');
+    expect(key()).toContain('gpt-5.6-luna');
+    expect(all.getAttribute('aria-pressed')).toBe('true');
+});
+
 test('heatmap selection in All resolves to its local aggregate bucket', async () => {
     const snapshot = await recordedSnapshot();
     const all = snapshot.ranges.all;
