@@ -58,15 +58,31 @@ test('uses stable outcome/category order and conserves route edges', () => {
 test('builds a conserved flow for all attempts and groups the four display outcomes', () => {
   const edges = autoModeOverviewEdges(summary)
   expect(edges.filter(edge => edge.from === 'Attempts')).toEqual([
-    { from: 'Attempts', to: 'Route: base', count: 60 },
-    { from: 'Attempts', to: 'Route: stage1', count: 33 },
-    { from: 'Attempts', to: 'Route: stage2', count: 7 },
+    { from: 'Attempts', to: 'Base paths', count: 60 },
+    { from: 'Attempts', to: 'Stage 1', count: 33 },
+    { from: 'Attempts', to: 'Stage 2', count: 7 },
   ])
-  expect(edges.filter(edge => edge.from.startsWith('Route: ')).reduce((total, edge) => total + edge.count, 0)).toBe(100)
+  expect(edges.filter(edge => edge.from === 'Base paths' || edge.from === 'Stage 1' || edge.from === 'Stage 2').reduce((total, edge) => total + edge.count, 0)).toBe(100)
   expect(autoModeDisplayCounts(summary)).toEqual([
     { group: 'allowed', label: 'Allowed', count: 85 },
     { group: 'blocked', label: 'Blocked', count: 7 },
     { group: 'error', label: 'Error', count: 8 },
     { group: 'cancelled', label: 'Cancelled', count: 0 },
+  ])
+  const variedRoutes = structuredClone(summary)
+  variedRoutes.routes = [
+    { route: 'base', outcome: 'allowed', count: 1 },
+    { route: 'forced', outcome: 'allowed', count: 2 },
+    { route: 'guard', outcome: 'allowed', count: 3 },
+    { route: 'accept_edits', outcome: 'allowed', count: 4 },
+    { route: 'allowlist', outcome: 'allowed', count: 5 },
+    { route: 'unknown', outcome: 'allowed', count: 6 },
+    { route: 'stage1', outcome: 'allowed', count: 7 },
+    { route: 'stage2', outcome: 'allowed', count: 8 },
+  ]
+  expect(autoModeOverviewEdges(variedRoutes).filter(edge => edge.from === 'Attempts')).toEqual([
+    { from: 'Attempts', to: 'Base paths', count: 21 },
+    { from: 'Attempts', to: 'Stage 1', count: 7 },
+    { from: 'Attempts', to: 'Stage 2', count: 8 },
   ])
 })

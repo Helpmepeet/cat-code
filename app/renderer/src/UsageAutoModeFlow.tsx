@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
-import { AUTO_MODE_DISPLAY_GROUPS, autoModeAttempts, autoModeOverviewEdges, type AutoModeDisplayGroup } from './usageAutoModeState.js'
+import { autoModeAttempts, autoModeOverviewEdges, type AutoModeDisplayGroup } from './usageAutoModeState.js'
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js'
 import {
   layoutAutoModeFlow,
@@ -125,9 +125,10 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         {layout.nodes.map(node => {
           const label = nodeLabelPosition(node)
           const outcome = GROUPS.has(node.id) ? node.id : ''
+          const title = node.id === 'error' ? 'Error (review required, operational error, unknown outcome, and incomplete)' : node.label
           return <g key={node.id}>
             <rect className={`usage-auto-flow-node usage-auto-flow-node-${outcome || node.id.toLowerCase().replaceAll(' ', '-')}`} x={node.x} y={node.y} width={node.width} height={node.height} rx="2">
-              <title>{`${node.label}: ${usageNumber(Math.max(node.incoming, node.outgoing))} recorded attempts`}</title>
+              <title>{`${title}: ${usageNumber(Math.max(node.incoming, node.outgoing))} recorded attempts`}</title>
             </rect>
             <text className="usage-auto-flow-node-label" x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline={label.baseline}>{node.label}</text>
           </g>
@@ -135,8 +136,5 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
       </svg>
     </div>
     {activeLink && <div className="usage-auto-flow-readout" role="status"><p><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} · {usagePercent(activeLink.count / layout.total * 100)}</p>{pinnedLinkId && <button type="button" onClick={() => { setPinnedLinkId(null); setPreviewLinkId(null) }}>Clear selection</button>}</div>}
-    <ul className="usage-auto-flow-legend" aria-label="Decision outcomes">
-      {AUTO_MODE_DISPLAY_GROUPS.map(({ group, label }) => <li key={group} aria-label={group === 'error' ? 'Error. Includes review required, operational error, unknown outcome, and incomplete' : label} title={group === 'error' ? 'Includes review required, operational error, unknown outcome, and incomplete' : undefined}><i className={`usage-auto-flow-legend-${group}`} aria-hidden="true"/><span>{label}</span></li>)}
-    </ul>
   </section>
 }

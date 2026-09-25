@@ -6,17 +6,20 @@ import { UsageAutoModeFlow } from './UsageAutoModeFlow.js'
 
 const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture())
 
-test('renders all attempts, four display groups, and consistent group colors', () => {
+test('renders the simplified route groups and outcome labels without a duplicate legend', () => {
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={summary} />)
   expect(html).toContain('Decision flow')
   expect(html).toContain('Decision flow for 100 recorded automatic permission attempts')
-  expect(html).toContain('base route')
-  expect(html).toContain('stage1 route')
+  expect(html).toContain('>Base paths</text>')
+  expect(html).toContain('>Stage 1</text>')
+  expect(html).toContain('>Stage 2</text>')
+  expect(html).not.toContain('base route')
+  expect(html).not.toContain('usage-auto-flow-legend')
   expect(html).toContain('Allowed')
   expect(html).toContain('Blocked')
   expect(html).toContain('Error')
-  expect(html).toContain('Cancelled')
-  expect(html).toContain('Includes review required, operational error, unknown outcome, and incomplete')
+  expect(html).not.toContain('>Cancelled</text>')
+  expect(html).toContain('Error (review required, operational error, unknown outcome, and incomplete)')
   expect(html).toContain('of 100 attempts')
 })
 

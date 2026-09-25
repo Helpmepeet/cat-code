@@ -12,7 +12,7 @@ test('lays out every attempt through a route into a display group', () => {
   expect(autoModeFlowConserves(edges)).toBe(true)
   expect(layout!.total).toBe(100)
   expect(layout!.nodes.map(node => node.id)).toEqual([
-    'Attempts', 'Route: base', 'Route: stage1', 'Route: stage2', 'allowed', 'blocked', 'error',
+    'Attempts', 'Base paths', 'Stage 1', 'Stage 2', 'allowed', 'blocked', 'error',
   ])
   expect(layout!.nodes.filter(node => node.column === 2).reduce((total, node) => total + node.incoming, 0)).toBe(100)
   expect(layout!.links.every(link => Math.abs(link.height - link.count * layout!.scale) < 0.000001)).toBe(true)
@@ -24,22 +24,22 @@ test('lays out every attempt through a route into a display group', () => {
 
 test('preserves rare outcome sizes without a visual minimum', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Route: base', count: 10 },
-    { from: 'Route: base', to: 'allowed', outcome: 'allowed', count: 9 },
-    { from: 'Route: base', to: 'error', outcome: 'error', count: 1 },
+    { from: 'Attempts', to: 'Base paths', count: 10 },
+    { from: 'Base paths', to: 'allowed', outcome: 'allowed', count: 9 },
+    { from: 'Base paths', to: 'error', outcome: 'error', count: 1 },
   ])
   expect(layout).not.toBeNull()
   expect(layout!.links.find(link => link.to === 'error')!.height).toBe(layout!.scale)
-  expect(layout!.links.find(link => link.from === 'Route: base' && link.to === 'allowed')!.height).toBe(layout!.scale * 9)
+  expect(layout!.links.find(link => link.from === 'Base paths' && link.to === 'allowed')!.height).toBe(layout!.scale * 9)
 })
 
 test('stacks routes and groups without changing their values', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Route: base', count: 75 },
-    { from: 'Attempts', to: 'Route: stage1', count: 25 },
-    { from: 'Route: base', to: 'allowed', outcome: 'allowed', count: 75 },
-    { from: 'Route: stage1', to: 'allowed', outcome: 'allowed', count: 24 },
-    { from: 'Route: stage1', to: 'blocked', outcome: 'blocked', count: 1 },
+    { from: 'Attempts', to: 'Base paths', count: 75 },
+    { from: 'Attempts', to: 'Stage 1', count: 25 },
+    { from: 'Base paths', to: 'allowed', outcome: 'allowed', count: 75 },
+    { from: 'Stage 1', to: 'allowed', outcome: 'allowed', count: 24 },
+    { from: 'Stage 1', to: 'blocked', outcome: 'blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
@@ -57,9 +57,9 @@ test('stacks routes and groups without changing their values', () => {
 
 test('leaves readable vertical space between outcome nodes', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Route: stage2', count: 100 },
-    { from: 'Route: stage2', to: 'allowed', outcome: 'allowed', count: 99 },
-    { from: 'Route: stage2', to: 'blocked', outcome: 'blocked', count: 1 },
+    { from: 'Attempts', to: 'Stage 2', count: 100 },
+    { from: 'Stage 2', to: 'allowed', outcome: 'allowed', count: 99 },
+    { from: 'Stage 2', to: 'blocked', outcome: 'blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 

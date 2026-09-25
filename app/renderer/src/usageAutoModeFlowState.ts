@@ -54,6 +54,7 @@ const OUTCOME_LABELS: Record<AutoModeDisplayGroup, string> = {
 }
 
 const TERMINAL_NODES = new Set(['allowed', 'blocked', 'error', 'cancelled'])
+const ROUTE_NODES = new Set(['Base paths', 'Stage 1', 'Stage 2'])
 const TOP = 34
 const BOTTOM = 24
 const NODE_GAP = 20
@@ -76,12 +77,12 @@ type AutoModeSankeyLink = UsageAutoModeFlowEdge & {
 
 function nodeColumn(id: string): number | null {
   if (id === 'Attempts') return 0
-  if (id.startsWith('Route: ')) return 1
+  if (ROUTE_NODES.has(id)) return 1
   return TERMINAL_NODES.has(id) ? 2 : null
 }
 
 function compareNodeIds(left: string, right: string): number {
-  const rank = (id: string) => id === 'Attempts' ? 0 : id.startsWith('Route: ') ? 1 : 2
+  const rank = (id: string) => id === 'Attempts' ? 0 : ROUTE_NODES.has(id) ? 1 : 2
   return rank(left) - rank(right) || left.localeCompare(right)
 }
 
@@ -91,7 +92,6 @@ function compareEdges(left: UsageAutoModeFlowEdge, right: UsageAutoModeFlowEdge)
 }
 
 export function usageAutoModeFlowNodeLabel(id: string): string {
-  if (id.startsWith('Route: ')) return `${id.slice(7)} route`
   return OUTCOME_LABELS[id as AutoModeDisplayGroup] ?? id
 }
 

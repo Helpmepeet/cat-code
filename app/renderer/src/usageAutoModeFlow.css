@@ -14,13 +14,6 @@
 .usage-auto-flow-node-blocked,.usage-auto-flow-ribbon-blocked { --usage-auto-flow-color:var(--usage-errors); fill:var(--usage-errors); }
 .usage-auto-flow-node-error,.usage-auto-flow-ribbon-error { --usage-auto-flow-color:var(--usage-violet); fill:var(--usage-violet); }
 .usage-auto-flow-node-cancelled,.usage-auto-flow-ribbon-cancelled { --usage-auto-flow-color:var(--usage-other); fill:var(--usage-other); }
-.usage-auto-flow-legend { display:flex; flex-wrap:wrap; gap:7px 13px; margin:8px 0 0; padding:0; list-style:none; color:var(--usage-secondary); font-size:11px; }
-.usage-auto-flow-legend li { display:flex; align-items:center; gap:5px; }
-.usage-auto-flow-legend i { width:8px; height:8px; flex:none; border-radius:2px; }
-.usage-auto-flow-legend-allowed { background:var(--usage-success); }
-.usage-auto-flow-legend-blocked { background:var(--usage-errors); }
-.usage-auto-flow-legend-error { background:var(--usage-violet); }
-.usage-auto-flow-legend-cancelled { background:var(--usage-other); }
 .usage-auto-flow-readout { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:18px; margin:8px 0 0; color:var(--usage-secondary); font:11px var(--font-mono); }
 .usage-auto-flow-readout p { margin:0; }
 .usage-auto-flow-readout button { color:var(--color-text-primary); text-decoration:underline; cursor:pointer; }

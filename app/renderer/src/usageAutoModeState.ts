@@ -133,6 +133,17 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
   unknown: ['Attempts', 'Unknown route'],
 }
 
+const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['route'], 'Base paths' | 'Stage 1' | 'Stage 2'> = {
+  base: 'Base paths',
+  forced: 'Base paths',
+  guard: 'Base paths',
+  accept_edits: 'Base paths',
+  allowlist: 'Base paths',
+  stage1: 'Stage 1',
+  stage2: 'Stage 2',
+  unknown: 'Base paths',
+}
+
 export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   const edges = new Map<string, { from: string; to: string; outcome?: AutoModeDisplayGroup; count: number }>()
   const add = (from: string, to: string, count: number, outcome?: AutoModeDisplayGroup) => {
@@ -143,7 +154,7 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   }
 
   for (const route of summary.routes) {
-    const routeNode = `Route: ${route.route}`
+    const routeNode = AUTO_MODE_OVERVIEW_ROUTES[route.route]
     const group = autoModeDisplayGroup(route.outcome)
     add('Attempts', routeNode, route.count)
     add(routeNode, group, route.count, group)
