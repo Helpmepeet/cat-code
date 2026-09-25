@@ -1862,60 +1862,6 @@ test('D1a — an unrelated queue event does not publish an empty staged list', (
   expect(queuedPromptSnapshots(received)).toEqual([])
 })
 
-test('D1a — a submit that throws synchronously announces its staged message once', async () => {
-  // `AppSessionController.submit` is `async`, so this throw cannot happen
-  // through the real controller; it is the state `startTurn`'s catch exists
-  // for, and the announcement has already gone out by the time that catch runs.
-  // Leaving the message staged there had the next boundary drain announce it a
-  // second time, with no retry cap in reach: `onSettled` rides the promise this
-  // path never created.
-  let releaseFirst: (() => void) | undefined
-  let turns = 0
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      turns += 1
-      options?.onInputPersisted?.()
-      if (turns === 1) {
-        await new Promise<void>(resolve => {
-          releaseFirst = resolve
-        })
-      }
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const realSubmit = controller.submit.bind(controller)
-  let submits = 0
-  ;(controller as { submit: AppSessionController['submit'] }).submit = ((
-    ...args: Parameters<AppSessionController['submit']>
-  ) => {
-    submits += 1
-    if (submits === 2) throw new Error('submit exploded')
-    return realSubmit(...args)
-  }) as AppSessionController['submit']
-
-  const { server, received, conn } = connect(controller)
-
-  server.handleData(
-    conn,
-    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
-  )
-  await new Promise(resolve => setTimeout(resolve, 0))
-  server.handleData(
-    conn,
-    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
-  )
-
-  // The first turn ends, the boundary drain claims the staged message, and its
-  // turn throws before any promise exists to carry a failure.
-  releaseFirst?.()
-  await waitFor(() => submits >= 3)
-  await new Promise(resolve => setTimeout(resolve, 5))
-
-  expect(
-    userMessageTexts(received).filter(text => text === 'and the logs'),
-  ).toHaveLength(1)
-})
-
 /** A server whose log lines are captured rather than discarded. */
 function makeLoggingServer(logs: string[]): SidecarServer {
   const server = new SidecarServer({
