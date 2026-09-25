@@ -187,11 +187,6 @@ function checkedState(row: HTMLElement): string | null {
   return row.getAttribute('aria-checked')
 }
 
-test('the card takes the keyboard on mount', async () => {
-  const { card } = await mountFlow()
-  expect(document.activeElement).toBe(card)
-})
-
 test('a focused option row does not kill the navigation keys', async () => {
   // THE HEADLINE FIX. A mouse click leaves the row focused; the old guard
   // resolved that <button> as the key owner and bailed on every key after it.
@@ -253,14 +248,6 @@ test('Space on a focused footer button is left to the button', async () => {
   expect(markerText(optionRows(card)[0]!)).toBe('')
   expect(checkedState(optionRows(card)[0]!)).toBe('false')
   expect(calls.answers).toHaveLength(0)
-})
-
-test('one Enter selects the highlighted option and submits', async () => {
-  const { card, calls } = await mountFlow()
-  const enter = await press(card, 'Enter')
-  expect(enter.defaultPrevented).toBe(true)
-  expect(calls.answers).toHaveLength(1)
-  expect(calls.answers[0]).toEqual([{ optionIndices: [0] }])
 })
 
 test('arrows move a single-select pick before Enter submits it', async () => {
@@ -643,7 +630,8 @@ test('the card takes focus from the composer when it appears', async () => {
   const { calls, card } = await mountFlow()
   expect(document.activeElement).toBe(card)
 
-  await press(card, 'Enter')
+  const enter = await press(card, 'Enter')
+  expect(enter.defaultPrevented).toBe(true)
   expect(calls.answers).toEqual([[{ optionIndices: [0] }]])
   composer.remove()
 })

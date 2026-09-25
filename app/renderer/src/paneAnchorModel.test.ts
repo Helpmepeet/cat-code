@@ -198,16 +198,6 @@ describe('several corrections in one frame', () => {
 describe('bottom lock', () => {
   const FOLLOWING = { scrollTop: 39_000, viewportHeight: 800, contentHeight: 40_500 }
 
-  test('an active lock lands on the end of the document', () => {
-    expect(
-      selectPaneScrollAdjustment({
-        metrics: FOLLOWING,
-        corrections: [{ offset: 40_000, delta: 500 }],
-        bottomLocked: true,
-      }),
-    ).toBe(700)
-  })
-
   test('an active lock wins over a correction the anchor rule would ignore', () => {
     const corrections = [{ offset: 40_000, delta: 500 }]
     expect(
