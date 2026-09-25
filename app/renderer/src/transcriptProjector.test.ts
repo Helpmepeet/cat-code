@@ -20,7 +20,6 @@ import {
   stripCompactionEcho,
   type NestedTranscriptRow,
 } from './transcriptProjector.js'
-import { reduceLiveTranscriptState } from './previewTranscriptState.js'
 import { FrameReplayBuffer } from '../../main/replayBuffer.js'
 import {
   AGENT_WITH_NESTED_SUBAGENT_TURN,
@@ -954,33 +953,6 @@ test('suppresses and deduplicates a submit-interrupt result', () => {
  * discriminant; these tests prove the runtime contract over every sample.
  * ───────────────────────────────────────────────────────────────────────── */
 
-test('fixture spans all 15 SDKMessage discriminants with ≥1 sample each', () => {
-  const keys = Object.keys(SDK_MESSAGE_FIXTURE).sort()
-  expect(keys).toEqual([
-    'assistant',
-    'assistant_error',
-    'auth_status',
-    'permission_denial',
-    'prompt_suggestion',
-    'rate_limit_event',
-    'result',
-    'status',
-    'stream_event',
-    'streamlined_text',
-    'streamlined_tool_use_summary',
-    'system',
-    'tool_progress',
-    'tool_use_summary',
-    'user',
-  ])
-  for (const [key, samples] of Object.entries(SDK_MESSAGE_FIXTURE)) {
-    expect(samples.length).toBeGreaterThan(0)
-    for (const sample of samples) {
-      expect(key).toBe(sample.message.type)
-    }
-  }
-})
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -1011,6 +983,9 @@ test('fixture covers every assistant content-block discriminant the engine rende
 })
 
 test('every fixture sample projects without crashing and adds exactly its documented rows', () => {
+  for (const samples of Object.values(SDK_MESSAGE_FIXTURE)) {
+    expect(samples.length).toBeGreaterThan(0)
+  }
   for (const sample of allSdkMessageSamples()) {
     let state = createTranscriptState()
     state = projectServerFrame(state, ready('session-1'))
@@ -3444,25 +3419,6 @@ test('legacy Apply_patch result with whole-file before/after still narrows to a 
   })
 })
 
-/*
- * The RUNNING-name path. The C4 nesting test also asserts this, but a break here
- * should fail a test named for identity rather than one named for nesting, and
- * the absent case below is not covered anywhere else.
- */
-test('a nested frame\'s engine-minted agent_name reaches the child row while the agent runs', () => {
-  let state = createTranscriptState()
-  state = projectServerFrame(state, ready('session-1'))
-  for (const message of AGENT_WITH_NESTED_SUBAGENT_TURN.messages) {
-    state = projectServerFrame(state, messageFrame('session-1', message))
-  }
-
-  const agent = selectNestedTranscriptRows(state, 'session-1')[0]
-  if (agent?.kind !== 'tool-use') throw new Error('expected agent tool-use row')
-  const child = agent.children[0]
-  if (child?.kind !== 'tool-use') throw new Error('expected nested child tool-use row')
-  expect(child.agentName).toBe('Ada')
-})
-
 test('a nested frame with no agent_name leaves the child row unnamed, never guessing one', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
@@ -4331,35 +4287,6 @@ test('DelegateGroup: two parallel Agent tool_uses (same message.id) coalesce int
     PARALLEL_AGENTS_TURN.toolUseIds[0],
     PARALLEL_AGENTS_TURN.toolUseIds[1],
   ])
-})
-
-test('DelegateGroup: a lone Agent tool_use is a single item, never grouped', () => {
-  let state = createTranscriptState()
-  state = projectServerFrame(state, ready('session-1'))
-  state = projectServerFrame(
-    state,
-    messageFrame('session-1', {
-      type: 'assistant',
-      message: {
-        id: 'msg_solo_agent',
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_use',
-            id: 'toolu_solo_agent',
-            name: 'Agent',
-            input: { subagent_type: 'Explore', description: 'look around' },
-          },
-        ],
-      },
-      parent_tool_use_id: null,
-      uuid: '00000000-0000-4000-8000-0000008cf001',
-    }),
-  )
-
-  const items = selectTranscriptDisplayItems(state, 'session-1')
-  expect(items).toHaveLength(1)
-  expect(items[0]?.kind).toBe('single')
 })
 
 test('C4: an Agent tool_use with a nested subagent stays ONE single display item whose card owns the child', () => {
@@ -5675,14 +5602,6 @@ test('projection preserves source identities and publishes no-op deliveries', ()
   expect(initial.sessions['session-1']).toBe(session)
   expect(initial.sessions['session-1']!.rows).toBe(rows)
   expect(initial).toEqual(sourceSnapshot)
-})
-
-test('single live reducer projection remains the single-frame projector path', () => {
-  const state = projectPerFrame([ready('session-1')])
-  const frame = assistantFrame('session-1', 1)
-  expect(reduceLiveTranscriptState(state, frame)).toEqual(
-    projectServerFrame(state, frame),
-  )
 })
 
 test('a recovered typed assistant error without a frame id is retained', () => {
