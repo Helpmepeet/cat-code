@@ -45,7 +45,7 @@ export function usageModelColors(models: readonly UsageModelIdentity[]): Record<
         terra: 'var(--usage-model-orange)',
         astra: 'var(--usage-model-yellow)',
     };
-    const fallback = ['var(--usage-cyan)', 'light-dark(#2f9d74,#54d2a0)', 'light-dark(#4338ca,#818cf8)', 'var(--usage-coral)', 'light-dark(#697c22,#bbca70)', 'light-dark(#a54e88,#d897c5)', 'light-dark(#956343,#cdaa8b)', 'var(--usage-teal)'];
+    const fallback = ['var(--usage-fresh)', 'light-dark(#94c5ad,#54d2a0)', 'light-dark(#a3b0dd,#818cf8)', 'var(--usage-output)', 'light-dark(#b9c99c,#bbca70)', 'light-dark(#d4abc4,#d897c5)', 'light-dark(#d8b39a,#cdaa8b)', 'var(--usage-model-blue)'];
     const unique = [...new Map(models.map(model => [model.id, model])).values()].sort((a, b) => a.id.localeCompare(b.id));
     let fallbackIndex = 0;
     return Object.fromEntries(unique.map(model => {
