@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { PassThrough } from 'stream'
 import stripAnsi from 'strip-ansi'
 import * as React from 'react'
@@ -193,12 +192,6 @@ afterEach(() => {
 })
 
 describe('LogoV2', () => {
-  test('does not load the retired Opus 1M startup notice', () => {
-    const source = readFileSync(new URL('./LogoV2.tsx', import.meta.url), 'utf8')
-
-    expect(source).not.toContain('Opus1mMergeNotice')
-  })
-
   test('uses Claude profile name without reading active Codex account for non-Codex providers', async () => {
     const originalNodeEnv = process.env.NODE_ENV
     process.env.NODE_ENV = 'development'

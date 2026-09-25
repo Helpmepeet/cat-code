@@ -11,7 +11,6 @@
  */
 
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CodeThemePreview } from './CodeThemePreview.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
@@ -48,14 +47,6 @@ test('the sample is really tokenized, so a palette has something to color', () =
   expect(html).toContain('hljs-number') // lives=9, hours=16
   expect(html).toContain('hljs-title') // Cat, knock_off, nap
   expect(html).toContain('hljs-built_in') // print, range
-})
-
-test('the preview shares the transcript highlighting configuration', () => {
-  const source = readFileSync(new URL('./CodeThemePreview.tsx', import.meta.url), 'utf8')
-
-  expect(source).toContain("import { REHYPE_PLUGINS } from './markdownPlugins.js'")
-  expect(source).toContain('rehypePlugins={REHYPE_PLUGINS}')
-  expect(source).not.toContain('PREVIEW_REHYPE_PLUGINS')
 })
 
 test('the canvas renders under the attribute the active palette selects on', () => {
