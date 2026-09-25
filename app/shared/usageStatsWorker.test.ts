@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test';
 import { MAX_USAGE_LABEL_BYTES, MAX_USAGE_RECORD_BYTES } from './usageDashboard.js';
 import { parseUsageCollectionLine, parseUsageCollectionResult } from './usageStatsWorker.js';
+import { collectRetainedUsage } from '../../src/utils/statsUsage.js';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const tokens = { fresh: 4, read: 2, write: 1, output: 3 };
 const tokenCost = { usd: 0.00006, pricedTokens: 10 };
 const timing = { models: { state: 'unavailable', logicalCalls: 0, retriedCalls: 0, streamingAttempts: 0, outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, responseDuration: { samples: 0, p50Ms: null, p95Ms: null }, firstText: { samples: 0, p50Ms: null, p95Ms: null } }, tools: { state: 'unavailable', outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, duration: { samples: 0, p50Ms: null, p95Ms: null } } };
@@ -10,16 +14,42 @@ function snapshot(label = 'Model'): Record<string, unknown> {
     const days = Array.from({ length: 30 }, (_, i) => {
         const d = new Date('2026-08-15T00:00:00.000Z');
         d.setUTCDate(d.getUTCDate() + i);
-        return { date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, tools: i === 29 ? [{ id: 'tool-a', requests: 3, results: 2, errors: 1 }] : [], hourlyRequests: Array.from({ length: 24 }, (_, hour) => i === 29 && hour === 12 ? 3 : 0), tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] : [] } };
+        return { date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, tools: i === 29 ? [{ id: 'tool-a', requests: 3, results: 2, errors: 1 }] : [], tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] : [] } };
     });
-    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), autoMode: structuredClone(autoMode), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
-    return { version: 1, metricVersion: 1, countingVersion: 13, pricingVersion: 1, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hourlyTokens: Array.from({ length: 24 }, (_, hour) => index === 6 && hour === 12 ? 10 : 0) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
+    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startDate: start, endDateExclusive: '2026-09-14', startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), autoMode: structuredClone(autoMode), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
+    return { version: 2, metricVersion: 1, countingVersion: 15, pricingVersion: 1, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, offsetMinutes: 0, startAt: `${day.date}T${String(hour).padStart(2, '0')}:00:00.000Z`, requests: index === 6 && hour === 12 ? 3 : 0, tokens: index === 6 && hour === 12 ? 10 : 0 })) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
 }
 function usage(over: Record<string, unknown> = {}) { return { type: 'usage', version: 1, snapshot: { ...snapshot(), ...over } }; }
 test('accepts a valid three-range snapshot and JSON line', () => {
     const value = usage();
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
     expect(parseUsageCollectionLine(JSON.stringify(value))?.type).toBe('usage');
+});
+test('accepts real 22-hour and 26-hour local days', async () => {
+    for (const [asOf, date, hours] of [
+        ['2026-03-29T12:00:00.000Z', '2026-03-29', 22],
+        ['2025-10-26T12:00:00.000Z', '2025-10-26', 26],
+    ] as const) {
+        const actual = await collectRetainedUsage([], asOf, { timezone: 'Antarctica/Troll' });
+        expect(actual.ranges['7d'].days.find(day => day.date === date)?.hours).toHaveLength(hours);
+        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: actual })?.type).toBe('usage');
+    }
+});
+test('keeps a cross-UTC-midnight timeline in its local day', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'usage-local-day-'));
+    try {
+        const at = '2026-09-13T18:00:00.000Z';
+        const rows = [
+            { type: 'assistant', sessionId: 's', uuid: 'a', timestamp: at, message: { id: 'a', model: 'm', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: 'tool_use', id: 't', name: 'Bash' }] } },
+            { type: 'system', subtype: 'tool_execution_start', sessionId: 's', uuid: 'start', timestamp: at, schema_version: 1, tool_use_id: 't' },
+        ];
+        const file = join(directory, 'session.jsonl');
+        await writeFile(file, rows.map(row => JSON.stringify(row)).join('\n'));
+        const actual = await collectRetainedUsage([file], '2026-09-14T05:00:00.000Z', { timezone: 'Asia/Bangkok' });
+        const day = actual.ranges['7d'].days.find(item => item.date === '2026-09-14');
+        expect(day?.contributors.items[0]?.timeline.items.some(item => item.startedAt === at)).toBe(true);
+        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: actual })?.type).toBe('usage');
+    } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test('accepts excluded timing records without marking token and tool coverage partial', () => {
     const value = usage();
@@ -50,7 +80,7 @@ test('previous periods require complete coverage and bounded truthful accounting
     const base = snapshot() as any;
     base.ranges['7d'].previousPeriod = {
         startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T12:00:00.000Z',
-        tokens: { fresh: 0, read: 0, write: 0, output: 0 }, sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null,
+        tokens: { fresh: 0, read: 0, write: 0, output: 0 }, sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
     };
     expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: base })?.type).toBe('usage');
     const partial = structuredClone(base);
@@ -100,9 +130,9 @@ test('count policy rejects fractions, nonfinite and unsafe integers', () => {
 
 test('rejects inconsistent hourly cells and impossible tool outcomes', () => {
     for (const mutate of [
-        (s: any) => s.ranges['7d'].days.at(-1).hourlyRequests.pop(),
-        (s: any) => s.ranges['7d'].days.at(-1).hourlyRequests[0] = 1,
-        (s: any) => { s.ranges['7d'].days.at(-1).hourlyRequests[12] = 0; s.ranges['7d'].days.at(-1).hourlyRequests[13] = 3; },
+        (s: any) => s.ranges['7d'].days.at(-1).hours.pop(),
+        (s: any) => s.ranges['7d'].days.at(-1).hours[0].requests = 1,
+        (s: any) => { s.ranges['7d'].days.at(-1).hours[12].requests = 0; s.ranges['7d'].days.at(-1).hours[13].requests = 3; },
         (s: any) => s.ranges['7d'].tools[0].errors = 3,
         (s: any) => s.ranges['7d'].tools[0].results = 4,
         (s: any) => s.countingVersion = 2,
@@ -193,12 +223,12 @@ test('All rejects missing history, unordered buckets, illegal bucket sizes, and 
 
 test('validates hourly token and daily outcome reconciliation at the boundary', () => {
     for (const mutate of [
-        (s: any) => { delete s.ranges['7d'].days[0].hourlyTokens; },
-        (s: any) => { s.ranges['7d'].days.at(-1).hourlyTokens[12]++; },
-        (s: any) => { s.ranges['7d'].days.at(-1).hourlyTokens.pop(); },
-        (s: any) => { s.ranges['7d'].days.at(-1).hourlyTokens[12] = -1; },
-        (s: any) => { s.ranges['7d'].days.at(-1).hourlyTokens[12] = 0; s.ranges['7d'].days.at(-1).hourlyTokens[13] = 10; },
-        (s: any) => { s.ranges['30d'].days.at(-1).hourlyTokens = s.ranges['7d'].days.at(-1).hourlyTokens; },
+        (s: any) => { delete s.ranges['7d'].days[0].hours[0].tokens; },
+        (s: any) => { s.ranges['7d'].days.at(-1).hours[12].tokens++; },
+        (s: any) => { s.ranges['7d'].days.at(-1).hours.pop(); },
+        (s: any) => { s.ranges['7d'].days.at(-1).hours[12].tokens = -1; },
+        (s: any) => { s.ranges['7d'].days.at(-1).hours[12].tokens = 0; s.ranges['7d'].days.at(-1).hours[13].tokens = 10; },
+        (s: any) => { s.ranges['30d'].days.at(-1).hours = structuredClone(s.ranges['7d'].days.at(-1).hours); },
         (s: any) => { delete s.ranges.all.days[0].results; },
         (s: any) => { s.ranges.all.days[0].errors = 3; },
         (s: any) => { s.ranges.all.days[0].results = 3; },
@@ -226,9 +256,10 @@ test('validates auto-mode category and route totals', () => {
     expect(parseUsageCollectionResult(value)).toBeNull();
 });
 
-test('rejects All auto-mode buckets outside the published UTC grid', () => {
+test('rejects All auto-mode buckets outside the published local-day grid', () => {
     const value = snapshot() as any;
     const all = value.ranges.all;
+    all.startDate = '2026-09-10';
     all.startInclusive = '2026-09-10T00:00:00.000Z';
     all.bucketDays = 2;
     all.days[0].date = '2026-09-10';

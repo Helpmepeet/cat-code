@@ -29,7 +29,6 @@ import type {
   AccountsSnapshot,
   SessionId,
   SessionsCatalogSnapshot,
-  UsageStatsByRange,
 } from './protocol.js'
 
 /* ------------------------------------------------------------------------- *
@@ -355,7 +354,6 @@ export type SaveTextInput = {
  *  - `usage-dashboard` carries the independently validated usage worker result.
  *    Success and failure are explicit; the renderer retains the last successful
  *    snapshot with its original UTC cutoff. See USAGE-DASHBOARD.md.
- *  - `usage-stats` is a retained legacy shape, no longer published by main.
  *
  * The first three carry the full descriptor (except `removed`, which carries only
  * the id) so a subscriber can update without a follow-up read.
@@ -366,7 +364,6 @@ export type HostEvent =
   | { type: 'session-removed'; appSessionId: SessionId }
   | { type: 'sessions-catalog'; catalog: SessionsCatalogSnapshot }
   | { type: 'accounts-pool'; pool: AccountsSnapshot }
-  | { type: 'usage-stats'; stats: UsageStatsByRange }
   | { type: 'usage-dashboard'; result: UsageCollectionResult }
   | { type: 'usage-dashboard-loading' }
 

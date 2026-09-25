@@ -22,7 +22,6 @@ import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
   AccountSignOutReceipt,
   AccountsSnapshot,
-  UsageStatsByRange,
 } from '../shared/protocol.js'
 import {
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
@@ -46,32 +45,6 @@ import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 export const ACCOUNTS_POOL_REFRESH_INTERVAL_MS = 60_000
 export const ACCOUNTS_POOL_WORKER_TIMEOUT_MS = 2 * 60 * 1000
 
-/**
- * Usage analytics ride only every Nth pool run (5 min at the 60 s cadence
- * above), requested with the `--usage-stats` argv flag.
- *
- * Their cost is nothing like the pool's. The pool read is a vault/config read
- * plus one usage GET; the stats read is a full stat-and-parse pass over every
- * transcript in the projects directory, ~0.9 s for both ranges on a corpus of
- * ~130 sessions and growing with history. Paying that every minute is ~22
- * minutes of disk work a day for numbers that are 7-day and 30-day totals: they
- * cannot meaningfully move inside a minute, and the whole scan happens whether
- * or not the Accounts page is even open.
- *
- * A shorter interval for the pool is the right trade (usage headroom IS live and
- * the page shows it per-account); the same interval for the analytics is not.
- * Runs that skip it deliver the pool exactly as before and simply carry no
- * `usageStats`, which the renderer already treats as "keep the last good value".
- * The FIRST run always includes them, so a cold launch is never gated on this.
- *
- * "Every 5 minutes" is therefore approximate, not a clock. The counter advances
- * per RUN, and `refreshNow()` runs are runs, so an out-of-band refresh both
- * shifts the phase and can be the run that pays the scan. Harmless in both
- * directions (the numbers are 7-day and 30-day totals), and worth knowing before
- * reading the interval off this constant.
- */
-export const USAGE_STATS_EVERY_N_RUNS = 5
-
 export type AccountsPoolPublicationGate = {
   beginRead(): number
   invalidate(): void
@@ -87,15 +60,6 @@ export function createAccountsPoolPublicationGate(): AccountsPoolPublicationGate
     },
     canPublish: candidate => candidate === generation,
   }
-}
-
-/**
- * Does run `runIndex` (0-based) carry the analytics? Run 0 must, or a cold
- * launch would leave the Accounts page pending for the first five minutes,
- * which is the state this whole feed exists to remove.
- */
-export function runCarriesUsageStats(runIndex: number): boolean {
-  return runIndex % USAGE_STATS_EVERY_N_RUNS === 0
 }
 
 /**
@@ -128,12 +92,6 @@ export type AccountsPoolRunOptions = {
   onAccountDelete?: (result: AccountsPoolWorkerDeleteResult) => void
   /** Called at most once for an accepted targeted account-sign-out result. */
   onAccountSignOut?: (result: AccountsPoolWorkerSignOutResult) => void
-  /**
-   * Called at most ONCE, and only when the accepted record actually carried
-   * `usageStats` — the field is optional so a failed stats read still delivers
-   * the pool. Fired AFTER `onPool` so the two never land out of order.
-   */
-  onUsageStats?: (stats: UsageStatsByRange) => void
   /** Metadata-only process lifecycle hook; it never receives worker output. */
   onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
   log?: (line: string) => void
@@ -335,9 +293,6 @@ export async function runAccountsPoolWorker(
   } else if (acceptedResult?.type === 'pool') {
     try {
       options.onPool?.(acceptedResult.pool)
-      if (acceptedResult.usageStats) {
-        options.onUsageStats?.(acceptedResult.usageStats)
-      }
     } catch (error) {
       throw new Error('accounts worker result callback failed', { cause: error })
     }

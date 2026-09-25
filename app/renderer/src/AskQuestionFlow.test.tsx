@@ -109,8 +109,9 @@ test('the active pane can be focused at all, and an inactive one cannot', () => 
   // pane listens. `tabIndex={-1}` is never a TAB stop either way; what it
   // controls is programmatic focusability, so its absence is what stops the
   // mount effect from taking the keyboard onto a card nothing listens for.
-  expect(render(SINGLE)).toContain('tabindex="-1"')
-  expect(render(SINGLE, false)).not.toContain('tabindex')
+  expect(render(SINGLE)).toMatch(/<section[^>]*tabindex="-1"/)
+  // The radio group's roving tab stop is separate from card focusability.
+  expect(render(SINGLE, false)).not.toMatch(/<section[^>]*tabindex/)
 })
 
 test('the card body is a bounded scroller', () => {
@@ -122,12 +123,19 @@ test('the card body is a bounded scroller', () => {
   // `composerDock.test.tsx`).
   expect(html).toContain('max-h-[60vh]')
   expect(html).toContain('overflow-y-auto')
-  expect(html).toContain('py-2.5')
+  expect(html).toContain('pt-3')
+  expect(html).toContain('pb-2.5')
   expect(html).toContain('gap-0.5')
   expect(html).not.toContain('bg-[#0d0d0f]')
 })
 
-test('the kicker names the request family and counts what is queued behind it', () => {
+test('the card has one border without an outer shadow ring', () => {
+  const sectionClass = render(SINGLE).match(/<section[^>]*class="([^"]*)"/)?.[1]
+  expect(sectionClass).toContain('border-white/[0.08]')
+  expect(sectionClass).not.toContain('shadow-')
+})
+
+test('the header names this question and counts what is queued behind it', () => {
   // Only past one: a lone question must not imply something follows it.
   expect(render(SINGLE, true, 1)).not.toContain('pending')
   expect(render(SINGLE)).not.toContain('pending')
@@ -137,20 +145,19 @@ test('the kicker names the request family and counts what is queued behind it', 
   expect(queued).toContain('pending')
 })
 
-test('renders the question, header chip, option rows with key caps + descriptions', () => {
+test('renders the question, header kicker, option rows with digits and descriptions', () => {
   const html = render(SINGLE)
   // Not a raw JSON dump — the real flow.
   expect(html).toContain('Which date library should we use?')
-  expect(html).toContain('Library') // header chip
+  expect(html).toContain('Library') // header beside the glyph
   expect(html).toContain('date-fns')
   expect(html).toContain('lightweight &amp; tree-shakeable')
   expect(html).toContain('luxon')
-  // The digit is a SHORTCUT, so it reads as a key cap at the row's far end
-  // rather than as the state marker at its head.
+  // The digit is a shortcut at the row's far end, separate from the marker.
   expect(html).toContain('>1</span>')
 })
 
-test('a row past the ninth advertises no key cap, because no key reaches it', () => {
+test('a row past the ninth advertises no digit, because no key reaches it', () => {
   const eleven: AskQuestion[] = [
     {
       question: 'Which one?',
@@ -169,7 +176,7 @@ test('a row past the ninth advertises no key cap, because no key reaches it', ()
   expect(html).not.toContain('>11</span>')
 })
 
-test('renders the preview badge for an option carrying a preview, and the focused preview pane', () => {
+test('renders the preview badge and the highlighted option preview pane', () => {
   const html = render(SINGLE)
   expect(html).toContain('preview') // per-option badge
   // Cursor starts on option 0 (date-fns), which has a preview → the pane shows.
@@ -198,8 +205,7 @@ test('the Other row never shows a number no key can produce', () => {
     },
   ]
   const html = render(many)
-  // 9 options put the Other row at 10: two digits in a 16px circle, and
-  // unreachable from the digit shortcuts, which stop at 9.
+  // 9 options put the Other row at 10, beyond the digit shortcuts.
   expect(html).not.toContain('>10<')
   expect(html).toContain('>o<')
   expect(html).not.toContain('1–9 · o pick')
@@ -252,11 +258,14 @@ test('an option row is a real checkbox or radio, empty until it is chosen', () =
 })
 
 test('a chosen row outranks the cursor row', () => {
-  // `rowTone`: the cursor is the WEAKER accent step. It was the stronger one,
-  // so the brightest row on the card was whichever the mouse was passing over.
+  // An unchosen keyboard highlight is neutral. A chosen row uses accent even
+  // when it is no longer highlighted, and hover cannot replace that tint.
   const html = render(SINGLE)
-  expect(html).toContain('border-accent/25 bg-accent/[0.05]') // cursor, unchosen
-  expect(html).not.toContain('border-accent/45 bg-accent/10') // the old cursor tint
+  expect(html).toContain('bg-text-primary/[0.05]')
+  expect(html).not.toContain('border-accent/25 bg-accent/[0.05]')
+  const source = readFileSync(new URL('./AskQuestionFlow.tsx', import.meta.url), 'utf8')
+  expect(source).toContain("? 'bg-accent/[0.14]'")
+  expect(source).toContain(": 'bg-accent/10'")
 })
 
 test('every option row can be clicked, and says so', () => {

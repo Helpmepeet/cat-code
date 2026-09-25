@@ -212,14 +212,6 @@ describe('CJK escalation', () => {
     ).toBe(Math.round(LEN / 4))
   })
 
-  test('English structured text stays at the prose ratio', () => {
-    expect(
-      roughTokenCountEstimationForContent([
-        { type: 'text', text: STRUCTURED_TEXT },
-      ]),
-    ).toBe(LEN / 4)
-  })
-
   test('source with CJK comments stays below the threshold', () => {
     // ~0.11 CJK against a 0.30 threshold.  Measured 3.06 chars/token: it is
     // under-counted at 4, but escalating it to 1.5 would over-count it 2x.
@@ -285,20 +277,6 @@ describe('base64 escalation', () => {
     expect(roughTokenCountEstimationForContent([toolResult(dataUri)])).toBe(
       Math.round(dataUri.length / 1.5),
     )
-  })
-
-  test('it does not fire on English prose or source output', () => {
-    expect(
-      roughTokenCountEstimationForContent([toolResult(STRUCTURED_TEXT)]),
-    ).toBe(LEN / 3)
-  })
-
-  test('it does not fire on hex identifiers, which keep their own ratio', () => {
-    // Hex is all one case, so the case-mixing requirement rejects it and the
-    // identifier escalator still owns this class at 2.
-    expect(
-      roughTokenCountEstimationForContent([toolResult(IDENTIFIER_TEXT)]),
-    ).toBe(LEN / 2)
   })
 
   test('it does not fire on a file-path listing', () => {

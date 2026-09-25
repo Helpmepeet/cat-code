@@ -1,29 +1,28 @@
 .usage-auto-flow { min-width:0; }
 .usage-auto-flow-heading { margin:0 0 4px; color:var(--color-text-primary); font-size:14px; font-weight:600; }
 .usage-auto-flow-scroll { min-width:0; overflow-x:auto; }
-.usage-auto-flow-chart { display:block; min-width:760px; width:100%; height:auto; }
+.usage-auto-flow-chart { display:block; width:100%; height:auto; }
 .usage-auto-flow-ribbon { --usage-auto-flow-color:var(--usage-other); fill:none; stroke:var(--usage-auto-flow-color); stroke-opacity:.23; transition:stroke-opacity .12s ease; }
 .usage-auto-flow-ribbon-thin { stroke-opacity:.72; stroke-width:1.25px; }
 .usage-auto-flow-ribbon:hover,.usage-auto-flow-ribbon-active { stroke-opacity:.55; }
-.usage-auto-flow-hit { fill:none; stroke:transparent; cursor:default; }
+.usage-auto-flow-hit { fill:none; stroke:transparent; cursor:pointer; }
 .usage-auto-flow-hit:focus-visible { outline:none; stroke:var(--usage-selection); stroke-width:2px; }
 .usage-auto-flow-node { fill:var(--usage-other); }
 .usage-auto-flow-node-label { fill:var(--usage-secondary); font:11px var(--font-mono); paint-order:stroke; pointer-events:none; stroke:var(--usage-panel); stroke-linejoin:round; stroke-width:3px; }
 .usage-auto-flow-node-attempts { fill:var(--usage-selection); }
-.usage-auto-flow-node-approved { fill:var(--usage-success); }
-.usage-auto-flow-node-blocked { fill:var(--usage-errors); }
 .usage-auto-flow-node-allowed,.usage-auto-flow-ribbon-allowed { --usage-auto-flow-color:var(--usage-success); fill:var(--usage-success); }
-.usage-auto-flow-node-policy_blocked,.usage-auto-flow-ribbon-policy_blocked { --usage-auto-flow-color:var(--usage-errors); fill:var(--usage-errors); }
-.usage-auto-flow-node-review_required,.usage-auto-flow-ribbon-review_required { --usage-auto-flow-color:var(--usage-amber); fill:var(--usage-amber); }
-.usage-auto-flow-node-operational_error,.usage-auto-flow-ribbon-operational_error { --usage-auto-flow-color:var(--usage-other); fill:var(--usage-other); }
-.usage-auto-flow-node-cancelled,.usage-auto-flow-ribbon-cancelled { --usage-auto-flow-color:var(--usage-violet); fill:var(--usage-violet); }
-.usage-auto-flow-node-unknown_outcome,.usage-auto-flow-ribbon-unknown_outcome { --usage-auto-flow-color:var(--usage-pink); fill:var(--usage-pink); }
-.usage-auto-flow-node-incomplete,.usage-auto-flow-ribbon-incomplete { --usage-auto-flow-color:var(--usage-cyan); fill:var(--usage-cyan); }
-.usage-auto-flow-node-incomplete { stroke:var(--usage-cyan); stroke-dasharray:2 1; }
-.usage-auto-flow-readout { min-height:18px; margin:8px 0 0; color:var(--usage-secondary); font:11px var(--font-mono); }
+.usage-auto-flow-node-blocked,.usage-auto-flow-ribbon-blocked { --usage-auto-flow-color:var(--usage-errors); fill:var(--usage-errors); }
+.usage-auto-flow-node-error,.usage-auto-flow-ribbon-error { --usage-auto-flow-color:var(--usage-violet); fill:var(--usage-violet); }
+.usage-auto-flow-node-cancelled,.usage-auto-flow-ribbon-cancelled { --usage-auto-flow-color:var(--usage-other); fill:var(--usage-other); }
+.usage-auto-flow-legend { display:flex; flex-wrap:wrap; gap:7px 13px; margin:8px 0 0; padding:0; list-style:none; color:var(--usage-secondary); font-size:11px; }
+.usage-auto-flow-legend li { display:flex; align-items:center; gap:5px; }
+.usage-auto-flow-legend i { width:8px; height:8px; flex:none; border-radius:2px; }
+.usage-auto-flow-legend-allowed { background:var(--usage-success); }
+.usage-auto-flow-legend-blocked { background:var(--usage-errors); }
+.usage-auto-flow-legend-error { background:var(--usage-violet); }
+.usage-auto-flow-legend-cancelled { background:var(--usage-other); }
+.usage-auto-flow-readout { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:18px; margin:8px 0 0; color:var(--usage-secondary); font:11px var(--font-mono); }
+.usage-auto-flow-readout p { margin:0; }
+.usage-auto-flow-readout button { color:var(--color-text-primary); text-decoration:underline; cursor:pointer; }
 .usage-auto-flow-readout strong { color:var(--color-text-primary); font-weight:500; }
-.usage-auto-flow-values { margin-top:12px; font-size:12px; }
-.usage-auto-flow-values summary { cursor:pointer; color:var(--usage-secondary); }
-.usage-auto-flow-values table { margin-top:8px; }
-.usage-auto-flow-values td:last-child,.usage-auto-flow-values th:last-child { text-align:right; }
 @media (prefers-reduced-motion:reduce) { .usage-auto-flow-ribbon { transition:none; } }

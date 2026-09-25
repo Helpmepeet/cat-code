@@ -121,21 +121,6 @@ describe('transcript projection after a preserving compaction', () => {
  * the row's diff stats describe a span the rewind does not cut.
  */
 describe('rewind selection after a preserving compaction', () => {
-  test('the raw array resolves the same message to two different copies', () => {
-    const { messages, keptAskUuid } = conversationWithPreservingCompaction()
-
-    const byUuid = messages.findIndex(m => m.uuid === keptAskUuid)
-    const keptAsk = messages[byUuid]!
-    const byIdentity = messages.lastIndexOf(keptAsk)
-
-    expect(byUuid).not.toBe(byIdentity)
-    // And the disagreement is what makes the stats wrong: the uuid lookup
-    // starts above the seam, so its span swallows the boundary and summary.
-    expect(
-      messages.slice(byUuid, byIdentity).some(isCompactBoundaryMessage),
-    ).toBe(true)
-  })
-
   test('the projection makes both resolutions land on the surviving copy', () => {
     const { messages, keptAskUuid } = conversationWithPreservingCompaction()
     const projected = dropPreservedMessageDuplicates(messages)

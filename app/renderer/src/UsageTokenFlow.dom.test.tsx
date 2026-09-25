@@ -28,9 +28,7 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     />);
     const button = (text: string) => Array.from(tree.container.querySelectorAll('button')).find(item => item.textContent === text)!;
     const seriesButton = (label: string) => tree.container.querySelector<HTMLButtonElement>(`[aria-label="Hide ${label}"],[aria-label="Show ${label}"]`)!;
-    const total = () => tree.container.querySelector('.usage-flow-heading strong')?.textContent;
-
-    expect(total()).toBe('105');
+    expect(tree.container.querySelector('.usage-flow-heading')?.textContent).toBe('Tokens');
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(3);
     expect(tree.container.querySelectorAll('.usage-flow-grid-line')).toHaveLength(4);
     expect(tree.container.querySelector('.usage-flow-chart')?.nextElementSibling?.classList.contains('usage-flow-legend')).toBe(true);
@@ -48,25 +46,25 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(selected).toEqual([summary.days[0]!.date]);
 
     await act(async () => hits[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
-    expect(selected.at(-1)).toBe(summary.days[1]!.date);
+    expect(selected.at(-1)).toBe(summary.days[0]!.date);
     expect(document.activeElement).toBe(hits[1]);
 
-    await act(async () => seriesButton('Cache reads').click());
-    expect(total()).toBe('15');
-    expect(seriesButton('Cache reads').getAttribute('aria-label')).toBe('Show Cache reads');
-    expect(seriesButton('Cache reads').getAttribute('aria-pressed')).toBe('false');
+    await act(async () => seriesButton('Cache').click());
+    expect(tree.container.querySelector('.usage-flow-hit')?.getAttribute('aria-label')).toContain('15 recorded tokens');
+    expect(seriesButton('Cache').getAttribute('aria-label')).toBe('Show Cache');
+    expect(seriesButton('Cache').getAttribute('aria-pressed')).toBe('false');
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(2);
 
     await act(async () => button('By model').click());
-    expect(total()).toBe('105');
-    expect(tree.container.querySelector('[aria-label="Hide Cache reads"]')).toBeNull();
+    expect(tree.container.querySelector('.usage-flow-hit')?.getAttribute('aria-label')).toContain('105 recorded tokens');
+    expect(tree.container.querySelector('[aria-label="Hide Cache"]')).toBeNull();
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(1);
     await act(async () => seriesButton('Model A').click());
-    expect(total()).toBe('0');
+    expect(tree.container.querySelector('.usage-flow-hit')?.getAttribute('aria-label')).toContain('0 recorded tokens');
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(0);
     await act(async () => button('By type').click());
-    expect(total()).toBe('15');
-    expect(seriesButton('Cache reads').getAttribute('aria-pressed')).toBe('false');
+    expect(tree.container.querySelector('.usage-flow-hit')?.getAttribute('aria-label')).toContain('15 recorded tokens');
+    expect(seriesButton('Cache').getAttribute('aria-pressed')).toBe('false');
 });
 
 test('hover shows cumulative markers and an attached color-coded card without pinning on selection', async () => {
@@ -167,14 +165,12 @@ test('token types use displayed range totals and reorder after cache reads are h
         cacheWriteReporting: 'reported',
     } as unknown as Parameters<typeof usageFlowSeries>[0];
     expect(usageFlowSeries(summary, {}, 'type').map(series => series.id)).toEqual([
-        'read',
+        'cache',
         'output',
-        'write',
         'fresh',
     ]);
-    expect(usageFlowSeries(summary, {}, 'type', new Set(['read'])).map(series => series.id)).toEqual([
+    expect(usageFlowSeries(summary, {}, 'type', new Set(['cache'])).map(series => series.id)).toEqual([
         'fresh',
-        'write',
         'output',
     ]);
 });

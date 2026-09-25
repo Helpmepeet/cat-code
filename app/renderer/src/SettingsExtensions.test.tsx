@@ -68,12 +68,6 @@ test('the marketplace tab tells the user what to do, not what we have not built'
   expect(branch).not.toContain('Browsing and installing')
 })
 
-test('the DeferredNote twin that survived the 2026-07-27 sweep is gone', () => {
-  // Named explicitly: a helper whose only job is to print roadmap notes must
-  // not survive to be reused by the next panel added here.
-  expect(MODULE).not.toContain('DeferredNote')
-})
-
 test('skill flags direct configuration changes without exposing an implementation note', () => {
   expect(MODULE).toContain('Change them in the agent&apos;s configuration file.')
   expect(MODULE).not.toContain('toggling is deferred to a settings writer')

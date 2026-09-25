@@ -12,18 +12,18 @@ import './usageAutoModeBlockRate.css'
 
 type UsageAutoModeBlockRateProps = {
   summary: AutoModeUsageSummary
-  startInclusive: string
-  endExclusive: string
+  startDate: string
+  endDateExclusive: string
   bucketDays?: number
 }
 
 const DAY_MS = 86_400_000
 
-function bucketLabel(date: string, bucketDays: number, endExclusive: string): string {
+function bucketLabel(date: string, bucketDays: number, endDateExclusive: string): string {
   if (bucketDays === 1) return date
   const finalDay = Math.min(
     Date.parse(`${date}T00:00:00.000Z`) + bucketDays * DAY_MS,
-    Date.parse(endExclusive),
+    Date.parse(`${endDateExclusive}T00:00:00.000Z`),
   ) - DAY_MS
   return `${date} to ${new Date(finalDay).toISOString().slice(0, 10)}`
 }
@@ -53,8 +53,8 @@ function pointStateLabel(point: AutoModeRatePoint): string {
 
 export function UsageAutoModeBlockRate({
   summary,
-  startInclusive,
-  endExclusive,
+  startDate,
+  endDateExclusive,
   bucketDays = 1,
 }: UsageAutoModeBlockRateProps) {
   const chart = useUsageChartWidth()
@@ -71,16 +71,16 @@ export function UsageAutoModeBlockRate({
   const right = chart.width - 10
   const peak = Math.max(0, ...numericPoints.map(point => point.rate * 100))
   const ceiling = Math.min(100, Math.max(5, usageAxisCeiling(peak * 1.15)))
-  const start = Date.parse(startInclusive)
-  const end = Date.parse(endExclusive) - DAY_MS
+  const start = Date.parse(`${startDate}T00:00:00.000Z`)
+  const end = Date.parse(`${endDateExclusive}T00:00:00.000Z`) - DAY_MS
   const x = (date: string) => {
     const range = end - start
     const position = range <= 0 ? 0.5 : (Date.parse(`${date}T00:00:00.000Z`) - start) / range
     return left + Math.max(0, Math.min(1, position)) * (right - left)
   }
   const y = (rate: number) => bottom - rate * 100 / ceiling * (bottom - top)
-  const ticks = usageChartTicks(startInclusive, endExclusive, right - left)
-  const includeYear = Date.parse(endExclusive) - start > 365 * DAY_MS
+  const ticks = usageChartTicks(startDate, endDateExclusive, right - left)
+  const includeYear = Date.parse(`${endDateExclusive}T00:00:00.000Z`) - start > 365 * DAY_MS
   const headlineText = headline.rate === null
     ? 'Unavailable'
     : `${headline.state === 'provisional' ? 'Provisional ' : ''}${usagePercent(headline.rate * 100)}`
@@ -105,7 +105,7 @@ export function UsageAutoModeBlockRate({
           className="usage-auto-mode-block-rate-chart"
           viewBox={`0 0 ${chart.width} ${height}`}
           role="group"
-          aria-label={`Command block rate from zero to ${ceiling} percent. Rate is initial automatic policy denials divided by recorded command permission attempts. Missing, unavailable, and provisional periods break confirmed line segments. Exact UTC values follow the graph.`}
+          aria-label={`Command block rate, 0 to ${ceiling}%`}
           onMouseLeave={() => setActiveDate(null)}
         >
           {[0, 1 / 3, 2 / 3, 1].map(fraction => {
@@ -122,7 +122,7 @@ export function UsageAutoModeBlockRate({
           />)}
           {numericPoints.map((point, index) => {
             const population = summary.buckets.find(bucket => bucket.date === point.date)?.commands ?? summary.commands
-            const label = `${bucketLabel(point.date, bucketDays, endExclusive)}: ${pointDetails(point, population)}. ${pointStateLabel(point)}.`
+            const label = `${bucketLabel(point.date, bucketDays, endDateExclusive)}: ${pointDetails(point, population)}. ${pointStateLabel(point)}.`
             return <g
               key={point.date}
               className="usage-auto-mode-block-rate-point"
@@ -162,32 +162,9 @@ export function UsageAutoModeBlockRate({
         </svg>
       : <p className="usage-note">{emptyMessage}</p>}
     {active && <div className="usage-auto-mode-block-rate-readout" role="status">
-      <strong>{bucketLabel(active.date, bucketDays, endExclusive)}</strong>
+      <strong>{bucketLabel(active.date, bucketDays, endDateExclusive)}</strong>
       <span>{pointDetails(active, summary.buckets.find(bucket => bucket.date === active.date)?.commands ?? summary.commands)}</span>
       <span>{pointStateLabel(active)}</span>
     </div>}
-    <details className="usage-auto-mode-block-rate-values">
-      <summary>Exact command block-rate values</summary>
-      <div className="usage-table-scroll">
-        <table>
-          <caption>Command permission attempts by UTC period</caption>
-          <thead><tr><th scope="col">Period</th><th scope="col">Coverage</th><th scope="col">Policy-denied commands</th><th scope="col">Recorded commands</th><th scope="col">Block rate</th><th scope="col">Operational errors</th><th scope="col">Review required</th><th scope="col">Unresolved</th></tr></thead>
-          <tbody>{points.map(point => {
-            const population = summary.buckets.find(bucket => bucket.date === point.date)?.commands ?? summary.commands
-            const unresolved = population.outcomes.incomplete + population.outcomes.unknown_outcome
-            return <tr key={point.date}>
-              <th scope="row">{bucketLabel(point.date, bucketDays, endExclusive)}</th>
-              <td>{pointStateLabel(point)}</td>
-              <td>{usageNumber(point.numerator)}</td>
-              <td>{usageNumber(point.denominator)}</td>
-              <td>{point.rate === null ? 'Unavailable' : usagePercent(point.rate * 100)}</td>
-              <td>{usageNumber(population.outcomes.operational_error)}</td>
-              <td>{usageNumber(population.outcomes.review_required)}</td>
-              <td>{usageNumber(unresolved)}</td>
-            </tr>
-          })}</tbody>
-        </table>
-      </div>
-    </details>
   </section>
 }

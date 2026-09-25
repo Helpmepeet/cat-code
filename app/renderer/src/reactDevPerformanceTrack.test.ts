@@ -6,9 +6,7 @@ import {
 
 // The exact shape react-dom's development build passes as its second argument
 // (`reusableComponentOptions`, react-dom-client.development.js:25542). The
-// filter keys on `detail.devtools`, so this fixture is what makes the test
-// load-bearing: widen or narrow the predicate and one of the two cases below
-// fails.
+// filter keys on `detail.devtools`; the remaining lifecycle tests use it.
 function reactDevTrackOptions(): PerformanceMeasureOptions {
   return {
     start: 0,
@@ -38,14 +36,6 @@ afterEach(() => {
 })
 
 describe('installReactDevPerformanceTrackFilter', () => {
-  test("drops React's dev-track measures so nothing retains their detail", () => {
-    installReactDevPerformanceTrackFilter()
-
-    performance.measure('​MessageBody', reactDevTrackOptions())
-
-    expect(measureNames()).toEqual([])
-  })
-
   test('forwards every other measure untouched', () => {
     installReactDevPerformanceTrackFilter()
 

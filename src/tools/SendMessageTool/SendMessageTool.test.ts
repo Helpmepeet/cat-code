@@ -128,12 +128,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
     expect(SendMessageTool.isEnabled?.()).toBe(true)
   })
 
-  test('is enabled in normal sessions for running subagent targets', () => {
-    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-
-    expect(SendMessageTool.isEnabled?.()).toBe(true)
-  })
-
   test('schema describes running subagent targets', () => {
     const description = SendMessageTool.inputSchema.shape.to.description
     // Must convey the target has to be running, accept name/handle/raw ID, and

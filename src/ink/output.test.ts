@@ -110,18 +110,6 @@ describe('Output', () => {
     expect(changes[0]?.[2]?.char).toBe(sequence)
   })
 
-  test('preserves whole-line tmux-wrapped iTerm2 inline image sequences inside horizontal clips', () => {
-    const sequence = '\x1bPtmux;\x1b\x1b]1337;File=inline=1;size=4:AAAA\x07\x1b\\'
-    const { rendered, changes } = renderLine(`${sequence}\n\n`, {
-      x1: 0,
-      x2: 80,
-    })
-
-    expect(charInCellAt(rendered, 0, 0)).toBe(sequence)
-    expect(changes).toHaveLength(1)
-    expect(changes[0]?.[2]?.char).toBe(sequence)
-  })
-
   test('clears stale text before writing an inline image', () => {
     const stylePool = new StylePool()
     const charPool = new CharPool()

@@ -50,8 +50,8 @@ export function usageFlowSamples(summary: UsageRangeSummary, series: readonly Us
     ]));
     const empty = () => series.map(() => 0);
     const step = usageBucketDays(summary) * DAY_MS;
-    const first = Date.parse(summary.startInclusive);
-    const last = Date.parse(summary.endExclusive) - DAY_MS;
+    const first = Date.parse(`${summary.startDate}T00:00:00.000Z`);
+    const last = Date.parse(`${summary.endDateExclusive}T00:00:00.000Z`) - DAY_MS;
     let previous = first - step;
 
     for (const day of [...summary.days].sort((a, b) => a.date.localeCompare(b.date))) {

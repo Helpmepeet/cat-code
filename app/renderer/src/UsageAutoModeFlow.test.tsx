@@ -6,21 +6,18 @@ import { UsageAutoModeFlow } from './UsageAutoModeFlow.js'
 
 const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture())
 
-test('renders the normal decision path and exact route values from aggregated routes', () => {
+test('renders all attempts, four display groups, and consistent group colors', () => {
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={summary} />)
   expect(html).toContain('Decision flow')
-  expect(html).toContain('Normal decision flow for 87 recorded automatic permission attempts')
-  expect(html).not.toContain('exceptional records')
-  expect(html).toContain('Safety check')
-  expect(html).toContain('Context review')
-  expect(html).not.toContain('Stage 1')
-  expect(html).not.toContain('Stage 2')
-  expect(html).toContain('Approved')
+  expect(html).toContain('Decision flow for 100 recorded automatic permission attempts')
+  expect(html).toContain('base route')
+  expect(html).toContain('stage1 route')
+  expect(html).toContain('Allowed')
   expect(html).toContain('Blocked')
-  expect(html).toContain('Base checks')
-  expect(html).toContain('Policy-blocked')
-  expect(html).toContain('Exact route values')
-  expect(html).toContain('of 87 normal completed decisions')
+  expect(html).toContain('Error')
+  expect(html).toContain('Cancelled')
+  expect(html).toContain('Includes review required, operational error, unknown outcome, and incomplete')
+  expect(html).toContain('of 100 attempts')
 })
 
 test('does not render a zero-valued flow for unavailable or empty coverage', () => {
@@ -34,15 +31,15 @@ test('does not render a zero-valued flow for unavailable or empty coverage', () 
   expect(renderToStaticMarkup(<UsageAutoModeFlow summary={empty} />)).toContain('No decisions')
 })
 
-test('marks partial history without replacing the recorded route flow', () => {
+test('does not narrate partial history', () => {
   const partial = structuredClone(summary)
   partial.allTools.coverage.state = 'partial'
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={partial} />)
-  expect(html).toContain('Partial history')
-  expect(html).toContain('Recorded automatic permission routes')
+  expect(html).not.toContain('Partial history')
+  expect(html).toContain('Decision flow for 100 recorded automatic permission attempts')
 })
 
-test('keeps exact values available when every record is exceptional', () => {
+test('renders exceptional-only histories as a full Error flow', () => {
   const exceptional = structuredClone(summary)
   exceptional.allTools.outcomes = {
     allowed: 0,
@@ -55,7 +52,7 @@ test('keeps exact values available when every record is exceptional', () => {
   }
   exceptional.routes = [{ route: 'base', outcome: 'operational_error', count: 1 }]
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={exceptional} />)
-  expect(html).toContain('No normal completed decisions')
-  expect(html).toContain('Exact route values')
-  expect(html).toContain('Operational error')
+  expect(html).toContain('Decision flow for 1 recorded automatic permission attempt')
+  expect(html).toContain('Error: 1 recorded attempt')
+  expect(html).not.toContain('No decisions')
 })

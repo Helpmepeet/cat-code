@@ -311,7 +311,7 @@ test('keeps joins within source scope and excludes contradictory starts', () => 
   expect(summary.allTools.coverage).toMatchObject({ state: 'partial', invalidRecords: 1, orphanRecords: 1 })
 })
 
-test('attributes a later eligible terminal to its start UTC bucket and ignores post-cutoff records', () => {
+test('attributes a later eligible terminal to its start local-day bucket and ignores post-cutoff records', () => {
   const summary = reduceAutoModeUsage({
     records: [
       start('cross-midnight', '2026-09-10T23:59:00.000Z'),

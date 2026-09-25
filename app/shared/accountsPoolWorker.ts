@@ -12,12 +12,6 @@
  * child can neither grow main's buffers without bound nor smuggle a malformed
  * snapshot past the redaction contract.
  *
- * The record also carries the Accounts page's usage analytics for both ranges
- * (`usageStats`, optional — see the field). Same owner, same page, same reason:
- * that surface must work with no session open, and the numbers are a local-disk
- * aggregation this run can afford. It is aggregate arithmetic over transcript
- * metadata — token counts, dates, model names — and carries no prompt text.
- *
  * The payload reuses the existing `AccountsSnapshot` protocol type, which is
  * ALREADY the redacted projection (`accountsDomain.ts` `buildAccountsSnapshot`):
  * no `accessToken`, no `refreshToken`, no `vaultFilePath`, no `idToken` by
@@ -34,16 +28,10 @@ import type {
   AccountsSnapshot,
   AnthropicAccountStatus,
   SignedOutCodexProfileStatus,
-  UsageStatsByRange,
-  UsageStatsDailyActivityItem,
-  UsageStatsDailyModelTokens,
-  UsageStatsModelUsageItem,
-  UsageStatsSnapshot,
 } from './protocol.js'
 import { MAX_TEXT_FIELD_CHARS } from './limits.js'
 import {
   isBoolean,
-  isFiniteNumber,
   isNumber,
   isNumberOrNull,
   isRecord,
@@ -69,22 +57,6 @@ export type AccountsPoolWorkerPoolResult = {
   type: 'pool'
   version: typeof ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
   pool: AccountsSnapshot
-  /**
-   * Usage analytics for both ranges, aggregated from the engine's own transcript
-   * logs in the SAME run that reads the pool. It rides this record rather than a
-   * second worker because it serves the same page for the same reason (the
-   * Accounts page must work with no session open) off the same disposable
-   * engine-graph process, and the read is local disk (~1.2 s for both ranges,
-   * ~5 KB) against a worker that already pays the engine import and a network
-   * usage fetch every run.
-   *
-   * OPTIONAL on purpose, and the reason this stays boundary-version 1: a stats
-   * read that fails must not cost the pool its delivery, so the worker omits the
-   * field and main still emits the accounts event. Absent means "this run had
-   * none", never "the user has no history" — the renderer keeps its last good
-   * value, exactly as it does for a failed pool run.
-   */
-  usageStats?: UsageStatsByRange
 }
 
 export type AccountsPoolWorkerFailureResult = {
@@ -208,38 +180,6 @@ export function parseAccountSignOutReceipt(
 }
 
 /**
- * Drop the optional half of a record that would not fit the size cap, in place,
- * and report whether it did. Returns the same object so the caller can emit it
- * either way.
- *
- * The two halves have very different size behaviour: the pool is a bounded list
- * of accounts, while `usageStats` carries a per-day map keyed by every model
- * name seen in a 30-day window, so its cardinality follows user data. Without
- * this the oversize case would throw at emit, exit the worker non-zero, and cost
- * the POOL its delivery too, on every run, permanently. Shedding the optional
- * half is exactly what makes it optional.
- */
-export function shedOversizeUsageStats(result: AccountsPoolWorkerResult): {
-  result: AccountsPoolWorkerResult
-  shed: boolean
-} {
-  if (result.type !== 'pool' || !result.usageStats) return { result, shed: false }
-  if (fitsAccountsPoolRecordLimit(result)) return { result, shed: false }
-  delete result.usageStats
-  return { result, shed: true }
-}
-
-/** The same measurement the worker's `emit` throws on, asked in advance. */
-export function fitsAccountsPoolRecordLimit(
-  result: AccountsPoolWorkerResult,
-): boolean {
-  return (
-    Buffer.byteLength(JSON.stringify(result), 'utf8') <=
-    MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES
-  )
-}
-
-/**
  * Parse + validate one worker result record fail-closed. Returns the typed
  * result only when every gate passes; a wrong version, unknown discriminant,
  * extra keys, or a single malformed account row fails the WHOLE record (null).
@@ -291,123 +231,15 @@ export function parseAccountsPoolWorkerResult(
     type: oneOf(['pool'] as const),
     version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
     pool: isRecord,
-    // `usageStats` is optional (see the field's doc): accept the record with OR
-    // without it, but no OTHER key — the closed-vocabulary gate stands. A PRESENT
-    // malformed value is malformed child output and fails the WHOLE record.
-    usageStats: optional(isRecord),
   })
   if (!record) return null
   const pool = parseAccountsSnapshot(record.pool)
   if (!pool) return null
-  const result: AccountsPoolWorkerResult = {
+  return {
     type: 'pool',
     version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
     pool,
   }
-  if (record.usageStats !== undefined) {
-    const usageStats = parseUsageStatsByRange(record.usageStats)
-    if (!usageStats) return null
-    result.usageStats = usageStats
-  }
-  return result
-}
-
-/**
- * Fail-closed `UsageStatsByRange` validator. Both ranges must be present, and
- * each snapshot's own `range` must MATCH the key it arrived under — otherwise a
- * compromised child could file 30-day totals under the 7-day toggle, which the
- * renderer keys by and would never re-check.
- */
-export function parseUsageStatsByRange(value: unknown): UsageStatsByRange | null {
-  const ranges = narrowExact(value, { '7d': isRecord, '30d': isRecord })
-  if (!ranges) return null
-  const sevenDay = parseUsageStatsSnapshot(ranges['7d'])
-  const thirtyDay = parseUsageStatsSnapshot(ranges['30d'])
-  if (!sevenDay || !thirtyDay) return null
-  if (sevenDay.range !== '7d' || thirtyDay.range !== '30d') return null
-  return { '7d': sevenDay, '30d': thirtyDay }
-}
-
-/**
- * Fail-closed `UsageStatsSnapshot` validator — the ONE place this untrusted
- * shape is narrowed. Numbers are required to be FINITE: the record arrives as
- * JSON, where `NaN`/`Infinity` cannot survive `JSON.stringify` (they serialize
- * to `null`), so a non-finite number here is malformed output, and letting one
- * through would poison every chart axis it divides.
- */
-export function parseUsageStatsSnapshot(value: unknown): UsageStatsSnapshot | null {
-  const snapshot = narrowExact(value, {
-    range: oneOf(['7d', '30d'] as const),
-    totalTokens: isFiniteNumber,
-    dailyModelTokens: isUnknownArray,
-    modelUsage: isRecord,
-    dailyActivity: isUnknownArray,
-    cacheHitRate: isFiniteNumber,
-    cacheReadTokens: isFiniteNumber,
-    cacheWriteTokens: isFiniteNumber,
-    freshInputTokens: isFiniteNumber,
-    totalSessions: isFiniteNumber,
-    totalMessages: isFiniteNumber,
-    activeDays: isFiniteNumber,
-  })
-  if (!snapshot) return null
-
-  const dailyModelTokens: UsageStatsDailyModelTokens[] = []
-  for (const candidate of snapshot.dailyModelTokens) {
-    const row = narrowExact(candidate, {
-      date: isString,
-      tokensByModel: isRecord,
-    })
-    if (!row) return null
-    const tokensByModel = parseNumberMap(row.tokensByModel)
-    if (!tokensByModel) return null
-    dailyModelTokens.push({ date: row.date, tokensByModel })
-  }
-
-  const dailyActivity: UsageStatsDailyActivityItem[] = []
-  for (const candidate of snapshot.dailyActivity) {
-    const row = narrowExact(candidate, {
-      date: isString,
-      messageCount: isFiniteNumber,
-      sessionCount: isFiniteNumber,
-      toolCallCount: isFiniteNumber,
-    })
-    if (!row) return null
-    dailyActivity.push(row)
-  }
-
-  // `Object.create(null)`, not `{}`: model names come from transcript files, and
-  // a key of `__proto__` survives `JSON.parse` as an enumerable own property.
-  // Assigning it into an object literal invokes the prototype SETTER, so the row
-  // vanishes and the object this validator returns carries a caller-shaped
-  // prototype. A null-prototype accumulator makes every such key an ordinary
-  // own property, which is what a fail-closed narrower of untrusted child output
-  // has to guarantee.
-  const modelUsage: Record<string, UsageStatsModelUsageItem> =
-    Object.create(null)
-  for (const [model, candidate] of Object.entries(snapshot.modelUsage)) {
-    const row = narrowExact(candidate, {
-      inputTokens: isFiniteNumber,
-      outputTokens: isFiniteNumber,
-      cacheCreationInputTokens: isFiniteNumber,
-      cacheReadInputTokens: isFiniteNumber,
-    })
-    if (!row) return null
-    modelUsage[model] = row
-  }
-
-  return { ...snapshot, dailyModelTokens, modelUsage, dailyActivity }
-}
-
-function parseNumberMap(value: unknown): Record<string, number> | null {
-  if (!isRecord(value)) return null
-  // Null-prototype for the same reason as `modelUsage` above.
-  const out: Record<string, number> = Object.create(null)
-  for (const [key, candidate] of Object.entries(value)) {
-    if (!isFiniteNumber(candidate)) return null
-    out[key] = candidate
-  }
-  return out
 }
 
 /**

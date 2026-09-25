@@ -6,17 +6,17 @@ import { UsageAutoModeBars } from './UsageAutoModeBars.js';
 
 const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture());
 
-test('renders ordered all-tool decision bars and exact values for the hundred-attempt fixture', () => {
+test('renders all four display groups using the all-attempt total', () => {
     const html = renderToStaticMarkup(<UsageAutoModeBars summary={summary}/>);
     expect(html).toContain('Decisions over time');
     expect(html).toContain('Allowed</span><b>85</b>');
-    expect(html).toContain('Policy blocked</span><b>7</b>');
-    expect(html).toContain('Review required</span><b>4</b>');
-    expect(html).toContain('Operational error</span><b>4</b>');
-    expect(html).not.toContain('Cancelled</span>');
-    expect(html).not.toContain('Unknown</span>');
-    expect(html).toContain('Exact decision values');
-    expect(html).toContain('100</td>');
+    expect(html).toContain('Blocked</span><b>7</b>');
+    expect(html).toContain('Error</span><b>8</b>');
+    expect(html).toContain('Cancelled</span><b>0</b>');
+    expect(html).toContain('85.0% of 100 attempts');
+    expect(html).toContain('tabindex="0" role="button"');
+    expect(html).not.toContain('Exact decision values');
+    expect(html).toContain('Includes review required, operational error, unknown outcome, and incomplete');
 });
 
 test('keeps backend category ranking and exact policy-block totals', () => {
@@ -33,12 +33,10 @@ test('keeps backend category ranking and exact policy-block totals', () => {
     expect(html.indexOf('First key')).toBeLessThan(html.indexOf('Later key'));
     expect(html.indexOf('Later key')).toBeLessThan(html.indexOf('Other'));
     expect(html.indexOf('Other')).toBeLessThan(html.indexOf('Uncategorized'));
-    expect(html).toContain('Exact block-reason values');
-    expect(html).toContain('Total policy blocks');
-    expect(html).toContain('7</td><td>100.0%</td>');
+    expect(html).not.toContain('Exact block-reason values');
 });
 
-test('shows an extra outcome only when it occurs in the selected range', () => {
+test('retains the four group legend when one group has no events', () => {
     const withCancellation = structuredClone(summary);
     withCancellation.allTools.outcomes.allowed--;
     withCancellation.allTools.outcomes.cancelled++;
@@ -46,8 +44,7 @@ test('shows an extra outcome only when it occurs in the selected range', () => {
     withCancellation.buckets[0]!.allTools.outcomes.cancelled++;
     const html = renderToStaticMarkup(<UsageAutoModeBars summary={withCancellation}/>);
     expect(html).toContain('Cancelled</span><b>1</b>');
-    expect(html).not.toContain('Unknown</span>');
-    expect(html).not.toContain('Incomplete</span>');
+    expect(html).toContain('Error</span><b>8</b>');
 });
 
 test('reports unavailable history and a verified no-policy-block state without inventing values', () => {

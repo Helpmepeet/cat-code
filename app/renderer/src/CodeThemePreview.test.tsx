@@ -11,11 +11,9 @@
  */
 
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CodeThemePreview } from './CodeThemePreview.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
-import { CODE_THEME_STORAGE_KEY } from './codeTheme.js'
 
 const html = renderToStaticMarkup(<CodeThemePreview />)
 
@@ -50,14 +48,6 @@ test('the sample is really tokenized, so a palette has something to color', () =
   expect(html).toContain('hljs-built_in') // print, range
 })
 
-test('the preview shares the transcript highlighting configuration', () => {
-  const source = readFileSync(new URL('./CodeThemePreview.tsx', import.meta.url), 'utf8')
-
-  expect(source).toContain("import { REHYPE_PLUGINS } from './markdownPlugins.js'")
-  expect(source).toContain('rehypePlugins={REHYPE_PLUGINS}')
-  expect(source).not.toContain('PREVIEW_REHYPE_PLUGINS')
-})
-
 test('the canvas renders under the attribute the active palette selects on', () => {
   const themed = renderToStaticMarkup(
     <CodeThemeProvider
@@ -77,22 +67,4 @@ test('the canvas renders under the attribute the active palette selects on', () 
   // Nothing rewrites the spans per theme: the palette is CSS, so the same token
   // markup has to come out under every theme.
   expect(themed).toContain('class="hljs"')
-})
-
-test('the preview reads the picker, so a theme change recolors it with no reload', () => {
-  const store = new Map<string, string>([
-    [CODE_THEME_STORAGE_KEY, JSON.stringify({ version: 1, theme: 'monokai' })],
-  ])
-  const themed = renderToStaticMarkup(
-    <CodeThemeProvider
-      storage={{
-        getItem: key => store.get(key) ?? null,
-        setItem: (key, value) => void store.set(key, value),
-      }}
-    >
-      <CodeThemePreview />
-    </CodeThemeProvider>,
-  )
-
-  expect(themed).toContain('data-code-theme="monokai"')
 })

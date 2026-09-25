@@ -3,22 +3,28 @@
 .usage-tool-error-trend h3 { margin:0; font-size:13px; font-weight:550; }
 .usage-tool-error-trend header p { margin:3px 0 0; color:var(--usage-secondary); font-size:11.5px; }
 .usage-tool-build-toggle { display:inline-flex; align-items:center; gap:7px; padding:5px 8px; border:1px solid var(--color-shell-seam); border-radius:5px; color:var(--usage-secondary); font-size:11px; }
-.usage-tool-build-toggle:hover,.usage-tool-build-toggle[aria-pressed=true] { background:var(--color-surface-hover); color:var(--color-text-primary); }
+.usage-tool-build-toggle:hover,.usage-tool-build-toggle[aria-pressed=true] { background:var(--color-shell-hover); color:var(--color-text-primary); }
 .usage-tool-build-toggle i { width:7px; height:7px; transform:rotate(45deg); border-radius:1px; background:var(--usage-violet); }
 .usage-tool-picker { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 8px; }
 .usage-tool-picker button { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:160px; padding:5px 8px; border:1px solid var(--color-shell-seam); border-radius:999px; color:var(--usage-secondary); font-size:11px; }
-.usage-tool-picker button:hover { background:var(--color-surface-hover); color:var(--color-text-primary); }
+.usage-tool-picker button:hover { background:var(--color-shell-hover); color:var(--color-text-primary); }
 .usage-tool-picker button[aria-pressed=true] { border-color:var(--usage-errors); background:color-mix(in srgb,var(--usage-errors) 8%,transparent); color:var(--color-text-primary); }
 .usage-tool-picker svg { flex:none; }
 .usage-tool-error-chart { display:block; width:100%; min-height:156px; overflow:visible; }
 .usage-tool-error-grid { stroke:var(--color-shell-seam); stroke-width:1; }
 .usage-tool-error-line { fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .usage-tool-error-series circle { fill:var(--usage-panel); stroke-width:2; }
+.usage-tool-error-series g[role=button] { cursor:pointer; }
+.usage-tool-error-series g[role=button]:focus-visible { outline:none; }
+.usage-tool-error-series g[role=button]:focus-visible circle { stroke-width:4; }
+.usage-tool-error-series g[aria-pressed=true] circle { stroke-width:4; }
 .usage-tool-build-marker path { stroke:var(--usage-panel); stroke-width:1; }
 .usage-tool-build-marker:focus { outline:none; }
 .usage-tool-build-marker:focus-visible path { stroke:var(--color-text-primary); stroke-width:2; }
+.usage-tool-build-marker[aria-pressed=true] path { stroke:var(--color-text-primary); stroke-width:2; }
 .usage-tool-error-readout { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; min-height:18px; margin-top:4px; font-size:11px; }
 .usage-tool-error-readout span { color:var(--usage-secondary); font-family:var(--font-mono); }
+.usage-tool-error-readout button { color:var(--color-text-primary); text-decoration:underline; cursor:pointer; }
 .usage-tool-error-values { margin-top:10px; }
 .usage-tool-error-values > summary { color:var(--usage-secondary); font-size:11px; cursor:pointer; }
 .usage-tool-error-values table { margin-top:8px; }

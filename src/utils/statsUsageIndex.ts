@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality } from './statsReader.js';
 import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
+import { localDateKey, shiftLocalCalendarDays } from './usageWindow.js';
 import { projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
@@ -83,6 +84,7 @@ export function readSavedUsage(path = usageIndexPath()): UsageDashboardSnapshot 
 type UsageIndexOptions = {
     path?: string;
     deadline: number;
+    timezone?: string;
     finalize?: (snapshot: UsageDashboardSnapshot) => UsageDashboardSnapshot;
     onReadSource?: (path: string) => void;
 };
@@ -166,19 +168,25 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             }
         }
         const hasRecordBetween = (start: number, end: number) => db.query('SELECT 1 FROM records WHERE timestamp > ? AND timestamp <= ? LIMIT 1').get(start, end);
+        const timezone = options.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const newlyEligible = saved && hasRecordBetween(Date.parse(saved.asOf), Date.parse(asOf));
-        const newlyEligibleComparison = saved && ([7, 30] as const).some(days => hasRecordBetween(Date.parse(saved.asOf) - days * 86400000, Date.parse(asOf) - days * 86400000));
+        const newlyEligibleComparison = saved && ([7, 30] as const).some(days =>
+            hasRecordBetween(
+                shiftLocalCalendarDays(Date.parse(saved.asOf), -days, timezone),
+                shiftLocalCalendarDays(Date.parse(asOf), -days, timezone),
+            ),
+        );
         let snapshot: UsageDashboardSnapshot;
-        // Within one UTC day, totals remain valid until a record crosses either
-        // the current or shifted prior cutoff. Preserve the warm path otherwise.
-        if (!changed && saved && asOf >= saved.asOf && asOf.slice(0, 10) === saved.asOf.slice(0, 10) && !newlyEligible && !newlyEligibleComparison) {
+        // Within one local day, reuse totals only while both current and prior
+        // observed cutoffs have admitted no additional records.
+        if (!changed && saved && saved.timezone === timezone && asOf >= saved.asOf && localDateKey(Date.parse(asOf), timezone) === localDateKey(Date.parse(saved.asOf), timezone) && !newlyEligible && !newlyEligibleComparison) {
             snapshot = structuredClone(saved);
             snapshot.asOf = asOf;
             snapshot.computedAt = new Date().toISOString();
             snapshot.snapshotId = randomUUID();
-            for (const [days, range] of [[7, '7d'], [30, '30d']] as const) {
-                const previous = snapshot.ranges[range].previousPeriod;
-                if (previous) previous.endInclusive = new Date(Date.parse(asOf) - days * 86400000).toISOString();
+            for (const days of [7, 30] as const) {
+                const prior = snapshot.ranges[days === 7 ? '7d' : '30d'].previousPeriod;
+                if (prior) prior.endInclusive = new Date(shiftLocalCalendarDays(Date.parse(asOf), -days, timezone)).toISOString();
             }
         } else {
             const get = db.query<{ value: string }, [string, string]>('SELECT value FROM identities WHERE kind=? AND key=?');
@@ -191,7 +199,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                 }; },
                 set(name: string) { const map = this.map<boolean>(name); return { has: key => map.get(key) === true, add: key => map.set(key, true) }; },
             };
-            snapshot = await collectRetainedUsage(files, asOf, { deadline: options.deadline, identities,
+            snapshot = await collectRetainedUsage(files, asOf, { deadline: options.deadline, timezone, identities,
                 readRecords: async (file, consume) => {
                     const source = db.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file);
                     if (!source) throw new Error('Usage source unavailable');

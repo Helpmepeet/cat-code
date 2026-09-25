@@ -1,83 +1,77 @@
 import { useState } from 'react';
-import { usageChartDate } from './usageGraphState.js';
-import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
-import { useUsageChartWidth, usageNumber, usagePercent, usageCompact } from './usageDashboardState.js';
+import type { UsageDay, UsageHour, UsageRangeSummary } from '../../shared/usageDashboard.js';
+import { usageChartDate, usageHourLabel } from './usageGraphState.js';
+import { useUsageChartWidth, usageNumber } from './usageDashboardState.js';
 
-export function UsageHeatmap({ summary, asOf, onSelect, partial, metric = 'requests' }: {
-    summary: UsageRangeSummary; asOf: string; onSelect: (date: string) => void; partial: boolean; metric?: 'requests' | 'tokens';
+type HeatCell = { day: UsageDay; dayIndex: number; slot: UsageHour };
+
+function offsetLabel(minutes: number): string {
+    return `UTC${minutes >= 0 ? '+' : '−'}${String(Math.floor(Math.abs(minutes) / 60)).padStart(2, '0')}:${String(Math.abs(minutes) % 60).padStart(2, '0')}`;
+}
+
+export function UsageHeatmap({ summary, asOf, onSelect, selected = '', selectedBucketDays = 1, metric = 'requests' }: {
+    summary: UsageRangeSummary;
+    asOf: string;
+    onSelect: (date: string) => void;
+    selected?: string;
+    selectedBucketDays?: number;
+    partial?: boolean;
+    metric?: 'requests' | 'tokens';
 }) {
     const [active, setActive] = useState(0);
     const [hovered, setHovered] = useState<number | null>(null);
-    const [pinned, setPinned] = useState<number | null>(null);
-    const columns = summary.days.length;
-    const values = (day: UsageRangeSummary['days'][number]) => metric === 'tokens' ? day.hourlyTokens : day.hourlyRequests;
-    const noun = metric === 'tokens' ? 'tokens' : 'tool requests';
-    const missing = summary.days.some(day => values(day) === undefined);
-    const max = Math.max(1, ...summary.days.flatMap(d => values(d) ?? []));
-    const compact = columns <= 7;
     const chart = useUsageChartWidth();
-    const left = compact ? 62 : 36, top = compact ? 24 : 8;
-    const width = compact ? Math.max(580, chart.width) : left + columns * 13 + 10;
-    const step = compact ? (width - left) / 24 : 13;
-    const size = step - 2, height = (compact ? columns : 24) * step + (compact ? 26 : 38);
-    const xFor = (col: number, hour: number) => left + (compact ? hour : col) * step;
-    const yFor = (col: number, hour: number) => top + (compact ? col : hour) * step;
-    const shown = hovered ?? pinned;
-    const cell = shown === null ? null : { day: summary.days[shown % columns]!, hour: Math.floor(shown / columns) };
-    const isFuture = (date: string, hour: number) => Date.parse(`${date}T${String(hour).padStart(2, '0')}:00:00.000Z`) > Date.parse(asOf);
-    const labels = new Set(columns <= 7 ? [0, columns - 1] : [0, Math.floor(columns / 3), Math.floor(columns * 2 / 3), columns - 1]);
-    if (missing) return <p className="usage-note">Hourly token counts are unavailable.</p>;
+    const noun = metric === 'tokens' ? 'tokens' : 'tool requests';
+    const cells: HeatCell[] = summary.days.flatMap((day, dayIndex) => (day.hours ?? []).map(slot => ({ day, dayIndex, slot })));
+    if (!cells.length) return <p className="usage-note">Hourly activity is unavailable.</p>;
+    const future = (slot: UsageHour) => !!slot.startAt && Date.parse(slot.startAt) > Date.parse(asOf);
+    const selectedStart = selected ? Date.parse(`${selected}T00:00:00.000Z`) : NaN;
+    const isSelectedDay = (date: string) => {
+        const offset = (Date.parse(`${date}T00:00:00.000Z`) - selectedStart) / 86400000;
+        return offset >= 0 && offset < selectedBucketDays;
+    };
+    const value = (slot: UsageHour) => metric === 'tokens' ? slot.tokens ?? 0 : slot.requests;
+    const max = Math.max(1, ...cells.filter(cell => !future(cell.slot)).map(cell => value(cell.slot)));
+    const width = Math.max(320, chart.width), left = 50, right = 8, top = 16;
+    const hourStep = (width - left - right) / 24, size = Math.min(18, Math.max(8, hourStep - 3)), rowStep = size + 5;
+    const height = top + summary.days.length * rowStep + 25;
+    const x = (hour: number) => left + hour * hourStep + (hourStep - size) / 2;
+    const y = (dayIndex: number) => top + dayIndex * rowStep;
+    const shown = hovered === null ? null : cells[hovered];
+    const focus = (index: number, target: SVGGElement) => {
+        const next = Math.max(0, Math.min(cells.length - 1, index));
+        setActive(next);
+        target.ownerSVGElement?.querySelectorAll<SVGGElement>('.usage-heat-cell')[next]?.focus();
+    };
     return <>
-        <div className="usage-chart-toolbar"><span>{metric === 'tokens' ? 'Last 7 days · UTC' : 'Tool requests · UTC'}</span><div className="usage-heat-key" aria-label={`Intensity from fewer to more ${noun}`}><span>Less</span>{(metric === 'tokens' ? [0,1,2,3,4,5,6,7,8] : [0,1,2,3,4]).map(n => <i key={n} className={`usage-heat-${n}`}/>)}<span>{metric === 'tokens' ? usageCompact(max) : 'More'}</span></div></div>
-        <div className="usage-heat-scroll">
-        <svg ref={chart.ref} className={`usage-heatmap${compact ? ' usage-heatmap-week' : ''}`} width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-label={`Hourly ${noun} by day, UTC`} onMouseLeave={() => setHovered(null)}>
-            {compact ? summary.days.map((day, col) => <text key={day.date} x={left - 8} textAnchor="end" y={yFor(col, 0) + size / 2 + 4} className="usage-axis">{usageChartDate(day.date)}</text>) : [0,6,12,18,23].map(hour => <text key={hour} x="0" y={top + hour * step + 9} className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
-            {Array.from({ length: 24 }, (_, hour) => summary.days.map((day, col) => {
-                const index = hour * columns + col, value = values(day)![hour]!;
-                const future = isFuture(day.date, hour);
-                const level = value === 0 ? 0 : metric === 'tokens' ? Math.min(8, Math.max(1, Math.ceil(Math.sqrt(value / max) * 8))) : Math.min(4, Math.max(1, Math.ceil(value / max * 4)));
-                const label = `${day.date} ${String(hour).padStart(2, '0')}:00 UTC: ${future ? 'not yet recorded' : `${usageNumber(value)} ${noun}${metric === 'tokens' ? `, ${usageNumber(day.hourlyRequests[hour]!)} tool requests` : ''}${partial ? ', partial history' : ''}`}`;
-                return <g key={index} role="button" tabIndex={active === index ? 0 : -1} aria-label={label} aria-pressed={pinned === index}
-                    onMouseEnter={() => setHovered(index)} onFocus={() => { setActive(index); setHovered(index); }} onBlur={() => setHovered(null)}
-                    onClick={() => { setPinned(pinned === index ? null : index); onSelect(day.date); }}
-                    onKeyDown={event => {
-                        const offsets: Record<string, number> = compact ? { ArrowLeft: -columns, ArrowRight: columns, ArrowUp: -1, ArrowDown: 1 } : { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns };
-                        if (event.key in offsets) {
-                            event.preventDefault();
-                            const next = Math.max(0, Math.min(columns * 24 - 1, index + offsets[event.key]!));
-                            setActive(next);
-                            const nodes = event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('[role="button"]');
-                            nodes?.[next]?.focus();
-                        } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPinned(index); onSelect(day.date); }
-                        else if (event.key === 'Escape') { setPinned(null); setHovered(null); }
-                    }}>
-                    <rect x={xFor(col, hour)} y={yFor(col, hour)} width={size} height={size} rx="1.5" className={`${future ? 'usage-heat-future' : `usage-heat-${level}`} ${shown === index ? 'usage-heat-selected' : ''}`}/>
-                </g>;
-            }))}
-            {cell && shown !== null && <g className="usage-heat-tooltip" aria-hidden="true" pointerEvents="none" transform={`translate(${Math.min(width - 210, xFor(shown % columns, cell.hour) + 12)},${yFor(shown % columns, cell.hour) > height - 85 ? yFor(shown % columns, cell.hour) - 72 : yFor(shown % columns, cell.hour) + size + 6})`}>
-                <rect width="200" height={metric === 'tokens' ? 66 : 48} rx="6"/><text x="10" y="18">{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00</text><text x="10" y="36">{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(values(cell.day)![cell.hour]!)} ${noun}`}</text>{metric === 'tokens' && !isFuture(cell.day.date, cell.hour) && <text x="10" y="54">{usageNumber(cell.day.hourlyRequests[cell.hour]!)} tool requests</text>}
-            </g>}
-            {compact && [0,3,6,9,12,15,18,21].map(hour => <text key={hour} x={xFor(0, hour) + size / 2} y="12" textAnchor="middle" className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
-            {!compact && summary.days.map((day, col) => labels.has(col) && <text key={day.date} x={left + col * step + (col === columns - 1 ? size : 0)} y={height - 8} textAnchor={col === columns - 1 ? 'end' : 'start'} className="usage-axis">{day.date.slice(5)}</text>)}
-        </svg></div>
-        {cell && <div className="usage-interaction-readout usage-visually-hidden" role="status"><strong>{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00 UTC</strong><span>{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(values(cell.day)![cell.hour]!)} ${noun}`}</span></div>}
-    </>;
-}
-
-export function UsageToolErrors({ summary }: { summary: UsageRangeSummary }) {
-    const [mode, setMode] = useState<'count' | 'rate'>('count');
-    const [selected, setSelected] = useState('');
-    const rate = (tool: UsageRangeSummary['tools'][number]) => tool.results ? tool.errors / tool.results * 100 : 0;
-    const tools = [...summary.tools].sort((a, b) => (mode === 'count' ? b.errors - a.errors : rate(b) - rate(a)) || b.results - a.results || a.id.localeCompare(b.id));
-    const max = mode === 'count' ? Math.max(1, ...tools.map(t => t.errors)) : 100;
-    const detail = tools.find(t => t.id === selected);
-    return <>
-        <div className="usage-chart-toolbar"><span>Errors / recorded results</span><div className="usage-range" role="group" aria-label="Tool error measure">{(['count', 'rate'] as const).map(m => <button type="button" key={m} aria-pressed={mode === m} onClick={() => setMode(m)}>{m === 'count' ? 'Count' : 'Rate'}</button>)}</div></div>
-        {!tools.some(t => t.results) && <p className="usage-note">No matched tool results in this period.</p>}
-        <div className="usage-error-list">{tools.map(tool => <button type="button" className="usage-error-row" key={tool.id} aria-pressed={selected === tool.id} onClick={() => setSelected(selected === tool.id ? '' : tool.id)}>
-            <span>{tool.label}</span><svg className="usage-error-bar" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true"><rect width="100" height="8" rx="2" className="usage-track"/><rect width={(mode === 'count' ? tool.errors : rate(tool)) / max * 100} height="8" rx="2" className="usage-error-fill"/></svg>
-            <span className="usage-tool-count">{usageNumber(tool.errors)} / {usageNumber(tool.results)}</span><span className="usage-tool-count">{tool.results ? usagePercent(rate(tool)) : 'N/A'}</span>
-        </button>)}</div>
-        {detail && <div className="usage-interaction-readout" role="status"><strong>{detail.label}</strong><span>{usageNumber(detail.results - detail.errors)} successful · {usageNumber(detail.errors)} errors · {usageNumber(detail.requests - detail.results)} without a matched result</span></div>}
+        <div className="usage-chart-toolbar"><span>Last 7 days</span><div className="usage-heat-key" aria-label={`Intensity from fewer to more ${noun}`}><span>Less</span>{[0, 1, 2, 3, 4, 5].map(level => <i key={level} className={`usage-heat-${level}`}/>)}<span>More</span></div></div>
+        <svg ref={chart.ref} className="usage-heatmap usage-heatmap-week" viewBox={`0 0 ${width} ${height}`} role="group" aria-label={`Hourly ${noun} by local day`} onMouseLeave={() => setHovered(null)}>
+            {summary.days.map((day, dayIndex) => <g key={day.date}>
+                <text x={left - 9} y={y(dayIndex) + size / 2 + 4} textAnchor="end" className="usage-axis">{usageChartDate(day.date)}</text>
+                {Array.from({ length: 24 }, (_, hour) => {
+                    const slots = (day.hours ?? []).filter(slot => slot.hour === hour);
+                    if (!slots.length) return <rect key={hour} x={x(hour)} y={y(dayIndex)} width={size} height={size} rx="2" className="usage-heat-missing" aria-label={`${day.date} ${String(hour).padStart(2, '0')}:00 did not occur locally`}/>;
+                    return slots.map((slot, repeat) => {
+                        const index = cells.findIndex(cell => cell.dayIndex === dayIndex && cell.slot === slot);
+                        const isFuture = future(slot);
+                        const count = value(slot);
+                        const level = count === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(count / max * 5)));
+                        const splitWidth = (size - Math.max(0, slots.length - 1)) / slots.length;
+                        return <g key={`${hour}:${slot.offsetMinutes}:${repeat}`} className="usage-heat-cell" role="button" tabIndex={active === index ? 0 : -1} aria-pressed={isSelectedDay(day.date)} aria-label={`${day.date} ${usageHourLabel(slot)} ${offsetLabel(slot.offsetMinutes)}: ${isFuture ? 'not yet recorded' : `${usageNumber(count)} ${noun}`}`}
+                            onMouseEnter={() => setHovered(index)} onFocus={() => { setActive(index); setHovered(index); }} onBlur={() => setHovered(null)}
+                            onClick={() => onSelect(day.date)} onKeyDown={event => {
+                                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(day.date); }
+                                else if (event.key === 'Escape') { setHovered(null); onSelect(''); }
+                                else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); focus(index + (event.key === 'ArrowRight' ? 1 : -1), event.currentTarget); }
+                                else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); const otherDay = dayIndex + (event.key === 'ArrowDown' ? 1 : -1); const other = cells.findIndex(cell => cell.dayIndex === otherDay && cell.slot.hour === hour); if (other >= 0) focus(other, event.currentTarget); }
+                            }}>
+                            <rect x={x(hour) + repeat * (splitWidth + 1)} y={y(dayIndex)} width={splitWidth} height={size} rx="2" className={`${isFuture ? 'usage-heat-future' : `usage-heat-${level}`} ${isSelectedDay(day.date) ? 'usage-heat-selected' : ''}`}/>
+                        </g>;
+                    });
+                })}
+            </g>)}
+            {[0, 6, 12, 18].map(hour => <text key={hour} x={x(hour) + size / 2} y={height - 5} textAnchor="middle" className="usage-axis">{['12a', '6a', '12p', '6p'][hour / 6]}</text>)}
+        </svg>
+        {shown && <div className="usage-interaction-readout" role="status"><strong>{usageChartDate(shown.day.date)} · {usageHourLabel(shown.slot)} {offsetLabel(shown.slot.offsetMinutes)}</strong><span>{future(shown.slot) ? 'Not yet recorded' : `${usageNumber(value(shown.slot))} ${noun}${metric === 'tokens' ? `, ${usageNumber(shown.slot.requests)} tool requests` : ''}`}</span></div>}
     </>;
 }

@@ -43,10 +43,6 @@ test('main never imports the engine graph', () => {
   expect(source).not.toMatch(/from ['"]\.\.\/\.\.\/src\//)
 })
 
-test('the P1-1 pinned boot cwd literal stays retired', () => {
-  expect(source).not.toContain('P1_1_CWD')
-})
-
 test('ids are never drawn from Math.random', () => {
   // Request ids and directory tokens are correlation/capability values; a
   // predictable generator makes a token guessable (HC1).

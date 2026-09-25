@@ -2006,17 +2006,6 @@ export class SidecarServer {
     } catch (error) {
       this.activeTurn = false
       this.endTurnObservation('failed')
-      // D1a — the announcement above already happened, so this prompt is
-      // transcript history even though no turn survived to carry it. Leaving it
-      // staged would have the next boundary drain announce it a second time,
-      // and the retry cap cannot intervene: `onSettled` rides the promise this
-      // path never created. Kept rather than removed with the catch, because
-      // the catch is also what keeps `activeTurn` and the turn-observation pair
-      // (A1) honest; without it a synchronous throw would wedge the session for
-      // good.
-      if (announcePrompt && this.stagedPrompts.delete(uuid)) {
-        this.broadcastQueuedPrompts()
-      }
       this.scheduleBoundaryDrain()
       return false
     }

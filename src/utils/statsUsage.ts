@@ -2,7 +2,7 @@ import { usageCategory as category } from './usageCategory.js';
 import { basename, dirname, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readStatsRecords, type StatsRecord } from './statsReader.js';
-import { usageWindow, usageTimestampEligible } from './usageWindow.js';
+import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, localMidnight, shiftLocalCalendarDays, usageWindow, usageTimestampEligible } from './usageWindow.js';
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts } from './modelCostRates.js';
@@ -68,12 +68,16 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     maxIdentities?: number;
     maxStateBytes?: number;
     signal?: AbortSignal;
+    timezone?: string;
     identities?: UsageIdentityStore;
     readRecords?: typeof readStatsRecords;
 } = {}): Promise<UsageDashboardSnapshot> {
     const cutoff = Date.parse(asOf), deadline = options.deadline ?? Date.now() + USAGE_COLLECTION_TIMEOUT_MS;
     if (!Number.isFinite(cutoff))
         throw new Error('Invalid cutoff');
+    const timezone = options.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // Validate once so an invalid host timezone fails collection visibly.
+    localDateKey(cutoff, timezone);
     const coverage = emptyUsageCoverage();
     coverage.sourcesDiscovered = files.length;
     const autoModeRecords: RetainedAutoModeRecord[] = [];
@@ -204,23 +208,27 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         summary: UsagePreviousPeriod;
         sessions: Set<string>;
         activeDays: Set<string>;
+        cacheWriteReported: boolean;
+        cacheWriteUnreported: boolean;
+        cacheWriteUnknown: boolean;
     };
     const states = (['7d', '30d', 'all'] as const).map(range => {
-        const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
-        if (range === 'all') { bounds.startInclusive = `${asOf.slice(0, 10)}T00:00:00.000Z`; bounds.dates = []; }
-        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), ...(range === '7d' ? { hourlyTokens: Array(24).fill(0) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf }), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        const bounds = usageWindow(range === '7d' ? 7 : 30, asOf, timezone);
+        if (range === 'all') { bounds.startDate = localDateKey(cutoff, timezone); bounds.startInclusive = new Date(localMidnight(bounds.startDate, timezone)).toISOString(); bounds.dates = []; }
+        const summary: UsageRangeSummary = { range, startDate: bounds.startDate, endDateExclusive: bounds.endDateExclusive, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, ...(range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf, timezone }), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
         return { summary, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
             }>() };
     });
     const comparisons: ComparisonState[] = ([7, 30] as const).map(days => {
-        const current = usageWindow(days, asOf);
-        const start = Date.parse(current.startInclusive) - days * 86400000;
-        const end = cutoff - days * 86400000;
-        return { days, start, end, sessions: new Set(), activeDays: new Set(), summary: {
+        const current = usageWindow(days, asOf, timezone);
+        const priorStart = addCalendarDays(current.startDate, -days);
+        const start = localMidnight(priorStart, timezone);
+        const end = shiftLocalCalendarDays(cutoff, -days, timezone);
+        return { days, start, end, sessions: new Set(), activeDays: new Set(), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, summary: {
             startInclusive: new Date(start).toISOString(), endInclusive: new Date(end).toISOString(),
-            tokens: zero(), sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null,
+            tokens: zero(), sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
         } };
     });
     const eligibleComparisons = (timestamp: number) => comparisons.filter(s => timestamp >= s.start && timestamp <= s.end);
@@ -229,10 +237,13 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         let day = s.dayMap.get(date);
         if (!day) {
             reserve(date, 1024);
-            day = { date, hourlyRequests: Array(24).fill(0), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
+            day = { date, ...(s.summary.range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
             s.dayMap.set(date, day);
             s.summary.days.push(day);
-            if (`${date}T00:00:00.000Z` < s.summary.startInclusive) s.summary.startInclusive = `${date}T00:00:00.000Z`;
+            if (date < s.summary.startDate) {
+                s.summary.startDate = date;
+                s.summary.startInclusive = new Date(localMidnight(date, timezone)).toISOString();
+            }
         }
         return day;
     };
@@ -463,9 +474,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const sourceScope = autoModeSourceScope(file);
             if (Number.isFinite(observed) && observed <= cutoff) {
                 observeAutoModeSource(file, observedAt);
-                const observedDay = `${observedAt.slice(0, 10)}T00:00:00.000Z`;
-                if (observedDay < states[2]!.summary.startInclusive)
-                    states[2]!.summary.startInclusive = observedDay;
+                const observedDate = localDateKey(observed, timezone);
+                if (observedDate < states[2]!.summary.startDate) {
+                    states[2]!.summary.startDate = observedDate;
+                    states[2]!.summary.startInclusive = new Date(localMidnight(observedDate, timezone)).toISOString();
+                }
                 const autoModeRecordId = nonempty(row.uuid)
                     ? row.uuid
                     : `${item.generation}:${item.offset}`;
@@ -529,7 +542,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
         }
         const eligibleStates = states.filter(s => usageTimestampEligible(timestamp, s.start, s.end, cutoff));
-        const date = new Date(timestamp).toISOString().slice(0, 10);
+        const date = localDateKey(timestamp, timezone);
         for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             if (!isSubagent && !alreadyRecorded) {
@@ -772,8 +785,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     const dayTool = ensureDayTool(day, cat.id);
                     dayTool.requests = plus(dayTool.requests, 1);
                     addBuildRequest(dayTool, build, timestamp);
-                    const hour = new Date(timestamp).getUTCHours();
-                    day.hourlyRequests[hour] = plus(day.hourlyRequests[hour]!, 1);
+                    if (day.hours) {
+                        const hourIndex = Math.floor((timestamp - Date.parse(day.hours[0]!.startAt!)) / 3600000);
+                        const slot = day.hours[hourIndex];
+                        if (!slot || timestamp < Date.parse(slot.startAt!) || timestamp >= Date.parse(slot.startAt!) + 3600000) throw new Error('Usage hour bucket mismatch');
+                        slot.requests = plus(slot.requests, 1);
+                    }
                     if (identified)
                         s.summary.identifiedRequests++;
                     else
@@ -832,6 +849,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             daily[writeReporting] = true;
             s.dailyCacheWriteReporting.set(date, daily);
         }
+        for (const s of eligibleComparisons(timestamp)) {
+            if (writeReporting === 'reported') s.cacheWriteReported = true;
+            else if (writeReporting === 'unreported') s.cacheWriteUnreported = true;
+            else s.cacheWriteUnknown = true;
+        }
         const cat = category(modelName);
         const key = JSON.stringify([scope, nonempty(message.id) ? ['api', message.id] : ['record', recordId]]);
         const prior = usage.get(key);
@@ -857,9 +879,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const day = ensureDay(s, date);
             addTokens(s.summary.tokens, delta);
             addTokens(day.tokens, delta);
-            if (day.hourlyTokens) {
-                const hour = new Date(timestamp).getUTCHours();
-                day.hourlyTokens[hour] = plus(day.hourlyTokens[hour]!, total(delta));
+            if (day.hours) {
+                const hourIndex = Math.floor((timestamp - Date.parse(day.hours[0]!.startAt!)) / 3600000);
+                const slot = day.hours[hourIndex];
+                if (!slot || timestamp < Date.parse(slot.startAt!) || timestamp >= Date.parse(slot.startAt!) + 3600000) throw new Error('Usage hour bucket mismatch');
+                slot.tokens = plus(slot.tokens ?? 0, total(delta));
             }
             const contributor = s.summary.range === 'all' ? null : ensureContributor(s, session, date);
             if (contributor) addTokens(contributor.tokens, delta);
@@ -918,6 +942,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             rangeStart: s.summary.startInclusive,
             rangeEnd: new Date(end).toISOString(),
             cutoff: asOf,
+            timezone,
         });
         const models = [...modelTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
         const tools = [...toolTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
@@ -1014,18 +1039,19 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         s.summary.activeDays = s.activeDays.size;
         const prompt = s.summary.tokens.fresh + s.summary.tokens.read + s.summary.tokens.write;
         s.summary.cachedInputShare = prompt > 0 ? s.summary.tokens.read / prompt * 100 : null;
+        s.summary.cacheWriteReporting = s.cacheWriteUnknown || (s.cacheWriteReported && s.cacheWriteUnreported)
+            ? 'partial' : s.cacheWriteReported ? 'reported' : s.cacheWriteUnreported ? 'unreported' : 'unavailable';
         if (earliestUsableMainRecord <= s.start)
             states[s.days === 7 ? 0 : 1]!.summary.previousPeriod = s.summary;
     }
     // Keep the entire retained timeline within the outbound frame budget. Sparse
     // daily data avoids allocating empty history; larger histories use explicit
-    // UTC buckets while activeDays remains the exact count of individual days.
+    // local-calendar buckets while activeDays remains exact.
     const all = states[2]!;
     if (all.summary.days.length > MAX_USAGE_ALL_BUCKETS || all.summary.autoMode.buckets.length > MAX_USAGE_ALL_BUCKETS) {
-        const start = Date.parse(all.summary.startInclusive);
-        const span = Math.ceil((Date.parse(all.summary.endExclusive) - start) / 86400000);
+        const span = calendarDayDistance(all.summary.startDate, all.summary.endDateExclusive);
         const bucketDays = Math.ceil(span / MAX_USAGE_ALL_BUCKETS);
-        const bucketDate = (date: string) => new Date(start + Math.floor((Date.parse(`${date}T00:00:00.000Z`) - start) / (bucketDays * 86400000)) * bucketDays * 86400000).toISOString().slice(0, 10);
+        const bucketDate = (date: string) => addCalendarDays(all.summary.startDate, Math.floor(calendarDayDistance(all.summary.startDate, date) / bucketDays) * bucketDays);
         const buckets = new Map<string, UsageDay>();
         const bucketSessions = new Map<string, Set<string>>();
         for (const key of all.sessionDays) {
@@ -1038,7 +1064,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const day of all.summary.days) {
             const date = bucketDate(day.date);
             let bucket = buckets.get(date);
-            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, hourlyRequests: Array(24).fill(0), models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
+            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
             addTokens(bucket.tokens, day.tokens);
             bucket.requests = plus(bucket.requests, day.requests);
             bucket.results = plus(bucket.results, day.results);
@@ -1069,7 +1095,6 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     }
                 }
             }
-            for (let hour = 0; hour < 24; hour++) bucket.hourlyRequests[hour] = plus(bucket.hourlyRequests[hour]!, day.hourlyRequests[hour]!);
             for (const model of day.models) {
                 const existing = bucket.models.find(item => item.id === model.id);
                 if (existing) existing.total = plus(existing.total, model.total);
@@ -1109,5 +1134,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             all.summary.autoMode.buckets = [...grouped.values()].sort((left, right) => left.date.localeCompare(right.date));
         }
     }
-    return { version: 1, metricVersion: 1, countingVersion: 13, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    for (const state of states) {
+        if (state.summary.range !== 'all') state.summary.startDate = state.summary.days[0]?.date ?? state.summary.startDate;
+        state.summary.endDateExclusive = state.summary.range === 'all' ? addCalendarDays(localDateKey(cutoff, timezone), 1) : state.summary.endDateExclusive;
+        state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
+        state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
+    }
+    return { version: 2, metricVersion: 1, countingVersion: 15, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

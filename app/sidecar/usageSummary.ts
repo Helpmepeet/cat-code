@@ -108,16 +108,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
             const tools = groupDayTools(day.tools);
             if (day.contributors.state === 'unavailable') return { ...day, tools, models: [...kept, ...(other ? [{ id: 'other', total: other }] : [])] };
             const ranked = withDayRanks([...day.contributors.items]);
-            const leadersPerMetric = Math.floor(contributorLimit / 3);
-            const selected = new Set(ranked.filter(item => item.rank && (item.rank.tokens <= leadersPerMetric || item.rank.requests <= leadersPerMetric || item.rank.errors <= leadersPerMetric)));
-            for (const item of [...ranked].filter(item => item.timeline.state !== 'unavailable').sort((a, b) => (b.timeline.items.at(-1)?.startedAt ?? '').localeCompare(a.timeline.items.at(-1)?.startedAt ?? '') || a.id.localeCompare(b.id))) {
-                if (selected.size >= contributorLimit) break;
-                selected.add(item);
-            }
-            for (const item of [...ranked].sort((a, b) => a.rank!.tokens - b.rank!.tokens)) {
-                if (selected.size >= contributorLimit) break;
-                selected.add(item);
-            }
+            const selected = new Set([...ranked].sort((a, b) => a.rank!.tokens - b.rank!.tokens).slice(0, contributorLimit));
             const contributors = [...selected].sort((a, b) => a.rank!.tokens - b.rank!.tokens).map(contributor => {
                 const models = [...contributor.models].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id));
                 const named = models.filter(model => model.kind === 'named');

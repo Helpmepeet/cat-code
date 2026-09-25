@@ -10,7 +10,7 @@ afterEach(async () => { await harness.unmountAll(); });
 afterAll(async () => { await harness.teardown(); });
 
 const summary = {
-    range: '7d', startInclusive: '2026-09-07T00:00:00.000Z', endExclusive: '2026-09-14T00:00:00.000Z',
+    range: '7d', startDate: '2026-09-07', endDateExclusive: '2026-09-14', startInclusive: '2026-09-07T00:00:00.000Z', endExclusive: '2026-09-14T00:00:00.000Z',
     tools: [
         { id: 'read', kind: 'named', label: 'Read', requests: 2, results: 2, errors: 1 },
         { id: 'bash', kind: 'named', label: 'Bash', requests: 2, results: 1, errors: 1 },
@@ -51,4 +51,18 @@ test('tool toggles are multi-select and commit markers use one roving keyboard s
     await act(async () => commits.click());
     expect(commits.getAttribute('aria-pressed')).toBe('false');
     expect(tree.container.querySelector('.usage-tool-build-marker')).toBeNull();
+});
+test('error points and commits can be pinned by keyboard or click and cleared', async () => {
+    const tree = await harness.mount(<UsageToolErrorTrend summary={summary}/>);
+    const point = tree.container.querySelector<SVGGElement>('.usage-tool-error-series g[role="button"]')!;
+    expect(point.getAttribute('aria-label')).toContain('Read:');
+    await act(async () => point.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(point.getAttribute('aria-pressed')).toBe('true');
+    expect(tree.container.querySelector('.usage-tool-error-readout')?.textContent).toContain('Read');
+    await act(async () => tree.container.querySelector<HTMLButtonElement>('.usage-tool-error-readout button')!.click());
+    expect(point.getAttribute('aria-pressed')).toBe('false');
+    const marker = tree.container.querySelector<SVGGElement>('.usage-tool-build-marker')!;
+    await act(async () => marker.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(marker.getAttribute('aria-pressed')).toBe('true');
+    expect(tree.container.querySelector('.usage-tool-error-readout')?.textContent).toContain('Cat Code build');
 });

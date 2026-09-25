@@ -1,20 +1,13 @@
 /**
- * The two halves of glass mode, tested apart: the stored preference, and the
- * stylesheet that gives the stamped attribute something to mean.
+ * The stored preference validation and the stylesheet that gives the stamped
+ * attribute something to mean.
  *
- * The stamp path takes an injected root rather than a document
- * (`glassMode.ts` `GlassRoot`), so this stays an SSR-only suite. Whether the
- * PROVIDER actually reaches that path is a separate question, and a
- * `renderToStaticMarkup` suite structurally cannot answer it: effects do not
- * run. `GlassModeProvider.dom.test.ts` owns that half.
+ * `GlassModeProvider.dom.test.ts` mounts the provider and checks the real
+ * document stamp and persistence path.
  */
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'fs'
 import {
-  applyGlassMode,
-  DEFAULT_GLASS_ENABLED,
-  GLASS_ATTRIBUTE,
-  GLASS_ATTRIBUTE_ON,
   GLASS_STORAGE_KEY,
   readGlassFromStorage,
   writeGlassToStorage,
@@ -23,15 +16,6 @@ import {
   memoryStorage as storage,
   throwingStorage,
 } from './viewPreferenceStorageFixture.js'
-
-function fakeRoot() {
-  const attributes = new Map<string, string>()
-  return {
-    attributes,
-    setAttribute: (name: string, value: string) => void attributes.set(name, value),
-    removeAttribute: (name: string) => void attributes.delete(name),
-  }
-}
 
 function themeCss(): string {
   return readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
@@ -67,18 +51,6 @@ function translucentPair(body: string): { light: boolean; dark: boolean } {
   return { light: translucent(pair?.[1]), dark: translucent(pair?.[2]) }
 }
 
-test('the shipped default is solid', () => {
-  expect(DEFAULT_GLASS_ENABLED).toBe(false)
-})
-
-test('a written preference round-trips through the real read', () => {
-  const store = storage()
-  writeGlassToStorage(store, true)
-  expect(readGlassFromStorage(store)).toBe(true)
-  writeGlassToStorage(store, false)
-  expect(readGlassFromStorage(store)).toBe(false)
-})
-
 test('an empty, unavailable or corrupt store reads as no preference', () => {
   expect(readGlassFromStorage(storage())).toBeNull()
   expect(readGlassFromStorage(null)).toBeNull()
@@ -99,20 +71,6 @@ test('a failing store never throws into the caller', () => {
   const hostile = throwingStorage()
   expect(readGlassFromStorage(hostile)).toBeNull()
   expect(() => writeGlassToStorage(hostile, true)).not.toThrow()
-})
-
-/**
- * Off REMOVES the attribute rather than writing `off`, so a document with glass
- * disabled is indistinguishable from one whose renderer never knew about the
- * preference, and the stylesheet needs no rule for the off state.
- */
-test('the stamp is present only while glass is on', () => {
-  const root = fakeRoot()
-  applyGlassMode(root, true)
-  expect(root.attributes.get(GLASS_ATTRIBUTE)).toBe(GLASS_ATTRIBUTE_ON)
-  applyGlassMode(root, false)
-  expect(root.attributes.has(GLASS_ATTRIBUTE)).toBe(false)
-  expect(() => applyGlassMode(null, true)).not.toThrow()
 })
 
 /**

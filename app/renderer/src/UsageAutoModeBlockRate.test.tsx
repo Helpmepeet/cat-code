@@ -40,15 +40,15 @@ function summary(): AutoModeUsageSummary {
 }
 
 const render = (value = summary()) => renderToStaticMarkup(
-  <UsageAutoModeBlockRate summary={value} startInclusive="2026-09-10T00:00:00.000Z" endExclusive="2026-09-14T00:00:00.000Z"/>,
+  <UsageAutoModeBlockRate summary={value} startDate="2026-09-10" endDateExclusive="2026-09-14"/>,
 )
 
 test('renders confirmed 4/40, unavailable 0/0, and a gap before provisional values', () => {
   const html = render()
   expect(html).toContain('4 policy-denied commands / 40 recorded commands')
   expect(html).toContain('10.0%')
-  expect(html).toContain('<td>0</td><td>0</td><td>Unavailable</td>')
-  expect(html).toContain('Incomplete coverage')
+  expect(html).toContain('Sep 10')
+  expect(html).toContain('Sep 13')
   expect(html).toContain('Provisional')
   expect((html.match(/usage-auto-mode-block-rate-line/g) ?? []).length).toBe(1)
   expect((html.match(/usage-auto-mode-block-rate-dot/g) ?? []).length).toBe(2)
@@ -66,10 +66,10 @@ test('does not bridge confirmed points across missing UTC periods', () => {
   expect((html.match(/usage-auto-mode-block-rate-line/g) ?? []).length).toBe(2)
 })
 
-test('exposes exact values and keyboard-readable chart points', () => {
+test('exposes keyboard-readable chart points without a per-panel table', () => {
   const html = render()
-  expect(html).toContain('Exact command block-rate values')
-  expect(html).toContain('Command permission attempts by UTC period')
+  expect(html).not.toContain('Exact command block-rate values')
+  expect(html).toContain('Command block rate, 0 to ')
   expect(html).toContain('role="button"')
   expect(html).toContain('tabindex="0"')
   expect(html).toContain('1 operational error, 2 review-required decisions')
@@ -83,5 +83,5 @@ test('uses a meaningful unavailable state instead of fabricated graph axes for 0
   const html = render(empty)
   expect(html).toContain('No command attempts')
   expect(html).not.toContain('usage-auto-mode-block-rate-chart')
-  expect(html).toContain('<td>0</td><td>0</td><td>Unavailable</td>')
+  expect(html).not.toContain('Exact command block-rate values')
 })

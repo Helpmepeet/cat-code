@@ -5,12 +5,12 @@ import {
   type SankeyLink,
   type SankeyNode,
 } from 'd3-sankey'
-import type { AutoModeUsageOutcome } from '../../shared/usageAutoMode.js'
+import type { AutoModeDisplayGroup } from './usageAutoModeState.js'
 
 export type UsageAutoModeFlowEdge = {
   from: string
   to: string
-  outcome?: AutoModeUsageOutcome
+  outcome?: AutoModeDisplayGroup
   count: number
 }
 
@@ -46,41 +46,21 @@ export type UsageAutoModeFlowLayout = {
   links: UsageAutoModeFlowLink[]
 }
 
-const OUTCOME_LABELS: Record<AutoModeUsageOutcome, string> = {
+const OUTCOME_LABELS: Record<AutoModeDisplayGroup, string> = {
   allowed: 'Allowed',
-  policy_blocked: 'Policy-blocked',
-  review_required: 'Review required',
-  operational_error: 'Operational error',
+  blocked: 'Blocked',
+  error: 'Error',
   cancelled: 'Cancelled',
-  unknown_outcome: 'Unknown outcome',
-  incomplete: 'Incomplete',
 }
 
-const NODE_COLUMNS: Record<string, number> = {
-  Attempts: 0,
-  'Safety check': 1,
-  'Context review': 2,
-  Approved: 3,
-  Blocked: 3,
-}
-
-const NODE_ORDER = [
-  'Attempts',
-  'Safety check',
-  'Context review',
-  'Approved',
-  'Blocked',
-]
-
-const NODE_RANK = new Map(NODE_ORDER.map((node, index) => [node, index]))
-const TERMINAL_NODES = new Set(['Approved', 'Blocked'])
+const TERMINAL_NODES = new Set(['allowed', 'blocked', 'error', 'cancelled'])
 const TOP = 34
 const BOTTOM = 24
 const NODE_GAP = 20
 const MAX_FLOW_HEIGHT = 320
 const NODE_WIDTH = 14
-const LEFT = 148
-const RIGHT = 148
+const LEFT = 96
+const RIGHT = 96
 
 type AutoModeSankeyNode = {
   id: string
@@ -95,11 +75,14 @@ type AutoModeSankeyLink = UsageAutoModeFlowEdge & {
 }
 
 function nodeColumn(id: string): number | null {
-  return NODE_COLUMNS[id] ?? null
+  if (id === 'Attempts') return 0
+  if (id.startsWith('Route: ')) return 1
+  return TERMINAL_NODES.has(id) ? 2 : null
 }
 
 function compareNodeIds(left: string, right: string): number {
-  return (NODE_RANK.get(left) ?? Number.MAX_SAFE_INTEGER) - (NODE_RANK.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right)
+  const rank = (id: string) => id === 'Attempts' ? 0 : id.startsWith('Route: ') ? 1 : 2
+  return rank(left) - rank(right) || left.localeCompare(right)
 }
 
 function compareEdges(left: UsageAutoModeFlowEdge, right: UsageAutoModeFlowEdge): number {
@@ -108,8 +91,8 @@ function compareEdges(left: UsageAutoModeFlowEdge, right: UsageAutoModeFlowEdge)
 }
 
 export function usageAutoModeFlowNodeLabel(id: string): string {
-  if (id === 'other') return 'Other'
-  return OUTCOME_LABELS[id as AutoModeUsageOutcome] ?? id
+  if (id.startsWith('Route: ')) return `${id.slice(7)} route`
+  return OUTCOME_LABELS[id as AutoModeDisplayGroup] ?? id
 }
 
 export function autoModeFlowConserves(edges: readonly UsageAutoModeFlowEdge[]): boolean {

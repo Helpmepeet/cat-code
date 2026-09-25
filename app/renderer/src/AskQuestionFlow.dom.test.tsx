@@ -176,9 +176,8 @@ function buttonWithText(card: HTMLElement, text: string): HTMLButtonElement {
 
 /**
  * What the row's checkbox/radio marker shows: '✓' when the option is part of
- * the answer, empty when it is not. The digit moved out of the marker and onto
- * a keycap at the row's other end, so the marker now carries ONLY the chosen
- * state — which is the whole point of the 2026-08-23 vocabulary change.
+ * the answer, empty when it is not. The digit sits at the row's other end, so
+ * the marker carries only the chosen state.
  */
 function markerText(row: HTMLElement): string {
   return row.querySelector('[data-ask-marker]')?.textContent?.trim() ?? ''
@@ -187,11 +186,6 @@ function markerText(row: HTMLElement): string {
 function checkedState(row: HTMLElement): string | null {
   return row.getAttribute('aria-checked')
 }
-
-test('the card takes the keyboard on mount', async () => {
-  const { card } = await mountFlow()
-  expect(document.activeElement).toBe(card)
-})
 
 test('a focused option row does not kill the navigation keys', async () => {
   // THE HEADLINE FIX. A mouse click leaves the row focused; the old guard
@@ -256,12 +250,229 @@ test('Space on a focused footer button is left to the button', async () => {
   expect(calls.answers).toHaveLength(0)
 })
 
-test('one Enter selects the highlighted option and submits', async () => {
+test('arrows move a single-select pick before Enter submits it', async () => {
   const { card, calls } = await mountFlow()
-  const enter = await press(card, 'Enter')
-  expect(enter.defaultPrevented).toBe(true)
-  expect(calls.answers).toHaveLength(1)
-  expect(calls.answers[0]).toEqual([{ optionIndices: [0] }])
+  await press(card, '1')
+  await press(card, 'ArrowDown')
+  await press(card, 'ArrowDown')
+
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [2] }]])
+  const rows = optionRows(card)
+  expect(checkedState(rows[2]!)).toBe('true')
+  expect(markerText(rows[2]!)).toBe('✓')
+  expect(checkedState(rows[0]!)).toBe('false')
+})
+
+test('hover does not move the highlight or change what Enter sends', async () => {
+  const { card, calls } = await mountFlow()
+  const rows = optionRows(card)
+  await act(async () => {
+    rows[2]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+
+  expect(optionRows(card)[0]!.getAttribute('data-ask-active')).toBe('true')
+  expect(optionRows(card)[2]!.getAttribute('data-ask-active')).toBe(null)
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [0] }]])
+})
+
+test('hover keeps the Other field open, focused, and unchanged', async () => {
+  const { card } = await mountFlow()
+  await press(card, 'o')
+  const input = card.querySelector('input') as HTMLInputElement
+  await act(async () => {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set
+    setValue?.call(input, 'my own answer')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(document.activeElement).toBe(input)
+  expect(input.value).toBe('my own answer')
+  await act(async () => {
+    optionRows(card)[0]!.dispatchEvent(
+      new MouseEvent('mouseover', { bubbles: true }),
+    )
+  })
+
+  expect(card.querySelector('input') === input).toBe(true)
+  expect(document.activeElement).toBe(input)
+  expect(input.value).toBe('my own answer')
+})
+
+test('single-select has one option tab stop', async () => {
+  const { card } = await mountFlow()
+  expect(optionRows(card).map(row => row.tabIndex)).toEqual([0, -1, -1])
+
+  await press(card, '2')
+  expect(optionRows(card).map(row => row.tabIndex)).toEqual([-1, 0, -1])
+})
+
+test('Tab focus alone does not choose a single-select answer', async () => {
+  const { card } = await mountFlow()
+  const first = optionRows(card)[0]!
+  await focusIn(first)
+
+  expect(document.activeElement).toBe(first)
+  expect(first.getAttribute('data-ask-active')).toBe('true')
+  expect(checkedState(first)).toBe('false')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+})
+
+test('arrow navigation focuses the row whose Space action will run', async () => {
+  for (const questions of [SINGLE, MULTI]) {
+    const { card, calls, tree } = await mountFlow(questions)
+    const first = optionRows(card)[0]!
+    await focusIn(first)
+    await press(first, 'ArrowDown')
+
+    const second = optionRows(card)[1]!
+    expect(second.getAttribute('data-ask-active')).toBe('true')
+    expect(document.activeElement === second).toBe(true)
+    const space = await press(second, ' ')
+    // DOM test events do not synthesize the browser's Space -> click default.
+    if (!space.defaultPrevented) {
+      await act(async () => second.click())
+    }
+    expect(checkedState(second)).toBe('true')
+    expect(checkedState(first)).toBe('false')
+
+    await press(second, 'Enter')
+    expect(calls.answers).toEqual([[{ optionIndices: [1] }]])
+    await tree.unmount()
+  }
+})
+
+test('digit shortcuts focus the option they choose or toggle', async () => {
+  for (const questions of [SINGLE, MULTI]) {
+    const { card, tree } = await mountFlow(questions)
+    const first = optionRows(card)[0]!
+    await focusIn(first)
+    await press(first, '2')
+
+    const second = optionRows(card)[1]!
+    expect(second.getAttribute('data-ask-active')).toBe('true')
+    expect(document.activeElement === second).toBe(true)
+    expect(checkedState(second)).toBe('true')
+    await tree.unmount()
+  }
+})
+
+test('Enter on the Other row opens its field without answering', async () => {
+  const { card, calls } = await mountFlow()
+  for (let i = 0; i < optionRows(card).length; i += 1) {
+    await press(card, 'ArrowDown')
+  }
+  expect(card.querySelector('div[data-ask-active="true"]')).not.toBe(null)
+
+  await press(card, 'Enter')
+  expect(card.querySelector('input')).not.toBe(null)
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('arrowing onto Other focuses its button and Enter opens the field', async () => {
+  const { card, calls } = await mountFlow()
+  const last = optionRows(card)[2]!
+  await focusIn(last)
+  await press(last, 'ArrowDown')
+
+  const other = card.querySelector<HTMLButtonElement>('button[data-ask-other]')
+  expect(other).not.toBe(null)
+  expect(document.activeElement).toBe(other)
+  await press(other!, 'Enter')
+  expect(card.querySelector('input')).not.toBe(null)
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('clicking Other moves the single-select tint before any text is typed', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, '3')
+  const selected = optionRows(card)[2]!
+  expect(checkedState(selected)).toBe('true')
+
+  const otherButton = card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+  await act(async () => otherButton.click())
+  const otherRow = card.querySelector('input')?.parentElement as HTMLElement
+  expect(otherRow).toBeTruthy()
+  expect(otherRow.className).toContain('bg-accent')
+  expect(markerText(otherRow)).toBe('✓')
+  expect(selected.className).not.toContain('bg-accent')
+  expect(checkedState(selected)).toBe('false')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+
+  const input = card.querySelector('input')!
+  await press(input, 'Enter')
+  expect(calls.answers).toHaveLength(0)
+  await press(input, 'Escape')
+  expect(checkedState(optionRows(card)[2]!)).toBe('true')
+})
+
+test('hovering Other previews its pink row and mark without submitting the old pick', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, '3')
+  const selected = optionRows(card)[2]!
+  const other = card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+  const otherRow = other.parentElement!
+
+  await act(async () => {
+    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+  expect(otherRow.className).toContain('bg-accent')
+  expect(markerText(otherRow)).toBe('✓')
+  expect(checkedState(selected)).toBe('false')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+
+  await act(async () => {
+    other.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: card }),
+    )
+  })
+  expect(markerText(otherRow)).toBe('')
+  expect(checkedState(selected)).toBe('true')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(false)
+
+  await act(async () => {
+    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+  await press(card, 'Enter')
+  expect(card.querySelector('input')).not.toBe(null)
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('a digit pick overrides the Other hover preview', async () => {
+  const { card, calls } = await mountFlow()
+  const other = card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+  await act(async () => {
+    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+
+  await press(card, '2')
+  expect(markerText(other.parentElement!)).toBe('')
+  expect(checkedState(optionRows(card)[1]!)).toBe('true')
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [1] }]])
+})
+
+test('hover previews an option, then restores the highlighted preview', async () => {
+  const { card } = await mountFlow([ALL_TYPES[2]!])
+  expect(card.textContent).toContain('return early')
+
+  await act(async () => {
+    optionRows(card)[2]!.dispatchEvent(
+      new MouseEvent('mouseover', { bubbles: true }),
+    )
+  })
+  expect(card.textContent).toContain('use a ternary')
+
+  await act(async () => {
+    optionRows(card)[2]!.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true }),
+    )
+  })
+  expect(card.textContent).toContain('return early')
+  expect(card.textContent).not.toContain('use a ternary')
 })
 
 test('one Enter per single-select step selects each highlighted option and advances', async () => {
@@ -419,7 +630,8 @@ test('the card takes focus from the composer when it appears', async () => {
   const { calls, card } = await mountFlow()
   expect(document.activeElement).toBe(card)
 
-  await press(card, 'Enter')
+  const enter = await press(card, 'Enter')
+  expect(enter.defaultPrevented).toBe(true)
   expect(calls.answers).toEqual([[{ optionIndices: [0] }]])
   composer.remove()
 })
@@ -472,4 +684,30 @@ test('unmounting hands the keyboard back to whatever had it', async () => {
   await tree.unmount()
   expect(document.activeElement).toBe(before)
   before.remove()
+})
+
+test('deactivating a pane releases focus from its question option', async () => {
+  const previous = document.createElement('button')
+  document.body.appendChild(previous)
+  await focusIn(previous)
+
+  const calls: Calls = { answers: [], cancels: 0 }
+  const props = {
+    onAnswer: (answers: AskUserQuestionAnswer[]) => calls.answers.push(answers),
+    onCancel: () => { calls.cancels += 1 },
+    questions: SINGLE,
+    requestId: 'perm-switch',
+  }
+  const tree = await harness.mount(<AskQuestionFlow {...props} isActivePane />)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  const card = tree.container.querySelector('section') as HTMLElement
+  const option = optionRows(card)[1]!
+  await focusIn(option)
+  expect(document.activeElement).toBe(option)
+
+  await tree.render(<AskQuestionFlow {...props} isActivePane={false} />)
+  expect(document.activeElement).toBe(previous)
+  await press(previous, 'Enter')
+  expect(calls.answers).toHaveLength(0)
+  previous.remove()
 })

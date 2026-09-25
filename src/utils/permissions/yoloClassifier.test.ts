@@ -51,6 +51,24 @@ describe('auto mode provider ladder', () => {
     expect(getClassifierFallbackModel('gpt-6-sol', error)).toBe('gpt-5.6-terra')
     expect(getClassifierFallbackModel('gpt-5.6-terra', error)).toBe('gpt-6-luna')
     expect(getClassifierFallbackModel('gpt-6-luna', error)).toBeUndefined()
+    expect(
+      getClassifierFallbackModel('gpt-6-sol', {
+        code: 'model_unavailable',
+        message: 'request failed',
+      }),
+    ).toBe('gpt-5.6-terra')
+    expect(
+      getClassifierFallbackModel(
+        'gpt-6-sol',
+        new Error('Codex API error (503): Service Unavailable'),
+      ),
+    ).toBe('gpt-5.6-terra')
+    expect(
+      getClassifierFallbackModel(
+        'gpt-6-sol',
+        new Error('Codex API error (404): model not found'),
+      ),
+    ).toBeUndefined()
   })
 })
 

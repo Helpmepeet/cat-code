@@ -204,8 +204,8 @@ test('hourly requests and matched errors deduplicate and respect request windows
     ]);
     const summary = (await collectRetainedUsage([path], asOf)).ranges['7d'];
     expect(summary.requests).toBe(5);
-    expect(summary.days.at(-1)!.hourlyRequests[10]).toBe(5);
-    expect(summary.days.flatMap(d => d.hourlyRequests).reduce((a,b) => a+b,0)).toBe(5);
+    expect(summary.days.at(-1)!.hours!.find(hour => hour.hour === 10)!.requests).toBe(5);
+    expect(summary.days.flatMap(d => d.hours ?? []).reduce((a,b) => a+b.requests,0)).toBe(5);
     expect(summary.tools[0]).toMatchObject({ requests: 5, results: 2, errors: 1 });
 });
 
@@ -364,12 +364,51 @@ test('seven-day hourly tokens credit normalized exclusive deltas once in the rec
     const path = await file([before, first, first, later, native, future]);
     const snapshot = await collectRetainedUsage([path], asOf);
     const seven = snapshot.ranges['7d'];
-    expect(seven.days[0]!.hourlyTokens).toEqual(Array.from({ length: 24 }, (_, hour) => hour === 1 || hour === 4 ? 10 : 0));
-    expect(seven.days.at(-1)!.hourlyTokens![12]).toBe(105);
-    expect(seven.days.at(-1)!.hourlyTokens![13]).toBe(0);
-    expect(seven.days.flatMap(day => day.hourlyTokens!).reduce((sum, value) => sum + value, 0)).toBe(125);
-    expect(snapshot.ranges['30d'].days.every(day => day.hourlyTokens === undefined)).toBe(true);
-    expect(snapshot.ranges.all.days.every(day => day.hourlyTokens === undefined)).toBe(true);
+    expect(seven.days[0]!.hours!.filter(hour => hour.tokens! > 0).map(hour => [hour.hour, hour.tokens])).toEqual([[1, 10], [4, 10]]);
+    expect(seven.days.at(-1)!.hours!.find(hour => hour.hour === 12)!.tokens).toBe(105);
+    expect(seven.days.at(-1)!.hours!.find(hour => hour.hour === 13)!.tokens).toBe(0);
+    expect(seven.days.flatMap(day => day.hours!).reduce((sum, hour) => sum + hour.tokens!, 0)).toBe(125);
+    expect(snapshot.ranges['30d'].days.every(day => day.hours === undefined)).toBe(true);
+    expect(snapshot.ranges.all.days.every(day => day.hours === undefined)).toBe(true);
+});
+
+test('local day and hour buckets handle midnight and both DST transitions', async () => {
+    const spring = await file([
+        msg('2025-03-10T03:30:00.000Z', 'before-midnight', 1, 'before'),
+        msg('2025-03-10T04:30:00.000Z', 'after-midnight', 1, 'after'),
+        msg('2025-03-09T06:30:00.000Z', 'before-jump', 1, 'before-jump'),
+        msg('2025-03-09T07:30:00.000Z', 'after-jump', 1, 'after-jump'),
+    ]);
+    const springSnapshot = await collectRetainedUsage([spring], '2025-03-10T16:00:00.000Z', { timezone: 'America/New_York' });
+    const springDays = springSnapshot.ranges['7d'].days;
+    const march9 = springDays.find(day => day.date === '2025-03-09')!;
+    const march10 = springDays.find(day => day.date === '2025-03-10')!;
+    expect(march9.hours).toHaveLength(23);
+    expect(march9.hours!.some(hour => hour.hour === 2)).toBe(false);
+    expect(march9.hours!.find(hour => hour.hour === 23)!.requests).toBe(1);
+    expect(march10.hours!.find(hour => hour.hour === 0)!.requests).toBe(1);
+    expect(springSnapshot.ranges['7d'].startDate).toBe('2025-03-04');
+    expect(springSnapshot.timezone).toBe('America/New_York');
+    const { fitUsageDashboardSnapshot } = await import('../../app/sidecar/usageSummary.js');
+    const { parseUsageCollectionResult } = await import('../../app/shared/usageStatsWorker.js');
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: fitUsageDashboardSnapshot(springSnapshot) })).not.toBeNull();
+
+    const fall = await file([
+        msg('2025-11-02T03:30:00.000Z', 'before-midnight-fall', 1, 'before'),
+        msg('2025-11-02T04:30:00.000Z', 'after-midnight-fall', 1, 'after'),
+        msg('2025-11-02T05:30:00.000Z', 'first-one', 1, 'first'),
+        msg('2025-11-02T06:30:00.000Z', 'second-one', 1, 'second'),
+    ]);
+    const fallSnapshot = await collectRetainedUsage([fall], '2025-11-03T17:00:00.000Z', { timezone: 'America/New_York' });
+    const november1 = fallSnapshot.ranges['7d'].days.find(day => day.date === '2025-11-01')!;
+    const november2 = fallSnapshot.ranges['7d'].days.find(day => day.date === '2025-11-02')!;
+    const repeatedHour = november2.hours!.filter(hour => hour.hour === 1);
+    expect(november2.hours).toHaveLength(25);
+    expect(november1.hours!.find(hour => hour.hour === 23)!.requests).toBe(1);
+    expect(november2.hours!.find(hour => hour.hour === 0)!.requests).toBe(1);
+    expect(repeatedHour.map(hour => hour.offsetMinutes)).toEqual([-240, -300]);
+    expect(repeatedHour.map(hour => hour.requests)).toEqual([1, 1]);
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: fitUsageDashboardSnapshot(fallSnapshot) })).not.toBeNull();
 });
 
 test('daily outcomes follow matched request dates across midnight and All bucket aggregation', async () => {
@@ -397,7 +436,7 @@ test('daily outcomes follow matched request dates across midnight and All bucket
     }
 });
 
-test('previous periods use equal elapsed UTC bounds and canonical distinct-session accounting', async () => {
+test('previous periods use local calendar bounds and canonical distinct-session accounting', async () => {
     const path = await file([
         { type: 'user', sessionId: 'thirty-anchor', uuid: 'thirty-anchor', timestamp: '2026-07-15T00:00:00.000Z' },
         msg('2026-07-16T00:00:00.000Z', 'thirty-open', 5, 'thirty-open', 'thirty'),

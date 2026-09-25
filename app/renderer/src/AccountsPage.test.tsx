@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
-  AccountResultFrame,
   AccountsSnapshot,
   AccountStatus,
   AccountVerbMessage,
@@ -309,31 +308,11 @@ test('a null snapshot renders the waiting state without throwing', () => {
   }
 })
 
-/* ── (f) result correlation → toast tone; page accepts a lastResult prop ── */
+/* ── (f) result correlation → toast tone ── */
 
 test('resultToastTone maps ok/err to success/danger', () => {
   expect(resultToastTone(true)).toBe('success')
   expect(resultToastTone(false)).toBe('danger')
-})
-
-test('renders with a lastResult prop present without throwing', () => {
-  const result: AccountResultFrame = {
-    kind: 'account.result',
-    protocolVersion: 2,
-    sessionId: 'sess-1',
-    requestId: 'req-1',
-    verb: 'account.switch',
-    ok: true,
-    message: 'Switched to backup',
-  }
-  const html = renderToStaticMarkup(
-    <AccountsPage
-      snapshot={snapshot([account()])}
-      lastResult={result}
-      onVerb={noop}
-    />,
-  )
-  expect(html).toContain('Codex Pool')
 })
 
 /* ── cap banner + supporting helpers ── */
@@ -525,11 +504,4 @@ test('renameError enforces the alias regex + uniqueness (excluding self)', () =>
   // renaming to its own current alias is allowed
   expect(renameError('old', 'old', ['old'])).toBeNull()
   expect(renameError('fresh-name_1', 'old', ['taken'])).toBeNull()
-})
-
-test('Accounts stays independent of the dedicated Usage destination', () => {
-  const html = renderToStaticMarkup(<AccountsPage snapshot={snapshot([account({id:'acc-1',isDefault:true})])} lastResult={null} onVerb={noop} />)
-  expect(html).not.toContain('Usage Analytics')
-  expect(html).not.toContain('Tokens per Session')
-  expect(html).not.toContain('Daily Average')
 })

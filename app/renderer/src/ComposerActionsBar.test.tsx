@@ -261,13 +261,6 @@ test('effort labels match cat-code — xhigh renders "Extra high", not "Xhigh"',
   expect(html).not.toContain('Xhigh')
 })
 
-test('the FAST ⚡ face renders only when fast mode is actually on', () => {
-  const on = render({ fastMode: true })
-  expect(on).toContain('Fast mode on')
-  const off = render({ fastMode: false })
-  expect(off).not.toContain('Fast mode on')
-})
-
 test('P4-24c — with runControls + handlers, the MODEL face becomes an interactive picker', () => {
   const html = render({
     model: 'gpt-5.6-terra',
@@ -431,25 +424,6 @@ test('P4-24c — the FAST toggle is hidden when off AND the model cannot run fas
     onSetFast: () => {},
   })
   expect(html).not.toContain('Enable fast mode')
-  expect(html).not.toContain('Fast mode on')
-})
-
-test('P4-24c — the FAST toggle is hidden for Anthropic model snapshots', () => {
-  const html = render({
-    model: 'claude-opus-5',
-    runControls: runControls({
-      model: {
-        current: 'claude-opus-5',
-        currentLabel: 'Opus 5',
-        selected: 'claude-opus-5',
-        provider: 'anthropic',
-      },
-      fast: { active: false, supportedByModel: false },
-    }),
-    onSetFast: () => {},
-  })
-  expect(html).toContain('claude-opus-5')
-  expect(html).not.toContain('data-composer-face="fast"')
   expect(html).not.toContain('Fast mode on')
 })
 

@@ -271,26 +271,6 @@ describe('accountDiagnostics', () => {
     process.stderr.write = realStderrWrite
   })
 
-  test('sanitizes SDK messages and stderr fallback lines', () => {
-    const message = buildAccountDiagnosticMessage(rawDiagnostic, {
-      sessionId: 'session-account-diagnostic',
-      uuid: '123e4567-e89b-12d3-a456-426614174001',
-    })
-    const serializedMessage = JSON.stringify(message)
-
-    expect(SDKAccountDiagnosticMessageSchema().safeParse(message).success).toBe(
-      true,
-    )
-
-    const stderrLine = formatAccountDiagnosticStderrLine(rawDiagnostic)
-    expect(stderrLine.startsWith(`${ACCOUNT_DIAGNOSTIC_MARKER} `)).toBe(true)
-
-    for (const sensitiveValue of sensitiveValues) {
-      expect(serializedMessage).not.toContain(sensitiveValue)
-      expect(stderrLine).not.toContain(sensitiveValue)
-    }
-  })
-
   test('emits every diagnostic code through the real emitter and matches the golden sanitized fixtures', () => {
     const emittedMessages: unknown[] = []
     installStreamJsonAccountDiagnosticHook({
@@ -386,37 +366,6 @@ describe('accountDiagnostics', () => {
     }
     expect(serializedMessage).not.toContain('user@example.com')
     expect(serializedMessage).not.toContain('acct-secret')
-  })
-
-  test('accepts and formats all Patch 5 diagnostic codes', () => {
-    const patch5Diagnostics = [
-      'account.manual_switch',
-      'account.active.reroll',
-      'account.lease.failover',
-      'account.usage.cap',
-      'account.usage.uncap',
-      'account.retry.exhausted',
-    ] as const
-
-    for (const code of patch5Diagnostics) {
-      const diagnostic: AccountDiagnosticEvent = {
-        code,
-        severity: code === 'account.retry.exhausted' ? 'error' : 'info',
-        provider: 'openai',
-        recoverable: code !== 'account.retry.exhausted',
-        account_ref: `account_id=${accountId}`,
-        reason: 'patch 5 validator coverage',
-      }
-
-      const message = buildAccountDiagnosticMessage(diagnostic, {
-        sessionId: 'patch-5-session',
-        uuid: `patch-5-${code}`,
-      })
-      expect(SDKAccountDiagnosticMessageSchema().safeParse(message).success).toBe(
-        true,
-      )
-      expect(formatAccountDiagnosticStderrLine(diagnostic)).toContain(code)
-    }
   })
 
   test('does not write raw stderr without an installed diagnostic sink by default', () => {

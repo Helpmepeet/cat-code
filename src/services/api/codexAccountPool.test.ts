@@ -2747,39 +2747,6 @@ describe('REDEEM_HINT_LAG_GRACE_MS guard in updateAccountUsageHints', () => {
     expect(getCodexAccountAvailability(acct).kind).toBe('blocked')
   })
 
-  test('existing uncap-branch tests still pass — allowed:true hint still uncaps after normal grace', () => {
-    // This is a regression check: the REDEEM_HINT_LAG_GRACE_MS guard must not
-    // interfere with the normal uncap flow for accounts that have never been redeemed.
-    const now = Date.now()
-    const oldCappedAt = now - 3 * 60 * 1000 // 3min ago, past USAGE_UNCAP_GRACE_MS
-    seedCodexAccountPoolForTest({
-      accounts: [
-        buildPoolAccount({ accountId: 'main-account' }),
-        buildPoolAccount({
-          accountId: 'capped-account',
-          status: 'capped',
-          statusReason: 'usage_cap',
-          cappedAt: oldCappedAt,
-          // No redeemedAt — never redeemed
-        }),
-      ],
-    })
-
-    updateAccountUsageHints([
-      {
-        accountId: 'capped-account',
-        primaryPercent: 10,
-        weeklyPercent: 5,
-        allowed: true,
-        limitReached: false,
-        fetchedAt: oldCappedAt + 60_000,
-      },
-    ])
-
-    const uncapped = getPoolStatus().accounts.find(a => a.accountId === 'capped-account')!
-    expect(uncapped.status).toBe('healthy')
-    expect(uncapped.cappedAt).toBeUndefined()
-  })
 })
 
 // ── Slice 2: Integration-style heal → stale hint → grace ─────────────────

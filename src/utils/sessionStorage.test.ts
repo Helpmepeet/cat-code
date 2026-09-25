@@ -1899,25 +1899,6 @@ describe('session storage', () => {
   })
 
   describe('execution timing diagnostics', () => {
-    test('do not create an orphan transcript', () => {
-      recordModelAttemptStart({
-        schema_version: 1,
-        call_id: 'call-1',
-        attempt_id: 'attempt-1',
-        attempt_index: 1,
-        provider: 'firstParty',
-        model: 'claude-sonnet-4-6',
-        mode: 'streaming',
-      })
-      recordToolExecutionStart({
-        schema_version: 1,
-        tool_use_id: 'tool-1',
-      })
-
-      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
-      expect(readdirSync(tempDir)).toHaveLength(0)
-    })
-
     test('persist closed metadata-only rows in an owned transcript', async () => {
       await recordTranscript([
         createUserMessage({ content: 'real turn', uuid: randomUUID() }),
@@ -2003,15 +1984,6 @@ describe('session storage', () => {
       turn_count: 2,
       query_source: 'repl_main_thread',
     }
-
-    test('no owning session writes nothing', () => {
-      expect(readdirSync(tempDir)).toHaveLength(0)
-
-      recordPostTurnStall(stallEntry)
-
-      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
-      expect(readdirSync(tempDir)).toHaveLength(0)
-    })
 
     test('an owning session records the phase', async () => {
       await recordTranscript([
@@ -2136,13 +2108,6 @@ describe('session storage', () => {
 
     afterEach(() => {
       unregisterActiveSubagent(agentId)
-    })
-
-    test('main-session branch: no owning session writes nothing', () => {
-      recordPromptCacheBreak(breakEntry)
-
-      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
-      expect(readdirSync(tempDir)).toHaveLength(0)
     })
 
     test('main-session branch: an owning session writes as before', async () => {

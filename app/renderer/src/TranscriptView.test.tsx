@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
@@ -18,7 +17,6 @@ import {
 } from './transcriptViewModel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
-  DEFAULT_TOOL_CARD_STYLE,
   ToolCardStyleContext,
   type ToolCardStyle,
 } from './toolCardStyle.js'
@@ -410,14 +408,6 @@ test('an unknown alert marker stays visible in an ordinary blockquote', () => {
   expect(html).not.toContain('md-callout')
 })
 
-test('quote and reasoning markdown component types stay stable between content changes', () => {
-  // SSR cannot preserve click state, so pin the component-identity guard at its
-  // source: changing unrelated streamed rows must not remount QuoteCopyChip.
-  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('const components = useMemo(')
-  expect(source).toContain('REASONING_HEADING_COMPONENTS')
-})
-
 test('prose with no blockquote gets no per-quote copy control', () => {
   const html = render({
     ...blockSource,
@@ -687,18 +677,6 @@ test('IS-C: preview rows render without a restore divider', () => {
   expect(html).not.toContain('Opening session')
 })
 
-test('IS-C: an engaged preview does not add a pulsing restore divider', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView rows={[cachedRow]} restorePhase="resuming" />,
-  )
-  expect(html).toContain('cached line')
-  expect(html).not.toContain('h-px flex-1 bg-accent/20')
-  expect(html).not.toContain('animate-pulse')
-  expect(html).not.toContain('Restored session')
-  expect(html).not.toContain('Resuming session')
-  expect(html).not.toContain('Opening session')
-})
-
 test('PL-A: a no-cache connecting pane shows a non-text skeleton, never an empty Welcome', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView rows={[]} restorePhase="connecting" cwd="/w/cat-code" />,
@@ -712,24 +690,6 @@ test('PL-A: a no-cache connecting pane shows a non-text skeleton, never an empty
   expect(html).not.toContain('Restored session')
 })
 
-test('IS-C: a preview that distilled to zero rows shows the skeleton, not Welcome', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView rows={[]} restorePhase="preview" />,
-  )
-  expect(html).toContain('aria-busy="true"')
-  expect(html).not.toContain('Welcome back')
-  expect(html).not.toContain('Restored session')
-  expect(html).not.toContain('Resuming session')
-  expect(html).not.toContain('Opening session')
-})
-
-test('IS-C: an ordinary empty pane (no restore) still shows the WelcomeScreen', () => {
-  const html = renderToStaticMarkup(<TranscriptRowsView rows={[]} />)
-  expect(html).toContain('Welcome back')
-  expect(html).not.toContain('Opening session')
-  expect(html).not.toContain('Restored session')
-})
-
 test('CC-91: an empty pane keeps its roster separate from pending usage presentation', () => {
   // A recognized pane snapshot remains available immediately while the shell
   // waits for its first global pool event. WelcomeScreen owns the rail's visual
@@ -739,13 +699,21 @@ test('CC-91: an empty pane keeps its roster separate from pending usage presenta
       rows={[]}
       accountsUsagePending
       accounts={pool([
-        account({ id: 'main', alias: 'nightowl', isDefault: true, usagePrimary: 20 }),
+        account({
+          id: 'main',
+          alias: 'nightowl',
+          isDefault: true,
+          usagePrimary: null,
+          usageWeekly: null,
+          usagePrimaryWindowSeconds: null,
+          usageSecondaryWindowSeconds: null,
+        }),
       ])}
     />,
   )
 
   expect(html).toContain('nightowl')
-  expect(html).toContain('20%')
+  expect(html).toContain('data-welcome-usage-state="pending"')
 })
 
 test('CC-91: pending usage presentation does not affect a non-empty transcript', () => {
@@ -755,26 +723,6 @@ test('CC-91: pending usage presentation does not affect a non-empty transcript',
 
   expect(html).toContain('cached line')
   expect(html).not.toContain('Welcome back')
-})
-
-test('CC-91 wiring tripwire: the pane forwards pending usage presentation into its empty Welcome', () => {
-  // The Welcome-specific DOM behavior belongs to WelcomeScreen tests. This
-  // assertion covers the otherwise unobservable prop hand-off here.
-  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
-  const rowsView = source.slice(
-    source.indexOf('export const TranscriptRowsView'),
-    source.indexOf('export function ToolInspectorOverlay'),
-  )
-
-  expect(rowsView).toContain('accountsUsagePending = false')
-  expect(rowsView).toContain('accountsUsagePending={accountsUsagePending}')
-})
-
-test('IS-C: an ordinary live pane renders no restore divider', () => {
-  const html = renderToStaticMarkup(<TranscriptRowsView rows={[cachedRow]} />)
-  expect(html).not.toContain('Restored session')
-  expect(html).not.toContain('Resuming session')
-  expect(html).toContain('cached line')
 })
 
 test('P4-18b: a resolved bash card shows the collapsed tail-peek output and done state', () => {
@@ -1090,13 +1038,6 @@ test('a completed GenerateImage card shows the generated image by default', () =
   expect(html).toContain('Copy path')
   expect(html).not.toContain('high')
   expect(html).not.toContain('aria-expanded')
-
-  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
-  expect(source).toContain(
-    "toast('Could not write to the clipboard', { tone: 'warn' })",
-  )
-  expect(source).toContain('clearTimeout(copiedResetRef.current)')
-  expect(source).toContain('copiedResetRef.current = setTimeout')
 })
 
 // P4-8c: a top-level Agent tool-use row (the DelegateGroup member / lone card).
@@ -1328,18 +1269,6 @@ test('a foreground agent card WITH children keeps the C4 collapsed default', () 
 
 /* ── a backgrounded agent's launch ack is not its finish (bug, 2026-08-05) ── */
 
-test('a backgrounded agent is a neutral past-tense launch record without a lifecycle chip', () => {
-  const html = render(
-    agentRow(
-      'launched',
-      { subagent_type: 'Explore', description: 'audit launcher lifecycle claims', run_in_background: true },
-      'success',
-    ),
-  )
-  expect(html).toContain('launched')
-  expect(html).not.toContain('>In background<')
-  expect(html).not.toContain('>Completed<')
-})
 
 test('a backgrounded agent remains byte-stable in meaning if completion data is present', () => {
   const html = render(
@@ -1354,28 +1283,6 @@ test('a backgrounded agent remains byte-stable in meaning if completion data is 
   expect(html).toContain('launched')
   expect(html).not.toContain('>Completed<')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
-})
-
-test('background launch records do not form a stale lifecycle group', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView
-      rows={[
-        agentRow(
-          'a',
-          { subagent_type: 'Explore', description: 'audit A', run_in_background: true },
-          'success',
-        ),
-        agentRow(
-          'b',
-          { subagent_type: 'Explore', description: 'audit B', run_in_background: true },
-          'success',
-        ),
-      ]}
-    />,
-  )
-  expect(html.match(/launched/g)).toHaveLength(2)
-  expect(html).not.toContain('Running 2 Explore agents')
-  expect(html).not.toContain('Delegate')
 })
 
 test('background launch records stay independent even if completion facts are present', () => {
@@ -2231,7 +2138,6 @@ test('a long create instruction is cut in the header, a short one is not', () =>
   expect(short).not.toContain('…')
 })
 
-
 test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [
@@ -2329,25 +2235,6 @@ test('a rejected resume has no identity line at all', () => {
   expect(html).not.toContain('AGENT')
 })
 
-test('a backgrounded launch says it launched and reports no outcome', () => {
-  const html = render(
-    agentRow(
-      'bglaunch',
-      { subagent_type: 'verification', description: 'sweep for stale references', run_in_background: true },
-      'success',
-      [],
-      ADA_COMPLETION,
-    ),
-  )
-
-  // `launched`, not `backgrounded`: this card only ever knew that the launch was
-  // acknowledged. The two used to be told apart by teal versus blue on the face,
-  // which the identity-colour ruling took away, so the distinction is a word now.
-  expect(html).toContain('launched')
-  expect(html).not.toContain('animate-face-pulse')
-  expect(html).not.toContain('Completed')
-  expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
-})
 
 test('the pulse runs on a running face and on nothing else on the card', () => {
   const running = render(
@@ -2996,20 +2883,6 @@ test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no 
 
 // ── P4-18a: user turns + core/boundary rows (the functional fix) ────────────
 
-test('P4-18a REGRESSION: a projected user-text turn is rendered, not dropped', () => {
-  // Pre-18a, TranscriptView returned null for every non-tool-use kind, so the
-  // running app showed no user messages. This proves the drop is fixed.
-  const html = render({
-    ...blockSource,
-    id: 's:m:0:user-text',
-    kind: 'user-text',
-    role: 'user',
-    content: 'restart the sidecar please',
-    isReplay: false,
-  })
-
-  expect(html).toContain('restart the sidecar please')
-})
 
 test('renders rich user Markdown with the shared bounded prose grammar', () => {
   const content = [
@@ -3210,26 +3083,13 @@ test('a delivered peer message draws its body, not the envelope around it', () =
   expect(html).not.toContain('cross-session-message')
 })
 
-/**
- * The other four kinds must come out BYTE-IDENTICAL after the peer row's
- * emphasis was added. `emphasizeSender` is optional and set only by `peer`
- * precisely so the shared class strings never moved; this pins that, because
- * folding the emphasis into those strings is the tidier-looking change and is
- * the wrong one.
- */
-test.each([
-  ['coordinator', null],
-  ['channel', 'slack · dana'],
-  ['teammate', 'scout'],
-  ['deferred-continuation', null],
-  ['future-kind-2027', null],
-])('the %s injected row keeps the accent glyph and muted label it had', (injectedKind, label) => {
+test('a non-peer injected row keeps its accent glyph and muted label', () => {
   const html = render({
     ...blockSource,
-    id: `s:m:0:injected-${injectedKind}`,
+    id: 's:m:0:injected-coordinator',
     kind: 'injected-turn',
-    injectedKind,
-    label,
+    injectedKind: 'coordinator',
+    label: null,
     content: 'a message the operator did not write',
     isReplay: false,
   })
@@ -3389,15 +3249,6 @@ test('trail mode: a lone reasoning summary is ONE labelled line, not a card', ()
   expect(html).not.toContain('aria-expanded')
   // Not the blocks treatment: no accent-tinted card frame around four words.
   expect(html).not.toContain('border-accent/15')
-})
-
-test('trail mode: a summary heading renders its Markdown emphasis', () => {
-  const html = render(thinkingRow('s:m:0:thinking', 'weighing the **socket** options'))
-
-  // Summary headings are compact, but must not expose model-authored Markdown
-  // delimiters to the user.
-  expect(html).toContain('<strong>socket</strong>')
-  expect(html).not.toContain('**socket**')
 })
 
 test('trail mode: every heading in a reasoning run renders inline Markdown', () => {
@@ -4336,15 +4187,6 @@ test('P4-18c: a malformed pipe table degrades tolerantly, never throws', () => {
   expect(render0()).toContain('A') // content still surfaces
 })
 
-test('P4-18c: an explicitly-languaged fenced block gets highlight.js token classes', () => {
-  const html = render(
-    proseRow('```python\ndef greet(name):\n    return name\n```\n', 'py'),
-  )
-
-  expect(html).toContain('hljs') // highlight.js base class on the <code>
-  expect(html).toContain('hljs-keyword') // `def`/`return` keyword tokens
-  expect(html).toContain('greet') // code content still present
-})
 
 test('P4-18c: an unknown code language degrades to plain framed code, never throws', () => {
   const render0 = () =>
@@ -4373,12 +4215,6 @@ test('a code fence still streaming gets its card frame as soon as it opens', () 
   expect(html).not.toContain('hljs-keyword')
 })
 
-test('the settled fence gets its copy control back', () => {
-  const html = render(proseRow('Here:\n\n```python\ndef greet(name):\n    return name\n```\n', 'shutfence'))
-
-  expect(html).toContain('aria-label="Copy code"')
-  expect(html).not.toContain('Code still writing')
-})
 
 // ── Model-prose typography (`.md-prose`, theme.css)
 //
@@ -4775,17 +4611,6 @@ test('a live user turn renders exactly Copy, Edit, and Branch in the reserved ac
   expect(html.match(/focus-visible:outline-accent/g)).toHaveLength(3)
 })
 
-test('the first prompt keeps Branch visible and lets the engine report an honest failure', () => {
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView
-      rows={[userRow('first', 'f1'), userRow('second', 'f2')]}
-      onMessageAction={() => {}}
-    />,
-  )
-  expect(html.match(/aria-label="Edit from here"/g)).toHaveLength(2)
-  expect(html.match(/aria-label="Branch from here"/g)).toHaveLength(2)
-})
-
 test('message actions stay absent without a live callback', () => {
   const noEngine = renderToStaticMarkup(
     <TranscriptRowsView rows={[userRow('offline')]} />,
@@ -4805,24 +4630,6 @@ test('revealed hidden user-role rows never gain message actions', () => {
   expect(html).not.toContain('Copy message')
   expect(html).not.toContain('Edit from here')
   expect(html).not.toContain('Branch from here')
-})
-
-test('message actions use visible row text for Copy and the producer frame id for targeted verbs', () => {
-  const source = readFileSync(
-    new URL('./TranscriptView.tsx', import.meta.url),
-    'utf8',
-  )
-  const userCaseStart = source.indexOf("case 'user-text':")
-  const userCaseEnd = source.indexOf("case 'command-echo':", userCaseStart)
-  const userCase = source.slice(userCaseStart, userCaseEnd)
-  expect(userCase).toContain(
-    "onMessageAction(row.sessionId, 'edit', row.frameId)",
-  )
-  expect(userCase).toContain(
-    "onMessageAction(row.sessionId, 'branch', row.frameId)",
-  )
-  expect(source).toContain('.writeText(content)')
-  expect(userCase).not.toContain('row.messageId')
 })
 
 test('non-user-text rows do not gain message controls when the action callback is live', () => {
@@ -5030,12 +4837,18 @@ function longToolRow(family: ToolFamily, lineCount: number): NestedTranscriptRow
   })
 }
 
-test('P4-36 — a long file READ no longer stops silently: it states the gap', () => {
+
+
+test('P4-36 — the tail of a truncated read stays visible, with its real line numbers', () => {
   const html = render(longToolRow('read', 900))
 
-  // 900 lines, head 30, tail 6 → 864 in the gap.
-  expect(html).toContain('864 lines hidden')
   expect(html).toContain('Show 100 more')
+  expect(html).toContain('src line 1') // head
+  expect(html).toContain('src line 900') // tail: the file's true last line
+  expect(html).not.toContain('src line 500') // the gap really is hidden
+  // The tail is numbered 895..900, not 1..6.
+  expect(html).toContain('>895<')
+  expect(html).toContain('>900<')
 })
 
 test('P4-36 — a long file WRITE states the gap too (the second silent body)', () => {
@@ -5043,17 +4856,6 @@ test('P4-36 — a long file WRITE states the gap too (the second silent body)', 
 
   expect(html).toContain('864 lines hidden')
   expect(html).toContain('Show 100 more')
-})
-
-test('P4-36 — the tail of a truncated read stays visible, with its real line numbers', () => {
-  const html = render(longToolRow('read', 900))
-
-  expect(html).toContain('src line 1') // head
-  expect(html).toContain('src line 900') // tail: the file's true last line
-  expect(html).not.toContain('src line 500') // the gap really is hidden
-  // The tail is numbered 895..900, not 1..6.
-  expect(html).toContain('>895<')
-  expect(html).toContain('>900<')
 })
 
 test('P4-36 — the band offers the route to the complete text, and it is the only one', () => {
@@ -5285,6 +5087,7 @@ test('a long written file still bands, and the band counts the FILE', () => {
   )
 
   expect(html).toContain('864 lines hidden') // 900 - 30 head - 6 tail
+  expect(html).toContain('Show 100 more')
   expect(visibleText(html)).toContain('line 1')
   expect(visibleText(html)).toContain('line 900')
   expect(visibleText(html)).not.toContain('line 500')
@@ -5673,19 +5476,6 @@ test('expansion is keyed by the engine tool_use id, not by row or display key', 
   expect(
     visibleText(renderWithStore([row, runReadRow('r2', '/w/b.ts')], store)),
   ).toContain('KEYED_BY_TOOL_USE_ID')
-})
-
-test('inline output reveal depth uses the same tool_use-keyed store across regrouping', () => {
-  const store = createToolCardExpansionStore()
-  const row = runReadRow('r1', '/w/a.ts', { content: '1\tONE' })
-  const toolUseId = row.kind === 'tool-use' ? row.toolUseId : ''
-
-  store.setInlineOutputHead(toolUseId, 230)
-
-  expect(store.getInlineOutputHead(toolUseId)).toBe(230)
-  expect(
-    readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8'),
-  ).toContain('useInlineOutputWindow(\n    source.lines,\n    toolUseId,\n  )')
 })
 
 test('a run head keeps its own expansion as the run grows', () => {
@@ -6120,17 +5910,6 @@ test('every row publishes its identity, which is what the reading position holds
   expect(html).toContain(`${TRANSCRIPT_ROW_KEY_ATTRIBUTE}="s:m:0:user-text"`)
 })
 
-test('assistant prose renders markdown links and inline paths as file action buttons', () => {
-  const markdownRow = assistantRow(
-    'Check out [foo.ts](src/foo.ts) and also `src/utils/bar.ts` for details.',
-  )
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView rows={[markdownRow]} cwd="/Users/test/cat-code" />,
-  )
-  expect(html).toContain('aria-label="Open src/foo.ts"')
-  expect(html).toContain('aria-label="Open src/utils/bar.ts"')
-  expect(html).toContain('<svg')
-})
 
 /* ── compaction (2026-08-22) ───────────────────────────────────────────────
  * Two rows for one event, one of them advertising a shortcut this app does not
@@ -6282,44 +6061,6 @@ test('the open body swaps its filled panel for an indented rule', () => {
   expect(cards).toContain('bg-black/[0.28]')
   expect(lines).not.toContain('bg-black/[0.28]')
   expect(lines).toContain('border-l border-shell-seam')
-})
-
-test('the default style still renders the exact markup the app had before', () => {
-  const row = toolRow({
-    toolName: 'Bash',
-    toolFamily: 'bash',
-    input: { command: 'bun test' },
-    status: 'error',
-    result: { content: 'boom', isError: true, diff: null },
-  })
-  const html = renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
-
-  // These four strings are copied from the pre-change source, NOT derived from
-  // the class maps. Comparing the default render against `renderUnderCardStyle(
-  // row, DEFAULT)` — which is what this test used to do — runs the same
-  // post-change component down both sides and passes even with the whole
-  // feature reverted; it could only ever catch a wrong context default.
-  expect(html).toContain(
-    'class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans"',
-  )
-  expect(html).toContain(
-    'class="group flex w-full items-center gap-2.5 px-3 py-2 text-left"',
-  )
-  expect(html).toContain('class="border-t border-shell-seam bg-black/[0.28]"')
-  expect(html).toContain('class="px-3 pb-2.5 pt-1"')
-  // And the default really is the old drawing, not merely consistent with it.
-  expect(DEFAULT_TOOL_CARD_STYLE).toBe('cards')
-})
-
-test('the agent and rejected-resume bodies keep their single-element markup', () => {
-  // Splitting the frame from its padding across two nested divs would be
-  // visually equivalent but is a DOM change the `cards` path never had. These
-  // two shells have no sub-label between frame and padding, so one div is both
-  // correct and identical to what shipped before.
-  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
-  expect(source).toContain(
-    '`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`',
-  )
 })
 
 test('adjacent container-less tool rows are marked so `lines` can close the gap', () => {

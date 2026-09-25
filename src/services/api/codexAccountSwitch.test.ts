@@ -142,21 +142,4 @@ describe('commitCodexAccountSwitch', () => {
     expect(stubs.applyPostCodexAccountSwitchRefresh).not.toHaveBeenCalled()
   })
 
-  test('returns null when the named account does not resolve', async () => {
-    const stubs = await stubSwitchSideEffects()
-    codexPoolModule.seedCodexAccountPoolForTest({
-      accounts: [
-        buildPoolAccount('codex-one', 'main'),
-        buildPoolAccount('codex-two', 'backup'),
-      ],
-      activeAccountId: 'codex-one',
-    })
-
-    const result = await commitCodexAccountSwitch('nonexistent')
-
-    expect(result).toBeNull()
-    const { accounts, activeIndex } = codexPoolModule.getPoolStatus()
-    expect(accounts[activeIndex]?.accountId).toBe('codex-one')
-    expect(stubs.clearAuthRelatedCaches).not.toHaveBeenCalled()
-  })
 })

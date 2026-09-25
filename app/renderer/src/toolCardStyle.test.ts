@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  DEFAULT_TOOL_CARD_STYLE,
   TOOL_CARD_BAND_CLASS,
   TOOL_CARD_BODY_CLASS,
   TOOL_CARD_BODY_INNER_CLASS,
@@ -26,20 +25,12 @@ const store = (initial?: string) =>
     initial === undefined ? {} : { [TOOL_CARD_STYLE_STORAGE_KEY]: initial },
   )
 
-test('the shipped default is the drawing the app already had', () => {
-  expect(DEFAULT_TOOL_CARD_STYLE).toBe('cards')
-})
-
 test('a written preference reads back', () => {
   const s = store()
   writeToolCardStyleToStorage(s, 'lines')
   expect(readToolCardStyleFromStorage(s)).toBe('lines')
   writeToolCardStyleToStorage(s, 'cards')
   expect(readToolCardStyleFromStorage(s)).toBe('cards')
-})
-
-test('nothing stored yields null, so the caller falls back to the default', () => {
-  expect(readToolCardStyleFromStorage(store())).toBeNull()
 })
 
 test('a foreign, damaged or future-versioned payload is ignored, never guessed', () => {

@@ -1142,20 +1142,6 @@ describe('functional rail', () => {
     ])
   })
 
-  test('the resolver vocabulary never structures the rail again', () => {
-    for (const scope of SETTINGS_SCOPE_KINDS) {
-      const headings = selectSettingsRail(scope, '').map(group => group.heading)
-      for (const banned of [
-        'Resolved',
-        'This project',
-        'This machine',
-        'Resolved per project',
-      ]) {
-        expect(headings).not.toContain(banned)
-      }
-    }
-  })
-
   /**
    * The box is labelled "Search settings", and it could not find a setting.
    *

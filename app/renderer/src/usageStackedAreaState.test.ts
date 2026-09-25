@@ -59,8 +59,8 @@ test('center indicators stop across intervals where a series is absent', () => {
 test('sparse ranges add only gap boundaries and retain calendar bucket positions', () => {
     const summary = structuredClone(snapshot.ranges.all);
     const template = structuredClone(snapshot.ranges['7d'].days[0]!);
-    summary.startInclusive = '2026-09-01T00:00:00.000Z';
-    summary.endExclusive = '2026-09-14T00:00:00.000Z';
+    summary.startDate = '2026-09-01';
+    summary.endDateExclusive = '2026-09-14';
     summary.bucketDays = 1;
     summary.days = [
         { ...structuredClone(template), date: '2026-09-01', tokens: { fresh: 10, read: 2, write: 0, output: 1 } },

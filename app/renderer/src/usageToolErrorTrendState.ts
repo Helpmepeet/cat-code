@@ -45,8 +45,8 @@ function point(date: string, tool: UsageDayTool | undefined): UsageToolErrorPoin
 /** Sparse histories gain null boundary points so lines never bridge unknown spans. */
 export function usageToolErrorSeries(summary: UsageRangeSummary, selected: readonly string[]): UsageToolErrorSeries[] {
     const step = usageBucketDays(summary) * DAY_MS;
-    const first = Date.parse(summary.startInclusive);
-    const last = Date.parse(summary.endExclusive) - DAY_MS;
+    const first = Date.parse(`${summary.startDate}T00:00:00.000Z`);
+    const last = Date.parse(`${summary.endDateExclusive}T00:00:00.000Z`) - DAY_MS;
     return selected.flatMap(id => {
         const tool = summary.tools.find(item => item.id === id);
         if (!tool) return [];

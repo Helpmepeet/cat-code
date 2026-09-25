@@ -3,6 +3,7 @@ import { hundredAttemptAutoModeFixture } from '../../../src/utils/autoModeUsage.
 import { reduceAutoModeUsage } from '../../../src/utils/autoModeUsage.js'
 import {
   autoModeAttempts,
+  autoModeDisplayCounts,
   autoModeCommandRateHeadline,
   autoModeCommandRatePoints,
   autoModeOverviewEdges,
@@ -54,14 +55,18 @@ test('uses stable outcome/category order and conserves route edges', () => {
   }
 })
 
-test('reduces the overview to the canonical completed decision path', () => {
+test('builds a conserved flow for all attempts and groups the four display outcomes', () => {
   const edges = autoModeOverviewEdges(summary)
   expect(edges.filter(edge => edge.from === 'Attempts')).toEqual([
-    { from: 'Attempts', to: 'Approved', outcome: 'allowed', count: 50 },
-    { from: 'Attempts', to: 'Safety check', count: 37 },
+    { from: 'Attempts', to: 'Route: base', count: 60 },
+    { from: 'Attempts', to: 'Route: stage1', count: 33 },
+    { from: 'Attempts', to: 'Route: stage2', count: 7 },
   ])
-  expect(edges).toContainEqual({ from: 'Safety check', to: 'Approved', outcome: 'allowed', count: 32 })
-  expect(edges).toContainEqual({ from: 'Safety check', to: 'Context review', count: 5 })
-  expect(edges).toContainEqual({ from: 'Context review', to: 'Approved', outcome: 'allowed', count: 3 })
-  expect(edges).toContainEqual({ from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 2 })
+  expect(edges.filter(edge => edge.from.startsWith('Route: ')).reduce((total, edge) => total + edge.count, 0)).toBe(100)
+  expect(autoModeDisplayCounts(summary)).toEqual([
+    { group: 'allowed', label: 'Allowed', count: 85 },
+    { group: 'blocked', label: 'Blocked', count: 7 },
+    { group: 'error', label: 'Error', count: 8 },
+    { group: 'cancelled', label: 'Cancelled', count: 0 },
+  ])
 })

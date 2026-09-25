@@ -142,15 +142,6 @@ export function isNumberOrNull(value: unknown): value is number | null {
   return typeof value === 'number' || value === null
 }
 
-/**
- * Stricter than `isNumber` for fields a chart divides by: the record arrives as
- * JSON, where `NaN`/`Infinity` cannot survive `JSON.stringify` (they serialize to
- * `null`), so a non-finite number here is malformed output.
- */
-export function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
 /** Closed vocabulary. Pass the list `as const` so the spec states the exact type. */
 export function oneOf<T extends readonly unknown[]>(allowed: T): Check<T[number]> {
   return (value): value is T[number] => allowed.includes(value)

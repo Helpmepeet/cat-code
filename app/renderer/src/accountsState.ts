@@ -8,7 +8,6 @@ import type {
   ServerFrame,
   SessionId,
   SignedOutCodexProfileStatus,
-  UsageStatsByRange,
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
@@ -85,18 +84,8 @@ export type AccountsState = {
    * measurement, and rendering the second as the first is what made this page
    * tell users with 33k messages that they had no session activity.
    *
-   * Two feeds, mirroring `pool` / `sessions` above:
-   *  - the `usage-stats` HOST EVENT (accounts owner) fills BOTH ranges from
-   *    main's timer and exists with no session open. This is the primary feed.
-   *  - a session's own `stats.usage.snapshot` frame fills ONE range, in answer to
-   *    a range toggle, and only while a sidecar is attached.
-   *
-   * Both write the same slots and last-write-wins. They run the same engine
-   * aggregation but not at the same MOMENT, so a host event carrying data
-   * measured at the start of a worker run can overwrite a fresher session-plane
-   * snapshot and briefly walk the numbers backwards. Bounded by the refresh
-   * period and self-healing on the next run; do not read a decrease here as
-   * usage being reclaimed.
+   * A session's `stats.usage.snapshot` frame fills one range in answer to the
+   * legacy `stats.query` verb. The current Usage page uses `usageStatsWorker`.
    */
   usageStats: Record<UsageStatsRange, UsageStatsSnapshot | null>
   activeStatsRange: UsageStatsRange
@@ -110,8 +99,6 @@ export type AccountsAction =
   | { type: 'pool'; pool: AccountsSnapshot }
   /** The row is gone for good — drop its retained snapshot (see `lastSessions`). */
   | { type: 'session-removed'; sessionId: SessionId }
-  /** The global `usage-stats` host event (accounts owner). Session-independent. */
-  | { type: 'usage-stats'; stats: UsageStatsByRange }
   | { type: 'set-stats-range'; range: UsageStatsRange }
 
 export function createAccountsState(): AccountsState {
@@ -359,13 +346,6 @@ export function reduceAccountsState(
     delete lastSessions[sessionId]
     delete oauthProgress[sessionId]
     return { ...state, sessions, lastSessions, oauthProgress }
-  }
-
-  if (action.type === 'usage-stats') {
-    return {
-      ...state,
-      usageStats: { '7d': action.stats['7d'], '30d': action.stats['30d'] },
-    }
   }
 
   if (action.type === 'set-stats-range') {

@@ -1,42 +1,13 @@
 /**
- * AskQuestionFlow — P4-20 (adapts the prototype's `Permissions.jsx`
- * `AskQuestionFlow`, the `ln` alias). Renders a live `AskUserQuestion` tool call
- * as an interactive answer flow on the permission rail: 1–4 questions
- * (single-question, or a stepper), single- and multi-select, the built-in
- * "Other…" freeform answer, per-option preview, a footer rail, and a dedicated
- * keyboard handler. Submit round-trips through `answerQuestions`
- * (decisions/ASK-USER-QUESTION-ANSWER.md); the renderer authors ONLY option
- * INDICES + the freeform text — the sidecar re-attaches the engine's own labels.
+ * Renders `AskUserQuestion` on the docked permission rail. The renderer sends
+ * option indices and freeform text; the sidecar attaches engine-owned labels.
  *
- * Accent: the whole flow reads in the app's pink accent, which IS the
- * prototype's `ASK_ACCENT` (`#f472b6` == `theme.css --accent`), so every accent
- * shade is a static `accent` utility — no interpolated colour classes (the
- * Tailwind v4 dynamic-class trap).
- *
- * Container: the prototype's `AskQuestionFlow` renders a bare `<div>` and gets
- * ALL of its chrome from the `PermissionQueue` card hosting it
- * (`Permissions.jsx:437-593`) — the raised `#141416` surface, the accent
- * hairline, the drop shadow, the icon + kicker row, and the scrolling body under
- * a height ceiling. Lifting the flow out of that card and
- * docking it in the chat column dropped every one of those, so they are rebuilt
- * here. Three deliberate deviations, each flagged in PARITY-LEDGER §7:
- *   - NOT a `position:fixed` portal (PARITY-LEDGER.md:577): a split workspace
- *     mounts one flow PER PANE and two body-level portals would stack. The card
- *     therefore grows DOWNWARD in the dock rather than upward over the
- *     transcript. What keeps that from reaching the composer is no longer this
- *     card's business: the dock itself now yields and scrolls its panel region
- *     (`App.tsx`, the composer dock), so no docked surface can push the input
- *     off screen. The ceiling below stops ONE card monopolising the dock.
- *   - The prototype's full-width key strip, `Manage rules →`, and `Keep
- *     pending →` are omitted by operator request. The Submit and Cancel
- *     controls retain their compact Enter and Escape chips, and each option row
- *     carries its own digit keycap in place of the strip.
- *
- * Selection vocabulary (2026-08-23): an option row draws its CHOSEN state and
- * its CURSOR state on two separate channels — see `rowTone` and `markerClass`.
- * The two used to share one channel with the cursor painted louder, so the
- * brightest row on the card was whichever one the mouse was over and a picked
- * answer dimmed as soon as the pointer left it.
+ * The dock scrolls its panel region, while this card's height ceiling keeps one
+ * question from taking the whole region. A split workspace mounts a card per
+ * pane, so only the active pane owns the keyboard. Accent marks picked answers;
+ * the keyboard highlight uses a neutral wash. Hovering the single-select Other
+ * row previews it as a provisional choice. Arrow and digit shortcuts pick their
+ * destination; focus alone does not.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -50,8 +21,6 @@ import {
 } from './askQuestionFlowModel.js'
 import { permissionKeysAreLive } from './permissionPromptModel.js'
 
-/** One question's in-progress answer: engine-option indices + freeform text. */
-
 /**
  * Keys a focused control acts on ITSELF. Footer buttons keep both activation
  * keys, and option rows keep Space for toggling. Enter on an option row belongs
@@ -59,7 +28,7 @@ import { permissionKeysAreLive } from './permissionPromptModel.js'
  */
 const CONTROL_ACTIVATION_KEYS = new Set([' ', 'Enter'])
 
-/** Controls that own their activation keys, per `FOCUSED_KEY_OWNER_SELECTOR`. */
+/** Controls that own their activation keys inside the card. */
 const CARD_CONTROL_SELECTOR = 'a[href], button, input, select, textarea'
 
 /**
@@ -74,28 +43,23 @@ function askKeysLive(card: HTMLElement | null, active: Element | null): boolean 
 }
 
 /**
- * Row tint. CHOSEN must outrank WHERE-THE-POINTER-IS, or the loudest thing on
- * the card is whatever the mouse is passing over — which is what made a
- * multi-select read as unselectable in live use (the two were `bg-accent/10`
- * for the cursor against `bg-accent/5` for a pick, so moving the mouse away
- * from an answer visibly dimmed it). Both states stay in the accent so the
- * cursor still shows a single-select which row one Enter would submit.
+ * A pick or provisional Other choice gets the accent. The keyboard highlight
+ * is a neutral wash. Arrow and digit shortcuts synchronize a single-select
+ * pick with that highlight; Tab focus alone leaves the answer unchanged.
  */
 function rowTone(checked: boolean, active: boolean): string {
   if (checked) {
-    return active
-      ? 'border-accent/70 bg-accent/[0.16]'
-      : 'border-accent/50 bg-accent/[0.11]'
+    return active ? 'bg-accent/[0.14]' : 'bg-accent/10'
   }
-  return active ? 'border-accent/25 bg-accent/[0.05]' : 'border-transparent'
+  return active
+    ? 'bg-text-primary/[0.05] hover:bg-text-primary/[0.05]'
+    : 'hover:bg-text-primary/[0.05]'
 }
 
 /**
- * The marker carries the categorical half of the signal: an EMPTY outlined box
- * against a FILLED accent one. Alpha steps are a matter of degree and were
- * missed; empty-versus-filled is not. Its shape is the only place the flow says
- * how many answers are allowed without words — square for multi-select, round
- * for single — which is why the row number moved out of it and onto a keycap.
+ * A filled accent marker means picked or provisionally on Other. An empty
+ * marker has a neutral border, including on the highlighted row. The shape
+ * distinguishes radio from checkbox without relying on color.
  */
 function markerClass(
   multiSelect: boolean,
@@ -106,15 +70,17 @@ function markerClass(
   const tone = checked
     ? 'border-accent bg-accent text-on-fill'
     : active
-      ? 'border-accent/60 bg-transparent'
-      : 'border-text-primary/30 bg-transparent'
-  return `mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border font-mono text-[9px] font-semibold leading-none ${shape} ${tone}`
+      ? 'border-text-primary/50 bg-transparent'
+      : 'border-text-primary/[0.28] bg-transparent'
+  return `mt-px flex h-4 w-4 shrink-0 items-center justify-center border font-mono text-[10px] font-semibold leading-none ${shape} ${tone}`
 }
 
-/** A row's digit shortcut, in the footer chips' keycap grammar. */
-function KeyCap({ children }: { children: ReactNode }) {
+/** A row's digit shortcut brightens on the keyboard highlight. */
+function KeyCap({ children, active }: { children: ReactNode; active: boolean }) {
   return (
-    <span className="mt-0.5 shrink-0 rounded border border-shell-seam px-1 font-mono text-[9px] leading-[15px] text-text-faint">
+    <span
+      className={`min-w-[10px] shrink-0 text-right font-mono text-[10.5px] leading-[17px] ${active ? 'text-text-muted' : 'text-text-ghost'}`}
+    >
       {children}
     </span>
   )
@@ -153,6 +119,7 @@ export function AskQuestionFlow({
     questions.map(() => ({ optionIndices: [], other: '' })),
   )
   const [cursor, setCursor] = useState(0)
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
   const [otherActive, setOtherActive] = useState(false)
   const otherInputRef = useRef<HTMLInputElement>(null)
   const cardRef = useRef<HTMLElement>(null)
@@ -169,17 +136,21 @@ export function AskQuestionFlow({
   const otherText = draft.other
   /** The freeform row is an ANSWER once it carries text, so it shows as one. */
   const otherFilled = draft.other.trim().length > 0
+  // Hovering or opening Other previews it as the single-select choice. Keep the
+  // previous draft until text replaces it, so leaving restores the old option.
+  const otherPending =
+    !q?.multiSelect && !otherFilled && (otherActive || hoverIndex === otherIndex)
   // Counts the freeform row too, or the line reads "2 selected" under three
   // rows drawn as chosen.
   const selectedCount = draft.optionIndices.length + (otherFilled ? 1 : 0)
-  const canAdvance =
-    draft.optionIndices.length > 0 || otherText.trim().length > 0
+  const canAdvance = !otherPending && (draft.optionIndices.length > 0 || otherFilled)
   const isLast = qi >= questions.length - 1
 
   // Reset per-question transient UI when the step changes (committed answers in
   // `answers` persist — the flow only advances forward, like the prototype).
   useEffect(() => {
     setCursor(0)
+    setHoverIndex(null)
     setOtherActive(false)
   }, [qi])
 
@@ -234,7 +205,7 @@ export function AskQuestionFlow({
       // left the keyboard on <body>. Restore when we still hold focus, or when
       // it fell to the body because our node went away.
       const active = document.activeElement
-      if (active === node || active === null || active === document.body) {
+      if (active === node || node.contains(active) || active === null || active === document.body) {
         previous.focus()
       }
     }
@@ -267,6 +238,29 @@ export function AskQuestionFlow({
     }
   }
 
+  function focusCursor(next: number) {
+    const target =
+      next < optionCount
+        ? cardRef.current?.querySelectorAll<HTMLButtonElement>(
+            'button[data-ask-option]',
+          )[next]
+        : cardRef.current?.querySelector<HTMLButtonElement>(
+            'button[data-ask-other]',
+          )
+    target?.focus()
+  }
+
+  function moveCursor(next: number) {
+    setCursor(next)
+    if (q && !q.multiSelect && next < optionCount) {
+      updateDraft(() => ({ optionIndices: [next], other: '' }))
+      setOtherActive(false)
+    }
+    // Space is native button activation when a row has focus. Keep that focus
+    // on the highlighted row so Space never clicks the previous option.
+    focusCursor(next)
+  }
+
   function setOtherText(value: string) {
     // Single-select: typing a freeform answer clears the option pick; multi keeps it.
     updateDraft(current => ({
@@ -276,6 +270,14 @@ export function AskQuestionFlow({
   }
 
   function advance() {
+    if (
+      (cursor === otherIndex || otherPending) &&
+      !otherActive &&
+      !otherText.trim()
+    ) {
+      setOtherActive(true)
+      return
+    }
     let nextAnswers = answers
     if (!canAdvance) {
       // A single-select cursor is an implicit default for one-Enter submission.
@@ -332,18 +334,19 @@ export function AskQuestionFlow({
       if (!inCard && !permissionKeysAreLive(event.target)) return
 
       // Containment claims the NAVIGATION keys. Footer controls keep their own
-      // activation keys, and option rows keep Space. Enter on an option row is
-      // deliberately claimed by the flow: clicking an answer and pressing Enter
-      // submits it instead of toggling it off.
+      // activation keys, and option rows keep Space. Enter on an option row or
+      // Other is claimed by the flow so it submits or opens the freeform field
+      // without triggering the button's native click.
       if (inCard && CONTROL_ACTIVATION_KEYS.has(event.key)) {
         const control = element.closest(CARD_CONTROL_SELECTOR)
         const optionRow = element.closest('[data-ask-option]')
-        const flowClaimsOptionEnter =
-          event.key === 'Enter' && optionRow !== null
+        const flowClaimsRowEnter =
+          event.key === 'Enter' &&
+          (optionRow !== null || control?.matches('[data-ask-other]') === true)
         if (
           control !== null &&
           control !== otherInputRef.current &&
-          !flowClaimsOptionEnter
+          !flowClaimsRowEnter
         ) {
           return
         }
@@ -395,6 +398,7 @@ export function AskQuestionFlow({
           event.preventDefault()
           setCursor(index)
           toggleOption(index)
+          focusCursor(index)
         } else if (index === otherIndex) {
           event.preventDefault()
           setCursor(otherIndex)
@@ -413,12 +417,12 @@ export function AskQuestionFlow({
       }
       if (key === 'ArrowDown' || key === 'j' || (event.ctrlKey && key === 'n')) {
         event.preventDefault()
-        setCursor(c => (c + 1) % rowCount)
+        moveCursor((cursor + 1) % rowCount)
         return
       }
       if (key === 'ArrowUp' || key === 'k' || (event.ctrlKey && key === 'p')) {
         event.preventDefault()
-        setCursor(c => (c - 1 + rowCount) % rowCount)
+        moveCursor((cursor - 1 + rowCount) % rowCount)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -426,9 +430,12 @@ export function AskQuestionFlow({
   })
 
   if (!q) return null
+  const previewIndex = hoverIndex ?? cursor
   const focusedPreview =
-    cursor < optionCount ? q.options[cursor]?.preview ?? null : null
+    previewIndex < optionCount ? q.options[previewIndex]?.preview ?? null : null
   const titleId = `ask-question-${requestId}`
+  const tabStop = draft.optionIndices[0] ?? (cursor < optionCount ? cursor : 0)
+  const showPending = pendingCount !== undefined && pendingCount > 1
   // The sibling card's honesty rule (P4-43, PARITY-LEDGER §7): never advertise
   // a key that will not fire. An inactive pane registers no listener, and a card
   // behind a modal deliberately does not take focus.
@@ -437,7 +444,7 @@ export function AskQuestionFlow({
   return (
     <section
       aria-labelledby={titleId}
-      className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[light-dark(#ffffff,#141416)] shadow-[var(--elev-popover),0_0_0_1px_var(--card-ring)] focus:outline-none"
+      className="overflow-hidden rounded-xl border border-white/[0.08] bg-[light-dark(#ffffff,#141416)] focus:outline-none"
       // Focus events bubble, so these fire for the card AND every control in
       // it — which is exactly the containment rule the key handler applies.
       onBlur={event =>
@@ -457,54 +464,51 @@ export function AskQuestionFlow({
        * to the viewport rather than to the dock on purpose, so that in a window
        * with room the card sits at its natural height and the dock's own
        * scroller never engages. */}
-      <div className="max-h-[60vh] overflow-y-auto px-4 py-2.5">
-      {/* Kicker — glyph + family word + pending count, the grammar the sibling
-       * permission card already uses (`PermissionPrompt.tsx` kicker row). */}
-      <div className="flex items-center gap-2">
+      <div className="max-h-[60vh] overflow-y-auto px-4 pb-2.5 pt-3">
+      {/* Header, step progress, and queued count share one line. */}
+      <div className="flex h-[15px] items-center gap-2">
         <span className="flex text-accent">
           <QuestionGlyph />
         </span>
-        <span className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-accent">
-          Question
-        </span>
-        {pendingCount !== undefined && pendingCount > 1 ? (
-          <span className="ml-auto font-mono text-[10px] tabular-nums text-text-faint">
-            <b className="text-text-muted">{pendingCount}</b> pending
-          </span>
-        ) : null}
-      </div>
-
-      {/* Header chip + multi-select badge + multi-question stepper */}
-      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-        <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
+        <span className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.1em] text-accent">
           {q.header || 'Question'}
         </span>
-        {questions.length > 1 ? (
-          <span className="ml-auto flex items-center gap-1">
-            {questions.map((_, i) => (
-              <span
-                aria-hidden
-                className={`h-1.5 w-1.5 rounded-full ${
-                  i === qi
-                    ? 'bg-accent'
-                    : answers[i] &&
-                        (answers[i]!.optionIndices.length > 0 ||
-                          answers[i]!.other.trim().length > 0)
-                      ? 'bg-accent/40'
-                      : 'bg-text-primary/15'
-                }`}
-                key={i}
-              />
-            ))}
-            <span className="ml-1 font-mono text-[10px] text-text-faint">
-              {qi + 1}/{questions.length}
-            </span>
+        {questions.length > 1 || showPending ? (
+          <span className="ml-auto flex items-center gap-2.5 font-mono text-[10.5px] tabular-nums text-text-faint">
+            {questions.length > 1 ? (
+              <span className="flex items-center gap-1">
+                {questions.map((_, i) => (
+                  <span
+                    aria-hidden
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      i === qi
+                        ? 'bg-accent'
+                        : answers[i] &&
+                            (answers[i]!.optionIndices.length > 0 ||
+                              answers[i]!.other.trim().length > 0)
+                          ? 'bg-accent/40'
+                          : 'bg-text-primary/15'
+                    }`}
+                    key={i}
+                  />
+                ))}
+                <span className="ml-[3px]">{qi + 1}/{questions.length}</span>
+              </span>
+            ) : null}
+            {questions.length > 1 && showPending ? (
+              <span className="h-2.5 w-px bg-shell-seam" />
+            ) : null}
+            {showPending ? (
+              <span>
+                <b className="font-medium text-text-muted">{pendingCount}</b> pending
+              </span>
+            ) : null}
           </span>
         ) : null}
       </div>
 
       <h2
-        className="mt-1.5 text-sm font-semibold leading-snug text-text-primary"
+        className="mt-1.5 text-[15px] font-semibold leading-5 text-text-primary"
         id={titleId}
       >
         {q.question}
@@ -515,7 +519,7 @@ export function AskQuestionFlow({
        * doubles as the running confirmation that a pick registered, which is
        * the second channel the checkboxes alone did not give the operator. */}
       {q.multiSelect ? (
-        <p className="mt-1 text-[11px] leading-snug text-text-subtle">
+        <p className="mt-0.5 text-xs leading-4 text-text-subtle">
           {selectedCount > 0
             ? `${selectedCount} selected`
             : 'Pick as many as you like'}
@@ -523,31 +527,34 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Options — label + description, radio/checkbox marker, preview badge */}
-      <div className="mt-1.5 flex flex-col gap-0.5">
+      <div
+        aria-labelledby={q.multiSelect ? undefined : titleId}
+        className="-mx-2 mt-2 flex flex-col gap-0.5"
+        role={q.multiSelect ? undefined : 'radiogroup'}
+      >
         {q.options.map((option, i) => {
           const active = cursor === i && !otherActive
-          const checked = draft.optionIndices.includes(i)
+          const checked = !otherPending && draft.optionIndices.includes(i)
           return (
             <button
               aria-checked={checked}
-              className={`flex w-full cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
+              className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2 py-[5px] text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
               data-ask-active={active ? 'true' : undefined}
               data-ask-option
               disabled={submitted}
               key={i}
               onClick={() => toggleOption(i)}
               role={q.multiSelect ? 'checkbox' : 'radio'}
-              // Tab-focusing a row must move the cursor onto it, or the focus
-              // ring and the cursor ring sit on different rows and space
-              // toggles the one the user is NOT looking at.
+              // Focus moves the highlight. Arrow and digit shortcuts pick;
+              // simply tabbing into the group does not choose an answer.
               onFocus={() => {
                 setCursor(i)
                 setOtherActive(false)
+                setHoverIndex(null)
               }}
-              onMouseEnter={() => {
-                setCursor(i)
-                setOtherActive(false)
-              }}
+              onMouseEnter={() => setHoverIndex(i)}
+              onMouseLeave={() => setHoverIndex(null)}
+              tabIndex={q.multiSelect ? undefined : i === tabStop ? 0 : -1}
               type="button"
             >
               <span
@@ -557,49 +564,52 @@ export function AskQuestionFlow({
                 {checked ? '✓' : ''}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-xs font-medium leading-snug text-text-primary">
+                <span className="block text-[13px] font-medium leading-[17px] text-text-primary">
                   {option.label}
                 </span>
                 {option.description ? (
-                  <span className="mt-0.5 block text-[11px] leading-snug text-text-subtle">
+                  <span className="mt-px block text-xs leading-4 text-text-subtle">
                     {option.description}
                   </span>
                 ) : null}
               </span>
               {option.preview ? (
-                <span className="mt-0.5 shrink-0 rounded bg-tone-info/10 px-1.5 text-[9px] font-semibold text-tone-info">
+                <span className="mt-[1.5px] shrink-0 rounded bg-tone-info/10 px-1.5 text-[10px] font-semibold leading-[14px] text-tone-info">
                   preview
                 </span>
               ) : null}
-              {keysAdvertised && i < 9 ? <KeyCap>{i + 1}</KeyCap> : null}
+              {keysAdvertised && i < 9 ? (
+                <KeyCap active={active}>{i + 1}</KeyCap>
+              ) : null}
             </button>
           )
         })}
 
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
-          className={`flex items-center gap-2 rounded-lg border px-2.5 py-1 ${rowTone(
-            otherFilled,
+          className={`flex items-start gap-2.5 rounded-lg px-2 py-[5px] ${rowTone(
+            otherFilled || otherPending,
             cursor === otherIndex,
           )}`}
           data-ask-active={cursor === otherIndex ? 'true' : undefined}
           onFocus={() => setCursor(otherIndex)}
-          onMouseEnter={() => setCursor(otherIndex)}
+          onMouseEnter={() => setHoverIndex(otherIndex)}
+          onMouseLeave={() => setHoverIndex(null)}
         >
           <span
             className={markerClass(
               q.multiSelect,
-              otherFilled,
+              otherFilled || otherPending,
               cursor === otherIndex,
             )}
             data-ask-marker
           >
-            {otherFilled ? '✓' : ''}
+            {otherFilled || otherPending ? '✓' : ''}
           </span>
           {otherActive ? (
             <input
               aria-label="Other answer"
-              className="min-w-0 flex-1 bg-transparent text-xs text-text-primary outline-none placeholder:text-text-subtle"
+              className="-my-[3px] min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-[13px] leading-[17px] text-text-primary outline-none placeholder:text-text-subtle"
               disabled={submitted}
               onBlur={() => {
                 if (!otherText.trim()) setOtherActive(false)
@@ -614,7 +624,8 @@ export function AskQuestionFlow({
             />
           ) : (
             <button
-              className="flex-1 cursor-pointer bg-transparent text-left text-xs text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default"
+              className="flex-1 cursor-pointer bg-transparent text-left text-[13px] leading-[17px] text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default"
+              data-ask-other
               disabled={submitted}
               onClick={() => setOtherActive(true)}
               type="button"
@@ -622,52 +633,53 @@ export function AskQuestionFlow({
               {otherText.trim() ? otherText : 'Other…'}
             </button>
           )}
-          {/* The row number IS the shortcut, so it may only claim a key that
-           * exists: past 8 options the cap shows the letter key instead of an
-           * unreachable two-digit number. */}
+          {/* Past eight options, the Other shortcut is its letter rather than
+           * an unreachable two-digit number. */}
           {keysAdvertised ? (
-            <KeyCap>{otherIndex < 9 ? otherIndex + 1 : 'o'}</KeyCap>
+            <KeyCap active={cursor === otherIndex}>
+              {otherIndex < 9 ? otherIndex + 1 : 'o'}
+            </KeyCap>
           ) : null}
         </div>
       </div>
 
-      {/* Preview pane — appears when the focused option carries one */}
+      {/* Preview follows hover, then the keyboard highlight. */}
       {focusedPreview ? (
-        <div className="mt-1.5 rounded-lg border border-tone-info/20 bg-black/30 px-3 py-1.5">
-          <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-tone-info">
+        <div className="mt-1.5 rounded-[9px] border border-white/[0.07] bg-black/30 px-[11px] py-[7px]">
+          <div className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.08em] text-text-faint">
             Preview
           </div>
-          <pre className="m-0 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-text-muted">
+          <pre className="m-0 whitespace-pre-wrap font-mono text-[11px] leading-[1.55] text-text-muted">
             {focusedPreview}
           </pre>
         </div>
       ) : null}
 
-      {/* Footer rail — advance/submit + key hints + cancel */}
-      <div className="mt-2 flex items-center gap-3 border-t border-shell-seam pt-2">
+      {/* Footer actions end with the primary action. */}
+      <div className="mt-2 flex items-center justify-end gap-1.5 border-t border-shell-seam pt-2">
         <button
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-semibold text-on-fill focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
-          disabled={!canAdvance || submitted}
-          onClick={advance}
-          type="button"
-        >
-          {isLast ? 'Submit' : 'Next question'}
-          {keysAdvertised ? (
-            <span className="rounded border border-on-fill/35 px-1 font-mono text-[9px] leading-none">
-              ↵
-            </span>
-          ) : null}
-        </button>
-        <button
-          className="ml-auto inline-flex items-center gap-1.5 bg-transparent text-[11px] text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-xs leading-4 text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
           disabled={submitted}
           onClick={onCancel}
           type="button"
         >
           Cancel
           {keysAdvertised ? (
-            <span className="rounded border border-text-ghost px-1 font-mono text-[9px] leading-none text-text-faint">
+            <span className="rounded border border-text-ghost px-1 font-mono text-[9.5px] leading-[14px] text-text-faint">
               esc
+            </span>
+          ) : null}
+        </button>
+        <button
+          className="inline-flex items-center gap-[7px] rounded-md bg-accent px-3 py-1 text-xs font-semibold leading-4 text-on-fill focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
+          disabled={!canAdvance || submitted}
+          onClick={advance}
+          type="button"
+        >
+          {isLast ? 'Submit' : 'Next question'}
+          {keysAdvertised ? (
+            <span className={`rounded border px-1 font-mono text-[9.5px] leading-[14px] ${canAdvance && !submitted ? 'border-on-fill/35' : 'border-text-primary/15'}`}>
+              ↵
             </span>
           ) : null}
         </button>

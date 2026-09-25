@@ -1157,7 +1157,7 @@ export function reduceRetainedSubmitCleared(
  */
 export type SubmitAnswer = { submitId: string; accepted: boolean }
 
-export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
+function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
   if (frame.kind !== 'submit.result') return null
   return { submitId: frame.submitId, accepted: frame.accepted }
 }

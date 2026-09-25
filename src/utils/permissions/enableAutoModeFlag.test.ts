@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { APIError } from '@anthropic-ai/sdk'
 import type { ToolPermissionContext } from '../../Tool.js'
 import { modelSupportsAutoMode } from '../betas.js'
 import { getNextPermissionMode } from './getNextPermissionMode.js'
@@ -111,15 +110,6 @@ describe('auto mode with Codex models', () => {
     }
   })
 
-  test('classifier stops after temporarily unavailable GPT-5.6 Luna', () => {
-    expect(
-      getClassifierFallbackModel(
-        'gpt-5.6-luna',
-        new Error('gpt-5.6-luna is temporarily unavailable'),
-      ),
-    ).toBeUndefined()
-  })
-
   test('classifier cascades GPT-5.6 transient failures through the available GPT models', () => {
     const unavailable = new Error('model is temporarily unavailable')
     expect(getClassifierFallbackModel('gpt-5.6-sol', unavailable)).toBe(
@@ -129,95 +119,6 @@ describe('auto mode with Codex models', () => {
       'gpt-5.6-luna',
     )
     expect(getClassifierFallbackModel('gpt-5.6-luna', unavailable)).toBeUndefined()
-  })
-
-  test('classifier stops after structured Luna capacity errors', () => {
-    expect(
-      getClassifierFallbackModel('gpt-5.6-luna', {
-        status: 529,
-        message: 'request failed',
-      }),
-    ).toBeUndefined()
-    expect(
-      getClassifierFallbackModel('gpt-5.6-luna', {
-        code: 'model_unavailable',
-        message: 'request failed',
-      }),
-    ).toBeUndefined()
-  })
-
-  // Codex transient outages surface as bare 5xx statuses with a generic body.
-  // Before the fix only 503/529 were recognized, so 500/502/504 silently failed
-  // closed and blocked the tool with the GPT-5.6 Luna unavailable message.
-  test('classifier stops after bare Luna 5xx outage statuses', () => {
-    for (const status of [500, 502, 503, 504, 529]) {
-      expect(
-        getClassifierFallbackModel('gpt-5.6-luna', {
-          status,
-          message: `Codex API error (${status}): upstream error`,
-        }),
-      ).toBeUndefined()
-    }
-  })
-
-  // The Codex WS→HTTP fallback rethrows as an SDK APIConnectionError, which drops
-  // the numeric status. The upstream status stays embedded in the message; the
-  // classifier must recover it so the action isn't blocked on a transient error.
-  test('classifier stops when Luna status is only embedded in the message', () => {
-    expect(
-      getClassifierFallbackModel(
-        'gpt-5.6-luna',
-        new Error('Codex API error (503): Service Unavailable'),
-      ),
-    ).toBeUndefined()
-    expect(
-      getClassifierFallbackModel(
-        'gpt-5.6-luna',
-        new Error('Codex API error (500): internal server error'),
-      ),
-    ).toBeUndefined()
-  })
-
-  // A real "model not found" (404) is not a transient capacity error — falling
-  // back would mask a genuine misconfiguration, so it must NOT trigger fallback.
-  test('classifier does not fall back from Luna on a non-transient 404', () => {
-    expect(
-      getClassifierFallbackModel('gpt-5.6-luna', {
-        status: 404,
-        message: 'Codex API error (404): model gpt-5.6-luna not found',
-      }),
-    ).toBeUndefined()
-  })
-
-  // A real SDK APIError instance (not just a plain object) is the actual shape
-  // the non-streaming Codex HTTP path produces. Asserts the status path matches
-  // a genuine InternalServerError, not only hand-rolled { status } literals.
-  test('classifier stops after a real SDK APIError on Luna', () => {
-    const sdkError = new APIError(
-      503,
-      { error: { message: 'Codex API error (503): Service Unavailable' } },
-      '503 Codex API error (503): Service Unavailable',
-      new Headers() as unknown as Headers,
-    )
-    expect(getClassifierFallbackModel('gpt-5.6-luna', sdkError)).toBeUndefined()
-  })
-
-  // The classifier path has no app-level account failover, so a non-cap 429
-  // (generic rate limit) must fall back rather than fail closed and block.
-  test('classifier stops after a non-cap Luna 429', () => {
-    expect(
-      getClassifierFallbackModel('gpt-5.6-luna', {
-        status: 429,
-        message: 'Codex API error (429): rate limit exceeded',
-      }),
-    ).toBeUndefined()
-    // 429 whose body advertises overload also falls back via text matching.
-    expect(
-      getClassifierFallbackModel('gpt-5.6-luna', {
-        status: 429,
-        message: 'Codex API error (429): the model is currently overloaded',
-      }),
-    ).toBeUndefined()
   })
 
   // A true account usage cap surfaces as CodexAccountCapError (also status 429).

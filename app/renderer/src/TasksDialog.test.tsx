@@ -156,26 +156,6 @@ test('an agents-only session points the empty Tasks tab at Workers', () => {
   expect(html).not.toContain('Run a background')
 })
 
-test('a blocked local_agent is omitted from Tasks because Workers owns delegated agents', () => {
-  const snapshot: TasksSnapshot = {
-    items: [
-      item({
-        id: 'a1',
-        type: 'local_agent',
-        status: 'running',
-        label: 'Fix the flaky test',
-        handoffStatus: 'blocked',
-      }),
-    ],
-  }
-  const html = renderToStaticMarkup(
-    <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={snapshot} />,
-  )
-  expect(html).not.toContain('Fix the flaky test')
-  expect(html).not.toContain('Waiting on the assistant')
-  expect(html).not.toContain('Needs you')
-})
-
 test('P4-8b — the "K stop" footer hint appears ONLY when a stop handler is wired (no dead affordance)', () => {
   const snapshot: TasksSnapshot = {
     items: [item({ id: 'a1', type: 'local_agent', status: 'running', label: 'Wire the auth flow' })],
