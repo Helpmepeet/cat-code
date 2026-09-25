@@ -3,8 +3,6 @@ import type { ClaudeCodeStats } from '../../src/utils/stats.js'
 import {
   _forTest,
   buildUsageStatsSnapshot,
-  tryGetUsageStatsSnapshots,
-  getEmptyUsageStatsSnapshot,
   tryGetUsageStatsSnapshot,
 } from './statsDomain.js'
 
@@ -87,64 +85,10 @@ describe('statsDomain', () => {
     expect(snapshot.dailyActivity).toHaveLength(2)
   })
 
-  test('getEmptyUsageStatsSnapshot produces a clean zeroed snapshot with zero tokens', () => {
-    const empty = getEmptyUsageStatsSnapshot('30d')
-    expect(empty.range).toBe('30d')
-    expect(empty.totalTokens).toBe(0)
-    expect(empty.cacheHitRate).toBe(0)
-    expect(empty.dailyModelTokens).toEqual([])
-    expect(empty.modelUsage).toEqual({})
-    expect(empty.dailyActivity).toEqual([])
-  })
-
   test('a successful empty aggregation remains a measured zero snapshot', async () => {
     const restore = _forTest.setAggregatorForTest(async () => emptyStats)
     try {
-      expect(await tryGetUsageStatsSnapshot('7d', true)).toEqual(getEmptyUsageStatsSnapshot('7d'))
-    } finally {
-      restore()
-    }
-  })
-
-  test('the paired read uses one range aggregation and caches both results after completion', async () => {
-    const realNow = Date.now
-    let clock = 10_000_000_000_000
-    Date.now = () => clock
-    const calls: string[][] = []
-    const restore = _forTest.setRangesAggregatorForTest(async ranges => {
-      calls.push([...ranges])
-      clock += 6000
-      return { '7d': emptyStats, '30d': { ...emptyStats, totalSessions: 2 } }
-    })
-    const restoreSingle = _forTest.setAggregatorForTest(async () => {
-      throw new Error('paired reads must not use the single-range aggregator')
-    })
-    try {
-      const snapshots = await tryGetUsageStatsSnapshots(true)
-      expect(calls).toEqual([['7d', '30d']])
-      expect(snapshots?.['7d'].totalSessions).toBe(0)
-      expect(snapshots?.['30d'].totalSessions).toBe(2)
-      expect(await tryGetUsageStatsSnapshots()).toEqual(snapshots)
-      expect(await tryGetUsageStatsSnapshot('30d')).toEqual(snapshots!['30d'])
-      expect(calls).toHaveLength(1)
-    } finally {
-      restore()
-      restoreSingle()
-      Date.now = realNow
-    }
-  })
-
-  test('a failed paired read returns null and preserves the last successful snapshots', async () => {
-    let failed = false
-    const restore = _forTest.setRangesAggregatorForTest(async () => {
-      if (failed) throw new Error('transcript directory unreadable')
-      return { '7d': emptyStats, '30d': { ...emptyStats, totalSessions: 2 } }
-    })
-    try {
-      const success = await tryGetUsageStatsSnapshots(true)
-      failed = true
-      expect(await tryGetUsageStatsSnapshots(true)).toBeNull()
-      expect(await tryGetUsageStatsSnapshots()).toEqual(success)
+      expect(await tryGetUsageStatsSnapshot('7d', true)).toEqual(buildUsageStatsSnapshot(emptyStats, '7d'))
     } finally {
       restore()
     }

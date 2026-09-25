@@ -5,9 +5,6 @@ import type { spawn } from 'node:child_process'
 import type {
   AccountStatus,
   AccountsSnapshot,
-  UsageStatsByRange,
-  UsageStatsRange,
-  UsageStatsSnapshot,
 } from '../shared/protocol.js'
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
@@ -15,11 +12,8 @@ import {
   type AccountsPoolWorkerSignOutResult,
 } from '../shared/accountsPoolWorker.js'
 import {
-  ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
   createAccountsPoolPublicationGate,
   runAccountsPoolWorker,
-  runCarriesUsageStats,
-  USAGE_STATS_EVERY_N_RUNS,
 } from './accountsPoolRunner.js'
 
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
@@ -213,34 +207,6 @@ function signOutResult(
   }
 }
 
-function usageStats(range: UsageStatsRange, totalTokens: number): UsageStatsSnapshot {
-  return {
-    range,
-    totalTokens,
-    dailyModelTokens: [
-      { date: '2026-08-13', tokensByModel: { 'gpt-5.6-sol': totalTokens } },
-    ],
-    modelUsage: {
-      'gpt-5.6-sol': {
-        inputTokens: 400_000,
-        outputTokens: 162_713,
-        cacheCreationInputTokens: 12_000,
-        cacheReadInputTokens: 900_000,
-      },
-    },
-    dailyActivity: [
-      { date: '2026-08-13', messageCount: 812, sessionCount: 9, toolCallCount: 240 },
-    ],
-    cacheHitRate: 68,
-    cacheReadTokens: 900_000,
-    cacheWriteTokens: 12_000,
-    freshInputTokens: 400_000,
-    totalSessions: 76,
-    totalMessages: 33_482,
-    activeDays: 4,
-  }
-}
-
 describe('runAccountsPoolWorker — accept + deliver', () => {
   test('delivers the single pool record to onPool', async () => {
     const delivered: AccountsSnapshot[] = []
@@ -351,80 +317,6 @@ describe('runAccountsPoolWorker — accept + deliver', () => {
       ).resolves.toBe('delivered')
       expect(delivered[0]?.receipt.outcome).toBe(outcome)
     }
-  })
-
-  test('usageStats reaches onUsageStats when the record carries it', async () => {
-    const stats: UsageStatsByRange = {
-      '7d': usageStats('7d', 2_138_901),
-      '30d': usageStats('30d', 4_421_134),
-    }
-    const pools: AccountsSnapshot[] = []
-    const delivered: UsageStatsByRange[] = []
-    const outcome = await runAccountsPoolWorker({
-      command: 'bun',
-      args: [],
-      cwd: process.cwd(),
-      spawnWorker: fakeSpawn({
-        stdout: ndjson({
-          type: 'pool',
-          version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
-          pool: pool(['work']),
-          usageStats: stats,
-        }),
-      }),
-      onPool: snapshot => pools.push(snapshot),
-      onUsageStats: value => delivered.push(value),
-    })
-    expect(outcome).toBe('delivered')
-    expect(pools).toHaveLength(1)
-    expect(delivered).toEqual([stats])
-  })
-
-  test('a record without usageStats still delivers the pool and skips onUsageStats', async () => {
-    // The stats read is best-effort; failing it must not cost the pool its
-    // delivery, and must not publish a zeroed snapshot as the user's history.
-    const pools: AccountsSnapshot[] = []
-    let statsCalls = 0
-    const outcome = await runAccountsPoolWorker({
-      command: 'bun',
-      args: [],
-      cwd: process.cwd(),
-      spawnWorker: fakeSpawn({
-        stdout: ndjson({
-          type: 'pool',
-          version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
-          pool: pool(['work']),
-        }),
-      }),
-      onPool: snapshot => pools.push(snapshot),
-      onUsageStats: () => {
-        statsCalls += 1
-      },
-    })
-    expect(outcome).toBe('delivered')
-    expect(pools).toHaveLength(1)
-    expect(statsCalls).toBe(0)
-  })
-
-  test('a malformed usageStats rejects the WHOLE record, pool included', async () => {
-    await expect(
-      runAccountsPoolWorker({
-        command: 'bun',
-        args: [],
-        cwd: process.cwd(),
-        spawnWorker: fakeSpawn({
-          stdout: ndjson({
-            type: 'pool',
-            version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
-            pool: pool(['work']),
-            usageStats: { '7d': 'nope', '30d': 'nope' },
-          }),
-        }),
-        onPool: () => {
-          throw new Error('onPool must not run for a rejected record')
-        },
-      }),
-    ).rejects.toThrow(/failed validation/)
   })
 
   test('a clean worker-reported failure resolves "failure" and never calls onPool (keeps last good)', async () => {
@@ -716,29 +608,5 @@ describe('accounts-pool publication gate', () => {
 
     expect(gate.canPublish(staleRead)).toBe(false)
     expect(gate.canPublish(gate.beginRead())).toBe(true)
-  })
-})
-
-describe('usage-stats cadence', () => {
-  test('the FIRST run always carries them (cold launch must not wait)', () => {
-    // The Accounts page exists to be readable with no session open. If run 0
-    // skipped the analytics, a fresh launch would sit on "Loading" for five
-    // minutes, which is the state this feed was added to remove.
-    expect(runCarriesUsageStats(0)).toBe(true)
-  })
-
-  test('then every Nth run, and no others', () => {
-    const carried = Array.from({ length: 12 }, (_, i) => i).filter(
-      runCarriesUsageStats,
-    )
-    expect(carried).toEqual([0, 5, 10])
-    expect(USAGE_STATS_EVERY_N_RUNS).toBe(5)
-  })
-
-  test('skipped runs still deliver the pool at the full interval', () => {
-    // The cadence gate is about the transcript aggregation only. Every run is
-    // still a pool run; the analytics just do not ride most of them.
-    expect(runCarriesUsageStats(1)).toBe(false)
-    expect(ACCOUNTS_POOL_REFRESH_INTERVAL_MS).toBe(60_000)
   })
 })

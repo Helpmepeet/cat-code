@@ -1256,19 +1256,13 @@ export function App() {
         dispatchAccounts({ type: 'pool', pool: event.pool })
         return
       }
-      // Usage analytics ride the same accounts worker run, for the same reason:
-      // the Accounts page opens with no session attached, and the per-session
-      // stats frame cannot reach it there. Also NOT a roster row.
+      // The independent usage worker publishes a session-free dashboard.
       if (event.type === 'usage-dashboard-loading') {
         dispatchUsageDashboard({ type: 'loading' })
         return
       }
       if (event.type === 'usage-dashboard') {
         dispatchUsageDashboard(event.result)
-        return
-      }
-      if (event.type === 'usage-stats') {
-        dispatchAccounts({ type: 'usage-stats', stats: event.stats })
         return
       }
       // A new/restored tab appears in the bar but does NOT steal the pane — a
@@ -1837,9 +1831,6 @@ export function App() {
     [activeSessionId],
   )
 
-  // Flipping 7d/30d is a VIEW switch, not a fetch. The host `usage-stats` event
-  // fills both ranges in one worker run precisely so the toggle needs no round
-  // trip (`protocol.ts` `UsageStatsByRange`), and the store holds both.
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
   // scroll away inside it. Session-free by construction: it reads the global pool
   // view, so it is the same fact whichever tab is in front.
