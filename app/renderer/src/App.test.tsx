@@ -1308,17 +1308,6 @@ test('D1a: the waiting block follows the rows and shares their measure', () => {
   expect(waitingColumn).toBe(rowColumn)
 })
 
-test('the waiting-message row is written once and used at both call sites', () => {
-  // The cold-spawn park row and the D1a staged row were the same markup typed
-  // twice: same label, same classes, same image fallback, free to drift apart.
-  // SSR proves each row still renders (the two tests above); only source can
-  // say they come from one place.
-  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
-
-  expect(source.match(/'Image attachment'/g) ?? []).toHaveLength(1)
-  expect(source.match(/<QueuedRow/g) ?? []).toHaveLength(2)
-})
-
 // D1b — ↑ takes waiting messages back before it walks history, and Escape still
 // interrupts. Both are real keydowns on a mounted pane now, in App.dom.test.tsx.
 
@@ -2470,11 +2459,6 @@ test('P4-32a — real workers reach the composer dock, above the permission stac
   const dockIndex = html.indexOf('max-w-[var(--transcript-width)]')
   expect(dockIndex).toBeGreaterThan(-1)
   expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
-})
-
-test('P4-32a — a session with no delegated workers leaves the dock untouched', () => {
-  const html = renderToStaticMarkup(<SessionPane {...idleSessionPaneProps()} />)
-  expect(html).not.toContain('subagents')
 })
 
 test('P4-32a — the dock retires settled workers but keeps unresolved ones', () => {

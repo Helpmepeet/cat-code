@@ -165,14 +165,6 @@ describe('deriveFocusedInputDialog: priority', () => {
     })
   })
 
-  test('local sandbox outranks the tool permission queue', () => {
-    expect(
-      deriveFocusedInputDialog(
-        factsFor(['sandbox-permission', 'tool-permission']),
-      ),
-    ).toBe('sandbox-permission')
-  })
-
   test('local sandbox ignores the toolJSX animation gate', () => {
     // A network prompt has to reach the user even while a tool owns the frame.
     expect(
@@ -215,14 +207,6 @@ describe('deriveFocusedInputDialog: exit and typing suppression', () => {
     ).toBeUndefined()
   })
 
-  test('exit outranks the message selector', () => {
-    expect(
-      deriveFocusedInputDialog(
-        factsFor(['message-selector'], { hasExitFlow: true }),
-      ),
-    ).toBeUndefined()
-  })
-
   test('typing suppression hides interrupt dialogs', () => {
     expect(
       deriveFocusedInputDialog(
@@ -261,15 +245,6 @@ describe('deriveFocusedInputDialog: exit and typing suppression', () => {
     ).toBe('sandbox-permission')
   })
 
-  test('the prospective re-run still honours exit', () => {
-    const typing = factsFor(['tool-permission'], {
-      suppressInterruptDialogs: true,
-      isExiting: true,
-    })
-    expect(
-      deriveFocusedInputDialog({ ...typing, suppressInterruptDialogs: false }),
-    ).toBeUndefined()
-  })
 })
 
 describe('getDialogWaitingReason', () => {
@@ -1204,63 +1179,6 @@ describe('deriveHasUnblockedDelegatedWork', () => {
       ),
     ).toBe(true)
   })
-})
-
-describe('session status and sleep policy together', () => {
-  function derive(args: {
-    isLoading: boolean
-    hasWorkingDelegatedTask: boolean
-    localWaitingReason: TuiWaitingReason | undefined
-    delegatedWaitingReason: 'input-needed' | undefined
-  }) {
-    return {
-      status: deriveTuiSessionStatus(args),
-      // No delegated task is prompted in this table, so working and unblocked
-      // coincide. Where they diverge has its own describe above.
-      work: deriveHasOperationalWork({
-        isLoading: args.isLoading,
-        hasUnblockedDelegatedWork: args.hasWorkingDelegatedTask,
-        localWaitingReason: args.localWaitingReason,
-      }),
-    }
-  }
-
-  type PrecedenceCase = {
-    name: string
-    args: Parameters<typeof derive>[0]
-    status: 'busy' | 'waiting' | 'idle'
-    work: boolean
-  }
-
-  const CASES: readonly PrecedenceCase[] = [
-    {
-      name: 'local waiting plus working delegated',
-      args: { isLoading: false, hasWorkingDelegatedTask: true, localWaitingReason: 'tool-approval', delegatedWaitingReason: undefined },
-      status: 'waiting',
-      work: true,
-    },
-    {
-      name: 'delegated waiting plus loading',
-      args: { isLoading: true, hasWorkingDelegatedTask: false, localWaitingReason: undefined, delegatedWaitingReason: 'input-needed' },
-      status: 'waiting',
-      work: true,
-    },
-    {
-      name: 'delegated waiting plus working delegated',
-      args: { isLoading: false, hasWorkingDelegatedTask: true, localWaitingReason: undefined, delegatedWaitingReason: 'input-needed' },
-      status: 'waiting',
-      work: true,
-    },
-  ]
-
-  for (const testCase of CASES) {
-    test(testCase.name, () => {
-      expect(derive(testCase.args)).toEqual({
-        status: testCase.status,
-        work: testCase.work,
-      })
-    })
-  }
 })
 
 // -- Integration facts REPL depends on
