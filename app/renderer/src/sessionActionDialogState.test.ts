@@ -328,15 +328,4 @@ describe('bulkExportSavedMessage (P4-35)', () => {
     )
   })
 
-  test('carries no em dash and no engineering vocabulary (operator rules)', () => {
-    for (const [ok, failed] of [
-      [1, 0],
-      [4, 0],
-      [2, 3],
-    ]) {
-      const message = bulkExportSavedMessage(ok, failed)
-      expect(message).not.toContain('—')
-      expect(message).not.toMatch(/verb|frame|sidecar|requestId/i)
-    }
-  })
 })

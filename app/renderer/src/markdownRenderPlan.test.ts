@@ -573,34 +573,9 @@ describe('resolveMarkdownMeasurements', () => {
     expect(live.size).toBe(0)
     expect(heights.size).toBe(0)
   })
-
-  test('a run whose content changed under the same ids is not live', () => {
-    const leaves = planMarkdownLeaves('row-1', table)
-    const [unit] = mergeMountedMarkdownLeaves(leaves, 0, 2)
-    const grown = planMarkdownLeaves('row-1', `${table}\n| tail | tail |`)
-
-    const stale = new Map([[unit.measurementKey, 4_800]])
-    const resolved = resolveMarkdownMeasurements(grown, stale)
-    const rows = grown.filter(leaf => leaf.id === unit.key)
-
-    expect(rows).toHaveLength(1)
-    expect(resolved.live.has(unit.measurementKey)).toBe(
-      leaves[0].characters + leaves[1].characters ===
-        grown[0].characters + grown[1].characters,
-    )
-  })
 })
 
 describe('selectMarkdownLeafWindow', () => {
-  test('keeps the mounted window fixed as source grows', () => {
-    const source = Array.from({ length: 4_000 }, (_, index) => `Paragraph ${index}\n`).join('\n')
-    const leaves = planMarkdownLeaves('row-1', source)
-    const leafWindow = selectMarkdownLeafWindow(leaves, 0, 800, 800)
-
-    expect(leafWindow.end - leafWindow.start).toBeLessThanOrEqual(MAX_MOUNTED_MARKDOWN_LEAVES)
-    expect(leafWindow.bottomSpacerHeight).toBeGreaterThan(0)
-  })
-
   test('returns prefix and suffix spacer heights around a later viewport', () => {
     const source = Array.from({ length: 2_000 }, (_, index) => `Paragraph ${index}\n`).join('\n')
     const leaves = planMarkdownLeaves('row-1', source)

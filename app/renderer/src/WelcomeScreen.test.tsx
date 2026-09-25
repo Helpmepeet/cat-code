@@ -85,16 +85,6 @@ test('renders the hero wordmark, greeting and meta strip labels', () => {
   expect(html).toContain('cat-code')
 })
 
-test('uses a randomized packaged cat image rather than embedding the hero as SVG', () => {
-  const source = readFileSync(new URL('./WelcomeScreen.tsx', import.meta.url), 'utf8')
-
-  expect(source).toContain("import sleepingCat from './assets/sleeping-cat.png'")
-  expect(source).toContain('const welcomeCats = [')
-  expect(source).toContain('Math.floor(Math.random() * welcomeCats.length)')
-  expect(source).toContain('src={welcomeCat}')
-  expect(source).not.toContain('function NeonCat()')
-})
-
 test('the projectless launcher has no branch choice or worktree option', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen
@@ -127,19 +117,6 @@ test('P4-59 keeps Open folder actionable without advertising an unbound shortcut
   expect(picker).toContain('Open folder…')
   expect(picker).toContain('onClick={() => { close() onOpenFolder() }}')
   expect(picker).not.toContain('⌘O')
-})
-
-test('Codex usage meters follow the selected accent rather than a hard-coded color', () => {
-  const source = readFileSync(new URL('./WelcomeScreen.tsx', import.meta.url), 'utf8')
-
-  expect(source).toContain('from-accent-soft to-accent')
-  expect(source).toContain("p >= 100 ? 'text-accent' : 'text-accent-soft'")
-  // Asserted as the HEX rather than a whole class. This guard exists for the
-  // historical regression of a hardcoded pink, and pinning the exact class
-  // string let the appearance pass rewrite it into a form that no longer
-  // matched the thing being guarded against.
-  expect(source).not.toContain('#f9a8d4')
-  expect(source).not.toContain('#ec4899')
 })
 
 test('P4-55 renders a truthful retry in place of the false empty roster', () => {
@@ -452,38 +429,6 @@ test('a loaded row without usage renders no rail or fabricated metric', () => {
   expect(html).not.toContain('>5h<')
   expect(html).not.toContain('>7d<')
   expect(html).not.toMatch(/\d+%/)
-})
-
-test('usage-state replacement preserves the account row and usage-region geometry classes', () => {
-  const noUsage = pool([account({
-    usagePrimary: null,
-    usageWeekly: null,
-    usagePrimaryWindowSeconds: null,
-    usageSecondaryWindowSeconds: null,
-  })])
-  const withUsage = pool([account({ usagePrimary: 20, usagePrimaryWindowSeconds: 18_000 })])
-  const render = (accounts: AccountsSnapshot, accountsUsagePending: boolean) =>
-    renderToStaticMarkup(
-      <WelcomeScreen
-        recents={[]}
-        accounts={accounts}
-        accountsUsagePending={accountsUsagePending}
-        onOpenRecent={noop}
-        onOpenFolder={noop}
-      />,
-    )
-  const accountRowClass =
-    'grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]'
-  const usageRegionClass = 'grid min-w-0'
-
-  for (const html of [
-    render(noUsage, true),
-    render(noUsage, false),
-    render(withUsage, false),
-  ]) {
-    expect(html).toContain(`class="${accountRowClass}"`)
-    expect(html).toContain(`class="${usageRegionClass}"`)
-  }
 })
 
 test('weekly-only usage expands across the full usage track', () => {

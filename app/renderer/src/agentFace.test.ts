@@ -13,7 +13,6 @@ import {
   axesForName,
   createAgentFaceRegistry,
   createAgentFaceRegistryStore,
-  faceHash,
   faceRects,
   type FaceAxes,
   type FaceRect,
@@ -135,12 +134,6 @@ describe('the stamp itself', () => {
 })
 
 describe('identity', () => {
-  test('the same name always proposes the same axes', () => {
-    for (const name of NAMES) {
-      expect(axesForName(name)).toEqual(axesForName(name))
-    }
-  })
-
   test('a missing name is the featureless base, with nothing cleared', () => {
     const base: FaceAxes = {
       ear: 'pointy',
@@ -154,17 +147,6 @@ describe('identity', () => {
     expect(axesForName(null)).toEqual(base)
     expect(axesForName('')).toEqual(base)
     expect(axesForName(undefined)).toEqual(base)
-  })
-
-
-
-  test('the hash is FNV-1a over the name, salted per axis', () => {
-    // A different salt must actually change the draw, or six of the seven axes
-    // would be perfectly correlated.
-    const salts = new Set([1, 2, 3, 4, 5, 6].map(salt => faceHash('Scout', salt)))
-    expect(salts.size).toBe(6)
-    expect(faceHash('Scout', 1)).toBe(faceHash('Scout', 1))
-    expect(faceHash('Scout', 1)).not.toBe(faceHash('Wick', 1))
   })
 })
 

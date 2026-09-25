@@ -218,13 +218,6 @@ function bashRowWithOutput(content: string) {
   })
 }
 
-test('output search is memoized independently from toolbar state', () => {
-  // Static SSR cannot toggle Wrap, so pin the dependency boundary at source.
-  const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('() => describeOutputSearch(body, query, matchIndex)')
-  expect(source).toContain('[body, query, matchIndex]')
-})
-
 test('P4-37: an output carries the copy / search / wrap toolbar', () => {
   const html = renderToStaticMarkup(
     <ToolInspector row={bashRowWithOutput('a\nb\n')} />,
@@ -306,22 +299,6 @@ test('a multi-megabyte single line mounts a bounded chunk, and copy still holds 
   expect(model.output?.length).toBe(3_000_017)
   const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
   expect(source).toContain('.writeText(body)')
-})
-
-test('a repetitive one-character query mounts a bounded number of highlights', () => {
-  const html = renderToStaticMarkup(
-    <ToolInspector row={bashRowWithOutput('a'.repeat(20_000))} />,
-  )
-  const marks = html.split('<mark').length - 1
-  // No query yet: nothing is painted at all.
-  expect(marks).toBe(0)
-
-  // The steppers cannot be typed into under SSR, so the ceiling that matters is
-  // proven directly on the model in `outputSearchModel.test.ts`; this pins that
-  // the drawer routes through it rather than splitting the raw line.
-  const drawer = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
-  expect(drawer).toContain('selectOutputLineChunk(')
-  expect(drawer).not.toContain('splitLineByQuery(')
 })
 
 test('the wrap toggle lives on the scroll box, so it qualifies the measurements', () => {

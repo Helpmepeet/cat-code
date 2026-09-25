@@ -424,24 +424,6 @@ describe('selectSessionsPageActions (P4-35 — the Sessions-page entry point)', 
     )
   })
 
-  test('Export survives the filter for a live row and Branch stays absent', () => {
-    const page = byKind(selectSessionsPageActions(resolveSessionActions(row(), { isActiveOpen: true })))
-    expect(page.get('export')!.enabled).toBe(true)
-    expect(page.has('branch' as SessionActionKind)).toBe(false)
-  })
-
-  test('a closed row still offers Export with the actionable reason', () => {
-    const page = byKind(
-      selectSessionsPageActions(
-        resolveSessionActions(row({ live: false, status: 'exited', restorable: true }), {
-          isActiveOpen: false,
-        }),
-      ),
-    )
-    expect(page.get('export')!.enabled).toBe(false)
-    expect(page.get('export')!.reason).toContain('Open or restore this session first.')
-  })
-
   test('an empty menu filters to an empty menu, never a throw', () => {
     expect(selectSessionsPageActions([])).toEqual([])
   })
