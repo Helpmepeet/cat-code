@@ -217,28 +217,17 @@ describe('resolveAgentTools Skill policy is symmetric across spawn shapes', () =
     ).resolvedTools.map(tool => tool.name)
   }
 
-  // Foreground vs background must not change a role's logical capabilities
-  // (owner decision 2026-07-30). The async allowlist alone left Skill on every
-  // sync subagent, which made the worker tool policy false for foreground
-  // spawns.
-  test.each([
-    ['sync', false],
-    ['async', true],
-  ] as const)('withholds Skill from a wildcard %s worker', (_shape, isAsync) => {
-    expect(resolveNames(['*'], isAsync)).not.toContain(SKILL_TOOL_NAME)
+  // The async path has dedicated tests below; these keep the foreground
+  // worker policy covered independently.
+  test('withholds Skill from a wildcard sync worker', () => {
+    expect(resolveNames(['*'], false)).not.toContain(SKILL_TOOL_NAME)
   })
 
-  test.each([
-    ['sync', false],
-    ['async', true],
-  ] as const)(
-    'grants Skill to a %s worker whose definition names it',
-    (_shape, isAsync) => {
-      expect(resolveNames(['Read', SKILL_TOOL_NAME], isAsync)).toContain(
-        SKILL_TOOL_NAME,
-      )
-    },
-  )
+  test('grants Skill to a sync worker whose definition names it', () => {
+    expect(resolveNames(['Read', SKILL_TOOL_NAME], false)).toContain(
+      SKILL_TOOL_NAME,
+    )
+  })
 
   test('leaves Skill selectable when asking which tools a definition could pick', () => {
     // The agent-creation picker passes no explicit list; hiding Skill there

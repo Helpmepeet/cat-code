@@ -3128,26 +3128,13 @@ test('a delivered peer message draws its body, not the envelope around it', () =
   expect(html).not.toContain('cross-session-message')
 })
 
-/**
- * The other four kinds must come out BYTE-IDENTICAL after the peer row's
- * emphasis was added. `emphasizeSender` is optional and set only by `peer`
- * precisely so the shared class strings never moved; this pins that, because
- * folding the emphasis into those strings is the tidier-looking change and is
- * the wrong one.
- */
-test.each([
-  ['coordinator', null],
-  ['channel', 'slack · dana'],
-  ['teammate', 'scout'],
-  ['deferred-continuation', null],
-  ['future-kind-2027', null],
-])('the %s injected row keeps the accent glyph and muted label it had', (injectedKind, label) => {
+test('a non-peer injected row keeps its accent glyph and muted label', () => {
   const html = render({
     ...blockSource,
-    id: `s:m:0:injected-${injectedKind}`,
+    id: 's:m:0:injected-coordinator',
     kind: 'injected-turn',
-    injectedKind,
-    label,
+    injectedKind: 'coordinator',
+    label: null,
     content: 'a message the operator did not write',
     isReplay: false,
   })

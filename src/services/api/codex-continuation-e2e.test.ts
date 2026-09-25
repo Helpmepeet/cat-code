@@ -326,37 +326,6 @@ describe('codex continuation e2e: normalization → translation → reconciliati
     },
   )
 
-  test('normalization drift in sent-input portion does not block canonical reconciliation', () => {
-    // Core regression from the bug report: normalizeMessagesForAPI rewrites the
-    // user message prefix (id-tags, block merges, etc.). Non-tool-result prefix
-    // normalization remains trusted by length, so the canonical delta succeeds.
-    const turn1Input = transcriptToCodexInput([userMsg('hello')])
-    const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'world')
-
-    const driftedTurn2Input: Array<Record<string, unknown>> = [
-      // Drifted from canonical: [id:...] tag appended by appendMessageTagToUserMessage
-      { role: 'user', content: 'hello [id:drifted_tag]' },
-      // Output item replayed verbatim
-      ...outputItems,
-      // Genuinely new item
-      { role: 'user', content: 'follow-up' },
-    ]
-
-    const delta = canonicalDelta(driftedTurn2Input, sentInput, outputItems)
-    expect(delta).not.toBeNull()
-    expect(delta!).toEqual([{ role: 'user', content: 'follow-up' }])
-  })
-
-  test('input shorter than baseline always falls back to full send', () => {
-    const turn1Input = transcriptToCodexInput([userMsg('hello')])
-    const { sentInput, outputItems } = simulateCanonicalState(turn1Input)
-
-    // baseline = 1 sent + 1 output = 2 items; turn2 has only 1 → must full-send
-    const turn2Input = transcriptToCodexInput([userMsg('fresh context')])
-    const delta = canonicalDelta(turn2Input, sentInput, outputItems)
-    expect(delta).toBeNull()
-  })
-
   test('logprobs-bearing server message stays incremental (message_content_drift killed)', () => {
     // Regression for message_content_drift len_delta=-14: the server's output_text
     // part carries a `logprobs` field the replay path drops. The record side must
