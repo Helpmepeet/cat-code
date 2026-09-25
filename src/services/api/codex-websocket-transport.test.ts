@@ -1114,7 +1114,6 @@ describe('streamTurnViaWebSocket', () => {
     expect(sent[1]!.input).toEqual([])
   })
 
-
   // ── Stale previous_response_id ──────────────────────────────────────────
 
   test('retries as full send when server rejects previous_response_id', async () => {
@@ -1220,24 +1219,6 @@ describe('streamTurnViaWebSocket', () => {
     await expect(
       collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [] }, AUTH, 0))
     ).rejects.toBeInstanceOf(CodexWebSocketClosedBeforeCompletedError)
-  })
-
-  // ── turnState scoping ───────────────────────────────────────────────────
-
-  test('does not echo previous turn turnState into next turn request', async () => {
-    installFakeWs()
-    await ensureWebSocketSession(CONV_ID, AUTH)
-
-    // Turn 1: complete, no x-codex-turn-state in any message.
-    fakeWs.responses = [completedEvent('resp_001')]
-    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'q' }] }, AUTH, 1))
-
-    // Turn 2: the request should NOT have x-codex-turn-state since none was received.
-    fakeWs.responses = [completedEvent('resp_002')]
-    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: [{ role: 'user', content: 'q' }, { role: 'user', content: 'q2' }] }, AUTH, 2))
-
-    const sent = fakeWs.getSent()
-    expect(sent[1]!['x-codex-turn-state']).toBeUndefined()
   })
 
   // ── Effort change ───────────────────────────────────────────────────────

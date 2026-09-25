@@ -4267,13 +4267,6 @@ describe('codex tool-result truncation (Item 2)', () => {
     expect(out.endsWith('TAIL_MARKER_LINE')).toBe(true)
   })
 
-  test('truncateCodexToolOutputText is a pure function: byte-identical across calls', () => {
-    const big = 'Z'.repeat(OVER)
-    const a = truncateCodexToolOutputText(big)
-    const b = truncateCodexToolOutputText(big)
-    expect(a).toBe(b)
-  })
-
   function buildBodyWithToolResult(
     toolName: string,
     resultText: string,

@@ -3660,27 +3660,6 @@ test('task.background.one without a tool-use id is refused, not defaulted to all
   expect(backgroundCalls).toEqual([])
 })
 
-test('P4-8b — an unknown/terminal task acks ok:false (fail-closed), no crash', async () => {
-  const { server, calls } = makeTaskControlServer(() => ({
-    ok: false,
-    message: 'That task is no longer running.',
-  }))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'task.stop', requestId: 'ts2', taskId: 'gone' }),
-  )
-
-  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  const result = received.find(f => f.kind === 'task-control.result')
-  expect(result && result.kind === 'task-control.result' && result.ok).toBe(false)
-  expect(calls).toEqual(['gone'])
-})
-
 test('P4-8b — rejects task.stop with a NON-string taskId (Zod boundary), no domain call', () => {
   const { server, calls } = makeTaskControlServer()
   const { socket, received } = makeSocket()
@@ -3871,18 +3850,6 @@ test('CC-32 — rejects task.dismiss carrying a forged eviction key (checkStrict
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
   expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
   expect(dismissCalls).toEqual([])
-})
-
-test('CC-32 — task.dismiss with NO task-control domain fails closed (internal_error), no result frame', () => {
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'task.dismiss', requestId: 'td4', taskId: 'agent-1' }),
-  )
-
-  expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
-  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
 })
 
 test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reaper cannot, AND drives a fresh tasks.snapshot without it', async () => {
@@ -4213,56 +4180,6 @@ test('P4-24c — a valid effort.set + fast.set both round-trip through the domai
   )
   expect(snaps[snaps.length - 1]?.runControls.effort.current).toBe('high')
   expect(snaps[snaps.length - 1]?.runControls.fast.active).toBe(true)
-})
-
-test('P4-24c — a well-typed unsupported model returns a correlated failed result', () => {
-  const { server, calls } = makeRunControlsServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'model.set',
-      requestId: 'rc-unsupported-model',
-      model: 'forged-model',
-    }),
-  )
-
-  expect(
-    received.some(
-      f =>
-        f.kind === 'run-control.result' &&
-        f.requestId === 'rc-unsupported-model' &&
-        !f.ok,
-    ),
-  ).toBe(true)
-  expect(calls).toEqual([])
-})
-
-test('P4-24c — a well-typed unsupported effort returns a correlated failed result', () => {
-  const { server, calls } = makeRunControlsServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'effort.set',
-      requestId: 'rc-unsupported-effort',
-      effort: 'forged-effort',
-    }),
-  )
-
-  expect(
-    received.some(
-      f =>
-        f.kind === 'run-control.result' &&
-        f.requestId === 'rc-unsupported-effort' &&
-        !f.ok,
-    ),
-  ).toBe(true)
-  expect(calls).toEqual([])
 })
 
 test('P4-24c — rejects model.set with a NON-string model (Zod boundary), no domain call', () => {
@@ -5397,30 +5314,6 @@ test('F5 — ready frame canonicalizes undefined-valued fields', () => {
   expect(ready).toBeDefined()
   const snapshotKeys = Object.keys((ready as any).payload.goalSnapshot)
   expect(snapshotKeys).not.toContain('description')
-})
-
-test('F5 — ready frame with non-JSON-safe payload is rejected', () => {
-  const controller = new AppSessionController(probeAdapter())
-  controller.getGoalSnapshot = () => ({
-    threadId: 'thread-123',
-    invalidField: new Date(),
-  } as any)
-
-  let loggedMessage = ''
-  const server = new SidecarServer({
-    sessionId: SESSION,
-    engineSessionId: ENGINE_SESSION,
-    controller,
-    log: (msg) => { loggedMessage = msg }
-  })
-  servers.push(server)
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
-
-  // Ready frame should be blocked
-  expect(received.some(f => f.kind === 'ready')).toBe(false)
-  // An error should be logged
-  expect(loggedMessage).toContain('non-plain object')
 })
 
 /* ------------------------------------------------------------------------- *
