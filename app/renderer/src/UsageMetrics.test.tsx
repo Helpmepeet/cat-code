@@ -38,10 +38,10 @@ test('All, incomplete history, absent baseline and zero count baseline omit delt
     expect(renderToStaticMarkup(<UsageMetrics unknown="Loading" partial={false}/>)).not.toContain('usage-metric-delta');
 });
 
-test('unreported cache writes suppress the share and its comparison', () => {
+test('unreported cache writes show recorded cache reads without a share comparison', () => {
     const summary = comparable();
     summary.cacheWriteReporting = 'unreported';
-    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('<h2>Cached input</h2><strong>–</strong>');
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('<h2>Cached input</h2><strong>1.1K tokens</strong>');
     expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).not.toContain('Cached input: 5 percentage points increase');
     summary.cacheWriteReporting = 'reported';
     summary.previousPeriod!.cacheWriteReporting = 'unreported';

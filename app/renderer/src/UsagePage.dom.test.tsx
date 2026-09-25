@@ -71,6 +71,10 @@ test('exact values are mounted only after opening the single disclosure', async 
     const snapshot = await recordedSnapshot();
     snapshot.ranges['7d'].tokens.fresh = 12_345;
     snapshot.ranges['7d'].days[0]!.tokens.fresh = 12_345;
+    snapshot.ranges['7d'].tokens.write = 125;
+    snapshot.ranges['7d'].cacheWriteReporting = 'partial';
+    snapshot.ranges['7d'].days[0]!.tokens.write = 125;
+    snapshot.ranges['7d'].days[0]!.cacheWriteReporting = 'partial';
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     const disclosure = tree.container.querySelector<HTMLDetailsElement>('.usage-values')!;
     expect(disclosure.querySelectorAll('table')).toHaveLength(0);
@@ -79,6 +83,7 @@ test('exact values are mounted only after opening the single disclosure', async 
     expect(disclosure.textContent).toContain('Raw decision outcomes by local period');
     expect(disclosure.textContent).toContain('UTC offset');
     expect(disclosure.textContent).toContain('12,345');
+    expect(disclosure.querySelector('table tbody tr')?.textContent).toContain('125 reported');
     expect([...disclosure.querySelectorAll('table')].find(table => table.caption?.textContent === 'Raw decision outcomes by local period')?.querySelector('thead')?.textContent).toContain('Needs reviewOperational errorCancelledUnknownIncomplete');
 });
 

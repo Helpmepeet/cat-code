@@ -75,7 +75,7 @@ test('tiny model geometry retains real fractional shares and distinct colors', (
     expect(new Set(Object.values(usageGraphColors(Array.from({ length: 10 }, (_, i) => String(i))))).size).toBe(10);
 });
 
-test('cache writes remain visible as unavailable or measured zero', async () => {
+test('cache writes distinguish unavailable, measured zero, and known partial counts', async () => {
     const { UsageCacheSummary } = await import('./UsageOverviewDetails.js');
     const range = structuredClone(snapshot.ranges['7d']);
     range.cacheWriteReporting = 'unreported';
@@ -84,6 +84,9 @@ test('cache writes remain visible as unavailable or measured zero', async () => 
     range.tokens.fresh = 10;
     range.cachedInputShare = 0;
     expect(renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>)).toContain('Cache writes</dt><dd title="0">0');
+    range.cacheWriteReporting = 'partial';
+    range.tokens.write = 125;
+    expect(renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>)).toContain('Cache writes</dt><dd title="125 reported">125 reported');
 });
 
 test('reported cache days remain visible when another day lacks cache-write data', () => {
