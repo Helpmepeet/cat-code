@@ -29,3 +29,12 @@
 | Mailbox negative control | 1 | Correlated disk-path test and mailbox tests with real pending records | 29,234/271,194 lines with the same preload |
 
 Current provisional count: 8,272 declarations, down 28. The edited cohorts ran 50 fewer runtime cases; the difference arises from loops and a table that expand into multiple tests. The remaining provisional declaration target is 1,632, subject to runtime-count confirmation. The preload exists only in `/private/tmp` and supplies the missing export as `false` so unrelated engine suites can import; it does not repair the checkout. These focused coverage results do not establish the repository-wide two-point requirement.
+
+## Second batch
+
+| Area | Removed cases | Production owner and remaining proof | Focused LCOV before and after |
+|---|---:|---|---|
+| Codex identity reconciliation | 1 | The deleted module had no production caller. Active token-refresh and account-identity tests guard the current explicit-reauthentication behavior. | 30,711/271,199 surviving source lines both times, with the temporary bridge-export preload |
+| Retired renderer timing and Accounts analytics | 42 | Usage timing and the Accounts analytics section have no production caller after their page redesigns. The live Usage page, Accounts page, and Transcript view tests remain. `formatModelDisplayName` and four tests remain; `UsageBarsIcon` remains for Sidebar. | 11,030/19,542 (56.44%) to 10,766/19,277 (55.85%) on 95 shared source files |
+
+Current provisional count: 8,229 declarations, down 71 of 8,300 (0.86%). The two batches have removed 93 runtime cases. The renderer cohort loses 0.59 coverage points on shared files, within the two-point batch gate. The app typecheck and `bun run build:dev:full` passed. A full reproducible repository coverage comparison and the 20% deletion target remain open.

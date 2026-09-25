@@ -42,8 +42,6 @@ import type {
   AccountStatus,
   AccountVerbMessage,
   SignedOutCodexProfileStatus,
-  UsageStatsRange,
-  UsageStatsSnapshot,
 } from '../../shared/protocol.js'
 import type {
   AccountSignOutOverlay,
@@ -907,10 +905,7 @@ export function AccountsPage({
 }: {
   snapshot: AccountsSnapshot | null
   lastResult: AccountResultFrame | null
-  usageStats?: UsageStatsSnapshot | null
-  activeStatsRange?: UsageStatsRange
   signOutOverlays?: Record<string, AccountSignOutOverlay>
-  onRangeChange?: (range: UsageStatsRange) => void
   onVerb: (verb: AccountVerbMessage) => void
 }): ReactElement {
   const toast = useToast()

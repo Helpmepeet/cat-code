@@ -219,7 +219,6 @@ import {
   selectGlobalAccountsSnapshot,
   selectOAuthProgress,
   selectWelcomeAccountsSnapshot,
-  selectUsageStatsForRange,
   useAccountsPoolPresentationState,
 } from './accountsState.js'
 import { selectAccountHealthBanner } from './accountHealthBanner.js'
@@ -376,7 +375,6 @@ import type {
   RemoteVerbMessage,
   SessionActionVerbMessage,
   SessionId,
-  UsageStatsRange,
 } from '../../shared/protocol.js'
 import type {
   HostEvent,
@@ -1842,20 +1840,6 @@ export function App() {
   // Flipping 7d/30d is a VIEW switch, not a fetch. The host `usage-stats` event
   // fills both ranges in one worker run precisely so the toggle needs no round
   // trip (`protocol.ts` `UsageStatsByRange`), and the store holds both.
-  //
-  // This used to also fire `queryStats(activeSessionId, range)` under an
-  // `if (activeSessionId)` guard, which tests that an id EXISTS, not that its
-  // session is LIVE. The Accounts page is reachable with no sidecar at all, so a
-  // remembered id passed the guard, main answered `session_not_found`, and
-  // because the preload mints a requestId for the query the error frame came
-  // back correlated: the renderer toasted a raw session id at the user AND
-  // `connectionState` moved that session to `dead`. A range toggle must not
-  // touch session lifetime. No liveness check would fix it either, since the
-  // session can die between the check and the send.
-  const handleStatsRangeChange = useCallback((range: UsageStatsRange) => {
-    dispatchAccounts({ type: 'set-stats-range', range })
-  }, [])
-
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
   // scroll away inside it. Session-free by construction: it reads the global pool
   // view, so it is the same fact whichever tab is in front.
@@ -4443,10 +4427,7 @@ export function App() {
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}
               lastResult={accounts.lastResult}
-              usageStats={selectUsageStatsForRange(accounts)}
-              activeStatsRange={accounts.activeStatsRange}
               signOutOverlays={accounts.signOutOverlays}
-              onRangeChange={handleStatsRangeChange}
               onVerb={sendAccountVerb}
             />
           ) : activeView === 'sessions' ? (
