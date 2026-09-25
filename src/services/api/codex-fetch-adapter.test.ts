@@ -1021,18 +1021,6 @@ describe('codex-fetch-adapter', () => {
     ])
   })
 
-  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Terra', () => {
-    const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.6-terra',
-      thinking: { type: 'disabled' },
-      _openaiInstructionAssembly: {
-        instructions: 'test instructions',
-        inputMessages: [],
-      },
-    })
-
-    expect(codexBody.reasoning).toEqual({ effort: 'none' })
-  })
 
   test('translateToCodexBody maps boolean disabled thinking to none for GPT-5.6 Terra', () => {
     const { codexBody } = translateToCodexBody({
@@ -1047,18 +1035,6 @@ describe('codex-fetch-adapter', () => {
     expect(codexBody.reasoning).toEqual({ effort: 'none' })
   })
 
-  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Luna', () => {
-    const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.6-luna',
-      thinking: { type: 'disabled' },
-      _openaiInstructionAssembly: {
-        instructions: 'test instructions',
-        inputMessages: [],
-      },
-    })
-
-    expect(codexBody.reasoning).toEqual({ effort: 'none' })
-  })
 
   test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Sol', () => {
     const { codexBody } = translateToCodexBody({

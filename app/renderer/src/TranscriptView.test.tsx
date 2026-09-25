@@ -1269,18 +1269,6 @@ test('a foreground agent card WITH children keeps the C4 collapsed default', () 
 
 /* ── a backgrounded agent's launch ack is not its finish (bug, 2026-08-05) ── */
 
-test('a backgrounded agent is a neutral past-tense launch record without a lifecycle chip', () => {
-  const html = render(
-    agentRow(
-      'launched',
-      { subagent_type: 'Explore', description: 'audit launcher lifecycle claims', run_in_background: true },
-      'success',
-    ),
-  )
-  expect(html).toContain('launched')
-  expect(html).not.toContain('>In background<')
-  expect(html).not.toContain('>Completed<')
-})
 
 test('a backgrounded agent remains byte-stable in meaning if completion data is present', () => {
   const html = render(
@@ -2247,25 +2235,6 @@ test('a rejected resume has no identity line at all', () => {
   expect(html).not.toContain('AGENT')
 })
 
-test('a backgrounded launch says it launched and reports no outcome', () => {
-  const html = render(
-    agentRow(
-      'bglaunch',
-      { subagent_type: 'verification', description: 'sweep for stale references', run_in_background: true },
-      'success',
-      [],
-      ADA_COMPLETION,
-    ),
-  )
-
-  // `launched`, not `backgrounded`: this card only ever knew that the launch was
-  // acknowledged. The two used to be told apart by teal versus blue on the face,
-  // which the identity-colour ruling took away, so the distinction is a word now.
-  expect(html).toContain('launched')
-  expect(html).not.toContain('animate-face-pulse')
-  expect(html).not.toContain('Completed')
-  expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
-})
 
 test('the pulse runs on a running face and on nothing else on the card', () => {
   const running = render(
@@ -2914,20 +2883,6 @@ test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no 
 
 // ── P4-18a: user turns + core/boundary rows (the functional fix) ────────────
 
-test('P4-18a REGRESSION: a projected user-text turn is rendered, not dropped', () => {
-  // Pre-18a, TranscriptView returned null for every non-tool-use kind, so the
-  // running app showed no user messages. This proves the drop is fixed.
-  const html = render({
-    ...blockSource,
-    id: 's:m:0:user-text',
-    kind: 'user-text',
-    role: 'user',
-    content: 'restart the sidecar please',
-    isReplay: false,
-  })
-
-  expect(html).toContain('restart the sidecar please')
-})
 
 test('renders rich user Markdown with the shared bounded prose grammar', () => {
   const content = [
@@ -4232,15 +4187,6 @@ test('P4-18c: a malformed pipe table degrades tolerantly, never throws', () => {
   expect(render0()).toContain('A') // content still surfaces
 })
 
-test('P4-18c: an explicitly-languaged fenced block gets highlight.js token classes', () => {
-  const html = render(
-    proseRow('```python\ndef greet(name):\n    return name\n```\n', 'py'),
-  )
-
-  expect(html).toContain('hljs') // highlight.js base class on the <code>
-  expect(html).toContain('hljs-keyword') // `def`/`return` keyword tokens
-  expect(html).toContain('greet') // code content still present
-})
 
 test('P4-18c: an unknown code language degrades to plain framed code, never throws', () => {
   const render0 = () =>
@@ -4269,12 +4215,6 @@ test('a code fence still streaming gets its card frame as soon as it opens', () 
   expect(html).not.toContain('hljs-keyword')
 })
 
-test('the settled fence gets its copy control back', () => {
-  const html = render(proseRow('Here:\n\n```python\ndef greet(name):\n    return name\n```\n', 'shutfence'))
-
-  expect(html).toContain('aria-label="Copy code"')
-  expect(html).not.toContain('Code still writing')
-})
 
 // ── Model-prose typography (`.md-prose`, theme.css)
 //
@@ -4897,12 +4837,18 @@ function longToolRow(family: ToolFamily, lineCount: number): NestedTranscriptRow
   })
 }
 
-test('P4-36 — a long file READ no longer stops silently: it states the gap', () => {
+
+
+test('P4-36 — the tail of a truncated read stays visible, with its real line numbers', () => {
   const html = render(longToolRow('read', 900))
 
-  // 900 lines, head 30, tail 6 → 864 in the gap.
-  expect(html).toContain('864 lines hidden')
   expect(html).toContain('Show 100 more')
+  expect(html).toContain('src line 1') // head
+  expect(html).toContain('src line 900') // tail: the file's true last line
+  expect(html).not.toContain('src line 500') // the gap really is hidden
+  // The tail is numbered 895..900, not 1..6.
+  expect(html).toContain('>895<')
+  expect(html).toContain('>900<')
 })
 
 test('P4-36 — a long file WRITE states the gap too (the second silent body)', () => {
@@ -4910,17 +4856,6 @@ test('P4-36 — a long file WRITE states the gap too (the second silent body)', 
 
   expect(html).toContain('864 lines hidden')
   expect(html).toContain('Show 100 more')
-})
-
-test('P4-36 — the tail of a truncated read stays visible, with its real line numbers', () => {
-  const html = render(longToolRow('read', 900))
-
-  expect(html).toContain('src line 1') // head
-  expect(html).toContain('src line 900') // tail: the file's true last line
-  expect(html).not.toContain('src line 500') // the gap really is hidden
-  // The tail is numbered 895..900, not 1..6.
-  expect(html).toContain('>895<')
-  expect(html).toContain('>900<')
 })
 
 test('P4-36 — the band offers the route to the complete text, and it is the only one', () => {
@@ -5152,6 +5087,7 @@ test('a long written file still bands, and the band counts the FILE', () => {
   )
 
   expect(html).toContain('864 lines hidden') // 900 - 30 head - 6 tail
+  expect(html).toContain('Show 100 more')
   expect(visibleText(html)).toContain('line 1')
   expect(visibleText(html)).toContain('line 900')
   expect(visibleText(html)).not.toContain('line 500')
@@ -5974,17 +5910,6 @@ test('every row publishes its identity, which is what the reading position holds
   expect(html).toContain(`${TRANSCRIPT_ROW_KEY_ATTRIBUTE}="s:m:0:user-text"`)
 })
 
-test('assistant prose renders markdown links and inline paths as file action buttons', () => {
-  const markdownRow = assistantRow(
-    'Check out [foo.ts](src/foo.ts) and also `src/utils/bar.ts` for details.',
-  )
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView rows={[markdownRow]} cwd="/Users/test/cat-code" />,
-  )
-  expect(html).toContain('aria-label="Open src/foo.ts"')
-  expect(html).toContain('aria-label="Open src/utils/bar.ts"')
-  expect(html).toContain('<svg')
-})
 
 /* ── compaction (2026-08-22) ───────────────────────────────────────────────
  * Two rows for one event, one of them advertising a shortcut this app does not

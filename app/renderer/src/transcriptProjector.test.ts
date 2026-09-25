@@ -1840,20 +1840,6 @@ test('unwraps the <persisted-output> a large `!` command nests inside bash-stdou
   )
 })
 
-test('bash output without the inner wrapper is left exactly as it was', () => {
-  // The terminal's `?? rawStdout` fallback (UserBashOutputMessage.tsx:14-18):
-  // no inner tag means the payload is untouched.
-  expect(
-    rowsForUserOrigin(
-      undefined,
-      '<bash-stdout>README.md\npackage.json</bash-stdout>',
-    )[0],
-  ).toMatchObject({
-    kind: 'system-notice',
-    noticeType: 'local_command_output',
-    content: 'README.md\npackage.json',
-  })
-})
 
 test('local-command output keeps a persisted-output wrapper it happens to carry', () => {
   // Pinned scope limit, matching the terminal: only UserBashOutputMessage

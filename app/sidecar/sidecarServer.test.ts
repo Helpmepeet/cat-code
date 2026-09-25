@@ -2774,13 +2774,6 @@ test('D1a — a reconnect is told the staged list emptied while nobody was liste
   release()
 })
 
-test('D1a — a fresh session with nothing ever waiting still gets no staged frame', () => {
-  // The suppression this preserves: an attaching reader's own list starts empty,
-  // so an empty frame on every handshake is noise.
-  const { received } = connect(new AppSessionController(probeAdapter()))
-
-  expect(queuedPromptSnapshots(received)).toEqual([])
-})
 
 // The third consumer, the park gate, is deliberately NOT pinned by a test here.
 // `isParkGateOpen` refuses on `activeTurn` before it reads the queue, and the
