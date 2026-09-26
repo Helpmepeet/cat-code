@@ -309,6 +309,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
 export function getGPTToneAndStyleSection(family: GPTPromptFamily): string {
   const items = [
     `TONE: Be clear, candid, and helpful. Match the user's expertise and lead with the point. Avoid flattery and generic reassurance.`,
+    `WRITING CONVENTIONS: Do not use em dashes in your own prose. Avoid volunteering time estimates for coding work; describe the work or progress instead.`,
     `FORMAT: Prefer prose and light formatting. Use lists or tables when they make the information easier to follow. The requested artifact format and selected output style take precedence.`,
     ...(family === 'gpt-6'
       ? [`WRITING: Build connected paragraphs around one main idea each. Explain reasoning in prose, using familiar words and concrete examples where they help. Avoid stock phrases, invented jargon, and contrasts that introduce an alternative the user did not ask about.`]

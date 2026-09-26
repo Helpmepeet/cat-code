@@ -199,6 +199,14 @@ describe('GPT copyable text guidance', () => {
   })
 })
 
+test('Claude and GPT prompts carry the writing conventions', async () => {
+  for (const model of ['claude-opus-5', 'gpt-5.6-terra']) {
+    const prompt = (await getSystemPrompt([], model)).join('\n')
+    expect(prompt).toContain('Do not use em dashes in your own prose.')
+    expect(prompt).toContain('Avoid volunteering time estimates for coding work')
+  }
+})
+
 describe('well-known URL homepages', () => {
   test('allows only a directly relevant public service root homepage', async () => {
     const claudePrompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
