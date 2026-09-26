@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>No project chats · Cat Code design</title>
+  <style>
+    @font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 100 1000; src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2'); }
+    @font-face { font-family: 'DM Mono'; font-style: normal; font-weight: 400; src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2'); }
+    body { margin: 0; }
+    .x-bar { min-height: 54px; box-sizing: border-box; padding: 12px 20px; display: flex; align-items: center; gap: 26px; flex-wrap: wrap; background: #eee; color: #5a5a5a; font: 10px/1.4 ui-monospace, monospace; text-transform: uppercase; letter-spacing: 1px; }
+    .x-title { margin-right: auto; }
+    .x-nav { display: flex; gap: 18px; flex-wrap: wrap; }
+    .x-state { appearance: none; border: 0; border-bottom: 1px solid transparent; background: none; color: #777; font: inherit; text-transform: inherit; letter-spacing: inherit; padding: 3px 0; cursor: pointer; }
+    .x-state[aria-pressed='true'] { color: #333; border-bottom-color: #777; }
+    .x-state:focus-visible { outline: 1px solid #777; outline-offset: 4px; }
+    .x-note { min-width: 80px; text-align: right; }
+
+    /* Specimen values follow theme.css, Sidebar, SessionPane and ComposerActionsBar.
+       New pixels: Chats group, context row, Files menu, missing-files notice. */
+    .specimen { --accent: #f472b6; --accent-soft: #f9a8d4; --bg: #09090b; --chrome: #070709; --panel: #0a0a0c; --raised: #111113; --seam: rgba(255,255,255,.06); --hover: rgba(255,255,255,.045); --text: #f4f4f5; --muted: #a1a1aa; --subtle: #98989f; --faint: #838389; --ghost: #75757b; color-scheme: dark; height: calc(100vh - 54px); min-height: 650px; background: var(--bg); color: var(--text); font: 14px/1.5 'DM Sans', sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+    .specimen * { box-sizing: border-box; }
+    .specimen button, .specimen input, .specimen textarea { font: inherit; }
+    .specimen button { cursor: pointer; background: none; border: 0; color: inherit; }
+    .specimen button:disabled { cursor: default; color: var(--ghost); }
+    .specimen button:focus-visible, .specimen a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .specimen [hidden] { display: none !important; }
+    .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+    .icon.small { width: 13px; height: 13px; }
+    .sprite { display: none; }
+    .tabbar { height: 40px; min-height: 40px; display: flex; align-items: stretch; padding-left: 84px; background: var(--chrome); border-bottom: 1px solid var(--seam); }
+    .tab { position: relative; width: 176px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-right: 1px solid var(--seam) !important; font-size: 12px !important; color: var(--muted) !important; text-align: left; }
+    .tab.active { color: var(--text) !important; background: var(--bg); }
+    .tab.active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1.5px; background: var(--accent); }
+    .tab span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab-plus { width: 38px; color: var(--subtle) !important; }
+    .shell { flex: 1; min-height: 0; display: grid; grid-template-columns: 288px minmax(0,1fr); }
+    .sidebar { background: var(--panel); border-right: 1px solid var(--seam); display: flex; flex-direction: column; min-height: 0; }
+    .brand { height: 50px; min-height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 13px; font-weight: 600; letter-spacing: -.3px; }
+    .brand .icon { color: var(--subtle); }
+    .search { position: relative; margin: 0 10px 8px; }
+    .search .icon { position: absolute; left: 8px; top: 8px; color: var(--faint); width: 13px; height: 13px; }
+    .search input { width: 100%; padding: 6px 8px 6px 26px; font-size: 12px; border: 1px solid rgba(255,255,255,.07); border-radius: 8px; background: rgba(255,255,255,.04); color: var(--text); outline: none; }
+    .search input:focus { border-color: rgba(244,114,182,.35); }
+    .search input::placeholder { color: var(--subtle); }
+    .new-chat { display: flex; align-items: center; gap: 9px; margin: 0 8px 8px; padding: 6px 8px; border-radius: 6px; font-size: 12.5px !important; font-weight: 500 !important; text-align: left; }
+    .new-chat:hover { background: rgba(244,114,182,.1); color: var(--accent-soft); }
+    .sidebar-list { flex: 1; min-height: 0; overflow: auto; padding: 0 8px; }
+    .section-label { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px; margin-top: 14px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
+    .section-label:first-child { margin-top: 1px; }
+    .section-label button { width: 18px; height: 18px; padding: 0; border: 1px solid var(--seam); border-radius: 3px; }
+    .session-row { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px 6px 4px; border: 1px solid transparent !important; border-radius: 6px; text-align: left; }
+    .session-row.active { border-color: rgba(244,114,182,.18) !important; background: rgba(244,114,182,.09); }
+    .session-row:hover { border-color: rgba(244,114,182,.22) !important; background: rgba(244,114,182,.07); }
+    .row-lane { width: 6px; flex-shrink: 0; }
+    .row-content { min-width: 0; }
+    .row-title { display: block; font-size: 13px; line-height: 16px; font-weight: 500; color: #c4c4c8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .active .row-title { color: #fce7f3; }
+    .row-meta { display: block; margin-top: 2px; font-size: 10px; color: var(--faint); }
+    .project-row { display: flex; align-items: center; gap: 5px; padding: 4px; color: var(--muted); font-size: 12.5px; }
+    .project-row span { flex: 1; }
+    .project-row button { padding: 0; width: 20px; height: 20px; color: var(--faint); }
+    .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--seam); color: var(--subtle); display: flex; align-items: center; gap: 9px; font-size: 12px; }
+    .panes { display: flex; min-width: 0; min-height: 0; }
+    .pane { display: flex; flex-direction: column; flex: 1; min-width: 0; padding: 0 32px 32px; position: relative; }
+    .pane + .pane { border-left: 1px solid var(--seam); }
+    .transcript { flex: 1; overflow: auto; min-height: 0; width: 100%; max-width: 900px; margin: 0 auto; padding: 26px 0 32px; }
+    .welcome { margin: 60px auto 0; display: grid; grid-template-columns: minmax(150px,220px) 1fr; align-items: center; gap: 24px; max-width: 750px; }
+    .welcome img { width: 100%; max-width: 220px; height: auto; }
+    .wordmark { font-size: clamp(56px,6.3vw,96px); line-height: .9; font-weight: 700; letter-spacing: -.06em; white-space: nowrap; margin: 0 0 24px; }
+    .wordmark span { color: var(--accent); }
+    .greeting { font-size: 26px; font-weight: 500; letter-spacing: -.02em; }
+    .user-message { margin: 0 0 30px auto; width: fit-content; max-width: 82%; border: 1px solid rgba(244,114,182,.2); border-radius: 16px 16px 4px 16px; background: rgba(244,114,182,.1); padding: 10px 16px; font-size: 14px; line-height: 1.625; }
+    .assistant-message { line-height: 1.75; font-size: 15px; }
+    .assistant-message p { margin: 0 0 14px; }
+    .assistant-message ul { padding-left: 22px; }
+    .assistant-message code { font: 12px 'DM Mono', monospace; color: var(--muted); }
+    .file-link { color: var(--accent-soft); text-decoration: underline; text-underline-offset: 3px; display: inline-flex; gap: 6px; align-items: center; }
+    .tool-row { display: flex; align-items: center; gap: 8px; color: var(--subtle); font-size: 12px; margin: 0 0 20px; }
+    .tool-row code { font: 11px 'DM Mono', monospace; }
+    .dock { width: 100%; max-width: 900px; margin: 0 auto; flex-shrink: 0; }
+    .context-row { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 14px; gap: 12px; }
+    .context-control { position: relative; }
+    .scope, .files { display: inline-flex; align-items: center; gap: 6px; color: var(--muted) !important; font-size: 12px !important; padding: 3px 0; }
+    .scope:hover, .files:hover { color: var(--text) !important; }
+    .scope-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--subtle); }
+    .composer { display: flex; align-items: end; gap: 14px; padding: 0 4px; }
+    .composer textarea { display: block; resize: none; width: 100%; min-height: 30px; max-height: 180px; padding: 0; color: var(--text); background: none; border: 0; outline: 0; font-size: 16px; font-weight: 300; line-height: 1.8; caret-color: var(--accent); }
+    .composer textarea::placeholder { color: var(--ghost); }
+    .send { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px; color: var(--accent) !important; padding: 0; }
+    .send .icon { width: 20px; height: 20px; stroke-width: 2.4; }
+    .send:disabled { color: var(--ghost) !important; }
+    .focus-rule { height: 2px; border-radius: 2px; background: rgba(255,255,255,.08); }
+    /* The focused gradient is the existing composer's focus rule. */
+    .composer:focus-within + .focus-rule { background: linear-gradient(to right,var(--accent),rgba(244,114,182,.12)); }
+    .actions { margin-top: 12px; padding: 0 4px; display: flex; align-items: center; gap: 12px; color: var(--subtle); font-size: 12.5px; min-height: 24px; }
+    .actions .icon { color: var(--ghost); }
+    .actions .model { color: #22d3ee; }
+    .actions .effort { color: #fbbf24; }
+    .separator { color: var(--ghost); font-size: 10px; }
+    .actions .account { margin-left: auto; font-size: 11px; color: var(--faint); }
+    .menu { position: absolute; bottom: calc(100% + 8px); left: -6px; z-index: 10; width: 225px; border: 1px solid var(--seam); border-radius: 8px; padding: 6px; background: var(--raised); }
+    .menu.right { left: auto; right: -6px; width: 206px; }
+    .menu-title { font-size: 10px; color: var(--faint); padding: 6px 8px; font-weight: 600; }
+    .menu button { display: flex; gap: 8px; align-items: center; justify-content: flex-start; width: 100%; border-radius: 6px; padding: 7px 8px; text-align: left; font-size: 12.5px; color: var(--muted); }
+    .menu button:hover { background: var(--hover); color: var(--text); }
+    .menu .selected { color: var(--accent-soft); }
+    .menu .check { margin-left: auto; }
+    .menu-divider { border-top: 1px solid var(--seam); margin: 5px 0; }
+    .recovery { border: 1px solid rgba(251,191,36,.25); border-radius: 8px; padding: 14px 16px; margin-bottom: 22px; font-size: 13px; }
+    .recovery strong { font-weight: 500; color: #fbbf24; }
+    .recovery p { margin: 6px 0 12px; color: var(--muted); }
+    .recovery button { padding: 5px 9px; border: 1px solid rgba(251,191,36,.3); border-radius: 6px; font-size: 12px; color: #fbbf24; }
+    .recreated { font-size: 12px; color: var(--muted); padding: 12px 0 20px; }
+    .split .pane { padding-left: 24px; padding-right: 24px; }
+    .split .account { display: none; }
+    .split .user-message { max-width: 95%; }
+    .split .actions { gap: 8px; font-size: 11px; }
+    @media (max-width: 1040px) {
+      .shell { grid-template-columns: 235px minmax(0,1fr); }
+      .welcome { grid-template-columns: 140px 1fr; gap: 16px; }
+      .wordmark { font-size: 56px; }
+      .split .pane { padding-left: 16px; padding-right: 16px; }
+      .split .effort, .split .effort-separator { display: none; }
+    }
+    @media (max-width: 760px) {
+      .x-bar { gap: 10px; }
+      .x-title { width: 100%; }
+      .x-note { display: none; }
+      .specimen { height: auto; min-height: calc(100vh - 90px); }
+      .shell { grid-template-columns: 190px minmax(0,1fr); min-height: 680px; }
+      .pane { padding: 0 18px 24px; }
+      .welcome { grid-template-columns: 1fr; margin-top: 10px; text-align: center; gap: 15px; }
+      .welcome img { width: 130px; margin: auto; }
+      .wordmark { font-size: 56px; margin-bottom: 20px; }
+      .greeting { font-size: 22px; }
+      .account, .effort, .effort-separator { display: none; }
+      .panes.split { flex-direction: column; }
+      .split .pane { min-height: 480px; padding-bottom: 24px; }
+      .split .pane + .pane { border-left: 0; border-top: 1px solid var(--seam); }
+      .split .transcript { overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+  <header class="x-bar">
+    <span class="x-title">No project · Interactive mockup</span>
+    <nav class="x-nav" aria-label="Design states">
+      <button class="x-state" data-state="new" aria-pressed="true">New chat</button>
+      <button class="x-state" data-state="files" aria-pressed="false">File task</button>
+      <button class="x-state" data-state="parallel" aria-pressed="false">Two chats</button>
+      <button class="x-state" data-state="missing" aria-pressed="false">Missing files</button>
+    </nav>
+    <span class="x-note" aria-live="polite">Proposed</span>
+  </header>
+  <div class="specimen" id="specimen">
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="chat" viewBox="0 0 24 24"><path d="M21 11.5a8.3 8.3 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.3 8.3 0 0 1-3.8-.9L3 21l1.9-5.7a8.3 8.3 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6A8.3 8.3 0 0 1 12.5 3h.5a8.5 8.5 0 0 1 8 8v.5Z"/></symbol>
+      <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/></symbol>
+      <symbol id="chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+      <symbol id="compose" viewBox="0 0 24 24"><path d="M12 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7M16 3l5 5M10 14l-1 4 4-1L22 8l-5-5Z"/></symbol>
+      <symbol id="send" viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7"/></symbol>
+      <symbol id="file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6M8 13h8M8 17h6"/></symbol>
+      <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="pin" viewBox="0 0 24 24"><path d="m16 3 5 5-4 1-4 5-1 5-7-7 5-1 5-4ZM4 20l4-4"/></symbol>
+      <symbol id="settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--panel)"/><circle cx="15" cy="17" r="3" fill="var(--panel)"/></symbol>
+    </svg>
+    <div class="tabbar" id="tabs"></div>
+    <div class="shell">
+      <aside class="sidebar" aria-label="Sidebar">
+        <div class="brand">Cat Code <svg class="icon small" aria-hidden="true"><use href="#pin"/></svg></div>
+        <div class="search"><svg class="icon" aria-hidden="true"><use href="#search"/></svg><input id="session-search" type="search" placeholder="Search sessions…" aria-label="Search sessions"></div>
+        <button class="new-chat" data-action="new"><svg class="icon" aria-hidden="true"><use href="#compose"/></svg>New chat</button>
+        <div class="sidebar-list">
+          <div class="section-label">Pinned</div>
+          <button class="session-row" data-action="reference"><span class="row-lane"></span><span class="row-content"><span class="row-title">Reference notes</span><span class="row-meta">Yesterday · Jade</span></span></button>
+          <div class="section-label">Chats</div>
+          <div id="chat-rows"></div>
+          <div class="section-label">Projects <button data-action="picker" aria-label="Add project"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
+          <div class="project-row"><svg class="icon small" aria-hidden="true"><use href="#folder"/></svg><span>cat-code</span><button data-action="project" aria-label="New chat in cat-code"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
+          <button class="session-row" data-action="project"><span class="row-lane"></span><span class="row-content"><span class="row-title">UI adjustments</span><span class="row-meta">Yesterday · Cobalt</span></span></button>
+        </div>
+        <div class="sidebar-footer"><svg class="icon" aria-hidden="true"><use href="#settings"/></svg>Settings</div>
+      </aside>
+      <div class="panes" id="panes"></div>
+    </div>
+  </div>
+  <script>
+    const state = { view: 'new', project: false, recreated: false, draft: '', submitted: '' };
+    const $ = selector => document.querySelector(selector);
+    const icon = (name, small = false) => `<svg class="icon${small ? ' small' : ''}" aria-hidden="true"><use href="#${name}"/></svg>`;
+    const escape = value => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+    const row = (title, meta, action, active) => `<button class="session-row${active ? ' active' : ''}" data-action="${action}"><span class="row-lane"></span><span class="row-content"><span class="row-title">${title}</span><span class="row-meta">${meta}</span></span></button>`;
+    const note = text => { $('.x-note').textContent = text; };
+
+    function dock(key, draft, missing = false) {
+      const scope = state.project ? 'cat-code' : 'No project';
+      return `<div class="dock">
+        <div class="context-row">
+          <div class="context-control">
+            ${draft ? `<button class="scope" data-menu="scope-${key}" aria-expanded="false" aria-controls="scope-${key}" aria-label="Project: ${scope}">${icon(state.project ? 'folder' : 'chat', true)}${scope}${icon('chevron', true)}</button>
+            <div class="menu" id="scope-${key}" role="menu" hidden>
+              <button role="menuitem" class="${state.project ? '' : 'selected'}" data-action="no-project">${icon('chat', true)}No project${!state.project ? icon('check', true) : ''}</button>
+              <div class="menu-divider"></div><div class="menu-title">Recent projects</div>
+              <button role="menuitem" data-action="select-project" class="${state.project ? 'selected' : ''}">${icon('folder', true)}cat-code</button>
+              <button role="menuitem" data-action="picker">${icon('plus', true)}Choose folder…</button>
+            </div>` : `<span class="scope-label">${icon(state.project ? 'folder' : 'chat', true)}${scope}</span>`}
+          </div>
+          ${draft || missing ? '' : `<div class="context-control"><button class="files" data-menu="files-${key}" aria-expanded="false" aria-controls="files-${key}">${icon('folder', true)}Files</button>
+            <div class="menu right" id="files-${key}" role="menu" hidden><button role="menuitem" data-action="finder">${icon('folder', true)}Open chat folder</button><button role="menuitem" data-action="copy-path">Copy folder path</button></div></div>`}
+        </div>
+        <form class="prompt-form" data-key="${key}">
+          <div class="composer"><textarea rows="1" aria-label="Prompt${key === 'b' ? ' in second chat' : ''}" placeholder="${missing ? 'Restore the folder to continue' : 'Ask anything…'}" ${missing ? 'disabled' : ''}>${draft ? escape(state.draft) : ''}</textarea><button class="send" type="submit" aria-label="Send prompt${key === 'b' ? ' in second chat' : ''}" ${missing || !state.draft ? 'disabled' : ''}>${icon('send')}</button></div>
+          <div class="focus-rule"></div>
+          <div class="actions"><span aria-label="Attachment control">${icon('plus')}</span><span class="model">Default model</span><span class="separator">·</span><span class="effort">High</span><span class="separator effort-separator">·</span><span>Default</span><span class="account">Account 1</span></div>
+        </form>
+      </div>`;
+    }
+
+    function packingBody(missing) {
+      const request = state.submitted || 'Make a short packing checklist and save it as checklist.md.';
+      return `<div class="user-message">${escape(request)}</div>
+        <div class="tool-row">${icon('check', true)}<span>Write</span><code>checklist.md</code></div>
+        <div class="assistant-message"><p>Your checklist is ready.</p><ul><li>Travel documents</li><li>Clothes and toiletries</li><li>Chargers</li></ul><a class="file-link" href="#" data-action="${missing ? 'missing-link' : 'output'}">${icon('file', true)}checklist.md</a></div>`;
+    }
+
+    function filePane(key = 'a', second = false) {
+      const missing = state.view === 'missing' && !state.recreated;
+      const content = second ? `<div class="user-message">Make a weekend packing checklist and save it as checklist.md.</div><div class="tool-row">${icon('check', true)}<span>Write</span><code>checklist.md</code></div><div class="assistant-message"><p>Your weekend checklist is ready.</p><ul><li>A change of clothes</li><li>Toiletries</li><li>A phone charger</li></ul><a class="file-link" href="#" data-action="output-b">${icon('file', true)}checklist.md</a></div>` : packingBody(missing || state.recreated);
+      return `<section class="pane" aria-label="${second ? 'Weekend checklist' : 'Packing checklist'}"><div class="transcript">${content}</div>
+        ${missing ? `<div class="dock"><div class="recovery"><strong>This chat's files are missing.</strong><p>Your conversation is still available. Recreating the folder will not restore its earlier files.</p><button data-action="recreate">Recreate empty folder</button></div></div>` : ''}
+        ${state.recreated ? `<div class="dock recreated" role="status">An empty folder is ready. Earlier files are still missing.</div>` : ''}
+        ${dock(key, false, missing)}</section>`;
+    }
+
+    function render() {
+      closeMenus(false);
+      document.querySelectorAll('.x-state').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.state === state.view)));
+      note('Proposed');
+      const draft = state.view === 'new';
+      const title = draft ? 'New chat' : state.view === 'question' ? 'Quick question' : state.view === 'reference' ? 'Reference notes' : 'Packing checklist';
+      $('#tabs').innerHTML = `<button class="tab active" data-action="${draft ? 'new' : state.view === 'question' || state.view === 'reference' ? state.view : 'files'}">${icon(state.project ? 'folder' : 'chat', true)}<span>${title}</span></button>${state.view === 'parallel' ? `<button class="tab" data-action="parallel">${icon('chat', true)}<span>Weekend checklist</span></button>` : ''}<button class="tab-plus" data-action="new" aria-label="New chat">${icon('plus')}</button>`;
+      $('#chat-rows').innerHTML = `${row('Packing checklist','Today · Opal','files',['files','parallel','missing'].includes(state.view))}${row(state.view === 'parallel' ? 'Weekend checklist' : 'Quick question','Today · Quartz',state.view === 'parallel' ? 'parallel' : 'question',state.view === 'question')}`;
+      $('[data-action="reference"]').classList.toggle('active',state.view === 'reference');
+      $('#panes').classList.toggle('split', state.view === 'parallel');
+      if (draft) {
+        $('#panes').innerHTML = `<section class="pane" aria-label="New chat"><div class="transcript"><div class="welcome"><img src="../../app/renderer/src/assets/welcome-cat-thinking.png" alt="" width="248" height="211"><div><div class="wordmark">cat <span>code</span></div><div class="greeting">Welcome back</div></div></div></div>${dock('draft', true)}</section>`;
+      } else if (state.view === 'question' || state.view === 'reference') {
+        const question = state.view === 'question';
+        $('#panes').innerHTML = `<section class="pane" aria-label="${title}"><div class="transcript"><div class="user-message">${question ? 'Why is the sky blue?' : 'Organize these notes into a checklist.'}</div><div class="assistant-message"><p>${question ? 'Air molecules scatter blue light more strongly than red light. That scattered blue light reaches your eyes from across the sky.' : 'Here is a checklist for your notes.'}</p>${question ? '' : '<ul><li>Collect the source material</li><li>Group related ideas</li><li>Choose the next action</li></ul>'}</div></div>${dock('history',false)}</section>`;
+      } else {
+        $('#panes').innerHTML = filePane() + (state.view === 'parallel' ? filePane('b',true) : '');
+      }
+      filterRows();
+    }
+
+    function closeMenus(restore = true) {
+      document.querySelectorAll('.menu:not([hidden])').forEach(menu => {
+        menu.hidden = true;
+        const trigger = document.querySelector(`[data-menu="${menu.id}"]`);
+        if (trigger) { trigger.setAttribute('aria-expanded','false'); if (restore) trigger.focus(); }
+      });
+    }
+
+    function changeView(view) {
+      state.view = view;
+      state.project = false;
+      state.recreated = false;
+      state.submitted = '';
+      state.draft = '';
+      render();
+    }
+
+    function filterRows() {
+      const query = $('#session-search').value.toLowerCase();
+      document.querySelectorAll('.session-row').forEach(element => { element.hidden = !element.textContent.toLowerCase().includes(query); });
+    }
+
+    document.addEventListener('click', event => {
+      const stateButton = event.target.closest('[data-state]');
+      if (stateButton) { changeView(stateButton.dataset.state); return; }
+      const trigger = event.target.closest('[data-menu]');
+      if (trigger) {
+        const menu = document.getElementById(trigger.dataset.menu);
+        const opening = menu.hidden;
+        closeMenus(false);
+        menu.hidden = !opening;
+        trigger.setAttribute('aria-expanded',String(opening));
+        if (opening) menu.querySelector('button').focus();
+        return;
+      }
+      const action = event.target.closest('[data-action]');
+      if (!action) { if (!event.target.closest('.menu')) closeMenus(false); return; }
+      event.preventDefault();
+      const type = action.dataset.action;
+      if (['new','files','parallel'].includes(type)) { changeView(type); if (type === 'new') $('textarea').focus(); return; }
+      if (type === 'project') { changeView('new'); state.project = true; render(); $('textarea').focus(); return; }
+      if (type === 'select-project' || type === 'no-project') { state.draft = $('textarea').value; state.project = type === 'select-project'; render(); $('.scope').focus(); return; }
+      if (type === 'recreate') { state.recreated = true; render(); $('textarea').focus(); return; }
+      if (type === 'question' || type === 'reference') {
+        changeView(type); return;
+      }
+      // Native operations deliberately stop at the mock boundary. The outside
+      // chrome names the destination; no system file or clipboard is touched.
+      const destinations = { picker: 'Folder picker', finder: 'Finder', 'copy-path': 'Path copy', output: 'File opener', 'output-b': 'File opener', 'missing-link': 'File missing' };
+      if (destinations[type]) { closeMenus(); note(destinations[type]); }
+    });
+
+    document.addEventListener('input', event => {
+      if (event.target.id === 'session-search') filterRows();
+      if (event.target.matches('textarea')) {
+        event.target.closest('form').querySelector('.send').disabled = !event.target.value.trim();
+        if (state.view === 'new') state.draft = event.target.value;
+      }
+    });
+
+    document.addEventListener('submit', event => {
+      if (!event.target.matches('.prompt-form')) return;
+      event.preventDefault();
+      const input = event.target.querySelector('textarea').value.trim();
+      if (!input) return;
+      state.submitted = input; state.draft = ''; state.view = 'files'; state.recreated = false;
+      render(); note('Sample response');
+    });
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { closeMenus(); return; }
+      if (event.target.matches('textarea') && event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey && !event.isComposing) {
+        event.preventDefault(); event.target.closest('form').requestSubmit();
+      }
+      const menu = event.target.closest('.menu');
+      if (menu && ['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
+        event.preventDefault();
+        const items = [...menu.querySelectorAll('button')];
+        const index = items.indexOf(document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        items[next].focus();
+      }
+    });
+    render();
+    $('textarea').focus();
+  </script>
+</body>
+</html>
