@@ -227,7 +227,10 @@ export class Host implements HostApi {
     // The name repair joins the gate rather than following it: every op already
     // awaits this, so no caller can read a row mid-repair and cache it nameless.
     this.launched = (options.launched ?? Promise.resolve())
-      .then(() => this.nameUnnamedRows())
+      .then(async () => {
+        await this.repairManagedBindings()
+        await this.nameUnnamedRows()
+      })
       .catch(() => undefined)
     this.wireSupervisor()
   }
@@ -238,7 +241,9 @@ export class Host implements HostApi {
 
   private wireSupervisor(): void {
     this.supervisor.subscribe(event => {
-      void this.onSupervisorEvent(event)
+      void this.onSupervisorEvent(event).catch(error => {
+        this.log(`[host] supervisor event could not be recorded: ${errText(error)}`)
+      })
     })
   }
 
@@ -401,6 +406,50 @@ export class Host implements HostApi {
     return this.createSession({ cwd: allocation.cwd, binding: allocation.binding, appSessionId })
   }
 
+  /** Record a successful branch before its result reaches the renderer. */
+  recordManagedBranch(sourceAppSessionId: SessionId, branchEngineSessionId: string): boolean {
+    if (!isUuid(sourceAppSessionId) || !isUuid(branchEngineSessionId) || !this.managedStorage) return false
+    const source = this.registry.findSession(sourceAppSessionId)
+    if (!source || source.binding.kind !== 'managed') return false
+    try {
+      const resolved = this.managedStorage.resolve(source.binding)
+      if (!resolved.ok || resolved.cwd !== source.cwd) return false
+      const existing = this.managedStorage.findByEngineSession(branchEngineSessionId)
+      if (existing) {
+        return existing.appSessionId !== sourceAppSessionId &&
+          existing.cwd === source.cwd &&
+          existing.binding.storageRootId === source.binding.storageRootId &&
+          existing.binding.storageId === source.binding.storageId
+      }
+      return this.managedStorage.recordSessionIdentity(source.binding, randomUUID(), branchEngineSessionId)
+    } catch {
+      return false
+    }
+  }
+
+  hasManagedHistoryIdentity(engineSessionId: string): boolean {
+    if (!isUuid(engineSessionId)) return false
+    try {
+      return this.managedStorage?.findByEngineSession(engineSessionId) !== undefined
+    } catch {
+      return false
+    }
+  }
+
+  /** A managed prompt may run only after its engine id is durable in the ledger. */
+  ensureManagedSubmitIdentity(appSessionId: SessionId): boolean {
+    if (!isUuid(appSessionId)) return false
+    const row = this.registry.findSession(appSessionId)
+    if (!row || row.binding.kind !== 'managed') return true
+    if (!row.engineSessionId || !this.managedStorage) return false
+    try {
+      return this.managedStorage.hasSessionIdentity(row.binding, appSessionId, row.engineSessionId) ||
+        this.managedStorage.recordSessionIdentity(row.binding, appSessionId, row.engineSessionId)
+    } catch {
+      return false
+    }
+  }
+
   async adoptManagedHistorySession(
     engineSessionId: string,
     title?: string,
@@ -455,16 +504,21 @@ export class Host implements HostApi {
     if (live && !isTerminalStatus(live.status)) {
       return hostError('session_not_found', 'close this chat before recreating its folder')
     }
-    const recreated = this.managedStorage.recreate(row.binding)
-    if (!recreated.ok) return hostError('managed_storage_invalid', 'managed chat folder could not be recreated safely')
-    row.cwd = recreated.cwd
-    await this.registry.updateCwd(appSessionId, recreated.cwd)
+    const storage = this.managedStorage.resolve(row.binding)
+    const folder = storage.ok
+      ? storage
+      : storage.reason === 'missing'
+        ? this.managedStorage.recreate(row.binding)
+        : storage
+    if (!folder.ok) return hostError('managed_storage_invalid', 'managed chat folder could not be recreated safely')
+    row.cwd = folder.cwd
+    await this.registry.updateCwd(appSessionId, folder.cwd)
     if (row.engineSessionId !== null) return this.restoreSession(appSessionId)
     const reservation = this.reserveSpawn(true)
     if (!reservation.ok) return reservation.result
     return this.spawn({
       appSessionId,
-      cwd: recreated.cwd,
+      cwd: folder.cwd,
       title: row.title,
       resumeEngineSessionId: undefined,
       forked: row.forked,
@@ -908,6 +962,24 @@ export class Host implements HostApi {
         `[host] named ${named.length} recently-active registry row(s) that had none`,
       )
     }
+  }
+
+  private async repairManagedBindings(): Promise<void> {
+    if (!this.managedStorage) return
+    const repaired = await this.registry.repairManagedBindings(row => {
+      if (row.engineSessionId === null) return undefined
+      try {
+        return this.managedStorage?.findByEngineSession(row.engineSessionId)
+      } catch {
+        return undefined
+      }
+    })
+    if (repaired > 0) this.log(`[host] recovered ${repaired} managed binding(s) from ownership records`)
+  }
+
+  /** Wait for launch recovery before exposing registry rows to an IPC caller. */
+  async whenReady(): Promise<void> {
+    await this.launched
   }
 
   /* --------------------------------------------------------------------- *

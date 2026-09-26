@@ -81,21 +81,26 @@ export class ManagedStorage {
     engineSessionId?: string,
   ): boolean {
     if (!validUuid(appSessionId) || (engineSessionId !== undefined && !validUuid(engineSessionId))) return false
-    const root = this.readRoot()
-    if (!root || root.storageRootId !== binding.storageRootId || !this.resolve(binding).ok) return false
-    if (!this.hasOwnership(binding.storageRootId, binding.storageId)) return false
-    const path = this.ownershipPath(binding.storageRootId, binding.storageId)
-    let current: Record<string, unknown>
-    try { current = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> } catch { return false }
-    const identities = Array.isArray(current.identities) ? current.identities.filter(isIdentity) : []
-    const existing = identities.find(identity => identity.appSessionId === appSessionId)
-    if (existing?.engineSessionId && engineSessionId && existing.engineSessionId !== engineSessionId) return false
-    const next = existing ?? { appSessionId }
-    if (engineSessionId !== undefined) next.engineSessionId = engineSessionId
-    if (!existing) identities.push(next)
-    current.identities = identities
-    this.writeOwnershipRecord(path, current)
-    return true
+    try {
+      const root = this.readRoot()
+      if (!root || root.storageRootId !== binding.storageRootId || !this.resolve(binding).ok) return false
+      if (!this.hasOwnership(binding.storageRootId, binding.storageId)) return false
+      const path = this.ownershipPath(binding.storageRootId, binding.storageId)
+      const current = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+      const identities = Array.isArray(current.identities) ? current.identities.filter(isIdentity) : []
+      const existing = identities.find(identity => identity.appSessionId === appSessionId)
+      if (existing?.engineSessionId && engineSessionId && existing.engineSessionId !== engineSessionId) return false
+      const next = existing ?? { appSessionId }
+      if (engineSessionId !== undefined) next.engineSessionId = engineSessionId
+      if (!existing) identities.push(next)
+      current.identities = identities
+      this.writeOwnershipRecord(path, current)
+      return true
+    } catch {
+      // A ready frame is delivered on a fire-and-forget supervisor callback.
+      // Filesystem failures must become a refusal, never an unhandled rejection.
+      return false
+    }
   }
 
   hasSessionIdentity(

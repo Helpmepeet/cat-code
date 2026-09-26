@@ -1902,6 +1902,14 @@ class Project {
 
       for (const message of messages) {
         const isCompactBoundary = isCompactBoundaryMessage(message)
+        // Keep the session binding near the start of the serialized row so
+        // lite catalog readers can recover it from their bounded head scan,
+        // even when the first message has a very large body. Source bindings
+        // on resumed/forked messages must not override this session's binding.
+        const {
+          sessionBinding: _sourceSessionBinding,
+          ...sourceMessageFields
+        } = message
 
         // For tool_result messages, use the assistant message UUID from the message
         // if available (set at creation time), otherwise fall back to sequential parent
@@ -1915,6 +1923,7 @@ class Project {
         }
 
         const transcriptMessage: TranscriptMessage = {
+          sessionBinding: readSessionBindingFromEnv(),
           parentUuid: isCompactBoundary ? null : effectiveParentUuid,
           logicalParentUuid: isCompactBoundary ? parentUuid : undefined,
           isSidechain,
@@ -1923,7 +1932,7 @@ class Project {
           promptId:
             message.type === 'user' ? (getPromptId() ?? undefined) : undefined,
           agentId,
-          ...message,
+          ...sourceMessageFields,
           // Session-stamp fields MUST come after the spread. On --fork-session
           // and --resume, messages arrive as SerializedMessage (carries source
           // sessionId/cwd/etc. because removeExtraFields only strips parentUuid
@@ -1935,7 +1944,6 @@ class Project {
           userType: getUserType(),
           entrypoint: getEntrypoint(),
           cwd: getCwd(),
-          sessionBinding: readSessionBindingFromEnv(),
           sessionId,
           // Loaded/forked messages carry their source build. Preserve it while
           // re-stamping session-local identity fields such as cwd/sessionId.

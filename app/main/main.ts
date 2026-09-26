@@ -348,6 +348,19 @@ function rememberBranchOpenSeed(
     ?.listSessions()
     .find(descriptor => descriptor.appSessionId === appSessionId)
   if (!source || source.cwd.trim().length === 0) return
+  // The branch transcript exists as soon as this result arrives. Persist its
+  // managed-storage ownership before forwarding the result makes it openable;
+  // the bounded seed below only covers catalog lag in this process.
+  if (
+    source.binding?.kind === 'managed' &&
+    !host?.recordManagedBranch(appSessionId, frame.branchEngineSessionId)
+  ) {
+    logLegacyDiagnostic(
+      `could not durably record managed branch ${frame.branchEngineSessionId}`,
+      'host',
+      'main',
+    )
+  }
   const now = Date.now()
   branchOpenSeeds.delete(frame.branchEngineSessionId)
   branchOpenSeeds.set(frame.branchEngineSessionId, {
@@ -3063,8 +3076,12 @@ function registerHostControlPlane(): void {
     },
   )
 
-  ipcMain.handle(CH_HOST_LIST, (): SessionDescriptor[] => {
-    return host ? host.listSessions() : []
+  ipcMain.handle(CH_HOST_LIST, async (): Promise<SessionDescriptor[]> => {
+    const currentHost = host
+    if (!currentHost) return []
+    await currentHost.whenReady()
+    if (host !== currentHost) return []
+    return currentHost.listSessions()
   })
 
   ipcMain.handle(
@@ -3251,8 +3268,11 @@ function registerHostControlPlane(): void {
   }
   ipcMain.handle(
     CH_HOST_OPEN_HISTORY,
-    (_e, engineSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
-      if (!host) return Promise.resolve(noHost<SessionDescriptor>())
+    async (_e, engineSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
+      const openingHost = host
+      if (!openingHost) return noHost<SessionDescriptor>()
+      await openingHost.whenReady()
+      if (host !== openingHost) return noHost<SessionDescriptor>()
       // SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-
       // created session (a transcript with no desktop registry row) as a real
       // desktop session. HC1: the renderer supplies ONLY an ENGINE session id; it
@@ -3288,7 +3308,11 @@ function registerHostControlPlane(): void {
         }
         return Promise.resolve({ ok: true, value: resolution.descriptor })
       }
-      if (resolution.binding?.kind === 'managed' && !branchOpenSeed(engineId)) {
+      // A just-created branch normally has its ledger identity already. If a
+      // transient write failed, its trusted in-process seed can still take the
+      // existing resume-create path and retry recording ownership on open.
+      if (resolution.binding?.kind === 'managed' &&
+        (!branchOpenSeed(engineId) || host.hasManagedHistoryIdentity(engineId))) {
         const promise = host.adoptManagedHistorySession(
           engineId,
           resolution.title,
@@ -3865,6 +3889,23 @@ function handOff(
     return 'session_not_found'
   }
   try {
+    if (message.type === 'app.submit' && !host?.ensureManagedSubmitIdentity(sessionId)) {
+      const messageText = "This chat's storage could not be verified. Check its folder, then retry."
+      if (audience === 'renderer') {
+        const frame: ServerFrame = {
+          kind: 'error',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId,
+          requestId: message.requestId,
+          code: 'session_not_ready',
+          message: messageText,
+          retryable: true,
+        }
+        deliver(attachmentGate.onFrame(sessionId, frame))
+      }
+      process.stderr.write(`[main] forward to ${sessionId} failed: ${messageText}\n`)
+      return 'session_not_ready'
+    }
     supervisor.send(sessionId, message)
     if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
     return null

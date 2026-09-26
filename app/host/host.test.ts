@@ -473,8 +473,9 @@ test('managed chats keep separate folders and can rehydrate identity after regis
     transcriptPathFor: (_cwd, id) => join(freshDir, 'transcripts', `${id}.jsonl`),
   })
   writeTranscript(freshDir, engineId)
+  const freshSupervisor = new FakeSupervisor()
   const freshHost = new Host({
-    supervisor: new FakeSupervisor() as never,
+    supervisor: freshSupervisor as never,
     registry: freshRegistry,
     managedStorage,
     validateCwd,
@@ -492,10 +493,134 @@ test('managed chats keep separate folders and can rehydrate identity after regis
   expect(freshHost.canPreview(first.value.appSessionId)).toBe(true)
   const refused = await freshHost.restoreSession(first.value.appSessionId)
   expect(refused.ok ? null : refused.error.code).toBe('managed_storage_missing')
-  const recreated = await freshHost.recreateManagedChatFolder(first.value.appSessionId)
-  expect(recreated.ok).toBe(true)
+  freshSupervisor.throwOnNextSpawn = new Error('temporary spawn failure')
+  const firstRecreate = await freshHost.recreateManagedChatFolder(first.value.appSessionId)
+  expect(firstRecreate.ok ? null : firstRecreate.error.code).toBe('spawn_failed')
   expect(existsSync(join(first.value.cwd, 'tmp'))).toBe(true)
   expect(existsSync(join(first.value.cwd, 'report.md'))).toBe(false)
+  writeFileSync(join(first.value.cwd, 'keep.txt'), 'created after failed start')
+
+  const retriedRecreate = await freshHost.recreateManagedChatFolder(first.value.appSessionId)
+  expect(retriedRecreate.ok).toBe(true)
+  expect(readFileSync(join(first.value.cwd, 'keep.txt'), 'utf8')).toBe('created after failed start')
+})
+
+test('a managed binding stripped by an older registry writer is repaired before peer naming', async () => {
+  const storageRoot = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(storageRoot, 'user-data'),
+    ownershipDir: join(storageRoot, 'config', 'chat-workspaces'),
+  })
+  const validateCwd = (cwd: string): CwdValidation =>
+    existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false }
+  const h = makeHost({ managedStorage, validateCwd })
+  const created = await h.host.createManagedChat()
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const engineId = randomUUID()
+  h.supervisor.emitReady(created.value.appSessionId, engineId)
+  await settle(() => h.registry.findSession(created.value.appSessionId)?.engineSessionId === engineId)
+  writeTranscript(h.storageDir, engineId)
+  await h.host.closeSession(created.value.appSessionId)
+
+  const document = JSON.parse(readFileSync(h.registry.filePath, 'utf8')) as {
+    sessions: Array<Record<string, unknown>>
+  }
+  const row = document.sessions.find(item => item.appSessionId === created.value.appSessionId)!
+  delete row.binding
+  row.name = 'StalePeerName'
+  writeFileSync(h.registry.filePath, JSON.stringify(document))
+
+  const freshRegistry = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+  })
+  const freshHost = new Host({
+    supervisor: new FakeSupervisor() as never,
+    registry: freshRegistry,
+    managedStorage,
+    validateCwd,
+    launched: freshRegistry.launch(),
+  })
+  const folder = await freshHost.getSessionFolderState(created.value.appSessionId)
+  expect(folder).toEqual({ ok: true, value: 'available' })
+  const restored = freshRegistry.findSession(created.value.appSessionId)
+  expect(restored?.binding).toEqual(created.value.binding)
+  expect(restored?.name).toBeUndefined()
+  expect(freshHost.listSessions().find(item => item.appSessionId === created.value.appSessionId)?.binding)
+    .toEqual(created.value.binding)
+})
+
+test('a managed branch is discoverable from durable ownership before its first open', async () => {
+  const storageRoot = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(storageRoot, 'user-data'),
+    ownershipDir: join(storageRoot, 'config', 'chat-workspaces'),
+  })
+  const validateCwd = (cwd: string): CwdValidation =>
+    existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false }
+  const h = makeHost({ managedStorage, validateCwd })
+  const source = await h.host.createManagedChat()
+  expect(source.ok).toBe(true)
+  if (!source.ok) return
+  if (source.value.binding?.kind !== 'managed') throw new Error('expected managed binding')
+  const branchEngineId = randomUUID()
+  expect(h.host.recordManagedBranch(source.value.appSessionId, branchEngineId)).toBe(true)
+  const owned = managedStorage.findByEngineSession(branchEngineId)
+  if (!owned) throw new Error('expected durable branch identity')
+  expect(owned?.appSessionId).not.toBe(source.value.appSessionId)
+  expect(owned.binding).toEqual(source.value.binding)
+  expect(h.host.recordManagedBranch(source.value.appSessionId, branchEngineId)).toBe(true)
+  expect(managedStorage.findByEngineSession(branchEngineId)?.appSessionId).toBe(owned.appSessionId)
+
+  const freshDir = tempDir()
+  const registry = new SessionRegistry({
+    storageDir: freshDir,
+    transcriptPathFor: (_cwd, id) => join(freshDir, 'transcripts', `${id}.jsonl`),
+  })
+  writeTranscript(freshDir, branchEngineId)
+  const restarted = new Host({
+    supervisor: new FakeSupervisor() as never,
+    registry,
+    managedStorage,
+    validateCwd,
+  })
+  const adopted = await restarted.adoptManagedHistorySession(branchEngineId, 'Branch', true)
+  expect(adopted.ok).toBe(true)
+  if (adopted.ok) {
+    expect(adopted.value.appSessionId).toBe(owned.appSessionId)
+    expect(adopted.value.binding).toEqual(source.value.binding)
+    expect(adopted.value.forked).toBe(true)
+  }
+})
+
+test('managed submit waits for a durable ready identity after storage failure', async () => {
+  const storageRoot = tempDir()
+  const ownershipDir = join(storageRoot, 'config', 'chat-workspaces')
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(storageRoot, 'user-data'),
+    ownershipDir,
+  })
+  const validateCwd = (cwd: string): CwdValidation =>
+    existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false }
+  const h = makeHost({ managedStorage, validateCwd })
+  const created = await h.host.createManagedChat()
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const engineId = randomUUID()
+
+  // An invalid root record makes `readRoot` throw on the ready callback. The
+  // callback must settle, and a submit must remain blocked until repair.
+  const recordPath = join(ownershipDir, 'managed-storage-root.json')
+  const validRoot = readFileSync(recordPath, 'utf8')
+  writeFileSync(recordPath, '{broken')
+  h.supervisor.emitReady(created.value.appSessionId, engineId)
+  await settle(() => h.registry.findSession(created.value.appSessionId)?.engineSessionId === engineId)
+  expect(h.host.ensureManagedSubmitIdentity(created.value.appSessionId)).toBe(false)
+  writeFileSync(recordPath, validRoot)
+  expect(h.host.ensureManagedSubmitIdentity(created.value.appSessionId)).toBe(true)
+  if (created.value.binding?.kind !== 'managed') throw new Error('expected managed binding')
+  expect(managedStorage.hasSessionIdentity(created.value.binding, created.value.appSessionId, engineId)).toBe(true)
 })
 
 // Opening a session from history is a `createSession` with a resume target and a

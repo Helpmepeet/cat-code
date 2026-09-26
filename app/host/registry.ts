@@ -784,6 +784,33 @@ export class SessionRegistry {
       .map(row => ({ ...row }))
   }
 
+  /**
+   * An older installed app can rewrite the registry through a field whitelist
+   * that drops `binding`. Recover only rows whose app id, engine id, and cwd all
+   * match a validated host-owned ledger entry, before any row is exposed as a
+   * project session or assigned a peer name.
+   */
+  async repairManagedBindings(
+    lookup: (row: RegistrySession) =>
+      | { appSessionId: string; cwd: string; binding: Extract<SessionBinding, { kind: 'managed' }> }
+      | undefined,
+  ): Promise<number> {
+    let repaired = 0
+    for (const row of this.doc.sessions) {
+      if (row.binding.kind !== 'project' || row.engineSessionId === null) continue
+      const owned = lookup({ ...row })
+      if (!owned || owned.appSessionId !== row.appSessionId || owned.cwd !== row.cwd) continue
+      row.binding = owned.binding
+      delete row.name
+      delete row.createdBy
+      delete row.createdByName
+      delete row.peerWakeBlocked
+      repaired++
+    }
+    if (repaired > 0) await this.persist()
+    return repaired
+  }
+
   /* --------------------------------------------------------------------- *
    * §4.5 — write points (each mutates the in-memory doc, then persists atomically)
    * --------------------------------------------------------------------- */

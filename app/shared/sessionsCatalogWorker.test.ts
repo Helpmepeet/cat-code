@@ -69,6 +69,22 @@ describe('parseSessionsCatalogWorkerResult — accept valid', () => {
     const parsed = parseSessionsCatalogWorkerResult(JSON.parse(JSON.stringify(record)))
     expect(parsed?.type).toBe('catalog')
   })
+
+  test('preserves a managed binding through the worker and cache parser', () => {
+    const binding = {
+      kind: 'managed' as const,
+      storageRootId: '11111111-1111-4111-8111-111111111111',
+      storageId: '22222222-2222-4222-8222-222222222222',
+    }
+    const snapshot = { entries: [entry({ sessionId: 'a', binding })], truncated: false }
+    const worker = parseSessionsCatalogWorkerResult(JSON.parse(JSON.stringify({
+      type: 'catalog',
+      version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
+      catalog: snapshot,
+    })))
+    expect(worker?.type === 'catalog' ? worker.catalog.entries[0]?.binding : null).toEqual(binding)
+    expect(parseSessionsCatalogSnapshot(JSON.parse(JSON.stringify(snapshot)))?.entries[0]?.binding).toEqual(binding)
+  })
 })
 
 describe('parseSessionsCatalogWorkerResult — reject invalid (fail closed)', () => {
