@@ -2,6 +2,7 @@
 
 Date: 2026-09-26. Source inspected after design commit `f3156ad3`.
 Scope: source investigation and design amendment only. No runtime changes.
+Amended after the user removed peer sessions from the feature.
 
 ## Decision
 
@@ -22,6 +23,8 @@ at existing builders; it does not add a separate context-management architecture
 The [revised design](../design/2026-09-26-no-project-chats.md#prompt-composition)
 records the product contract. Explicit repository work reads applicable guidance
 through existing tools; it does not convert the chat to a project session.
+No-project chats also omit peer-session tools and coordination instructions;
+ordinary in-session subagents remain available.
 
 ## What already exists
 
@@ -33,6 +36,7 @@ through existing tools; it does not convert the chat to a project session.
 | [`prompts.ts`](../../src/constants/prompts.ts), [`gpt.ts`](../../src/constants/promptStyles/gpt.ts) | Provider prompts are built from sections. Small conditional wording changes can share the normal safety and tool sections. No need for a copied prompt. |
 | [`corePolicy.ts`](../../src/constants/corePolicy.ts) | Shared policy owns safety, provenance, instruction authority, retry, and truthful reporting. Preserve these invariants. |
 | [`instructionAssembly.ts`](../../src/services/api/instructionAssembly.ts) | Both providers consume the same context objects, but serialize them differently. OpenAI includes user context in instructions; Claude prepends it to messages. Omission belongs before this split. |
+| [`desktopSystemPrompt.ts`](../../app/sidecar/desktopSystemPrompt.ts), [`sessionController.ts`](../../app/sidecar/sessionController.ts) | Peer doctrine is composed separately from desktop file-link guidance; the controller adds peer tools and post-compaction context. Omit those peer-specific inputs for managed chats and retain normal desktop guidance. |
 
 ## Work that a one-line flag would miss
 
@@ -73,7 +77,7 @@ through existing tools; it does not convert the chat to a project session.
    whole-blob omission. A desktop append-only block in
    [`sessionController.ts`](../../app/sidecar/sessionController.ts) cannot enforce
    absence across those paths. Install the stable managed binding before
-   context construction and carry it into newly initialized peers.
+   context construction and preserve it through subagent context assembly.
 
 5. **The external-repository loader is not already solved.**
    `getDirectoriesToProcess` in `attachments.ts` derives nested discovery from
@@ -111,8 +115,9 @@ larger feature and should be assessed separately.
   characters at inspection time. That is a source-file size, not a measured
   emitted-token saving. An already empty cwd may contribute no such file.
 - **Bounded base savings:** neutral wording and omitted repository metadata
-  save less than a large loaded guide. Tool schemas, global guidance, and safety
-  remain, so this does not make the whole agent prompt small.
+  save less than a large loaded guide. Peer tool schemas and coordination text
+  are also omitted after the scope reduction. Normal task tools, global guidance,
+  and safety remain, so this does not make the whole agent prompt small.
 - **Cache effects:** fewer input tokens do not imply the same proportional cost
   or latency reduction. Keep composition stable, and compare actual provider
   inputs with matching model, tool pool, and instruction fixtures during
@@ -125,8 +130,8 @@ and gaps; it does not establish a percentage saving or improved model accuracy.
 ## Documentation validation
 
 `git diff --check` passed. `bun run maps:lint` passed with seven existing
-recommended-section warnings in maps untouched by this task. All 61 local
-Markdown links across the revised design, this assessment, and the earlier
-review record resolve, including the prompt-composition anchor.
+recommended-section warnings in maps untouched by this task. At revision
+`1496eb6b`, all 61 local Markdown links across the design, this assessment, and
+the earlier review record resolved, including the prompt-composition anchor.
 Application builds and runtime verification belong to a separately requested
 implementation.

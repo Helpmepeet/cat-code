@@ -173,7 +173,7 @@
         <button class="new-chat" data-action="new"><svg class="icon" aria-hidden="true"><use href="#compose"/></svg>New chat</button>
         <div class="sidebar-list">
           <div class="section-label">Pinned</div>
-          <button class="session-row" data-action="reference"><span class="row-lane"></span><span class="row-content"><span class="row-title">Reference notes</span><span class="row-meta">Yesterday · Jade</span></span></button>
+          <button class="session-row" data-action="reference"><span class="row-lane"></span><span class="row-content"><span class="row-title">Reference notes</span><span class="row-meta">Yesterday</span></span></button>
           <div class="section-label">Chats</div>
           <div id="chat-rows"></div>
           <div class="section-label">Projects <button data-action="picker" aria-label="Add project"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
@@ -234,7 +234,7 @@
       const draft = state.view === 'new';
       const title = draft ? 'New chat' : state.view === 'question' ? 'Quick question' : state.view === 'reference' ? 'Reference notes' : state.view === 'branch' ? 'Packing checklist · branch' : 'Packing checklist';
       $('#tabs').innerHTML = `<button class="tab active">${icon(state.project ? 'folder' : 'chat', true)}<span>${title}</span></button>${state.view === 'parallel' ? `<button class="tab" data-action="parallel">${icon('chat', true)}<span>Weekend checklist</span></button>` : ''}<button class="tab-plus" data-action="new" aria-label="New chat">${icon('plus')}</button>`;
-      $('#chat-rows').innerHTML = `${draft && !state.project ? row('New chat','Now · Amber','new',true) : ''}${state.view === 'branch' ? row('Packing checklist · branch','Now · Ruby','branch',true) : ''}${row('Packing checklist','Today · Opal','files',!state.project && ['files','parallel','missing'].includes(state.view))}${row(state.view === 'parallel' ? 'Weekend checklist' : 'Quick question','Today · Quartz',state.view === 'parallel' ? 'parallel' : 'question',state.view === 'question')}`;
+      $('#chat-rows').innerHTML = `${draft && !state.project ? row('New chat','Now','new',true) : ''}${state.view === 'branch' ? row('Packing checklist · branch','Now','branch',true) : ''}${row('Packing checklist','Today','files',!state.project && ['files','parallel','missing'].includes(state.view))}${row(state.view === 'parallel' ? 'Weekend checklist' : 'Quick question','Today',state.view === 'parallel' ? 'parallel' : 'question',state.view === 'question')}`;
       $('#project-chat-row').innerHTML = state.project ? row(title,'Now · Cobalt','project',true) : '';
       $('[data-action="reference"]').classList.toggle('active',state.view === 'reference');
       $('#panes').classList.toggle('split', state.view === 'parallel');

@@ -12,9 +12,20 @@ Two independent subagents reviewed the completed proposal in parallel:
 
 The reviewers worked read-only, using the proposal, mockup, repository source,
 and architecture decisions. Their seven findings overlap in two places, leaving
-five distinct issues. The parent checked the cited source and accepted all five.
-The corrections are incorporated in the [revised design](../design/2026-09-26-no-project-chats.md)
-and, where visible, the [mockup](../design-html/2026-09-26-no-project-chats.html).
+five distinct issues. At that revision, the parent checked the cited source and
+accepted all five. The [current design](../design/2026-09-26-no-project-chats.md)
+and [mockup](../design-html/2026-09-26-no-project-chats.html) include the later
+scope change described below.
+
+## Subsequent scope change
+
+The user removed peer sessions from No project chats. Findings 2 and 3 below
+remain valid observations about the earlier proposal, but their peer-specific
+solutions are withdrawn. There is no planned shared peer group, cross-cwd
+transcript locator, or peer artifact-delivery workflow. Managed chats omit peer
+tools and coordination context, and the host excludes them as callers/targets.
+Ordinary subagents and independent chats remain. The file opener's external-path
+limitation still applies to a chat's own outputs and is handled with Copy path.
 
 ## Accepted findings
 
@@ -32,7 +43,7 @@ protected configuration tree. Keep host binding records in config home.
 Record the canonical root in a stable workspace binding. No new permission
 exception is proposed, and sensitive descendants retain their existing checks.
 
-### 2. Logical peer membership alone breaks ReadPeer
+### 2. Logical peer membership alone breaks ReadPeer (scope withdrawn)
 
 Reported by both reviewers. Changing `peersOf` to include all managed chats
 does not make their transcripts readable. In
@@ -41,19 +52,19 @@ derives the transcript directory from the reader's launch cwd. Once A and B
 have separate working directories, reading B by its engine ID searches A's
 transcript directory and can falsely report that nothing has been written.
 
-**Correction:** return the target's pinned transcript storage identity in
-host-validated peer metadata. Resolve it under the configured transcript store
+**Historical correction, now withdrawn:** return the target's pinned transcript
+storage identity in host-validated peer metadata. Resolve it under the configured transcript store
 inside the reader's sidecar. Preserve passive reads, bounds, redaction, and
 untrusted-data framing. An unresolved locator returns unavailable. No transcript
 contents travel through main and no model supplies a filesystem path.
 
-The proposal now explicitly calls for amending
+At review time, the proposal called for amending
 [R9](../migration/decisions/PEER-SESSIONS.md) and
 [HR3/HR6](../migration/decisions/HOST-REQUEST-PLANE.md) alongside the metadata
-contract. Existing approved decisions and runtime behavior remain unchanged
-until implementation is separately requested.
+contract. That expansion is no longer proposed. Existing approved decisions
+and runtime behavior have not been modified.
 
-### 3. An artifact in a peer's cwd cannot open from the presenting chat
+### 3. An artifact in a peer's cwd cannot open from the presenting chat (scope withdrawn)
 
 Reported by `design_challenges`. The original statement that file links could
 remain unchanged omitted the different working directories. In
@@ -61,8 +72,9 @@ remain unchanged omitted the different working directories. In
 target must lie inside the displaying session's cwd. A link from A to B's output
 therefore fails even if the handoff itself was authorized.
 
-**Correction:** deliver a copy into the presenting chat's cwd, or have the peer
-write to an explicitly agreed destination there under normal permissions.
+**Historical correction, now withdrawn:** deliver a copy into the presenting
+chat's cwd, or have the peer write to an explicitly agreed destination there
+under normal permissions.
 Preserve originals and disambiguate filename collisions. When a file should
 remain with its peer, open the owning chat and use that chat's Files action.
 External destinations get truthful copy-path presentation. This preserves the
@@ -108,7 +120,7 @@ reuses the existing correlated submit/recovery flow. It does not promise
 exactly-once delivery across crashes or automatically resend after an uncertain
 transport outcome. A durable receipt protocol would be separate work.
 
-## Revision validation
+## Original review revision validation
 
 - `git diff --check`: passed.
 - `bun run maps:lint`: passed with seven existing recommended-section warnings
@@ -129,5 +141,16 @@ transport outcome. A durable receipt protocol would be separate work.
 State selectors reset the sample. Native attachment, Finder, clipboard, and
 engine operations remain outside this mockup. No application build, runtime
 test, or Cat Code GUI session was run. This review does not establish runtime
-correctness: permission behavior, peer transcript location, attachment lifetime,
-and restore cases remain acceptance criteria for a future implementation.
+correctness: permission behavior, attachment lifetime, and restore cases remain
+acceptance criteria for a future implementation. Peer transcript location is
+no longer part of the feature's acceptance criteria.
+
+## Scope-reduction validation
+
+After removing peers, `git diff --check` and `node --check` on the mockup's
+extracted script passed. Map lint passed with the same seven existing warnings.
+All 64 local document links across the design and both reports resolve; local
+mockup assets resolve and no remote URLs are embedded. Browser inspection
+covered all five mockup states: no-project rows have no peer names, the branch
+notice remains, and no browser warnings or errors were reported. No application
+code or runtime behavior was changed or tested.
