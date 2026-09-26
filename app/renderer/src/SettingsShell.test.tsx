@@ -4,9 +4,8 @@
  *
  * SSR-only (`renderToStaticMarkup`): no click, no keypress, no effect. So the
  * decisions live in `settingsScope.ts` and are tested there; what is tested HERE
- * is what the operator would actually see — that the scope is on screen and
- * chosen, that the rail is functional, that no live session value appears, and
- * that a write's destination is stated before the control.
+ * is the static navigation, app-local controls, and absence of live session
+ * values. Inventory reads and writes are covered by the DOM suite.
  *
  * The `initialScope` prop is how a non-landing scope is reachable at all without
  * events; every test that uses it says which scope it is standing in.
@@ -14,12 +13,6 @@
 
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type {
-  ExtensionsSnapshot,
-  MemorySnapshot,
-  PermissionContextSnapshot,
-  SettingsSnapshot,
-} from '../../shared/protocol.js'
 import { SettingsShell } from './SettingsShell.js'
 import {
   ACCENT_KEYS,
@@ -99,59 +92,12 @@ function selectTag(html: string, label: string): string {
   return match?.[0] ?? ''
 }
 
-function controlCount(html: string): number {
-  return (
-    (html.match(/role="switch"/g) ?? []).length +
-    (html.match(/<select/g) ?? []).length +
-    (html.match(/inputMode="numeric"/g) ?? []).length
-  )
-}
-
-const USER_FILE = '/Users/pt/.cat-code/settings.json'
-const PROJECT_FILE = '/Users/pt/cat-code/.cat-code/settings.json'
-
-const SNAPSHOT: SettingsSnapshot = {
-  layers: [
-    {
-      source: 'userSettings',
-      origin: USER_FILE,
-      keys: ['reasoningDisplay', 'theme'],
-    },
-    {
-      source: 'policySettings',
-      origin: '/Library/Managed/managed-settings.json',
-      keys: ['telemetry', 'bypassPermissions'],
-    },
-  ],
-  resolved: [
-    { key: 'bypassPermissions', source: 'policySettings', editable: false, managed: true },
-    { key: 'reasoningDisplay', source: 'userSettings', editable: true, managed: false },
-    { key: 'telemetry', source: 'policySettings', editable: false, managed: true },
-    { key: 'theme', source: 'userSettings', editable: true, managed: false },
-  ],
-  policyOrigin: 'file',
-  editableValues: [{ key: 'reasoningDisplay', value: 'raw', source: 'userSettings' }],
-}
-
-/** The engine key the app-local code-theme picker defers to, turned off. */
-const HIGHLIGHTING_OFF: SettingsSnapshot = {
-  ...SNAPSHOT,
-  editableValues: [
-    ...(SNAPSHOT.editableValues ?? []),
-    {
-      key: 'syntaxHighlightingDisabled',
-      value: true,
-      source: 'userSettings',
-    },
-  ],
-}
-
 /* ── Law 2: the subject is chosen ─────────────────────────────────────────── */
 
 describe('scope selector', () => {
   test('engine settings offer My defaults and Project, and land on My defaults', () => {
     const tabs = scopeTabs(
-      renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />),
+      renderToStaticMarkup(<SettingsShell initialCategory="general" />),
     )
     expect(tabs.map(tab => tab.label)).toEqual([
       'My defaults',
@@ -165,7 +111,7 @@ describe('scope selector', () => {
   test('the focused session names the Project tab but never selects it', () => {
     const tabs = scopeTabs(
       renderToStaticMarkup(
-        <SettingsShell cwd="/Users/pt/cat-code" snapshot={SNAPSHOT} />,
+        <SettingsShell cwd="/Users/pt/cat-code" initialCategory="general" />,
       ),
     )
     expect(tabs[1]?.label).toBe('Project: cat-code')
@@ -182,10 +128,10 @@ describe('scope selector', () => {
    */
   test('switching the focused session does not change what My defaults shows', () => {
     const inCatCode = renderToStaticMarkup(
-      <SettingsShell cwd="/Users/pt/cat-code" snapshot={SNAPSHOT} />,
+      <SettingsShell cwd="/Users/pt/cat-code" initialCategory="general" />,
     )
     const inOther = renderToStaticMarkup(
-      <SettingsShell cwd="/Users/pt/somewhere-else" snapshot={SNAPSHOT} />,
+      <SettingsShell cwd="/Users/pt/somewhere-else" initialCategory="general" />,
     )
     // The heading names the other available project, while the actual setting
     // rows remain the same user-layer values.
@@ -200,10 +146,10 @@ describe('scope selector', () => {
 
   test('with no session open the project tab names nothing and invents nothing', () => {
     const html = renderToStaticMarkup(
-      <SettingsShell initialScope="project" snapshot={null} />,
+      <SettingsShell initialCategory="general" initialScope="project" />,
     )
     expect(scopeTabs(html)[1]?.label).toBe('Project')
-    expect(headMarkup(html)).toContain('No project is open')
+    expect(headMarkup(html)).toContain('Choose a project')
     // Not a "waiting…": with no session nothing is in flight.
     expect(headMarkup(html).toLowerCase()).not.toContain('waiting')
     expect(headMarkup(html).toLowerCase()).not.toContain('loading')
@@ -214,7 +160,7 @@ describe('scope selector', () => {
 
 describe('functional rail', () => {
   test('categories stay visible, with Extensions and Advanced grouped', () => {
-    const html = renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />)
+    const html = renderToStaticMarkup(<SettingsShell />)
     expect(railLabels(html)).toEqual([
       'General',
       'Appearance',
@@ -237,7 +183,7 @@ describe('functional rail', () => {
 
   test('the rejected scope-grouped headings are gone from the rail', () => {
     const nav = decode(
-      navMarkup(renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />)),
+      navMarkup(renderToStaticMarkup(<SettingsShell />)),
     )
     for (const heading of [
       'Resolved for',
@@ -250,12 +196,12 @@ describe('functional rail', () => {
   })
 
   test('category navigation is stable across settings scopes', () => {
-    const user = renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />)
+    const user = renderToStaticMarkup(<SettingsShell />)
     const project = renderToStaticMarkup(
-      <SettingsShell initialScope="project" snapshot={SNAPSHOT} />,
+      <SettingsShell initialScope="project" />,
     )
     const appearance = renderToStaticMarkup(
-      <SettingsShell initialScope="app" snapshot={SNAPSHOT} />,
+      <SettingsShell initialScope="app" />,
     )
     expect(railLabels(project)).toEqual(railLabels(user))
     expect(railLabels(appearance)).toEqual(railLabels(user))
@@ -263,7 +209,7 @@ describe('functional rail', () => {
 
   test('App’s existing entry point still opens a real pane', () => {
     const html = renderToStaticMarkup(
-      <SettingsShell initialCategory="agents" snapshot={SNAPSHOT} />,
+      <SettingsShell initialCategory="agents" />,
     )
     expect(navMarkup(html)).toContain('aria-current="page"')
     expect(paneMarkup(html)).toContain('Agents')
@@ -273,79 +219,14 @@ describe('functional rail', () => {
 /* ── Law 3 on screen ──────────────────────────────────────────────────────── */
 
 describe('write targeting', () => {
-  test('My defaults names the user file as the destination, before the control', () => {
-    const pane = decode(
-      paneMarkup(
-        renderToStaticMarkup(
-          <SettingsShell initialCategory="general" snapshot={SNAPSHOT} />,
-        ),
-      ),
-    )
-    expect(pane).toContain(`Edits here write to your own settings file: ${USER_FILE}`)
-    expect(pane).not.toContain('write to this project')
-  })
-
-  /**
-   * The same key, the same snapshot, two scopes: in My defaults it writes the
-   * user file even though a project override is what currently wins. The old
-   * `targetSourceFor` sent that write into the project's file instead.
-   */
-  test('a project-overridden value still writes the user file from My defaults', () => {
-    const overridden: SettingsSnapshot = {
-      ...SNAPSHOT,
-      layers: [
-        { source: 'userSettings', origin: USER_FILE, keys: ['reasoningDisplay'] },
-        {
-          source: 'projectSettings',
-          origin: PROJECT_FILE,
-          keys: ['reasoningDisplay'],
-        },
-      ],
-      resolved: [
-        { key: 'reasoningDisplay', source: 'projectSettings', editable: true, managed: false },
-      ],
-      editableValues: [
-        { key: 'reasoningDisplay', value: 'off', source: 'projectSettings' },
-      ],
-    }
-    const pane = decode(
-      paneMarkup(
-        renderToStaticMarkup(
-          <SettingsShell initialCategory="model" snapshot={overridden} />,
-        ),
-      ),
-    )
-    expect(pane).toContain(`Edits here write to your own settings file: ${USER_FILE}`)
-    // Exactly one destination is stated, and the project's file is never it —
-    // the project path appears only inside the override annotation below.
-    expect(pane.match(/Edits here write to/g)).toHaveLength(1)
-    const destination = /Edits here write to[^<]*/.exec(pane)?.[0] ?? ''
-    expect(destination).toContain(USER_FILE)
-    expect(destination).not.toContain(PROJECT_FILE)
-    // The override is visible as an annotation…
-    expect(pane).toContain("Overridden by this project's shared settings")
-    // …and the project's value is NOT presented as the user's own. Bound the
-    // row so a later control cannot satisfy the count below.
-    const rowStart = pane.indexOf('data-setting-key="reasoningDisplay"')
-    const nextRow = pane.indexOf('data-setting-key=', rowStart + 1)
-    const rowEnd = nextRow < 0 ? pane.indexOf('</section>', rowStart) : nextRow
-    expect(rowStart).toBeGreaterThan(0)
-    expect(rowEnd).toBeGreaterThan(rowStart)
-    const displayRow = pane.slice(rowStart, rowEnd)
-    expect(displayRow).toContain('unknown')
-    // No control at all for a value this scope cannot read — not a control
-    // sitting at a guessed position.
-    expect(controlCount(displayRow)).toBe(0)
-  })
-
   test('the project scope states the Shared / Just-me choice up front', () => {
     const head = decode(
       headMarkup(
         renderToStaticMarkup(
           <SettingsShell
             cwd="/Users/pt/cat-code"
+            initialCategory="general"
             initialScope="project"
-            snapshot={SNAPSHOT}
           />,
         ),
       ),
@@ -356,102 +237,13 @@ describe('write targeting', () => {
   })
 })
 
-/* ── the honest v1 project limit ──────────────────────────────────────────── */
-
-test('a project with no engine of its own shows no values and no controls', () => {
-  // A roster entry that is NOT the focused session's project: nothing in this
-  // window has read its files, and a write would land in the wrong one.
-  const html = renderToStaticMarkup(
-    <SettingsShell
-      cwd={null}
-      initialCategory="general"
-      initialScope="project"
-      projects={[{ cwd: '/Users/pt/other-repo', name: 'other-repo' }]}
-      snapshot={SNAPSHOT}
-    />,
-  )
-  const pane = paneMarkup(html)
-  const body = pane.split('</header>')[1] ?? ''
-  expect(controlCount(body)).toBe(0)
-  expect(body).toContain('No engine is running in other-repo')
-  expect(body).not.toContain('Edits here write to')
-  // The user file that WAS read must not be presented as this project's.
-  expect(body).not.toContain(USER_FILE)
-
-  // The focused session's own project is fully live, so the block is the
-  // engine gate rather than an empty project scope.
-  const live = paneMarkup(
-    renderToStaticMarkup(
-      <SettingsShell
-        cwd="/Users/pt/cat-code"
-        initialCategory="general"
-        initialScope="project"
-        snapshot={SNAPSHOT}
-      />,
-    ),
-  )
-  expect(controlCount(live)).toBeGreaterThan(0)
-  expect(live).toContain('Edits here write to')
-})
-
-/**
- * The panes with no value-editor of their own (the Extensions library, Memory,
- * Agents) read snapshots captured for the FOCUSED session. In a project that has
- * no engine, showing them would attribute one project's installed inventory to
- * another — so the scope is gated once, above the pane, not per editor.
- */
-test('extension inventories retain their source context independently of the engine scope', () => {
-  const pane = paneMarkup(
-    renderToStaticMarkup(
-      <SettingsShell
-        cwd={null}
-        extensionsSnapshot={EXTENSIONS}
-        initialCategory="mcp"
-        initialScope="project"
-        projects={[{ cwd: '/Users/pt/other-repo', name: 'other-repo' }]}
-        snapshot={SNAPSHOT}
-      />,
-    ),
-  )
-  expect(pane).toContain('linear')
-  expect(pane).toContain('User')
-  expect(pane).not.toContain('No engine is running in other-repo')
-
-  // With the project's own engine live, the same pane renders the real library.
-  const live = paneMarkup(
-    renderToStaticMarkup(
-      <SettingsShell
-        cwd="/Users/pt/cat-code"
-        extensionsSnapshot={EXTENSIONS}
-        initialCategory="mcp"
-        initialScope="project"
-        snapshot={SNAPSHOT}
-      />,
-    ),
-  )
-  expect(live).toContain('linear')
-})
-
 /* ── Law 1: no live session value ─────────────────────────────────────────── */
-
-const PERMISSION_CONTEXT: PermissionContextSnapshot = {
-  mode: 'plan',
-  alwaysAllowRules: { userSettings: ['Bash(ls)'] },
-  alwaysDenyRules: { localSettings: ['Bash(rm -rf /tmp)'] },
-  alwaysAskRules: {},
-  ruleMetadata: [],
-  managedRulesOnly: false,
-  permissionClassifierEnabled: false,
-  additionalWorkingDirectories: [{ path: '/tmp/work', source: 'cliArg' }],
-  isBypassPermissionsModeAvailable: false,
-}
 
 describe('Permissions — durable half only', () => {
   test('the running session’s mode, rules and directories are not rendered', () => {
     const html = renderToStaticMarkup(
       <SettingsShell
         initialCategory="permissions"
-        snapshot={SNAPSHOT}
       />,
     )
     // The exact strings the operator objected to seeing under Settings.
@@ -464,95 +256,7 @@ describe('Permissions — durable half only', () => {
     expect(html).not.toContain('Default permission mode: plan')
   })
 
-  test('the durable default mode is shown, read-only, with its source', () => {
-    const html = renderToStaticMarkup(
-      <SettingsShell
-        initialCategory="permissions"
-        snapshot={{
-          ...SNAPSHOT,
-          permissionDefaultMode: { value: 'acceptEdits', source: 'userSettings' },
-        }}
-      />,
-    )
-    expect(html).toContain('Default permission mode: acceptEdits')
-    expect(html).toContain('>User<') // the source badge
-    expect(decode(html)).toContain('Change it from the CLI')
-    // Read-only means no control of any kind, not a disabled one.
-    expect(controlCount(paneMarkup(html))).toBe(0)
-  })
 
-  test('unset and never-read stay different answers', () => {
-    const unset = renderToStaticMarkup(
-      <SettingsShell initialCategory="permissions" snapshot={SNAPSHOT} />,
-    )
-    expect(unset).toContain('Default permission mode: not set')
-    expect(unset).toContain('is not set')
-
-    const unread = renderToStaticMarkup(
-      <SettingsShell initialCategory="permissions" snapshot={null} />,
-    )
-    expect(unread).toContain('Open a session to read and edit them.')
-    expect(unread).not.toContain('Default permission mode: unknown')
-    expect(unread).not.toContain('is not set')
-    expect(unread).toContain('No session is open')
-    // Neither promises anything is on its way.
-    expect(unread).not.toContain('Waiting for')
-  })
-
-  /**
-   * Every other row on this page is scope-relative. This one read the resolved
-   * `permissions.defaultMode` across ALL layers, so a project's setting rendered
-   * under a head that reads "Your own settings files", and switching scope
-   * changed nothing.
-   */
-  test('the default mode obeys the chosen scope', () => {
-    const projectDefault: SettingsSnapshot = {
-      ...SNAPSHOT,
-      layers: [
-        ...SNAPSHOT.layers,
-        { source: 'projectSettings', origin: '/repo/.cat-code/settings.json', keys: [] },
-      ],
-      permissionDefaultMode: { value: 'acceptEdits', source: 'projectSettings' },
-    }
-
-    const mine = renderToStaticMarkup(
-      <SettingsShell initialCategory="permissions" snapshot={projectDefault} />,
-    )
-    // My defaults does not hold this value, so it is not shown as if it did…
-    expect(mine).not.toContain('Default permission mode: acceptEdits')
-    expect(mine).toContain('Default permission mode: unknown')
-    // …and the cross-scope read no longer licenses a claim about the files.
-    expect(mine).not.toContain('is not set in any settings file')
-    expect(decode(mine)).toContain('Overridden by')
-
-    // The project scope, which DOES hold it, shows it.
-    const theirs = renderToStaticMarkup(
-      <SettingsShell
-        cwd="/repo"
-        initialCategory="permissions"
-        initialScope="project"
-        snapshot={projectDefault}
-      />,
-    )
-    expect(theirs).toContain('Default permission mode: acceptEdits')
-    // The whole bug was the two scopes rendering the same answer.
-    expect(mine).not.toBe(theirs)
-  })
-
-  /**
-   * A null snapshot is not proof that no session exists: the spawn-time read can
-   * throw and send no frame at all, so a RUNNING session sat under "No session
-   * is open" forever.
-   */
-  test('a session with unread settings is not told that no session is open', () => {
-    const attached = renderToStaticMarkup(
-      <SettingsShell cwd="/repo" initialCategory="permissions" snapshot={null} />,
-    )
-    expect(attached).not.toContain('No session is open')
-    expect(attached).toContain('have not been read for this session')
-    // No untrusted value or read-only field is rendered from an absent snapshot.
-    expect(attached).not.toContain('Default permission mode: unknown')
-  })
 })
 
 /* ── This app ─────────────────────────────────────────────────────────────── */
@@ -561,7 +265,7 @@ describe('This app scope', () => {
   test('the reasoning-layout control lives here, at the live mode, with no settings badge', () => {
     const html = renderToStaticMarkup(
       <ReasoningLayoutContext.Provider value={{ mode: 'blocks', setMode: () => {} }}>
-        <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+        <SettingsShell initialScope="app" />
       </ReasoningLayoutContext.Provider>,
     )
     const pane = paneMarkup(html)
@@ -577,20 +281,19 @@ describe('This app scope', () => {
     const generalPane = paneMarkup(
       renderToStaticMarkup(
         <ReasoningLayoutContext.Provider value={{ mode: 'blocks', setMode: () => {} }}>
-          <SettingsShell initialCategory="general" snapshot={SNAPSHOT} />
+          <SettingsShell initialCategory="general" />
         </ReasoningLayoutContext.Provider>,
       ),
     )
     expect(generalPane).not.toContain('Reasoning layout')
     expect(generalPane).not.toContain('value="blocks"')
-    expect(generalPane).toContain('Output style')
   })
 
   test('the code-theme picker offers all five themes at the live one', () => {
     const pane = paneMarkup(
       renderToStaticMarkup(
         <CodeThemeContext.Provider value={{ theme: 'nord', setTheme: () => {} }}>
-          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          <SettingsShell initialScope="app" />
         </CodeThemeContext.Provider>,
       ),
     )
@@ -607,7 +310,7 @@ describe('This app scope', () => {
 
   test('the live code canvas is disclosed beside the picker that changes it', () => {
     const pane = paneMarkup(
-      renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={SNAPSHOT} />),
+      renderToStaticMarkup(<SettingsShell initialScope="app" />),
     )
     // The sample mounts when the disclosure opens, so closed previews do not
     // render or animate off screen.
@@ -620,7 +323,7 @@ describe('This app scope', () => {
   test('the canvas belongs to Appearance only', () => {
     const general = paneMarkup(
       renderToStaticMarkup(
-        <SettingsShell initialCategory="general" snapshot={SNAPSHOT} />,
+        <SettingsShell initialCategory="general" />,
       ),
     )
     expect(general).not.toContain('hljs')
@@ -628,27 +331,15 @@ describe('This app scope', () => {
 
   test('the code theme is not an engine setting, so General does not offer it', () => {
     const generalPane = paneMarkup(
-      renderToStaticMarkup(<SettingsShell initialCategory="general" snapshot={SNAPSHOT} />),
+      renderToStaticMarkup(<SettingsShell initialCategory="general" />),
     )
     expect(generalPane).not.toContain('Code theme')
     expect(generalPane).not.toContain('value="monokai"')
   })
 
-  test('desktop code theme stays usable when terminal syntax highlighting is off', () => {
+  test('the code theme picker stays usable without a chat', () => {
     const pane = paneMarkup(
-      renderToStaticMarkup(
-        <SettingsShell initialScope="app" snapshot={HIGHLIGHTING_OFF} />,
-      ),
-    )
-    expect(selectTag(pane, 'Code theme')).not.toContain('disabled=""')
-    expect(decode(pane)).not.toContain('Turn it back on under Interface')
-    // The other app-local control is unaffected by an engine key.
-    expect(selectTag(pane, 'Reasoning layout')).not.toContain('disabled=""')
-  })
-
-  test('an unread snapshot leaves the picker usable rather than guessing it is off', () => {
-    const pane = paneMarkup(
-      renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={null} />),
+      renderToStaticMarkup(<SettingsShell initialScope="app" />),
     )
     expect(pane).toContain('Code theme')
     expect(selectTag(pane, 'Code theme')).not.toContain('disabled=""')
@@ -659,7 +350,7 @@ describe('This app scope', () => {
     const pane = paneMarkup(
       renderToStaticMarkup(
         <AccentThemeContext.Provider value={{ accent: 'blue', setAccent: () => {} }}>
-          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          <SettingsShell initialScope="app" />
         </AccentThemeContext.Provider>,
       ),
     )
@@ -692,7 +383,7 @@ describe('This app scope', () => {
    */
   test('no row claims where its preference is stored', () => {
     const pane = decode(
-      paneMarkup(renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={SNAPSHOT} />)),
+      paneMarkup(renderToStaticMarkup(<SettingsShell initialScope="app" />)),
     )
     expect(pane).not.toContain('Stored in this app')
     expect(pane).not.toContain('not in your settings files')
@@ -706,7 +397,7 @@ describe('This app scope', () => {
     const pane = paneMarkup(
       renderToStaticMarkup(
         <GlassModeContext.Provider value={{ glass: true, setGlass: () => {} }}>
-          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+          <SettingsShell initialScope="app" />
         </GlassModeContext.Provider>,
       ),
     )
@@ -722,7 +413,7 @@ describe('This app scope', () => {
 
   test('the accent is above the transcript preferences, as in the prototype', () => {
     const pane = paneMarkup(
-      renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={SNAPSHOT} />),
+      renderToStaticMarkup(<SettingsShell initialScope="app" />),
     )
     expect(decode(pane).indexOf('Accent color')).toBeLessThan(
       decode(pane).indexOf('Code theme'),
@@ -741,7 +432,7 @@ describe('This app scope', () => {
       renderToStaticMarkup(
         <AccentThemeContext.Provider value={{ accent: DEFAULT_ACCENT, setAccent: () => {} }}>
           <CodeThemeContext.Provider value={{ theme: DEFAULT_CODE_THEME, setTheme: () => {} }}>
-            <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+            <SettingsShell initialScope="app" />
           </CodeThemeContext.Provider>
         </AccentThemeContext.Provider>,
       ),
@@ -753,7 +444,7 @@ describe('This app scope', () => {
       renderToStaticMarkup(
         <AccentThemeContext.Provider value={{ accent: 'amber', setAccent: () => {} }}>
           <CodeThemeContext.Provider value={{ theme: DEFAULT_CODE_THEME, setTheme: () => {} }}>
-            <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+            <SettingsShell initialScope="app" />
           </CodeThemeContext.Provider>
         </AccentThemeContext.Provider>,
       ),
@@ -763,169 +454,13 @@ describe('This app scope', () => {
   })
 
   test('unbuilt Notifications is absent from primary navigation', () => {
-    const html = renderToStaticMarkup(<SettingsShell snapshot={SNAPSHOT} />)
+    const html = renderToStaticMarkup(<SettingsShell />)
     expect(railLabels(html)).not.toContain('Notifications')
   })
 })
 
-/* ── Enforced ─────────────────────────────────────────────────────────────── */
-
-describe('Enforced scope', () => {
-  test('renders the real policy-locked keys', () => {
-    const html = renderToStaticMarkup(
-      <SettingsShell initialScope="enforced" snapshot={SNAPSHOT} />,
-    )
-    expect(html).toContain('Managed by your organization')
-    expect(html).toContain('policy source: file')
-    expect(html).toContain('telemetry')
-    expect(html).toContain('bypassPermissions')
-    // A user-source key is not in the enforced list.
-    expect(html).not.toContain('>theme<')
-  })
-
-  test('never reports zero enforced settings it has not read', () => {
-    const unread = paneMarkup(
-      renderToStaticMarkup(
-        <SettingsShell initialScope="enforced" snapshot={null} />,
-      ),
-    )
-    expect(unread).not.toContain('No managed settings on this machine')
-    expect(unread).toContain('No session is open')
-    expect(unread).toContain('unknown')
-    // The banner still renders — the pane degrades, it does not disappear.
-    expect(unread).toContain('Managed by your organization')
-
-    const readEmpty = paneMarkup(
-      renderToStaticMarkup(
-        <SettingsShell
-          initialScope="enforced"
-          snapshot={{ layers: [], resolved: [], policyOrigin: null, editableValues: [] }}
-        />,
-      ),
-    )
-    expect(readEmpty).toContain('No managed settings on this machine')
-    expect(readEmpty).not.toContain('No session is open')
-  })
-})
-
-/* ── extensions still render over real data ───────────────────────────────── */
-
-const EXTENSIONS: ExtensionsSnapshot = {
-  mcp: [{ name: 'linear', transport: 'http', scope: 'user', url: 'https://mcp.linear/rpc' }],
-  plugins: [
-    {
-      id: 'fmt@tools',
-      name: 'formatter',
-      source: 'fmt@tools',
-      enabled: true,
-      builtin: false,
-      provides: { commands: 1, agents: 0, skills: 0, hooks: 0, mcpServers: 0, lsp: 0 },
-    },
-  ],
-  skills: [
-    {
-      name: 'deep-research',
-      source: 'userSettings',
-      context: 'inline',
-      disableModelInvocation: false,
-      userInvocable: true,
-      description: 'research a topic',
-    },
-  ],
-  hooks: [
-    {
-      event: 'PreToolUse',
-      type: 'command',
-      source: 'userSettings',
-      async: false,
-      displayLine: 'run-check',
-    },
-  ],
-}
-
-test('the Extensions group renders the real library, not stubs', () => {
-  const mcp = renderToStaticMarkup(
-    <SettingsShell extensionsSnapshot={EXTENSIONS} initialCategory="mcp" snapshot={SNAPSHOT} />,
-  )
-  expect(mcp).toContain('linear')
-
-  const skills = renderToStaticMarkup(
-    <SettingsShell extensionsSnapshot={EXTENSIONS} initialCategory="skills" snapshot={SNAPSHOT} />,
-  )
-  expect(skills).toContain('/deep-research')
-
-  const hooks = renderToStaticMarkup(
-    <SettingsShell extensionsSnapshot={EXTENSIONS} initialCategory="hooks" snapshot={SNAPSHOT} />,
-  )
-  expect(hooks).toContain('PreToolUse')
-  expect(hooks).toContain('run-check')
-})
-
-test('Memory separates the current saved setting from the opened-session observation', () => {
-  const settings: SettingsSnapshot = {
-    ...SNAPSHOT,
-    layers: [
-      {
-        source: 'userSettings',
-        origin: USER_FILE,
-        keys: ['autoMemoryEnabled'],
-      },
-    ],
-    resolved: [
-      {
-        key: 'autoMemoryEnabled',
-        source: 'userSettings',
-        editable: true,
-        managed: false,
-      },
-    ],
-    editableValues: [
-      {
-        key: 'autoMemoryEnabled',
-        value: false,
-        source: 'userSettings',
-      },
-    ],
-  }
-  const memory: MemorySnapshot = {
-    autoMemoryEnabled: true,
-    autoMemoryDir: '/Users/pt/.cat-code/projects/repo/memory/',
-    autoMemoryEntrypoint:
-      '/Users/pt/.cat-code/projects/repo/memory/MEMORY.md',
-    instructionFiles: [],
-    autoMemories: [],
-    agentMemories: [],
-    notes: [],
-  }
-
-  const html = decode(
-    renderToStaticMarkup(
-      <SettingsShell
-        initialCategory="memory"
-        memorySnapshot={memory}
-        snapshot={settings}
-      />,
-    ),
-  )
-  const pane = paneMarkup(html)
-
-  // Saved layer value: the shared Field/Toggle/SourceBadge/reset grammar.
-  expect(pane).toContain('>Auto memory<')
-  expect(pane).toContain('role="switch"')
-  expect(pane).toContain('aria-checked="false"')
-  expect(pane).toContain('>User<')
-  expect(pane).toContain(`title="${USER_FILE}"`)
-  expect(pane).toContain('Reset to default')
-  // Historical value: `memory.snapshot` is not re-emitted after a settings
-  // write, so it may only describe what the session observed when it opened.
-  expect(html).toContain(
-    'When this session opened, auto memory was enabled.',
-  )
-  expect(html).not.toContain('Current session: auto memory')
-})
-
 test('renders with no snapshot at all without claiming anything', () => {
-  const html = renderToStaticMarkup(<SettingsShell snapshot={null} />)
+  const html = renderToStaticMarkup(<SettingsShell />)
   expect(html).toContain('Settings')
   expect(html).not.toContain('Waiting for the engine')
 })

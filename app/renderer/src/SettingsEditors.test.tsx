@@ -639,7 +639,7 @@ test('with nothing read the pane offers no control at all, and says why', () => 
   // Not "disabled controls": no control is drawn, because a drawn toggle has a
   // position and a position is a claim about the operator's file.
   expect(controlCount(html)).toBe(0)
-  expect(html).toContain('No session is open')
+  expect(html).toContain('Settings files have not been read')
   // …and nothing promises a destination for a click that cannot happen.
   expect(html).not.toContain('Edits here write to')
 
@@ -651,12 +651,12 @@ test('with nothing read the pane offers no control at all, and says why', () => 
   expect(controlCount(live)).toBeGreaterThan(0)
 })
 
-test('a project with no engine renders no values and no controls, and names the project', () => {
+test('an unavailable project renders no values and no controls', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
       engine="absent"
       layer="projectSettings"
-      noEngineNote="No engine is running in other-repo, so its settings files have not been read."
+      noEngineNote="Choose a project to read and edit its settings."
       onWrite={noop}
       pane="general"
       snapshot={snapshot({
@@ -677,7 +677,7 @@ test('a project with no engine renders no values and no controls, and names the 
     />,
   )
   expect(controlCount(html)).toBe(0)
-  expect(html).toContain('No engine is running in other-repo')
+  expect(html).toContain('Choose a project')
   // The OTHER project's file must not leak in as if it described this one.
   expect(html).not.toContain('/repo/.cat-code/settings.json')
   expect(html).not.toContain('Edits here write to')

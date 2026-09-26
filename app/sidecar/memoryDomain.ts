@@ -87,7 +87,7 @@ export function buildMemorySnapshot({
   }
 }
 
-async function readMemorySnapshotOnce(
+export async function readMemorySnapshotOnce(
   agents: readonly AgentMemorySource[],
 ): Promise<MemorySnapshot | null> {
   try {

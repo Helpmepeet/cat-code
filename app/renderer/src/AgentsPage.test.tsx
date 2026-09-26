@@ -68,6 +68,8 @@ test('renders real agent definition groups, with no note about our own build', (
   expect(html).toContain('inactive')
   expect(html).toContain('overridden')
   expect(html).toContain('Read-only')
+  expect(html).not.toContain('Unavailable')
+  expect(html).not.toContain('mcp missing')
   // The landing pane of Settings is the first thing the operator sees, so the
   // deferral list that used to sit here — withheld payloads, undesigned writers
   // — is gone rather than reworded (CLAUDE.md §7).
@@ -76,17 +78,15 @@ test('renders real agent definition groups, with no note about our own build', (
   expect(html).not.toContain('deferred')
 })
 
-test('with no session, says what to do rather than naming the missing frame', () => {
+test('without a snapshot, reports a read failure rather than requiring a session', () => {
   const html = renderToStaticMarkup(<AgentsPage snapshot={null} />)
-  // The read is session-keyed but Settings renders with no session, so this is a
-  // no-session state, not a load. The copy it replaced promised a fill that
-  // never came and named internals (CLAUDE.md §7).
-  expect(html).toContain('Open a session to see its agent definitions')
+  expect(html).toContain('Agent definitions could not be read')
+  expect(html).not.toContain('Open a session')
   expect(html).not.toContain('MOCK')
 })
 
 test('P4-57 agent definition file paths have a keyboard-reachable copy button', () => {
-  const definition = SNAPSHOT.definitions[0]!
+  const definition = { ...SNAPSHOT.definitions[0]!, available: false, missingMcpServers: ['linear'] }
   const html = renderToStaticMarkup(
     <AgentInspectDrawer definition={definition} onClose={() => {}} />,
   )
@@ -96,6 +96,8 @@ test('P4-57 agent definition file paths have a keyboard-reachable copy button', 
   expect(html).toContain('title="Copy agent definition file path"')
   expect(html).toContain('type="button"')
   expect(html).toContain('Configured')
+  expect(html).not.toContain('Missing MCP')
+  expect(html).not.toContain('>Available<')
   expect(html).not.toContain('payload withheld')
   expect(html).not.toContain('config withheld')
 })

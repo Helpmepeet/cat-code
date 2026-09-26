@@ -1,13 +1,13 @@
 /**
- * Packaged-build sidecar entry — one engine binary, five modes (P5-1).
+ * Packaged-build sidecar entry — one engine binary, multiple modes (P5-1).
  *
  * A compiled Bun binary embeds its own runtime, so one executable per entry
- * would ship that runtime five times. This entry selects the real module from
+ * would ship that runtime for every mode. This entry selects the real module from
  * `process.argv[2]` instead; the mode tokens are the keys of
  * `SIDECAR_MODE_ENTRIES` in `app/main/mainDecisions.ts`, which is also what
  * main spawns with, so the two sides cannot drift.
  *
- * The imports are DYNAMIC on purpose. Three of the five workers set a
+ * The imports are DYNAMIC on purpose. Some workers set a
  * process-global switch (`CLAUDE_CODE_SIMPLE`) at their own module scope before
  * reaching the engine graph; a static import here would evaluate every module,
  * dragging the live-session machinery in before that switch is set and undoing
@@ -29,6 +29,8 @@ const MODES = {
   'transcript-backfill': () => import('./transcriptBackfillWorker.js'),
   'catalog': () => import('./sessionsCatalogWorker.js'),
   'accounts-pool': () => import('./accountsPoolWorker.js'),
+  'settings-inventory': () => import('./settingsInventoryWorker.js'),
+  'settings-write': () => import('./settingsWriteWorker.js'),
   'usage-stats': () => import('./usageStatsWorker.js'),
   'debug-cleanup': () => import('./debugCleanupWorker.js'),
 } as const

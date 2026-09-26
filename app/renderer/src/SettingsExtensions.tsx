@@ -1,9 +1,9 @@
 /**
  * Settings → Extensions panels (P4-12) — MCP / Plugins / Skills / Hooks, rebuilt
  * in TS/Tailwind on the P0-2 tokens from the prototype's `SettingsExtensions.jsx`
- * (design reference only — zero ported code, no inline `style`). Each panel reads
- * the real `extensions.snapshot` read-seam via `extensionsState.ts` selectors and
- * source-badges every row with P4-3's `SourceBadge`.
+ * (design reference only — zero ported code, no inline `style`). SettingsShell
+ * supplies the session-independent inventory read and each row carries a source
+ * badge from P4-3's `SourceBadge`.
  *
  * Deferred surfaces (rendered as honest truth, not mocked — see the report's §0
  * flags and the `protocol.ts` P4-12 header): MCP live connection status / counts
@@ -103,7 +103,7 @@ function EmptyRow({ children }: { children: ReactNode }) {
 
 function WaitingRow() {
   return (
-    <EmptyRow>Open a session to see its extensions.</EmptyRow>
+    <EmptyRow>Extension configuration could not be read.</EmptyRow>
   )
 }
 

@@ -63,6 +63,8 @@ import {
   type HostEvent,
   type HostResult,
   type SaveTextResult,
+  type SettingsInventoryReadResult,
+  type SettingsWriteReadResult,
   type SessionDescriptor,
   type SwitchWorkspaceBranchResult,
   type WorkspaceBranches,
@@ -112,6 +114,9 @@ import {
   CH_DELIVERY_HEALTH_RESPONSE,
   CH_REFRESH_ACCOUNTS_POOL,
   CH_REFRESH_USAGE_DASHBOARD,
+  CH_READ_SETTINGS_INVENTORY,
+  CH_WRITE_DURABLE_SETTING,
+  CH_PICK_SETTINGS_PROJECT,
   // Control plane (HC3 — fixed, per-method structured senders). `invoke`
   // channels return a typed HostResult; `pick-directory` returns a realpath or
   // null (the native picker, HC1); the host-event channel is a one-way stream.
@@ -232,6 +237,10 @@ import {
   createAccountsPoolPublicationGate,
   runAccountsPoolWorker,
 } from './accountsPoolRunner.js'
+import { runSettingsInventoryWorker } from './settingsInventoryRunner.js'
+import { resolveSettingsInventoryCwd, settingsWriteMatchesScope } from './settingsInventoryAccess.js'
+import { runSettingsWriteWorker } from './settingsWriteRunner.js'
+import { parseSettingsWriteWorkerRequest } from '../shared/settingsWriteWorker.js'
 import {
   createIdleParkDriver,
   type IdleParkDriver,
@@ -742,6 +751,13 @@ const accountInvalidation = createAccountInvalidationDispatcher({
  */
 let sessionsCatalogAbort: AbortController | null = null
 let accountsPoolAbort: AbortController | null = null
+const settingsInventoryReads = new Set<AbortController>()
+const settingsWriteRuns = new Set<AbortController>()
+/** Directories explicitly chosen for Settings in this app process. */
+const settingsPickedProjects = new Set<string>()
+let settingsWriteTail: Promise<void> = Promise.resolve()
+let settingsWritePending = 0
+let settingsWriteGeneration = 0
 
 /**
  * IDLE-PARK (decisions/IDLE-PARK.md §4) — one main-supervised policy driver per
@@ -2580,6 +2596,140 @@ function registerIpcHandlers(): void {
     refreshUsageDashboardNow()
   })
 
+  ipcMain.handle(CH_PICK_SETTINGS_PROJECT, async (event): Promise<{ cwd: string; name: string } | null> => {
+    if (!isMainWindowSender(event)) return null
+    const parent = mainWindow ?? undefined
+    const result = parent
+      ? await dialog.showOpenDialog(parent, { properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const selected = validateCwd(result.filePaths[0])
+    if (!selected.ok) return null
+    settingsPickedProjects.add(selected.realpath)
+    return { cwd: selected.realpath, name: basename(selected.realpath) }
+  })
+
+  ipcMain.handle(
+    CH_READ_SETTINGS_INVENTORY,
+    async (event, projectCwd: unknown): Promise<SettingsInventoryReadResult> => {
+      const unavailable = (): SettingsInventoryReadResult => ({
+        ok: false,
+        error: { code: 'unavailable', message: 'Could not load configuration. Try again.' },
+      })
+      if (!isMainWindowSender(event)) return unavailable()
+
+      const knownProjects = new Set([
+        ...settingsPickedProjects,
+        ...(host?.listSessions().map(row => row.cwd) ?? []),
+        ...(readSessionsCatalogCache(defaultRegistryDir())?.entries.map(row => row.cwd) ?? []),
+      ])
+      const cwd = resolveSettingsInventoryCwd(
+        projectCwd,
+        app.getPath('home'),
+        knownProjects,
+        validateCwd,
+      )
+      if (!cwd) {
+        return { ok: false, error: { code: 'invalid_project', message: 'Choose a known project.' } }
+      }
+      if (settingsInventoryReads.size >= 4) return unavailable()
+
+      const abort = new AbortController()
+      settingsInventoryReads.add(abort)
+      let accepted: SettingsInventoryReadResult | null = null
+      try {
+        await runSettingsInventoryWorker({
+          command: sidecarLaunch().command,
+          args: sidecarLaunch().argsFor('settings-inventory'),
+          cwd,
+          signal: abort.signal,
+          onWorkerLifecycle: createWorkerLifecycleLogger('settings-inventory'),
+          onInventory: inventory => {
+            if (inventory.cwd === cwd) accepted = { ok: true, inventory }
+          },
+          log: line => process.stderr.write(`${line}\n`),
+        })
+      } catch (error) {
+        process.stderr.write(
+          `[main] settings inventory read failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+      } finally {
+        settingsInventoryReads.delete(abort)
+      }
+      return abort.signal.aborted ? unavailable() : accepted ?? unavailable()
+    },
+  )
+
+  ipcMain.handle(
+    CH_WRITE_DURABLE_SETTING,
+    async (event, projectCwd: unknown, rawVerb: unknown): Promise<SettingsWriteReadResult> => {
+      const unavailable = (): SettingsWriteReadResult => ({
+        ok: false,
+        error: { code: 'unavailable', message: 'Could not save this setting. Try again.' },
+      })
+      if (!isMainWindowSender(event)) return unavailable()
+      const request = parseSettingsWriteWorkerRequest({
+        type: 'settings-write',
+        version: 1,
+        verb: rawVerb,
+      })
+      if (!request || !settingsWriteMatchesScope(request.verb.source, projectCwd)) {
+        return { ok: false, error: { code: 'invalid_write', message: 'Choose a valid setting and scope.' } }
+      }
+      const knownProjects = new Set([
+        ...settingsPickedProjects,
+        ...(host?.listSessions().map(row => row.cwd) ?? []),
+        ...(readSessionsCatalogCache(defaultRegistryDir())?.entries.map(row => row.cwd) ?? []),
+      ])
+      const cwd = resolveSettingsInventoryCwd(
+        projectCwd,
+        app.getPath('home'),
+        knownProjects,
+        validateCwd,
+      )
+      if (!cwd) {
+        return { ok: false, error: { code: 'invalid_project', message: 'Choose a known project.' } }
+      }
+      if (settingsWritePending >= 8) return unavailable()
+      settingsWritePending += 1
+      const generation = settingsWriteGeneration
+      const priorWrite = settingsWriteTail
+      let releaseWrite!: () => void
+      settingsWriteTail = new Promise<void>(resolve => { releaseWrite = resolve })
+      try {
+        await priorWrite
+        if (generation !== settingsWriteGeneration) return unavailable()
+        const abort = new AbortController()
+        settingsWriteRuns.add(abort)
+        try {
+          const result = await runSettingsWriteWorker({
+            command: sidecarLaunch().command,
+            args: sidecarLaunch().argsFor('settings-write'),
+            cwd,
+            request,
+            signal: abort.signal,
+            onWorkerLifecycle: createWorkerLifecycleLogger('settings-write'),
+            log: line => process.stderr.write(`${line}\n`),
+          })
+          if (abort.signal.aborted) return unavailable()
+          return result.ok
+            ? { ok: true, message: result.message }
+            : { ok: false, error: { code: 'unavailable', message: result.message } }
+        } finally {
+          settingsWriteRuns.delete(abort)
+        }
+      } catch (error) {
+        process.stderr.write(
+          `[main] durable setting write failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+        return unavailable()
+      } finally {
+        settingsWritePending -= 1
+        releaseWrite()
+      }
+    },
+  )
+
   ipcMain.on(CH_OPEN_LOGS, () => {
     void shell.openPath(operationalLog.getDirectory())
   })
@@ -3991,6 +4141,11 @@ function stopBackgroundDrivers(): void {
   accountsPoolDriver = null
   accountsPoolAbort?.abort()
   accountsPoolAbort = null
+  for (const read of settingsInventoryReads) read.abort()
+  settingsInventoryReads.clear()
+  for (const write of settingsWriteRuns) write.abort()
+  settingsWriteRuns.clear()
+  settingsWriteGeneration += 1
   accountProfileMutationAbort?.abort()
   accountProfileMutationAbort = null
   accountInvalidation.clearAll()

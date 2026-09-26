@@ -50,6 +50,8 @@ import type {
   HostResult,
   SaveTextInput,
   SaveTextResult,
+  SettingsInventoryReadResult,
+  SettingsWriteReadResult,
   SessionDescriptor,
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
@@ -92,6 +94,9 @@ import {
   CH_DELIVERY_HEALTH_RESPONSE,
   CH_REFRESH_ACCOUNTS_POOL,
   CH_REFRESH_USAGE_DASHBOARD,
+  CH_READ_SETTINGS_INVENTORY,
+  CH_WRITE_DURABLE_SETTING,
+  CH_PICK_SETTINGS_PROJECT,
   // Control plane (HC3 — fixed, per-method senders).
   CH_HOST_CREATE,
   CH_HOST_CREATE_IN_WORKSPACE,
@@ -494,6 +499,30 @@ const bridge: CatCodeBridge = {
   refreshUsageDashboard(): void {
     sendGuard.assertAllowed({ refreshUsageDashboard: true })
     ipcRenderer.send(CH_REFRESH_USAGE_DASHBOARD)
+  },
+  readSettingsInventory(projectCwd: string | null): Promise<SettingsInventoryReadResult> {
+    if (projectCwd !== null && (typeof projectCwd !== 'string' || projectCwd.length > 4096)) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'invalid_project', message: 'Choose a known project.' },
+      })
+    }
+    sendGuard.assertAllowed({ projectCwd })
+    return ipcRenderer.invoke(CH_READ_SETTINGS_INVENTORY, projectCwd) as Promise<SettingsInventoryReadResult>
+  },
+  pickSettingsProject(): Promise<{ cwd: string; name: string } | null> {
+    sendGuard.assertAllowed({ pickSettingsProject: true })
+    return ipcRenderer.invoke(CH_PICK_SETTINGS_PROJECT) as Promise<{ cwd: string; name: string } | null>
+  },
+  writeDurableSetting(projectCwd: string | null, verb: SettingsVerbMessage): Promise<SettingsWriteReadResult> {
+    if (projectCwd !== null && (typeof projectCwd !== 'string' || projectCwd.length > 4096)) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'invalid_project', message: 'Choose a known project.' },
+      })
+    }
+    sendGuard.assertAllowed({ projectCwd, verb })
+    return ipcRenderer.invoke(CH_WRITE_DURABLE_SETTING, projectCwd, verb) as Promise<SettingsWriteReadResult>
   },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })

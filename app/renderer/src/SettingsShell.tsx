@@ -1,11 +1,11 @@
 /**
  * Stable settings navigation and local scope selection. Search and the category
- * rail share settingsScope/settingsSearch metadata. A project other than the
- * focused session's still cannot be read or written through this session's
- * sidecar; selectProjectEngine and SettingsPane enforce that boundary.
+ * rail share settingsScope/settingsSearch metadata. Durable settings and memory
+ * read through the host inventory for the selected project.
  */
 
 import { useContext, useEffect, useRef, useState } from 'react'
+import type { SettingsInventoryReadResult } from '../../shared/hostApi.js'
 import type {
   AgentConfigSnapshot,
   ExtensionsSnapshot,
@@ -14,6 +14,7 @@ import type {
   RemoteSettingsSnapshot,
   RemoteVerbMessage,
   SettingsSnapshot,
+  SettingsVerbMessage,
 } from '../../shared/protocol.js'
 import type { EditableSettingPane } from '../../shared/settingsEditable.js'
 import {
@@ -35,6 +36,7 @@ import {
   isColorSchemeKey,
 } from './colorScheme.js'
 import { AgentsPage } from './AgentsPage.js'
+import { getBridge } from './bridge.js'
 import {
   CODE_THEME_KEYS,
   CODE_THEME_LABELS,
@@ -87,10 +89,8 @@ import {
   SETTINGS_NAVIGATION_GROUPS,
   selectSettingsCategory,
   selectPermissionDefaultModeRow,
-  selectProjectEngine,
   selectSettingsProjects,
   selectSettingsWriteLayer,
-  settingsNoEngineNote,
   settingsRowNote,
   type SettingsCategoryId,
   type SettingsProjectEngine,
@@ -115,15 +115,10 @@ import {
 let rememberedCategory: SettingsCategoryId | null = null
 
 export function SettingsShell({
-  snapshot,
-  agentsSnapshot,
   cwd,
-  memorySnapshot,
-  extensionsSnapshot,
   remoteSnapshot,
   remoteLastResult,
   onRemoteVerb,
-  onSettingWrite,
   projectBinding,
   projects,
   initialScope = 'user',
@@ -131,27 +126,17 @@ export function SettingsShell({
   onOpenLogs,
   onSaveDiagnostics,
 }: {
-  snapshot: SettingsSnapshot | null
-  agentsSnapshot?: AgentConfigSnapshot | null
   /** The focused session's cwd. Used ONLY as project IDENTITY — which project
-   * the picker can offer and whose files this window has actually read. It never
-   * chooses the scope (Law 2). */
+   * the picker can offer first. It never chooses the scope (Law 2). */
   cwd?: string | null
-  memorySnapshot?: MemorySnapshot | null
-  extensionsSnapshot?: ExtensionsSnapshot | null
   remoteSnapshot?: RemoteSettingsSnapshot | null
   remoteLastResult?: RemoteSettingsResultFrame | null
   onRemoteVerb?: (verb: RemoteVerbMessage) => void
-  /** Sends one editable-setting write to the sidecar. The SOURCE it carries is
-   * decided by the chosen scope (Law 3), never by where the value resolves. */
-  onSettingWrite?: (input: SettingWriteInput) => void
   /** Names the focused session's project (`settingsProjectBinding.ts`), so the
    * picker's "current" entry gets the roster-disambiguated label instead of a
    * bare basename. Optional: without it the cwd's last segment is used. */
   projectBinding?: SettingsProjectBinding
-  /** Every project the picker may offer (the merged workspace roster). Only the
-   * focused session's project can be READ or WRITTEN in v1; the rest render the
-   * honest limit. App wires this in one line when it is free to edit. */
+  /** Every known project the picker may offer (the merged workspace roster). */
   projects?: readonly SettingsProjectOption[]
   /** Initial scope remains available for direct page entry and SSR checks. */
   initialScope?: SettingsScopeKind
@@ -180,8 +165,21 @@ export function SettingsShell({
   const [projectLayer, setProjectLayer] =
     useState<SettingsProjectLayer>('projectSettings')
   const [projectCwd, setProjectCwd] = useState<string | null>(null)
+  const [pickedProjects, setPickedProjects] = useState<SettingsProjectOption[]>([])
+  const [projectPickError, setProjectPickError] = useState<string | null>(null)
+  const [inventoryUserOnly, setInventoryUserOnly] = useState(false)
+  const [inventoryRead, setInventoryRead] = useState<{
+    cwd: string | null
+    result: SettingsInventoryReadResult | null
+  } | null>(null)
+  const [writeStatus, setWriteStatus] = useState<{
+    kind: 'saving' | 'saved' | 'failed'
+    message: string
+  } | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const pageRef = useRef<HTMLDivElement>(null)
+  const inventoryReadToken = useRef(0)
+  const writeActionToken = useRef(0)
 
   const sessionOpen = typeof cwd === 'string' && cwd.trim().length > 0
   const activeCwd =
@@ -190,26 +188,17 @@ export function SettingsShell({
       : projectBinding?.bound
         ? projectBinding.cwd
         : null
-  const known =
-    projects ??
-    (projectBinding?.bound
+  const known = [
+    ...(projects ?? (projectBinding?.bound
       ? [{ cwd: projectBinding.cwd, name: projectBinding.name }]
-      : undefined)
+      : [])),
+    ...pickedProjects,
+  ]
   const projectChoices = selectSettingsProjects(known, activeCwd)
   const selectedProject =
     projectChoices.find(choice => choice.cwd === projectCwd) ??
     projectChoices[0] ??
     null
-  const engine: SettingsProjectEngine =
-    preferredEngineScope === 'project'
-      ? selectProjectEngine(selectedProject?.cwd ?? null, activeCwd)
-      : 'live'
-  const writeLayer = selectSettingsWriteLayer(preferredEngineScope, projectLayer)
-  const searching = query.trim().length > 0
-  const results = searching
-    ? selectSettingsSearchResults(query, preferredEngineScope)
-    : []
-  const currentCategory = selectSettingsCategory(category)
   const engineCategory =
     category === 'general' || category === 'model' ||
     category === 'permissions' || category === 'privacy' ||
@@ -217,6 +206,113 @@ export function SettingsShell({
   const inventoryCategory =
     category === 'agents' || category === 'skills' ||
     category === 'plugins' || category === 'mcp' || category === 'hooks'
+  const inventoryCwd = engineCategory || category === 'policy'
+    ? preferredEngineScope === 'project' ? selectedProject?.cwd ?? null : null
+    : inventoryCategory && !inventoryUserOnly ? selectedProject?.cwd ?? null : null
+  const inventoryCwdRef = useRef(inventoryCwd)
+  inventoryCwdRef.current = inventoryCwd
+  const currentInventory = inventoryRead?.cwd === inventoryCwd ? inventoryRead.result : null
+  const inventoryLoading = currentInventory === null
+  const inventoryError = currentInventory?.ok === false ? currentInventory.error.message : null
+  const inventory = currentInventory?.ok === true ? currentInventory.inventory : null
+
+  const chooseProject = (): void => {
+    setProjectPickError(null)
+    void getBridge().pickSettingsProject().then(project => {
+      if (!project) return
+      setPickedProjects(current => [
+        ...current.filter(choice => choice.cwd !== project.cwd),
+        project,
+      ])
+      setProjectCwd(project.cwd)
+      setInventoryUserOnly(false)
+    }, () => {
+      setProjectPickError('Project could not be opened.')
+    })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const token = ++inventoryReadToken.current
+    setInventoryRead({ cwd: inventoryCwd, result: null })
+    void Promise.resolve().then(() => getBridge().readSettingsInventory(inventoryCwd)).then(
+      result => {
+        if (!cancelled && token === inventoryReadToken.current) {
+          setInventoryRead({ cwd: inventoryCwd, result })
+        }
+      },
+      () => {
+        if (!cancelled && token === inventoryReadToken.current) setInventoryRead({
+          cwd: inventoryCwd,
+          result: {
+            ok: false,
+            error: {
+              code: 'unavailable',
+              message: 'Configuration could not be read.',
+            },
+          },
+        })
+      },
+    )
+    return () => { cancelled = true }
+  }, [inventoryCwd])
+  const engine: SettingsProjectEngine =
+    preferredEngineScope === 'project' && !selectedProject ? 'absent' : 'live'
+  const writeLayer = selectSettingsWriteLayer(preferredEngineScope, projectLayer)
+
+  useEffect(() => {
+    ++writeActionToken.current
+    setWriteStatus(null)
+  }, [category, inventoryCwd, writeLayer])
+
+  const searching = query.trim().length > 0
+  const results = searching
+    ? selectSettingsSearchResults(query, preferredEngineScope)
+    : []
+  const currentCategory = selectSettingsCategory(category)
+
+  const handleSettingWrite = (input: SettingWriteInput): void => {
+    const targetCwd = input.source === 'userSettings' ? null : selectedProject?.cwd ?? null
+    if (input.source !== 'userSettings' && !targetCwd) {
+      setWriteStatus({ kind: 'failed', message: 'Choose a project before saving.' })
+      return
+    }
+    const verb: SettingsVerbMessage = {
+      type: 'settings.setValue',
+      requestId: crypto.randomUUID(),
+      source: input.source,
+      key: input.key,
+      value: input.value,
+    }
+    const actionToken = ++writeActionToken.current
+    setWriteStatus({ kind: 'saving', message: 'Saving…' })
+    void (async () => {
+      let failure: string | null = null
+      try {
+        const result = await getBridge().writeDurableSetting(targetCwd, verb)
+        if (!result.ok) failure = result.error.message
+      } catch {
+        failure = 'Setting could not be saved.'
+      }
+      try {
+        const refreshed = await getBridge().readSettingsInventory(targetCwd)
+        if (inventoryCwdRef.current === targetCwd && actionToken === writeActionToken.current) {
+          ++inventoryReadToken.current
+          setInventoryRead({ cwd: targetCwd, result: refreshed })
+        }
+        if (!refreshed.ok && !failure) failure = refreshed.error.message
+      } catch {
+        if (!failure) {
+          failure = 'Setting was saved, but could not be reloaded.'
+        }
+      }
+      if (actionToken === writeActionToken.current && inventoryCwdRef.current === targetCwd) {
+        setWriteStatus(failure
+          ? { kind: 'failed', message: failure }
+          : { kind: 'saved', message: 'Saved' })
+      }
+    })()
+  }
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -394,38 +490,76 @@ export function SettingsShell({
                   ) : category === 'remote' ? (
                     <span className="text-[12px] text-text-subtle">This session</span>
                   ) : inventoryCategory ? (
-                    <span className="text-[12px] text-text-subtle">All sources</span>
+                    <span className="text-[12px] text-text-subtle">{selectedProject && !inventoryUserOnly ? selectedProject.name : 'User configuration'}</span>
                   ) : category === 'policy' ? (
                     <span className="flex items-center gap-1 text-[12px] text-text-subtle"><LockIcon className="h-3 w-3" /> Enforced</span>
                   ) : null}
                 </div>
                 <p className="mt-1 text-[13px] leading-5 text-text-muted">{currentCategory.desc}</p>
+                {writeStatus && engineCategory ? (
+                  <p
+                    className={`mt-2 text-[12px] ${writeStatus.kind === 'failed' ? 'text-tone-warn' : 'text-text-subtle'}`}
+                    role={writeStatus.kind === 'failed' ? 'alert' : 'status'}
+                  >
+                    {writeStatus.message}
+                  </p>
+                ) : null}
                 {engineCategory && preferredEngineScope === 'project' ? (
                   <ProjectScopeControls
                     choices={projectChoices}
                     layer={projectLayer}
+                    onChooseProject={chooseProject}
                     onSelectLayer={setProjectLayer}
                     onSelectProject={setProjectCwd}
                     selected={selectedProject}
                   />
                 ) : null}
+                {inventoryCategory ? (
+                  <div className="mt-2.5">
+                    <SelectControl
+                      label="Configuration for"
+                      onChange={value => {
+                        setInventoryUserOnly(value === '')
+                        if (value) setProjectCwd(value)
+                      }}
+                      optionLabels={{
+                        '': 'User configuration',
+                        ...Object.fromEntries(projectChoices.map(choice => [choice.cwd, choice.name])),
+                      }}
+                      options={['', ...projectChoices.map(choice => choice.cwd)]}
+                      value={inventoryCwd ?? ''}
+                    />
+                    <button
+                      className="ml-2 rounded-md border border-shell-seam px-2.5 py-1 text-[12px] text-text-muted hover:bg-shell-hover"
+                      onClick={chooseProject}
+                      type="button"
+                    >
+                      Choose project…
+                    </button>
+                  </div>
+                ) : null}
+                {projectPickError && (engineCategory || inventoryCategory) ? (
+                  <p className="mt-2 text-[12px] text-tone-warn" role="alert">{projectPickError}</p>
+                ) : null}
               </header>
               <ScopeBody
-                agentsSnapshot={agentsSnapshot ?? null}
+                agentsSnapshot={inventory?.agents ?? null}
                 category={category}
                 engine={engine}
-                extensionsSnapshot={extensionsSnapshot ?? null}
+                extensionsSnapshot={inventory?.extensions ?? null}
+                inventoryError={inventoryError}
+                inventoryLoading={inventoryLoading}
                 layer={writeLayer}
-                memorySnapshot={memorySnapshot ?? null}
+                memorySnapshot={inventory?.memory ?? null}
                 onOpenLogs={onOpenLogs}
                 onRemoteVerb={onRemoteVerb ?? (() => {})}
                 onSaveDiagnostics={onSaveDiagnostics}
-                onSettingWrite={onSettingWrite ?? (() => {})}
+                onSettingWrite={handleSettingWrite}
                 remoteLastResult={remoteLastResult ?? null}
                 remoteSnapshot={remoteSnapshot ?? null}
                 selectedProject={selectedProject}
                 sessionOpen={sessionOpen}
-                snapshot={snapshot}
+                snapshot={inventory?.settings ?? null}
               />
             </>
           )}
@@ -439,22 +573,24 @@ export function SettingsShell({
 function ProjectScopeControls({
   choices,
   selected,
+  onChooseProject,
   onSelectProject,
   layer,
   onSelectLayer,
 }: {
   choices: readonly { cwd: string; name: string; current: boolean }[]
   selected: { cwd: string; name: string; current: boolean } | null
+  onChooseProject: () => void
   onSelectProject: (cwd: string) => void
   layer: SettingsProjectLayer
   onSelectLayer: (layer: SettingsProjectLayer) => void
 }) {
   if (!selected) {
     return (
-      <p className="mt-2.5 text-[12px] leading-relaxed text-text-subtle">
-        No project is open, so there is none to name. Open a session in a project
-        to edit its settings files.
-      </p>
+      <div className="mt-2.5 flex items-center gap-3">
+        <p className="text-[12px] leading-relaxed text-text-subtle">Choose a project to read and edit its settings files.</p>
+        <button className="rounded-md border border-shell-seam px-2.5 py-1 text-[12px] text-text-muted hover:bg-shell-hover" onClick={onChooseProject} type="button">Choose project…</button>
+      </div>
     )
   }
   return (
@@ -472,6 +608,7 @@ function ProjectScopeControls({
           options={choices.map(choice => choice.cwd)}
           value={selected.cwd}
         />
+        <button className="rounded-md border border-shell-seam px-2.5 py-1 text-[12px] text-text-muted hover:bg-shell-hover" onClick={onChooseProject} type="button">Choose project…</button>
         <span className="truncate font-mono text-[11px] text-text-subtle">
           {selected.cwd}
         </span>
@@ -515,6 +652,8 @@ function ScopeBody({
   snapshot,
   agentsSnapshot,
   extensionsSnapshot,
+  inventoryError,
+  inventoryLoading,
   memorySnapshot,
   remoteSnapshot,
   remoteLastResult,
@@ -532,6 +671,8 @@ function ScopeBody({
   snapshot: SettingsSnapshot | null
   agentsSnapshot: AgentConfigSnapshot | null
   extensionsSnapshot: ExtensionsSnapshot | null
+  inventoryError: string | null
+  inventoryLoading: boolean
   memorySnapshot: MemorySnapshot | null
   remoteSnapshot: RemoteSettingsSnapshot | null
   remoteLastResult: RemoteSettingsResultFrame | null
@@ -541,16 +682,24 @@ function ScopeBody({
   onSaveDiagnostics?: () => void
 }) {
   const writeLayer = layer ?? 'userSettings'
-  const projectName = selectedProject?.name ?? 'this project'
   const engineCategory =
     category === 'general' || category === 'model' ||
     category === 'permissions' || category === 'privacy' ||
     category === 'memory'
+  const inventoryCategory =
+    category === 'agents' || category === 'skills' ||
+    category === 'plugins' || category === 'mcp' || category === 'hooks'
+  if ((inventoryCategory || engineCategory || category === 'policy') && inventoryLoading) {
+    return <p className="text-[13px] leading-5 text-text-muted">Loading configuration…</p>
+  }
+  if ((inventoryCategory || engineCategory || category === 'policy') && inventoryError) {
+    return <p role="alert" className="text-[13px] leading-5 text-tone-warn">{inventoryError}</p>
+  }
   if (engineCategory && engine === 'absent') {
-    return <p className="text-[13px] leading-5 text-text-muted">{settingsNoEngineNote(projectName)}</p>
+    return <p className="text-[13px] leading-5 text-text-muted">Choose a project to read and edit its settings.</p>
   }
   if (engineCategory && !snapshot) {
-    return <p className="text-[13px] leading-5 text-text-muted">{settingsUnreadNote(sessionOpen, 'Open a session to read and edit them.')}</p>
+    return <p className="text-[13px] leading-5 text-text-muted">Settings are unavailable for this scope.</p>
   }
   const settingsPane = (
     pane: EditableSettingPane,
@@ -562,7 +711,7 @@ function ScopeBody({
       engine={engine}
       keys={keys}
       layer={writeLayer}
-      noEngineNote={settingsNoEngineNote(projectName)}
+      noEngineNote="Choose a project to read and edit its settings."
       onWrite={onSettingWrite}
       pane={pane}
       sessionOpen={sessionOpen}
@@ -601,7 +750,7 @@ function ScopeBody({
       return (
         <>
           {settingsPane('memory')}
-          {engine === 'live' ? <MemoryPage snapshot={memorySnapshot} /> : null}
+          <MemoryPage snapshot={memorySnapshot} />
         </>
       )
     case 'appearance':

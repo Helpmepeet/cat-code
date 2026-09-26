@@ -1,5 +1,5 @@
 /**
- * Settings core value-editors — the renderer→engine settings WRITE path. Toggle
+ * Settings core value-editors for the durable host settings write path. Toggle
  * / select / validated-int controls bound to REAL settings keys, rebuilt in
  * TS/Tailwind from the prototype's `Settings.jsx` Sw* controls (port zero code,
  * no inline style). Every editor is driven by the canonical `EDITABLE_SETTINGS`
@@ -87,9 +87,8 @@ export type SettingWriteInput = {
 /**
  * Renders every core value-editor for one pane, in one scope.
  *
- * `layer` is the scope's write target (Law 3). `engine` is `absent` when the
- * chosen project has no running session, in which case its files were never
- * read and the pane states that instead of showing another project's values.
+ * `layer` is the scope's write target (Law 3). `engine` is `absent` when no
+ * project was selected, so the pane cannot show or write a project's values.
  */
 export function SettingsPane({
   pane,
@@ -109,7 +108,7 @@ export function SettingsPane({
   onWrite: (input: SettingWriteInput) => void
   layer: EditableSettingSource
   engine?: SettingsProjectEngine
-  /** Names the project that has no engine; falls back to a generic sentence. */
+  /** Explains an unavailable project target. */
   noEngineNote?: string
   /** Whether a session is attached, so the unread sentence can stop claiming
    * none is (`settingsReadState.ts`). */
@@ -125,10 +124,10 @@ export function SettingsPane({
   const unavailable =
     engine === 'absent'
       ? (noEngineNote ??
-        'No engine is running in this project, so its settings files have not been read.')
+        'Choose a project to read and edit its settings.')
       : snapshot
         ? null
-        : settingsUnreadNote(sessionOpen, 'Open a session to read and edit them.')
+        : settingsUnreadNote(sessionOpen)
 
   return (
     <PaneSection title={title}>
@@ -318,7 +317,7 @@ function SettingControl({
     )
   }
   if (control.kind === 'dynamic-enum') {
-    // Options are engine truth from the snapshot (captured at spawn). If the
+    // Options are engine truth from the inventory snapshot. If the
     // on-disk value is not in the live set (e.g. a style whose dir was removed)
     // still show it, so the field reflects truth. No live options ⇒ disabled.
     const available = selectAvailableOptions(snapshot, spec.key)

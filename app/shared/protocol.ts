@@ -71,6 +71,8 @@ import type {
   HostResult,
   SaveTextInput,
   SaveTextResult,
+  SettingsInventoryReadResult,
+  SettingsWriteReadResult,
   SessionDescriptor,
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
@@ -4196,6 +4198,12 @@ export type CatCodeBridge = {
    * This has no payload, starts no session, and never becomes sidecar vocabulary.
    */
   refreshUsageDashboard(): void
+  /** Read configured agents and extensions without opening a chat session. */
+  readSettingsInventory(projectCwd: string | null): Promise<SettingsInventoryReadResult>
+  /** Select a project for Settings through a native directory picker, without a chat session. */
+  pickSettingsProject(): Promise<{ cwd: string; name: string } | null>
+  /** Persist one durable setting in its chosen scope without a chat session. */
+  writeDurableSetting(projectCwd: string | null, verb: SettingsVerbMessage): Promise<SettingsWriteReadResult>
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>

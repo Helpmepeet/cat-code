@@ -92,13 +92,11 @@ export function AgentsPage({
 
       <p className="mb-4 text-[11.5px] leading-relaxed text-text-subtle">
         Definitions in <code className="font-mono text-text-muted">.cat-code/agents/*.md</code>,
-        built-ins, plugins, flags, and managed policy. Running workers belong on the
-        the worker roster and Tasks surfaces, not this config page.
+        built-ins, plugins, flags, and managed policy.
       </p>
 
-      <div className="mb-5 grid gap-2 text-[11.5px] text-text-subtle sm:grid-cols-3">
+      <div className="mb-5 grid gap-2 text-[11.5px] text-text-subtle sm:grid-cols-2">
         <SummaryCard label="Active" value={counts.active} />
-        <SummaryCard label="Unavailable" value={counts.unavailable} />
         <SummaryCard label="Overridden" value={counts.overridden} />
       </div>
 
@@ -109,7 +107,7 @@ export function AgentsPage({
       ) : null}
 
       {!snapshot ? (
-        <EmptyState title="Open a session to see its agent definitions" />
+        <EmptyState title="Agent definitions could not be read" />
       ) : snapshot.definitions.length === 0 ? (
         <EmptyState
           description="Add agent files to this workspace or your user config to see them here."
@@ -180,12 +178,7 @@ function AgentRow({
 }) {
   return (
     <button
-      className={
-        'flex w-full items-center gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors ' +
-        (definition.available
-          ? 'border-white/[0.06] bg-white/[0.015] hover:border-white/15 hover:bg-white/[0.035]'
-          : 'border-white/[0.04] bg-white/[0.01] opacity-60 hover:opacity-80')
-      }
+      className="flex w-full items-center gap-3 rounded-[10px] border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5 text-left transition-colors hover:border-white/15 hover:bg-white/[0.035]"
       onClick={() => onSelect(definition)}
       type="button"
     >
@@ -207,7 +200,6 @@ function AgentRow({
             {definition.active ? 'active' : 'inactive'}
           </Pill>
           {definition.overriddenBy ? <Pill tone="muted">overridden</Pill> : null}
-          {definition.missingMcpServers.length > 0 ? <Pill tone="warn">mcp missing</Pill> : null}
         </span>
         <span className="mb-1 block truncate text-[11.5px] text-text-subtle">
           {definition.whenToUse}
@@ -329,7 +321,6 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
     ['Provider', 'runtime-selected'],
     ['Tools', toolsLabel(definition.tools)],
     ['Active', definition.active ? 'yes' : 'no'],
-    ['Available', definition.available ? 'yes' : 'no'],
     ...(definition.effort !== undefined ? [['Effort', String(definition.effort)] as [string, string]] : []),
     ...(definition.permissionMode ? [['Permission mode', definition.permissionMode] as [string, string]] : []),
     ...(definition.maxTurns !== undefined ? [['Max turns', String(definition.maxTurns)] as [string, string]] : []),
@@ -338,9 +329,6 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
     ...(definition.isolation ? [['Isolation', definition.isolation] as [string, string]] : []),
     ...(definition.requiredMcpServers.length
       ? [['Requires MCP', definition.requiredMcpServers.join(', ')] as [string, string]]
-      : []),
-    ...(definition.missingMcpServers.length
-      ? [['Missing MCP', definition.missingMcpServers.join(', ')] as [string, string]]
       : []),
     ...(definition.skills?.length ? [['Skills', definition.skills.join(', ')] as [string, string]] : []),
     ...(definition.hasInitialPrompt ? [['Initial prompt', 'Configured'] as [string, string]] : []),

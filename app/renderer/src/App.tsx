@@ -205,7 +205,6 @@ import {
 import {
   createGoalMemoryState,
   reduceGoalMemoryState,
-  selectMemorySnapshot,
   selectThreadGoalRows,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
@@ -366,7 +365,6 @@ import {
 import type { RecallRequests } from './verbAckResultState.js'
 import { SettingsShell } from './SettingsShell.js'
 import { selectSettingsProjectBinding } from './settingsProjectBinding.js'
-import type { SettingWriteInput } from './SettingsEditors.js'
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import type {
   AccountVerbMessage,
@@ -1959,23 +1957,6 @@ export function App() {
     (verb: RemoteVerbMessage) => {
       if (!activeSessionId) return
       getBridge().remoteSettingsVerb(activeSessionId, verb)
-    },
-    [activeSessionId],
-  )
-
-  const sendSettingWrite = useCallback(
-    (input: SettingWriteInput) => {
-      if (!activeSessionId) return
-      // P4-19 — the renderer names {source,key,value}; the sidecar re-validates
-      // and applies it under the cross-process settings lock. requestId is a
-      // UX correlation field only (the sidecar bounds it structurally).
-      getBridge().settingsVerb(activeSessionId, {
-        type: 'settings.setValue',
-        requestId: crypto.randomUUID(),
-        source: input.source,
-        key: input.key,
-        value: input.value,
-      })
     },
     [activeSessionId],
   )
@@ -4396,24 +4377,18 @@ export function App() {
             </div>
           ) : null}
 
-          {/* The workspace panels are renderer-owned layout over the P3-4
-           * session-keyed stores. Each panel reads its own session slice, so visible
-           * background sessions keep rendering without becoming the active tab. */}
+          {/* Settings reads durable configuration through the host inventory;
+           * session views below continue reading their own session slices. */}
           {activeView === 'settings' ? (
             <SettingsShell
-              agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
               cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
-              extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
-              memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
               onRemoteVerb={sendRemoteSettingsVerb}
               onOpenLogs={() => getBridge().openLogsFolder()}
               onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
-              onSettingWrite={sendSettingWrite}
               remoteLastResult={remoteSettings.lastResult}
               remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
               projectBinding={settingsProjectBinding}
               projects={settingsProjects}
-              snapshot={selectSettingsSnapshot(settings, activeSessionId)}
             />
           ) : activeView === 'goals' ? (
             <GoalsPage rows={selectThreadGoalRows(goalMemory, sessionCatalogRows)} />

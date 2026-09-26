@@ -22,7 +22,6 @@ import {
   SETTINGS_APPLY_NOTE,
   SETTINGS_SCOPE_KINDS,
   selectPermissionDefaultModeRow,
-  selectProjectEngine,
   selectSettingsDestructiveChoice,
   selectSettingsDestructiveWarning,
   selectSettingsIntCommit,
@@ -987,13 +986,11 @@ describe('permission default mode, per scope', () => {
 /* ── unread wording ───────────────────────────────────────────────────────── */
 
 /**
- * A null snapshot is NOT proof that no session exists — the spawn-time read can
- * throw, the attach window has not delivered one, and a process reset clears the
- * one already held. So a running session was told "No session is open", denying
- * the tab the operator was looking at.
+ * A null snapshot cannot claim whether a session exists. A session-specific
+ * view may add context, while a durable view uses neutral wording.
  */
 describe('the unread sentence', () => {
-  test('stops claiming no session is open when one is', () => {
+  test('distinguishes a session-specific read from an unread configuration', () => {
     const attached = selectSettingsRow({
       snapshot: null,
       key: 'fastMode',
@@ -1001,16 +998,14 @@ describe('the unread sentence', () => {
       sessionOpen: true,
     })
     expect(attached.read.kind).toBe('unread')
-    expect(settingsRowNote(attached)).not.toContain('No session is open')
     expect(settingsRowNote(attached)).toBe(SETTINGS_UNREAD_WITH_SESSION_NOTE)
 
-    // With nothing attached the original sentence is correct and survives.
     const detached = selectSettingsRow({
       snapshot: null,
       key: 'fastMode',
       layer: 'userSettings',
     })
-    expect(settingsRowNote(detached)).toContain('No session is open')
+    expect(settingsRowNote(detached)).toContain('Settings files have not been read')
 
     // The whole point is that the two differ.
     expect(settingsRowNote(attached)).not.toBe(settingsRowNote(detached))
@@ -1151,13 +1146,6 @@ describe('project picker', () => {
     ).toEqual([{ cwd: '/repo', name: 'repo', current: false }])
   })
 
-  test('only the focused session’s project has an engine', () => {
-    expect(selectProjectEngine('/repo', '/repo')).toBe('live')
-    expect(selectProjectEngine('/repo/', '/repo')).toBe('live')
-    expect(selectProjectEngine('/repo', '/other')).toBe('absent')
-    expect(selectProjectEngine('/repo', null)).toBe('absent')
-    expect(selectProjectEngine(null, '/repo')).toBe('absent')
-  })
 })
 
 /* ── P4-41: what this layer may REMOVE ────────────────────────────────────── */

@@ -1,50 +1,11 @@
 /**
- * The Settings surface's SUBJECT: which configuration scope the operator chose,
- * what a row may state about that scope's files, and where a write lands.
+ * Pure Settings decisions: the selected file layer, stable category navigation,
+ * and what a snapshot can truthfully show for that layer.
  *
- * The rebuilt surface rests on three laws
- * (`docs/migration/specs/2026-07-27-settings-redesign.md` §2):
- *
- *  1. **Settings edits sources; sessions show state.** Nothing here reads a live
- *     session value. The one session-shaped input is `engine` below, and it is
- *     used only to decide whether a project's FILES have been read at all.
- *  2. **Scope is chosen, never inherited.** The page's subject is an explicit
- *     pick — My defaults / a named project / This app / Enforced. Switching
- *     session tabs never changes it. So every selector here takes the scope as
- *     an argument; none of them derives it from whoever is focused.
- *  3. **Every write names its file before it happens.** The chosen scope decides
- *     the write layer (`selectSettingsWriteLayer`), full stop. The old
- *     `targetSourceFor` — write back to whichever layer the key happens to
- *     resolve at, so editing a value with a project override silently landed in
- *     that project's file — is deleted, not softened.
- *
- * Everything in here is pure and synchronous, because the renderer suite is
- * SSR-only (`renderToStaticMarkup`): no test in this package can press a key or
- * run an effect, so the decisions that matter live in selectors a test CAN call.
- * Same idiom as `settingsProjectBinding.ts` and `settingsReadState.ts`.
- *
- * ## What this module is allowed to know
- *
- * The snapshot it reads is one session's spawn-time read: the sidecar is spawned
- * in the session's cwd, so its project/local layers are THAT session's
- * (`app/sidecar/settingsDomain.ts:16-17`). Two consequences are load-bearing and
- * are encoded, not commented around:
- *
- *  - the **user layer is session-invariant**, so My defaults reads correctly
- *    from whichever session supplied the snapshot;
- *  - a **project layer is only about the session's own cwd**, so any other
- *    project must render the honest limit (`engine: 'absent'`) rather than
- *    values borrowed from a different project. The same rule blocks the WRITE,
- *    and there it is not merely cautious: the write verb is routed to the active
- *    session's sidecar, which writes ITS cwd's project file, so a write for a
- *    different project would land in the wrong file. Scope-addressed reads and
- *    per-project routing are the `settings.refresh` work (spec §6).
- *
- * The snapshot carries per-layer KEY NAMES (`layers[].keys`) but only the
- * WINNING layer's value (`editableValues[].source`). So "my user file sets this,
- * and a higher layer currently wins" is knowable, while the user file's own
- * value in that case is NOT — that is the `unreadable` read below, and it is
- * stated as unknown instead of being papered over with the resolved value.
+ * Durable Settings inventories are read for the selected known project without
+ * an open chat. `SettingsSnapshot` still carries only the winning value for a
+ * key, even when several layers define it. An overridden layer's own value must
+ * stay unknown unless the snapshot explicitly attributes a value to that layer.
  */
 
 import type {
@@ -163,11 +124,8 @@ export function normalizeProjectCwd(cwd: string): string {
  * The picker's population: every project the app knows about, the focused
  * session's first and flagged `current`.
  *
- * `projects` is the merged workspace roster when App supplies it. Until then the
- * only project this screen can name is the focused session's own cwd, which is
- * ALSO the only project whose files this window can currently read or write
- * (see the module header) — so the shorter list is not a placeholder, it is the
- * exact set the v1 read/write path can serve.
+ * `projects` is the merged workspace roster when App supplies it. Without it,
+ * the focused session's cwd can still be offered by name.
  */
 export function selectSettingsProjects(
   projects: readonly SettingsProjectOption[] | undefined,
@@ -196,30 +154,7 @@ export function selectSettingsProjects(
   return out
 }
 
-/** Whether an engine is running IN the chosen project, i.e. whether this window
- * has read that project's settings files at all. */
 export type SettingsProjectEngine = 'live' | 'absent'
-
-/**
- * v1's honest limit, computed rather than assumed: the only project whose files
- * were read is the one the focused session's sidecar was spawned in.
- */
-export function selectProjectEngine(
-  projectCwd: string | null,
-  activeCwd: string | null,
-): SettingsProjectEngine {
-  if (!projectCwd || !activeCwd) return 'absent'
-  return normalizeProjectCwd(projectCwd) === normalizeProjectCwd(activeCwd)
-    ? 'live'
-    : 'absent'
-}
-
-export function settingsNoEngineNote(projectName: string): string {
-  return (
-    `No engine is running in ${projectName}, so its settings files have not ` +
-    'been read. Open a session in that project to see and edit them.'
-  )
-}
 
 /* ── stable category navigation ──────────────────────────────────────────── */
 
@@ -869,7 +804,7 @@ export function settingsRowAnnotationText(
     case 'unread':
       return settingsUnreadNote(annotation.sessionOpen)
     case 'no-engine':
-      return 'Not read, because no engine is running in this project'
+      return 'Choose a project to read its settings'
     case 'enforced':
       return withOrigin('Enforced by organization policy', annotation.origin)
     case 'overridden':

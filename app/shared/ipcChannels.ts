@@ -51,6 +51,9 @@ export const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
 export const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
 export const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
 export const CH_REFRESH_USAGE_DASHBOARD = 'catcode:refresh-usage-dashboard'
+export const CH_READ_SETTINGS_INVENTORY = 'catcode:read-settings-inventory'
+export const CH_WRITE_DURABLE_SETTING = 'catcode:write-durable-setting'
+export const CH_PICK_SETTINGS_PROJECT = 'catcode:pick-settings-project'
 
 // --- Control plane (HC3 — fixed, per-method structured senders). `invoke`
 // channels return a typed HostResult; `pick-directory` returns a one-time

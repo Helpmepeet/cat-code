@@ -30,5 +30,6 @@ test('a null snapshot is unread — nothing may be asserted from it', () => {
 test('the shared unread note does not promise that anything is arriving', () => {
   expect(SETTINGS_UNREAD_NOTE.toLowerCase()).not.toContain('waiting')
   expect(SETTINGS_UNREAD_NOTE.toLowerCase()).not.toContain('loading')
-  expect(SETTINGS_UNREAD_NOTE).toContain('No session is open')
+  expect(SETTINGS_UNREAD_NOTE).toContain('Settings files have not been read')
+  expect(SETTINGS_UNREAD_NOTE).not.toContain('session')
 })

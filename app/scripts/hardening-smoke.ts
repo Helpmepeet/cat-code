@@ -219,6 +219,11 @@ async function runProductionHardeningSmoke(
       // Fixed, payload-free request to main's existing single-flight analytics
       // driver. It adds no sidecar frame or renderer-authored query.
       'refreshUsageDashboard',
+      // Settings catalogs and durable writes run in bounded, project-validated
+      // workers. Neither request needs an active chat session.
+      'readSettingsInventory',
+      'pickSettingsProject',
+      'writeDurableSetting',
       // Send-now is bound to an engine-minted queued prompt id and revalidated
       // by the sidecar before it can interrupt a turn.
       'forcePrompt',

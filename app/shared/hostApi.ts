@@ -1,4 +1,5 @@
 import type { UsageCollectionResult } from './usageDashboard.js'
+import type { SettingsInventory } from './settingsInventoryWorker.js'
 /**
  * The host control-plane contract (D1 — `decisions/REGISTRY.md` §6.1; trust zone
  * — `decisions/SECURITY-MINIMUM.md` Addendum 2026-07-04, T8 / HC1–HC4).
@@ -322,6 +323,15 @@ export type SaveTextInput = {
   text: string
   suggestedName: string
 }
+
+/** Read-only, session-independent settings catalogs for a known workspace. */
+export type SettingsInventoryReadResult =
+  | { ok: true; inventory: SettingsInventory }
+  | { ok: false; error: { code: 'invalid_project' | 'unavailable'; message: string } }
+
+export type SettingsWriteReadResult =
+  | { ok: true; message: string }
+  | { ok: false; error: { code: 'invalid_project' | 'invalid_write' | 'unavailable'; message: string } }
 
 /* ------------------------------------------------------------------------- *
  * HostEvent — the row-change stream (REGISTRY.md §6.1)
