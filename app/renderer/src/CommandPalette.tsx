@@ -110,12 +110,12 @@ export function CommandPalette({
 
   return (
     <div
-      className={`fixed inset-0 ${COMMAND_PALETTE_LAYER_CLASS} flex items-start justify-center bg-scrim px-4 pt-[12vh] backdrop-blur-sm`}
+      className={`animate-scrim-in fixed inset-0 ${COMMAND_PALETTE_LAYER_CLASS} flex items-start justify-center bg-scrim px-4 pt-[12vh] backdrop-blur-sm`}
       onMouseDown={onClose}
     >
       <div
         ref={dialogRef}
-        className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-surface-raised shadow-[var(--elev-modal)]"
+        className="animate-sa-pop w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-surface-raised shadow-[var(--elev-modal)]"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"

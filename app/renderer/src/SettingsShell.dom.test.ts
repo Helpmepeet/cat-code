@@ -80,6 +80,7 @@ async function searchFor(input: HTMLInputElement, query: string): Promise<void> 
 test('a search result opens Appearance and focuses the Code theme control', async () => {
   const tree = await harness.mount(createElement(SettingsShell, { initialCategory: 'general' }))
   try {
+    expect(tree.container.querySelector('.animate-land')).toBeNull()
     const search = tree.container.querySelector<HTMLInputElement>(
       'input[aria-label="Search all settings"]',
     )
@@ -97,6 +98,11 @@ test('a search result opens Appearance and focuses the Code theme control', asyn
     )
     expect(select).not.toBeNull()
     expect(harness.document.activeElement).toBe(select)
+    const landingRows = tree.container.querySelectorAll<HTMLElement>('[data-setting-key].animate-land')
+    expect(landingRows).toHaveLength(1)
+    expect(landingRows[0]?.dataset.settingKey).toBe('codeTheme')
+    landingRows[0]?.dispatchEvent(new Event('animationend', { bubbles: true }))
+    expect(tree.container.querySelector('.animate-land')).toBeNull()
   } finally {
     const general = Array.from(tree.container.querySelectorAll<HTMLButtonElement>(
       'nav[aria-label="Settings categories"] button',

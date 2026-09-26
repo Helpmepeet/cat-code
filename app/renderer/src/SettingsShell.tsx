@@ -341,6 +341,16 @@ export function SettingsShell({
     const destination = control ?? target ?? pageRef.current?.querySelector<HTMLElement>('[data-settings-heading]')
     destination?.focus({ preventScroll: true })
     destination?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+    if (target) {
+      target.classList.remove('animate-land')
+      target.classList.add('animate-land')
+      const onLandingEnd = (event: AnimationEvent) => {
+        if (event.target !== target) return
+        target.classList.remove('animate-land')
+        target.removeEventListener('animationend', onLandingEnd)
+      }
+      target.addEventListener('animationend', onLandingEnd)
+    }
     setFocusKey(null)
   }, [category, focusKey, preferredEngineScope, searching])
 
