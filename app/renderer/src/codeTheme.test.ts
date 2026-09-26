@@ -166,29 +166,35 @@ function paletteOf(
 }
 
 describe('theme.css', () => {
-  test('reduced motion neutralizes every current renderer animation class', () => {
-    const mediaRule =
-      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*([^{}]+)\s*\{\s*([^{}]+)\s*\}\s*\}/.exec(
-        CSS,
-      )
-    expect(mediaRule).not.toBeNull()
+  test('reduced motion neutralizes animation classes and geometry or opacity transitions', () => {
+    const mediaRules = [...CSS.matchAll(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*([^{}]+)\s*\{\s*([^{}]+)\s*\}\s*\}/g,
+    )]
+    expect(mediaRules).toHaveLength(2)
 
-    const selectors = mediaRule?.[1]
+    const animationSelectors = mediaRules[0]?.[1]
       .split(',')
       .map(selector => selector.trim())
       .sort()
-    expect(selectors).toEqual(
+    expect(animationSelectors).toEqual(
       [
+        '.animate-arrive',
         '.animate-compact-absorb',
         '.animate-compact-ingest',
         '.animate-compact-star',
         '.animate-compact-sweep-left',
         '.animate-compact-sweep-right',
+        '.animate-drawer-in',
         '.animate-face-pulse',
+        '.animate-land',
         '.animate-ping',
+        '.animate-pop-up',
         '.animate-pulse',
         '.animate-sa-pop',
+        '.animate-scrim-in',
+        '.animate-settle',
         '.animate-spin',
+        '.animate-tab-in',
         '.animate-toast-in',
         '.animate-token-warn-in',
         // Arriving prose fades in; a reader who asked for less motion gets the
@@ -197,7 +203,25 @@ describe('theme.css', () => {
         '.prose-arrive-flowing',
       ].sort(),
     )
-    expect(mediaRule?.[2].trim()).toBe('animation: none !important;')
+    // The exact list pins the current contract; this discovery catches a future
+    // animation class that is added without also updating that list and media rule.
+    const definedAnimations = [...CSS.matchAll(/(\.animate-[\w-]+)\s*\{[^{}]*\banimation\s*:/g)]
+      .map(match => match[1])
+    expect(definedAnimations.every(selector => animationSelectors?.includes(selector))).toBe(true)
+    expect(mediaRules[0]?.[2].trim()).toBe('animation: none !important;')
+
+    const transitionSelectors = mediaRules[1]?.[1]
+      .split(',')
+      .map(selector => selector.trim())
+      .sort()
+    expect(transitionSelectors).toEqual([
+      '.transition',
+      '.transition-all',
+      '.transition-opacity',
+      '.transition-transform',
+      "[class*='transition-[']",
+    ].sort())
+    expect(mediaRules[1]?.[2].trim()).toBe('transition-duration: 0s !important;')
   })
 
   test('the default theme is the unscoped block, so it needs no rules of its own', () => {
