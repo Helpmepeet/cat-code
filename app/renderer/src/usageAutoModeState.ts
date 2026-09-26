@@ -20,11 +20,7 @@ export const AUTO_MODE_DISPLAY_GROUPS = [
   { group: 'cancelled', label: 'Cancelled', outcomes: ['cancelled'] },
 ] as const satisfies readonly { group: string; label: string; outcomes: readonly AutoModeUsageOutcome[] }[]
 
-export type AutoModeDisplayGroup = typeof AUTO_MODE_DISPLAY_GROUPS[number]['group']
-
-export function autoModeDisplayGroup(outcome: AutoModeUsageOutcome): AutoModeDisplayGroup {
-  return AUTO_MODE_DISPLAY_GROUPS.find(group => (group.outcomes as readonly string[]).includes(outcome))!.group
-}
+export type AutoModeDecisionGroup = 'allowed' | 'blocked'
 
 export function autoModeDisplayCounts(summary: AutoModeUsageSummary) {
   return AUTO_MODE_DISPLAY_GROUPS.map(({ group, label, outcomes }) => ({
@@ -145,8 +141,8 @@ const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['
 }
 
 export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
-  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeDisplayGroup; count: number }>()
-  const add = (from: string, to: string, count: number, outcome?: AutoModeDisplayGroup) => {
+  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeDecisionGroup; count: number }>()
+  const add = (from: string, to: string, count: number, outcome?: AutoModeDecisionGroup) => {
     const key = JSON.stringify([from, to])
     const edge = edges.get(key)
     if (edge) edge.count += count
@@ -154,8 +150,9 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   }
 
   for (const route of summary.routes) {
+    if (route.outcome !== 'allowed' && route.outcome !== 'policy_blocked') continue
     const routeNode = AUTO_MODE_OVERVIEW_ROUTES[route.route]
-    const group = autoModeDisplayGroup(route.outcome)
+    const group: AutoModeDecisionGroup = route.outcome === 'allowed' ? 'allowed' : 'blocked'
     add('Attempts', routeNode, route.count)
     add(routeNode, group, route.count, group)
   }

@@ -12,8 +12,6 @@
 .usage-auto-flow-node-attempts { fill:var(--usage-selection); }
 .usage-auto-flow-node-allowed,.usage-auto-flow-ribbon-allowed { --usage-auto-flow-color:var(--usage-success); fill:var(--usage-success); }
 .usage-auto-flow-node-blocked,.usage-auto-flow-ribbon-blocked { --usage-auto-flow-color:var(--usage-errors); fill:var(--usage-errors); }
-.usage-auto-flow-node-error,.usage-auto-flow-ribbon-error { --usage-auto-flow-color:var(--usage-violet); fill:var(--usage-violet); }
-.usage-auto-flow-node-cancelled,.usage-auto-flow-ribbon-cancelled { --usage-auto-flow-color:var(--usage-other); fill:var(--usage-other); }
 .usage-auto-flow-readout { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:18px; margin:8px 0 0; color:var(--usage-secondary); font:11px var(--font-mono); }
 .usage-auto-flow-readout p { margin:0; }
 .usage-auto-flow-readout button { color:var(--color-text-primary); text-decoration:underline; cursor:pointer; }

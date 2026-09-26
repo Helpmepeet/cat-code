@@ -367,3 +367,12 @@ chart keeps gaps where neither category was recorded, and partial history is
 identified on the prompt cache panel. The table includes the same daily rate
 and retains the separate cache share calculation that includes reported cache
 writes only when that denominator is complete.
+
+## Decision flow outcome amendment, 2026-09-26
+
+Decision flow visualizes only recorded Allowed and Blocked automatic permission
+outcomes. Route widths and percentages use this displayed population, so an
+error, cancellation, incomplete attempt, or review request cannot dilute the
+decision comparison. Other Auto mode views retain their existing outcome data.
+If the selected period has attempts but none with these two outcomes, the flow
+states that there are no allowed or blocked decisions.

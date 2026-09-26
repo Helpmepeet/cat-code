@@ -5,12 +5,12 @@ import {
   type SankeyLink,
   type SankeyNode,
 } from 'd3-sankey'
-import type { AutoModeDisplayGroup } from './usageAutoModeState.js'
+import type { AutoModeDecisionGroup } from './usageAutoModeState.js'
 
 export type UsageAutoModeFlowEdge = {
   from: string
   to: string
-  outcome?: AutoModeDisplayGroup
+  outcome?: AutoModeDecisionGroup
   count: number
 }
 
@@ -46,14 +46,12 @@ export type UsageAutoModeFlowLayout = {
   links: UsageAutoModeFlowLink[]
 }
 
-const OUTCOME_LABELS: Record<AutoModeDisplayGroup, string> = {
+const OUTCOME_LABELS: Record<AutoModeDecisionGroup, string> = {
   allowed: 'Allowed',
   blocked: 'Blocked',
-  error: 'Error',
-  cancelled: 'Cancelled',
 }
 
-const TERMINAL_NODES = new Set(['allowed', 'blocked', 'error', 'cancelled'])
+const TERMINAL_NODES = new Set(['allowed', 'blocked'])
 const ROUTE_NODES = new Set(['Base paths', 'Stage 1', 'Stage 2'])
 const TOP = 34
 const BOTTOM = 24
@@ -92,7 +90,7 @@ function compareEdges(left: UsageAutoModeFlowEdge, right: UsageAutoModeFlowEdge)
 }
 
 export function usageAutoModeFlowNodeLabel(id: string): string {
-  return OUTCOME_LABELS[id as AutoModeDisplayGroup] ?? id
+  return OUTCOME_LABELS[id as AutoModeDecisionGroup] ?? id
 }
 
 export function autoModeFlowConserves(edges: readonly UsageAutoModeFlowEdge[]): boolean {
