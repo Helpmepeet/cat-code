@@ -5,6 +5,7 @@ import type { ThreadGoal } from '../utils/threadGoal.js'
 import type { AgentId } from './ids.js'
 import type { Message } from './message.js'
 import type { QueueOperationMessage } from './messageQueueTypes.js'
+import type { SessionBinding } from '../../app/shared/sessionBinding.js'
 
 export type SessionMode = 'coordinator' | 'normal'
 export type LegacySessionMode = SessionMode | 'agent'
@@ -35,6 +36,8 @@ export type SerializedMessage = Message & {
     sessionId: string
     messageUuid: UUID
   }
+  /** Host-authored workspace identity, repeated on appended transcript lines. */
+  sessionBinding?: SessionBinding
 }
 
 export type LogOption = {
@@ -79,6 +82,8 @@ export type LogOption = {
   contentReplacements?: ContentReplacementRecord[] // Replacement decisions for resume reconstruction
   /** True when the active transcript chain carries engine-authored fork provenance. */
   forked?: boolean
+  /** Survives host registry eviction so history can recover managed identity. */
+  sessionBinding?: SessionBinding
 }
 
 export type SummaryMessage = {

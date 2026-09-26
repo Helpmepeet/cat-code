@@ -4,6 +4,25 @@ import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { FileEditTool } from '../FileEditTool/FileEditTool.js'
 import { BashTool } from './BashTool.js'
 import { getBashPrompt } from './prompt.js'
+import { setManagedSessionPolicy } from '../../utils/managedSessionPolicy.js'
+
+test('managed chat Bash guidance inspects changes without requiring Git', () => {
+  setManagedSessionPolicy({
+    workingDirectory: '/tmp/managed-bash',
+    temporaryDirectory: '/tmp/managed-bash/tmp',
+    storageRootId: '22222222-2222-4222-8222-222222222222',
+    storageId: '11111111-1111-4111-8111-111111111111',
+  })
+  try {
+    const prompt = getBashPrompt('openai')
+    expect(prompt).toContain('inspect the changed files before moving on')
+    expect(prompt).toContain('When working in a Git repository, use git diff')
+    expect(prompt).not.toContain('show the resulting git diff before moving on')
+    expect(prompt).toContain('Never skip hooks')
+  } finally {
+    setManagedSessionPolicy(null)
+  }
+})
 
 describe('Bash prompt working-directory guidance', () => {
   test('distinguishes main-session persistence from agent-thread Bash calls', () => {

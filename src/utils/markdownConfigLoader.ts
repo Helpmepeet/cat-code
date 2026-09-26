@@ -302,7 +302,10 @@ export const loadMarkdownFilesForSubdir = memoize(
     const searchStartTime = Date.now()
     const userDir = join(getClaudeConfigHomeDir(), subdir)
     const managedDir = join(getManagedFilePath(), '.cat-code', subdir)
-    const projectDirs = getProjectDirsUpToHome(subdir, cwd)
+    const projectSettingsEnabled = isSettingSourceEnabled('projectSettings')
+    const projectDirs = projectSettingsEnabled
+      ? getProjectDirsUpToHome(subdir, cwd)
+      : []
 
     // For git worktrees where the worktree does NOT have .cat-code/<subdir> checked
     // out (e.g. sparse-checkout), fall back to the main repository's copy.
@@ -317,9 +320,16 @@ export const loadMarkdownFilesForSubdir = memoize(
     //
     // projectDirs already reflects existence (getProjectDirsUpToHome checked
     // each dir), so we compare against that instead of stat'ing again.
-    const gitRoot = findGitRoot(cwd)
-    const canonicalRoot = findCanonicalGitRoot(cwd)
-    if (gitRoot && canonicalRoot && canonicalRoot !== gitRoot) {
+    const gitRoot = projectSettingsEnabled ? findGitRoot(cwd) : null
+    const canonicalRoot = projectSettingsEnabled
+      ? findCanonicalGitRoot(cwd)
+      : null
+    if (
+      projectSettingsEnabled &&
+      gitRoot &&
+      canonicalRoot &&
+      canonicalRoot !== gitRoot
+    ) {
       const worktreeSubdir = normalizePathForComparison(
         join(gitRoot, '.cat-code', subdir),
       )
@@ -355,7 +365,7 @@ export const loadMarkdownFilesForSubdir = memoize(
           )
         : Promise.resolve([]),
       // Conditionally load project files from all directories up to home
-      isSettingSourceEnabled('projectSettings') &&
+      projectSettingsEnabled &&
       !(subdir === 'agents' && isRestrictedToPluginOnly('agents'))
         ? Promise.all(
             projectDirs.map(projectDir =>

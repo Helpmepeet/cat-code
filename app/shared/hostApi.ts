@@ -31,6 +31,7 @@ import type {
   SessionId,
   SessionsCatalogSnapshot,
 } from './protocol.js'
+import type { SessionBinding } from './sessionBinding.js'
 
 /* ------------------------------------------------------------------------- *
  * Requests / responses (REGISTRY.md §6.1)
@@ -60,6 +61,10 @@ export type CreateSessionRequest = {
    * never renderer-authored and never sent as a protocol frame.
    */
   forked?: boolean
+  /** Main-owned association; omitted means an ordinary project session. */
+  binding?: SessionBinding
+  /** Host-only stable address used when rehydrating an owned history record. */
+  appSessionId?: SessionId
 }
 
 /**
@@ -83,6 +88,8 @@ export type SessionDescriptor = {
   /** null until the ready frame arrives (the two-id bridge, REGISTRY.md §2). */
   engineSessionId: string | null
   cwd: string
+  /** Explicit association. Absent only in old external fixtures; host always sets it. */
+  binding?: SessionBinding
   title: string | null
   /**
    * The session's peer NAME (PEER-SESSIONS §2), or null for a row that predates
@@ -219,6 +226,8 @@ export type HostErrorCode =
   | 'session_unreachable'
   /** Git branch inspection or a safe checkout was refused. */
   | 'branch_unavailable'
+  | 'managed_storage_missing'
+  | 'managed_storage_invalid'
 
 /** Local branches for a host-validated session workspace. */
 export type WorkspaceBranches = {
@@ -415,6 +424,9 @@ export const MAX_SESSION_TITLE_CHARS = 200
  */
 export type HostApi = {
   createSession(req: CreateSessionRequest): Promise<HostResult<SessionDescriptor>>
+  createManagedChat(): Promise<HostResult<SessionDescriptor>>
+  getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>>
+  recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   /**
    * Create a FRESH session in an existing workspace, named by a REGISTRY id (a

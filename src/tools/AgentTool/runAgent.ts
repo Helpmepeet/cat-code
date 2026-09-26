@@ -18,6 +18,8 @@ import {
 } from '../../constants/prompts.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import { getSystemContext, getUserContext } from '../../context.js'
+import { getClaudeMds, getMemoryFiles } from '../../utils/claudemd.js'
+import { isManagedSession } from '../../utils/managedSessionPolicy.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import { query } from '../../query.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
@@ -628,11 +630,18 @@ async function* runAgentInCleanupScope({
     agentDefinition.omitClaudeMd &&
     !override?.userContext &&
     getFeatureValue_CACHED_MAY_BE_STALE('tengu_slim_subagent_claudemd', true)
-  const { claudeMd: _omittedClaudeMd, ...userContextNoClaudeMd } =
-    baseUserContext
-  const resolvedUserContext = shouldOmitClaudeMd
-    ? userContextNoClaudeMd
-    : baseUserContext
+  const { claudeMd: _omittedClaudeMd, ...userContextNoClaudeMd } = baseUserContext
+  let resolvedUserContext = baseUserContext
+  if (!override?.userContext) {
+    if (isManagedSession() && baseUserContext.claudeMd) {
+      resolvedUserContext = {
+        ...baseUserContext,
+        claudeMd: getClaudeMds(await getMemoryFiles()),
+      }
+    } else if (shouldOmitClaudeMd) {
+      resolvedUserContext = userContextNoClaudeMd
+    }
+  }
 
   // Explore/Plan are read-only search agents — the parent-session-start
   // gitStatus (up to 40KB, explicitly labeled stale) is dead weight. If they

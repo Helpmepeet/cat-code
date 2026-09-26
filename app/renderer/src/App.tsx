@@ -1692,6 +1692,17 @@ export function App() {
     }
   }, [activeSessionId, focusCreatedSession])
 
+  const newManagedChat = useCallback(async () => {
+    const bridge = getBridge()
+    try {
+      const result = await bridge.createManagedChat()
+      if (result.ok) focusCreatedSession(result.value.appSessionId)
+      else setShellError(hostErrorMessage(result.error))
+    } catch (error) {
+      setShellError(errorMessage(error))
+    }
+  }, [focusCreatedSession])
+
   const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
     const bridge = getBridge()
     try {
@@ -1710,31 +1721,17 @@ export function App() {
     }
   }, [focusCreatedSession])
 
-  /**
-   * The sidebar's "New chat" (design source `components/sidebar/index.html`).
-   * The design source leaves it unwired; here a session cannot exist without a
-   * workspace, so it opens one in the workspace already on screen — no picker,
-   * no prompt — and only falls back to the picker when nothing is open. The
-   * Projects "+" is the deliberate picker path, so routing both there would give
-   * the rail two identical buttons.
-   */
+  /** Start an independent managed chat from any global New chat entry point. */
   const newChat = useCallback(async () => {
     if (newChatInFlightRef.current) return
     newChatInFlightRef.current = true
 
     try {
-      // Only a REGISTRY row can name a workspace to the host (HC1), so this asks
-      // the merged catalog rather than trusting `activeSessionId` on its own.
-      const repId = activeSessionRow?.appSessionId ?? null
-      if (repId) {
-        await newSessionInWorkspace(repId)
-        return
-      }
-      await newSession()
+      await newManagedChat()
     } finally {
       newChatInFlightRef.current = false
     }
-  }, [activeSessionRow, newSession, newSessionInWorkspace])
+  }, [newManagedChat])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -4184,6 +4181,19 @@ export function App() {
                           targetId,
                           targetRow.peerWakeBlocked !== true,
                         )
+                      else if (kind === 'open-chat-folder') {
+                        void getBridge().openSessionFolder(targetId).then(result => {
+                          if (!result.ok) toast(hostErrorMessage(result.error), { tone: 'warn' })
+                        }).catch(() => toast('Could not open this chat folder.', { tone: 'warn' }))
+                      } else if (kind === 'copy-chat-folder-path') {
+                        void getBridge().copySessionFolderPath(targetId).then(result => {
+                          if (!result.ok) {
+                            toast(hostErrorMessage(result.error), { tone: 'warn' })
+                            return
+                          }
+                          toast('Chat folder path copied to clipboard', { tone: 'success' })
+                        }).catch(() => toast('Could not copy this chat folder path.', { tone: 'warn' }))
+                      }
                       // P4-29 — was a bare `selectTab`, which merely re-focused a
                       // stale pane for the very rows whose menu says "Restore".
                       else if (kind === 'open') openCatalogRow(targetRow)
@@ -4535,6 +4545,7 @@ export function App() {
               accountsUsagePending={accountsUsagePending}
               onOpenRecent={openRecentWorkspace}
               onOpenFolder={() => void newSession()}
+              onNewChat={() => void newChat()}
               rosterFailure={
                 rosterBootstrap.status === 'failure'
                   ? {

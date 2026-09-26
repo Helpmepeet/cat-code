@@ -33,6 +33,8 @@ import {
 } from './contextBreakdownDomain.js'
 import { getCommands, isHeadlessSafeCommand, type Command } from '../../src/commands.js'
 import type { SlashCatalogEntry } from '../shared/protocol.js'
+import type { SessionBinding } from '../shared/sessionBinding.js'
+import { getManagedSessionPolicy } from '../../src/utils/managedSessionPolicy.js'
 import {
   getAgentDefinitionsWithOverrides,
   type AgentDefinitionsResult,
@@ -341,12 +343,14 @@ export async function createNormalSidecarQueryEngineConfig(
   initialMessages?: readonly Message[],
   {
     appSessionId,
+    binding = { kind: 'project' },
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
   }: {
     /** Trusted app-session identity used to filter peer restoration state. */
     appSessionId?: string
+    binding?: SessionBinding
     /** One startup snapshot shared with resume, never a second disk read. */
     agentDefinitions?: AgentDefinitionsResult
     /** Registers sidecar shutdown ownership before asynchronous MCP setup. */
@@ -394,10 +398,14 @@ export async function createNormalSidecarQueryEngineConfig(
   // every other tool does.
   const tools = [
     ...getTools(appStateStore.getState().toolPermissionContext),
-    createListPeersTool(),
-    createCreatePeerTool(),
-    createSendToPeerTool(),
-    createReadPeerTool(),
+    ...(binding.kind === 'managed'
+      ? []
+      : [
+          createListPeersTool(),
+          createCreatePeerTool(),
+          createSendToPeerTool(),
+          createReadPeerTool(),
+        ]),
   ]
 
   // Load the REAL command catalog for this cwd, mirroring the non-interactive
@@ -503,8 +511,12 @@ export async function createNormalSidecarQueryEngineConfig(
         readFileCache: createFileStateCacheWithSizeLimit(
           READ_FILE_STATE_CACHE_SIZE,
         ),
-        appendSystemPrompt: buildDesktopSystemPrompt(),
-        ...(appSessionId
+        appendSystemPrompt: buildDesktopSystemPrompt(
+          undefined,
+          binding.kind === 'managed' ? cwd : undefined,
+          getManagedSessionPolicy()?.sharedFilesNotice === true,
+        ),
+        ...(appSessionId && binding.kind !== 'managed'
           ? {
               getPostCompactRuntimeAttachments: createPeerCompactContext({
                 appSessionId,
@@ -653,6 +665,7 @@ export async function createSidecarSessionController({
   probe,
   cwd,
   appSessionId,
+  binding = { kind: 'project' },
   initialMessages,
   agentDefinitions: suppliedAgentDefinitions,
   onMcpLifecycleCreated,
@@ -663,6 +676,8 @@ export async function createSidecarSessionController({
   cwd: string
   /** Trusted app-session identity, supplied by the sidecar entrypoint. */
   appSessionId?: string
+  /** Validated host binding; legacy launches retain project behavior. */
+  binding?: SessionBinding
   /**
    * The resumed transcript from `resumeEngineSession` (F1): seeds the
    * QueryEngine's turn context so a restored session actually operates on its
@@ -739,6 +754,7 @@ export async function createSidecarSessionController({
     tools,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
     appSessionId,
+    binding,
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
@@ -774,7 +790,9 @@ export async function createSidecarSessionController({
         if (!result.ok) throw new Error(result.message)
       },
     }),
-    workspaceTrust: await createSidecarWorkspaceTrustDomain(cwd),
+    workspaceTrust: await createSidecarWorkspaceTrustDomain(cwd, {
+      managed: binding.kind === 'managed',
+    }),
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),

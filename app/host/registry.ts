@@ -42,6 +42,8 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import type { SessionBinding } from '../shared/sessionBinding.js'
+import { isSessionBinding } from '../shared/sessionBinding.js'
 
 /* ------------------------------------------------------------------------- *
  * Schema (§3, registryVersion 1)
@@ -124,6 +126,8 @@ export type RegistrySession = {
   engineSessionId: string | null
   /** [D] session root — spawn input, not an engine echo. */
   cwd: string
+  /** [D] workspace association, independent from the real cwd. */
+  binding: SessionBinding
   /** [D] optional app-owned display name. */
   title?: string
   /** [D] trusted desktop branch provenance. */
@@ -808,6 +812,7 @@ export class SessionRegistry {
   async upsertOnSpawn(input: {
     appSessionId: string
     cwd: string
+    binding?: SessionBinding
     title?: string
     /** The id this spawn resumes, when it is a resume. New rows only: an
      * existing row already carries the id (restore/restart both require it). */
@@ -835,6 +840,12 @@ export class SessionRegistry {
     const existing = this.find(input.appSessionId)
     if (existing) {
       existing.cwd = input.cwd
+      if (input.binding !== undefined) existing.binding = input.binding
+      if (existing.binding.kind === 'managed') {
+        delete existing.name
+        delete existing.createdBy
+        delete existing.createdByName
+      }
       if (input.title !== undefined) {
         // Stamp ONLY a real change of intent: restore feeds the row's own title
         // straight back in (`host.ts:332`), and re-stamping that would make an
@@ -868,6 +879,7 @@ export class SessionRegistry {
         appSessionId: input.appSessionId,
         engineSessionId: input.engineSessionId ?? null,
         cwd: input.cwd,
+        binding: input.binding ?? { kind: 'project' },
         ...(input.title !== undefined
           ? { title: input.title, titleUpdatedAt: now }
           : {}),
@@ -892,6 +904,49 @@ export class SessionRegistry {
     }
     await this.persist()
     return reaped
+  }
+
+  async updateCwd(appSessionId: string, cwd: string): Promise<void> {
+    const row = this.find(appSessionId)
+    if (!row) return
+    row.cwd = cwd
+    await this.persist()
+  }
+
+  async registerManagedHistorySession(input: {
+    appSessionId: string
+    engineSessionId: string
+    cwd: string
+    binding: Extract<SessionBinding, { kind: 'managed' }>
+    title?: string
+    forked?: boolean
+  }): Promise<void> {
+    const existing = this.find(input.appSessionId)
+    if (existing) {
+      if (existing.binding.kind !== 'managed' || existing.binding.storageId !== input.binding.storageId || existing.binding.storageRootId !== input.binding.storageRootId) {
+        throw new Error('managed history identity conflict')
+      }
+      existing.engineSessionId = input.engineSessionId
+      existing.cwd = input.cwd
+      existing.shutdown = 'clean'
+      if (input.title !== undefined) existing.title = input.title
+    } else {
+      const now = Date.now()
+      this.doc.sessions.push({
+        appSessionId: input.appSessionId,
+        engineSessionId: input.engineSessionId,
+        cwd: input.cwd,
+        binding: input.binding,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        forked: input.forked === true,
+        createdAt: now,
+        lastAttachedAt: now,
+        lastMessageSentAt: null,
+        shutdown: 'clean',
+      })
+      this.enforceBound()
+    }
+    await this.persist()
   }
 
   /**
@@ -929,6 +984,7 @@ export class SessionRegistry {
     const cutoff = Date.now() - NAME_REPAIR_WINDOW_MS
     const named: string[] = []
     for (const row of this.doc.sessions) {
+      if (row.binding.kind === 'managed') continue
       if (row.name !== undefined) continue
       if (row.lastAttachedAt < cutoff) continue
       row.name = allocate()
@@ -1362,6 +1418,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.appSessionId === right.appSessionId &&
     left.engineSessionId === right.engineSessionId &&
     left.cwd === right.cwd &&
+    JSON.stringify(left.binding) === JSON.stringify(right.binding) &&
     left.title === right.title &&
     left.forked === right.forked &&
     left.name === right.name &&
@@ -1395,6 +1452,9 @@ function mergeRegistryRow(
   // from its baseline, preserve a concurrent writer's newer trusted value.
   const forked =
     baseline && local.forked === baseline.forked ? latest.forked : local.forked
+  const binding = baseline && JSON.stringify(local.binding) === JSON.stringify(baseline.binding)
+    ? latest.binding
+    : local.binding
   // The three peer fields are durable identity/intent, not runtime hints, so they
   // follow the `forked` rule: a writer that did not change a field from its own
   // baseline must not roll back a concurrent writer's newer value. That is what
@@ -1419,6 +1479,7 @@ function mergeRegistryRow(
     appSessionId: local.appSessionId,
     engineSessionId: runtime.engineSessionId,
     cwd: runtime.cwd,
+    binding,
     ...(titleSource.title !== undefined ? { title: titleSource.title } : {}),
     ...(titleSource.titleUpdatedAt !== undefined
       ? { titleUpdatedAt: titleSource.titleUpdatedAt }
@@ -1482,6 +1543,7 @@ function validateRow(candidate: unknown): RegistrySession | null {
     return null
   }
   if (typeof candidate.cwd !== 'string' || candidate.cwd.length === 0) return null
+  if (candidate.binding !== undefined && !isSessionBinding(candidate.binding)) return null
 
   const engineSessionId =
     typeof candidate.engineSessionId === 'string' ? candidate.engineSessionId : null
@@ -1491,6 +1553,7 @@ function validateRow(candidate: unknown): RegistrySession | null {
     appSessionId: candidate.appSessionId,
     engineSessionId,
     cwd: candidate.cwd,
+    binding: candidate.binding === undefined ? { kind: 'project' } : candidate.binding,
     // Additive migration: rows written before branch provenance existed are
     // ordinary sessions.
     forked: candidate.forked === true,

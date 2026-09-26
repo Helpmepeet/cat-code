@@ -99,6 +99,11 @@ import {
   CH_PICK_SETTINGS_PROJECT,
   // Control plane (HC3 — fixed, per-method senders).
   CH_HOST_CREATE,
+  CH_HOST_CREATE_MANAGED,
+  CH_HOST_FOLDER_STATE,
+  CH_HOST_FOLDER_RECREATE,
+  CH_HOST_FOLDER_OPEN,
+  CH_HOST_FOLDER_COPY,
   CH_HOST_CREATE_IN_WORKSPACE,
   CH_HOST_LIST_BRANCHES,
   CH_HOST_SWITCH_BRANCH,
@@ -573,6 +578,26 @@ const bridge: CatCodeBridge = {
     return ipcRenderer.invoke(CH_HOST_CREATE, input) as Promise<
       HostResult<SessionDescriptor>
     >
+  },
+  createManagedChat(): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ createManagedChat: true })
+    return ipcRenderer.invoke(CH_HOST_CREATE_MANAGED) as Promise<HostResult<SessionDescriptor>>
+  },
+  getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_STATE, appSessionId) as Promise<HostResult<'available' | 'missing'>>
+  },
+  recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_RECREATE, appSessionId) as Promise<HostResult<SessionDescriptor>>
+  },
+  openSessionFolder(appSessionId: SessionId): Promise<HostResult<void>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_OPEN, appSessionId) as Promise<HostResult<void>>
+  },
+  copySessionFolderPath(appSessionId: SessionId): Promise<HostResult<void>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_COPY, appSessionId) as Promise<HostResult<void>>
   },
   restoreSession(
     appSessionId: SessionId,

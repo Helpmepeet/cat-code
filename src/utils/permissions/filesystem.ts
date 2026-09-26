@@ -22,6 +22,7 @@ import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { getCwd } from '../cwd.js'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
+import { isManagedSession } from '../managedSessionPolicy.js'
 import {
   getFsImplementation,
   getPathsForPermissionCheck,
@@ -320,7 +321,10 @@ function isProjectDirPath(absolutePath: string): boolean {
  * Controlled by the tengu_scratch Statsig gate.
  */
 export function isScratchpadEnabled(): boolean {
-  return checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_scratch')
+  return (
+    !isManagedSession() &&
+    checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_scratch')
+  )
 }
 
 /**

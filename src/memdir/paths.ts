@@ -13,6 +13,7 @@ import {
 } from '../utils/envUtils.js'
 import { findCanonicalGitRoot } from '../utils/git.js'
 import { sanitizePath } from '../utils/path.js'
+import { getManagedSessionPolicy } from '../utils/managedSessionPolicy.js'
 import {
   getInitialSettings,
   getSettingsForSource,
@@ -177,10 +178,11 @@ function getAutoMemPathOverride(): string | undefined {
  * the same pattern as hasSkipDangerousModePermissionPrompt() etc.
  */
 function getAutoMemPathSetting(): string | undefined {
+  const managed = getManagedSessionPolicy() !== null
   const dir =
     getSettingsForSource('policySettings')?.autoMemoryDirectory ??
     getSettingsForSource('flagSettings')?.autoMemoryDirectory ??
-    getSettingsForSource('localSettings')?.autoMemoryDirectory ??
+    (!managed ? getSettingsForSource('localSettings')?.autoMemoryDirectory : undefined) ??
     getSettingsForSource('userSettings')?.autoMemoryDirectory
   return validateMemoryPath(dir, true)
 }
@@ -226,12 +228,28 @@ export const getAutoMemPath = memoize(
     if (override) {
       return override
     }
+    const managedPolicy = getManagedSessionPolicy()
+    if (managedPolicy) {
+      return (
+        join(
+          getMemoryBaseDir(),
+          'chat-memory',
+          sanitizePath(managedPolicy.storageRootId),
+          sanitizePath(managedPolicy.storageId),
+        ) + sep
+      ).normalize('NFC')
+    }
     const projectsDir = join(getMemoryBaseDir(), 'projects')
     return (
       join(projectsDir, sanitizePath(getAutoMemBase()), AUTO_MEM_DIRNAME) + sep
     ).normalize('NFC')
   },
-  () => getProjectRoot(),
+  () => {
+    const managedPolicy = getManagedSessionPolicy()
+    return managedPolicy
+      ? `${managedPolicy.storageRootId}:${managedPolicy.storageId}`
+      : getProjectRoot()
+  },
 )
 
 /**

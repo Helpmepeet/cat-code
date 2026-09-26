@@ -233,6 +233,7 @@ import { isAgentSwarmsEnabled } from './agentSwarmsEnabled.js'
 import { findRelevantMemories } from '../memdir/findRelevantMemories.js'
 import { memoryAge, memoryFreshnessText } from '../memdir/memoryAge.js'
 import { getAutoMemPath, isAutoMemoryEnabled } from '../memdir/paths.js'
+import { isManagedSession } from './managedSessionPolicy.js'
 import { getAgentMemoryDir } from '../tools/AgentTool/agentMemory.js'
 import {
   acknowledgeMailboxMessages,
@@ -1866,6 +1867,12 @@ async function getNestedMemoryAttachmentsForFile(
     attachments.push(
       ...memoryFilesToAttachments(managedUserRules, toolUseContext, filePath),
     )
+
+    // Managed chats may open external files as task data, but that read does
+    // not implicitly activate the file's repository instructions.
+    if (isManagedSession()) {
+      return attachments
+    }
 
     // Phase 2: Get directories to process
     const { nestedDirs, cwdLevelDirs } = getDirectoriesToProcess(

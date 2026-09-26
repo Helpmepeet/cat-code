@@ -229,9 +229,9 @@ export type MergedRowVisual = {
  * Fold a merged row into its sidebar visual + click intent. Registry rows reuse
  * the shared `sessionStatusVisual` vocabulary (live/starting/crashed/closed/
  * disconnected), so every surface reads live/restorable state identically. A
- * history row paints a subdued `history` chip and is
- * openable ONLY when it carries a resolvable cwd — an empty-cwd row degrades to
- * a non-interactive `none` intent (browse-only), never a dead-looking button.
+ * history row paints a subdued `history` chip. Project history is openable ONLY
+ * when it carries a resolvable cwd — an
+ * empty-cwd row degrades to a non-interactive `none` intent (browse-only).
  */
 export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
   const { tone, label } = sessionStatusVisual(
@@ -241,13 +241,17 @@ export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
     row.parked,
   )
   if (!row.inRegistry) {
-    // A resolvable, still-EXISTING cwd makes a history row openable (Part-A host
-    // path). An empty-cwd row degrades to a non-interactive `none` intent
+    // A resolvable, still-existing project cwd makes a history row openable
+    // (Part-A host path). An empty-cwd row degrades to a non-interactive `none` intent
     // (browse-only); a dead-cwd row (workspace gone from disk — bug-sweep #1) is
     // likewise non-openable, so it never presents a button that fails
     // `invalid_cwd` only on click. (`isSidebarVisibleRow` also hides it from the
-    // rail; the Sessions page still lists it as browse-only.)
-    const openable = row.cwd.trim().length > 0 && row.cwdExists
+    // rail; the Sessions page still lists it as browse-only. Managed history is
+    // an exception: its binding can rehydrate the cached transcript even while
+    // storage is missing, after which the pane offers explicit recreation.)
+    const openable =
+      row.cwd.trim().length > 0 &&
+      (row.cwdExists || row.binding?.kind === 'managed')
     return {
       kind: 'history',
       tone,
@@ -285,6 +289,7 @@ export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
  */
 export function isSidebarVisibleRow(row: MergedSessionRow): boolean {
   if (row.inRegistry) return true
+  if (row.binding?.kind === 'managed') return true
   if (row.cwd.trim().length === 0) return true
   return row.cwdExists
 }

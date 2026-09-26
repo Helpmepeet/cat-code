@@ -653,7 +653,12 @@ export const getSkillDirCommands = memoize(
         ? []
         : [claudeCompatibilitySkillsDir]
     const managedSkillsDir = join(getManagedFilePath(), '.cat-code', 'skills')
-    const projectSkillsDirs = getProjectDirsUpToHome('skills', cwd)
+    const skillsLocked = isRestrictedToPluginOnly('skills')
+    const projectSettingsEnabled =
+      isSettingSourceEnabled('projectSettings') && !skillsLocked
+    const projectSkillsDirs = projectSettingsEnabled
+      ? getProjectDirsUpToHome('skills', cwd)
+      : []
 
     logForDebugging(
       `Loading skills from: managed=${managedSkillsDir}, user=${userSkillsDir}, compatibility=[${compatibilityUserSkillsDirs.join(', ')}], project=[${projectSkillsDirs.join(', ')}]`,
@@ -661,9 +666,6 @@ export const getSkillDirCommands = memoize(
 
     // Load from additional directories (--add-dir)
     const additionalDirs = getAdditionalDirectoriesForClaudeMd()
-    const skillsLocked = isRestrictedToPluginOnly('skills')
-    const projectSettingsEnabled =
-      isSettingSourceEnabled('projectSettings') && !skillsLocked
 
     // --bare: skip auto-discovery (managed/user/project dir walks + legacy
     // commands-dir). Load ONLY explicit --add-dir paths. Bundled skills

@@ -334,6 +334,7 @@ export const TranscriptView = memo(function TranscriptView({
   accounts,
   accountsUsagePending = false,
   cwd,
+  managedChat,
   branch,
   onListBranches,
   onSwitchBranch,
@@ -359,6 +360,7 @@ export const TranscriptView = memo(function TranscriptView({
   /** Presentation-only account usage loading state from the app shell. */
   accountsUsagePending?: boolean
   cwd?: string | null
+  managedChat?: boolean
   branch?: string | null
   onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
   onSwitchBranch?: (branch: string) => Promise<string | null>
@@ -408,6 +410,7 @@ export const TranscriptView = memo(function TranscriptView({
       accounts={accounts ?? null}
       accountsUsagePending={accountsUsagePending}
       cwd={cwd ?? null}
+      managedChat={managedChat ?? false}
       branch={branch ?? null}
       onListBranches={onListBranches}
       onSwitchBranch={onSwitchBranch}
@@ -433,6 +436,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   accounts = null,
   accountsUsagePending = false,
   cwd = null,
+  managedChat = false,
   branch = null,
   onListBranches,
   onSwitchBranch,
@@ -458,6 +462,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   accounts?: AccountsSnapshot | null
   accountsUsagePending?: boolean
   cwd?: string | null
+  managedChat?: boolean
   branch?: string | null
   onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
   onSwitchBranch?: (branch: string) => Promise<string | null>
@@ -550,6 +555,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         <WelcomeScreen
           variant="session"
           cwd={cwd}
+          managedChat={managedChat}
           branch={branch}
           onListBranches={onListBranches}
           onSwitchBranch={onSwitchBranch}

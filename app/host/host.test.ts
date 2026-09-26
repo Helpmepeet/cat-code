@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -26,6 +27,7 @@ import { randomUUID } from 'node:crypto'
 import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
 import { Host, type CwdValidation } from './host.js'
+import { ManagedStorage } from './managedStorage.js'
 import type { SessionId } from '../shared/protocol.js'
 import type {
   SidecarStatus,
@@ -357,6 +359,7 @@ function makeHost(
   overrides: {
     validateCwd?: (cwd: string) => CwdValidation
     registry?: SessionRegistry
+    managedStorage?: ManagedStorage
   } = {},
 ): Harness {
   const storageDir = tempDir()
@@ -386,6 +389,7 @@ function makeHost(
   const host = new Host({
     supervisor: supervisor as never,
     registry,
+    managedStorage: overrides.managedStorage,
     validateCwd:
       overrides.validateCwd ??
       ((c: string): CwdValidation =>
@@ -431,6 +435,67 @@ test('createSession spawns, persists a live row, and emits session-added', async
   expect(spawned?.resumeEngineSessionId).toBeUndefined()
 
   expect(h.events.some(e => e.type === 'session-added')).toBe(true)
+})
+
+test('managed chats keep separate folders and can rehydrate identity after registry eviction', async () => {
+  const storageRoot = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(storageRoot, 'user-data'),
+    ownershipDir: join(storageRoot, 'config', 'chat-workspaces'),
+  })
+  const validateCwd = (cwd: string): CwdValidation =>
+    existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false }
+  const h = makeHost({ managedStorage, validateCwd })
+  const first = await h.host.createManagedChat()
+  const second = await h.host.createManagedChat()
+  expect(first.ok && second.ok).toBe(true)
+  if (!first.ok || !second.ok) return
+  expect(first.value.cwd).not.toBe(second.value.cwd)
+  expect(first.value.binding?.kind).toBe('managed')
+  expect(h.registry.findSession(first.value.appSessionId)?.binding).toEqual(first.value.binding)
+  expect(h.supervisor.records.get(first.value.appSessionId)?.name).toBeUndefined()
+  writeFileSync(join(first.value.cwd, 'report.md'), 'first')
+  writeFileSync(join(second.value.cwd, 'report.md'), 'second')
+  expect(readFileSync(join(first.value.cwd, 'report.md'), 'utf8')).toBe('first')
+  expect(readFileSync(join(second.value.cwd, 'report.md'), 'utf8')).toBe('second')
+
+  const engineId = randomUUID()
+  h.supervisor.emitReady(first.value.appSessionId, engineId)
+  await settle(() => h.registry.findSession(first.value.appSessionId)?.engineSessionId === engineId)
+  expect(managedStorage.findByEngineSession(engineId)?.appSessionId).toBe(first.value.appSessionId)
+  await h.host.closeSession(first.value.appSessionId)
+
+  // A fresh registry models eviction: the host-owned ledger still establishes
+  // the app id, storage binding, and original files for catalog-only history.
+  const freshDir = tempDir()
+  const freshRegistry = new SessionRegistry({
+    storageDir: freshDir,
+    transcriptPathFor: (_cwd, id) => join(freshDir, 'transcripts', `${id}.jsonl`),
+  })
+  writeTranscript(freshDir, engineId)
+  const freshHost = new Host({
+    supervisor: new FakeSupervisor() as never,
+    registry: freshRegistry,
+    managedStorage,
+    validateCwd,
+  })
+  const adopted = await freshHost.adoptManagedHistorySession(engineId)
+  expect(adopted.ok).toBe(true)
+  if (!adopted.ok) return
+  expect(adopted.value.appSessionId).toBe(first.value.appSessionId)
+  expect(adopted.value.cwd).toBe(first.value.cwd)
+  expect(adopted.value.binding).toEqual(first.value.binding)
+  expect(freshHost.canPreview(first.value.appSessionId)).toBe(true)
+
+  rmSync(first.value.cwd, { recursive: true, force: true })
+  expect(await freshHost.getSessionFolderState(first.value.appSessionId)).toEqual({ ok: true, value: 'missing' })
+  expect(freshHost.canPreview(first.value.appSessionId)).toBe(true)
+  const refused = await freshHost.restoreSession(first.value.appSessionId)
+  expect(refused.ok ? null : refused.error.code).toBe('managed_storage_missing')
+  const recreated = await freshHost.recreateManagedChatFolder(first.value.appSessionId)
+  expect(recreated.ok).toBe(true)
+  expect(existsSync(join(first.value.cwd, 'tmp'))).toBe(true)
+  expect(existsSync(join(first.value.cwd, 'report.md'))).toBe(false)
 })
 
 // Opening a session from history is a `createSession` with a resume target and a

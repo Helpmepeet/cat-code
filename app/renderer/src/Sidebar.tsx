@@ -178,6 +178,7 @@ import {
 } from './viewPreference.js'
 import {
   groupByWorkspace,
+  selectManagedChatRows,
   type MergedSessionRow,
   type WorkspaceGroup,
 } from './sessionsCatalogState.js'
@@ -559,7 +560,7 @@ export function Sidebar({
   const matchesQuery = (row: MergedSessionRow) =>
     !query ||
     row.displayLabel.toLowerCase().includes(query) ||
-    row.cwd.toLowerCase().includes(query)
+    (row.binding?.kind !== 'managed' && row.cwd.toLowerCase().includes(query))
 
   // A pinned session is LIFTED into its own section, never duplicated inside its
   // project group (the design source's `visibleRows`).
@@ -570,6 +571,12 @@ export function Sidebar({
   const groupRows = useMemo(
     () => selectUnpinnedRows(railRows, pinnedSessions),
     [railRows, pinnedSessions],
+  )
+  const managedRows = useMemo(
+    () => selectManagedChatRows(groupRows).filter(row =>
+      !query || row.displayLabel.toLowerCase().includes(query),
+    ),
+    [groupRows, query],
   )
 
   // ➕ The operator's custom WORKSPACE order is applied HERE, on the sidebar side
@@ -947,6 +954,28 @@ export function Sidebar({
                             )
                           : null
                       }
+                      {...rowProps}
+                    />
+                  ))}
+                </section>
+              ) : null}
+
+              {managedRows.length > 0 ? (
+                <section className="mb-2.5">
+                  <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+                      Chats
+                    </span>
+                  </div>
+                  {managedRows.map(row => (
+                    <SidebarRowItem
+                      key={row.sessionId}
+                      row={row}
+                      isActive={row.appSessionId != null && row.appSessionId === activeSessionId}
+                      rowRef={element => {
+                        if (element) rowRefs.current.set(row.sessionId, element)
+                        else rowRefs.current.delete(row.sessionId)
+                      }}
                       {...rowProps}
                     />
                   ))}
@@ -1678,7 +1707,7 @@ export function SidebarRowItem({
       aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
       title={
         openable
-          ? `${row.cwd || title}${
+          ? `${row.binding?.kind === 'managed' ? title : row.cwd || title}${
               visual.kind === 'restorable'
                 ? ' · restore'
                 : visual.kind === 'history'

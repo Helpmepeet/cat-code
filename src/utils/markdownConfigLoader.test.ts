@@ -7,6 +7,7 @@ import {
   setAllowedSettingSources,
 } from '../bootstrap/state.js'
 import { loadMarkdownFilesForSubdir } from './markdownConfigLoader.js'
+import { setManagedSessionPolicy } from './managedSessionPolicy.js'
 import * as ripgrep from './ripgrep.js'
 import { getManagedFilePath } from './settings/managedPath.js'
 import { resetSettingsCache } from './settings/settingsCache.js'
@@ -27,6 +28,7 @@ afterEach(() => {
     else process.env[name] = value
   }
   setAllowedSettingSources(originalSources)
+  setManagedSessionPolicy(null)
   getManagedFilePath.cache.clear?.()
   loadMarkdownFilesForSubdir.cache.clear?.()
   resetSettingsCache()
@@ -66,6 +68,34 @@ test('missing optional scopes do not discard a project agent discovered by ripgr
     frontmatter: { name: 'reviewer', description: 'Review code' },
     content: 'Review it.\n',
   })
+})
+
+test('managed sessions keep user agents and exclude agents under their working directory', async () => {
+  const { cwd, directory } = createFixture()
+  const projectAgentsDir = join(cwd, '.cat-code', 'agents')
+  const userAgentsDir = join(directory, 'missing-user-config', 'agents')
+  mkdirSync(projectAgentsDir, { recursive: true })
+  mkdirSync(userAgentsDir, { recursive: true })
+  writeFileSync(
+    join(projectAgentsDir, 'project.md'),
+    '---\nname: project-agent\ndescription: Project agent\n---\nProject instructions.\n',
+  )
+  writeFileSync(
+    join(userAgentsDir, 'global.md'),
+    '---\nname: global-agent\ndescription: Global agent\n---\nGlobal instructions.\n',
+  )
+  setManagedSessionPolicy({
+    workingDirectory: cwd,
+    temporaryDirectory: join(cwd, 'tmp'),
+    storageRootId: '16fe164c-1b0f-494e-a9ad-6fd4e8d4f071',
+    storageId: 'f54a27bd-b16b-4a96-b39b-3748c8f98344',
+  })
+  loadMarkdownFilesForSubdir.cache.clear?.()
+
+  const files = await loadMarkdownFilesForSubdir('agents', cwd)
+
+  expect(files.map(file => file.frontmatter['name'])).toContain('global-agent')
+  expect(files.map(file => file.frontmatter['name'])).not.toContain('project-agent')
 })
 
 test('an installation with no optional markdown directories loads an empty catalog', async () => {

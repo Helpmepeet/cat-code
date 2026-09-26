@@ -33,6 +33,8 @@ import type {
   SupervisorEvent,
 } from '../supervisor/supervisor.js'
 import type { SessionId } from '../shared/protocol.js'
+import type { SessionBinding } from '../shared/sessionBinding.js'
+import { ManagedStorage } from './managedStorage.js'
 import {
   PARKED_EXIT_CODE,
   RESUME_BUSY_EXIT_CODE,
@@ -111,6 +113,8 @@ export type HostOptions = {
    * the row and the spawn both use the SAME resolved path (no symlink skew).
    */
   validateCwd: (cwd: string) => CwdValidation
+  /** Host-owned storage allocator; app-data base is supplied by Electron main. */
+  managedStorage?: ManagedStorage
   /**
    * Called when a session is closed/restarted so main can evict its replay
    * buffer (the P3-0 carry — `AttachmentGate.clearSession`). Kept as an injected
@@ -148,6 +152,7 @@ export class Host implements HostApi {
   private readonly supervisor: SidecarSupervisor
   private readonly registry: SessionRegistry
   private readonly validateCwd: (cwd: string) => CwdValidation
+  private readonly managedStorage?: ManagedStorage
   private readonly evictReplay: (appSessionId: SessionId) => void
   private readonly log: (line: string) => void
   private readonly now: () => number
@@ -212,6 +217,7 @@ export class Host implements HostApi {
     this.supervisor = options.supervisor
     this.registry = options.registry
     this.validateCwd = options.validateCwd
+    this.managedStorage = options.managedStorage
     this.evictReplay = options.evictReplay ?? (() => {})
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
     this.now = options.now ?? Date.now
@@ -243,6 +249,11 @@ export class Host implements HostApi {
       // Relay the ready frame's engineSessionId into the registry row (the
       // two-id bridge, REGISTRY.md §2). Only the ready frame carries it.
       if (event.frame.kind === 'ready') {
+        const row = this.registry.findSession(appSessionId)
+        if (row?.binding.kind === 'managed') {
+          const recorded = this.managedStorage?.recordSessionIdentity(row.binding, appSessionId, event.frame.engineSessionId)
+          if (!recorded) this.log(`[host] could not durably record managed engine identity for ${appSessionId}`)
+        }
         await this.registry.fillEngineSessionId(
           appSessionId,
           event.frame.engineSessionId,
@@ -345,6 +356,13 @@ export class Host implements HostApi {
     if (typeof req?.cwd !== 'string' || req.cwd.length === 0) {
       return hostError('invalid_cwd', 'cwd must be a non-empty string')
     }
+    const binding = req.binding ?? { kind: 'project' as const }
+    let expectedManagedCwd: string | undefined
+    if (binding.kind === 'managed') {
+      const resolution = this.managedStorage?.resolve(binding)
+      if (!resolution?.ok) return hostError('managed_storage_invalid', 'managed chat storage is unavailable')
+      expectedManagedCwd = resolution.cwd
+    }
     const validated = this.validateCwd(req.cwd)
     if (!validated.ok) {
       return hostError(
@@ -353,17 +371,120 @@ export class Host implements HostApi {
       )
     }
     const cwd = validated.realpath
+    if (expectedManagedCwd !== undefined && cwd !== expectedManagedCwd) {
+      return hostError('invalid_cwd', 'managed chat cwd does not match its host binding')
+    }
 
+    const appSessionId = req.appSessionId ?? randomUUID()
+    if (!isUuid(appSessionId)) return hostError('session_not_found', 'malformed session id')
+    if (binding.kind === 'managed' && !this.managedStorage?.recordSessionIdentity(binding, appSessionId, req.resumeEngineSessionId)) {
+      return hostError('managed_storage_invalid', 'managed chat ownership could not be recorded')
+    }
     const reservation = this.reserveSpawn(true)
     if (!reservation.ok) return reservation.result
-
     return this.spawn({
-      appSessionId: randomUUID(),
+      appSessionId,
       cwd,
       title: capTitle(req.title),
       resumeEngineSessionId: req.resumeEngineSessionId,
       forked: req.forked === true,
+      binding,
     }, reservation)
+  }
+
+  async createManagedChat(): Promise<HostResult<SessionDescriptor>> {
+    await this.launched
+    if (!this.managedStorage) return hostError('managed_storage_invalid', 'managed chat storage is unavailable')
+    const allocation = this.managedStorage.create()
+    if (!allocation.ok) return hostError('managed_storage_invalid', 'could not create managed chat storage')
+    const appSessionId = randomUUID()
+    return this.createSession({ cwd: allocation.cwd, binding: allocation.binding, appSessionId })
+  }
+
+  async adoptManagedHistorySession(
+    engineSessionId: string,
+    title?: string,
+    forked = false,
+  ): Promise<HostResult<SessionDescriptor>> {
+    await this.launched
+    if (!isUuid(engineSessionId)) return hostError('session_not_found', 'malformed engine session id')
+    const owned = this.managedStorage?.findByEngineSession(engineSessionId)
+    if (!owned) return hostError('session_not_found', 'no host-owned managed session record for this transcript')
+    const alreadyRegistered = this.registry.findSession(owned.appSessionId) !== undefined
+    await this.registry.registerManagedHistorySession({
+      ...owned,
+      engineSessionId,
+      ...(title !== undefined ? { title } : {}),
+      forked,
+    })
+    if (this.registry.lastWriteFailed) {
+      return hostError('registry_unavailable', 'managed history binding could not be saved safely')
+    }
+    const descriptor = this.descriptorFor(owned.appSessionId)
+    if (!descriptor) return hostError('session_not_found', 'managed history row could not be restored')
+    this.emit({ type: alreadyRegistered ? 'session-status' : 'session-added', session: descriptor })
+    return { ok: true, value: descriptor }
+  }
+
+  async getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>> {
+    await this.launched
+    if (!isUuid(appSessionId)) return hostError('session_not_found', 'malformed session id')
+    const row = this.registry.findSession(appSessionId)
+    if (!row) return hostError('session_not_found', 'session not found')
+    if (row.binding.kind !== 'managed') {
+      const cwd = this.validateCwd(row.cwd)
+      return { ok: true, value: cwd.ok ? 'available' : 'missing' }
+    }
+    if (!this.managedStorage) return hostError('managed_storage_invalid', 'managed chat storage is unavailable')
+    const resolved = this.managedStorage.resolve(row.binding)
+    if (resolved.ok) return { ok: true, value: 'available' }
+    return resolved.reason === 'missing'
+      ? { ok: true, value: 'missing' }
+      : hostError('managed_storage_invalid', 'managed chat storage failed validation')
+  }
+
+  async recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>> {
+    await this.launched
+    if (!isUuid(appSessionId)) return hostError('session_not_found', 'malformed session id')
+    const row = this.registry.findSession(appSessionId)
+    if (!row) return hostError('session_not_found', 'session not found')
+    if (row.binding.kind !== 'managed' || !this.managedStorage) {
+      return hostError('managed_storage_invalid', 'this session has no managed chat folder')
+    }
+    const live = this.supervisor.listSessions().find(session => session.sessionId === appSessionId)
+    if (live && !isTerminalStatus(live.status)) {
+      return hostError('session_not_found', 'close this chat before recreating its folder')
+    }
+    const recreated = this.managedStorage.recreate(row.binding)
+    if (!recreated.ok) return hostError('managed_storage_invalid', 'managed chat folder could not be recreated safely')
+    row.cwd = recreated.cwd
+    await this.registry.updateCwd(appSessionId, recreated.cwd)
+    if (row.engineSessionId !== null) return this.restoreSession(appSessionId)
+    const reservation = this.reserveSpawn(true)
+    if (!reservation.ok) return reservation.result
+    return this.spawn({
+      appSessionId,
+      cwd: recreated.cwd,
+      title: row.title,
+      resumeEngineSessionId: undefined,
+      forked: row.forked,
+      binding: row.binding,
+    }, reservation)
+  }
+
+  async copySessionFolderPath(appSessionId: SessionId): Promise<HostResult<string>> {
+    const state = await this.getSessionFolderState(appSessionId)
+    if (!state.ok) return state
+    const row = this.registry.findSession(appSessionId)
+    if (!row) return hostError('session_not_found', 'session not found')
+    const validated = row.binding.kind === 'managed'
+      ? this.managedStorage?.resolve(row.binding)
+      : undefined
+    if (row.binding.kind === 'managed') {
+      return validated?.ok ? { ok: true, value: validated.cwd } : hostError('managed_storage_invalid', 'managed chat storage failed validation')
+    }
+    const cwd = this.validateCwd(row.cwd)
+    return cwd.ok ? { ok: true, value: cwd.realpath } : hostError('invalid_cwd', 'session folder is unavailable')
   }
 
   /* --------------------------------------------------------------------- *
@@ -404,6 +525,10 @@ export class Host implements HostApi {
         'session_not_found',
         `no restorable session ${appSessionId}`,
       )
+    }
+    if (row.binding.kind === 'managed') {
+      const storage = this.managedStorage?.resolve(row.binding)
+      if (!storage?.ok) return hostError(storage?.reason === 'missing' ? 'managed_storage_missing' : 'managed_storage_invalid', 'this chat folder is missing or failed validation')
     }
     // Read the supervisor record ONCE, before the refusals that consult it: the
     // stranded-transport test below has to win over the advisory-pid test, which
@@ -460,9 +585,16 @@ export class Host implements HostApi {
 
     // Re-validate the row's cwd too (HC1 defense in depth: a row can go stale if
     // its directory was moved/deleted between launches).
-    const validated = this.validateCwd(row.cwd)
-    if (!validated.ok) {
-      return hostError('invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
+    const managed = row.binding.kind === 'managed'
+      ? this.managedStorage?.resolve(row.binding)
+      : undefined
+    const validatedCwd = row.binding.kind === 'managed'
+      ? (managed?.ok ? { ok: true as const, realpath: managed.cwd } : { ok: false as const, reason: managed?.reason ?? 'invalid' })
+      : this.validateCwd(row.cwd)
+    if (!validatedCwd.ok) {
+      return hostError(row.binding.kind === 'managed'
+        ? (managed && !managed.ok && managed.reason === 'missing' ? 'managed_storage_missing' : 'managed_storage_invalid')
+        : 'invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
     }
 
     const reservation = this.reserveSpawn(true)
@@ -485,10 +617,11 @@ export class Host implements HostApi {
 
     return this.spawn({
       appSessionId,
-      cwd: validated.realpath,
+      cwd: validatedCwd.realpath,
       title: row.title,
       resumeEngineSessionId: row.engineSessionId,
       forked: row.forked,
+      binding: row.binding,
       // PEER-SESSIONS §2/§5 + R1 — a restore of a created peer must rebuild the
       // SAME identity. The row keeps `createdBy`, but `spawn` reads the creator
       // only from its input, so omitting it here left `CATCODE_SIDECAR_CREATED_BY`
@@ -527,6 +660,9 @@ export class Host implements HostApi {
         `no workspace for session ${appSessionId}`,
       )
     }
+    if (row.binding.kind === 'managed') {
+      return hostError('session_not_found', 'managed chats cannot create project workspace sessions')
+    }
     // HC1 — re-derive + re-validate the cwd from the host's own row (never a
     // renderer string, never a stale value: a row can go stale if its directory
     // was moved/deleted between launches). This is the load-bearing trust point.
@@ -557,6 +693,7 @@ export class Host implements HostApi {
       title: undefined,
       resumeEngineSessionId: undefined,
       forked: false,
+      binding: { kind: 'project' },
       ...(peer?.createdBy !== undefined ? { createdBy: peer.createdBy } : {}),
       ...(peer?.model !== undefined ? { model: peer.model } : {}),
       ...(peer?.effort !== undefined ? { effort: peer.effort } : {}),
@@ -574,6 +711,7 @@ export class Host implements HostApi {
     title: string | null | undefined
     resumeEngineSessionId: string | undefined
     forked: boolean
+    binding?: SessionBinding
     createdBy?: SessionId
     model?: string
     effort?: string
@@ -592,7 +730,9 @@ export class Host implements HostApi {
     // restore.
     const existingRow = this.registry.findSession(appSessionId)
     const existingName = existingRow?.name
-    const name = existingName ?? this.allocatePeerName()
+    const binding = input.binding ?? existingRow?.binding ?? { kind: 'project' as const }
+    const isManaged = binding.kind === 'managed'
+    const name = isManaged ? undefined : (existingName ?? this.allocatePeerName())
     const createdByName = this.creatorNameFor(
       input.createdBy,
       existingRow?.createdByName,
@@ -617,18 +757,25 @@ export class Host implements HostApi {
           ? { engineSessionId: resumeEngineSessionId }
           : {}),
         forked,
-        name,
+        binding,
+        ...(name !== undefined ? { name } : {}),
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
         ...(createdByName !== undefined ? { createdByName } : {}),
       })
       rowPersisted = true
+      if (binding.kind === 'managed' && this.registry.lastWriteFailed) {
+        this.releaseSpawnReservation(reservation)
+        return hostError('registry_unavailable', 'managed chat binding could not be saved safely')
+      }
       for (const reapedId of reaped) {
         this.emitRemoved(reapedId)
       }
       this.supervisor.spawnSession(appSessionId, {
         cwd,
+        binding,
+        forked,
         ...(resumeEngineSessionId !== undefined ? { resumeEngineSessionId } : {}),
-        name,
+        ...(name !== undefined ? { name } : {}),
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
         ...(createdByName !== undefined ? { createdByName } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
@@ -928,9 +1075,14 @@ export class Host implements HostApi {
     // child before it respawns, and a stale cwd only surfaces on the fresh
     // child's async error as `failed` — so without this a moved/deleted
     // directory turns a restart into the loss of a healthy sidecar.
-    const validated = this.validateCwd(row.cwd)
-    if (!validated.ok) {
-      return hostError('invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
+    const managed = row.binding.kind === 'managed' ? this.managedStorage?.resolve(row.binding) : undefined
+    const validatedCwd = row.binding.kind === 'managed'
+      ? (managed?.ok ? { ok: true as const, realpath: managed.cwd } : { ok: false as const, reason: managed?.reason ?? 'invalid' })
+      : this.validateCwd(row.cwd)
+    if (!validatedCwd.ok) {
+      return hostError(row.binding.kind === 'managed'
+        ? (managed && !managed.ok && managed.reason === 'missing' ? 'managed_storage_missing' : 'managed_storage_invalid')
+        : 'invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
     }
     // §9-A4 (SF6) — the SAME re-check `restoreSession` performs, because this is
     // the other path that hands `resumeEngineSessionId` to a spawn. Without it a
@@ -956,7 +1108,9 @@ export class Host implements HostApi {
     const creatorName = this.creatorNameFor(row.createdBy, row.createdByName)
     try {
       this.supervisor.restartSession(appSessionId, {
-        cwd: row.cwd,
+        cwd: validatedCwd.realpath,
+        binding: row.binding,
+        forked: row.forked,
         ...(row.engineSessionId !== null
           ? { resumeEngineSessionId: row.engineSessionId }
           : {}),
@@ -1041,6 +1195,9 @@ export class Host implements HostApi {
   canResume(appSessionId: SessionId): boolean {
     if (!isUuid(appSessionId)) return false
     if (this.resumeFailed.has(appSessionId)) return false
+    const row = this.registry.findSession(appSessionId)
+    if (row?.binding.kind === 'managed' && row.engineSessionId !== null &&
+      !this.managedStorage?.hasSessionIdentity(row.binding, appSessionId, row.engineSessionId)) return false
     return this.registry.hasTranscript(appSessionId)
   }
 
@@ -1181,10 +1338,11 @@ export class Host implements HostApi {
       appSessionId: row?.appSessionId ?? '',
       engineSessionId: row?.engineSessionId ?? null,
       cwd: row?.cwd ?? '',
+      binding: row?.binding ?? { kind: 'project' },
       title: row?.title ?? null,
       // PEER-SESSIONS §2/§6. null ⇒ a row that predates the field and has not
       // been spawned since; false ⇒ the user has not blocked peer wake here.
-      name: row?.name ?? null,
+      name: row?.binding.kind === 'managed' ? null : (row?.name ?? null),
       // The creator's ID, never a resolved name: a name baked in here would
       // outlive the row it came from and later point at a different session.
       createdBy: row?.createdBy ?? null,

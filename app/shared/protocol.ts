@@ -77,6 +77,7 @@ import type {
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
 } from './hostApi.js'
+import type { SessionBinding } from './sessionBinding.js'
 import type { DebugRendererSnapshot } from './debugState.js'
 import type {
   EditableSettingSource,
@@ -3265,6 +3266,8 @@ export type DiagnosticsSnapshotFrame = {
 export type SessionCatalogEntry = {
   /** The transcript session id (matches a live row's `engineSessionId`). */
   sessionId: string
+  /** Explicit host-originated association persisted in transcript metadata. */
+  binding?: SessionBinding
   /** Engine-authored fork provenance derived from transcript `forkedFrom`. */
   forked: boolean
   /**
@@ -4262,6 +4265,12 @@ export type CatCodeBridge = {
    * `restoreSession`, not this.
    */
   createSession(input: CreateSessionInput): Promise<HostResult<SessionDescriptor>>
+  /** Create a new host-owned managed chat without a renderer-supplied path. */
+  createManagedChat(): Promise<HostResult<SessionDescriptor>>
+  getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>>
+  recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
+  openSessionFolder(appSessionId: SessionId): Promise<HostResult<void>>
+  copySessionFolderPath(appSessionId: SessionId): Promise<HostResult<void>>
   /** Restore a registry row's session by id (registry-mediated; HC2). */
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   /**

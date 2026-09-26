@@ -416,6 +416,33 @@ describe('deriveMergedRowVisual', () => {
     expect(v.openable).toBe(false)
     expect(v.intent).toBe('none')
   })
+
+  test('a managed history row with a missing folder stays openable for its cached transcript', () => {
+    const managed = {
+      kind: 'managed' as const,
+      storageRootId: '00000000-0000-4000-8000-000000000001',
+      storageId: '00000000-0000-4000-8000-000000000002',
+    }
+    const v = deriveMergedRowVisual(
+      mergedRow({
+        inRegistry: false,
+        appSessionId: null,
+        binding: managed,
+        status: 'history',
+        cwd: '/managed/missing',
+        cwdExists: false,
+      }),
+    )
+    expect(v).toMatchObject({ kind: 'history', openable: true, intent: 'open-history' })
+    expect(isSidebarVisibleRow(mergedRow({
+      inRegistry: false,
+      appSessionId: null,
+      binding: managed,
+      status: 'history',
+      cwd: '/managed/missing',
+      cwdExists: false,
+    }))).toBe(true)
+  })
 })
 
 describe('isSidebarVisibleRow (bug-sweep #1 — HIDE dead-workspace rows from the rail)', () => {

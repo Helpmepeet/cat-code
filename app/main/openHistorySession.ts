@@ -54,6 +54,7 @@
 
 import type { HostError, SessionDescriptor } from '../shared/hostApi.js'
 import type { SessionsCatalogSnapshot } from '../shared/protocol.js'
+import type { SessionBinding } from '../shared/sessionBinding.js'
 
 /**
  * UUID v1–v5 shape — the same pre-lookup reject the host uses for appSessionIds
@@ -83,6 +84,7 @@ export type OpenHistoryResolution =
       title?: string
       /** Present only for a main-trusted just-created desktop fork. */
       forked?: true
+      binding?: SessionBinding
     }
 
 export type TrustedOpenHistorySeed = {
@@ -91,6 +93,7 @@ export type TrustedOpenHistorySeed = {
   title?: string
   /** Main-captured provenance for a just-created desktop fork. */
   forked: true
+  binding?: SessionBinding
 }
 
 /**
@@ -151,6 +154,7 @@ export function resolveOpenHistorySession(
         trustedSeed.forked === true)
         ? { forked: true as const }
         : {}),
+      ...(entry.binding !== undefined ? { binding: entry.binding } : {}),
     }
   }
 
@@ -169,6 +173,7 @@ export function resolveOpenHistorySession(
         ? { title: trustedSeed.title }
         : {}),
       forked: true,
+      ...(trustedSeed.binding !== undefined ? { binding: trustedSeed.binding } : {}),
     }
   }
 

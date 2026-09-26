@@ -50,6 +50,7 @@ import {
   type OperationalRecord,
 } from '../shared/operationalLog.js'
 import { isDeliveryStage, isSafeDeliveryIdentifier, type DeliveryTrace, type SidecarDeliveryStageRecord } from '../shared/deliveryTrace.js'
+import type { SessionBinding } from '../shared/sessionBinding.js'
 
 export type SupervisorOptions = {
   /**
@@ -177,6 +178,10 @@ export type SpawnConfig = {
   /** Model and reasoning effort the created session starts on (PEER-SESSIONS R7). */
   model?: string
   effort?: string
+  /** Host-validated session association, available before engine bootstrap. */
+  binding?: SessionBinding
+  /** Trusted main-owned conversation branch provenance. */
+  forked?: boolean
 }
 
 export type SendFailureCode =
@@ -403,6 +408,8 @@ export class SidecarSupervisor {
         CATCODE_SIDECAR_CREATED_BY_NAME: config?.createdByName ?? '',
         CATCODE_SIDECAR_MODEL: config?.model ?? '',
         CATCODE_SIDECAR_EFFORT: config?.effort ?? '',
+        CATCODE_SESSION_BINDING_JSON: JSON.stringify(config?.binding ?? { kind: 'project' }),
+        CATCODE_SESSION_FORKED: config?.forked === true ? 'true' : 'false',
         CATCODE_OPERATIONAL_FD: '3',
         CATCODE_OPERATIONAL_LAUNCH_ID: process.env.CATCODE_OPERATIONAL_LAUNCH_ID ?? '',
       },

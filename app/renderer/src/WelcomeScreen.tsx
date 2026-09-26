@@ -103,6 +103,7 @@ type WelcomeScreenProps =
       onOpenRecent: (recent: RecentWorkspace) => void
       /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
       onOpenFolder: () => void
+      onNewChat?: () => void
       rosterFailure?: {
         retrying: boolean
         onRetry: () => void
@@ -110,6 +111,7 @@ type WelcomeScreenProps =
     }
   | {
       variant: 'session'
+      managedChat?: boolean
       /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
       cwd: string | null
       /** The session's git branch. App reads it from this session's
@@ -167,40 +169,71 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               </div>
               {showFirstRunOrder ? (
                 <p className="mt-2 text-[14px] text-text-muted">
-                  Open a project to start. Sign in once it opens.
+                  Start a chat or open a project. Sign in once it opens.
                 </p>
+              ) : null}
+              {props.variant !== 'session' && props.onNewChat ? (
+                <button
+                  type="button"
+                  onClick={props.onNewChat}
+                  className="mt-4 inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-accent/90"
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
+                  </svg>
+                  New chat
+                </button>
               ) : null}
             </div>
 
             {/* Meta strip with vertical dividers */}
             <div className="flex items-stretch border-t border-shell-seam pt-5">
-              <MetaCol icon={<FolderIcon />} label="Project">
-                {props.variant === 'session' ? (
-                  <SessionProject cwd={props.cwd} />
-                ) : (
-                  <ProjectPicker
-                    recents={props.recents}
-                    onOpenRecent={props.onOpenRecent}
-                    onOpenFolder={props.onOpenFolder}
-                    rosterFailure={props.rosterFailure}
-                  />
-                )}
-              </MetaCol>
-              <div className="w-px bg-shell-seam" />
-              <MetaCol icon={<MonitorIcon />} label="Start in">
+              {props.variant !== 'session' || !props.managedChat ? (
+                <MetaCol icon={<FolderIcon />} label="Project">
+                  {props.variant === 'session' ? (
+                    <SessionProject cwd={props.cwd} />
+                  ) : (
+                    <ProjectPicker
+                      recents={props.recents}
+                      onOpenRecent={props.onOpenRecent}
+                      onOpenFolder={props.onOpenFolder}
+                      rosterFailure={props.rosterFailure}
+                    />
+                  )}
+                </MetaCol>
+              ) : null}
+              {(props.variant !== 'session' || !props.managedChat || props.sandboxed) ? (
+                <>
+                  {props.variant === 'session' && props.managedChat ? null : (
+                    <div className="w-px bg-shell-seam" />
+                  )}
+                  <MetaCol icon={<MonitorIcon />} label="Start in">
                 {/* This reads the one thing about where a session runs that is
                     genuinely variable: whether its tools are sandboxed
                     (`diagnostics.snapshot`). The launcher has no session to ask,
                     so it states the plain default. */}
-                <span className="text-[13px] text-text-muted">
-                  {props.variant === 'session' && props.sandboxed
-                    ? 'Sandboxed'
-                    : 'Locally'}
-                </span>
-              </MetaCol>
+                    <span className="text-[13px] text-text-muted">
+                      {props.variant === 'session' && props.sandboxed
+                        ? 'Sandboxed'
+                        : 'Locally'}
+                    </span>
+                  </MetaCol>
+                </>
+              ) : null}
               {/* Branch is available once a session fixes the project path. The
                   host resolves that path from the session id for Git actions. */}
-              {props.variant === 'session' ? (
+              {props.variant === 'session' && !props.managedChat ? (
                 <>
                   <div className="w-px bg-shell-seam" />
                   <MetaCol icon={<BranchIcon />} label="Branch">

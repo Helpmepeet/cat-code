@@ -1514,16 +1514,18 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
 
   // The composer's three consumers all read the SAME gate object, so
   // "typeable" can never drift apart from "sendable" again.
-  expect(paneSource).toContain('const composerReadOnly = branchSwitchPending || !composerGate.editable')
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
+    'const composerReadOnly = branchSwitchPending || managedFolderUnavailable || !composerGate.editable',
+  )
   expect(paneSource).toContain('readOnly={composerReadOnly}')
   // Whitespace-normalised: the assertion is about which gate the send button
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ branchSwitchPending || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={ branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
-  expect(paneSource).toContain(
-    'attachDisabled={!composerGate.editable || preparingImage || pickingFile}',
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
+    'attachDisabled={ !composerGate.editable || managedFolderUnavailable || preparingImage || pickingFile }',
   )
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
     "if (preparingImage) { event.preventDefault() toast('Wait for the image to finish attaching.', { tone: 'info' }) return }",
@@ -2927,7 +2929,7 @@ test('the model a session displays comes from the live run-controls seam', () =>
 })
 
 /**
- * ⌘T opens a tab in the workspace you are already in, not a directory picker.
+ * ⌘T starts a managed chat independently of the current project.
  * The picker path (`newSession`) is still reachable and deliberate, through
  * "Add project" and "Open folder"; what changed is that the new-tab gesture no
  * longer asks. Pinned structurally because all three surfaces live in a keydown
@@ -2936,7 +2938,7 @@ test('the model a session displays comes from the live run-controls seam', () =>
  * palette that ran a different function than the chord would be the same
  * advertise-what-you-cannot-do defect the slash catalog had.
  */
-test('the new-tab gesture inherits the current workspace on every surface', () => {
+test('the new-tab gesture creates a managed chat on every surface', () => {
   const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   // (1) The ⌘T branch itself.
@@ -2962,6 +2964,11 @@ test('the new-tab gesture inherits the current workspace on every surface', () =
   // choose-a-directory entry points still call it.
   expect(app).toContain('onAddProject={() => void newSession()}')
   expect(app).toContain('onOpenFolder={() => void newSession()}')
+  expect(app).toContain('onNewChat={() => void newChat()}')
+  const newChatStart = app.indexOf('const newChat = useCallback(async () => {')
+  const newChatEnd = app.indexOf('\n\n  useEffect(() => {', newChatStart)
+  expect(app.slice(newChatStart, newChatEnd)).toContain('await newManagedChat()')
+  expect(app.slice(newChatStart, newChatEnd)).not.toContain('newSessionInWorkspace')
 })
 
 // Three composer behaviours a contentEditable does NOT inherit from the
@@ -3139,8 +3146,8 @@ test('New chat ignores repeated clicks while its fresh session is being created'
 
   expect(newChatBody).toContain('if (newChatInFlightRef.current) return')
   expect(newChatBody).toContain('newChatInFlightRef.current = true')
-  expect(newChatBody).toContain('await newSessionInWorkspace(repId)')
-  expect(newChatBody).toContain('await newSession()')
+  expect(newChatBody).toContain('await newManagedChat()')
+  expect(newChatBody).not.toContain('await newSessionInWorkspace(repId)')
   expect(newChatBody.replace(/\s+/g, ' ')).toContain(
     'finally { newChatInFlightRef.current = false',
   )

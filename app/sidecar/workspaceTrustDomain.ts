@@ -125,8 +125,23 @@ export type SidecarWorkspaceTrustDomain = {
  */
 export async function createSidecarWorkspaceTrustDomain(
   cwd: string,
-  options: { executor?: WorkspaceTrustExecutor } = {},
+  options: { executor?: WorkspaceTrustExecutor; managed?: boolean } = {},
 ): Promise<SidecarWorkspaceTrustDomain> {
+  if (options.managed) {
+    const snapshot: WorkspaceTrustSnapshot = {
+      trusted: true,
+      detectedRepo: null,
+      trustRoot: null,
+    }
+    return {
+      getSnapshot: () => snapshot,
+      acceptTrust: () => ({
+        ok: true,
+        message: 'This chat folder is ready.',
+        changed: false,
+      }),
+    }
+  }
   const executor = options.executor ?? createRealWorkspaceTrustExecutor(cwd)
   // Trust is read through the executor (real: `isPathTrusted(cwd)`) so the spawn
   // snapshot and `acceptTrust` share ONE truth source — otherwise a fake in

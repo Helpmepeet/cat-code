@@ -62,6 +62,7 @@ import {
   PEER_SEND_REFILL_MS,
   PEER_WAKE_TIMEOUT_MS,
 } from '../shared/limits.js'
+import type { SessionBinding } from '../shared/sessionBinding.js'
 
 /* ------------------------------------------------------------------------- *
  * Injected dependencies — the narrowest slice of each collaborator, so this
@@ -73,6 +74,7 @@ export type PeerRegistryRow = {
   appSessionId: string
   engineSessionId: string | null
   cwd: string
+  binding?: SessionBinding
   title?: string
   name?: string
   createdBy?: string
@@ -609,11 +611,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * predicate; see the dep.
    */
   function peersOf(requesterRow: PeerRegistryRow): NamedRow[] {
+    if (requesterRow.binding?.kind === 'managed') return []
     return deps
       .rows()
       .filter(
         (row): row is NamedRow =>
           row.appSessionId !== requesterRow.appSessionId &&
+          row.binding?.kind !== 'managed' &&
           row.cwd === requesterRow.cwd &&
           isNamed(row) &&
           (deps.isLive(row.appSessionId) || deps.canResume(row.appSessionId)),
@@ -1385,6 +1389,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       answer(sessionId, validated.requestId, {
         ok: false,
         error: fail('session_not_found', 'this session has no workspace'),
+      })
+      return
+    }
+    if (requesterRow.binding?.kind === 'managed') {
+      answer(sessionId, validated.requestId, {
+        ok: false,
+        error: fail('session_not_found', 'this session has no peer workspace'),
       })
       return
     }

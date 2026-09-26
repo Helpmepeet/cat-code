@@ -19,6 +19,7 @@ import {
   resolveSessionLabel,
   resolveSessionOpenRoute,
   selectMergedSessionRows,
+  selectManagedChatRows,
   selectRecentWorkspaces,
   selectRowEngineSessionId,
   selectSessionsCatalog,
@@ -165,6 +166,7 @@ describe('resolveSessionLabel (the P4-6 title rider precedence)', () => {
     expect(resolveSessionLabel(null, '/a/proj')).toBe('proj')
     expect(resolveSessionLabel('   ', '/a/proj')).toBe('proj')
     expect(resolveSessionLabel(null, '')).toBe('New session')
+    expect(resolveSessionLabel(null, '/managed/storage-id', { kind: 'managed', storageRootId: 'root', storageId: 'id' })).toBe('New chat')
   })
 })
 
@@ -550,7 +552,7 @@ describe('browse selectors', () => {
     expect(countWorkspaces(rows)).toBe(2)
   })
 
-  test('group by workspace, alphabetical — active workspace does NOT float to top', () => {
+test('group by workspace, alphabetical — active workspace does NOT float to top', () => {
     // Active = '/w/proj' (alphabetically last). Old code sorted active-first and
     // would return ['proj', 'other']; groups now stay frozen-alphabetical.
     const groups = groupByWorkspace(rows, '/w/proj')
@@ -558,6 +560,27 @@ describe('browse selectors', () => {
     // `current` is still computed (Sessions-page highlight), it just no longer drives order.
     expect(groups.find(g => g.name === 'proj')?.current).toBe(true)
     expect(groups.find(g => g.name === 'other')?.current).toBe(false)
+  })
+
+  test('managed bindings stay in Chats and are excluded from project groups and recents', () => {
+    const binding = {
+      kind: 'managed' as const,
+      storageRootId: '00000000-0000-4000-8000-000000000001',
+      storageId: '00000000-0000-4000-8000-000000000002',
+    }
+    const managed = selectMergedSessionRows(
+      [descriptor({ appSessionId: 'managed-app', engineSessionId: 'managed-engine', binding })],
+      snapshot([
+        entry({ sessionId: 'managed-engine', cwd: '/private/chat-id', binding }),
+        entry({ sessionId: 'history-managed', cwd: '/private/history-id', binding }),
+      ]),
+    )
+    expect(selectManagedChatRows(managed).map(item => item.sessionId)).toEqual([
+      'managed-engine',
+      'history-managed',
+    ])
+    expect(groupByWorkspace(managed, null)).toEqual([])
+    expect(selectRecentWorkspaces(managed, new Map())).toEqual([])
   })
 
   test('MAJOR-1 — two same-workspace sessions (reconciled to one real cwd) form ONE group', () => {
@@ -704,6 +727,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
   return {
     appSessionId: null,
     cwd: '/w/proj',
+    binding: { kind: 'project' },
     cwdExists: true,
     title: null,
     displayLabel: partial.sessionId,
@@ -843,6 +867,28 @@ describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller co
         }),
       ),
     ).toEqual({ kind: 'focus', appSessionId: 'app-a' })
+  })
+
+  test('a missing managed folder remains reopenable for transcript preview and explicit recovery', () => {
+    const binding = {
+      kind: 'managed' as const,
+      storageRootId: '00000000-0000-4000-8000-000000000001',
+      storageId: '00000000-0000-4000-8000-000000000002',
+    }
+    expect(resolveSessionOpenRoute(row({
+      sessionId: 'managed-history',
+      cwd: '/managed/gone',
+      cwdExists: false,
+      binding,
+    }))).toEqual({ kind: 'history', engineSessionId: 'managed-history' })
+    expect(resolveSessionOpenRoute(row({
+      sessionId: 'managed-app',
+      appSessionId: 'managed-app',
+      inRegistry: true,
+      live: false,
+      cwdExists: false,
+      binding,
+    }))).toEqual({ kind: 'restore', appSessionId: 'managed-app' })
   })
 
   test('a terminal-history row with a workspace opens by its ENGINE id', () => {

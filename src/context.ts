@@ -17,6 +17,7 @@ import { getBranch, getDefaultBranch, getIsGit, gitExe } from './utils/git.js'
 import { shouldIncludeGitInstructions } from './utils/gitSettings.js'
 import { getTimeZone } from './utils/intl.js'
 import { logError } from './utils/log.js'
+import { isManagedSession } from './utils/managedSessionPolicy.js'
 
 const MAX_STATUS_CHARS = 2000
 
@@ -152,6 +153,7 @@ export const getSystemContext = memoize(
     const startTime = Date.now()
     logForDiagnosticsNoPII('info', 'system_context_started')
     const shouldSkipGitStatus =
+      isManagedSession() ||
       isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) ||
       !shouldIncludeGitInstructions()
     logForDiagnosticsNoPII('info', 'system_context_git_status_mode', {

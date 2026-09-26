@@ -14,6 +14,7 @@ import {
   saveGlobalConfig,
 } from '../../utils/config.js'
 import { getCwd } from '../../utils/cwd.js'
+import { isManagedSession } from '../../utils/managedSessionPolicy.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { getErrnoCode } from '../../utils/errors.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
@@ -630,6 +631,7 @@ export async function addMcpConfig(
   config: unknown,
   scope: ConfigScope,
 ): Promise<void> {
+  assertMcpScopeAvailable(scope)
   if (name.match(/[^a-zA-Z0-9_-]/)) {
     throw new Error(
       `Invalid name ${name}. Names can only contain letters, numbers, hyphens, and underscores.`,
@@ -773,6 +775,7 @@ export async function removeMcpConfig(
   name: string,
   scope: ConfigScope,
 ): Promise<void> {
+  assertMcpScopeAvailable(scope)
   switch (scope) {
     case 'project': {
       const { servers: existingServers } = getProjectMcpConfigsFromCwd()
@@ -1564,6 +1567,9 @@ function toggleMembership(
  * @param enabled Whether the server should be enabled
  */
 export function setMcpServerEnabled(name: string, enabled: boolean): void {
+  if (isManagedSession()) {
+    throw new Error('Project MCP settings are unavailable in a managed chat.')
+  }
   const isBuiltinStateChange =
     isDefaultDisabledBuiltin(name) && isMcpServerDisabled(name) === enabled
 
@@ -1587,5 +1593,11 @@ export function setMcpServerEnabled(name: string, enabled: boolean): void {
         name as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       enabled,
     })
+  }
+}
+
+function assertMcpScopeAvailable(scope: ConfigScope): void {
+  if (isManagedSession() && (scope === 'project' || scope === 'local')) {
+    throw new Error('Project MCP settings are unavailable in a managed chat.')
   }
 }

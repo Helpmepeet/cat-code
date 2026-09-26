@@ -44,6 +44,8 @@ import {
   type SessionId,
 } from '../types/ids.js'
 import type { AttributionSnapshotMessage } from '../types/logs.js'
+import type { SessionBinding } from '../../app/shared/sessionBinding.js'
+import { isSessionBinding } from '../../app/shared/sessionBinding.js'
 import {
   type ActiveConversationTipEntry,
   type ContentReplacementEntry,
@@ -1933,6 +1935,7 @@ class Project {
           userType: getUserType(),
           entrypoint: getEntrypoint(),
           cwd: getCwd(),
+          sessionBinding: readSessionBindingFromEnv(),
           sessionId,
           // Loaded/forked messages carry their source build. Preserve it while
           // re-stamping session-local identity fields such as cwd/sessionId.
@@ -3735,6 +3738,7 @@ function convertToLogOption(
     firstPrompt,
     messageCount: countVisibleMessages(transcript),
     forked: transcript.some(message => message.forkedFrom !== undefined),
+    sessionBinding: firstMessage.sessionBinding,
     isSidechain: firstMessage.isSidechain,
     teamName: firstMessage.teamName,
     agentName: firstMessage.agentName,
@@ -6335,6 +6339,7 @@ type LiteMetadata = {
    */
   hasConversation?: boolean
   forked: boolean
+  sessionBinding?: SessionBinding
 }
 
 /**
@@ -6499,6 +6504,7 @@ async function readLiteMetadata(
   const entrypoint = extractJsonStringField(head, 'entrypoint')
   const teamName = extractJsonStringField(head, 'teamName')
   const agentSetting = extractJsonStringField(head, 'agentSetting')
+  const sessionBinding = extractSessionBinding(head)
 
   // Prefer the last-prompt tail entry — captured by extractFirstPrompt at
   // write time (filtered, authoritative) and shows what the user was most
@@ -6577,6 +6583,7 @@ async function readLiteMetadata(
     firstPrompt,
     hasConversation,
     forked,
+    sessionBinding,
     gitBranch,
     entrypoint,
     isSidechain,
@@ -6590,6 +6597,26 @@ async function readLiteMetadata(
     prUrl,
     prRepository,
     lastTimestamp,
+  }
+}
+
+function readSessionBindingFromEnv(): SessionBinding {
+  try {
+    const parsed: unknown = JSON.parse(process.env.CATCODE_SESSION_BINDING_JSON ?? '')
+    return isSessionBinding(parsed) ? parsed : { kind: 'project' }
+  } catch {
+    return { kind: 'project' }
+  }
+}
+
+function extractSessionBinding(chunk: string): SessionBinding | undefined {
+  const match = chunk.match(/"sessionBinding"\s*:\s*(\{[^}]*\})/)
+  if (!match) return undefined
+  try {
+    const parsed: unknown = JSON.parse(match[1])
+    return isSessionBinding(parsed) ? parsed : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -6837,6 +6864,7 @@ async function enrichLog(
     projectPath: meta.projectPath ?? log.projectPath,
     hasConversation: meta.hasConversation,
     forked: meta.forked,
+    sessionBinding: meta.sessionBinding,
   }
 
   // Provide a fallback title for sessions where we couldn't extract the first

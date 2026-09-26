@@ -35,6 +35,7 @@ function registryRow(
     sessionId: `engine-${id}`,
     appSessionId: id as SessionId,
     cwd: '/tmp/proj',
+    binding: { kind: 'project' },
     cwdExists: true,
     title: 'Alpha',
     displayLabel: 'Alpha',
@@ -520,6 +521,20 @@ test('P4-33 — the rail stays collapsed when no row menu is open', () => {
   const html = renderSidebar()
   expect(html).toContain(ASIDE_COLLAPSED)
   expect(html).not.toContain(ASIDE_EXPANDED)
+})
+
+test('managed sessions appear in Chats before Projects and hide their storage path', () => {
+  const managed = registryRow('managed', {
+    cwd: '/managed/storage-id',
+    binding: { kind: 'managed', storageRootId: 'root', storageId: 'storage' },
+    title: 'Planning chat',
+    displayLabel: 'Planning chat',
+  })
+  const project = registryRow('project', { title: 'Project session', displayLabel: 'Project session' })
+  const html = renderSidebar({ rows: [project, managed], menuActive: true })
+  expect(html.indexOf('>Chats<')).toBeLessThan(html.indexOf('>Projects<'))
+  expect(html).toContain('Planning chat')
+  expect(html).not.toContain('/managed/storage-id')
 })
 
 test('P4-53 — the collapsed rail keeps the pin as its stable keyboard entry target', () => {

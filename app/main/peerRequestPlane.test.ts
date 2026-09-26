@@ -279,6 +279,30 @@ describe('HR1 validation', () => {
  * ------------------------------------------------------------------------- */
 
 describe('HR3 scoping', () => {
+  test('managed chats cannot call peers and are invisible to project peers even in the same cwd', async () => {
+    const managed = {
+      kind: 'managed' as const,
+      storageRootId: '11111111-1111-4111-8111-111111111111',
+      storageId: '22222222-2222-4222-8222-222222222222',
+    }
+    const h = harness({
+      rows: [
+        row(ALEX, 'Alex', { binding: managed }),
+        row(BEAR, 'Bear'),
+        row(CORAL, 'Coral', { binding: managed }),
+      ],
+      live: new Set([ALEX, BEAR, CORAL]),
+    })
+
+    await h.plane.handleRequest(ALEX, request('peers.list'))
+    expect(h.lastResult()?.error?.code).toBe('session_not_found')
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Coral', text: 'hi' }))
+    expect(h.lastResult()?.error?.code).toBe('session_not_found')
+    await h.plane.handleRequest(BEAR, { ...request('peers.list'), sessionId: BEAR })
+    expect((h.lastResult()?.value as { peers: Array<{ name: string }> }).peers).toEqual([])
+    expect(h.deliveries()).toHaveLength(0)
+  })
+
   test('peers.list shows only named rows in the caller workspace, never the caller', async () => {
     const h = harness({
       rows: [

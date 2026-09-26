@@ -24,6 +24,7 @@ import { uniq } from '../array.js'
 import { logForDebugging } from '../debug.js'
 import { logForDiagnosticsNoPII } from '../diagLogs.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../envUtils.js'
+import { isManagedSession } from '../managedSessionPolicy.js'
 import { getErrnoCode, isENOENT } from '../errors.js'
 import { readFileSync } from '../fileRead.js'
 import { getFsImplementation, safeResolvePath } from '../fsOperations.js'
@@ -343,6 +344,12 @@ export function getRelativeSettingsFilePathForSource(
 export function getSettingsForSource(
   source: SettingSource,
 ): SettingsJson | null {
+  if (
+    isManagedSession() &&
+    (source === 'projectSettings' || source === 'localSettings')
+  ) {
+    return null
+  }
   const cached = getCachedSettingsForSource(source)
   if (cached !== undefined) return cached
   const result = getSettingsForSourceUncached(source)

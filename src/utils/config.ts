@@ -18,6 +18,7 @@ import { logForDebugging } from './debug.js'
 import { logForDiagnosticsNoPII } from './diagLogs.js'
 import { getGlobalClaudeFile } from './env.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
+import { isManagedSession } from './managedSessionPolicy.js'
 import { ConfigParseError, getErrnoCode } from './errors.js'
 import { writeFileSyncAndFlush_DEPRECATED } from './file.js'
 import { getFsImplementation } from './fsOperations.js'
@@ -1604,6 +1605,9 @@ export const getProjectPathForConfig = memoize((): string => {
 })
 
 export function getCurrentProjectConfig(): ProjectConfig {
+  if (isManagedSession()) {
+    return structuredClone(DEFAULT_PROJECT_CONFIG)
+  }
   if (process.env.NODE_ENV === 'test') {
     return TEST_PROJECT_CONFIG_FOR_TESTING
   }

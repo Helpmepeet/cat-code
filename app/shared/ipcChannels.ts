@@ -60,6 +60,11 @@ export const CH_PICK_SETTINGS_PROJECT = 'catcode:pick-settings-project'
 // cwdToken or null (the native picker, HC1); the host-event channel is a
 // one-way stream. ---
 export const CH_HOST_CREATE = 'catcode:host:create'
+export const CH_HOST_CREATE_MANAGED = 'catcode:host:create-managed'
+export const CH_HOST_FOLDER_STATE = 'catcode:host:folder-state'
+export const CH_HOST_FOLDER_RECREATE = 'catcode:host:folder-recreate'
+export const CH_HOST_FOLDER_OPEN = 'catcode:host:folder-open'
+export const CH_HOST_FOLDER_COPY = 'catcode:host:folder-copy'
 export const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
 export const CH_HOST_LIST_BRANCHES = 'catcode:host:list-branches'
 export const CH_HOST_SWITCH_BRANCH = 'catcode:host:switch-branch'

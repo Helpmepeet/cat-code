@@ -142,6 +142,7 @@ function resolvePathFromCwd(cwd: string, relativePath: string): string {
 export function resolveFilePathActionItems(
   parts: FilePathParts,
   platform: string = typeof navigator !== 'undefined' ? navigator.userAgent : '',
+  canOpen = true,
 ): FilePathActionItem[] {
   const isMac = /mac|darwin/i.test(platform)
   const finderLabel = isMac ? 'Reveal in Finder' : 'Show in file manager'
@@ -170,39 +171,76 @@ export function resolveFilePathActionItems(
         },
       ],
     },
-    {
-      kind: 'open',
-      label: 'Open in',
-      enabled: true,
-      flyout: [
-        {
-          kind: 'open-default',
-          label: 'Default application',
-          enabled: true,
-        },
-        {
-          kind: 'open-vscode',
-          label: 'Visual Studio Code',
-          enabled: true,
-        },
-        {
-          kind: 'open-zed',
-          label: 'Zed',
-          enabled: true,
-        },
-        {
-          kind: 'open-cursor',
-          label: 'Cursor',
-          enabled: true,
-        },
-        {
-          kind: 'open-finder',
-          label: finderLabel,
-          enabled: true,
-        },
-      ],
-    },
+    ...(canOpen
+      ? [
+          {
+            kind: 'open' as const,
+            label: 'Open in',
+            enabled: true,
+            flyout: [
+              {
+                kind: 'open-default',
+                label: 'Default application',
+                enabled: true,
+              },
+              {
+                kind: 'open-vscode',
+                label: 'Visual Studio Code',
+                enabled: true,
+              },
+              {
+                kind: 'open-zed',
+                label: 'Zed',
+                enabled: true,
+              },
+              {
+                kind: 'open-cursor',
+                label: 'Cursor',
+                enabled: true,
+              },
+              {
+                kind: 'open-finder',
+                label: finderLabel,
+                enabled: true,
+              },
+            ],
+          } satisfies FilePathActionItem,
+        ]
+      : []),
   ]
+}
+
+/** A renderer-side presentation check; the host still enforces canonical containment. */
+export function canOpenFilePathInSession(
+  parts: FilePathParts,
+  cwd: string | null | undefined,
+): boolean {
+  if (!cwd || !parts.absolutePath || isAbsoluteUrlLike(parts.absolutePath)) {
+    return false
+  }
+  const windows = WINDOWS_ABSOLUTE_PATH_PATTERN.test(cwd)
+  const target = normalizeComparablePath(stripLineSuffix(parts.absolutePath))
+  const root = normalizeComparablePath(cwd)
+  const normalizedTarget = windows ? target.toLowerCase() : target
+  const normalizedRoot = windows ? root.toLowerCase() : root
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}/`)
+  )
+}
+
+function normalizeComparablePath(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const drive = normalized.match(/^[A-Za-z]:/)
+  const prefix = drive?.[0] ?? (normalized.startsWith('/') ? '/' : '')
+  const segments = normalized.slice(prefix.length).split('/').filter(Boolean)
+  const clean: string[] = []
+  for (const segment of segments) {
+    if (segment === '.') continue
+    if (segment === '..') clean.pop()
+    else clean.push(segment)
+  }
+  return `${prefix}${prefix && prefix !== '/' ? '/' : ''}${clean.join('/')}`
 }
 
 export const FILE_PATH_MENU_WIDTH = 200

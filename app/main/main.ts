@@ -21,6 +21,7 @@ import {
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   nativeImage,
@@ -57,6 +58,7 @@ import {
   SessionRegistry,
 } from '../host/registry.js'
 import { Host, type CwdValidation } from '../host/host.js'
+import { ManagedStorage } from '../host/managedStorage.js'
 import {
   MAX_ATTACHMENT_SOURCE_IMAGE_BYTES,
   type AttachmentFileSelection,
@@ -121,6 +123,11 @@ import {
   // channels return a typed HostResult; `pick-directory` returns a realpath or
   // null (the native picker, HC1); the host-event channel is a one-way stream.
   CH_HOST_CREATE,
+  CH_HOST_CREATE_MANAGED,
+  CH_HOST_FOLDER_STATE,
+  CH_HOST_FOLDER_RECREATE,
+  CH_HOST_FOLDER_OPEN,
+  CH_HOST_FOLDER_COPY,
   CH_HOST_CREATE_IN_WORKSPACE,
   CH_HOST_LIST_BRANCHES,
   CH_HOST_SWITCH_BRANCH,
@@ -347,6 +354,7 @@ function rememberBranchOpenSeed(
     engineSessionId: frame.branchEngineSessionId,
     cwd: source.cwd,
     forked: true,
+    ...(source.binding !== undefined ? { binding: source.binding } : {}),
     ...(typeof frame.branchTitle === 'string' &&
     frame.branchTitle.trim().length > 0
       ? { title: frame.branchTitle }
@@ -2905,6 +2913,37 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(CH_HOST_CREATE_MANAGED, async (): Promise<HostResult<SessionDescriptor>> => {
+    if (!host) return noHost<SessionDescriptor>()
+    return host.createManagedChat()
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_STATE, async (_e, id: unknown) => {
+    if (!host) return noHost<'available' | 'missing'>()
+    return host.getSessionFolderState(String(id))
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_RECREATE, async (_e, id: unknown) => {
+    if (!host) return noHost<SessionDescriptor>()
+    return host.recreateManagedChatFolder(String(id))
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_OPEN, async (_e, id: unknown): Promise<HostResult<void>> => {
+    if (!host) return noHost<void>()
+    const path = await host.copySessionFolderPath(String(id))
+    if (!path.ok) return path
+    const error = await shell.openPath(path.value)
+    return error ? { ok: false, error: { code: 'invalid_cwd', message: 'could not open this chat folder' } } : { ok: true, value: undefined }
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_COPY, async (_e, id: unknown): Promise<HostResult<void>> => {
+    if (!host) return noHost<void>()
+    const path = await host.copySessionFolderPath(String(id))
+    if (!path.ok) return path
+    clipboard.writeText(path.value)
+    return { ok: true, value: undefined }
+  })
+
   ipcMain.handle(
     CH_HOST_RESTORE,
     async (_e, appSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
@@ -3175,6 +3214,41 @@ function registerHostControlPlane(): void {
     string,
     Promise<HostResult<SessionDescriptor>>
   >()
+  async function ensureManagedHistoryPreview(
+    descriptor: SessionDescriptor,
+    engineId: string,
+  ): Promise<HostResult<SessionDescriptor>> {
+    const result = { ok: true as const, value: descriptor }
+    if (!host?.canPreview(descriptor.appSessionId)) return result
+    const existingCache = readCache(TRANSCRIPT_CACHE_DIR, descriptor.appSessionId)
+    if (existingCache?.header.engineSessionId === engineId) return result
+
+    // Registry eviction can remove the preview cache. Rebuild it from the
+    // host-owned transcript before opening the pane, without starting an engine.
+    await runTranscriptBackfill({
+      items: [{
+        appSessionId: descriptor.appSessionId,
+        engineSessionId: engineId,
+        transcriptPath: defaultTranscriptPath(descriptor.cwd, engineId),
+      }],
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('transcript-backfill', ['--bare']),
+      cwd: process.cwd(),
+      onSession: workerResult => {
+        const currentHost = host
+        if (!currentHost?.canPreview(descriptor.appSessionId)) return
+        persistTranscriptBackfillResult({
+          cacheDir: TRANSCRIPT_CACHE_DIR,
+          getCurrentSession: id => currentHost.listSessions().find(row => row.appSessionId === id),
+          transcriptExists: row => row.engineSessionId !== null &&
+            existsSync(defaultTranscriptPath(row.cwd, row.engineSessionId)),
+        }, workerResult)
+      },
+    })
+    return readCache(TRANSCRIPT_CACHE_DIR, descriptor.appSessionId)?.header.engineSessionId === engineId
+      ? result
+      : { ok: false, error: { code: 'session_unreachable', message: 'Could not load this chat history.' } }
+  }
   ipcMain.handle(
     CH_HOST_OPEN_HISTORY,
     (_e, engineSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
@@ -3195,14 +3269,42 @@ function registerHostControlPlane(): void {
       if (resolution.kind === 'reject') {
         return Promise.resolve({ ok: false, error: resolution.error })
       }
+      const engineId = resolution.kind === 'existing'
+        ? resolution.descriptor.engineSessionId!
+        : resolution.resumeEngineSessionId
+      const inflight = openHistoryInFlight.get(engineId)
+      if (inflight) return inflight
       if (resolution.kind === 'existing') {
         // Already a ready app row — the renderer switches/restores it; no spawn.
         branchOpenSeeds.delete(resolution.descriptor.engineSessionId ?? '')
+        if (resolution.descriptor.binding?.kind === 'managed' && resolution.descriptor.restorable) {
+          const promise = ensureManagedHistoryPreview(resolution.descriptor, engineId)
+            .catch(() => ({
+              ok: false as const,
+              error: { code: 'session_unreachable' as const, message: 'Could not load this chat history.' },
+            })).finally(() => openHistoryInFlight.delete(engineId))
+          openHistoryInFlight.set(engineId, promise)
+          return promise
+        }
         return Promise.resolve({ ok: true, value: resolution.descriptor })
       }
-      const engineId = resolution.resumeEngineSessionId
-      const inflight = openHistoryInFlight.get(engineId)
-      if (inflight) return inflight
+      if (resolution.binding?.kind === 'managed' && !branchOpenSeed(engineId)) {
+        const promise = host.adoptManagedHistorySession(
+          engineId,
+          resolution.title,
+          resolution.forked === true,
+        ).then(async result => {
+          if (!result.ok) return result
+          return ensureManagedHistoryPreview(result.value, engineId)
+        }).catch(() => ({
+          ok: false as const,
+          error: { code: 'session_unreachable' as const, message: 'Could not load this chat history.' },
+        })).finally(() => {
+          openHistoryInFlight.delete(engineId)
+        })
+        openHistoryInFlight.set(engineId, promise)
+        return promise
+      }
       // Spawn a resume through the SAME machinery restore uses: createSession with
       // a MAIN-resolved cwd + resumeEngineSessionId → supervisor sets
       // CATCODE_SIDECAR_RESUME_SESSION_ID → sessionResume.ts (the engine's real
@@ -3220,6 +3322,7 @@ function registerHostControlPlane(): void {
           // of the cwd basename (bug-sweep #2, 2026-07-21).
           ...(resolution.title !== undefined ? { title: resolution.title } : {}),
           ...(resolution.forked === true ? { forked: true } : {}),
+          ...(resolution.binding !== undefined ? { binding: resolution.binding } : {}),
         })
         .then(result => {
           // Bootstrap coalescing, the same guard `CH_HOST_RESTORE` arms: this
@@ -3934,6 +4037,10 @@ function ensureHost(): Host {
     sidecarCommandMarker: sidecarLaunch().identityMarker,
     log: line => logLegacyDiagnostic(line, 'registry', 'host'),
   })
+  const managedStorage = new ManagedStorage({
+    appDataBase: app.getPath('userData'),
+    ownershipDir: join(defaultRegistryDir(), 'chat-workspaces'),
+  })
   registryForDebug = registry
 
   // B4 — kick off the launch sequence (read → sweep orphans → reap) and hand the
@@ -3949,6 +4056,7 @@ function ensureHost(): Host {
     supervisor,
     registry,
     validateCwd,
+    managedStorage,
     launched,
     log: line => logLegacyDiagnostic(line, 'host', 'host'),
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted

@@ -78,6 +78,7 @@ import { expandPath } from './path.js'
 import { pathInWorkingPath } from './permissions/filesystem.js'
 import { isSettingSourceEnabled } from './settings/constants.js'
 import { getInitialSettings } from './settings/settings.js'
+import { isManagedSession } from './managedSessionPolicy.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const teamMemPaths = feature('TEAMMEM')
@@ -800,10 +801,10 @@ export const getMemoryFiles = memoize(
 
     const result: MemoryFileInfo[] = []
     const processedPaths = new Set<string>()
-    const config = getCurrentProjectConfig()
+    const config = isManagedSession() ? null : getCurrentProjectConfig()
     const includeExternal =
       forceIncludeExternal ||
-      config.hasClaudeMdExternalIncludesApproved ||
+      config?.hasClaudeMdExternalIncludesApproved ||
       false
 
     // Process Managed file first (always loaded - policy settings)
@@ -852,10 +853,12 @@ export const getMemoryFiles = memoize(
       )
     }
 
+    // Managed chats retain global instructions, but do not walk the managed
+    // working directory or its ancestors for repository/local instructions.
     // Then process Project and Local files
     const dirs: string[] = []
     const originalCwd = getOriginalCwd()
-    let currentDir = originalCwd
+    let currentDir = isManagedSession() ? parse(originalCwd).root : originalCwd
 
     while (currentDir !== parse(currentDir).root) {
       dirs.push(currentDir)
@@ -871,8 +874,10 @@ export const getMemoryFiles = memoize(
     // already has its own checkout. CLAUDE.local.md is gitignored so it only
     // exists in the main repo and is still loaded.
     // See: https://github.com/anthropics/claude-code/issues/29599
-    const gitRoot = findGitRoot(originalCwd)
-    const canonicalRoot = findCanonicalGitRoot(originalCwd)
+    const gitRoot = isManagedSession() ? null : findGitRoot(originalCwd)
+    const canonicalRoot = isManagedSession()
+      ? null
+      : findCanonicalGitRoot(originalCwd)
     const isNestedWorktree =
       gitRoot !== null &&
       canonicalRoot !== null &&
@@ -966,7 +971,10 @@ export const getMemoryFiles = memoize(
     // This is controlled by CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD and defaults to off
     // Note: we don't check isSettingSourceEnabled('projectSettings') here because --add-dir
     // is an explicit user action and the SDK defaults settingSources to [] when not specified
-    if (isEnvTruthy(process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD)) {
+    if (
+      !isManagedSession() &&
+      isEnvTruthy(process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD)
+    ) {
       const additionalDirs = getAdditionalDirectoriesForClaudeMd()
       for (const dir of additionalDirs) {
         // Try reading CLAUDE.md from the additional directory
@@ -1364,44 +1372,48 @@ export async function getMemoryFilesForNestedDirectory(
   // Process project unconditional .cat-code/rules/*.md and .claude/rules/*.md files, which were not eagerly loaded
   // Use a separate processedPaths set to avoid marking conditional rule files as processed
   const unconditionalProcessedPaths = new Set(processedPaths)
-  result.push(
-    ...(await processMdRules({
-      rulesDir: catCodeRulesDir,
-      type: 'Project',
-      processedPaths: unconditionalProcessedPaths,
-      includeExternal: false,
-      conditionalRule: false,
-    })),
-  )
-  result.push(
-    ...(await processMdRules({
-      rulesDir,
-      type: 'Project',
-      processedPaths: unconditionalProcessedPaths,
-      includeExternal: false,
-      conditionalRule: false,
-    })),
-  )
+  if (isSettingSourceEnabled('projectSettings')) {
+    result.push(
+      ...(await processMdRules({
+        rulesDir: catCodeRulesDir,
+        type: 'Project',
+        processedPaths: unconditionalProcessedPaths,
+        includeExternal: false,
+        conditionalRule: false,
+      })),
+    )
+    result.push(
+      ...(await processMdRules({
+        rulesDir,
+        type: 'Project',
+        processedPaths: unconditionalProcessedPaths,
+        includeExternal: false,
+        conditionalRule: false,
+      })),
+    )
+  }
 
   // Process project conditional .cat-code/rules/*.md and .claude/rules/*.md files
-  result.push(
-    ...(await processConditionedMdRules(
-      targetPath,
-      catCodeRulesDir,
-      'Project',
-      processedPaths,
-      false,
-    )),
-  )
-  result.push(
-    ...(await processConditionedMdRules(
-      targetPath,
-      rulesDir,
-      'Project',
-      processedPaths,
-      false,
-    )),
-  )
+  if (isSettingSourceEnabled('projectSettings')) {
+    result.push(
+      ...(await processConditionedMdRules(
+        targetPath,
+        catCodeRulesDir,
+        'Project',
+        processedPaths,
+        false,
+      )),
+    )
+    result.push(
+      ...(await processConditionedMdRules(
+        targetPath,
+        rulesDir,
+        'Project',
+        processedPaths,
+        false,
+      )),
+    )
+  }
 
   // processedPaths must be seeded with unconditional paths for subsequent directories
   for (const path of unconditionalProcessedPaths) {
@@ -1425,6 +1437,7 @@ export async function getConditionalRulesForCwdLevelDirectory(
   targetPath: string,
   processedPaths: Set<string>,
 ): Promise<MemoryFileInfo[]> {
+  if (!isSettingSourceEnabled('projectSettings')) return []
   const catCodeRulesDir = join(dir, '.cat-code', 'rules')
   const rulesDir = join(dir, '.claude', 'rules')
   const results = await Promise.all([
