@@ -141,6 +141,9 @@ export function Field({
   error,
   origin,
   onReset,
+  resetLabel = 'Reset to default',
+  note,
+  settingKey,
   children,
 }: {
   label: string
@@ -152,44 +155,52 @@ export function Field({
   error?: string | null
   origin?: string | null
   onReset?: () => void
+  resetLabel?: string
+  note?: ReactNode
+  settingKey?: string
   children?: ReactNode
 }) {
   return (
-    <div className="flex items-start justify-between gap-[18px] border-b border-shell-seam py-[13px]">
+    <div
+      className="flex min-h-[69px] scroll-mt-[30px] items-center justify-between gap-4 border-b border-shell-seam py-4 last:border-b-0 sm:gap-8"
+      data-setting-key={settingKey}
+      tabIndex={settingKey ? -1 : undefined}
+    >
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-medium text-text-primary">
-            {label}
-          </span>
-          {managed ? (
-            <ManagedBadge origin={origin} />
-          ) : source ? (
-            <SourceBadge origin={origin} source={source} />
-          ) : null}
-        </div>
+        <div className="text-[14px] font-medium leading-[21px] text-text-primary">{label}</div>
         {desc ? (
-          <div className="mt-0.5 text-[11.5px] leading-relaxed text-text-subtle">
+          <div className="mt-0.5 max-w-[58ch] text-[13px] leading-5 text-text-subtle">
             {desc}
           </div>
         ) : null}
+        {managed || source || note || (modified && !managed && editable && onReset) ? (
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-[17px] text-text-subtle">
+            {managed ? (
+              <ManagedBadge origin={origin} />
+            ) : source ? (
+              <SourceBadge origin={origin} source={source} />
+            ) : null}
+            {note}
+            {modified && !managed && editable && onReset ? (
+              <button
+                className="text-text-muted underline decoration-text-muted/50 underline-offset-[3px] transition-colors hover:text-text-primary"
+                onClick={onReset}
+                type="button"
+              >
+                {resetLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {error ? (
-          <div className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-tone-danger">
+          <div className="mt-1.5 flex items-center gap-1.5 text-[12px] text-tone-danger">
             <ErrorIcon />
             {error}
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1.5">
+      <div className="flex min-w-[118px] max-w-[240px] shrink-0 flex-col items-end gap-1.5">
         {children}
-        {modified && !managed && editable && onReset ? (
-          <button
-            className="text-[11px] text-text-subtle transition-colors hover:text-text-muted"
-            onClick={onReset}
-            type="button"
-          >
-            Reset to default
-          </button>
-        ) : null}
       </div>
     </div>
   )
@@ -204,9 +215,9 @@ export function PaneSection({
   children: ReactNode
 }) {
   return (
-    <section className="mb-6">
+    <section className="mb-7">
       {title ? (
-        <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.12em] text-text-subtle">
+        <div className="mb-1 text-[13px] font-semibold text-text-primary">
           {title}
         </div>
       ) : null}

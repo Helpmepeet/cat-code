@@ -1,11 +1,10 @@
 /**
- * The live transcript canvas that heads Settings ▸ Transcript, above the
- * "Tool calls" picker.
+ * The live transcript canvas inside the Tool calls disclosure in Appearance.
  *
  * IT MUST BE THE TRANSCRIPT'S OWN ROWS, NOT A LOOKALIKE — the same rule
  * `CodeThemePreview` states for the code block, and for the same reason: a
  * preview that draws its own approximation drifts from the real thing the
- * moment either side is touched, and the picker above it then advertises a
+ * moment either side is touched, and the related picker then advertises a
  * drawing the transcript does not produce. So the sample goes through the
  * exported `TranscriptRowsView`, which brings the real shells, the real family
  * marks, the real collapsed peek and the real spacing with it.

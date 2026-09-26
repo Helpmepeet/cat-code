@@ -603,11 +603,11 @@ test('a row this scope wrote is still shown and still editable under an override
  * `<select>` fires no `change` event for the option already selected, so it was
  * unreachable and the operator got no feedback of any kind.
  */
-test('an unset select offers a way to save the option it is already showing', () => {
+test('an unset select offers a way to set the option it is already showing', () => {
   const unset = renderToStaticMarkup(
     <SettingsPane layer="userSettings" onWrite={noop} pane="model" snapshot={snapshot({})} />,
   )
-  expect(unset).toContain('aria-label="Save Reasoning display"')
+  expect(unset).toContain('aria-label="Set Reasoning display for this scope"')
 
   // A row with a real saved value has nothing to pin, so the affordance is not
   // there to be misread as unsaved state.
@@ -629,7 +629,7 @@ test('an unset select offers a way to save the option it is already showing', ()
       })}
     />,
   )
-  expect(set).not.toContain('aria-label="Save Reasoning display"')
+  expect(set).not.toContain('aria-label="Set Reasoning display for this scope"')
 })
 
 test('with nothing read the pane offers no control at all, and says why', () => {
@@ -693,7 +693,7 @@ function rowFor(html: string, label: string): string {
   return next === -1 ? html.slice(start) : html.slice(start, next)
 }
 
-test('a key set in THIS scope offers Reset to default', () => {
+test('a key set in this scope names the value reset will reveal', () => {
   const html = renderToStaticMarkup(
     <SettingsPane
       layer="userSettings"
@@ -711,6 +711,25 @@ test('a key set in THIS scope offers Reset to default', () => {
     />,
   )
   expect(rowFor(html, 'Fast mode')).toContain('Reset to default')
+
+  const withInheritedValue = renderToStaticMarkup(
+    <SettingsPane
+      layer="projectSettings"
+      onWrite={noop}
+      pane="model"
+      snapshot={snapshot({
+        layers: [
+          { source: 'projectSettings', origin: '/repo/settings.json', keys: ['fastMode'] },
+          { source: 'userSettings', origin: '/u/settings.json', keys: ['fastMode'] },
+        ],
+        resolved: [
+          { key: 'fastMode', source: 'projectSettings', editable: true, managed: false },
+        ],
+        editableValues: [{ key: 'fastMode', value: true, source: 'projectSettings' }],
+      })}
+    />,
+  )
+  expect(rowFor(withInheritedValue, 'Fast mode')).toContain('Use inherited value')
 })
 
 test('a key PINNED at its own built-in default still offers Reset — the pin is what is removed', () => {

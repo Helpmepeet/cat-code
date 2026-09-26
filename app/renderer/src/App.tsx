@@ -268,6 +268,7 @@ import {
 import {
   createSessionsCatalogState,
   filterInteractiveSessionDescriptors,
+  groupByWorkspace,
   reduceSessionsCatalogState,
   resolveCreatedPeerSessionRoute,
   resolveRecentOpenRoute,
@@ -1536,6 +1537,10 @@ export function App() {
   const settingsProjectBinding = useMemo(
     () => selectSettingsProjectBinding(sessionCatalogRows, activeSessionId),
     [activeSessionId, sessionCatalogRows],
+  )
+  const settingsProjects = useMemo(
+    () => groupByWorkspace(sessionCatalogRows, null).filter(group => group.cwd),
+    [sessionCatalogRows],
   )
 
   // P4-17 Welcome launcher — derived inputs, read from the SAME domain seams as
@@ -4399,7 +4404,6 @@ export function App() {
               agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
               cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
               extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
-              initialCategory="agents"
               memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
               onRemoteVerb={sendRemoteSettingsVerb}
               onOpenLogs={() => getBridge().openLogsFolder()}
@@ -4408,6 +4412,7 @@ export function App() {
               remoteLastResult={remoteSettings.lastResult}
               remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
               projectBinding={settingsProjectBinding}
+              projects={settingsProjects}
               snapshot={selectSettingsSnapshot(settings, activeSessionId)}
             />
           ) : activeView === 'goals' ? (

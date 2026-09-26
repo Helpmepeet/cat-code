@@ -52,13 +52,11 @@ import type {
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import type {
-  EditableSettingPane,
   EditableSettingSource,
   EditableSettingValue,
 } from '../../shared/settingsEditable.js'
 import { validateEditableSettingValue } from '../../shared/settingsEditable.js'
 import { settingsUnreadNote } from './settingsReadState.js'
-import { settingsPaneSpecs } from './settingsEditorModel.js'
 import { selectLayerOrigin, SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 
 /* ── scope ────────────────────────────────────────────────────────────────── */
@@ -223,13 +221,14 @@ export function settingsNoEngineNote(projectName: string): string {
   )
 }
 
-/* ── rail ─────────────────────────────────────────────────────────────────── */
+/* ── stable category navigation ──────────────────────────────────────────── */
 
-export const SETTINGS_RAIL_ITEM_IDS = [
+/** Categories describe the task, while the selected scope names its storage. */
+export const SETTINGS_CATEGORY_IDS = [
   'general',
+  'appearance',
   'model',
   'permissions',
-  'interface',
   'privacy',
   'memory',
   'agents',
@@ -238,236 +237,81 @@ export const SETTINGS_RAIL_ITEM_IDS = [
   'mcp',
   'hooks',
   'remote',
-  'appearance',
-  'notifications',
+  'diagnostics',
   'policy',
 ] as const
 
-export type SettingsRailItemId = (typeof SETTINGS_RAIL_ITEM_IDS)[number]
+export type SettingsCategoryId = (typeof SETTINGS_CATEGORY_IDS)[number]
 
-export function isSettingsRailItemId(
-  value: unknown,
-): value is SettingsRailItemId {
-  return (
-    typeof value === 'string' &&
-    (SETTINGS_RAIL_ITEM_IDS as readonly string[]).includes(value)
-  )
-}
-
-export type SettingsRailItem = {
-  readonly id: SettingsRailItemId
+export type SettingsNavigationItem = {
+  readonly id: SettingsCategoryId
   readonly label: string
   readonly desc: string
   readonly locked?: true
 }
 
-/**
- * The rail is FUNCTIONAL — what a person came to change — because the resolver's
- * own vocabulary (user / project / local / flag / policy) is now the scope
- * selector above it and a per-row annotation beside it. It never structures the
- * nav again (spec §2, "provenance is an annotation, not an organizing axis").
- */
-const RAIL_ITEMS: Record<SettingsRailItemId, SettingsRailItem> = {
-  general: {
-    id: 'general',
-    label: 'General',
-    desc: 'Update channel, git behavior, and workflow guidance',
-  },
-  model: {
-    id: 'model',
-    label: 'Model & Reasoning',
-    desc: 'Effort, thinking, fast mode, and how reasoning is shown',
-  },
-  permissions: {
-    id: 'permissions',
-    label: 'Permissions',
-    desc: 'The saved default mode and the rules new sessions start with',
-  },
-  interface: {
-    id: 'interface',
-    label: 'Interface',
-    desc: 'Output style and syntax highlighting',
-  },
-  privacy: {
-    id: 'privacy',
-    label: 'Privacy & Data',
-    desc: 'How long transcripts are kept',
-  },
-  memory: {
-    id: 'memory',
-    label: 'Memory',
-    desc: 'CLAUDE.md instruction files and saved memories',
-  },
-  agents: {
-    id: 'agents',
-    label: 'Agents',
-    desc: 'Agent definitions by source, with overrides and precedence',
-  },
-  skills: {
-    id: 'skills',
-    label: 'Skills',
-    desc: 'Prompt-command skills, grouped by source',
-  },
-  plugins: {
-    id: 'plugins',
-    label: 'Plugins',
-    desc: 'Installed plugins and the marketplace',
-  },
-  mcp: {
-    id: 'mcp',
-    label: 'MCP',
-    desc: 'Configured Model Context Protocol servers',
-  },
-  hooks: {
-    id: 'hooks',
-    label: 'Hooks',
-    desc: 'Event hooks by event, with recent run results',
-  },
-  remote: {
-    id: 'remote',
-    // There are no saved SSH environments, and there is no roster to save them
-    // in: `decisions/PAIRED-DEVICES.md` §1-§3 cut the SSH connect mode and the
-    // device roster, and `RemoteSettingsSnapshot` carries only `bridge` and
-    // `commandFilter`. The rail now names the three things the pane actually
-    // renders (`RemoteSettingsPage.tsx`): the bridge, its inbound command
-    // filter, and the direct-connect form.
-    label: 'Remote',
-    desc: 'The Remote Control bridge, its command filter, and connecting a remote session',
-  },
-  appearance: {
-    id: 'appearance',
-    label: 'Appearance',
-    desc: 'How this app draws the transcript',
-  },
-  notifications: {
-    id: 'notifications',
-    label: 'Notifications',
-    desc: 'How this app tells you a turn finished',
-  },
-  policy: {
-    id: 'policy',
-    label: 'Enforced settings',
-    desc: 'Settings your organization enforces',
-    locked: true,
-  },
-}
-
-export function settingsRailItem(id: SettingsRailItemId): SettingsRailItem {
-  return RAIL_ITEMS[id]
-}
-
-export type SettingsRailGroup = {
-  /** null = an unheaded block; the rail only earns a heading where one group
-   * would otherwise be indistinguishable from the next (Extensions). */
+export type SettingsNavigationGroup = {
   readonly heading: string | null
-  readonly items: readonly SettingsRailItem[]
+  readonly items: readonly SettingsNavigationItem[]
 }
 
-const CORE_ITEMS: readonly SettingsRailItemId[] = [
-  'general',
-  'model',
-  'permissions',
-  'interface',
-  'privacy',
-  'memory',
-]
-
-/** Operator ruling on spec §7.5: five rail items under an Extensions group. */
-const EXTENSION_ITEMS: readonly SettingsRailItemId[] = [
-  'agents',
-  'skills',
-  'plugins',
-  'mcp',
-  'hooks',
-]
-
-const RAIL: Record<
-  SettingsScopeKind,
-  readonly { heading: string | null; items: readonly SettingsRailItemId[] }[]
-> = {
-  user: [
-    { heading: null, items: CORE_ITEMS },
-    { heading: 'Extensions', items: EXTENSION_ITEMS },
-    { heading: null, items: ['remote'] },
-  ],
-  // Remote is machine-level durable config (sshConfigs, default environment), so
-  // it has no per-project meaning and is absent here rather than rendered empty.
-  project: [
-    { heading: null, items: CORE_ITEMS },
-    { heading: 'Extensions', items: EXTENSION_ITEMS },
-  ],
-  app: [{ heading: null, items: ['appearance', 'notifications'] }],
-  enforced: [{ heading: null, items: ['policy'] }],
+const NAVIGATION_ITEMS: Record<SettingsCategoryId, SettingsNavigationItem> = {
+  general: { id: 'general', label: 'General', desc: 'Everyday behavior for new sessions.' },
+  appearance: { id: 'appearance', label: 'Appearance', desc: 'The window and the way your conversations look.' },
+  model: { id: 'model', label: 'Model & reasoning', desc: 'Model and reasoning defaults for new sessions.' },
+  permissions: { id: 'permissions', label: 'Permissions', desc: 'Saved permissions for new sessions.' },
+  privacy: { id: 'privacy', label: 'Privacy & data', desc: 'Saved conversations and retention preferences.' },
+  memory: { id: 'memory', label: 'Memory', desc: 'Instruction files and automatic memories.' },
+  agents: { id: 'agents', label: 'Agents', desc: 'Specialized agents available to conversations.' },
+  skills: { id: 'skills', label: 'Skills', desc: 'Reusable instructions and commands.' },
+  plugins: { id: 'plugins', label: 'Plugins', desc: 'Installed plugins and their capabilities.' },
+  mcp: { id: 'mcp', label: 'MCP servers', desc: 'Connections to tools and data.' },
+  hooks: { id: 'hooks', label: 'Hooks', desc: 'Commands attached to agent events.' },
+  remote: { id: 'remote', label: 'Remote', desc: 'The Remote Control bridge, its command filter, and direct connections.' },
+  diagnostics: { id: 'diagnostics', label: 'Diagnostics', desc: 'App information and troubleshooting.' },
+  policy: { id: 'policy', label: 'Policies', desc: 'Enforced settings and their sources.', locked: true },
 }
 
-/**
- * Which editor pane each rail item hosts, for search. Items that render
- * `SettingsPane` appear; the rest carry no editable-setting rows, so a query can
- * only reach them through their own label and description.
- */
-const RAIL_ITEM_PANE: Partial<Record<SettingsRailItemId, EditableSettingPane>> =
-  {
-    general: 'general',
-    model: 'model',
-    privacy: 'privacy',
-    interface: 'theme',
-    memory: 'memory',
+const navigationGroup = (
+  heading: string | null,
+  ids: readonly SettingsCategoryId[],
+): SettingsNavigationGroup => ({
+  heading,
+  items: ids.map(id => NAVIGATION_ITEMS[id]),
+})
+
+/** The same destinations remain visible while My defaults or Project is chosen. */
+export const SETTINGS_NAVIGATION_GROUPS: readonly SettingsNavigationGroup[] = [
+  navigationGroup(null, ['general', 'appearance', 'model', 'permissions', 'privacy', 'memory']),
+  navigationGroup('Extensions', ['agents', 'skills', 'plugins', 'mcp', 'hooks']),
+  navigationGroup('Advanced', ['remote', 'diagnostics', 'policy']),
+]
+
+export function selectSettingsCategory(id: SettingsCategoryId): SettingsNavigationItem {
+  return NAVIGATION_ITEMS[id]
+}
+
+export function isSettingsCategoryId(value: unknown): value is SettingsCategoryId {
+  return typeof value === 'string' &&
+    (SETTINGS_CATEGORY_IDS as readonly string[]).includes(value)
+}
+
+/** A category changes the subject only when its controls have a fixed owner. */
+export function selectSettingsCategoryScope(
+  category: SettingsCategoryId,
+  preferredEngineScope: 'user' | 'project',
+): SettingsScopeKind {
+  switch (category) {
+    case 'appearance':
+    case 'diagnostics':
+      return 'app'
+    case 'policy':
+      return 'enforced'
+    case 'remote':
+      return 'user'
+    default:
+      return preferredEngineScope
   }
-
-/**
- * What a query is matched against for one rail item: its own label and
- * description, plus the LABELS OF THE SETTINGS IT CONTAINS.
- *
- * Matching the category label alone made the box unusable for its actual job —
- * every real setting name ("Respect .gitignore", "Output style", "Transcript
- * retention") returned nothing, because none of them is a category. The setting
- * labels come from `settingsPaneSpecs`, i.e. the specs the pane will really
- * render, so search can never route to a pane that then does not show the row
- * the operator searched for.
- */
-function railItemSearchText(item: SettingsRailItem): string {
-  const pane = RAIL_ITEM_PANE[item.id]
-  const settings = pane ? settingsPaneSpecs(pane).map(spec => spec.label) : []
-  return [item.label, item.desc, ...settings].join(' ').toLowerCase()
-}
-
-/**
- * The rail for one scope, matched against the search box in the same pass.
- *
- * Exported because search is the one part of the rail the SSR-only suite cannot
- * drive (no events), and a filter that quietly stopped reaching the last group
- * would look identical in the markup. Groups emptied by the query drop out
- * entirely, so no heading is ever left standing over nothing.
- */
-export function selectSettingsRail(
-  scope: SettingsScopeKind,
-  query: string,
-): SettingsRailGroup[] {
-  const q = query.trim().toLowerCase()
-  return RAIL[scope]
-    .map(group => ({
-      heading: group.heading,
-      items: group.items
-        .map(id => RAIL_ITEMS[id])
-        .filter(item => !q || railItemSearchText(item).includes(q)),
-    }))
-    .filter(group => group.items.length > 0)
-}
-
-/**
- * Which rail item a scope shows. Switching scope keeps the operator on the same
- * functional pane when that scope has one (General stays General), and falls
- * back to the scope's first item when it does not (Remote → General, because
- * Remote is not a project-scoped pane).
- */
-export function selectSettingsRailItem(
-  scope: SettingsScopeKind,
-  wanted: string,
-): SettingsRailItemId {
-  const available = RAIL[scope].flatMap(group => group.items)
-  if (isSettingsRailItemId(wanted) && available.includes(wanted)) return wanted
-  // Every scope's rail is non-empty by construction (see RAIL above).
-  return available[0] as SettingsRailItemId
 }
 
 /* ── row grammar ──────────────────────────────────────────────────────────── */
@@ -1108,7 +952,7 @@ export function settingsWriteTargetNote(
 export const SETTINGS_APPLY_NOTE =
   'Edits apply to sessions started afterwards, not to sessions already running.'
 
-export function settingsApplyNote(item: SettingsRailItemId): string {
+export function settingsApplyNote(item: SettingsCategoryId): string {
   return item === 'privacy'
     ? 'Stopping new session saves takes effect immediately. Existing saved sessions are deleted later by background cleanup. Other edits apply to sessions started afterwards.'
     : SETTINGS_APPLY_NOTE

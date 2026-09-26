@@ -3,7 +3,7 @@
  *
  * The renderer suite is SSR-only (`renderToStaticMarkup`), so nothing here can
  * click a scope tab or a project picker. That is exactly why the scope model,
- * the rail, and the row grammar are pure functions: the branch a click would
+ * navigation, and the row grammar are pure functions: the branch a click would
  * reach is reachable by a call.
  *
  * The assertions below are written to fail when the logic is wrong rather than
@@ -27,14 +27,13 @@ import {
   selectSettingsDestructiveWarning,
   selectSettingsIntCommit,
   selectSettingsProjects,
-  selectSettingsRail,
-  selectSettingsRailItem,
+  selectSettingsCategory,
+  selectSettingsCategoryScope,
   selectSettingsReset,
   selectSettingsRow,
   selectSettingsWriteLayer,
   settingsIntCancelDraft,
   settingsApplyNote,
-  settingsRailItem,
   settingsRowCommitsUnchanged,
   settingsRowNote,
   settingsWriteTargetNote,
@@ -1092,106 +1091,20 @@ describe('an unset row can persist the value it is showing', () => {
   })
 })
 
-/* ── the rail ─────────────────────────────────────────────────────────────── */
+/* ── category scope routing ────────────────────────────────────────────── */
 
-describe('functional rail', () => {
-  const labels = (scope: (typeof SETTINGS_SCOPE_KINDS)[number]) =>
-    selectSettingsRail(scope, '').map(group => ({
-      heading: group.heading,
-      items: group.items.map(item => item.label),
-    }))
-
-  test('My defaults is functional, with Extensions as the one named group', () => {
-    expect(labels('user')).toEqual([
-      {
-        heading: null,
-        items: [
-          'General',
-          'Model & Reasoning',
-          'Permissions',
-          'Interface',
-          'Privacy & Data',
-          'Memory',
-        ],
-      },
-      {
-        heading: 'Extensions',
-        items: ['Agents', 'Skills', 'Plugins', 'MCP', 'Hooks'],
-      },
-      { heading: null, items: ['Remote'] },
-    ])
+describe('category scope routing', () => {
+  test('engine categories retain the chosen file scope', () => {
+    expect(selectSettingsCategoryScope('general', 'user')).toBe('user')
+    expect(selectSettingsCategoryScope('model', 'project')).toBe('project')
+    expect(selectSettingsCategoryScope('permissions', 'project')).toBe('project')
   })
 
-  test('project scope drops Remote, which is machine-level durable config', () => {
-    expect(labels('project').flatMap(group => group.items)).not.toContain(
-      'Remote',
-    )
-    // …and keeps everything else, so this is a considered omission and not an
-    // accidentally different rail.
-    expect(labels('project')).toEqual(
-      labels('user').slice(0, 2),
-    )
-  })
-
-  test('This app and Enforced have their own small rails', () => {
-    expect(labels('app')).toEqual([
-      { heading: null, items: ['Appearance', 'Notifications'] },
-    ])
-    expect(labels('enforced')).toEqual([
-      { heading: null, items: ['Enforced settings'] },
-    ])
-  })
-
-  /**
-   * The box is labelled "Search settings", and it could not find a setting.
-   *
-   * `item` is a rail CATEGORY, so matching `item.label` alone meant every real
-   * setting name returned "No matches" — the operator typed the name printed on
-   * the row they wanted and the rail emptied. Each query below is a word off an
-   * actual control or an actual category description.
-   */
-  test('search finds SETTINGS, not only category names', () => {
-    const found = (query: string) =>
-      selectSettingsRail('user', query).flatMap(group =>
-        group.items.map(item => item.label),
-      )
-    // Control labels, none of which is a category name.
-    expect(found('gitignore')).toEqual(['General'])
-    expect(found('output style')).toEqual(['Interface'])
-    expect(found('retention')).toEqual(['Privacy & Data'])
-    expect(found('thinking')).toContain('Model & Reasoning')
-    expect(found('auto memory')).toEqual(['Memory'])
-    expect(found('auto')).toEqual(['Memory'])
-    // A word that lives only in a category's own description.
-    expect(found('effort')).toEqual(['Model & Reasoning'])
-    // Category names still work, and nonsense still finds nothing.
-    expect(found('memory')).toContain('Memory')
-    expect(found('zzz')).toEqual([])
-  })
-
-  test('search reaches every group, and empties none by halves', () => {
-    expect(
-      selectSettingsRail('user', 'remote').flatMap(group =>
-        group.items.map(item => item.label),
-      ),
-    ).toEqual(['Remote'])
-    // The last group is the one a broken filter silently stops reaching.
-    expect(selectSettingsRail('user', 'remote')).toHaveLength(1)
-    expect(
-      selectSettingsRail('user', 'e').map(group => group.heading),
-    ).toEqual([null, 'Extensions', null])
-    expect(selectSettingsRail('user', 'zzz')).toEqual([])
-  })
-
-  test('switching scope keeps the same pane when it exists, and falls back when it does not', () => {
-    expect(selectSettingsRailItem('project', 'general')).toBe('general')
-    // Remote is not a project pane, so the project scope opens at its first.
-    expect(selectSettingsRailItem('project', 'remote')).toBe('general')
-    // A stale / unknown id can never leave the rail with nothing selected.
-    expect(selectSettingsRailItem('app', 'general')).toBe('appearance')
-    expect(selectSettingsRailItem('enforced', 'nonsense')).toBe('policy')
-    // App's existing entry point still resolves.
-    expect(selectSettingsRailItem('user', 'agents')).toBe('agents')
+  test('app, policy, and machine destinations keep their actual owners', () => {
+    expect(selectSettingsCategoryScope('appearance', 'project')).toBe('app')
+    expect(selectSettingsCategoryScope('diagnostics', 'project')).toBe('app')
+    expect(selectSettingsCategoryScope('policy', 'project')).toBe('enforced')
+    expect(selectSettingsCategoryScope('remote', 'project')).toBe('user')
   })
 })
 
@@ -1686,17 +1599,17 @@ describe('what the destructive copy is allowed to say (CLAUDE.md §7)', () => {
   })
 })
 
-/* ── the Remote rail describes the Remote pane (P4-47, 26d) ───────────────── */
+/* ── the Remote destination describes the Remote pane ────────────────────── */
 
-describe('the rail promises only what a pane can deliver', () => {
+describe('the destination promises only what a pane can deliver', () => {
   /**
    * `decisions/PAIRED-DEVICES.md` §1-§3 cut the SSH connect mode and the device
    * roster, and `RemoteSettingsSnapshot` carries only `bridge` and
    * `commandFilter`, so there is nothing for "saved SSH environments" to be. The
    * copy is aligned with the cut; the cut is not reopened.
    */
-  test('the Remote rail no longer advertises saved SSH environments', () => {
-    const remote = settingsRailItem('remote')
+  test('Remote no longer advertises saved SSH environments', () => {
+    const remote = selectSettingsCategory('remote')
     expect(remote.desc.toLowerCase()).not.toContain('ssh')
     expect(remote.desc.toLowerCase()).not.toContain('saved')
     // What the pane actually renders (`RemoteSettingsPage.tsx`).

@@ -1,5 +1,5 @@
 /**
- * The live canvas above the "Text arrival" picker in Settings ▸ Transcript.
+ * The live canvas inside the Text arrival disclosure in Appearance.
  *
  * IT MUST PLAY. The three options are identical once text has settled — they
  * differ only in how it got there — so a still image of any of them is the same
