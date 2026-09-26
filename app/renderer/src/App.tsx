@@ -4545,7 +4545,6 @@ export function App() {
               accountsUsagePending={accountsUsagePending}
               onOpenRecent={openRecentWorkspace}
               onOpenFolder={() => void newSession()}
-              onNewChat={() => void newChat()}
               rosterFailure={
                 rosterBootstrap.status === 'failure'
                   ? {

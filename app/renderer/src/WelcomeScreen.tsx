@@ -103,7 +103,6 @@ type WelcomeScreenProps =
       onOpenRecent: (recent: RecentWorkspace) => void
       /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
       onOpenFolder: () => void
-      onNewChat?: () => void
       rosterFailure?: {
         retrying: boolean
         onRetry: () => void
@@ -171,29 +170,6 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                 <p className="mt-2 text-[14px] text-text-muted">
                   Start a chat or open a project. Sign in once it opens.
                 </p>
-              ) : null}
-              {props.variant !== 'session' && props.onNewChat ? (
-                <button
-                  type="button"
-                  onClick={props.onNewChat}
-                  className="mt-4 inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-accent/90"
-                >
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M12 20h9" />
-                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
-                  </svg>
-                  New chat
-                </button>
               ) : null}
             </div>
 

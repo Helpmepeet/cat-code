@@ -103,17 +103,16 @@ test('the projectless launcher has no branch choice or worktree option', () => {
   expect(html).toContain('Open a project')
 })
 
-test('launcher offers New chat and managed chat omits project and branch context', () => {
+test('launcher leaves New chat to the sidebar and managed chat omits project and branch context', () => {
   const launcher = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
       accounts={null}
       onOpenRecent={noop}
       onOpenFolder={noop}
-      onNewChat={noop}
     />,
   )
-  expect(launcher).toContain('New chat')
+  expect(launcher).not.toContain('New chat')
 
   const managed = renderToStaticMarkup(
     <WelcomeScreen variant="session" managedChat cwd="/managed/id" branch={null} accounts={null} />,

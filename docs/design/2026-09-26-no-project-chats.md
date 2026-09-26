@@ -3,7 +3,7 @@
 Date: 2026-09-26. Revised after two independent adversarial reviews and the
 user's instructions to omit project-specific prompt content, peer sessions,
 and the No project / Files row above the composer.
-Status: proposed design only. No application implementation.
+Status: design specification.
 
 ## Product decision
 
@@ -38,7 +38,7 @@ case work correctly. It is an ownership convention, not an OS isolation boundary
 | Entry point | Proposed behavior |
 | --- | --- |
 | Sidebar **New chat**, tab **+**, existing new-chat shortcut | Create a managed session without a selected project, regardless of the active project. Focus its composer as the normal engine startup proceeds. No folder picker. |
-| App with no active session | Keep the welcome launcher and add a prominent **New chat** action. It starts the same managed-session flow; opening the app alone does not need to spawn an engine. |
+| App with no active session | Keep the welcome launcher. Use **New chat** in the left sidebar, tab **+**, or the existing shortcut; do not duplicate the button in the welcome panel. Opening the app alone does not need to spawn an engine. |
 | Project header **+** | Create a chat in that specific project, preserving the fast project workflow. |
 | **Projects +** | Keep the native folder picker and existing project trust flow. |
 | Chat's existing session-actions menu | **Open chat folder** and **Copy folder path** provide optional access to its working files. Existing session actions remain available. |
