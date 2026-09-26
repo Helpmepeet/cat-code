@@ -113,7 +113,8 @@ transport outcome. A durable receipt protocol would be separate work.
 - `git diff --check`: passed.
 - `bun run maps:lint`: passed with seven existing recommended-section warnings
   in maps untouched by this task.
-- All 40 local Markdown links across the design and this record resolve.
+- All local Markdown links across the design and this record resolved at review
+  time (40 links in revision `f3156ad3`).
   The mockup's local font and image paths resolve; it contains no remote URLs.
 - Extracted inline JavaScript passed `node --check`.
 - Browser verification on the isolated local preview covered New chat, sample

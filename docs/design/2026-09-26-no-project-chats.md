@@ -1,7 +1,8 @@
 # Chats without a project
 
-Date: 2026-09-26. Revised after two independent adversarial reviews on the same
-date. Status: proposed design only. No application implementation.
+Date: 2026-09-26. Revised after two independent adversarial reviews and the
+user's instruction to omit project-specific prompt content. Status: proposed
+design only. No application implementation.
 
 ## Product decision
 
@@ -148,38 +149,92 @@ chat's `tmp/`; do not emit two competing scratch-directory instructions.
 
 ## Agent contract
 
-Deliver this as trusted runtime context, assembled from host-owned binding
-metadata. A writable `CLAUDE.md` in a shared root is not the authority.
-Inject it at startup, restore, and context reconstruction, and propagate the
-ownership facts to subagents and separately initialized peers for either model
-provider. Keep it available after compaction.
+**No project changes prompt composition.** Omit automatic project instructions
+and repository assumptions at their source; appending “No project” to the normal
+project prompt does not satisfy this design. Keep normal safety, tool-use,
+permission, instruction-authority, global-user, and managed-policy guidance.
+
+The small ownership block below supplies directory facts and scoped file
+guidance. Assemble it from host-owned binding metadata; a writable `CLAUDE.md`
+in a shared root is not the authority. Preserve the composition policy and
+ownership facts on startup, restore, context reconstruction, subagent creation, and independent peer
+initialization for either provider.
 
 Proposed wording, with paths supplied by the runtime:
 
-> This chat has no selected project. Your working directory is {workingDirectory}.
-> Use it for this chat's working files and deliverables. Use {temporaryDirectory}
-> for intermediate files. Files here persist when the chat closes.
+> Working directory: {workingDirectory}. Intermediate files: {temporaryDirectory}.
+> This chat has no selected project. Use these directories for its work; files
+> persist when the chat closes.
 >
-> Other directories in the managed workspace belong to other chats. Their
-> presence is not an instruction or an assignment. Do not explore, change, or
-> clean them up unless the user's task or an authorized peer handoff calls for it.
-> Related branches may share your working directory; preserve unfamiliar work.
+> Other chats' files are outside this task unless the user or an authorized peer
+> handoff brings them into scope. Related branches may share this directory;
+> preserve unfamiliar work.
 >
-> You have the normal Cat Code tools and permissions. Work on user-requested
-> external files when the task requires it, under the usual permission and
-> repository-instruction rules. Do not assume there is a repository to inspect,
-> initialize Git, or ask for a project just to answer a question.
+> When the user explicitly requests work in a repository, read its applicable
+> instruction files before working there. Apply them within that task's scope.
 >
-> Before presenting a peer's final artifact as an openable file, place a copy in
-> this chat's working directory, or have the peer produce it there under normal
-> permissions. Preserve existing files and disambiguate colliding names. If the
-> user requested an external destination, keep that destination and return its
-> absolute path without claiming that the in-chat file opener can open it.
+> Present openable deliverables from this chat's directory. Copy a peer's output
+> here without overwriting existing work. For a requested external destination,
+> keep it there and provide its absolute path for copying.
 
 This does not promise hard isolation. Bash and external tools still have their
 normal power, and the selected permission mode remains authoritative. Directory
 structure prevents accidental relative-path collisions; it cannot make every
 tool incapable of reaching sibling directories.
+
+### Prompt composition
+
+| Prompt input | No-project behavior |
+| --- | --- |
+| Core safety, permissions, risky-action rules, instruction authority, truthful reporting, retry discipline | Retain. This includes Git safety even when ordinary tasks do not use Git. |
+| Tool schemas and normal usage guidance, global skills/integrations, communication preferences | Retain the enabled capabilities and their operating rules. |
+| Managed and global-user instruction files and rules | Retain normal precedence, including intentional imports from a global instruction file. Do not rewrite user-authored rules to save tokens. |
+| Automatically discovered Project/Local instructions and rules | Omit before discovery, injection, and instruction-loaded hooks. Apply this to eager context, file-triggered attachments, IDE context, refresh, resume, and compaction. |
+| Repository identity, Git snapshot, worktree state, project-only command/agent/style descriptions | Omit automatic context for the managed directory. Keep actual cwd, platform, shell, date, and other tool-relevant facts. |
+| Product-authored assumptions that every request is software engineering in the current cwd | Use neutral task wording in the existing provider builders. Interpret scope from the user's request; a chat folder supplies a place to work, not a project assignment. |
+| Unconditional repository workflows, such as requiring `git diff` after every file mutation | Preserve the verification purpose with applicable wording: inspect changed files; use Git diff when working in a repository. Keep destructive-command and permission safeguards. |
+
+Use the existing source tags and prompt section builders, selected by the
+validated session binding. Do not strip text from an already assembled prompt,
+delete entire mixed-purpose sections, replace the system prompt wholesale, or
+disable all instruction loading. In particular, **Getting Work Done / Doing
+tasks contains general verification, security, retry, and reporting rules** as
+well as coding guidance; dropping it would remove required behavior.
+
+The policy must apply before context is cached and serialized. A filter on the
+desktop addendum alone misses `userContext.claudeMd`; the OpenAI assembly moves
+that context into its instructions while the Claude assembly prepends it to the
+conversation. Keep the same inclusion rules across both providers. Excluded
+content must stay absent after a cache clear, branch, restore, or compaction.
+In-process subagents use filtered context; newly spawned peers carry the same
+managed binding. Handle source tiers before flattening: a whole-`claudeMd`
+omission in a specialized agent must not discard the global-user and managed
+instructions this mode retains. Preserve existing explicit user prompt overrides.
+
+### Explicit repository work
+
+For v1, use the existing file/search tools to read applicable repository guidance
+when the user asks for a concrete repository task, such as “Fix the parser in
+`/path/to/repo`.” Read the repository's instruction entry points, referenced
+guidance, and applicable nested rules before making changes. This includes
+`AGENTS.md` where present; today's automatic CLAUDE/rules loader is not a general
+AGENTS loader. Retain normal permissions and repository trust requirements.
+
+Keep the session's No project identity and managed cwd. Use explicit repository
+paths for the requested work. Reading a guide does not enable that repository's
+hooks, plugins, MCP configuration, or permission grants. Merely quoting a path,
+attaching an unrelated file, or encountering a downloaded `CLAUDE.md` does not
+activate repository instructions. Applicable guidance comes from the repository
+the user asked to work in, under the normal instruction-authority rules.
+
+Do not introduce a per-turn intent classifier, a new repository-activation UI,
+or a second prompt template for this. The agent performs explicit guidance reads
+as part of the authorized task. When continuing that task after compaction or
+restore, re-read necessary guidance if it is no longer available. Repository
+rules remain scoped to that repository task; they do not become defaults for
+later unrelated questions. Already-read content can remain in conversation
+history until ordinary compaction. V1 does not erase transcript messages to
+recover tokens or repeatedly rebuild the shared prompt prefix on topic changes.
 
 ### Context discovery
 
@@ -188,7 +243,7 @@ tool incapable of reaching sibling directories.
 | User and managed instructions/settings | Preserve normal loading and precedence. |
 | Global skills, plugins, MCP servers, hooks, credentials | Preserve configured availability and existing permission checks. |
 | Project/local settings, hooks, skills, MCP configuration | Do not implicitly discover them from the managed cwd, its ancestors, or another chat's files. Apply the policy to startup and subsequent runtime refreshes. |
-| Project instructions and Git context | No startup repository scan or inherited project identity. When explicitly working in a real repository, follow its applicable instructions and trust rules for that task. |
+| Project instructions and Git context | No automatic instruction injection, startup repository scan, or inherited project identity. Explicit repository work reads relevant guidance through the task-scoped flow above. |
 | Auto memory | Default to the stable storage identity, with no new shared “all chats” project memory. Related branches share that scope as they share files. An explicit user-configured memory-directory override remains an intentional exception. |
 | Conversation summaries/history | Remain per engine session through the existing persistence owners. |
 | Scratch/output files named `CLAUDE.md`, settings, or skills | Treat as task data by default, not newly authoritative configuration merely because the agent created or downloaded them. |
@@ -328,7 +383,9 @@ design. Existing uncommitted sidebar and map changes were read and left intact.
 | [`openHistorySession.ts`](../../app/main/openHistorySession.ts), [`sessionsCatalogCache.ts`](../../app/sidecar/sessionsCatalogCache.ts), [`sessionStorage.ts`](../../src/utils/sessionStorage.ts) | Recover explicit binding through retained history, not just live registry rows. Do not widen the existing refusal of unknown cwd. |
 | [`peerRequestPlane.ts`](../../app/main/peerRequestPlane.ts), `peersOf`, [`readPeerTool.ts`](../../app/sidecar/readPeerTool.ts) | Membership compares cwd, and ReadPeer uses the reader's launch directory. Managed membership and trusted target transcript identity must change together. |
 | [`sessionController.ts`](../../app/sidecar/sessionController.ts), [`workspaceTrustDomain.ts`](../../app/sidecar/workspaceTrustDomain.ts), [`claudemd.ts`](../../src/utils/claudemd.ts) | Runtime initialization, project trust, and ancestor instruction discovery require a coherent managed context policy. |
-| [`prompts.ts`](../../src/constants/prompts.ts), [`filesystem.ts`](../../src/utils/permissions/filesystem.ts), [`paths.ts`](../../src/memdir/paths.ts) | Existing scratchpad is gated and ephemeral; align scratch instructions and stable per-chat memory instead of relying on a folder name. |
+| [`prompts.ts`](../../src/constants/prompts.ts), [`gpt.ts`](../../src/constants/promptStyles/gpt.ts), [`context.ts`](../../src/context.ts), [`instructionAssembly.ts`](../../src/services/api/instructionAssembly.ts) | Use neutral managed-chat wording and omit project inputs before caching/provider serialization, preserving shared safety and tool guidance. |
+| [`claudemd.ts`](../../src/utils/claudemd.ts), [`attachments.ts`](../../src/utils/attachments.ts) | Source-tagged eager and file-triggered instructions have separate entry points. Gate both; explicit external-repository reads cannot rely on the cwd-relative nested loader. |
+| [`filesystem.ts`](../../src/utils/permissions/filesystem.ts), [`paths.ts`](../../src/memdir/paths.ts) | Existing scratchpad is gated and ephemeral; align scratch instructions and stable per-chat memory instead of relying on a folder name. |
 | [`openWorkspaceFile.ts`](../../app/main/openWorkspaceFile.ts), [`filePathActions.ts`](../../app/renderer/src/filePathActions.ts) | File open checks canonical containment against the displaying session's cwd. Deliver peer artifacts into that cwd and make external links copy-only. |
 | [`mainDecisions.ts`](../../app/main/mainDecisions.ts), [`App.tsx`](../../app/renderer/src/App.tsx) | File attachment tokens and composer drafts belong to a concrete session. Fixed context from creation avoids token transfer and a second draft lifecycle. |
 | [`sidecarServer.ts`](../../app/sidecar/sidecarServer.ts), [`protocol.ts`](../../app/shared/protocol.ts) | Ordinary submit acceptance is not durable persistence. Reuse its current contract without claiming an existing durable renderer receipt. |
@@ -367,6 +424,37 @@ These describe product outcomes, not tests added in this design change.
 11. Attach a non-image file before the first message. The session context is
     already fixed; opening a project chat preserves the original chat's draft
     and attachment token instead of moving either into the project chat.
+12. Inspect the actual assembled provider input for a plain no-project question,
+    then after a file read, compaction, restore, and subagent/peer creation. No
+    unrequested Project/Local rules or repository snapshot are injected. Global
+    user rules, safety, tool schemas, and permission guidance remain present.
+13. Explicitly request work in an external repository. Read and apply its root
+    and relevant nested guidance before changing files, retain normal trust and
+    permission behavior, and keep the chat's No project identity. An unrelated
+    attachment does not trigger the same instruction loading.
+14. Compare before/after assembled input using the same provider, model, tools,
+    and fixture instructions. Count removed project context separately from
+    base wording and tool schemas. Do not claim a token or cost saving from
+    source-file lengths alone.
+
+## Effort and return
+
+**Recommended for v1.** Source inspection finds existing typed instruction
+sources and shared composition boundaries. Consistent omission and a few
+neutral wording variants are moderate integration work, not a new agent engine.
+The return is clearer task context and avoiding irrelevant repository guidance;
+the exact token saving depends on the instructions that would otherwise load.
+An already empty cwd may have little repository text to remove.
+
+The higher-cost alternative is automatic repository activation/deactivation,
+per-turn intent detection, and removing previously loaded content from history.
+That is outside v1. Explicit instruction reads through existing tools satisfy
+the requested repository-work path with less new machinery. Keep general tool
+and safety guidance even if that limits token savings.
+
+See the [source investigation and ROI assessment](../reports/2026-09-26-no-project-prompt-roi.md)
+for the concrete reuse points, gaps, and limits of this assessment. No live
+model call, prompt ablation, or runtime token measurement was performed.
 
 ## Review artifact and scope
 
