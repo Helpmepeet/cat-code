@@ -27,6 +27,13 @@ tools and coordination context, and the host excludes them as callers/targets.
 Ordinary subagents and independent chats remain. The file opener's external-path
 limitation still applies to a chat's own outputs and is handled with Copy path.
 
+The user also removed the No project / Files row above the composer. The
+session still has a fixed managed binding, but it needs no visible context
+label. Optional folder actions move into the existing session-actions menu;
+output links remain in the conversation. The agent uses its folder directly
+and reads applicable CLAUDE.md / AGENTS.md guidance when explicitly asked to
+work in another workspace. No project-switching UI is required.
+
 ## Accepted findings
 
 ### 1. Working files under `.cat-code` trigger sensitive-directory checks
@@ -93,7 +100,9 @@ not define a transfer or rebinding contract.
 fixed No project context. Starting a project chat is a separate action. Existing
 per-session drafts, attachment lifetime, model controls, and engine startup
 apply. No pre-session composer or attachment-transfer mechanism is introduced.
-The mockup now shows a read-only label and Files access in the empty chat.
+The reviewed mockup showed a read-only label and Files access in the empty chat.
+The later composer simplification removes that row without changing session
+creation or attachment ownership.
 
 ### 5. The claimed existing branch confirmation does not exist
 
@@ -154,3 +163,17 @@ mockup assets resolve and no remote URLs are embedded. Browser inspection
 covered all five mockup states: no-project rows have no peer names, the branch
 notice remains, and no browser warnings or errors were reported. No application
 code or runtime behavior was changed or tested.
+
+## Composer-simplification validation
+
+After removing the context row, `git diff --check`, map lint, and `node --check`
+on the extracted mockup script passed. Map lint retained the same seven existing
+warnings. All 66 local document links and the three mockup assets resolve.
+
+Browser inspection covered all five design states with no project/files row,
+the tab's folder menu, Escape focus restoration, the simulated Copy folder path
+action, and missing-folder recovery. The branch notice remains. Visually checked
+the empty composer; no design-chrome classes appear inside the specimen and no
+browser warnings or errors were reported. The menu borrows the existing TabBar
+trigger and SessionActionsMenu styling; the mockup shows only its proposed
+folder actions. Native operations and application runtime behavior were not run.
