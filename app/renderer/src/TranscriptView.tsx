@@ -208,6 +208,8 @@ import {
   type ToolRunMember,
   type TranscriptLayoutItem,
 } from './toolRunLayout.js'
+import { TranscriptMotionContext, useTranscriptMotion } from './transcriptMotion.js'
+import { useChangedWhileMounted } from './useChangedWhileMounted.js'
 import {
   formatGrepDigest,
   grepDigest,
@@ -501,6 +503,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [cwd, openFilePathMenu],
   )
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
+  const motion = useTranscriptMotion(rows, restorePhase === null && !loadEarlierPending)
   // Owned ABOVE the derivations below, which is the whole point: a card that gets
   // re-keyed or re-typed when rows regroup finds its own expansion again through
   // the engine's `toolUseId` (`toolCardExpansion.ts`). A ref, not state — a toggle
@@ -648,6 +651,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   }
 
   return (
+    <TranscriptMotionContext.Provider value={motion}>
     <ToolCardExpansionContext.Provider value={expansionStore}>
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
@@ -677,6 +681,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
+    </TranscriptMotionContext.Provider>
   )
 })
 
@@ -697,6 +702,7 @@ export function ToolInspectorOverlay({
   row: ToolUseNestedRow | null
   onClose: () => void
 }) {
+  const openedWhileMounted = useChangedWhileMounted(row !== null) && row !== null
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalFocus({
     open: row !== null,
@@ -707,13 +713,13 @@ export function ToolInspectorOverlay({
   return (
     <div className="fixed inset-0 z-[200] flex justify-end">
       <div
-        className="absolute inset-0 bg-scrim backdrop-blur-[1px]"
+        className={`${openedWhileMounted ? 'animate-scrim-in ' : ''}absolute inset-0 bg-scrim backdrop-blur-[1px]`}
         onClick={onClose}
         aria-hidden
       />
       <div
         ref={dialogRef}
-        className="relative flex h-full shadow-2xl"
+        className={`${openedWhileMounted ? 'animate-drawer-in ' : ''}relative flex h-full shadow-2xl`}
         role="dialog"
         aria-modal="true"
         aria-label="Full output"
@@ -2366,6 +2372,8 @@ function ToolCardShell({
   targetHover,
   targetFilePath,
   collapsedExtra,
+  animateCollapsedExtra = false,
+  animateExpandedBody = false,
   defaultExpanded,
   expansionKey,
   presentation,
@@ -2387,6 +2395,8 @@ function ToolCardShell({
   targetHover?: string
   targetFilePath?: { rawPath: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
+  animateCollapsedExtra?: boolean
+  animateExpandedBody?: boolean
   defaultExpanded?: boolean
   /**
    * The engine's `toolUseId`, so the user's expansion outlives this component.
@@ -2486,18 +2496,24 @@ function ToolCardShell({
             carries the same state in color is redundant chrome; the dot alone,
             colour-coded, is enough (operator call). */}
         <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+          className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-[var(--motion-fast)] ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
           role="img"
           aria-label={st.word}
         />
       </button>
-      {!expanded && collapsedExtra ? collapsedExtra : null}
+      {!expanded && collapsedExtra ? (
+        <div className={animateCollapsedExtra ? 'animate-arrive' : undefined}>
+          {collapsedExtra}
+        </div>
+      ) : null}
       {expanded && hasBody ? (
         <div className={TOOL_CARD_BODY_CLASS[style]}>
           {sub ? (
             <div className={TOOL_CARD_SUB_CLASS[style]}>{sub}</div>
           ) : null}
-          <div className={TOOL_CARD_BODY_INNER_CLASS[style]}>{children}</div>
+          <div className={`${TOOL_CARD_BODY_INNER_CLASS[style]}${animateExpandedBody ? ' animate-arrive' : ''}`}>
+            {children}
+          </div>
         </div>
       ) : null}
     </div>
@@ -2688,6 +2704,7 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
  * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  const resolving = useContext(TranscriptMotionContext).resolvingTools.has(row.id)
   // The weakest of the three expansion inputs: a user's own click still wins
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
@@ -2781,6 +2798,8 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone || hasResultImages
         }
+        animateCollapsedExtra={resolving}
+        animateExpandedBody={resolving && (row.status === 'error' || isImageDone || hasResultImages)}
         collapsedExtra={
           ack !== null ? (
             <AckPeek ack={ack} />
@@ -3228,6 +3247,7 @@ const ToolRunRow = memo(function ToolRunRow({
     store?.set(runKey, true)
   }
   const content = row.result?.content ?? ''
+  const resolving = useContext(TranscriptMotionContext).resolvingTools.has(row.id)
   const st = STATE_STYLE[row.status]
   const fam = FAMILY_STYLE[family]
   return (
@@ -3261,7 +3281,7 @@ const ToolRunRow = memo(function ToolRunRow({
         {row.status !== 'success' ? (
           <span className="flex shrink-0 items-center gap-1.5">
             <span
-              className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+              className={`h-1.5 w-1.5 rounded-full transition-colors duration-[var(--motion-fast)] ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
               aria-hidden
             />
             <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
@@ -3269,7 +3289,10 @@ const ToolRunRow = memo(function ToolRunRow({
         ) : null}
       </button>
       {open ? (
-        <div className="mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3">
+        <div className={`mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3${
+          resolving && (row.status === 'error' || (row.result?.images?.length ?? 0) > 0)
+            ? ' animate-arrive' : ''
+        }`}>
           <ToolCardBody
             row={row}
             content={content}
@@ -4976,6 +4999,7 @@ function PlainLinesBody({
 }
 
 function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
+  const resolving = useContext(TranscriptMotionContext).resolvingTools.has(row.id)
   const toast = useToast()
   const [copied, setCopied] = useState(false)
   const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -5049,7 +5073,7 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
         <span className="h-1.5 w-1.5 rounded-full bg-tone-success" aria-hidden="true" />
         <span className="text-[10.5px] text-tone-success">Done</span>
       </div>
-      <div className="px-3 pb-3">
+      <div className={`px-3 pb-3${resolving ? ' animate-arrive' : ''}`}>
         <img
           alt="Generated image"
           className="mx-auto max-h-[520px] w-auto max-w-full rounded-[10px] border border-shell-seam object-contain"
@@ -5603,6 +5627,7 @@ function isVisibleStep(step: ReasoningStepModel): step is VisibleReasoningStep {
  * steps never fold away.
  */
 function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepModel[] }) {
+  const { arrivingSteps } = useContext(TranscriptMotionContext)
   const listId = useId()
   const visible = steps.filter(isVisibleStep)
   // Kept OUTSIDE this component, for the same reason a tool card's expansion is
@@ -5666,7 +5691,7 @@ function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepMod
           className="ml-2 mt-0.5 border-l border-white/10 pl-[17px] transition-colors duration-100 ease-out group-hover:border-white/[0.16]"
         >
           {shown.map(step => (
-            <ReasoningStep key={step.key} step={step} />
+            <ReasoningStep key={step.key} step={step} arriving={arrivingSteps.has(step.key)} />
           ))}
         </ol>
       )}
@@ -5682,12 +5707,14 @@ function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepMod
  */
 const ReasoningStep = memo(function ReasoningStep({
   step,
+  arriving,
 }: {
   step: VisibleReasoningStep
+  arriving: boolean
 }) {
   return (
     <li
-      className="relative py-0.5 text-[12.5px] leading-normal text-text-subtle"
+      className={`relative py-0.5 text-[12.5px] leading-normal text-text-subtle${arriving ? ' animate-arrive' : ''}`}
       title={REASONING_TITLE}
     >
       <ReasoningNode placement="rail" />
