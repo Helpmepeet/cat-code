@@ -214,6 +214,9 @@ export function SettingsShell({
     category === 'general' || category === 'model' ||
     category === 'permissions' || category === 'privacy' ||
     category === 'memory'
+  const inventoryCategory =
+    category === 'agents' || category === 'skills' ||
+    category === 'plugins' || category === 'mcp' || category === 'hooks'
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -235,7 +238,11 @@ export function SettingsShell({
     const target = Array.from(
       pageRef.current?.querySelectorAll<HTMLElement>('[data-setting-key]') ?? [],
     ).find(node => node.dataset.settingKey === focusKey)
-    const destination = target ?? pageRef.current?.querySelector<HTMLElement>('[data-settings-heading]')
+    const controlArea = target?.querySelector<HTMLElement>('[data-setting-control]')
+    const control =
+      controlArea?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]:not(:disabled)') ??
+      controlArea?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
+    const destination = control ?? target ?? pageRef.current?.querySelector<HTMLElement>('[data-settings-heading]')
     destination?.focus({ preventScroll: true })
     destination?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
     setFocusKey(null)
@@ -384,6 +391,10 @@ export function SettingsShell({
                     </div>
                   ) : category === 'appearance' || category === 'diagnostics' ? (
                     <span className="text-[12px] text-text-subtle">This app</span>
+                  ) : category === 'remote' ? (
+                    <span className="text-[12px] text-text-subtle">This session</span>
+                  ) : inventoryCategory ? (
+                    <span className="text-[12px] text-text-subtle">All sources</span>
                   ) : category === 'policy' ? (
                     <span className="flex items-center gap-1 text-[12px] text-text-subtle"><LockIcon className="h-3 w-3" /> Enforced</span>
                   ) : null}
@@ -618,8 +629,8 @@ function ScopeBody({
         <PaneSection title="Diagnostics">
           <p className="mb-4 text-[13px] leading-5 text-text-muted">Open application logs or save a diagnostics bundle.</p>
           <div className="flex flex-wrap gap-2">
-            {onOpenLogs ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" onClick={onOpenLogs} type="button">Open logs folder</button> : null}
-            {onSaveDiagnostics ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" onClick={onSaveDiagnostics} type="button">Save diagnostics bundle</button> : null}
+            {onOpenLogs ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="openLogs" onClick={onOpenLogs} type="button">Open logs folder</button> : null}
+            {onSaveDiagnostics ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="saveDiagnostics" onClick={onSaveDiagnostics} type="button">Save diagnostics bundle</button> : null}
           </div>
         </PaneSection>
       )

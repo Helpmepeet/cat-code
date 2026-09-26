@@ -77,11 +77,18 @@ const appEntries: readonly SearchEntry[] = [
   { category: 'appearance', key: 'toolsExpanded', label: 'Tools open by default', description: 'Open every tool card as it arrives.' },
   { category: 'appearance', key: 'reasoningLayout', label: 'Reasoning layout', description: 'How reasoning summaries are laid out.' },
   { category: 'appearance', key: 'codeTheme', label: 'Code theme', description: 'Color theme for code blocks in the transcript.', aliases: 'syntax colors' },
+  { category: 'remote', key: 'remoteBridge', label: 'Remote Control bridge', description: 'Set the Remote Control flag for this session.', aliases: 'start bridge stop bridge' },
+  { category: 'remote', key: 'remoteDirectConnect', label: 'Connect a remote session', description: 'Connect to a cat-code server over WebSocket.', aliases: 'direct connection server URL' },
+  { category: 'diagnostics', key: 'openLogs', label: 'Open logs folder', description: 'Open application logs.' },
+  { category: 'diagnostics', key: 'saveDiagnostics', label: 'Save diagnostics bundle', description: 'Save an app diagnostics bundle.' },
 ]
 
 /** Inventories have no fixed setting rows; their destination is the useful hit. */
 const categoryOnly: ReadonlySet<SettingsCategoryId> = new Set([
-  'agents', 'skills', 'plugins', 'mcp', 'hooks', 'remote', 'diagnostics', 'policy',
+  'agents', 'skills', 'plugins', 'mcp', 'hooks', 'policy',
+])
+const inventoryCategories: ReadonlySet<SettingsCategoryId> = new Set([
+  'agents', 'skills', 'plugins', 'mcp', 'hooks',
 ])
 
 const entriesByCategory = new Map<SettingsCategoryId, SearchEntry[]>()
@@ -106,9 +113,11 @@ export function selectSettingsSearchResults(
 
   return SETTINGS_NAVIGATION_GROUPS.flatMap(group => group.items).flatMap((item): SettingsSearchResult[] => {
     const scope = selectSettingsCategoryScope(item.id, preferredEngineScope)
-    const scopeLabel = scope === 'user' && item.id === 'remote'
-      ? 'This machine'
-      : SETTINGS_SCOPE_LABEL[scope]
+    const scopeLabel = item.id === 'remote'
+      ? 'This session'
+      : inventoryCategories.has(item.id)
+        ? 'All sources'
+        : SETTINGS_SCOPE_LABEL[scope]
     const entries = entriesByCategory.get(item.id) ?? []
     if (categoryOnly.has(item.id)) {
       const haystack = normalized(`${item.label} ${item.desc}`)

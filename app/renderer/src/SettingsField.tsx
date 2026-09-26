@@ -199,7 +199,7 @@ export function Field({
           </div>
         ) : null}
       </div>
-      <div className="flex min-w-[118px] max-w-[240px] shrink-0 flex-col items-end gap-1.5">
+      <div className="flex min-w-[118px] max-w-[240px] shrink-0 flex-col items-end gap-1.5" data-setting-control>
         {children}
       </div>
     </div>

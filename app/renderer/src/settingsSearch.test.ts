@@ -38,4 +38,19 @@ describe('settings search', () => {
     expect(selectSettingsSearchResults('unfindable setting', 'user')).toEqual([])
     expect(selectSettingsSearchResults('  ', 'user')).toEqual([])
   })
+
+  test('finds Remote and Diagnostics actions with their real scope', () => {
+    expect(selectSettingsSearchResults('bridge', 'project')).toEqual([
+      expect.objectContaining({ key: 'remoteBridge', category: 'remote', scopeLabel: 'This session' }),
+    ])
+    expect(selectSettingsSearchResults('server URL', 'user')).toEqual([
+      expect.objectContaining({ key: 'remoteDirectConnect', category: 'remote', scopeLabel: 'This session' }),
+    ])
+    expect(selectSettingsSearchResults('logs', 'user')).toEqual([
+      expect.objectContaining({ key: 'openLogs', category: 'diagnostics', scopeLabel: 'This app' }),
+    ])
+    expect(selectSettingsSearchResults('skills', 'project')[0]).toEqual(
+      expect.objectContaining({ category: 'skills', scopeLabel: 'All sources' }),
+    )
+  })
 })
