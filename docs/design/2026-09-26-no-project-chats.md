@@ -1,10 +1,12 @@
 # Chats without a project
 
-Date: 2026-09-26. Status: proposed design only. No application implementation.
+Date: 2026-09-26. Revised after two independent adversarial reviews on the same
+date. Status: proposed design only. No application implementation.
 
 ## Product decision
 
-**New chat opens a usable composer with `No project` selected.** The user can
+**New chat creates a normal session and opens its composer with `No project`
+as its fixed context.** The user can
 ask a question, run tools, edit files, create artifacts, or delegate work without
 choosing a folder. These are ordinary, persistent Cat Code sessions with the
 same models, tool loop, permissions, attachments, and history as project chats.
@@ -27,12 +29,11 @@ case work correctly. It is an ownership convention, not an OS isolation boundary
 
 | Entry point | Proposed behavior |
 | --- | --- |
-| Sidebar **New chat**, tab **+**, existing new-chat shortcut | Open a draft with **No project**, regardless of the active project. Focus the composer. No folder picker. |
-| App with no active session | Show the same draft composer alongside the welcome content. The first question requires no project setup. |
+| Sidebar **New chat**, tab **+**, existing new-chat shortcut | Create a managed session with **No project**, regardless of the active project. Focus its composer as the normal engine startup proceeds. No folder picker. |
+| App with no active session | Keep the welcome launcher and add a prominent **New chat** action. It starts the same managed-session flow; opening the app alone does not need to spawn an engine. |
 | Project header **+** | Create a chat in that specific project, preserving the fast project workflow. |
 | **Projects +** | Keep the native folder picker and existing project trust flow. |
-| Draft **No project** selector | Offer No project, recent projects, and Choose folder. Selecting a project preserves the draft and uses host-resolved identities or a native-picker token. |
-| No-project chat after its first submit | Keep No project as a quiet context label above the composer. Do not expose an in-place project switch. |
+| **No project** above the composer | A read-only context label from session creation onward. Starting a project chat is a separate action through its project **+** or the folder picker. |
 
 Place **Chats** after Pinned and before Projects. It is a flat list, with the
 same title, recency, peer name, status, search, pin, and overflow behavior as
@@ -47,12 +48,16 @@ view omits project-only branch information. It does not display a sandbox claim
 unless the engine reports that tools actually run sandboxed.
 
 **Files** opens a small menu with **Open chat folder** and **Copy folder path**.
-Generated outputs use the existing clickable file links in the transcript.
+Outputs inside this chat's directory use the existing clickable file links in
+the transcript. Peer-produced deliverables follow the delivery rule below.
 This version does not need a file browser, artifact index, or automatic export.
 The user can save elsewhere by asking the agent, or move/copy outputs in Finder.
 
-Selecting a project in an untouched draft uses the existing project behavior.
-After work begins, the agent can still operate on user-requested external paths
+Context is fixed as soon as the session is created, as in today's project chats.
+An unsent prompt and its attachments remain with that session when the user
+opens another chat. Use the existing per-session draft persistence and
+attachment lifetime; no new pre-session draft or attachment-transfer system is
+part of v1. The agent can still operate on user-requested external paths
 under normal permission and instruction rules; that does not silently reclassify
 the chat. Moving an existing conversation into a project is a separate feature.
 
@@ -60,9 +65,9 @@ the chat. Moving an existing conversation into a project is a separate feature.
 
 | State | User-visible behavior |
 | --- | --- |
-| Empty draft | Composer focused; No project selected; no empty history entry or allocated folder yet. |
-| Starting | Preserve the draft while preparing the engine; coalesce repeated submits. Display a startup failure beside the composer if it fails. |
-| First attachment | If an attachment needs a session-bound host token, allocate the session then. Preserve the attachment when creation or sign-in needs a retry. |
+| Empty chat | A real host session and working directory exist. Composer focused; No project is read-only; no content file is required just to ask a question. |
+| Starting | Use the existing per-session draft and pending-submit flow while preparing the engine. Display startup failures in the normal recovery surface. |
+| First attachment | Native-picker tokens bind to the existing session. Context cannot change underneath them; opening a project chat leaves the original prompt and attachments with their original session. |
 | Active | Normal streaming, Stop, questions, permission cards, tools, and workers. |
 | Completed file task | Output link in the answer; Files menu reveals its owning folder. |
 | Closed, parked, or app restarted | History and working files survive. Reopening uses the same working directory and existing restore flow. |
@@ -81,27 +86,33 @@ Keep a real, nonempty cwd for the engine. Represent project association
 separately. Do not make `cwd` nullable throughout the application and do not
 use the empty string as a special no-project path.
 
-Illustrative layout, resolved from the active Cat Code configuration home:
+Store working files outside the protected configuration tree. Main supplies the
+app-data base to the Electron-free host. The active configuration profile owns
+one stable managed-workspace identity and records its canonical storage root;
+restoration uses that binding rather than recomputing a path from a display name.
+Keep host ownership records in the configuration home, outside the agent's cwd.
+An illustrative macOS layout is:
 
 ```text
+~/Library/Application Support/Cat Code/Chat Files/<managed-workspace-id>/
+  <storage-id-A>/              Session A's cwd and durable working files
+    report.md
+    tmp/                      intermediate files, created when needed
+  <storage-id-B>/              Session B's cwd and durable working files
+    report.md
 ~/.cat-code/
-  chat-workspaces/
-    <storage-id-A>.json        host-owned ownership/binding record
-    <storage-id-B>.json
-  chats/
-    <storage-id-A>/            Session A's cwd and durable working files
-      report.md
-      tmp/                    intermediate files, created when needed
-    <storage-id-B>/            Session B's cwd and durable working files
-      report.md
+  chat-workspaces/             host-owned workspace/storage binding records
   projects/                   existing engine-owned transcript storage
     ...
 ```
 
 `storage-id` is a host-minted stable identity, not a chat title, peer name,
 appSessionId, or engineSessionId. Those identities have different lifetimes.
-The path is an implementation proposal; callers derive it from validated
-metadata rather than persisting path guesses in the renderer.
+Callers derive paths from validated metadata rather than persisting path guesses
+in the renderer. The earlier `~/.cat-code/chats/` proposal is withdrawn: the
+engine treats `.cat-code` ancestors as sensitive before ordinary cwd edit
+allowances. Choosing ordinary app-data storage avoids a new permission exception;
+normal deny rules, sensitive descendants, and permission modes still apply.
 
 - Fresh independent chat: allocate a new storage identity and cwd.
 - Resume, reopen, park/unpark, rename: preserve that identity and cwd.
@@ -110,12 +121,16 @@ metadata rather than persisting path guesses in the renderer.
   explicit handoffs carry the absolute paths the peer should work on.
 - **Branch from here**: preserve today's conversation-only branching semantics
   by retaining the source storage identity. The branch and source share files;
-  history branching does not snapshot or rewind them. Add that fact to the
-  existing branch confirmation for managed chats and the agent context.
+  history branching does not snapshot or rewind them. There is no existing
+  branch confirmation. Add a new non-blocking notice above the branched chat's
+  composer: **Files are shared with the source chat.** Also retain this fact in
+  the agent context; do not introduce a confirmation dialog.
 
-Allocate on the first action that needs a real session, normally Send. Pure
-question chats still get a cwd when the engine starts, but need not create any
-content files. Use the existing live-process and spawn-rate limits. A failed
+Allocate the working directory and start the normal engine flow when the user
+invokes New chat, as the app already does for project chats. This keeps model,
+permission, command, and attachment controls on their existing session-backed
+surfaces. Pure question chats need not create any content files. Use the existing
+live-process and spawn-rate limits. A failed
 startup can remove only a newly allocated, proven-empty directory with no
 retained session references; otherwise keep it recoverable.
 
@@ -154,6 +169,12 @@ Proposed wording, with paths supplied by the runtime:
 > external files when the task requires it, under the usual permission and
 > repository-instruction rules. Do not assume there is a repository to inspect,
 > initialize Git, or ask for a project just to answer a question.
+>
+> Before presenting a peer's final artifact as an openable file, place a copy in
+> this chat's working directory, or have the peer produce it there under normal
+> permissions. Preserve existing files and disambiguate colliding names. If the
+> user requested an external destination, keep that destination and return its
+> absolute path without claiming that the in-chat file opener can open it.
 
 This does not promise hard isolation. Bash and external tools still have their
 normal power, and the selected permission mode remains authoritative. Directory
@@ -190,8 +211,9 @@ permission mode; this feature is not an automatic switch to bypass mode.
 ### Peer collaboration
 
 All no-project chats occupy the same **logical managed workspace**, matching
-the user's Session A / Session B model. List/read/send/create continue to work
-through the existing peer request plane. ListPeers is available on demand;
+the user's Session A / Session B model. List/send/create use the existing peer
+request plane. ReadPeer stays a bounded, passive read inside the reader's
+sidecar; transcript contents never travel through main. ListPeers is available on demand;
 another chat's transcript is never automatically inserted into context.
 
 This requires a **proposed amendment** to
@@ -202,10 +224,40 @@ do not become peers of every real project on the computer. This proposal does
 not change the approved rule or any running behavior until implementation is
 separately requested.
 
+Membership alone is insufficient. Today's ReadPeer derives the transcript
+directory from the reader's launch cwd. With separate directories, that looks
+for B's transcript in A's storage. Extend the host-validated peer result with
+the target's pinned **transcript storage identity**, alongside its engine ID.
+The sidecar resolves that identity under the configured transcript store; it
+must not derive the target location from the reader's cwd or the peer's mutable
+current cwd. Use bounded identifiers, reject traversal and unknown bindings,
+and give an unresolved locator an explicit unavailable result, not “nothing
+written.” No caller supplies a filesystem path. Preserve no-wake behavior,
+bounded reads, redaction, and untrusted-data framing. Update the R9/HR3 scope
+decision and HR6's metadata contract explicitly while retaining HR6's ban on
+file contents and model-authored path requests.
+
 A peer handoff can name a specific source/output path. It does not imply that
 the peer owns the entire parent's directory or the common managed root. Keep
 existing engine permission gates, no-permission-laundering rules, wake blocking,
 name resolution, spawn caps, and delivery behavior.
+
+### Delivering files from peers
+
+Keep the current session-cwd containment boundary for opening files. In v1, a
+peer's final deliverable is copied into the presenting chat's directory before
+that chat offers an openable link. The peer may instead write to an explicitly
+agreed destination there, subject to normal permissions. Copying does not move
+or delete the original, and a filename collision requires a distinct name or
+an intentional update, never a silent overwrite. This uses the existing file
+tools, not a new host file-transfer service.
+
+If the user wants the file to remain in a peer's directory, open the owning peer
+chat through its existing session identity and use its Files menu there. For an
+external destination, provide Copy path; do not offer an apparently working
+Open action that main will reject. File-link/action presentation must distinguish
+an in-cwd target from an external one; main still validates canonical containment
+and handles symlinks. A broader cross-chat or arbitrary-file opener is deferred.
 
 ## Required contracts, without an implementation
 
@@ -231,12 +283,20 @@ flow. Validate realpath containment and reject symlink escapes before create,
 restore, folder reveal, and recreate actions. Auto-provisioning grants no blanket
 write access to `~/.cat-code`.
 
-Persist the binding before acknowledging the first retained prompt. Startup
-retry must not submit the same prompt twice or allocate multiple sessions.
-Preserve the original draft until the existing input-persisted boundary. If
-storage binding cannot be durably recorded, fail startup and retain the draft.
+Persist the binding before spawning the sidecar, so every first submit has a
+known storage identity. If storage binding cannot be durably recorded, fail
+creation without sending a prompt.
 This is stricter for a new managed allocation because losing its provenance
 would make the user's files and future restore ambiguous.
+
+Use the normal per-session submit and recovery contract. `submit.result` means
+accepted by a running turn or queue; it is not a durable-save receipt. The
+engine's `onInputPersisted` callback is not currently a renderer-facing receipt
+for ordinary submits. This feature does not add an exactly-once or crash-proof
+delivery promise: retain/recover drafts through the existing correlated result
+flow, coalesce repeated startup submits, and do not automatically resend a
+prompt after an uncertain transport outcome. Any future durable receipt or
+cross-crash deduplication change is separate protocol work.
 
 Creation, restore, catalog/history open, peer create, and conversation branch
 must all carry the binding. File links continue resolving against a real cwd.
@@ -266,16 +326,18 @@ design. Existing uncommitted sidebar and map changes were read and left intact.
 | [`Sidebar.tsx`](../../app/renderer/src/Sidebar.tsx), [`sessionsCatalogState.ts`](../../app/renderer/src/sessionsCatalogState.ts) | Rows group and project recents derive from cwd. Introduce Chats using explicit binding; preserve Unknown workspace. |
 | [`hostApi.ts`](../../app/shared/hostApi.ts), [`host.ts`](../../app/host/host.ts), [`registry.ts`](../../app/host/registry.ts) | Nonempty host-validated cwd, native-picker input tokens, two session identities, and restorable registry. Keep these boundaries. |
 | [`openHistorySession.ts`](../../app/main/openHistorySession.ts), [`sessionsCatalogCache.ts`](../../app/sidecar/sessionsCatalogCache.ts), [`sessionStorage.ts`](../../src/utils/sessionStorage.ts) | Recover explicit binding through retained history, not just live registry rows. Do not widen the existing refusal of unknown cwd. |
-| [`peerRequestPlane.ts`](../../app/main/peerRequestPlane.ts), `peersOf` | Existing peer membership compares cwd; managed membership needs the explicit R9 amendment above. |
+| [`peerRequestPlane.ts`](../../app/main/peerRequestPlane.ts), `peersOf`, [`readPeerTool.ts`](../../app/sidecar/readPeerTool.ts) | Membership compares cwd, and ReadPeer uses the reader's launch directory. Managed membership and trusted target transcript identity must change together. |
 | [`sessionController.ts`](../../app/sidecar/sessionController.ts), [`workspaceTrustDomain.ts`](../../app/sidecar/workspaceTrustDomain.ts), [`claudemd.ts`](../../src/utils/claudemd.ts) | Runtime initialization, project trust, and ancestor instruction discovery require a coherent managed context policy. |
 | [`prompts.ts`](../../src/constants/prompts.ts), [`filesystem.ts`](../../src/utils/permissions/filesystem.ts), [`paths.ts`](../../src/memdir/paths.ts) | Existing scratchpad is gated and ephemeral; align scratch instructions and stable per-chat memory instead of relying on a folder name. |
-| [`openWorkspaceFile.ts`](../../app/main/openWorkspaceFile.ts) | File open already checks canonical containment against host-owned session cwd. Reuse that boundary for generated file links. |
+| [`openWorkspaceFile.ts`](../../app/main/openWorkspaceFile.ts), [`filePathActions.ts`](../../app/renderer/src/filePathActions.ts) | File open checks canonical containment against the displaying session's cwd. Deliver peer artifacts into that cwd and make external links copy-only. |
+| [`mainDecisions.ts`](../../app/main/mainDecisions.ts), [`App.tsx`](../../app/renderer/src/App.tsx) | File attachment tokens and composer drafts belong to a concrete session. Fixed context from creation avoids token transfer and a second draft lifecycle. |
+| [`sidecarServer.ts`](../../app/sidecar/sidecarServer.ts), [`protocol.ts`](../../app/shared/protocol.ts) | Ordinary submit acceptance is not durable persistence. Reuse its current contract without claiming an existing durable renderer receipt. |
 
 ## Acceptance scenarios for later implementation
 
 These describe product outcomes, not tests added in this design change.
 
-1. With no project configured, type and submit a question. It runs without a
+1. With no project configured, choose New chat and submit a question. It runs without a
    folder picker; normal sign-in and model errors remain truthful.
 2. Start a new chat while a real project is active. The new chat has No project;
    the project's **+** still starts a project chat.
@@ -283,7 +345,8 @@ These describe product outcomes, not tests added in this design change.
    and both still exist after closing and reopening the app.
 4. A no-project chat uses Bash, file tools, a configured global skill/MCP server,
    a subagent, and a peer under the existing permission modes. No blanket extra
-   approval and no blanket bypass is introduced.
+   approval and no blanket bypass is introduced. Creating an ordinary output in
+   acceptEdits does not become a sensitive-config write because of the storage root.
 5. Place project instructions/configuration in the managed parent or a sibling
    chat. They do not become this chat's instructions, hooks, or tools on startup,
    compaction, or refresh. Global user instructions still load.
@@ -293,15 +356,23 @@ These describe product outcomes, not tests added in this design change.
    the visible recreate action and tells the agent that past files are absent.
 8. Create a peer, hand off one absolute file path, and get a reply. Each session
    has its own default working directory; project peers remain out of scope.
-9. Branch a conversation and verify the shared-files notice and conversation-only
+   ReadPeer finds both live and parked peers' transcripts without waking them.
+   A peer's delivered artifact opens successfully from the presenting chat;
+   retaining it externally instead gives a truthful Copy path action.
+9. Branch a conversation and verify the new shared-files notice and conversation-only
    semantics. Closing either chat does not remove storage used by the other.
 10. Retry failed creation, rapidly press Send, or cancel a folder picker. Preserve
-    drafts/attachments and do not duplicate a submitted question.
+    drafts/attachments under the existing delivery contract. Do not automatically
+    retry an uncertain submit. No durable-save guarantee is inferred from acceptance.
+11. Attach a non-image file before the first message. The session context is
+    already fixed; opening a project chat preserves the original chat's draft
+    and attachment token instead of moving either into the project chat.
 
 ## Review artifact and scope
 
 [Interactive design mockup](../design-html/2026-09-26-no-project-chats.html)
-covers New chat, a file-producing chat, parallel chats, and missing-file recovery.
+covers New chat, a file-producing chat, parallel chats, a shared-files branch,
+and missing-file recovery.
 It is a standalone local HTML artifact with sample conversations. Its state
 controls and menus are interactive; native Finder/file-picker operations and
 engine execution are not implemented. It borrows the real theme, local fonts,
@@ -314,11 +385,6 @@ and durable restore. In-place project conversion, a file manager, shared scratch
 root as every session's cwd, automatic cleanup, and new OS sandboxing are outside
 this proposal.
 
-Design-artifact validation: local document links and font/image paths resolve;
-the inline script passes `node --check`; the four specimen states, project
-selection with draft preservation, Files menu, Escape dismissal, search, and
-missing-folder recreation were exercised in the browser. No browser warnings
-or errors occurred after the mockup's search-selector fix. Workspace-map lint
-passes with seven existing recommended-section warnings in untouched maps.
-Application builds and runtime tests were not run because this change contains
-only the specification and standalone mockup.
+The [adversarial review record](../reports/2026-09-26-no-project-chats-adversarial-review.md)
+records both reviewers' findings, the chosen corrections, and revision validation.
+Application builds and runtime tests are outside this design-only change.

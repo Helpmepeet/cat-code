@@ -17,7 +17,7 @@
     .x-note { min-width: 80px; text-align: right; }
 
     /* Specimen values follow theme.css, Sidebar, SessionPane and ComposerActionsBar.
-       New pixels: Chats group, context row, Files menu, missing-files notice. */
+       New pixels: Chats group, context row, Files menu, branch and missing-files notices. */
     .specimen { --accent: #f472b6; --accent-soft: #f9a8d4; --bg: #09090b; --chrome: #070709; --panel: #0a0a0c; --raised: #111113; --seam: rgba(255,255,255,.06); --hover: rgba(255,255,255,.045); --text: #f4f4f5; --muted: #a1a1aa; --subtle: #98989f; --faint: #838389; --ghost: #75757b; color-scheme: dark; height: calc(100vh - 54px); min-height: 650px; background: var(--bg); color: var(--text); font: 14px/1.5 'DM Sans', sans-serif; display: flex; flex-direction: column; overflow: hidden; }
     .specimen * { box-sizing: border-box; }
     .specimen button, .specimen input, .specimen textarea { font: inherit; }
@@ -81,8 +81,8 @@
     .dock { width: 100%; max-width: 900px; margin: 0 auto; flex-shrink: 0; }
     .context-row { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 14px; gap: 12px; }
     .context-control { position: relative; }
-    .scope, .files { display: inline-flex; align-items: center; gap: 6px; color: var(--muted) !important; font-size: 12px !important; padding: 3px 0; }
-    .scope:hover, .files:hover { color: var(--text) !important; }
+    .files { display: inline-flex; align-items: center; gap: 6px; color: var(--muted) !important; font-size: 12px !important; padding: 3px 0; }
+    .files:hover { color: var(--text) !important; }
     .scope-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--subtle); }
     .composer { display: flex; align-items: end; gap: 14px; padding: 0 4px; }
     .composer textarea { display: block; resize: none; width: 100%; min-height: 30px; max-height: 180px; padding: 0; color: var(--text); background: none; border: 0; outline: 0; font-size: 16px; font-weight: 300; line-height: 1.8; caret-color: var(--accent); }
@@ -101,12 +101,9 @@
     .actions .account { margin-left: auto; font-size: 11px; color: var(--faint); }
     .menu { position: absolute; bottom: calc(100% + 8px); left: -6px; z-index: 10; width: 225px; border: 1px solid var(--seam); border-radius: 8px; padding: 6px; background: var(--raised); }
     .menu.right { left: auto; right: -6px; width: 206px; }
-    .menu-title { font-size: 10px; color: var(--faint); padding: 6px 8px; font-weight: 600; }
     .menu button { display: flex; gap: 8px; align-items: center; justify-content: flex-start; width: 100%; border-radius: 6px; padding: 7px 8px; text-align: left; font-size: 12.5px; color: var(--muted); }
     .menu button:hover { background: var(--hover); color: var(--text); }
-    .menu .selected { color: var(--accent-soft); }
-    .menu .check { margin-left: auto; }
-    .menu-divider { border-top: 1px solid var(--seam); margin: 5px 0; }
+    .branch-note { padding: 0 4px 16px; color: var(--subtle); font-size: 12px; }
     .recovery { border: 1px solid rgba(251,191,36,.25); border-radius: 8px; padding: 14px 16px; margin-bottom: 22px; font-size: 13px; }
     .recovery strong { font-weight: 500; color: #fbbf24; }
     .recovery p { margin: 6px 0 12px; color: var(--muted); }
@@ -149,6 +146,7 @@
       <button class="x-state" data-state="new" aria-pressed="true">New chat</button>
       <button class="x-state" data-state="files" aria-pressed="false">File task</button>
       <button class="x-state" data-state="parallel" aria-pressed="false">Two chats</button>
+      <button class="x-state" data-state="branch" aria-pressed="false">Branch</button>
       <button class="x-state" data-state="missing" aria-pressed="false">Missing files</button>
     </nav>
     <span class="x-note" aria-live="polite">Proposed</span>
@@ -180,6 +178,7 @@
           <div id="chat-rows"></div>
           <div class="section-label">Projects <button data-action="picker" aria-label="Add project"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
           <div class="project-row"><svg class="icon small" aria-hidden="true"><use href="#folder"/></svg><span>cat-code</span><button data-action="project" aria-label="New chat in cat-code"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
+          <div id="project-chat-row"></div>
           <button class="session-row" data-action="project"><span class="row-lane"></span><span class="row-content"><span class="row-title">UI adjustments</span><span class="row-meta">Yesterday · Cobalt</span></span></button>
         </div>
         <div class="sidebar-footer"><svg class="icon" aria-hidden="true"><use href="#settings"/></svg>Settings</div>
@@ -199,17 +198,9 @@
       const scope = state.project ? 'cat-code' : 'No project';
       return `<div class="dock">
         <div class="context-row">
-          <div class="context-control">
-            ${draft ? `<button class="scope" data-menu="scope-${key}" aria-expanded="false" aria-controls="scope-${key}" aria-label="Project: ${scope}">${icon(state.project ? 'folder' : 'chat', true)}${scope}${icon('chevron', true)}</button>
-            <div class="menu" id="scope-${key}" role="menu" hidden>
-              <button role="menuitem" class="${state.project ? '' : 'selected'}" data-action="no-project">${icon('chat', true)}No project${!state.project ? icon('check', true) : ''}</button>
-              <div class="menu-divider"></div><div class="menu-title">Recent projects</div>
-              <button role="menuitem" data-action="select-project" class="${state.project ? 'selected' : ''}">${icon('folder', true)}cat-code</button>
-              <button role="menuitem" data-action="picker">${icon('plus', true)}Choose folder…</button>
-            </div>` : `<span class="scope-label">${icon(state.project ? 'folder' : 'chat', true)}${scope}</span>`}
-          </div>
-          ${draft || missing ? '' : `<div class="context-control"><button class="files" data-menu="files-${key}" aria-expanded="false" aria-controls="files-${key}">${icon('folder', true)}Files</button>
-            <div class="menu right" id="files-${key}" role="menu" hidden><button role="menuitem" data-action="finder">${icon('folder', true)}Open chat folder</button><button role="menuitem" data-action="copy-path">Copy folder path</button></div></div>`}
+          <span class="scope-label">${icon(state.project ? 'folder' : 'chat', true)}${scope}</span>
+          ${missing ? '' : `<div class="context-control"><button class="files" data-menu="files-${key}" aria-expanded="false" aria-controls="files-${key}">${icon('folder', true)}Files</button>
+            <div class="menu right" id="files-${key}" role="menu" hidden><button role="menuitem" data-action="finder">${icon('folder', true)}${state.project ? 'Open project folder' : 'Open chat folder'}</button><button role="menuitem" data-action="copy-path">Copy folder path</button></div></div>`}
         </div>
         <form class="prompt-form" data-key="${key}">
           <div class="composer"><textarea rows="1" aria-label="Prompt${key === 'b' ? ' in second chat' : ''}" placeholder="${missing ? 'Restore the folder to continue' : 'Ask anything…'}" ${missing ? 'disabled' : ''}>${draft ? escape(state.draft) : ''}</textarea><button class="send" type="submit" aria-label="Send prompt${key === 'b' ? ' in second chat' : ''}" ${missing || !state.draft ? 'disabled' : ''}>${icon('send')}</button></div>
@@ -232,6 +223,7 @@
       return `<section class="pane" aria-label="${second ? 'Weekend checklist' : 'Packing checklist'}"><div class="transcript">${content}</div>
         ${missing ? `<div class="dock"><div class="recovery"><strong>This chat's files are missing.</strong><p>Your conversation is still available. Recreating the folder will not restore its earlier files.</p><button data-action="recreate">Recreate empty folder</button></div></div>` : ''}
         ${state.recreated ? `<div class="dock recreated" role="status">An empty folder is ready. Earlier files are still missing.</div>` : ''}
+        ${state.view === 'branch' ? `<div class="dock branch-note">Files are shared with the source chat.</div>` : ''}
         ${dock(key, false, missing)}</section>`;
     }
 
@@ -240,9 +232,10 @@
       document.querySelectorAll('.x-state').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.state === state.view)));
       note('Proposed');
       const draft = state.view === 'new';
-      const title = draft ? 'New chat' : state.view === 'question' ? 'Quick question' : state.view === 'reference' ? 'Reference notes' : 'Packing checklist';
-      $('#tabs').innerHTML = `<button class="tab active" data-action="${draft ? 'new' : state.view === 'question' || state.view === 'reference' ? state.view : 'files'}">${icon(state.project ? 'folder' : 'chat', true)}<span>${title}</span></button>${state.view === 'parallel' ? `<button class="tab" data-action="parallel">${icon('chat', true)}<span>Weekend checklist</span></button>` : ''}<button class="tab-plus" data-action="new" aria-label="New chat">${icon('plus')}</button>`;
-      $('#chat-rows').innerHTML = `${row('Packing checklist','Today · Opal','files',['files','parallel','missing'].includes(state.view))}${row(state.view === 'parallel' ? 'Weekend checklist' : 'Quick question','Today · Quartz',state.view === 'parallel' ? 'parallel' : 'question',state.view === 'question')}`;
+      const title = draft ? 'New chat' : state.view === 'question' ? 'Quick question' : state.view === 'reference' ? 'Reference notes' : state.view === 'branch' ? 'Packing checklist · branch' : 'Packing checklist';
+      $('#tabs').innerHTML = `<button class="tab active">${icon(state.project ? 'folder' : 'chat', true)}<span>${title}</span></button>${state.view === 'parallel' ? `<button class="tab" data-action="parallel">${icon('chat', true)}<span>Weekend checklist</span></button>` : ''}<button class="tab-plus" data-action="new" aria-label="New chat">${icon('plus')}</button>`;
+      $('#chat-rows').innerHTML = `${draft && !state.project ? row('New chat','Now · Amber','new',true) : ''}${state.view === 'branch' ? row('Packing checklist · branch','Now · Ruby','branch',true) : ''}${row('Packing checklist','Today · Opal','files',!state.project && ['files','parallel','missing'].includes(state.view))}${row(state.view === 'parallel' ? 'Weekend checklist' : 'Quick question','Today · Quartz',state.view === 'parallel' ? 'parallel' : 'question',state.view === 'question')}`;
+      $('#project-chat-row').innerHTML = state.project ? row(title,'Now · Cobalt','project',true) : '';
       $('[data-action="reference"]').classList.toggle('active',state.view === 'reference');
       $('#panes').classList.toggle('split', state.view === 'parallel');
       if (draft) {
@@ -295,9 +288,8 @@
       if (!action) { if (!event.target.closest('.menu')) closeMenus(false); return; }
       event.preventDefault();
       const type = action.dataset.action;
-      if (['new','files','parallel'].includes(type)) { changeView(type); if (type === 'new') $('textarea').focus(); return; }
+      if (['new','files','parallel','branch'].includes(type)) { changeView(type); if (type === 'new') $('textarea').focus(); return; }
       if (type === 'project') { changeView('new'); state.project = true; render(); $('textarea').focus(); return; }
-      if (type === 'select-project' || type === 'no-project') { state.draft = $('textarea').value; state.project = type === 'select-project'; render(); $('.scope').focus(); return; }
       if (type === 'recreate') { state.recreated = true; render(); $('textarea').focus(); return; }
       if (type === 'question' || type === 'reference') {
         changeView(type); return;
