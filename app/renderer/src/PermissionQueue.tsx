@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
 import {
@@ -39,6 +40,17 @@ export function PermissionQueue({
   onRestore: (requestId: string) => void
   onSnooze?: (requestId: string) => void
 }) {
+  // This component stays mounted when the queue is empty. A new request can
+  // then be distinguished from one restored with the pane on its first render.
+  const seenIds = useRef<Set<string> | null>(null)
+  seenIds.current ??= new Set(items.map(item => item.request.requestId))
+  const arrivals = new Set(
+    items.map(item => item.request.requestId).filter(id => !seenIds.current?.has(id)),
+  )
+  useLayoutEffect(() => {
+    for (const item of items) seenIds.current?.add(item.request.requestId)
+  })
+
   if (items.length === 0) return null
 
   const active = items.filter(item => !item.dismissed)
@@ -85,6 +97,7 @@ export function PermissionQueue({
             pendingCount={index === 0 ? awaitingAnswer : undefined}
             request={item.request}
             submitted={item.submitted}
+            animateArrival={arrivals.has(item.request.requestId)}
             workers={workers}
           />
         )

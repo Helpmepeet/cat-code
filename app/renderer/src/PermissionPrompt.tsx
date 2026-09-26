@@ -77,6 +77,7 @@ export function PermissionPrompt({
   request,
   workers = [],
   submitted,
+  animateArrival = false,
   denyOnly,
   keyboardTarget,
   pendingCount,
@@ -89,6 +90,8 @@ export function PermissionPrompt({
   workers?: readonly LiveWorkerItem[]
   /** True while an answer for this card is in flight. */
   submitted?: boolean
+  /** Request arrived after this pane's first committed render. */
+  animateArrival?: boolean
   /** Hide every allow path: this request can only be answered by denying it. */
   denyOnly?: boolean
   /**
@@ -318,7 +321,7 @@ export function PermissionPrompt({
   return (
     <section
       aria-labelledby={titleId}
-      className="border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3 focus:outline-none"
+      className={`border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3 transition-opacity duration-[var(--motion-fast)] focus:outline-none ${submitted ? 'opacity-55' : ''} ${animateArrival ? 'animate-toast-in' : ''}`}
       // Literal because JSX needs a literal attribute name; the reader is
       // `PERMISSION_KEY_HOST_ATTR` in `permissionPromptModel.ts`.
       data-permission-key-host={keyboardTarget ? '' : undefined}

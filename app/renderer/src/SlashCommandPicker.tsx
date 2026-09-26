@@ -106,7 +106,7 @@ export function SlashCommandPicker({
                   onPick(entry.name)
                 }}
                 className={
-                  'flex w-full items-baseline border-l-2 px-3 py-1 text-left transition-colors ' +
+                  'flex w-full items-baseline border-l-2 px-3 py-1 text-left ' +
                   (isActive
                     ? 'border-accent bg-accent/[0.07]'
                     : 'border-transparent hover:bg-shell-hover')

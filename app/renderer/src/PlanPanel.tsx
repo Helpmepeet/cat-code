@@ -135,12 +135,12 @@ export function PlanPanel({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim backdrop-blur-sm"
+      className="animate-scrim-in fixed inset-0 z-50 flex items-center justify-center bg-scrim backdrop-blur-sm"
       onClick={onClose}
     >
       <div
         aria-label="Plan"
-        className={`flex max-h-[82vh] w-[520px] max-w-[92vw] flex-col overflow-hidden rounded-xl border bg-surface-panel shadow-2xl ${t.softBorder}`}
+        className={`animate-sa-pop flex max-h-[82vh] w-[520px] max-w-[92vw] flex-col overflow-hidden rounded-xl border bg-surface-panel shadow-2xl ${t.softBorder}`}
         onClick={event => event.stopPropagation()}
         ref={cardRef}
         role="dialog"
@@ -288,7 +288,7 @@ export function PlanPanel({
                 type="button"
               >
                 Approve plan
-                <span className="text-[9px] transition-transform">
+                <span className="text-[9px]">
                   {showApprove ? '▴' : '▾'}
                 </span>
               </button>
@@ -340,7 +340,7 @@ function ApproveMenu({
   return (
     <div
       aria-label="Plan approval mode"
-      className="absolute bottom-full left-0 z-10 mb-1.5 w-[270px] rounded-lg border border-shell-seam bg-surface-raised p-1 shadow-2xl"
+      className="animate-sa-pop absolute bottom-full left-0 z-10 mb-1.5 w-[270px] rounded-lg border border-shell-seam bg-surface-raised p-1 shadow-2xl"
       ref={ref}
       role="menu"
       onKeyDown={event => {

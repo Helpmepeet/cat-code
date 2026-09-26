@@ -116,7 +116,7 @@ export function PermissionModeChip({
           role="menu"
           aria-label="Permission mode"
           onKeyDown={handleMenuRovingKeyDown}
-          className="absolute bottom-full right-0 z-40 mb-2 w-60 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg"
+          className="animate-pop-up absolute bottom-full right-0 z-40 mb-2 w-60 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg"
         >
           <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
             Mode

@@ -14,6 +14,7 @@ import {
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
+import { useChangedWhileMounted } from './useChangedWhileMounted.js'
 import { ContextGauge } from './ContextGauge.js'
 import {
   pressureTone,
@@ -186,7 +187,7 @@ function FastGlyph({ active }: { active: boolean }) {
  * --------------------------------------------------------------------------- */
 
 const POPOVER_PANEL =
-  'absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
+  'animate-pop-up absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
 const POPOVER_HEADING =
   'px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle'
 /**
@@ -202,7 +203,7 @@ const MENU_FOCUS_RING =
 // popovers anchor right (a `left-0` panel would overflow off-screen). Own padding
 // per section (no panel-wide `p-1.5`), matching the prototype's sectioned popovers.
 const POPOVER_PANEL_RIGHT =
-  'absolute bottom-full right-0 z-40 mb-2 overflow-hidden rounded-lg border border-shell-seam bg-surface-raised shadow-lg'
+  'animate-pop-up absolute bottom-full right-0 z-40 mb-2 overflow-hidden rounded-lg border border-shell-seam bg-surface-raised shadow-lg'
 
 /**
  * The escalated usage footer's tint, at rest and on hover. `ToneClasses.hoverTint`
@@ -1276,9 +1277,11 @@ function CompactIcon() {
 function TokenWarningChip({
   warning,
   faceProps,
+  animateArrival = false,
 }: {
   warning: TokenWarning
   faceProps?: ComposerFaceProps
+  animateArrival?: boolean
 }) {
   const { open, setOpen, ref, triggerRef } = usePopover()
   const { percentLeft, autoCompactEnabled } = warning
@@ -1299,7 +1302,7 @@ function TokenWarningChip({
         aria-label={title}
         title={title}
         onClick={() => setOpen(value => !value)}
-        className="animate-token-warn-in flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
+        className={`${animateArrival ? 'animate-token-warn-in' : ''} flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn`}
       >
         <ActionWarningIcon size={14} />
       </button>
@@ -1307,7 +1310,7 @@ function TokenWarningChip({
         <div
           role="dialog"
           aria-label="Context"
-          className="absolute bottom-full right-0 z-40 mb-2.5 w-[252px] rounded-xl border border-tone-warn/25 bg-surface-raised px-3.5 py-3 shadow-lg"
+          className="animate-pop-up absolute bottom-full right-0 z-40 mb-2.5 w-[252px] rounded-xl border border-tone-warn/25 bg-surface-raised px-3.5 py-3 shadow-lg"
         >
           <div className="mb-1.5 flex items-center gap-[7px]">
             <span className="inline-flex text-tone-warn">
@@ -1519,6 +1522,7 @@ export function ComposerActionsBar({
     contextUsage ?? null,
     runControls?.autoCompact,
   )
+  const warningChangedWhileMounted = useChangedWhileMounted(tokenWarning !== null)
 
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
   // follows the last-focused face; when nothing in the bar is focused it rests on
@@ -1779,6 +1783,7 @@ export function ComposerActionsBar({
           {tokenWarning ? (
             <TokenWarningChip
               warning={tokenWarning}
+              animateArrival={warningChangedWhileMounted}
               faceProps={faceProps('token-warning')}
             />
           ) : null}

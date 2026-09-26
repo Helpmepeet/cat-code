@@ -91,7 +91,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
       : `Context: ${usedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${percent}% used)`
   return (
     <span
-      className={`flex shrink-0 items-center gap-1.5 self-center ${tone}`}
+      className={`flex shrink-0 items-center gap-1.5 self-center transition-colors duration-[var(--motion-value)] ${tone}`}
       title={
         tick
           ? `${readout}, mark at ${CONTEXT_REFERENCE_TOKENS.toLocaleString()}`
@@ -121,6 +121,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           strokeWidth={STROKE_WIDTH}
           strokeLinecap="round"
           strokeDasharray={`${arcLength} ${CIRCUMFERENCE}`}
+          className="transition-[stroke-dasharray,stroke] duration-[var(--motion-value)]"
         />
         {tick ? (
           <line

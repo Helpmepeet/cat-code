@@ -26,6 +26,7 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { PermissionQueue } from './PermissionQueue.js'
+import { useChangedWhileMounted } from './useChangedWhileMounted.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
@@ -648,6 +649,10 @@ export function SessionPane({
     (scrollCapturePumpRef.current ??= createTranscriptScrollCapturePump())
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
+  const runChangedWhileMounted = useChangedWhileMounted(generating)
+  const questionChangedWhileMounted = useChangedWhileMounted(
+    askQuestion?.request.requestId ?? null,
+  )
   // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
   // now, `connectPending` is "no engine attached yet, and your own
   // focus/keystroke is what attaches one", `turnPending` is "attached, a turn is
@@ -959,7 +964,7 @@ export function SessionPane({
   const jumpToBottom = (): void => {
     const el = transcriptScrollRef.current
     if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
     previousScrollTopRef.current = el.scrollTop
     applyAtBottom(true)
   }
@@ -1405,7 +1410,7 @@ export function SessionPane({
           <button
             type="button"
             onClick={jumpToBottom}
-            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur ${
+            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur transition-colors duration-[var(--motion-arrive)] ${
               generating
                 ? paused
                   ? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'
@@ -1430,7 +1435,11 @@ export function SessionPane({
                 <span aria-hidden>↓</span>
               </>
             ) : (
-              <span>↓ Latest</span>
+              <span
+                className={`inline-block ${runChangedWhileMounted ? 'animate-settle' : ''}`}
+              >
+                ↓ Latest
+              </span>
             )}
           </button>
         ) : null}
@@ -1499,16 +1508,20 @@ export function SessionPane({
        * cards and any error/notice sit directly above the input, then the
        * in-turn activity row hugs the composer. */}
       {askQuestion ? (
-        <AskQuestionFlow
-          key={askQuestion.request.requestId}
-          isActivePane={isActivePane}
-          onAnswer={onAnswerQuestions}
-          onCancel={onCancelQuestions}
-          pendingCount={askPendingCount}
-          questions={askQuestion.questions}
-          requestId={askQuestion.request.requestId}
-          submitted={askQuestion.submitted}
-        />
+        <div
+          className={`${questionChangedWhileMounted ? 'animate-toast-in' : ''} ${askQuestion.submitted ? 'opacity-55' : ''} transition-opacity duration-[var(--motion-fast)]`}
+        >
+          <AskQuestionFlow
+            key={askQuestion.request.requestId}
+            isActivePane={isActivePane}
+            onAnswer={onAnswerQuestions}
+            onCancel={onCancelQuestions}
+            pendingCount={askPendingCount}
+            questions={askQuestion.questions}
+            requestId={askQuestion.request.requestId}
+            submitted={askQuestion.submitted}
+          />
+        </div>
       ) : null}
 
       <PermissionQueue
