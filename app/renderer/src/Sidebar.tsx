@@ -276,6 +276,7 @@ export function Sidebar({
   onOpenRowActions,
   onNewSessionInWorkspace,
   onNewChat,
+  onNewManagedChat,
   onAddProject,
   accountAlias = null,
   accountsNeedingSignIn = 0,
@@ -314,10 +315,11 @@ export function Sidebar({
    * wired.
    */
   onNewSessionInWorkspace?: (repId: SessionId) => void
-  /** The "New chat" action above the list. App points it at the active
-   * workspace, falling back to the picker (see the §0 flag in the header).
-   * Optional + additive: the button renders only when wired. */
+  /** The existing project-aware New chat action; it uses the active project
+   * or opens the folder picker when there is no active project. */
   onNewChat?: () => void
+  /** Create a managed chat without a project, independently of the active view. */
+  onNewManagedChat?: () => void
   /** The Projects header's "+": choose a folder, and the session created there
    * makes the group appear. The native picker path (`onNewSession` in App), so
    * no cwd is authored here. Optional + additive. */
@@ -901,7 +903,7 @@ export function Sidebar({
               </div>
             </div>
 
-            {/* New chat — the action you came for, above the list. */}
+            {/* Project-aware New chat stays above the session roster. */}
             {onNewChat ? (
               <button
                 type="button"
@@ -960,27 +962,36 @@ export function Sidebar({
                 </section>
               ) : null}
 
-              {managedRows.length > 0 ? (
-                <section className="mb-2.5">
-                  <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
-                    <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
-                      Chats
-                    </span>
-                  </div>
-                  {managedRows.map(row => (
-                    <SidebarRowItem
-                      key={row.sessionId}
-                      row={row}
-                      isActive={row.appSessionId != null && row.appSessionId === activeSessionId}
-                      rowRef={element => {
-                        if (element) rowRefs.current.set(row.sessionId, element)
-                        else rowRefs.current.delete(row.sessionId)
-                      }}
-                      {...rowProps}
-                    />
-                  ))}
-                </section>
-              ) : null}
+              <section className="mb-2.5">
+                <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
+                  <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+                    Chats
+                  </span>
+                  {onNewManagedChat ? (
+                    <button
+                      type="button"
+                      onClick={onNewManagedChat}
+                      title="New chat without a project"
+                      aria-label="New chat without a project"
+                      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
+                    >
+                      <PlusIcon />
+                    </button>
+                  ) : null}
+                </div>
+                {managedRows.map(row => (
+                  <SidebarRowItem
+                    key={row.sessionId}
+                    row={row}
+                    isActive={row.appSessionId != null && row.appSessionId === activeSessionId}
+                    rowRef={element => {
+                      if (element) rowRefs.current.set(row.sessionId, element)
+                      else rowRefs.current.delete(row.sessionId)
+                    }}
+                    {...rowProps}
+                  />
+                ))}
+              </section>
 
               {/* "Add project" lives on this header: pick a folder, a session is
                * created there, and the group appears with that row. No empty

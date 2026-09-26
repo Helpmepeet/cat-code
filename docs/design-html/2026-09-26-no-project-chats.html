@@ -51,7 +51,8 @@
     .sidebar-list { flex: 1; min-height: 0; overflow: auto; padding: 0 8px; }
     .section-label { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px; margin-top: 14px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
     .section-label:first-child { margin-top: 1px; }
-    .section-label button { width: 18px; height: 18px; padding: 0; border: 1px solid var(--seam); border-radius: 3px; }
+    .section-label button { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 1px solid var(--seam); border-radius: 3px; }
+    .section-label button:hover { border-color: rgba(244,114,182,.4); background: rgba(244,114,182,.08); color: var(--accent); }
     .session-row { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px 6px 4px; border: 1px solid transparent !important; border-radius: 6px; text-align: left; }
     .session-row.active { border-color: rgba(244,114,182,.18) !important; background: rgba(244,114,182,.09); }
     .session-row:hover { border-color: rgba(244,114,182,.22) !important; background: rgba(244,114,182,.07); }
@@ -169,11 +170,11 @@
       <aside class="sidebar" aria-label="Sidebar">
         <div class="brand">Cat Code <svg class="icon small" aria-hidden="true"><use href="#pin"/></svg></div>
         <div class="search"><svg class="icon" aria-hidden="true"><use href="#search"/></svg><input id="session-search" type="search" placeholder="Search sessions…" aria-label="Search sessions"></div>
-        <button class="new-chat" data-action="new"><svg class="icon" aria-hidden="true"><use href="#compose"/></svg>New chat</button>
+        <button class="new-chat" data-action="workspace-new"><svg class="icon" aria-hidden="true"><use href="#compose"/></svg>New chat</button>
         <div class="sidebar-list">
           <div class="section-label">Pinned</div>
           <button class="session-row" data-action="reference"><span class="row-lane"></span><span class="row-content"><span class="row-title">Reference notes</span><span class="row-meta">Yesterday</span></span></button>
-          <div class="section-label">Chats</div>
+          <div class="section-label">Chats <button data-action="new" title="New chat without a project" aria-label="New chat without a project"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
           <div id="chat-rows"></div>
           <div class="section-label">Projects <button data-action="picker" aria-label="Add project"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
           <div class="project-row"><svg class="icon small" aria-hidden="true"><use href="#folder"/></svg><span>cat-code</span><button data-action="project" aria-label="New chat in cat-code"><svg class="icon small" aria-hidden="true"><use href="#plus"/></svg></button></div>
@@ -229,7 +230,7 @@
       const folderActions = !state.project && !(state.view === 'missing' && !state.recreated)
         ? `<button class="tab-actions" data-menu="session-folder-actions" aria-label="Session actions for ${title}" aria-haspopup="menu" aria-expanded="false" aria-controls="session-folder-actions">${icon('more')}</button><div class="menu" id="session-folder-actions" role="menu" aria-label="Session actions" hidden><button role="menuitem" data-action="finder">Open chat folder</button><button role="menuitem" data-action="copy-path">Copy folder path</button></div>`
         : '';
-      $('#tabs').innerHTML = `<div class="tab active">${icon(state.project ? 'folder' : 'chat', true)}<span>${title}</span>${folderActions}</div>${state.view === 'parallel' ? `<button class="tab" data-action="parallel">${icon('chat', true)}<span>Weekend checklist</span></button>` : ''}<button class="tab-plus" data-action="new" aria-label="New chat">${icon('plus')}</button>`;
+      $('#tabs').innerHTML = `<div class="tab active">${icon(state.project ? 'folder' : 'chat', true)}<span>${title}</span>${folderActions}</div>${state.view === 'parallel' ? `<button class="tab" data-action="parallel">${icon('chat', true)}<span>Weekend checklist</span></button>` : ''}<button class="tab-plus" data-action="workspace-new" aria-label="New chat">${icon('plus')}</button>`;
       $('#chat-rows').innerHTML = `${draft && !state.project ? row('New chat','Now','new',true) : ''}${state.view === 'branch' ? row('Packing checklist · branch','Now','branch',true) : ''}${row('Packing checklist','Today','files',!state.project && ['files','parallel','missing'].includes(state.view))}${row(state.view === 'parallel' ? 'Weekend checklist' : 'Quick question','Today',state.view === 'parallel' ? 'parallel' : 'question',state.view === 'question')}`;
       $('#project-chat-row').innerHTML = state.project ? row(title,'Now · Cobalt','project',true) : '';
       $('[data-action="reference"]').classList.toggle('active',state.view === 'reference');
@@ -285,7 +286,8 @@
       event.preventDefault();
       const type = action.dataset.action;
       if (['new','files','parallel','branch'].includes(type)) { changeView(type); if (type === 'new') $('textarea').focus(); return; }
-      if (type === 'project') { changeView('new'); state.project = true; render(); $('textarea').focus(); return; }
+      if (type === 'workspace-new' && !state.project) { closeMenus(); note('Folder picker'); return; }
+      if (type === 'project' || type === 'workspace-new') { changeView('new'); state.project = true; render(); $('textarea').focus(); return; }
       if (type === 'recreate') { state.recreated = true; render(); $('textarea').focus(); return; }
       if (type === 'question' || type === 'reference') {
         changeView(type); return;

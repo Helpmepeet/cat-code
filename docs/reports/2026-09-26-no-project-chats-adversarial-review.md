@@ -34,6 +34,12 @@ output links remain in the conversation. The agent uses its folder directly
 and reads applicable CLAUDE.md / AGENTS.md guidance when explicitly asked to
 work in another workspace. No project-switching UI is required.
 
+The user subsequently chose a dedicated **+** beside the **Chats** heading for
+managed creation. The existing New chat action, tab +, and shortcut retain their
+active-project behavior and folder-picker fallback. This changes the entry point
+in finding 4, without changing immediate session creation or attachment ownership.
+The Chats heading and + remain available when its list is empty.
+
 ## Accepted findings
 
 ### 1. Working files under `.cat-code` trigger sensitive-directory checks

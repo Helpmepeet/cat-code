@@ -592,6 +592,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
   const newChatInFlightRef = useRef(false)
+  const newManagedChatInFlightRef = useRef(false)
   // The window's face registries, one per SESSION, mounted at the shell so every
   // surface that draws a worker shares one. The transcript, the docked roster,
   // the Workers list and a relayed permission card can all show the same worker
@@ -1693,13 +1694,17 @@ export function App() {
   }, [activeSessionId, focusCreatedSession])
 
   const newManagedChat = useCallback(async () => {
-    const bridge = getBridge()
+    if (newManagedChatInFlightRef.current) return
+    newManagedChatInFlightRef.current = true
     try {
+      const bridge = getBridge()
       const result = await bridge.createManagedChat()
       if (result.ok) focusCreatedSession(result.value.appSessionId)
       else setShellError(hostErrorMessage(result.error))
     } catch (error) {
       setShellError(errorMessage(error))
+    } finally {
+      newManagedChatInFlightRef.current = false
     }
   }, [focusCreatedSession])
 
@@ -1721,17 +1726,24 @@ export function App() {
     }
   }, [focusCreatedSession])
 
-  /** Start an independent managed chat from any global New chat entry point. */
+  /** Start in the active project, or choose one when no project is active. */
   const newChat = useCallback(async () => {
     if (newChatInFlightRef.current) return
     newChatInFlightRef.current = true
 
     try {
-      await newManagedChat()
+      if (
+        activeSessionRow?.appSessionId &&
+        activeSessionRow.binding?.kind !== 'managed'
+      ) {
+        await newSessionInWorkspace(activeSessionRow.appSessionId)
+      } else {
+        await newSession()
+      }
     } finally {
       newChatInFlightRef.current = false
     }
-  }, [newManagedChat])
+  }, [activeSessionRow, newSession, newSessionInWorkspace])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -4092,6 +4104,7 @@ export function App() {
           }
           onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
           onNewChat={() => void newChat()}
+          onNewManagedChat={() => void newManagedChat()}
           /* The Projects header's "+": the native picker, so the renderer never
            * authors a cwd (HC1). The session created in the chosen folder is what
            * makes the group appear — there is no empty-workspace record to keep. */

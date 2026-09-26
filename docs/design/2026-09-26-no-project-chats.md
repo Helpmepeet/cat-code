@@ -2,13 +2,13 @@
 
 Date: 2026-09-26. Revised after two independent adversarial reviews and the
 user's instructions to omit project-specific prompt content, peer sessions,
-and the No project / Files row above the composer.
+and the No project / Files row above the composer, and to add a dedicated Chats +.
 Status: design specification.
 
 ## Product decision
 
-**New chat creates a normal session and opens its composer without choosing a
-project.** The user can
+**The + beside Chats creates a normal session and opens its composer without
+choosing a project.** The user can
 ask a question, run tools, edit files, create artifacts, or use subagents without
 choosing a folder. These are ordinary, persistent Cat Code sessions with the
 same models, tool loop, permissions, attachments, and history as project chats.
@@ -37,13 +37,17 @@ case work correctly. It is an ownership convention, not an OS isolation boundary
 
 | Entry point | Proposed behavior |
 | --- | --- |
-| Sidebar **New chat**, tab **+**, existing new-chat shortcut | Create a managed session without a selected project, regardless of the active project. Focus its composer as the normal engine startup proceeds. No folder picker. |
-| App with no active session | Keep the welcome launcher. Use **New chat** in the left sidebar, tab **+**, or the existing shortcut; do not duplicate the button in the welcome panel. Opening the app alone does not need to spawn an engine. |
+| **Chats +** | Create a managed session without a selected project, regardless of the active project. Focus its composer as the normal engine startup proceeds. No folder picker. |
+| Sidebar **New chat**, tab **+**, existing new-chat shortcut and command | Preserve their original behavior: create a session in the active project, or open the native folder picker when no project is active. A managed chat's storage directory is not a project to inherit. |
+| App with no active session | Keep the welcome launcher. **Chats +** in the left sidebar creates a no-project chat; do not duplicate the button in the welcome panel. Opening the app alone does not need to spawn an engine. |
 | Project header **+** | Create a chat in that specific project, preserving the fast project workflow. |
 | **Projects +** | Keep the native folder picker and existing project trust flow. |
 | Chat's existing session-actions menu | **Open chat folder** and **Copy folder path** provide optional access to its working files. Existing session actions remain available. |
 
-Place **Chats** after Pinned and before Projects. It is a flat list, with the
+Place **Chats** after Pinned and before Projects, with a **+** matching the
+Projects header's control. Keep the heading and creation control visible even
+when there are no chats, all chats are pinned, or search hides every chat row.
+It is a flat list, with the
 same title, recency, status, search, pin, and overflow behavior as
 existing rows. It is not a fake project called “scratch” and is not the current
 “Unknown workspace” group. Pinned chats follow existing pin behavior.
@@ -139,7 +143,7 @@ file ownership. It has no session-discovery or collaboration meaning.
   the agent context; do not introduce a confirmation dialog.
 
 Allocate the working directory and start the normal engine flow when the user
-invokes New chat, as the app already does for project chats. This keeps model,
+invokes **Chats +**. This keeps model,
 permission, command, and attachment controls on their existing session-backed
 surfaces. Pure question chats need not create any content files. Use the existing
 live-process and spawn-rate limits. A failed
@@ -295,7 +299,7 @@ cwd; hiding tool descriptions alone is insufficient. Existing project-session
 peer behavior keeps its current scope. No-project chats require no shared peer
 group, cross-cwd transcript locator, file-delivery protocol, or expansion of
 the existing same-cwd peer scope. A user opens another independent chat through
-the ordinary New chat action.
+**Chats +**.
 
 ### File access
 
@@ -369,7 +373,7 @@ design. Existing uncommitted sidebar and map changes were read and left intact.
 
 | Current evidence | Consequence / owner for future work |
 | --- | --- |
-| [`App.tsx`](../../app/renderer/src/App.tsx), `newChat`, `newSession`, `newSessionInWorkspace` | New chat inherits the active project or falls back to a native picker. Draft routing and all new-chat entry points must change together. |
+| [`App.tsx`](../../app/renderer/src/App.tsx), `newChat`, `newManagedChat`, `newSession`, `newSessionInWorkspace` | Preserve New chat's active-project or native-picker behavior across its existing callers. Wire Chats + separately to managed creation. |
 | [`WelcomeScreen.tsx`](../../app/renderer/src/WelcomeScreen.tsx), [`SessionPane.tsx`](../../app/renderer/src/SessionPane.tsx), [`ComposerActionsBar.tsx`](../../app/renderer/src/ComposerActionsBar.tsx), [`theme.css`](../../app/renderer/src/theme.css) | Current welcome, borderless composer, controls, typography, and spacing used by the mockup. SessionPane intentionally has no duplicate title header. |
 | [`TabBar.tsx`](../../app/renderer/src/TabBar.tsx), [`SessionActionsMenu.tsx`](../../app/renderer/src/SessionActionsMenu.tsx) | Add optional folder actions to the existing session menu and reuse its trigger. Keep the composer free of a project/files row. The mockup shows only the proposed folder actions within this menu. |
 | [`Sidebar.tsx`](../../app/renderer/src/Sidebar.tsx), [`sessionsCatalogState.ts`](../../app/renderer/src/sessionsCatalogState.ts) | Rows group and project recents derive from cwd. Introduce Chats using explicit binding; preserve Unknown workspace. |
@@ -388,11 +392,14 @@ design. Existing uncommitted sidebar and map changes were read and left intact.
 
 These describe product outcomes, not tests added in this design change.
 
-1. With no project configured, choose New chat and submit a question. It runs without a
+1. With no project configured and no existing chats, choose **Chats +** and submit a question. It runs without a
    folder picker or project/files row above the composer; normal sign-in and
    model errors remain truthful.
-2. Start a new chat while a real project is active. The new chat belongs to Chats;
-   the project's **+** still starts a project chat.
+2. Choose **Chats +** while a real project is active. The new chat belongs to Chats.
+   **New chat**, tab **+**, and the existing shortcut still create a session in
+   the active project; when a no-project chat is active, they open the folder
+   picker. The project's **+** still starts a project chat. **Chats +** remains
+   available when all chat rows are pinned or filtered out.
 3. Two independent chats each create and edit `report.md`. Their files differ,
    and both still exist after closing and reopening the app.
 4. A no-project chat uses Bash, file tools, a configured global skill/MCP server,
