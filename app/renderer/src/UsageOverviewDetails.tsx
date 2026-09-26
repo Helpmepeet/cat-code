@@ -4,7 +4,7 @@ import { isRetiredUsageModel } from '../../shared/usageModelStatus.js';
 import { UsageAreaTrend } from './UsageAreaTrend.js';
 import { UsageCacheChart } from './UsageDashboardCharts.js';
 import { UsageToolErrorTrend } from './UsageToolErrorTrend.js';
-import { usageCacheWrites, usageCompact, usageNumber, usagePercent, usageTotal } from './usageDashboardState.js';
+import { usageCacheReadRate, usageCacheWrites, usageCompact, usageNumber, usagePercent, usageTotal } from './usageDashboardState.js';
 import './usageOverviewDetails.css';
 
 function donutArcs(summary: UsageRangeSummary, total: number) {
@@ -53,10 +53,11 @@ function DetailValue({ color, label, value, total, title }: { color: string; lab
 
 export function UsageCacheSummary({ summary, partial, selected = '', onSelect }: { summary: UsageRangeSummary; partial: boolean; selected?: string; onSelect?: (date: string) => void }) {
     const measured = !partial && summary.cacheWriteReporting === 'reported' && summary.cachedInputShare !== null;
+    const readRate = usageCacheReadRate(summary.tokens);
     const total = summary.tokens.read + summary.tokens.fresh + summary.tokens.write;
     const writes = summary.cacheWriteReporting === 'reported' ? usageCompact(summary.tokens.write)
         : summary.cacheWriteReporting === 'partial' && summary.tokens.write > 0 ? `${usageCompact(summary.tokens.write)} reported` : '–';
-    return <div className="usage-details-summary"><header className="usage-details-card-header"><div><h2 className="usage-panel-heading">Prompt cache</h2>{!measured && <p>Cache reads over time</p>}</div>{measured && summary.cachedInputShare !== null && <strong aria-label={`Cache reads divided by input, cache reads, and cache writes: ${usagePercent(summary.cachedInputShare)}`}>{usagePercent(summary.cachedInputShare)}</strong>}</header><UsageCacheChart summary={summary} partial={partial} selected={selected} onSelect={onSelect}/><dl className="usage-cache-values usage-details-values"><DetailValue color="usage-details-cache-read" label="Cache reads" value={usageCompact(summary.tokens.read)} total={measured ? share(summary.tokens.read, total) : undefined} title={usageNumber(summary.tokens.read)}/><DetailValue color="usage-details-cache-write" label="Cache writes" value={writes} total={measured ? share(summary.tokens.write, total) : undefined} title={usageCacheWrites(summary.tokens.write, summary.cacheWriteReporting)}/><DetailValue color="usage-details-fresh" label="Input" value={usageCompact(summary.tokens.fresh)} total={measured ? share(summary.tokens.fresh, total) : undefined} title={`Uncached input: ${usageNumber(summary.tokens.fresh)}`}/></dl></div>;
+    return <div className="usage-details-summary"><header className="usage-details-card-header"><div><h2 className="usage-panel-heading">Prompt cache</h2><p>Cache reads / (cache reads + input){partial ? ', partial history' : ''}</p></div>{readRate !== null && <strong aria-label={`Cache reads divided by cache reads plus input${partial ? ', partial history' : ''}: ${usagePercent(readRate)}`}>{usagePercent(readRate)}</strong>}</header><UsageCacheChart summary={summary} partial={partial} selected={selected} onSelect={onSelect}/><dl className="usage-cache-values usage-details-values"><DetailValue color="usage-details-cache-read" label="Cache reads" value={usageCompact(summary.tokens.read)} total={measured ? share(summary.tokens.read, total) : undefined} title={usageNumber(summary.tokens.read)}/><DetailValue color="usage-details-cache-write" label="Cache writes" value={writes} total={measured ? share(summary.tokens.write, total) : undefined} title={usageCacheWrites(summary.tokens.write, summary.cacheWriteReporting)}/><DetailValue color="usage-details-fresh" label="Input" value={usageCompact(summary.tokens.fresh)} total={measured ? share(summary.tokens.fresh, total) : undefined} title={`Uncached input: ${usageNumber(summary.tokens.fresh)}`}/></dl></div>;
 }
 
 export function UsageToolActivity({ summary, partial = false, selected = '', onSelect }: { summary: UsageRangeSummary; partial?: boolean; selected?: string; onSelect?: (date: string) => void }) {

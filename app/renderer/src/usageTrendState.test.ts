@@ -3,7 +3,7 @@ import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { usageBucketLabel, usageDatePosition, usageTrendPoints } from './usageTrendState.js';
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 
-test('sparse dates keep calendar spacing, empty requests are zero, empty cache share breaks the line', () => {
+test('sparse dates keep calendar spacing, empty requests are zero, empty cache rates break the line', () => {
     const summary = structuredClone(snapshot.ranges.all);
     summary.startDate = '2026-09-01';
     summary.days = ['2026-09-01', '2026-09-10'].map(date => ({ ...structuredClone(snapshot.ranges['7d'].days[0]!), date, requests: 4, cacheWriteReporting: 'reported' as const, tokens: { fresh: 1, read: 9, write: 0, output: 0 } }));

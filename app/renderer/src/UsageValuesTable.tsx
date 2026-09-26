@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AutoModeUsageOutcome, AutoModeUsagePopulation } from '../../shared/usageAutoMode.js';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { autoModeCommandRatePoints } from './usageAutoModeState.js';
-import { usageCacheWrites, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
+import { usageCacheReadRate, usageCacheWrites, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
 import { usageBucketLabel } from './usageTrendState.js';
 import { usageHourLabel } from './usageGraphState.js';
 
@@ -38,9 +38,9 @@ export function UsageValuesTable({ summary, hourlySummary, asOf, timezone, parti
         {open && <div className="usage-values-sections">
             <section><h2>Tokens and prompt cache</h2><div className="usage-table-scroll"><table>
                 <caption>Recorded tokens by local period, full counts</caption>
-                <thead><tr><th scope="col">Period</th><th scope="col">Input</th><th scope="col">Cache reads</th><th scope="col">Cache writes</th><th scope="col">Output</th><th scope="col">Total</th><th scope="col">Cache share</th><th scope="col">Sessions</th><th scope="col">Tool requests</th></tr></thead>
-                <tbody>{summary.days.map(day => <tr key={day.date}><th scope="row">{usageBucketLabel(summary, day.date)}</th><Cell value={day.tokens.fresh}/><Cell value={day.tokens.read}/><td>{usageCacheWrites(day.tokens.write, day.cacheWriteReporting)}</td><Cell value={day.tokens.output}/><Cell value={usageTotal(day.tokens)}/><td>{!partial && day.cacheWriteReporting === 'reported' && usageShare(day.tokens) !== null ? usagePercent(usageShare(day.tokens)) : '–'}</td><Cell value={day.sessions}/><Cell value={day.requests}/></tr>)}</tbody>
-            </table></div><p className="usage-values-definition">Cache share = cache reads / (input + cache reads + cache writes). Cache in the Tokens chart combines reads and writes.</p></section>
+                <thead><tr><th scope="col">Period</th><th scope="col">Input</th><th scope="col">Cache reads</th><th scope="col">Cache writes</th><th scope="col">Output</th><th scope="col">Total</th><th scope="col">Cache read rate</th><th scope="col">Cache share</th><th scope="col">Sessions</th><th scope="col">Tool requests</th></tr></thead>
+                <tbody>{summary.days.map(day => <tr key={day.date}><th scope="row">{usageBucketLabel(summary, day.date)}</th><Cell value={day.tokens.fresh}/><Cell value={day.tokens.read}/><td>{usageCacheWrites(day.tokens.write, day.cacheWriteReporting)}</td><Cell value={day.tokens.output}/><Cell value={usageTotal(day.tokens)}/><td>{usageCacheReadRate(day.tokens) === null ? '–' : usagePercent(usageCacheReadRate(day.tokens))}</td><td>{!partial && day.cacheWriteReporting === 'reported' && usageShare(day.tokens) !== null ? usagePercent(usageShare(day.tokens)) : '–'}</td><Cell value={day.sessions}/><Cell value={day.requests}/></tr>)}</tbody>
+            </table></div><p className="usage-values-definition">Cache read rate = cache reads / (cache reads + input). Cache share also includes cache writes and requires complete reporting. Cache in the Tokens chart combines reads and writes.</p></section>
             <section><h2>Models</h2><div className="usage-table-scroll"><table>
                 <caption>Recorded tokens by model and local period</caption><thead><tr><th scope="col">Period</th>{summary.models.map(model => <th scope="col" key={model.id}>{model.label}</th>)}</tr></thead>
                 <tbody>{summary.days.map(day => <tr key={day.date}><th scope="row">{usageBucketLabel(summary, day.date)}</th>{summary.models.map(model => <Cell key={model.id} value={day.models.find(item => item.id === model.id)?.total ?? 0}/>)}</tr>)}</tbody>

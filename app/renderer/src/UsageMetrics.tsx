@@ -1,12 +1,13 @@
 import { usageMetricDelta } from './usageMetricDelta.js';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
-import { usageCompact, usageNumber, usagePercent, usageTotal, usageShare } from './usageDashboardState.js';
+import { usageCacheReadRate, usageCompact, usageNumber, usagePercent, usageTotal } from './usageDashboardState.js';
 export function UsageMetrics({ summary, unknown, partial }: { summary?: UsageRangeSummary; unknown: string; partial: boolean }) {
     const previous = !partial && summary?.range !== 'all' ? summary?.previousPeriod : undefined;
-    const cacheMeasured = !partial && summary?.cacheWriteReporting === 'reported' && summary.cachedInputShare !== null;
     const average = (tokens: UsageRangeSummary['tokens'], activeDays: number) => activeDays ? usageTotal(tokens) / activeDays : 0;
     const delta = (current: number | null, baseline: number | null | undefined, points = false) => previous ? usageMetricDelta(current, baseline ?? null, points ? 'points' : 'percent') : null;
     const comparison = previous ? `vs prior ${summary?.range === '7d' ? '7' : '30'} days` : '';
+    const cacheReadRate = summary ? usageCacheReadRate(summary.tokens) : null;
+    const previousCacheReadRate = previous ? usageCacheReadRate(previous.tokens) : null;
     let runningTokens = 0, runningActiveDays = 0;
     const activeDaySeries = summary?.range === 'all' ? [] : summary?.days.map(day => {
         const dayTokens = usageTotal(day.tokens);
@@ -19,7 +20,7 @@ export function UsageMetrics({ summary, unknown, partial }: { summary?: UsageRan
         { kind: 'tokens', label: 'Per active day', delta: delta(summary ? average(summary.tokens, summary.activeDays) : null, previous ? average(previous.tokens, previous.activeDays) : null), value: summary ? usageCompact(summary.activeDays ? usageTotal(summary.tokens) / summary.activeDays : 0) : unknown, series: activeDaySeries },
         { kind: 'sessions', label: 'Sessions', delta: delta(summary?.sessions ?? null, previous?.sessions), value: summary ? usageNumber(summary.sessions) : unknown, series: summary?.days.map(day => day.sessions) ?? [] },
         { kind: 'requests', label: 'Tool requests', delta: delta(summary?.requests ?? null, previous?.requests), value: summary ? usageNumber(summary.requests) : unknown, series: summary?.days.map(day => day.requests) ?? [] },
-        { kind: 'cache', label: 'Cached input', delta: cacheMeasured && previous?.cacheWriteReporting === 'reported' ? delta(summary?.cachedInputShare ?? null, previous.cachedInputShare, true) : null, value: summary ? cacheMeasured ? usagePercent(summary.cachedInputShare!) : `${usageCompact(summary.tokens.read)} tokens` : unknown, series: cacheMeasured ? summary?.days.filter(day => day.cacheWriteReporting === 'reported').map(day => usageShare(day.tokens)).filter((value): value is number => value !== null) ?? [] : summary?.days.map(day => day.tokens.read) ?? [] },
+        { kind: 'cache', label: 'Cache read rate', delta: delta(cacheReadRate, previousCacheReadRate, true), value: cacheReadRate === null ? unknown : usagePercent(cacheReadRate), series: summary?.days.map(day => usageCacheReadRate(day.tokens)).filter((value): value is number => value !== null) ?? [] },
     ];
     return <section className="usage-overview" aria-label="Analytics overview">{comparison && <p className="usage-comparison">{comparison}</p>}<div className="usage-cards">{items.map(item => {
         const max = Math.max(1, ...item.series);

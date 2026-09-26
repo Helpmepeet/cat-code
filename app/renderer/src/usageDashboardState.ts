@@ -25,6 +25,7 @@ export function usageFailureMessage(code: UsageDashboardState['errorCode']): str
 }
 export const usageTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const usageShare = (t: UsageTokens): number | null => t.fresh + t.read + t.write > 0 ? t.read / (t.fresh + t.read + t.write) * 100 : null;
+export const usageCacheReadRate = (t: UsageTokens): number | null => t.fresh + t.read > 0 ? t.read / (t.fresh + t.read) * 100 : null;
 export const usageNumber = (n: number): string => n.toLocaleString('en-US');
 export const usagePercent = (n: number | null): string => n === null ? 'Not applicable' : `${n.toFixed(1)}%`;
 export function usageColors(ids: readonly string[]): Record<string, string> {

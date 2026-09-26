@@ -14,14 +14,12 @@ export function UsageAreaTrend({ summary, metric, partial, selected = '', onSele
     const [hovered, setHovered] = useState<string | null>(null);
     const chart = useUsageChartWidth();
     const cache = metric === 'cache';
-    const cacheShareAvailable = cache && !partial && summary.cacheWriteReporting === 'reported' && summary.cachedInputShare !== null;
-    const cacheReads = cache && !cacheShareAvailable;
-    const percent = metric === 'errors' || cacheShareAvailable;
-    const points = usageTrendPoints(summary, cacheReads ? 'cacheReads' : metric);
+    const percent = cache || metric === 'errors';
+    const points = usageTrendPoints(summary, metric);
     const valid = points.filter(point => point.value !== null);
     const peak = Math.max(1, ...valid.map(point => point.value!));
     const min = 0;
-    const max = cacheShareAvailable ? 100 : usageAxisCeiling(peak * 1.15);
+    const max = cache ? 100 : usageAxisCeiling(peak * 1.15);
     const height = chart.width < 360 ? 128 : 150, top = 12, bottom = height - 22;
     const left = 40, right = chart.width - 10;
     const x = (date: string) => left + usageDatePosition(summary, date) * (right - left);
@@ -37,12 +35,12 @@ export function UsageAreaTrend({ summary, metric, partial, selected = '', onSele
     if (segment.length) segments.push(segment);
     const shown = hovered ?? selected;
     const detail = points.find(point => point.date === shown && point.value !== null);
-    const exactValue = (value: number) => cacheReads ? `${usageNumber(value)} cache-read tokens` : cache ? `${usagePercent(value)} cached input` : metric === 'errors' ? `${usagePercent(value)} errors / matched results` : `${usageNumber(value)} tool requests`;
-    const label = cacheReads ? 'Cache reads' : cache ? 'Cached input share' : metric === 'errors' ? 'Tool error rate' : 'Tool requests';
+    const exactValue = (value: number) => cache ? `${usagePercent(value)} cache read rate${partial ? ', partial history' : ''}` : metric === 'errors' ? `${usagePercent(value)} errors / matched results` : `${usageNumber(value)} tool requests`;
+    const label = cache ? 'Cache read rate' : metric === 'errors' ? 'Tool error rate' : 'Tool requests';
     return <div className={`usage-area-trend usage-area-${metric}`}>
-        <svg ref={chart.ref} className="usage-chart usage-trend-chart" viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${label}, ${min} to ${max}${percent ? ' percent' : cacheReads ? ' tokens' : ''}`} onMouseLeave={() => setHovered(null)}>
+        <svg ref={chart.ref} className="usage-chart usage-trend-chart" viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${label}, ${min} to ${max}${percent ? ' percent' : ''}${cache && partial ? ', partial history' : ''}`} onMouseLeave={() => setHovered(null)}>
             {detail && <line x1={x(detail.date)} x2={x(detail.date)} y1={top} y2={bottom} className="usage-trend-marker"/>}
-            {(cacheShareAvailable ? [0, 0.5, 1] : [0, 1 / 3, 2 / 3, 1]).map(fraction => {
+            {(cache ? [0, 0.5, 1] : [0, 1 / 3, 2 / 3, 1]).map(fraction => {
                 const value = min + (max - min) * fraction;
                 return <g key={fraction}><text x={left - 7} y={y(value) + 4} textAnchor="end" className="usage-axis">{percent ? `${Number(value.toFixed(1))}%` : usageCompact(value)}</text><line x1={left} x2={right} y1={y(value)} y2={y(value)} className="usage-trend-grid"/></g>;
             })}
