@@ -41,7 +41,6 @@ import { getDefaultFileReadingLimits } from '../FileReadTool/limits.js'
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.6-terra'
-const DEFAULT_CODEX_IMAGE_MODEL = 'gpt-image-2.5-flare'
 // Image generation is an auxiliary tool call, so keep retries bounded locally
 // instead of inheriting the main conversation's retry budget.
 const MAX_CODEX_IMAGE_RETRIES = 2
@@ -147,7 +146,7 @@ type Input = z.infer<InputSchema>
 const outputSchema = lazySchema(() =>
   z.object({
     filePath: z.string().describe('Path where the generated image was saved'),
-    model: z.string().describe('OpenAI image model used'),
+    model: z.string().describe('Image model identifier returned by Codex'),
     size: z.string().describe('Pixel dimensions of the image that was written'),
     outputFormat: z.enum(outputFormats).describe('Image format written'),
     bytes: z.number().describe('Number of bytes written'),
@@ -626,7 +625,8 @@ function buildCodexImageGenerationBody(
     tools: [
       {
         type: 'image_generation',
-        model: DEFAULT_CODEX_IMAGE_MODEL,
+        // The private Codex endpoint ignored even an invalid requested model
+        // in 2026-09-27 probes. Leave selection to the backend.
         moderation: input.moderation ?? 'auto',
         output_format: outputFormat,
         action: input.action ?? (input.reference_image_path ? 'edit' : 'auto'),
@@ -761,8 +761,8 @@ function summarizeCodexImageResponse(text: string): string {
   return parts.join(' ')
 }
 
-// Cat Code requests an image model in tools[].model. Codex may resolve a
-// different effective model, so report the model it echoes on response.created.
+// Codex chooses the image model. Report the identifier it returns in
+// response.created without treating it as a version guarantee.
 function extractCodexImageModel(text: string): string | undefined {
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
@@ -964,7 +964,7 @@ Rules:
 - Do not include markdown images ![...](path) in your text response; the interface automatically displays the generated image to the user, so you do not need to show or embed it.
 
 Image model limits:
-- Cat Code requests GPT Image 2.5 through the ChatGPT/Codex backend. Do not specify a model in tool arguments.
+- Images are generated through the ChatGPT/Codex backend. The backend chooses the image model; do not specify one in tool arguments.
 - Cat Code does not expose a size control. Describe the framing you want in the prompt instead.
 
 Transparent backgrounds:
@@ -1239,7 +1239,7 @@ Prompt rewriting:
 export function formatGenerateImageResult(output: Output): string {
   const lines = [
     `Generated image: ${output.filePath}`,
-    `Model: ${output.model}`,
+    `Reported model: ${output.model}`,
     `Size: ${output.size}`,
     `Format: ${output.outputFormat}`,
     `Bytes: ${output.bytes}`,

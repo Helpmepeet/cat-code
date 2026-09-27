@@ -210,7 +210,7 @@ describe('GenerateImageTool', () => {
     })
   })
 
-  test('keeps the Codex response and GPT Image models separate', () => {
+  test('keeps the Codex response model while leaving image model selection to the backend', () => {
     const body =
       _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
         {
@@ -234,12 +234,12 @@ describe('GenerateImageTool', () => {
       tools: [
         {
           type: 'image_generation',
-          model: 'gpt-image-2.5-flare',
           output_format: 'png',
         },
       ],
       tool_choice: 'required',
     })
+    expect(body.tools[0]).not.toHaveProperty('model')
   })
 
   test('accepts the Codex image-generation request parameters in the input schema', () => {
@@ -270,29 +270,6 @@ describe('GenerateImageTool', () => {
 
     expect(tool.output_compression).toBe(80)
     expect(tool.action).toBe('generate')
-  })
-
-  test('extracts the effective GPT Image 2.5 model from response.created', () => {
-    const sse = [
-      'event: response.created',
-      `data: ${JSON.stringify({
-        type: 'response.created',
-        response: {
-          tools: [
-            {
-              type: 'image_generation',
-              background: 'opaque',
-              model: 'gpt-image-2.5-codex',
-            },
-          ],
-        },
-      })}`,
-      '',
-    ].join('\n')
-
-    expect(
-      _generateImageToolInternalsForTest.extractCodexImageModel(sse),
-    ).toBe('gpt-image-2.5-codex')
   })
 
   test('does not invent an image model when the Codex response omits one', () => {
@@ -436,7 +413,7 @@ describe('GenerateImageTool', () => {
     expect(result.data.filePath).toBe(outputPath)
   })
 
-  test('uses Codex auth from the account pool and reports the effective model', async () => {
+  test('uses Codex auth from the account pool and reports its returned model identifier', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -502,11 +479,17 @@ describe('GenerateImageTool', () => {
     expect(accountId).toBe('main-account')
     expect(requestBody).toMatchObject({
       model: 'gpt-5.6-terra',
-      tools: [{ type: 'image_generation', model: 'gpt-image-2.5-flare' }],
+      tools: [{ type: 'image_generation' }],
     })
+    expect(
+      (requestBody as { tools: Record<string, unknown>[] }).tools[0],
+    ).not.toHaveProperty('model')
     expect(await readFile(outputPath)).toEqual(generatedBytes)
     expect(result.data.filePath).toBe(outputPath)
     expect(result.data.model).toBe('gpt-image-2-codex')
+    expect(formatGenerateImageResult(result.data)).toContain(
+      'Reported model: gpt-image-2-codex',
+    )
   })
 
   test('does not send an image request with a retained credential generation', async () => {
@@ -1248,7 +1231,7 @@ describe('GenerateImageTool', () => {
     }
   })
 
-  test('prompt names GPT Image 2.5 and describes supported controls', async () => {
+  test('prompt describes backend-selected image model and supported controls', async () => {
     const prompt = await GenerateImageTool.prompt({
       getToolPermissionContext: async () => ({} as never),
       tools: [],
@@ -1256,14 +1239,13 @@ describe('GenerateImageTool', () => {
     })
 
     expect(prompt).toContain(
-      'Cat Code requests GPT Image 2.5 through the ChatGPT/Codex backend. Do not specify a model in tool arguments.',
+      'Images are generated through the ChatGPT/Codex backend. The backend chooses the image model; do not specify one in tool arguments.',
     )
     expect(prompt).toContain(
       'Cat Code does not expose a size control. Describe the framing you want in the prompt instead.',
     )
     expect(prompt).toContain('gpt-image-prompting-guide.md')
     expect(prompt).toContain('structuring GPT Image prompts')
-    expect(prompt).toContain('GPT Image 2.5')
     expect(prompt).toContain('You MUST omit background entirely')
 
     const guidePath = prompt.match(/(\/\S+gpt-image-prompting-guide\.md)/)?.[1]
@@ -1428,7 +1410,7 @@ describe('GenerateImageTool', () => {
               tools: [
                 {
                   type: 'image_generation',
-                  model: 'gpt-image-2.5-flare',
+                  model: 'gpt-image-2-codex',
                 },
               ],
             },
@@ -1460,7 +1442,7 @@ describe('GenerateImageTool', () => {
 
     // 2. Metadata is correct and does NOT contain raw base64 or image data
     expect(result.data.filePath).toBe(outputPath)
-    expect(result.data.model).toBe('gpt-image-2.5-flare')
+    expect(result.data.model).toBe('gpt-image-2-codex')
     expect(result.data.bytes).toBe(validPngBytes.length)
     expect((result.data as Record<string, unknown>).base64).toBeUndefined()
     expect((result.data as Record<string, unknown>).image).toBeUndefined()
@@ -1505,7 +1487,7 @@ describe('GenerateImageTool', () => {
               tools: [
                 {
                   type: 'image_generation',
-                  model: 'gpt-image-2.5-flare',
+                  model: 'gpt-image-2-codex',
                 },
               ],
             },
