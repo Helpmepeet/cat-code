@@ -27,7 +27,7 @@ import { Dialog } from '../design-system/Dialog.js';
 import { Select } from '../CustomSelect/index.js';
 import { OutputStylePicker } from '../OutputStylePicker.js';
 import { LanguagePicker } from '../LanguagePicker.js';
-import { getExternalClaudeMdIncludes, getMemoryFiles, hasExternalClaudeMdIncludes } from 'src/utils/claudemd.js';
+import { clearMemoryFileCaches, getExternalClaudeMdIncludes, getMemoryFiles, hasExternalClaudeMdIncludes } from 'src/utils/claudemd.js';
 import { KeyboardShortcutHint } from '../design-system/KeyboardShortcutHint.js';
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
 import { Byline } from '../design-system/Byline.js';
@@ -36,6 +36,13 @@ import { useIsInsideModal } from '../../context/modalContext.js';
 import { SearchBox } from '../SearchBox.js';
 import { isSupportedTerminal, hasAccessToIDEExtensionDiffFeature } from '../../utils/ide.js';
 import { getInitialSettings, getSettingsForSource, updateSettingsForSource } from '../../utils/settings/settings.js';
+import {
+  getInstructionFilesSetting,
+  getUserInstructionFilesOption,
+  INSTRUCTION_FILES_MODE_LABELS,
+  INSTRUCTION_FILES_MODES,
+  updateUserInstructionFilesOption,
+} from '../../utils/instructionFiles.js';
 import { getUserMsgOptIn, setUserMsgOptIn } from '../../bootstrap/state.js';
 import { DEFAULT_OUTPUT_STYLE_NAME } from 'src/constants/outputStyles.js';
 import { isEnvTruthy, isRunningOnHomespace } from 'src/utils/envUtils.js';
@@ -146,6 +153,8 @@ export function Config({
   // eagerly even though only the first result is kept.
   const [initialLocalSettings] = useState(() => getSettingsForSource('localSettings'));
   const [initialUserSettings] = useState(() => getSettingsForSource('userSettings'));
+  const [projectInstructions, setProjectInstructions] = useState(() => getInstructionFilesSetting());
+  const initialProjectInstructionFilesOption = getUserInstructionFilesOption(initialUserSettings);
   const initialThemeSetting = React.useRef(themeSetting);
   // AppState fields Config may modify — snapshot once at mount.
   const store = useAppStateStore();
@@ -173,6 +182,7 @@ export function Config({
   // Set on first user-visible change; gates revertChanges() on Escape so
   // opening-then-closing doesn't trigger redundant disk writes.
   const isDirty = React.useRef(false);
+  const projectInstructionsChanged = React.useRef(false);
   const [showThinkingWarning, setShowThinkingWarning] = useState(false);
   const [showSubmenu, setShowSubmenu] = useState<SubMenu | null>(null);
   const {
@@ -488,6 +498,37 @@ export function Config({
         enabled: showTurnDuration
       });
     }
+  }, {
+    id: 'projectInstructions',
+    label: 'Project instructions',
+    value: INSTRUCTION_FILES_MODE_LABELS[projectInstructions.mode],
+    ...(projectInstructions.source === 'flagSettings' ||
+    projectInstructions.source === 'policySettings'
+      ? {
+          type: 'managedEnum' as const,
+          onChange() {},
+        }
+      : {
+          options: INSTRUCTION_FILES_MODES.map(
+            mode => INSTRUCTION_FILES_MODE_LABELS[mode],
+          ),
+          type: 'enum' as const,
+          onChange(selectedLabel: string) {
+            const selectedMode = INSTRUCTION_FILES_MODES.find(
+              mode => INSTRUCTION_FILES_MODE_LABELS[mode] === selectedLabel,
+            )
+            if (!selectedMode) return
+            const result = updateUserInstructionFilesOption(selectedMode)
+            if (result.error) {
+              logError(result.error)
+              return
+            }
+            clearMemoryFileCaches()
+            projectInstructionsChanged.current = true
+            isDirty.current = true
+            setProjectInstructions(getInstructionFilesSetting())
+          },
+        }),
   }, {
     id: 'defaultPermissionMode',
     label: 'Default permission mode',
@@ -970,7 +1011,7 @@ export function Config({
     }
   }] : []), ...(shouldShowExternalIncludesToggle ? [{
     id: 'showExternalIncludesDialog',
-    label: 'External CLAUDE.md includes',
+    label: 'External project instruction includes',
     value: (() => {
       const projectConfig = getCurrentProjectConfig();
       if (projectConfig.hasClaudeMdExternalIncludesApproved) {
@@ -1159,6 +1200,11 @@ export function Config({
     if (settingsData?.autoUpdatesChannel !== initialSettingsData.current?.autoUpdatesChannel) {
       formattedChanges.push(`Set auto-update channel to ${chalk.bold(settingsData?.autoUpdatesChannel ?? 'latest')}`);
     }
+    if (projectInstructionsChanged.current) {
+      formattedChanges.push(
+        `Set Project instructions to ${chalk.bold(INSTRUCTION_FILES_MODE_LABELS[projectInstructions.mode])}`,
+      );
+    }
     if (formattedChanges.length > 0) {
       onClose(formattedChanges.join('\n'));
     } else {
@@ -1166,7 +1212,7 @@ export function Config({
         display: 'system'
       });
     }
-  }, [showSubmenu, changes, globalConfig, mainLoopModel, currentOutputStyle, currentLanguage, settingsData?.autoUpdatesChannel, isFastModeEnabled() ? (settingsData as Record<string, unknown> | undefined)?.fastMode : undefined, onClose]);
+  }, [showSubmenu, changes, globalConfig, mainLoopModel, currentOutputStyle, currentLanguage, projectInstructions.mode, settingsData?.autoUpdatesChannel, isFastModeEnabled() ? (settingsData as Record<string, unknown> | undefined)?.fastMode : undefined, onClose]);
 
   // Restore all state stores to their mount-time snapshots. Changes are
   // applied to disk/AppState immediately on toggle, so "cancel" means
@@ -1217,6 +1263,18 @@ export function Config({
         iu?.permissions?.defaultMode,
       ),
     );
+    if (projectInstructionsChanged.current) {
+      const result = updateUserInstructionFilesOption(
+        initialProjectInstructionFilesOption,
+      );
+      if (result.error) {
+        logError(result.error);
+      } else {
+        clearMemoryFileCaches();
+        setProjectInstructions(getInstructionFilesSetting());
+      }
+      projectInstructionsChanged.current = false;
+    }
     // AppState: batch-restore all possibly-touched fields.
     const ia = initialAppState;
     setAppState(prev_23 => ({
@@ -1241,7 +1299,7 @@ export function Config({
     if (getUserMsgOptIn() !== initialUserMsgOptIn) {
       setUserMsgOptIn(initialUserMsgOptIn);
     }
-  }, [themeSetting, setTheme, initialLocalSettings, initialUserSettings, initialAppState, initialUserMsgOptIn, setAppState]);
+  }, [themeSetting, setTheme, initialLocalSettings, initialUserSettings, initialProjectInstructionFilesOption, initialAppState, initialUserMsgOptIn, setAppState]);
 
   // Escape: revert all changes (if any) and close.
   const handleEscape = useCallback(() => {

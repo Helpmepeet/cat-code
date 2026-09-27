@@ -6,6 +6,7 @@ import {
   getCyberPolicyInstruction,
   HOOK_AUTHORITY_RULE,
   INSTRUCTION_AUTHORITY_RULE,
+  PROJECT_INSTRUCTION_AUTHORITY_RULE,
   OUTCOME_REPORTING_RULE,
   PROMPT_INJECTION_RULE,
   RETRY_RULE,
@@ -117,6 +118,21 @@ describe('policy core coverage across provider and mode variants', () => {
       expect(prompt).toContain(PROMPT_INJECTION_RULE)
       expect(prompt).toContain(INSTRUCTION_AUTHORITY_RULE)
       expect(prompt).toContain(OUTCOME_REPORTING_RULE)
+    },
+  )
+
+  test.each(VARIANTS.map(v => [v.label, v.build] as const))(
+    '%s scopes AGENTS authority to the selected Project instructions mode',
+    async (_label, build) => {
+      const prompt = await withPromptEnv(async () => (await build()).join('\n'))
+
+      expect(prompt).toContain(PROJECT_INSTRUCTION_AUTHORITY_RULE)
+      expect(prompt).toContain(
+        'AGENTS.md when selected by the Project instructions setting',
+      )
+      expect(prompt).not.toContain(
+        'Loaded instruction files (CLAUDE.md, AGENTS.md, rule files)',
+      )
     },
   )
 

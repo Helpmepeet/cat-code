@@ -704,11 +704,10 @@ export function buildTranscriptForClassifier(
 }
 
 /**
- * Build the CLAUDE.md prefix message for the classifier. Returns null when
- * CLAUDE.md is disabled or empty. The content is wrapped in a delimiter that
- * tells the classifier this is user-provided configuration — actions
- * described here reflect user intent. cache_control is set because the
- * content is static per-session, making the system + CLAUDE.md prefix a
+ * Build the active instruction-context prefix message for the classifier.
+ * Returns null when instruction context is disabled or empty. Source labels
+ * distinguish instruction files from recalled memory. cache_control is set
+ * because the content is static per-session, making the system and instruction prefix a
  * stable cache prefix across classifier calls.
  *
  * Reads from bootstrap/state.ts cache (populated by context.ts) instead of
@@ -716,22 +715,22 @@ export function buildTranscriptForClassifier(
  * permissions → yoloClassifier is a cycle. context.ts already gates on
  * CLAUDE_CODE_DISABLE_CLAUDE_MDS and normalizes '' to null before caching.
  * If the cache is unpopulated (tests, or an entrypoint that never calls
- * getUserContext), the classifier proceeds without CLAUDE.md — same as
+ * getUserContext), the classifier proceeds without instruction context — same as
  * pre-PR behavior.
  */
-function buildClaudeMdMessage(): Anthropic.MessageParam | null {
-  const claudeMd = getCachedClaudeMdContent()
-  if (claudeMd === null) return null
+function buildInstructionContextMessage(): Anthropic.MessageParam | null {
+  const instructionContext = getCachedClaudeMdContent()
+  if (instructionContext === null) return null
   return {
     role: 'user',
     content: [
       {
         type: 'text',
         text:
-          `The following is the user's CLAUDE.md configuration. These are ` +
-          `instructions the user provided to the agent and should be treated ` +
-          `as part of the user's intent when evaluating actions.\n\n` +
-          `<user_claude_md>\n${claudeMd}\n</user_claude_md>`,
+          `The following is the active instruction context supplied to the ` +
+          `agent. Its source labels distinguish instructions from recalled ` +
+          `memory; consider applicable content when evaluating actions.\n\n` +
+          `<instruction_context>\n${instructionContext}\n</instruction_context>`,
         cache_control: getCacheControl({ querySource: 'auto_mode' }),
       },
     ],
@@ -756,16 +755,16 @@ export function buildSettingsDenyRulesMessage(
 }
 
 export function buildAutoModePrefixMessages(
-  claudeMdMessage: Anthropic.MessageParam | null,
+  instructionContextMessage: Anthropic.MessageParam | null,
   settingsDenyRulesMessage: Anthropic.MessageParam | null,
 ): Anthropic.MessageParam[] {
-  return [claudeMdMessage, settingsDenyRulesMessage].filter(
+  return [instructionContextMessage, settingsDenyRulesMessage].filter(
     (message): message is Anthropic.MessageParam => message !== null,
   )
 }
 
 /**
- * The prefix the classifier request actually carries: CLAUDE.md, then the
+ * The prefix the classifier request actually carries: instruction context, then the
  * operator's effective deny rules, then (from the caller) transcript and action.
  *
  * `includeSettingsDenyRules` exists so this is reachable from a test. Feature
@@ -780,7 +779,7 @@ export function buildAutoModeRequestPrefix(
   context: ToolPermissionContext,
 ): Anthropic.MessageParam[] {
   return buildAutoModePrefixMessages(
-    buildClaudeMdMessage(),
+    buildInstructionContextMessage(),
     buildSettingsDenyRulesMessage(context),
   )
 }
@@ -1159,8 +1158,8 @@ async function classifyYoloActionWithOverrides(
   // respects GrowthBook TTL allowlist and query-source gating.
   const cacheControl = getCacheControl({ querySource: 'auto_mode' })
   // Place cache_control on the action block so the stable classifier prefix
-  // (system + optional CLAUDE.md + transcript + meta + action) stays cacheable across
-  // repeated classifier calls. Budget: system (1) + CLAUDE.md (0–1) + action
+  // (system + optional instruction context + transcript + meta + action) stays cacheable across
+  // repeated classifier calls. Budget: system (1) + instruction context (0–1) + action
   // (1) = 2–3, under the API limit of 4 cache_control blocks.
   for (const line of metaLines) {
     userContentBlocks.push({ type: 'text' as const, text: line })

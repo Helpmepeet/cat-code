@@ -168,14 +168,14 @@ describe('buildSettingsDenyRulesMessage', () => {
         ],
       }),
     )!
-    const claudeMdMessage = {
+    const instructionContextMessage = {
       role: 'user' as const,
-      content: [{ type: 'text' as const, text: '<user_claude_md>intent</user_claude_md>' }],
+      content: [{ type: 'text' as const, text: '<instruction_context>intent</instruction_context>' }],
     }
 
-    const prefix = buildAutoModePrefixMessages(claudeMdMessage, denyMessage)
+    const prefix = buildAutoModePrefixMessages(instructionContextMessage, denyMessage)
 
-    expect(prefix).toEqual([claudeMdMessage, denyMessage])
+    expect(prefix).toEqual([instructionContextMessage, denyMessage])
     const denyText = (denyMessage.content as { text: string }[])[0]!.text
     expect(denyText).toContain('Write(/restricted/*)')
     expect(denyText).toContain('Bash(node -e:*)')

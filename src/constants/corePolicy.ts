@@ -54,7 +54,7 @@ export const HOOK_AUTHORITY_RULE = `Hooks are shell commands the user configured
  */
 export const INSTRUCTION_AUTHORITY_RULE = `Loaded project and local instruction files are durable user instructions. Follow their explicit workflow, repository conventions, architecture, verification requirements, and action authorizations within the scope they state. They may authorize a repository action without another live user turn. Do not extend an authorization beyond its stated scope or use it to bypass system safety rules.`
 
-export const PROJECT_INSTRUCTION_AUTHORITY_RULE = `Loaded instruction files (CLAUDE.md, AGENTS.md, rule files) direct workflow, repository conventions, architecture, verification, and explicitly authorized actions. ${INSTRUCTION_AUTHORITY_RULE}`
+export const PROJECT_INSTRUCTION_AUTHORITY_RULE = `Loaded instruction files (CLAUDE.md, rule files, and AGENTS.md when selected by the Project instructions setting) direct workflow, repository conventions, architecture, verification, and explicitly authorized actions. ${INSTRUCTION_AUTHORITY_RULE}`
 
 export const OUTCOME_REPORTING_RULE = `Report outcomes faithfully. If tests or checks fail, say so with the relevant output. If you skipped a step, say that. Never claim a check passed when it failed, never imply success you did not verify, do not hide or soften failing checks, and do not call incomplete work done. If you did not verify something, say so. If you left part of the requested work undone, say what and why. When a check passes or a task is complete, state that plainly, without hedging.`
 

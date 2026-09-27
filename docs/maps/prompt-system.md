@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-09-21
+Last refreshed: 2026-09-27
 
 ## Purpose
 
@@ -32,7 +32,7 @@ Read in this order for most prompt or instruction work:
 | Change GPT family calibration | `src/constants/promptStyle.ts` | `src/constants/prompts.ts`, `src/constants/promptStyles/gpt.ts`, `src/constants/promptAssembly.snapshot.test.ts` | Provider selects GPT style; `getGptPromptFamily()` maps GPT-6 models (Astra, Sol, Luna) to the `'gpt-6'` family calibration (doing-tasks, actions, tone), while Terra retains the `'gpt-5.6'` baseline. These static sections are rebuilt on model changes; dynamic sections do not depend on family. |
 | Change prompt-section cache correctness | `src/constants/systemPromptSections.ts` | `src/constants/prompts.ts`, `src/utils/queryContext.ts`, `src/screens/REPL.tsx` | Cache entries are keyed by each section's captured inputs. Cache-breaking sections must not populate that cache; language intentionally remains session-stable until a cache-clearing transition. |
 | Change runtime prompt precedence | `src/utils/systemPrompt.ts` | `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/query.ts` | Effective branch order is override, coordinator, main-thread agent, custom, default. `appendSystemPrompt` appends unless override replaces everything. |
-| Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts` | `src/constants/corePolicy.ts`, `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. Its source-tier wrapper grants workflow/repository authority, never permission authority. |
+| Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts`, `src/utils/instructionFiles.ts` | `src/constants/corePolicy.ts`, `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. Project AGENTS discovery follows the Project instructions mode. Its source-tier wrapper grants workflow/repository authority, never permission authority. |
 | Change generated context injection | `src/context.ts` | `src/utils/claudemd.ts`, `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/services/api/instructionAssembly.ts` | User context and system context are separate channels until provider assembly. |
 | Change SDK or custom-system-prompt behavior | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/utils/systemPrompt.ts`, `src/query.ts` | Custom prompts skip default prompt construction and skip `getSystemContext()` in `fetchSystemPromptParts()`. |
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
@@ -55,7 +55,7 @@ src/context.ts
   builds userContext and systemContext
 
 src/utils/claudemd.ts
-  discovers and wraps CLAUDE.md, rules, includes, and memory files
+  discovers and wraps CLAUDE.md, selected AGENTS.md, rules, includes, and memory files
 
 src/utils/queryContext.ts
   fetches defaultSystemPrompt, userContext, systemContext
@@ -82,7 +82,7 @@ src/services/api/claude.ts
 
 | Context | Built by | Injected as | Key gates and behavior |
 |---|---|---|---|
-| `claudeMd` | `src/context.ts` via `src/utils/claudemd.ts` | `userContext` | Disabled by `CLAUDE_CODE_DISABLE_CLAUDE_MDS`; bare mode skips auto-discovery unless explicit additional dirs exist. |
+| `claudeMd` | `src/context.ts` via `src/utils/claudemd.ts` | `userContext` | Includes CLAUDE.md, selected project AGENTS.md, rules, and recalled memory. Disabled by `CLAUDE_CODE_DISABLE_CLAUDE_MDS`; bare mode skips auto-discovery unless explicit additional dirs exist. |
 | `currentDate` | `src/context.ts` | `userContext` | Always included by `getUserContext()` as local ISO date text. |
 | `gitStatus` | `src/context.ts` | `systemContext` | Skipped for remote sessions or when git instructions are disabled; snapshot is memoized and capped. |
 | `cacheBreaker` | `src/context.ts` | `systemContext` | Feature-gated by `BREAK_CACHE_COMMAND`; setting it clears user/system context memo caches. |
@@ -100,17 +100,23 @@ later entries have more weight:
 
 1. Managed `CLAUDE.md` and managed rules.
 2. User-global `CLAUDE.md` and user rules.
-3. Project `CLAUDE.md`, `.claude/CLAUDE.md`, and `.claude/rules/*.md`, walking from root toward CWD.
-4. Local `CLAUDE.local.md`, also root toward CWD.
-5. Additional directory instructions when `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` is enabled.
-6. Auto-memory and team-memory entrypoints when their features are enabled;
+3. Project `CLAUDE.md` candidates and `.cat-code`/`.claude` rules, walking from root toward CWD.
+4. Project `AGENTS.md` and `.claude/AGENTS.md` candidates when enabled by the Project instructions mode.
+5. Local `CLAUDE.local.md`, also root toward CWD.
+6. Additional-directory CLAUDE instructions and rules when `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` is enabled.
+7. Auto-memory and team-memory entrypoints when their features are enabled;
    these are recalled background context, not instruction files.
 
 Important details:
 
+- The mode is stored at `pluginConfigs["agents-md@builtin"].options.instructionFiles`. Values are `claude-md-or-agents-md` (default), `claude-md`, `claude-md-and-agents-md`, and `managed-only`.
+- In the default mode, one eligible CLAUDE candidate anywhere from project root through CWD disables AGENTS fallback for the whole project, including nested reads. `CLAUDE.local.md` counts only when `localSettings` is enabled. For nested directories in a fallback project, a CLAUDE candidate claims only its own directory.
+- Mode resolution reads enabled user settings, then flag settings, then policy settings. Project and local settings are ignored for this option. Invalid winning values select the default.
+- AGENTS discovery is limited to the active project walk. It is not added to `--add-dir`. Managed chats skip project/local walks and reject included AGENTS files from the managed working directory or its ancestors.
+- `managed-only` keeps managed instructions and recalled memory, but excludes user, project, local, AGENTS, project-rule, nested, and additional-directory instructions.
 - `@include` paths can pull in additional text files, with circular-reference and external-include guards.
 - `.claude/rules/*.md` can be conditional through frontmatter paths.
-- `claudeMdExcludes` can suppress memory files.
+- `claudeMdExcludes` can suppress CLAUDE or AGENTS instruction files and rules.
 - Nested git worktrees skip duplicate checked-in project files above the worktree.
 - `filterInjectedMemoryFiles()` may omit auto-memory/team-memory index files when feature gates move them to attachments.
 - `getClaudeMds()` gives managed/user/project/local instruction files explicit
@@ -158,7 +164,7 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not assume `src/constants/prompts.ts` always wins. Coordinator mode, main-thread agent prompts, custom prompts, and override prompts can replace it.
 - Do not assume `appendSystemPrompt` replaces the prompt. It appends to the winning branch, except when `overrideSystemPrompt` is set.
 - Do not assume custom prompts still get `gitStatus`. `fetchSystemPromptParts()` skips `getSystemContext()` when `customSystemPrompt` is present.
-- Do not assume `CLAUDE.md` is part of the system prompt. It is collected as `userContext`, then placed by provider assembly.
+- Do not assume project instruction files are part of the system prompt. They are collected as `userContext`, then placed by provider assembly.
 - Do not assume OpenAI and Claude-style providers receive context in the same shape. OpenAI puts stable context in `instructions` and volatile session metadata in developer context.
 - Do not assume a subagent sees the same context as the main loop. `runAgent.ts` may omit `claudeMd` or `gitStatus` by agent type and feature gate.
 - Do not move or remove `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` without checking prompt-cache code in `src/utils/api.ts` and `src/services/api/claude.ts`.
@@ -169,5 +175,5 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not treat a single subagent as a neutral pass-through. The default and GPT prompt styles both require a concrete reason delegation beats doing that work in the current thread.
 - Do not reach for `src/services/api/dumpPrompts.ts` without setting `USER_TYPE=ant`. Every entry point returns early otherwise, so the rows above that point at prompt dumps describe an ant-only path. `/context` is the only inspection surface live by default.
 - Do not assume `--dump-system-prompt` exists in every build. `scripts/build.ts` enables `DUMP_SYSTEM_PROMPT` only for the `dev-full` feature set; when inspecting a non-GPT model, pass `--provider` explicitly or the persisted startup provider can select the wrong prompt style.
-- Do not assume the repo's `.claude/skills/` load into a Cat Code session. Project skills come from `.cat-code/skills/` only (`src/skills/loadSkillsDir.ts`); `.claude/` is honoured for `CLAUDE.md` and `rules/*.md` alone (`src/utils/claudemd.ts:915-939`).
+- Do not assume the repo's `.claude/skills/` load into a Cat Code session. Project skills come from `.cat-code/skills/` only (`src/skills/loadSkillsDir.ts`); `.claude/` is honored for CLAUDE.md, selected AGENTS.md, and rules/*.md only (`src/utils/claudemd.ts`).
 - Do not assume a prompt difference from upstream is Cat Code's doing. Roughly half of the prompt-system differences audited on 2026-08-10 were upstream changes made after the fork. Check [`../reports/2026-08-10-cat-code-upstream-divergence-ledger.md`](../reports/2026-08-10-cat-code-upstream-divergence-ledger.md) before re-syncing anything toward upstream, especially the instruction-authority wrapper in `src/utils/claudemd.ts` and the input-keyed section cache, which are deliberate.
