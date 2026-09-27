@@ -167,6 +167,21 @@ svg { display: block; }
 
 .s-rail.d-count .s-grp-count { display: block; }
 .s-rail.d-kbd .s-kbd { display: block; }
+
+/* ── live: hover-open rail over the app canvas ── */
+:root { --elev-rail: 4px 0 24px rgba(0,0,0,.45); }
+html[data-appearance='light'] { --elev-rail: 4px 0 20px rgba(24,24,27,.1); }
+.x-stage { position: relative; width: 288px; height: 880px; }
+.x-stage > .s-rail { position: absolute; left: 0; top: 0; bottom: 0; height: auto; transition: width 200ms ease-out, box-shadow 200ms ease-out; }
+.x-stage > .s-rail.is-closed { width: 48px; }
+.x-stage > .s-rail.is-open { box-shadow: var(--elev-rail); }
+.s-rnav { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0 12px; }
+.s-rbtn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--text-subtle); }
+.s-rbtn svg { width: 16px; height: 16px; }
+.s-rbtn.on { background: rgb(var(--accent-rgb) / .12); color: var(--accent-soft); }
+.s-rnav .s-av { margin-top: 4px; }
+.s-foot.icons { border-top-color: transparent; padding: 0; }
+.s-foot.icons .s-rnav { width: 48px; margin-top: 0; }
 </style>
 </head>
 <body>
@@ -180,6 +195,10 @@ svg { display: block; }
     <button class="x-btn" data-foot="strip" aria-pressed="false">Strip</button>
   </div>
   <div class="x-group" id="decor"><span>Decor</span></div>
+  <div class="x-group"><span>Live resting footer</span>
+    <button class="x-btn" data-rest="strip" aria-pressed="true">Strip</button>
+    <button class="x-btn" data-rest="icons" aria-pressed="false">Icons</button>
+  </div>
 </div>
 <div class="x-grid" id="grid"></div>
 
