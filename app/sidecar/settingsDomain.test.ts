@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { getOriginalCwd, setOriginalCwd } from '../../src/bootstrap/state.js'
 import {
   getSourceDisplayName,
   SETTING_SOURCES,
@@ -307,6 +308,63 @@ function useTempConfigHome(): string {
   resetSettingsCache()
   return join(scratch, 'settings.json')
 }
+
+test('user scope reads and writes user settings without layering an aliasing project', () => {
+  scratch = mkdtempSync(join(tmpdir(), 'catcode-settings-home-'))
+  const configRoot = join(scratch, '.cat-code')
+  mkdirSync(configRoot)
+  process.env.CLAUDE_CONFIG_DIR = configRoot
+  writeFileSync(join(configRoot, 'settings.json'), JSON.stringify({ includeCoAuthoredBy: false }))
+  writeFileSync(join(configRoot, 'settings.local.json'), JSON.stringify({ includeCoAuthoredBy: true }))
+  const originalCwd = getOriginalCwd()
+  try {
+    setOriginalCwd(scratch)
+    resetSettingsCache()
+    const projectSnapshot = createSidecarSettingsDomain().getSnapshot()
+    expect(projectSnapshot?.layers.map(layer => layer.source)).toContain('projectSettings')
+
+    const userDomain = createSidecarSettingsDomain([], { userScope: true })
+    const snapshot = userDomain.getSnapshot()
+    expect(snapshot?.layers.map(layer => layer.source)).toEqual(['userSettings'])
+    expect(snapshot?.resolved.find(row => row.key === 'includeCoAuthoredBy')?.source).toBe('userSettings')
+    expect(userDomain.runVerb(write('projectSettings', 'includeCoAuthoredBy', true)).ok).toBe(false)
+    expect(userDomain.runVerb(write('userSettings', 'includeCoAuthoredBy', true)).ok).toBe(true)
+    expect(JSON.parse(readFileSync(join(configRoot, 'settings.json'), 'utf8')).includeCoAuthoredBy).toBe(true)
+    expect(userDomain.getSnapshot()?.layers.map(layer => layer.source)).toEqual(['userSettings'])
+  } finally {
+    setOriginalCwd(originalCwd)
+    resetSettingsCache()
+  }
+})
+
+test('user scope excludes HOME project settings under a separate custom config root', () => {
+  scratch = mkdtempSync(join(tmpdir(), 'catcode-settings-custom-'))
+  const configRoot = join(scratch, 'custom-config')
+  const projectRoot = join(scratch, '.cat-code')
+  mkdirSync(configRoot)
+  mkdirSync(projectRoot)
+  process.env.CLAUDE_CONFIG_DIR = configRoot
+  writeFileSync(join(configRoot, 'settings.json'), JSON.stringify({ includeCoAuthoredBy: false }))
+  writeFileSync(join(projectRoot, 'settings.json'), JSON.stringify({ includeCoAuthoredBy: true }))
+  const originalCwd = getOriginalCwd()
+  try {
+    setOriginalCwd(scratch)
+    resetSettingsCache()
+    expect(createSidecarSettingsDomain().getSnapshot()?.resolved.find(
+      row => row.key === 'includeCoAuthoredBy',
+    )?.source).toBe('projectSettings')
+    const snapshot = createSidecarSettingsDomain([], { userScope: true }).getSnapshot()
+    expect(snapshot?.layers.map(layer => layer.source)).toEqual(['userSettings'])
+    expect(snapshot?.editableValues.find(row => row.key === 'includeCoAuthoredBy')).toEqual({
+      key: 'includeCoAuthoredBy',
+      value: false,
+      source: 'userSettings',
+    })
+  } finally {
+    setOriginalCwd(originalCwd)
+    resetSettingsCache()
+  }
+})
 
 const write = (
   source: EditableSettingSource,

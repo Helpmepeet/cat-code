@@ -9,7 +9,7 @@ export function packagedBinPath(execPath: string): string {
   return join(dirname(dirname(execPath)), 'bin')
 }
 
-export function prependPackagedBinToPath(
+export function appendPackagedBinToPath(
   execPath: string,
   currentPath: string | undefined,
 ): string {
@@ -17,7 +17,7 @@ export function prependPackagedBinToPath(
   const existing = (currentPath ?? '')
     .split(delimiter)
     .filter(entry => entry.length > 0 && entry !== bin)
-  return [bin, ...existing].join(delimiter)
+  return [...existing, bin].join(delimiter)
 }
 
 /** Include the user's shell PATH before the engine, hooks, and tools initialize. */
@@ -25,7 +25,7 @@ export async function resolvePackagedSidecarPath(
   execPath: string,
   env: NodeJS.ProcessEnv,
 ): Promise<string> {
-  const inherited = prependPackagedBinToPath(execPath, env.PATH)
+  const inherited = appendPackagedBinToPath(execPath, env.PATH)
   const preferredShell = [env.CLAUDE_CODE_SHELL, env.SHELL, '/bin/zsh'].find(
     candidate =>
       candidate &&
@@ -36,7 +36,7 @@ export async function resolvePackagedSidecarPath(
 
   const shellName = basename(preferredShell)
   const home = env.HOME && isAbsolute(env.HOME) ? env.HOME : homedir()
-  const rcFile = join(home, shellName === 'zsh' ? '.zshrc' : '.bashrc')
+  const rcFile = join(home, '.bashrc')
   try {
     // The shell can print from login files before this command runs. NUL
     // delimiters identify the PATH without treating that output as PATH data.
@@ -45,7 +45,9 @@ export async function resolvePackagedSidecarPath(
       [
         '-c',
         '-l',
-        'source "$1" < /dev/null >/dev/null 2>&1; printf "\\0%s\\0" "$PATH"',
+        shellName === 'zsh'
+          ? 'source "${ZDOTDIR:-$HOME}/.zshrc" < /dev/null >/dev/null 2>&1; printf "\\0%s\\0" "$PATH"'
+          : 'source "$1" < /dev/null >/dev/null 2>&1; printf "\\0%s\\0" "$PATH"',
         'catcode-path',
         rcFile,
       ],
@@ -76,7 +78,7 @@ export async function resolvePackagedSidecarPath(
     if (!captured || captured.includes('\n') || captured.includes('\0')) {
       return inherited
     }
-    return prependPackagedBinToPath(execPath, captured)
+    return appendPackagedBinToPath(execPath, captured)
   } catch {
     return inherited
   }

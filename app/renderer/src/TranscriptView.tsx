@@ -1383,27 +1383,50 @@ function AssistantProse({
   // copy control can dequote by source position rather than re-deriving text
   // from the parsed tree. Keep its component type stable until that source
   // changes: otherwise React remounts each quote and loses its copy feedback.
-  const components = useMemo(
+  const pathComponents = useMemo(
     () => ({
       ...MARKDOWN_COMPONENTS,
-      blockquote: createBlockquoteComponent(content),
       a: createPathAwareAnchor(openFile, onContextMenu),
       p: createPathAwareParagraph(openFile, onContextMenu),
       li: createPathAwareListItem(openFile, onContextMenu),
       code: createPathAwareCode(openFile, onContextMenu),
     }),
-    [content, openFile, onContextMenu],
+    [openFile, onContextMenu],
+  )
+  const components = useMemo(
+    () => ({ ...pathComponents, blockquote: createBlockquoteComponent(content) }),
+    [content, pathComponents],
   )
   const { arrival } = useContext(ProseArrivalContext)
-  // The source only ever grows by append, so the characters past the length this
-  // row rendered at last is exactly what the newest batch delivered — an answer
-  // that survives the tree restructuring retroactively when closing syntax
-  // lands (`proseArrivalMark.ts`). Read during render, advanced after paint.
-  const renderedLengthRef = useRef(0)
-  const arrivalFrom = streaming === true ? renderedLengthRef.current : -1
+  const { freshProse } = useContext(TranscriptMotionContext)
+  // Keep the earliest still-fading batch marked across faster streaming commits.
+  // Starting at the previous commit's length would remove its spans every 8ms,
+  // before their animation finishes. Static markup shows the first batch;
+  // in a live pane only a newly arrived row fades, not a restored/remounted one.
+  const renderedLengthRef = useRef(
+    typeof window === 'undefined' || freshProse.has(sourceId) ? 0 : content.length,
+  )
+  const batches = useRef<{ from: number; expires: number }[]>([])
+  const [, expire] = useReducer((value: number) => value + 1, 0)
+  const now = Date.now()
+  const className = PROSE_ARRIVAL_WORD_CLASS[arrival]
+  const activeBatches = streaming && className !== null
+    ? batches.current.filter(batch => batch.expires > now)
+    : []
+  if (streaming && className !== null && content.length > renderedLengthRef.current) {
+    activeBatches.push({
+      from: renderedLengthRef.current,
+      expires: now + (arrival === 'flowing' ? 160 + MAX_PROSE_ARRIVAL_STAGGER_MS : 220),
+    })
+  }
+  const arrivalFrom = activeBatches[0]?.from ?? -1
   useEffect(() => {
-    renderedLengthRef.current = streaming === true ? content.length : 0
-  }, [content, streaming])
+    renderedLengthRef.current = content.length
+    batches.current = activeBatches
+    if (!streaming || activeBatches.length === 0) return
+    const timeout = setTimeout(expire, Math.max(0, activeBatches[0]!.expires - Date.now()))
+    return () => clearTimeout(timeout)
+  })
   const markArrival = useCallback(
     (tree: HastRoot): HastRoot => {
       const className = PROSE_ARRIVAL_WORD_CLASS[arrival]

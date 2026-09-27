@@ -35,6 +35,7 @@ import {
 } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { basename, dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import {
@@ -245,7 +246,7 @@ import {
   runAccountsPoolWorker,
 } from './accountsPoolRunner.js'
 import { runSettingsInventoryWorker } from './settingsInventoryRunner.js'
-import { resolveSettingsInventoryCwd, settingsWriteMatchesScope } from './settingsInventoryAccess.js'
+import { resolveSettingsInventoryCwd, settingsInventoryScopeArgs, settingsWriteMatchesScope } from './settingsInventoryAccess.js'
 import { runSettingsWriteWorker } from './settingsWriteRunner.js'
 import { parseSettingsWriteWorkerRequest } from '../shared/settingsWriteWorker.js'
 import {
@@ -2649,6 +2650,7 @@ function registerIpcHandlers(): void {
         app.getPath('home'),
         knownProjects,
         validateCwd,
+        process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
       )
       if (!cwd) {
         return { ok: false, error: { code: 'invalid_project', message: 'Choose a known project.' } }
@@ -2661,7 +2663,10 @@ function registerIpcHandlers(): void {
       try {
         await runSettingsInventoryWorker({
           command: sidecarLaunch().command,
-          args: sidecarLaunch().argsFor('settings-inventory'),
+          args: sidecarLaunch().argsFor(
+            'settings-inventory',
+            settingsInventoryScopeArgs(projectCwd),
+          ),
           cwd,
           signal: abort.signal,
           onWorkerLifecycle: createWorkerLifecycleLogger('settings-inventory'),
@@ -2707,6 +2712,7 @@ function registerIpcHandlers(): void {
         app.getPath('home'),
         knownProjects,
         validateCwd,
+        process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
       )
       if (!cwd) {
         return { ok: false, error: { code: 'invalid_project', message: 'Choose a known project.' } }

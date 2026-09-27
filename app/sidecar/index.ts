@@ -160,6 +160,7 @@ type SidecarArgs = {
   probeOnAttach: boolean
   binding: SessionBinding
   forked: boolean
+  recreatedFolderNotice: boolean
 }
 
 async function projectCurrentDisplayHistory(
@@ -231,6 +232,8 @@ function parseArgs(): SidecarArgs {
     probeOnAttach,
     binding,
     forked: process.env.CATCODE_SESSION_FORKED === 'true',
+    recreatedFolderNotice: binding.kind === 'managed' &&
+      process.env.CATCODE_SESSION_RECREATED_FOLDER === 'true',
   }
 }
 
@@ -404,6 +407,7 @@ async function main(): Promise<void> {
     cwd: runtimeCwd,
     appSessionId: args.sessionId,
     binding: args.binding,
+    recreatedFolderNotice: args.recreatedFolderNotice,
     // Mutually exclusive by construction: a resume seeds the restored
     // transcript, whose tail already carries its own 'resume' hook messages; a
     // fresh session seeds the 'startup' hook messages computed just above.

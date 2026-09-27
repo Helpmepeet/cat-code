@@ -120,6 +120,10 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
     ['backgrounding', 'true && grep x f &'],
     ['a heredoc', 'grep x <<EOF\nbody\nEOF'],
     ['a dynamic command name', 'true && $GREP x f'],
+    ['a command substitution in an argument', 'grep x "$(ls "$TMPDIR"/exit-*)"'],
+    ['backtick substitution in an argument', 'grep x `ls "$TMPDIR"/exit-*`'],
+    ['a command substitution in a pipeline', 'printf "%s" "$(ls "$TMPDIR"/exit-*)" | grep x'],
+    ['a process substitution in an argument', 'grep x <(ls "$TMPDIR"/exit-*)'],
     ['`$?` read by a statement-start marker position', 'false; grep x f $?'],
     ['xtrace enabled by the command', 'set -x; true && grep x f'],
     ['verbose enabled by the command', 'set -v; true && grep x f'],
@@ -174,17 +178,20 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
       'grep x ~/f',
       'printf a > out | grep x',
       'A=*.x grep x f',
-      'grep "$(ls *.x)" f',
     ]) {
       expect([command, plan(command) !== null]).toEqual([command, true])
     }
+  })
+
+  test('a substitution after an && also refuses the marker', () => {
+    expect(plan('true && grep x "$(ls "$TMPDIR"/exit-*)"')).toBeNull()
   })
 
   test('parameter expansion in the command is flagged for the set -u check', () => {
     expect(plan('true && grep $X f')?.candidateExpandsParameters).toBe(true)
     expect(plan('true && grep "${X}" f')?.candidateExpandsParameters).toBe(true)
     expect(plan('true && grep x f')?.candidateExpandsParameters).toBe(false)
-    expect(plan('true && grep "$(echo $X)" f')?.candidateExpandsParameters).toBe(false)
+    expect(plan('true && grep "$(echo $X)" f')).toBeNull()
   })
 
   test('$? after && is 0 with or without the marker, so it is allowed', () => {
@@ -557,6 +564,34 @@ for (const shell of SHELLS) {
   const kind = shell.split('/').pop()!
 
   describe(`real ${kind}`, () => {
+    if (kind === 'bash' || kind === 'zsh') {
+      test('TMPDIR evidence cannot turn a missing grep file into no matches', () => {
+        const runDir = mkdtempSync(join(runs, 'run-'))
+        const command = 'grep needle "$(ls "$TMPDIR"/exit-*)"'
+        const env = { TMPDIR: runDir }
+        const original = runWrapped(shell, command, runDir, [], undefined, env)
+        expect(original.code).toBe(2)
+        const evidencePath = join(runDir, 'exit-marker')
+        const unsafe = runWrapped(
+          shell,
+          `${buildExitMarker(evidencePath, 'test-token', 'grep')}; ${command}`,
+          runDir,
+          [],
+          undefined,
+          env,
+        )
+        expect(unsafe.code).toBe(1)
+        const p = planExitAttribution(
+          command,
+          SEMANTIC_COMMAND_NAMES,
+          evidencePath,
+          NO_USER_COMMANDS,
+        )
+        expect(p).toBeNull()
+        expect(interpretCommandResult(original.code, original.output, '', null).isError).toBe(true)
+      })
+    }
+
     // [label, command, expected isError, runs only when]
     const rows: [string, () => string, boolean, boolean?][] = [
       ['false && grep: grep never ran', () => 'false && grep x file.txt', true],

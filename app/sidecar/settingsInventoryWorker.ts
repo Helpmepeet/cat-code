@@ -88,6 +88,7 @@ async function main(): Promise<void> {
   try {
     settings = createSidecarSettingsDomain(
       await loadAvailableSettingOptions(cwd),
+      { userScope: process.argv.includes('--user-settings-scope') },
     ).getSnapshot()
   } catch (error) {
     process.stderr.write(`[settings-inventory-worker] settings read failed: ${String(error)}\n`)

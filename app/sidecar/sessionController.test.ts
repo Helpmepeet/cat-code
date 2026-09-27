@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { buildEffectiveSystemPrompt } from '../../src/utils/systemPrompt.js'
+import type { ToolUseContext } from '../../src/Tool.js'
 import {
   getMainLoopModelOverride,
   getSessionProvider,
@@ -274,6 +276,54 @@ test('normal startup appends the desktop interface and file-reference instructio
   )
   expect(queryEngineConfig.appendSystemPrompt).toContain('Interface: Cat Code desktop app, in a session tab.')
   expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
+})
+
+test('recreated managed folder notice reaches the model system prompt without changing history', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-recreated-notice-'))
+  const cwd = join(root, 'workspace')
+  const configDir = join(root, 'config')
+  mkdirSync(cwd)
+  mkdirSync(configDir)
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const binding = {
+    kind: 'managed' as const,
+    storageRootId: 'c65e55fd-a6de-412d-9205-798bdb5f1b54',
+    storageId: '78377fce-5656-4221-97eb-0c3d8cd67496',
+  }
+  try {
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    resetSettingsCache()
+    clearCommandMemoizationCaches()
+    const messages: [] = []
+    const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(
+      cwd,
+      messages,
+      { binding, recreatedFolderNotice: true },
+    )
+    expect(queryEngineConfig.appendSystemPrompt).toContain(
+      'Earlier file references in the conversation may no longer exist.',
+    )
+    const effective = buildEffectiveSystemPrompt({
+      mainThreadAgentDefinition: undefined,
+      toolUseContext: { options: {} } as Pick<ToolUseContext, 'options'>,
+      customSystemPrompt: 'Custom agent instructions.',
+      defaultSystemPrompt: ['Default instructions.'],
+      appendSystemPrompt: queryEngineConfig.appendSystemPrompt,
+    })
+    expect(effective.join('\n')).toContain('Earlier file references in the conversation may no longer exist.')
+    expect(queryEngineConfig.initialMessages).toEqual(messages)
+    const normal = buildDesktopSystemPrompt(undefined, cwd)
+    expect(normal).not.toContain('Earlier file references in the conversation may no longer exist.')
+    expect(buildDesktopSystemPrompt(undefined, undefined, false, true)).not.toContain(
+      'Earlier file references in the conversation may no longer exist.',
+    )
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    resetSettingsCache()
+    clearCommandMemoizationCaches()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('normal startup loads the real command catalog (P3-7: commands: [] retired)', async () => {

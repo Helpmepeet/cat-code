@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   closeSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -10,6 +11,7 @@ import {
   realpathSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -111,8 +113,11 @@ export class ManagedStorage {
     appSessionId: string,
     engineSessionId: string,
   ): boolean {
-    if (!validUuid(engineSessionId) || !this.hasOwnership(binding.storageRootId, binding.storageId)) return false
+    if (!validUuid(appSessionId) || !validUuid(engineSessionId)) return false
     try {
+      const root = this.readRoot()
+      if (!root || root.storageRootId !== binding.storageRootId ||
+        !this.hasOwnership(binding.storageRootId, binding.storageId)) return false
       const owner = JSON.parse(readFileSync(this.ownershipPath(binding.storageRootId, binding.storageId), 'utf8')) as Record<string, unknown>
       return Array.isArray(owner.identities) && owner.identities.some((identity: unknown) =>
         isIdentity(identity) && identity.appSessionId === appSessionId && identity.engineSessionId === engineSessionId,
@@ -120,6 +125,13 @@ export class ManagedStorage {
     } catch {
       return false
     }
+  }
+
+  wasRecreated(binding: Extract<SessionBinding, { kind: 'managed' }>): boolean {
+    const root = this.readRoot()
+    if (!root || root.storageRootId !== binding.storageRootId ||
+      !this.hasOwnership(binding.storageRootId, binding.storageId)) return false
+    return this.readRecreationMarker(binding)
   }
 
   findByEngineSession(engineSessionId: string): { appSessionId: string; cwd: string; binding: Extract<SessionBinding, { kind: 'managed' }> } | undefined {
@@ -165,6 +177,9 @@ export class ManagedStorage {
       try { lstatSync(target); return { ok: false, reason: 'invalid' } } catch (error) {
         if (!isNotFound(error)) return { ok: false, reason: 'invalid' }
       }
+      // Separate create-once record: an identity write in another process may
+      // replace the ownership JSON without losing this durable notice.
+      this.markRecreated(binding)
       mkdirSync(target, { recursive: false, mode: 0o700 })
       let cwd: string | null
       try { cwd = this.validatePath(target, root) } catch { cwd = null }
@@ -290,6 +305,60 @@ export class ManagedStorage {
     try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
   }
 
+  private recreationMarkerPath(binding: Extract<SessionBinding, { kind: 'managed' }>): string {
+    return join(this.ownershipDir, binding.storageRootId, `${binding.storageId}.recreated.json`)
+  }
+
+  private readRecreationMarker(binding: Extract<SessionBinding, { kind: 'managed' }>): boolean {
+    const path = this.recreationMarkerPath(binding)
+    let st: ReturnType<typeof lstatSync>
+    try { st = lstatSync(path) } catch (error) {
+      if (isNotFound(error)) return false
+      throw error
+    }
+    if (!st.isFile() || st.isSymbolicLink() || (st.mode & 0o022) !== 0) {
+      throw new Error('invalid managed folder recreation marker')
+    }
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('invalid managed folder recreation marker')
+    }
+    const row = parsed as Record<string, unknown>
+    if (Object.keys(row).length !== 3 || row.version !== 1 ||
+      row.storageRootId !== binding.storageRootId || row.storageId !== binding.storageId) {
+      throw new Error('invalid managed folder recreation marker')
+    }
+    return true
+  }
+
+  private markRecreated(binding: Extract<SessionBinding, { kind: 'managed' }>): void {
+    const path = this.recreationMarkerPath(binding)
+    if (this.readRecreationMarker(binding)) {
+      const dirFd = openSync(dirname(path), 'r')
+      try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
+      return
+    }
+    const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+    try {
+      writeFileSync(temp, JSON.stringify({
+        version: 1,
+        storageRootId: binding.storageRootId,
+        storageId: binding.storageId,
+      }), { flag: 'wx', mode: 0o600 })
+      const fd = openSync(temp, 'r')
+      try { fsyncSync(fd) } finally { closeSync(fd) }
+      try { linkSync(temp, path) } catch (error) {
+        if (!isAlreadyExists(error) || !this.readRecreationMarker(binding)) throw error
+      }
+      const dirFd = openSync(dirname(path), 'r')
+      try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
+    } finally {
+      try { unlinkSync(temp) } catch (error) {
+        if (!isNotFound(error)) throw error
+      }
+    }
+  }
+
   private ownershipPath(storageRootId: string, storageId: string): string {
     if (!validUuid(storageRootId) || !validUuid(storageId)) throw new Error('invalid managed identity')
     return join(this.ownershipDir, storageRootId, `${storageId}.json`)
@@ -320,4 +389,9 @@ function isContained(parent: string, candidate: string): boolean {
 function isNotFound(error: unknown): boolean {
   return !!error && typeof error === 'object' && 'code' in error &&
     (error as { code?: unknown }).code === 'ENOENT'
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'code' in error &&
+    (error as { code?: unknown }).code === 'EEXIST'
 }

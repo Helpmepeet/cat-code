@@ -654,7 +654,7 @@ export async function processMemoryFile(
   }
 
   // Resolve symlink path early for @import resolution and deduplicate aliases.
-  const { resolvedPath } = safeResolvePath(
+  const { resolvedPath, isSymlink, isCanonical } = safeResolvePath(
     getFsImplementation(),
     filePath,
   )
@@ -676,6 +676,17 @@ export async function processMemoryFile(
   if (
     isManagedSession() &&
     isManagedSessionAgentsPath(filePath, resolvedPath)
+  ) {
+    return []
+  }
+
+  // Project aliases must not import a target outside the working directory
+  // without the same approval required for an external @include. A failed
+  // canonicalization cannot establish where the read would land.
+  if (
+    type === 'Project' &&
+    (!isCanonical ||
+      (isSymlink && !pathInOriginalCwd(resolvedPath) && !includeExternal))
   ) {
     return []
   }
@@ -1470,11 +1481,24 @@ export async function getMemoryFilesForNestedDirectory(
   const result: MemoryFileInfo[] = []
   const instructionFilesMode = getInstructionFilesSetting().mode
   if (instructionFilesMode === 'managed-only') return result
+  // Eager files can be handed to this walk under their spelled symlink paths.
+  // Seed their physical identities before comparing nested candidates.
+  for (const path of [...processedPaths]) {
+    const { resolvedPath, isCanonical } = safeResolvePath(
+      getFsImplementation(),
+      path,
+    )
+    if (isCanonical) {
+      processedPaths.add(normalizePathForComparison(resolvedPath))
+    }
+  }
   const projectDirectories = getEligibleRootToCwdDirectories()
   const shouldLoadAgents = shouldLoadProjectAgents(
     instructionFilesMode,
     projectDirectories,
   )
+  const includeExternalAgents =
+    getCurrentProjectConfig().hasClaudeMdExternalIncludesApproved ?? false
 
   // Process project memory files (CLAUDE.md, .cat-code/CLAUDE.md, and .claude/CLAUDE.md)
   if (isSettingSourceEnabled('projectSettings')) {
@@ -1516,7 +1540,7 @@ export async function getMemoryFilesForNestedDirectory(
           join(dir, 'AGENTS.md'),
           'Project',
           processedPaths,
-          false,
+          includeExternalAgents,
         )),
       )
       result.push(
@@ -1524,7 +1548,7 @@ export async function getMemoryFilesForNestedDirectory(
           join(dir, '.claude', 'AGENTS.md'),
           'Project',
           processedPaths,
-          false,
+          includeExternalAgents,
         )),
       )
     }
@@ -1697,8 +1721,19 @@ export function getExternalClaudeMdIncludes(
 ): ExternalClaudeMdInclude[] {
   const externals: ExternalClaudeMdInclude[] = []
   for (const file of files) {
-    if (file.type !== 'User' && file.parent && !pathInOriginalCwd(file.path)) {
+    if (file.type === 'User') continue
+    if (file.parent && !pathInOriginalCwd(file.path)) {
       externals.push({ path: file.path, parent: file.parent })
+      continue
+    }
+    if (file.type === 'Project') {
+      const { resolvedPath, isSymlink, isCanonical } = safeResolvePath(
+        getFsImplementation(),
+        file.path,
+      )
+      if (isCanonical && isSymlink && !pathInOriginalCwd(resolvedPath)) {
+        externals.push({ path: resolvedPath, parent: file.parent ?? file.path })
+      }
     }
   }
   return externals

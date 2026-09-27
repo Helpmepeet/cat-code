@@ -232,9 +232,9 @@ assert(
 
 // A5 — the engine's own ripgrep lookup inside the binary. A0 runs the bundled
 // rg directly, which cannot see whether the engine finds it: packagedEntry
-// prepends Resources/bin to PATH at runtime, and a lookup that ignores that
-// prepend falls back to an unexecutable /$bunfs path. settings-inventory loads
-// user agents through the engine's ripgrep file listing, so the probe agent
+// appends Resources/bin to PATH at runtime, and a lookup that ignores the
+// current PATH falls back to an unexecutable /$bunfs path. settings-inventory
+// loads user agents through the engine's ripgrep file listing, so the probe agent
 // appears only if that search ran.
 const inventoryHome = scratch('catcode-packaged-inventory-')
 mkdirSync(join(inventoryHome, 'agents'))

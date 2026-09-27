@@ -828,6 +828,8 @@ export class Host implements HostApi {
         cwd,
         binding,
         forked,
+        recreatedFolderNotice: binding.kind === 'managed' &&
+          this.managedStorage?.wasRecreated(binding) === true,
         ...(resumeEngineSessionId !== undefined ? { resumeEngineSessionId } : {}),
         ...(name !== undefined ? { name } : {}),
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
@@ -1183,6 +1185,8 @@ export class Host implements HostApi {
         cwd: validatedCwd.realpath,
         binding: row.binding,
         forked: row.forked,
+        recreatedFolderNotice: row.binding.kind === 'managed' &&
+          this.managedStorage?.wasRecreated(row.binding) === true,
         ...(row.engineSessionId !== null
           ? { resumeEngineSessionId: row.engineSessionId }
           : {}),

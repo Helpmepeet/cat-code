@@ -15,7 +15,15 @@ function planned(
     env = {},
     sessionEnv = {},
     envFile,
-  }: { env?: Record<string, string>; sessionEnv?: Record<string, string>; envFile?: string } = {},
+    command = 'diff',
+    useSandbox = false,
+  }: {
+    env?: Record<string, string>
+    sessionEnv?: Record<string, string>
+    envFile?: string
+    command?: string
+    useSandbox?: boolean
+  } = {},
 ): boolean {
   const home = mkdtempSync(join(tmpdir(), 'provider-exit-home-'))
   const config = mkdtempSync(join(tmpdir(), 'provider-exit-config-'))
@@ -28,8 +36,10 @@ function planned(
       const { SEMANTIC_COMMAND_NAMES } = await import(${JSON.stringify(join(import.meta.dir, '../../tools/BashTool/commandSemantics.ts'))})
       const provider = await createBashShellProvider(${JSON.stringify(shell)})
       for (const [name, value] of Object.entries(${JSON.stringify(sessionEnv)})) setSessionEnvVar(name, value)
-      const built = await provider.buildExecCommand('diff', {
-        id: 'test', useSandbox: false, exitSemanticCommands: SEMANTIC_COMMAND_NAMES,
+      const built = await provider.buildExecCommand(${JSON.stringify(command)}, {
+        id: 'test', useSandbox: ${JSON.stringify(useSandbox)},
+        sandboxTmpDir: ${JSON.stringify(join(home, 'sandbox'))},
+        exitSemanticCommands: SEMANTIC_COMMAND_NAMES,
       })
       process.stdout.write(built.exitAttributionPlan ? 'planned' : 'unplanned')
     `
@@ -54,6 +64,16 @@ function planned(
 describe.skipIf(!existsSync('/bin/bash'))('bash provider exit attribution', () => {
   test('a plain environment is instrumented', () => {
     expect(planned('/bin/bash')).toBe(true)
+  })
+
+  test('a sandboxed command substitution cannot observe its exit marker', () => {
+    expect(
+      planned('/bin/bash', {
+        useSandbox: true,
+        command: 'grep needle "$(ls "$TMPDIR"/exit-*)"',
+      }),
+    ).toBe(false)
+    expect(planned('/bin/bash', { useSandbox: true, command: 'grep missing file.txt' })).toBe(true)
   })
 
   test('an exported bash function the snapshot never saw disables it', () => {
@@ -101,6 +121,15 @@ describe.skipIf(!existsSync('/bin/bash'))('bash provider exit attribution', () =
 describe.skipIf(!existsSync('/bin/zsh'))('zsh provider exit attribution', () => {
   test('a plain environment is instrumented', () => {
     expect(planned('/bin/zsh')).toBe(true)
+  })
+
+  test('a sandboxed command substitution cannot observe its exit marker', () => {
+    expect(
+      planned('/bin/zsh', {
+        useSandbox: true,
+        command: 'grep needle "$(ls "$TMPDIR"/exit-*)"',
+      }),
+    ).toBe(false)
   })
 
   test.each(['ZDOTDIR', 'HOME'])('/env %s, which moves .zshenv, disables it', name => {

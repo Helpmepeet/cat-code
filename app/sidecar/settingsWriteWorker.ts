@@ -49,6 +49,7 @@ async function main(): Promise<void> {
   await bootstrapWorkerEngine()
   const domain = createSidecarSettingsDomain(
     await loadAvailableSettingOptions(process.cwd()),
+    { userScope: request.verb.source === 'userSettings' },
   )
   // A failed source read cannot establish the settings/policy floor. In that
   // state, refuse the write even though the engine writer could open a file.

@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act, createElement } from 'react'
+import { act, createElement, memo, useContext } from 'react'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ServerFrame } from '../../shared/protocol.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
+import { TranscriptMotionContext, useTranscriptMotion } from './transcriptMotion.js'
 import { TranscriptRowsView, ToolInspectorOverlay } from './TranscriptView.js'
 import {
   createTranscriptState,
@@ -160,6 +161,168 @@ test('an added reasoning step fades while its existing head stays instant', asyn
     restorePhase: 'preview',
   }))
   expect(remount.container.querySelector('.animate-arrive')).toBeNull()
+})
+
+test('stable nested branches are not revisited on each streaming text commit', async () => {
+  const child: NestedTranscriptRow = {
+    kind: 'thinking', id: 'nested-reasoning', sessionId, frameId: a,
+    messageId: a, blockIndex: 0, parentToolUseId: 'agent-1',
+    content: 'Inspecting', children: [],
+  }
+  const parent: NestedTranscriptRow = {
+    kind: 'tool-use', id: 'agent-parent', sessionId, frameId: b,
+    messageId: b, blockIndex: 0, parentToolUseId: null,
+    toolUseId: 'agent-1', toolName: 'Agent', toolFamily: 'agent',
+    input: { prompt: 'Inspect' }, status: 'pending', result: null, agentCompletion: null,
+    children: [child],
+  }
+  let reads = 0
+  Object.defineProperty(parent, 'children', {
+    get() { reads++; return [child] },
+  })
+  const text: NestedTranscriptRow = {
+    kind: 'assistant-text', id: 'streaming-tail', sessionId, frameId: c,
+    messageId: c, blockIndex: 0, parentToolUseId: null, role: 'assistant',
+    content: 'Hello', isStreaming: true, children: [],
+  }
+  const MotionProbe = ({ rows }: { rows: NestedTranscriptRow[] }) => {
+    useTranscriptMotion(rows, true, true)
+    return null
+  }
+  const tree = await harness.mount(createElement(MotionProbe, { rows: [parent, text] }))
+  const afterMount = reads
+  for (let i = 0; i < 4; i++) {
+    await tree.render(createElement(MotionProbe, {
+      rows: [parent, { ...text, content: `Hello ${i}` }],
+    }))
+  }
+  expect(reads).toBe(afterMount)
+})
+
+test('projected tail updates do not read historical roots or fan out unchanged motion context', async () => {
+  let state = projectServerFrame(createTranscriptState(), ready)
+  for (let i = 0; i < 24; i++) {
+    state = project(state, assistant(
+      `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` as Uuid,
+      `bash-${i}`, 'Bash', { command: `echo ${i}` },
+    ))
+  }
+  const initial = rows(state)
+  const oldest = initial[0]!
+  let reads = 0
+  const id = oldest.id
+  Object.defineProperty(oldest, 'id', { get() { reads++; return id } })
+  let consumers = 0
+  const Consumer = memo(() => {
+    useContext(TranscriptMotionContext)
+    consumers++
+    return null
+  })
+  const Probe = ({ list }: { list: NestedTranscriptRow[] }) => {
+    const motion = useTranscriptMotion(list, true, true)
+    return createElement(TranscriptMotionContext.Provider, { value: motion }, createElement(Consumer))
+  }
+  const tree = await harness.mount(createElement(Probe, { list: initial }))
+  const initialReads = reads
+  const initialConsumers = consumers
+  for (let i = 0; i < 5; i++) {
+    const session = state.sessions[sessionId]!
+    state = { ...state, sessions: { ...state.sessions, [sessionId]: {
+      ...session,
+      rows: session.rows.map((row, index) => index === session.rows.length - 1
+        ? { ...row, input: { command: `echo updated ${i}` } }
+        : row),
+    } } }
+    await tree.render(createElement(Probe, { list: rows(state) }))
+  }
+  expect(reads).toBe(initialReads)
+  expect(consumers).toBe(initialConsumers)
+})
+
+test('projected head inserts and reorders keep old rows still while live tail rows arrive', async () => {
+  let state = projectServerFrame(createTranscriptState(), ready)
+  state = project(state, assistant(a, 'bash-old-1', 'Bash', { command: 'echo one' }))
+  state = project(state, assistant(b, 'bash-old-2', 'Bash', { command: 'echo two' }))
+  const tree = await harness.mount(view(state, null, false, true))
+  const session = state.sessions[sessionId]!
+  const prior = session.rows[0]!
+  if (prior.kind !== 'tool-use') throw new Error('expected a projected tool row')
+  state = { ...state, sessions: { ...state.sessions, [sessionId]: {
+    ...session, rows: [{ ...prior, id: 'history-added', toolUseId: 'history-tool' }, ...session.rows],
+  } } }
+  await tree.render(view(state, null, false, true))
+  expect(tree.container.querySelector('[data-row-key="history-added"]')?.classList.contains('animate-arrive')).toBe(false)
+  const reordered = state.sessions[sessionId]!
+  state = { ...state, sessions: { ...state.sessions, [sessionId]: {
+    ...reordered, rows: [reordered.rows[0]!, reordered.rows[2]!, reordered.rows[1]!],
+  } } }
+  await tree.render(view(state, null, false, true))
+  expect(tree.container.querySelector('[data-row-key].animate-arrive')).toBeNull()
+  state = project(state, assistant(c, 'bash-live', 'Bash', { command: 'echo three' }))
+  await tree.render(view(state, null, false, true))
+  expect(tree.container.querySelector('[data-row-key].animate-arrive')?.getAttribute('data-row-key'))
+    .toBe(rows(state).at(-1)?.id)
+})
+
+test('streamed prose keeps the first batch fading during later commits and stays still on remount', async () => {
+  const base: NestedTranscriptRow = {
+    kind: 'assistant-text', id: 'prose-stream', sessionId, frameId: d,
+    messageId: d, blockIndex: 0, parentToolUseId: null, role: 'assistant',
+    content: 'Existing text', isStreaming: true, children: [],
+  }
+  const viewProse = (content: string) => createElement(TranscriptRowsView, {
+    rows: [{ ...base, content }], turnLive: true,
+  })
+  const tree = await harness.mount(viewProse(base.content))
+  expect(tree.container.querySelectorAll('.prose-arrive-smooth')).toHaveLength(0)
+  await tree.render(viewProse('Existing text first'))
+  const first = [...tree.container.querySelectorAll('.prose-arrive-smooth')]
+    .find(span => span.textContent === 'first')
+  expect(first).toBeDefined()
+  await tree.render(viewProse('Existing text first second'))
+  expect(tree.container.contains(first!)).toBe(true)
+  expect(first?.classList.contains('prose-arrive-smooth')).toBe(true)
+  expect([...tree.container.querySelectorAll('.prose-arrive-smooth')].map(span => span.textContent))
+    .toContain('second')
+  await tree.unmount()
+  const remount = await harness.mount(viewProse('Existing text first second'))
+  expect(remount.container.querySelectorAll('.prose-arrive-smooth')).toHaveLength(0)
+})
+
+test('a new streaming row fades its first batch in a live pane but not on remount', async () => {
+  const row: NestedTranscriptRow = {
+    kind: 'assistant-text', id: 'fresh-stream', sessionId, frameId: d,
+    messageId: d, blockIndex: 0, parentToolUseId: null, role: 'assistant',
+    content: 'First words', isStreaming: true, children: [],
+  }
+  const tree = await harness.mount(createElement(TranscriptRowsView, { rows: [], turnLive: true }))
+  await tree.render(createElement(TranscriptRowsView, { rows: [row], turnLive: true }))
+  expect([...tree.container.querySelectorAll('.prose-arrive-smooth')].map(span => span.textContent))
+    .toEqual(['First', 'words'])
+  await tree.unmount()
+  const remount = await harness.mount(createElement(TranscriptRowsView, { rows: [row], turnLive: true }))
+  expect(remount.container.querySelectorAll('.prose-arrive-smooth')).toHaveLength(0)
+})
+
+test('a new nested streaming row receives a first-batch arrival after its parent changes', async () => {
+  const parent: NestedTranscriptRow = {
+    kind: 'tool-use', id: 'nested-parent', sessionId, frameId: b,
+    messageId: b, blockIndex: 0, parentToolUseId: null,
+    toolUseId: 'nested-agent', toolName: 'Agent', toolFamily: 'agent',
+    input: {}, status: 'pending', result: null, agentCompletion: null, children: [],
+  }
+  const child: NestedTranscriptRow = {
+    kind: 'assistant-text', id: 'nested-stream', sessionId, frameId: c,
+    messageId: c, blockIndex: 0, parentToolUseId: 'nested-agent',
+    role: 'assistant', content: 'First words', isStreaming: true, children: [],
+  }
+  const MotionProbe = ({ rows }: { rows: NestedTranscriptRow[] }) => {
+    const { freshProse } = useTranscriptMotion(rows, true, true)
+    return createElement('div', { 'data-arriving': freshProse.has(child.id) })
+  }
+  const tree = await harness.mount(createElement(MotionProbe, { rows: [parent] }))
+  await tree.render(createElement(MotionProbe, { rows: [{ ...parent, children: [child] }] }))
+  expect(tree.container.querySelector('[data-arriving]')?.getAttribute('data-arriving')).toBe('true')
 })
 
 test('inspector animates an open action, not a pre-opened mount or remount', async () => {

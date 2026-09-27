@@ -912,6 +912,30 @@ const revealedNestedRowsCache = new WeakMap<
 >()
 const EMPTY_NESTED_ROWS: NestedTranscriptRow[] = []
 
+export type NestedRowsChange = {
+  previous: readonly NestedTranscriptRow[]
+  start: number
+  previousEnd: number
+  nextEnd: number
+}
+
+const nestedRowsChanges = new WeakMap<readonly NestedTranscriptRow[], {
+  previous: WeakRef<NestedTranscriptRow[]>
+  start: number
+  previousEnd: number
+  nextEnd: number
+}>()
+// Only a recent read of this same session/view can supply a comparison base.
+// Weak values avoid pinning prior transcript arrays through the current slice.
+const lastNestedRows = new Map<string, WeakRef<NestedTranscriptRow[]>>()
+const MAX_NESTED_ROWS_VIEWS = 64
+
+export function nestedRowsChange(rows: readonly NestedTranscriptRow[]): NestedRowsChange | null {
+  const change = nestedRowsChanges.get(rows)
+  const previous = change?.previous.deref()
+  return change && previous ? { ...change, previous } : null
+}
+
 /** One top-level placeholder to build: which parent is missing, and where. */
 type OrphanSlot = {
   missingToolUseId: string
@@ -948,6 +972,8 @@ export function selectNestedTranscriptRows(
   const cache = revealHidden ? revealedNestedRowsCache : nestedRowsCache
   const cached = cache.get(session)
   if (cached) return cached
+  const viewKey = `${sessionId}:${revealHidden ? 'revealed' : 'default'}`
+  const prior = lastNestedRows.get(viewKey)?.deref()
 
   const rows = selectTranscriptRows(state, sessionId, revealHidden)
   // Only a pane whose history is known incomplete can hold an Agent card whose
@@ -1060,16 +1086,41 @@ export function selectNestedTranscriptRows(
     return nested
   }
 
-  const result = topLevel.map(entry =>
-    'missingToolUseId' in entry ? attachOrphans(entry) : attachChildren(entry),
-  )
+  const oldestRow = rows[0]
+  const boundary = session.historyTruncated && oldestRow !== undefined
+    ? historyBoundaryRow(oldestRow)
+    : null
+  const offset = boundary ? 1 : 0
+  let start = prior && boundary && prior[0] === boundary ? 1 : 0
+  const result = topLevel.map((entry, index) => {
+    const nested = 'missingToolUseId' in entry ? attachOrphans(entry) : attachChildren(entry)
+    if (prior && start === index + offset && prior[start] === nested) start++
+    return nested
+  })
   // Above the oldest surviving row, so reaching it is reaching the top. Gated on
   // there BEING one: a pane with no rows draws the welcome/restore state, and a
   // lone hairline over an empty pane would replace it with a claim about
   // messages that are not on screen to be missing from.
-  const oldestRow = rows[0]
-  if (session.historyTruncated && oldestRow !== undefined) {
-    result.unshift(historyBoundaryRow(oldestRow))
+  if (boundary) {
+    result.unshift(boundary)
+  }
+  if (prior) {
+    let suffix = 0
+    while (suffix < Math.min(prior.length - start, result.length - start) &&
+      prior[prior.length - suffix - 1] === result[result.length - suffix - 1]) {
+      suffix++
+    }
+    nestedRowsChanges.set(result, {
+      previous: new WeakRef(prior),
+      start,
+      previousEnd: prior.length - suffix,
+      nextEnd: result.length - suffix,
+    })
+  }
+  lastNestedRows.delete(viewKey)
+  lastNestedRows.set(viewKey, new WeakRef(result))
+  if (lastNestedRows.size > MAX_NESTED_ROWS_VIEWS) {
+    lastNestedRows.delete(lastNestedRows.keys().next().value!)
   }
   cache.set(session, result)
   return result

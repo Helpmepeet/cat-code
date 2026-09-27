@@ -26,18 +26,23 @@ import {
 } from '../bootstrap/state.js'
 import { getAutoMemEntrypoint, getAutoMemPath } from '../memdir/paths.js'
 import {
+  getExternalClaudeMdIncludes,
   getManagedAndUserConditionalRules,
   getMemoryFiles,
   getMemoryFilesForNestedDirectory,
   getConditionalRulesForCwdLevelDirectory,
   isMemoryFilePath,
+  shouldShowClaudeMdExternalIncludesWarning,
   type MemoryFileInfo,
 } from './claudemd.js'
 import {
   getManagedSessionPolicy,
   setManagedSessionPolicy,
 } from './managedSessionPolicy.js'
-import { _setGlobalConfigCacheForTesting } from './config.js'
+import {
+  _setGlobalConfigCacheForTesting,
+  getCurrentProjectConfig,
+} from './config.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
 import {
   getManagedFilePath,
@@ -54,6 +59,8 @@ const originalAdditionalDirectories = getAdditionalDirectoriesForClaudeMd()
 const originalFlagSettingsPath = getFlagSettingsPath()
 const originalFlagSettingsInline = getFlagSettingsInline()
 const originalManagedSessionPolicy = getManagedSessionPolicy()
+const originalExternalIncludesApproval =
+  getCurrentProjectConfig().hasClaudeMdExternalIncludesApproved
 const environmentNames = [
   'HOME',
   'CLAUDE_CONFIG_DIR',
@@ -198,6 +205,8 @@ afterEach(() => {
   }
   setAllowedSettingSources(originalSources)
   setManagedSessionPolicy(originalManagedSessionPolicy)
+  getCurrentProjectConfig().hasClaudeMdExternalIncludesApproved =
+    originalExternalIncludesApproval
   setOriginalCwd(originalCwd)
   setProjectRoot(originalProjectRoot)
   setAdditionalDirectoriesForClaudeMd(originalAdditionalDirectories)
@@ -490,6 +499,128 @@ test('AGENTS symlink aliases do not duplicate CLAUDE while both mode still loads
   expect(agentPaths(files)).toEqual([
     pathKey(dotClaudeAgentsPath),
   ])
+})
+
+test('an eager AGENTS alias outside the working directory needs external-import approval', async () => {
+  const { project, additional } = createFixture()
+  const target = join(additional, 'AGENTS.md')
+  const alias = join(project, 'AGENTS.md')
+  writeInstruction(target, 'EXTERNAL_EAGER_AGENT_MARKER')
+  symlinkSync(target, alias)
+
+  expect(agentPaths(await getMemoryFiles())).toEqual([])
+  expect(await shouldShowClaudeMdExternalIncludesWarning()).toBe(true)
+  expect(
+    getExternalClaudeMdIncludes(await getMemoryFiles(true)).map(file => ({
+      path: pathKey(file.path),
+      parent: pathKey(file.parent),
+    })),
+  ).toEqual([{ path: pathKey(target), parent: pathKey(alias) }])
+
+  getCurrentProjectConfig().hasClaudeMdExternalIncludesApproved = true
+  getMemoryFiles.cache.clear?.()
+  expect(agentPaths(await getMemoryFiles())).toEqual([pathKey(alias)])
+})
+
+test('external user and managed instructions remain loadable without project approval', async () => {
+  const { project, additional, config, managed } = createFixture()
+  const userTarget = join(additional, 'user.md')
+  const managedTarget = join(additional, 'managed.md')
+  writeInstruction(userTarget, 'EXTERNAL_USER_INSTRUCTION_MARKER')
+  writeInstruction(managedTarget, 'EXTERNAL_MANAGED_INSTRUCTION_MARKER')
+  symlinkSync(userTarget, join(config, 'CLAUDE.md'))
+  symlinkSync(managedTarget, join(managed, 'CLAUDE.md'))
+  writeInstruction(join(project, 'AGENTS.md'), 'PROJECT_INSTRUCTION_MARKER')
+
+  const files = await getMemoryFiles()
+  expect(
+    files.some(
+      file =>
+        file.type === 'User' &&
+        file.content.includes('EXTERNAL_USER_INSTRUCTION_MARKER'),
+    ),
+  ).toBe(true)
+  expect(
+    files.some(
+      file =>
+        file.type === 'Managed' &&
+        file.content.includes('EXTERNAL_MANAGED_INSTRUCTION_MARKER'),
+    ),
+  ).toBe(true)
+  expect(await shouldShowClaudeMdExternalIncludesWarning()).toBe(false)
+})
+
+test('an ancestor AGENTS alias cannot bypass approval when the original cwd is nested', async () => {
+  const { project, additional } = createFixture()
+  const child = join(project, 'child')
+  const alias = join(project, 'AGENTS.md')
+  const target = join(additional, 'AGENTS.md')
+  writeInstruction(target, 'EXTERNAL_ANCESTOR_AGENT_MARKER')
+  mkdirSync(child)
+  symlinkSync(target, alias)
+  setOriginalCwd(realpathSync(child))
+  resetDiscoveryCaches()
+
+  expect(agentPaths(await getMemoryFiles())).toEqual([])
+  expect(await shouldShowClaudeMdExternalIncludesWarning()).toBe(true)
+
+  rmSync(alias)
+  writeInstruction(alias, 'ORDINARY_ANCESTOR_AGENT_MARKER')
+  getMemoryFiles.cache.clear?.()
+  expect(agentPaths(await getMemoryFiles())).toEqual([pathKey(alias)])
+})
+
+test('nested AGENTS aliases outside the working directory stay blocked until approval', async () => {
+  const { project, additional } = createFixture()
+  const child = join(project, 'child')
+  const target = join(additional, 'AGENTS.md')
+  const alias = join(child, 'AGENTS.md')
+  writeInstruction(target, 'EXTERNAL_NESTED_AGENT_MARKER')
+  mkdirSync(child)
+  symlinkSync(target, alias)
+
+  expect(
+    agentPaths(
+      await getMemoryFilesForNestedDirectory(
+        child,
+        join(child, 'file.ts'),
+        new Set(),
+      ),
+    ),
+  ).toEqual([])
+
+  getCurrentProjectConfig().hasClaudeMdExternalIncludesApproved = true
+  expect(
+    agentPaths(
+      await getMemoryFilesForNestedDirectory(
+        child,
+        join(child, 'file.ts'),
+        new Set(),
+      ),
+    ),
+  ).toEqual([pathKey(alias)])
+})
+
+test('nested AGENTS does not reload an eager file through a different alias', async () => {
+  const { project } = createFixture()
+  const eager = join(project, 'AGENTS.md')
+  const child = join(project, 'child')
+  const alias = join(child, 'AGENTS.md')
+  const target = join(project, 'shared', 'AGENTS.md')
+  writeInstruction(target, 'SHARED_EAGER_NESTED_MARKER')
+  symlinkSync(target, eager)
+  mkdirSync(child)
+  symlinkSync(target, alias)
+
+  const eagerFiles = await getMemoryFiles()
+  const nestedFiles = await getMemoryFilesForNestedDirectory(
+    child,
+    join(child, 'file.ts'),
+    new Set(eagerFiles.map(file => normalizePathForComparison(file.path))),
+  )
+
+  expect(agentPaths(eagerFiles)).toEqual([pathKey(eager)])
+  expect(agentPaths(nestedFiles)).toEqual([])
 })
 
 test('managed-only keeps managed instructions and recalled memory but blocks every project and user entry path', async () => {

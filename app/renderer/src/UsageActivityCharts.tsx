@@ -42,7 +42,13 @@ export function UsageHeatmap({ activity, range, onSelect, selected = '', selecte
     }
     const tokens = (cell: HeatCell) => cell.day ? usageTotal(cell.day.tokens) : 0;
     const max = Math.max(1, ...cells.map(tokens));
-    const weeks = new Set(cells.map(cell => cell.column)).size;
+    const firstVisible = cells[0]?.date, lastVisible = cells.at(-1)?.date;
+    const crossesYear = firstVisible?.slice(0, 4) !== lastVisible?.slice(0, 4);
+    const period = firstVisible && lastVisible
+        ? firstVisible === lastVisible
+            ? usageChartDate(firstVisible)
+            : `${usageChartDate(firstVisible, crossesYear)} to ${usageChartDate(lastVisible, crossesYear)}`
+        : '';
     const height = 7 * size + 6 * GAP;
     const selectedStart = selected ? civilDay(selected) : NaN;
     const isSelectedDay = (date: string) => {
@@ -59,7 +65,7 @@ export function UsageHeatmap({ activity, range, onSelect, selected = '', selecte
         next.focus();
     };
     return <>
-        <div className="usage-chart-toolbar"><span>Last {weeks} {weeks === 1 ? 'week' : 'weeks'}</span><div className="usage-heat-key" aria-label="Intensity from fewer to more tokens"><span>Less</span>{[0, 1, 2, 3, 4, 5].map(level => <i key={level} className={`usage-heat-${level}`}/>)}<span>More</span></div></div>
+        <div className="usage-chart-toolbar"><span>{period}</span><div className="usage-heat-key" aria-label="Intensity from fewer to more tokens"><span>Less</span>{[0, 1, 2, 3, 4, 5].map(level => <i key={level} className={`usage-heat-${level}`}/>)}<span>More</span></div></div>
         <svg ref={chart.ref} className="usage-heatmap usage-heatmap-week" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Tokens by local day" onMouseLeave={() => setHovered(null)}>
             {cells.map(cell => {
                 const count = tokens(cell);

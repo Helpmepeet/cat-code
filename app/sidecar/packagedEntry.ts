@@ -50,7 +50,7 @@ if (!isMode(requested)) {
 }
 
 // A GUI launch has only the system PATH. Restore the user's tool directories
-// and keep bundle-owned companions first before engine modules discover tools.
+// and keep the bundled rg available after user tools before engine discovery.
 process.env.PATH = await resolvePackagedSidecarPath(process.execPath, process.env)
 
 // Normalize argv to the shape the entry modules already see under `bun run`.

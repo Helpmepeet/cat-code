@@ -344,6 +344,7 @@ export async function createNormalSidecarQueryEngineConfig(
   {
     appSessionId,
     binding = { kind: 'project' },
+    recreatedFolderNotice = false,
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
@@ -351,6 +352,7 @@ export async function createNormalSidecarQueryEngineConfig(
     /** Trusted app-session identity used to filter peer restoration state. */
     appSessionId?: string
     binding?: SessionBinding
+    recreatedFolderNotice?: boolean
     /** One startup snapshot shared with resume, never a second disk read. */
     agentDefinitions?: AgentDefinitionsResult
     /** Registers sidecar shutdown ownership before asynchronous MCP setup. */
@@ -515,6 +517,7 @@ export async function createNormalSidecarQueryEngineConfig(
           undefined,
           binding.kind === 'managed' ? cwd : undefined,
           getManagedSessionPolicy()?.sharedFilesNotice === true,
+          binding.kind === 'managed' && recreatedFolderNotice,
         ),
         ...(appSessionId && binding.kind !== 'managed'
           ? {
@@ -666,6 +669,7 @@ export async function createSidecarSessionController({
   cwd,
   appSessionId,
   binding = { kind: 'project' },
+  recreatedFolderNotice = false,
   initialMessages,
   agentDefinitions: suppliedAgentDefinitions,
   onMcpLifecycleCreated,
@@ -678,6 +682,8 @@ export async function createSidecarSessionController({
   appSessionId?: string
   /** Validated host binding; legacy launches retain project behavior. */
   binding?: SessionBinding
+  /** Host-validated durable marker; appended to the model prompt, not history. */
+  recreatedFolderNotice?: boolean
   /**
    * The resumed transcript from `resumeEngineSession` (F1): seeds the
    * QueryEngine's turn context so a restored session actually operates on its
@@ -755,6 +761,7 @@ export async function createSidecarSessionController({
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
     appSessionId,
     binding,
+    recreatedFolderNotice,
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,

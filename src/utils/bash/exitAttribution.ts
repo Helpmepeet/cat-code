@@ -13,10 +13,10 @@
  * nothing, keeps `$_` (its last argument is the old `$_`), and writes from a
  * subshell so no variable, trap, or option of the user's shell changes. It
  * sits directly in front of the final command, or after the `&&` that guards
- * it, so nothing can run between the marker and that command. It is still one
- * more command, so it is skipped where the command reads status the marker
- * would reset (`$?`, `PIPESTATUS`) or where something could observe it
- * (xtrace, verbose, DEBUG traps).
+ * it. Expansions in the command can still run shell code after the marker,
+ * before the final program starts, so substitutions are refused. It is still
+ * one more command, so it is skipped where the command reads status the marker
+ * would reset (`$?`, `PIPESTATUS`) or where tracing or traps observe it.
  *
  * Proving the command started is not enough if the name runs user code: a
  * `diff` function returning 1 is not diff reporting differences. So the
@@ -509,6 +509,12 @@ function isInstrumentableProgram(
   if (root.type !== 'program') return false
   for (const node of walk(root)) {
     if (node.type === 'ERROR' || node.type === 'heredoc_redirect') return false
+    // The marker's file is visible to substitutions evaluated after it (and
+    // may even be in $TMPDIR). A substitution can find that file, then fail
+    // before the final program runs or change its arguments based on it.
+    if (node.type === 'command_substitution' || node.type === 'process_substitution') {
+      return false
+    }
     if (node.type === 'function_definition') {
       const name = node.children.find(c => c.type === 'word')?.text ?? ''
       if (

@@ -432,13 +432,9 @@ test('P4-18c: a streaming assistant row marks the text that just arrived', () =>
     isStreaming: true,
   })
 
-  // The words are separate spans while streaming, so the phrase is no longer
-  // one text node. Both words must still be present and both must be marked:
-  // the marking IS the streaming signal now that the caret is gone.
   expect(html).toContain('>partial<')
   expect(html).toContain('>answer<')
   expect(html).toContain('prose-arrive-smooth')
-  // And nothing is lost between them: the separator survives the split.
   expect(html.replace(/<[^>]*>/g, '')).toContain('partial answer')
 })
 
@@ -4810,9 +4806,6 @@ test('P4-38 — the assistant body is the positioned hover group the chip needs'
 
 test('P4-38 — no copy chip while the reply is still streaming', () => {
   const html = render(assistantRow('partial ans', true))
-  // Proof the row really is in the streaming state, so the missing chip below
-  // is the suppression under test and not an empty render. The caret used to
-  // carry this; the arrival marking carries it now.
   expect(html).toContain('prose-arrive-smooth')
   expect(html).not.toContain('Copy response')
 })

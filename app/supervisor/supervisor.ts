@@ -182,6 +182,8 @@ export type SpawnConfig = {
   binding?: SessionBinding
   /** Trusted main-owned conversation branch provenance. */
   forked?: boolean
+  /** Host-owned notice persisted when an absent managed folder is recreated. */
+  recreatedFolderNotice?: boolean
 }
 
 export type SendFailureCode =
@@ -410,6 +412,7 @@ export class SidecarSupervisor {
         CATCODE_SIDECAR_EFFORT: config?.effort ?? '',
         CATCODE_SESSION_BINDING_JSON: JSON.stringify(config?.binding ?? { kind: 'project' }),
         CATCODE_SESSION_FORKED: config?.forked === true ? 'true' : 'false',
+        CATCODE_SESSION_RECREATED_FOLDER: config?.recreatedFolderNotice === true ? 'true' : 'false',
         CATCODE_OPERATIONAL_FD: '3',
         CATCODE_OPERATIONAL_LAUNCH_ID: process.env.CATCODE_OPERATIONAL_LAUNCH_ID ?? '',
       },

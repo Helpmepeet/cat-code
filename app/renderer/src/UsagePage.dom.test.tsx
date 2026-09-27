@@ -26,6 +26,8 @@ async function recordedSnapshot() {
 
 test('analytics layout keeps one bottom table and uses the selected range', async () => {
     const snapshot = await recordedSnapshot();
+    snapshot.ranges['30d'].tokens.fresh = 123;
+    snapshot.ranges['30d'].records = 1;
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     expect(tree.container.querySelectorAll('.usage-metric')).toHaveLength(5);
     expect([...tree.container.querySelectorAll('.usage-panel-heading')].map(node => node.textContent)).toContain('Tokens');
@@ -37,6 +39,10 @@ test('analytics layout keeps one bottom table and uses the selected range', asyn
     await act(async () => range.click());
     expect(range.getAttribute('aria-pressed')).toBe('true');
     expect(tree.container.querySelector('.usage-freshness')?.textContent).toContain('Aug 15 to Sep 13');
+    const heatmap = tree.container.querySelector('.usage-heatmap')!;
+    expect(heatmap.querySelectorAll('.usage-heat-cell')).toHaveLength(30);
+    expect(new Set([...heatmap.querySelectorAll<SVGGElement>('.usage-heat-cell')].map(cell => cell.querySelector('rect')?.getAttribute('x'))).size).toBe(5);
+    expect(tree.container.querySelector('.usage-chart-toolbar > span')?.textContent).toBe('Aug 15 to Sep 13');
 });
 
 test('day focus does not select until activated; selection opens the session detail inline', async () => {

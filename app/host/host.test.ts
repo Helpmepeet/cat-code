@@ -57,6 +57,7 @@ type FakeRecord = {
   socketPath: string
   cwd: string
   resumeEngineSessionId?: string
+  recreatedFolderNotice?: boolean
   /** PEER-SESSIONS §2 — recorded so a test can prove what reached the spawn env. */
   name?: string
   createdBy?: string
@@ -69,6 +70,7 @@ type FakeRecord = {
 type FakeSpawnConfig = {
   cwd: string
   resumeEngineSessionId?: string
+  recreatedFolderNotice?: boolean
   name?: string
   createdBy?: string
   createdByName?: string
@@ -112,6 +114,7 @@ class FakeSupervisor {
       ...(config?.resumeEngineSessionId !== undefined
         ? { resumeEngineSessionId: config.resumeEngineSessionId }
         : {}),
+      recreatedFolderNotice: config?.recreatedFolderNotice,
       ...(config?.name !== undefined ? { name: config.name } : {}),
       ...(config?.createdBy !== undefined ? { createdBy: config.createdBy } : {}),
       ...(config?.createdByName !== undefined
@@ -143,6 +146,7 @@ class FakeSupervisor {
     record.socketPath = `/tmp/fake/s${this.sockSeq++}.sock`
     record.status = 'spawning'
     record.cwd = config?.cwd ?? record.cwd
+    record.recreatedFolderNotice = config?.recreatedFolderNotice
     if (config?.resumeEngineSessionId !== undefined) {
       record.resumeEngineSessionId = config.resumeEngineSessionId
     } else {
@@ -455,6 +459,7 @@ test('managed chats keep separate folders and can rehydrate identity after regis
   expect(first.value.binding?.kind).toBe('managed')
   expect(h.registry.findSession(first.value.appSessionId)?.binding).toEqual(first.value.binding)
   expect(h.supervisor.records.get(first.value.appSessionId)?.name).toBeUndefined()
+  expect(h.supervisor.records.get(first.value.appSessionId)?.recreatedFolderNotice).toBe(false)
   writeFileSync(join(first.value.cwd, 'report.md'), 'first')
   writeFileSync(join(second.value.cwd, 'report.md'), 'second')
   expect(readFileSync(join(first.value.cwd, 'report.md'), 'utf8')).toBe('first')
@@ -474,6 +479,8 @@ test('managed chats keep separate folders and can rehydrate identity after regis
     transcriptPathFor: (_cwd, id) => join(freshDir, 'transcripts', `${id}.jsonl`),
   })
   writeTranscript(freshDir, engineId)
+  const transcriptPath = join(freshDir, 'transcripts', `${engineId}.jsonl`)
+  const originalTranscript = readFileSync(transcriptPath, 'utf8')
   const freshSupervisor = new FakeSupervisor()
   const freshHost = new Host({
     supervisor: freshSupervisor as never,
@@ -497,13 +504,53 @@ test('managed chats keep separate folders and can rehydrate identity after regis
   freshSupervisor.throwOnNextSpawn = new Error('temporary spawn failure')
   const firstRecreate = await freshHost.recreateManagedChatFolder(first.value.appSessionId)
   expect(firstRecreate.ok ? null : firstRecreate.error.code).toBe('spawn_failed')
+  if (first.value.binding?.kind !== 'managed') throw new Error('expected managed binding')
+  expect(managedStorage.wasRecreated(first.value.binding)).toBe(true)
+  expect(readFileSync(transcriptPath, 'utf8')).toBe(originalTranscript)
   expect(existsSync(join(first.value.cwd, 'tmp'))).toBe(true)
   expect(existsSync(join(first.value.cwd, 'report.md'))).toBe(false)
   writeFileSync(join(first.value.cwd, 'keep.txt'), 'created after failed start')
 
   const retriedRecreate = await freshHost.recreateManagedChatFolder(first.value.appSessionId)
   expect(retriedRecreate.ok).toBe(true)
+  expect(freshSupervisor.records.get(first.value.appSessionId)?.recreatedFolderNotice).toBe(true)
+  expect(readFileSync(transcriptPath, 'utf8')).toBe(originalTranscript)
   expect(readFileSync(join(first.value.cwd, 'keep.txt'), 'utf8')).toBe('created after failed start')
+  freshSupervisor.emitReady(first.value.appSessionId, engineId)
+  await settle(() => freshRegistry.findSession(first.value.appSessionId)?.engineSessionId === engineId)
+  const restarted = await freshHost.restartSession(first.value.appSessionId)
+  expect(restarted.ok).toBe(true)
+  expect(freshSupervisor.records.get(first.value.appSessionId)?.recreatedFolderNotice).toBe(true)
+})
+
+test('another app-data profile cannot preview or resume a managed chat with shared ownership records', async () => {
+  const root = tempDir()
+  const ownershipDir = join(root, 'config', 'chat-workspaces')
+  const owner = new ManagedStorage({ appDataBase: join(root, 'first-profile'), ownershipDir })
+  const h = makeHost({
+    managedStorage: owner,
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok || created.value.binding?.kind !== 'managed') throw new Error('expected managed chat')
+  const engineId = randomUUID()
+  h.supervisor.emitReady(created.value.appSessionId, engineId)
+  await settle(() => h.registry.findSession(created.value.appSessionId)?.engineSessionId === engineId)
+  writeTranscript(h.storageDir, engineId)
+  await h.host.closeSession(created.value.appSessionId)
+  expect(h.host.canResume(created.value.appSessionId)).toBe(true)
+  expect(h.host.canPreview(created.value.appSessionId)).toBe(true)
+
+  const foreign = new Host({
+    supervisor: new FakeSupervisor() as never,
+    registry: h.registry,
+    managedStorage: new ManagedStorage({ appDataBase: join(root, 'second-profile'), ownershipDir }),
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+  })
+  expect(foreign.canResume(created.value.appSessionId)).toBe(false)
+  expect(foreign.canPreview(created.value.appSessionId)).toBe(false)
+  const restore = await foreign.restoreSession(created.value.appSessionId)
+  expect(restore.ok ? null : restore.error.code).toBe('managed_storage_invalid')
 })
 
 test('a managed binding stripped by an older registry writer is repaired before peer naming', async () => {
