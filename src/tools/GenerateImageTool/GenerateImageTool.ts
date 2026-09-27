@@ -954,7 +954,7 @@ export const GenerateImageTool = buildTool({
 Use this when the user asks to create or generate an image.
 
 Rules:
-- When the user writes the image description, pass it exactly as prompt; do not rewrite, expand, stylize, or add details unless they ask. When they only ask for an image of something discussed, write a self-contained prompt yourself, as detailed as it takes to match what was discussed: the image model cannot see the conversation.
+- When the user writes the image description, pass it exactly as prompt; do not rewrite, expand, stylize, or add details unless they ask. When they only ask for an image of something discussed, write a long, detailed, self-contained prompt yourself that captures everything discussed and imagined: the image model cannot see the conversation.
 - Omit output_path unless the user asks for a specific save location; Cat Code will save to ~/.cat-code/generated-images by default.
 - If the user references an existing image, pass its local path as reference_image_path. This uploads the image to the image-generation backend.
 - Use .png unless the user asks for another supported format.
