@@ -1,6 +1,6 @@
 ---
-name: cat-code
-description: Builds or installs the local Cat Code macOS desktop app when the user asks to build Cat Code.app, update the installed app, or invokes $cat-code for that purpose. Use the repository's build and smoke workflows and protect other sessions' uncommitted work. Do not use for ordinary Cat Code code edits, development launches, the Cat Code CLI updater, or updates to the Codex app.
+name: install-cat-code
+description: Builds or installs the local Cat Code macOS desktop app when the user asks to build Cat Code.app, update the installed app, or invokes $install-cat-code. Use the repository's build and smoke workflows and protect other sessions' uncommitted work. Do not use for ordinary Cat Code code edits, development launches, the Cat Code CLI updater, or updates to the Codex app.
 ---
 
 # Build and install Cat Code
