@@ -4,7 +4,16 @@ Treat this as guidance, not a rigid template. Adapt the structure to the user's 
 
 ## When to apply this guide
 
-Use it only when the user asks you to **rewrite, expand, polish, or improve** an image prompt. If the user gives you a prompt and just says "generate it," pass it through untouched.
+Use it when you write the prompt yourself because the user asked for an image of something from the conversation, or when the user asks you to **rewrite, expand, polish, or improve** their prompt. If the user gives you a prompt and just says "generate it," pass it through untouched.
+
+## Writing a prompt from conversation context
+
+The image model sees only the prompt and any reference image. It has not read the conversation.
+
+- **Describe what is visible, not how it relates to the discussion.** Drop "the other proposal," "not the previous chart," "make it different from the last image." Say what the screen shows.
+- **Leave out claims no pixel can show.** Product caveats such as "this does not measure waiting time" or "tokens are not money" belong in your reply to the user, not in the prompt. The same goes for disclaimers like "illustrative sample data."
+- **Prefer a real screenshot as the reference.** A previously generated image carries that image's invented details forward. If the only reference is a generated image, say which traits to borrow and expect drift.
+- **Keep in-image text short.** Name a few labels that carry the idea and quote them exactly. Every extra string raises the chance of garbled text.
 
 ## Structure of a strong prompt
 

@@ -954,7 +954,8 @@ export const GenerateImageTool = buildTool({
 Use this when the user asks to create or generate an image.
 
 Rules:
-- Pass the user's requested image prompt exactly as prompt. Do not rewrite, expand, stylize, or add details unless the user explicitly asks you to.
+- When the user's message describes the image itself, pass that description exactly as prompt. Do not rewrite, expand, stylize, or add details unless the user explicitly asks you to.
+- When the user asks for an image of something from the conversation, such as "show me how it would look" or "generate an image of the other proposal", that message is a request, not a prompt. Write a self-contained prompt yourself. Never pass the request sentence as prompt: the image model sees only the prompt and any reference image, not the conversation.
 - Omit output_path unless the user asks for a specific save location; Cat Code will save to ~/.cat-code/generated-images by default.
 - If the user references an existing image, pass its local path as reference_image_path. This uploads the image to the image-generation backend.
 - Use .png unless the user asks for another supported format.
@@ -968,10 +969,10 @@ Transparent backgrounds:
 - Transparency comes from the prompt, not from a parameter. When the user wants a transparent image, say so in the prompt text, for example "on a fully transparent background, no backdrop", and use .png or .webp.
 - You MUST omit background entirely for those requests. Passing background=opaque suppresses the alpha channel and returns a solid image.
 
-Prompt rewriting:
-- Only when the user explicitly asks you to rewrite, improve, expand, or polish the image prompt, first Read this file for guidance on structuring GPT Image prompts: ${guidePath}
+Prompt writing:
+- Before you write a prompt yourself, or when the user asks you to rewrite, improve, expand, or polish theirs, first Read this file for guidance on structuring GPT Image prompts: ${guidePath}
 - Treat the guide as a guideline, not a strict template — adapt to the user's request.
-- Do NOT Read the guide for normal pass-through generations.`
+- Skip the guide when passing the user's own description through unchanged.`
   },
   get inputSchema(): InputSchema {
     return inputSchema()
