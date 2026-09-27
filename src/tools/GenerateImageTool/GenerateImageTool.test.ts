@@ -1305,7 +1305,7 @@ describe('GenerateImageTool', () => {
     expect(guideContent).toStartWith('# GPT Image Prompting Guide')
   })
 
-  test('prompt passes user descriptions through but composes prompts for requests', async () => {
+  test('prompt instructs callers not to rewrite image prompts by default', async () => {
     const prompt = await GenerateImageTool.prompt({
       getToolPermissionContext: async () => ({} as never),
       tools: [],
@@ -1313,15 +1313,9 @@ describe('GenerateImageTool', () => {
     })
 
     expect(prompt).toContain(
-      'When the user\'s message describes the image itself, pass that description exactly as prompt',
+      'write a self-contained prompt yourself: the image model cannot see the conversation',
     )
-    expect(prompt).toContain('Do not rewrite, expand, stylize, or add details')
-    // A session forwarded "I want to know how it look like. Generate image for
-    // me" verbatim under the old pass-everything rule and got an unrelated image.
-    expect(prompt).toContain('that message is a request, not a prompt')
-    expect(prompt).toContain('Never pass the request sentence as prompt')
-    expect(prompt).toContain('Before you write a prompt yourself')
-    expect(prompt).not.toContain("Pass the user's requested image prompt exactly")
+    expect(prompt).toContain('do not rewrite, expand, stylize, or add details')
     expect(prompt).toContain(
       'This uploads the image to the image-generation backend',
     )
