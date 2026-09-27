@@ -208,13 +208,32 @@ describe('analyzeSnapshotForExitMarker', () => {
 })
 
 describe('sessionEnvAllowsExitMarker', () => {
-  test('exports only are fine; options, traps, and sourcing are not', () => {
-    expect(sessionEnvAllowsExitMarker(null)).toBe(true)
-    expect(sessionEnvAllowsExitMarker('export A=1\n')).toBe(true)
-    expect(sessionEnvAllowsExitMarker('export A=1\nset -x\n')).toBe(false)
-    expect(sessionEnvAllowsExitMarker("trap 'x' DEBUG\n")).toBe(false)
-    expect(sessionEnvAllowsExitMarker('diff() { return 1; }\n')).toBe(false)
-    expect(sessionEnvAllowsExitMarker('function lsof { return 1; }\n')).toBe(false)
+  test.each([
+    ['no script', null],
+    ['exports', 'export A=1\n'],
+    [
+      'assignments, exports, quoting, and $VAR expansion',
+      'export A=1 B="x y"\nexport PATH="/opt/bin:$PATH"\nC=\'lit\'\nexport D\n# note\n',
+    ],
+  ])('%s: allowed', (_label, script) => {
+    expect(sessionEnvAllowsExitMarker(script)).toBe(true)
+  })
+
+  test.each([
+    ['dot-sourcing after ;', 'export A=1; . /tmp/env.sh'],
+    ['dot-sourcing after &&', 'export A=1 && . /tmp/env.sh'],
+    ['dot-sourcing on its own line', '. /tmp/env.sh'],
+    ['source', 'source /tmp/env.sh'],
+    ['autoload', 'autoload -Uz diff'],
+    ['typeset -f', 'typeset -f diff'],
+    ['export -f', 'export -f diff'],
+    ['a command substitution', 'export A=$(id -u)'],
+    ['setting options', 'export A=1\nset -x\n'],
+    ['a trap', "trap 'x' DEBUG\n"],
+    ['a function definition', 'diff() { return 1; }\n'],
+    ['a function keyword definition', 'function lsof { return 1; }\n'],
+  ])('%s: refused', (_label, script) => {
+    expect(sessionEnvAllowsExitMarker(script)).toBe(false)
   })
 })
 

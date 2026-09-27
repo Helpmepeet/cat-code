@@ -65,12 +65,36 @@ function getDisableExtglobCommand(shellPath: string): string | null {
   return null
 }
 
-function exportsBashFunctions(): boolean {
-  const isExportedFunction = (name: string) => name.startsWith('BASH_FUNC_')
-  return (
-    Object.keys(subprocessEnv()).some(isExportedFunction) ||
-    [...getSessionEnvVars().keys()].some(isExportedFunction)
-  )
+// Variables the shell reads while starting, before the snapshot is sourced:
+// zsh -c reads $ZDOTDIR/.zshenv (else $HOME/.zshenv), bash reads BASH_ENV,
+// imports SHELLOPTS/BASHOPTS options and BASH_FUNC_* functions, and sh may
+// read ENV.
+const SHELL_STARTUP_ENV = new Set([
+  'HOME',
+  'ZDOTDIR',
+  'BASH_ENV',
+  'ENV',
+  'SHELLOPTS',
+  'BASHOPTS',
+])
+
+/**
+ * The snapshot describes the shell as it started when the snapshot was taken.
+ * The command shell can start differently: /env overrides of startup
+ * variables arrive after that, CLAUDE_CODE_DONT_INHERIT_ENV builds the
+ * snapshot from a different environment than commands get, and exported bash
+ * functions are missed when there is no .bashrc. Any of those can define or
+ * redefine commands the snapshot never showed.
+ */
+function commandStartupDiffersFromSnapshot(): boolean {
+  if (process.env.CLAUDE_CODE_DONT_INHERIT_ENV || process.env.BASH_ENV) return true
+  if (Object.keys(subprocessEnv()).some(name => name.startsWith('BASH_FUNC_'))) {
+    return true
+  }
+  for (const name of getSessionEnvVars().keys()) {
+    if (SHELL_STARTUP_ENV.has(name) || name.startsWith('BASH_FUNC_')) return true
+  }
+  return false
 }
 
 export async function createBashShellProvider(
@@ -174,21 +198,16 @@ export async function createBashShellProvider(
         : await getSessionEnvironmentScript()
 
       // Instrument only where nothing before the command can observe the
-      // marker. No snapshot means a login shell runs the user's profile, and a
-      // shell prefix or BASH_ENV runs code this process never sees; any of
+      // marker. No snapshot means a login shell runs the user's profile, a
+      // shell prefix runs code this process never sees, and a startup
+      // environment unlike the snapshot's can define commands unseen; any of
       // those leaves the exit unattributed. Windows paths are not handled.
-      // Exported bash functions (BASH_FUNC_*) reach the command through the
-      // environment, but the snapshot misses them when there is no .bashrc
-      // or under CLAUDE_CODE_DONT_INHERIT_ENV, so their names could shadow
-      // a command unseen.
       let exitAttributionPlan: ExitAttributionPlan | undefined
       const exitMarkerState =
         opts.exitSemanticCommands &&
         !isWindows &&
         !process.env.CLAUDE_CODE_SHELL_PREFIX &&
-        !process.env.BASH_ENV &&
-        !getSessionEnvVars().has('BASH_ENV') &&
-        !exportsBashFunctions() &&
+        !commandStartupDiffersFromSnapshot() &&
         snapshotFilePath &&
         sessionEnvAllowsExitMarker(sessionEnvScript)
           ? exitMarkerSnapshotState(snapshotFilePath)

@@ -218,16 +218,33 @@ export function analyzeSnapshotForExitMarker(
 }
 
 /**
- * The session environment script is sourced before every command too, and it
- * is not in the snapshot, so any option change, trap, alias, or function
- * definition in it is unaccounted for.
+ * The session environment script (CLAUDE_ENV_FILE and hook-written files) is
+ * sourced before every command and is not in the snapshot. It is arbitrary
+ * shell text, so instead of looking for dangerous words it must prove it only
+ * sets variables: every statement is an assignment or an `export` of names or
+ * assignments, with no command or process substitution anywhere.
  */
 export function sessionEnvAllowsExitMarker(sessionEnvScript: string | null): boolean {
-  return !(
-    sessionEnvScript &&
-    /\b(set|setopt|unsetopt|shopt|trap|source|eval|emulate|alias|function)\b|^\s*\.\s|\(\s*\)\s*\{/m.test(
-      sessionEnvScript,
-    )
+  if (!sessionEnvScript) return true
+  const root = parse(sessionEnvScript)
+  if (!root || root.type !== 'program') return false
+  for (const node of walk(root)) {
+    if (node.type === 'command_substitution' || node.type === 'process_substitution') {
+      return false
+    }
+  }
+  return root.children.every(isVariableSetup)
+}
+
+function isVariableSetup(node: TsNode): boolean {
+  if (node.type === 'comment' || node.type === ';' || node.type === 'variable_assignment') {
+    return true
+  }
+  if (node.type !== 'declaration_command') return false
+  const [keyword, ...rest] = node.children
+  return (
+    keyword?.type === 'export' &&
+    rest.every(c => c.type === 'variable_assignment' || c.type === 'variable_name')
   )
 }
 
