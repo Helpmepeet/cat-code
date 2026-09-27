@@ -18,11 +18,7 @@
  * directly.
  */
 
-import { prependPackagedBinToPath } from './packagedEnvironment.js'
-
-// A GUI launch has only the system PATH. Put the bundle-owned companion tools
-// first before any engine module can memoize command discovery.
-process.env.PATH = prependPackagedBinToPath(process.execPath, process.env.PATH)
+import { resolvePackagedSidecarPath } from './packagedEnvironment.js'
 
 const MODES = {
   session: () => import('./index.js'),
@@ -52,6 +48,10 @@ if (!isMode(requested)) {
   // This is a usage/launcher failure, never ripgrep's normal exit-1 no-match.
   process.exit(2)
 }
+
+// A GUI launch has only the system PATH. Restore the user's tool directories
+// and keep bundle-owned companions first before engine modules discover tools.
+process.env.PATH = await resolvePackagedSidecarPath(process.execPath, process.env)
 
 // Normalize argv to the shape the entry modules already see under `bun run`.
 // A compiled binary starts at ["bun", "/$bunfs/root/<binary>", ...args], so the
