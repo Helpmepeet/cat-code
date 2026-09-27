@@ -195,6 +195,8 @@ describe('sessionEnvAllowsExitMarker', () => {
     expect(sessionEnvAllowsExitMarker('export A=1\n')).toBe(true)
     expect(sessionEnvAllowsExitMarker('export A=1\nset -x\n')).toBe(false)
     expect(sessionEnvAllowsExitMarker("trap 'x' DEBUG\n")).toBe(false)
+    expect(sessionEnvAllowsExitMarker('diff() { return 1; }\n')).toBe(false)
+    expect(sessionEnvAllowsExitMarker('function lsof { return 1; }\n')).toBe(false)
   })
 })
 

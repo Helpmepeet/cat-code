@@ -211,11 +211,15 @@ export function analyzeSnapshotForExitMarker(
   return { userDefinedCommands }
 }
 
-/** The session environment script is sourced before every command too. */
+/**
+ * The session environment script is sourced before every command too, and it
+ * is not in the snapshot, so any option change, trap, alias, or function
+ * definition in it is unaccounted for.
+ */
 export function sessionEnvAllowsExitMarker(sessionEnvScript: string | null): boolean {
   return !(
     sessionEnvScript &&
-    /\b(set|setopt|unsetopt|shopt|trap|source|eval|emulate|alias)\b|^\s*\.\s/m.test(
+    /\b(set|setopt|unsetopt|shopt|trap|source|eval|emulate|alias|function)\b|^\s*\.\s|\(\s*\)\s*\{/m.test(
       sessionEnvScript,
     )
   )
