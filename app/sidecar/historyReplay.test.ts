@@ -173,7 +173,7 @@ test('restored GenerateImage history cannot authorize a generated-image file rea
       },
       tool_use_result: {
         filePath: '/tmp/restored-image.png',
-        model: 'gpt-image-2',
+        model: 'gpt-image-2-codex',
         size: '1024x1024',
         outputFormat: 'png',
         bytes: 4,

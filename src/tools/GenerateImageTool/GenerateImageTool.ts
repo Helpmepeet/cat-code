@@ -39,6 +39,7 @@ import { formatFileSize } from '../../utils/format.js'
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.6-terra'
+const DEFAULT_CODEX_IMAGE_MODEL = 'gpt-image-2.5-flare'
 // Image generation is an auxiliary tool call, so keep retries bounded locally
 // instead of inheriting the main conversation's retry budget.
 const MAX_CODEX_IMAGE_RETRIES = 2
@@ -49,8 +50,7 @@ const TERMINAL_PREVIEW_HEIGHT_ROWS = 16
 const DEFAULT_GENERATED_IMAGE_DIR = 'generated-images'
 const ITERM2_FILE_PART_CHARS = 1_000_000
 
-// The Codex image backend chooses its own dimensions and ignores any size asked for,
-// so the only truthful size is the one in the bytes it returned.
+// Cat Code does not send a requested size, so report the dimensions in the returned bytes.
 function readImageDimensions(bytes: Buffer): string | undefined {
   if (bytes.length > 24 && bytes.toString('ascii', 1, 4) === 'PNG') {
     return `${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`
@@ -624,6 +624,7 @@ function buildCodexImageGenerationBody(
     tools: [
       {
         type: 'image_generation',
+        model: DEFAULT_CODEX_IMAGE_MODEL,
         moderation: input.moderation ?? 'auto',
         output_format: outputFormat,
         action: input.action ?? (input.reference_image_path ? 'edit' : 'auto'),
@@ -758,9 +759,8 @@ function summarizeCodexImageResponse(text: string): string {
   return parts.join(' ')
 }
 
-// The Codex subscription backend owns the effective image model, so the only
-// truthful source for what rendered the image is the resolved tool spec it
-// echoes back on response.created.
+// Cat Code requests an image model in tools[].model. Codex may resolve a
+// different effective model, so report the model it echoes on response.created.
 function extractCodexImageModel(text: string): string | undefined {
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
@@ -961,11 +961,11 @@ Rules:
 - Do not overwrite existing files unless the user explicitly asks to replace them.
 
 Image model limits:
-- Images are generated through the ChatGPT/Codex subscription backend. Codex automatically uses its current image model; do not choose or specify an image model.
-- Codex also picks its own dimensions from the prompt, so there is no size to request. Describe the framing you want in the prompt instead.
+- Cat Code requests GPT Image 2.5 through the ChatGPT/Codex backend. Do not specify a model in tool arguments.
+- Cat Code does not expose a size control. Describe the framing you want in the prompt instead.
 
 Transparent backgrounds:
-- Transparency comes from the prompt, not from a parameter. When the user wants a transparent image, say so in the prompt text, for example "on a fully transparent background, no backdrop", and use .png or .webp.
+- When the user wants a transparent image, say so in the prompt text, for example "on a fully transparent background, no backdrop", and use .png or .webp.
 - You MUST omit background entirely for those requests. Passing background=opaque suppresses the alpha channel and returns a solid image.
 
 Prompt rewriting:

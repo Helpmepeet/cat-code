@@ -209,7 +209,7 @@ describe('GenerateImageTool', () => {
     })
   })
 
-  test('builds a Codex Responses image-generation request', () => {
+  test('keeps the Codex response and GPT Image models separate', () => {
     const body =
       _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
         {
@@ -233,6 +233,7 @@ describe('GenerateImageTool', () => {
       tools: [
         {
           type: 'image_generation',
+          model: 'gpt-image-2.5-flare',
           output_format: 'png',
         },
       ],
@@ -270,47 +271,7 @@ describe('GenerateImageTool', () => {
     expect(tool.action).toBe('generate')
   })
 
-  test('omits the image model from the Codex tool spec, which the backend overrides anyway', () => {
-    const body =
-      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
-        {
-          prompt: 'a watercolor cat',
-          output_path: join(tempDir!, 'generated.png'),
-          model: 'gpt-image-1.5',
-          background: 'transparent',
-        },
-        'png',
-        'gpt-5.6-terra',
-      )
-    const tool = body.tools[0] as Record<string, unknown>
-
-    // The Codex subscription backend owns the effective image model, so Cat Code
-    // must not send or report a client-selected image model.
-    expect(tool).not.toHaveProperty('model')
-    expect(tool.background).toBe('transparent')
-    expect(body.model).toBe('gpt-5.6-terra')
-  })
-
-  test('reports the image model the Codex backend actually resolved', () => {
-    const sse = [
-      'event: response.created',
-      `data: ${JSON.stringify({
-        type: 'response.created',
-        response: {
-          tools: [
-            { type: 'image_generation', background: 'opaque', model: 'gpt-image-2-codex' },
-          ],
-        },
-      })}`,
-      '',
-    ].join('\n')
-
-    expect(
-      _generateImageToolInternalsForTest.extractCodexImageModel(sse),
-    ).toBe('gpt-image-2-codex')
-  })
-
-  test('preserves a newer backend-reported image model unchanged', () => {
+  test('extracts the effective GPT Image 2.5 model from response.created', () => {
     const sse = [
       'event: response.created',
       `data: ${JSON.stringify({
@@ -474,7 +435,7 @@ describe('GenerateImageTool', () => {
     expect(result.data.filePath).toBe(outputPath)
   })
 
-  test('uses Codex auth from the account pool', async () => {
+  test('uses Codex auth from the account pool and reports the effective model', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -485,17 +446,31 @@ describe('GenerateImageTool', () => {
 
     const outputPath = join(tempDir!, 'generated.png')
     const generatedBytes = Buffer.from('generated image')
+    let requestBody: Record<string, unknown> | undefined
     let requestUrl: string | undefined
     let authorization: string | null = null
     let accountId: string | null = null
 
     globalThis.fetch = (async (input, init) => {
       requestUrl = String(input)
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
       const headers = new Headers(init?.headers)
       authorization = headers.get('authorization')
       accountId = headers.get('chatgpt-account-id')
       return new Response(
         [
+          'event: response.created',
+          `data: ${JSON.stringify({
+            type: 'response.created',
+            response: {
+              tools: [
+                {
+                  type: 'image_generation',
+                  model: 'gpt-image-2-codex',
+                },
+              ],
+            },
+          })}`,
           'event: response.output_item.done',
           `data: ${JSON.stringify({
             type: 'response.output_item.done',
@@ -524,8 +499,13 @@ describe('GenerateImageTool', () => {
     expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/responses')
     expect(authorization).toBe('Bearer access-main-account')
     expect(accountId).toBe('main-account')
+    expect(requestBody).toMatchObject({
+      model: 'gpt-5.6-terra',
+      tools: [{ type: 'image_generation', model: 'gpt-image-2.5-flare' }],
+    })
     expect(await readFile(outputPath)).toEqual(generatedBytes)
     expect(result.data.filePath).toBe(outputPath)
+    expect(result.data.model).toBe('gpt-image-2-codex')
   })
 
   test('does not send an image request with a retained credential generation', async () => {
@@ -1236,9 +1216,7 @@ describe('GenerateImageTool', () => {
     })
   })
 
-  test('reads back the dimensions the backend actually returned', () => {
-    // Verified live 2026-08-26: requesting 1024x1024 and 3840x2160 with the
-    // same prompt both returned 1254x1254, so size is not a control.
+  test('reads back the dimensions from the returned image bytes', () => {
     const png = PNG.sync.write(new PNG({ width: 1254, height: 1254 }))
     expect(_generateImageToolInternalsForTest.readImageDimensions(png)).toBe(
       '1254x1254',
@@ -1250,20 +1228,13 @@ describe('GenerateImageTool', () => {
     ).toBeUndefined()
   })
 
-  test('rejects the parameters the image backend always refuses', () => {
-    // Both verified live 2026-08-26: background=transparent returns
-    // "Transparent background is not supported for this model", and
-    // input_fidelity returns "The model 'gpt-image-2-codex' does not
-    // support the 'input_fidelity' parameter".
+  test('rejects unexposed controls and edit without a reference image', () => {
     for (const rejected of [
       { background: 'transparent' },
       { input_fidelity: 'high' },
       { model: 'gpt-image-1.5' },
       { size: '1024x1024' },
-      // The backend echoes quality back as "auto" whatever is sent.
       { quality: 'low' },
-      // Verified live: edit with nothing to edit streams a failed status and
-      // returns no image, so reject it before spending the request.
       { action: 'edit' },
     ]) {
       expect(
@@ -1276,7 +1247,7 @@ describe('GenerateImageTool', () => {
     }
   })
 
-  test('prompt states the image model limits', async () => {
+  test('prompt names GPT Image 2.5 and describes supported controls', async () => {
     const prompt = await GenerateImageTool.prompt({
       getToolPermissionContext: async () => ({} as never),
       tools: [],
@@ -1284,19 +1255,14 @@ describe('GenerateImageTool', () => {
     })
 
     expect(prompt).toContain(
-      'Images are generated through the ChatGPT/Codex subscription backend. Codex automatically uses its current image model; do not choose or specify an image model.',
+      'Cat Code requests GPT Image 2.5 through the ChatGPT/Codex backend. Do not specify a model in tool arguments.',
     )
     expect(prompt).toContain(
-      'Codex also picks its own dimensions from the prompt, so there is no size to request.',
+      'Cat Code does not expose a size control. Describe the framing you want in the prompt instead.',
     )
     expect(prompt).toContain('gpt-image-prompting-guide.md')
     expect(prompt).toContain('structuring GPT Image prompts')
-    expect(prompt).not.toContain('gpt-image-2-prompting-guide.md')
-    expect(prompt).not.toContain('GPT Image 2')
-    // Verified live 2026-08-26 with one variable changed: the same prompt with
-    // background omitted returned RGBA with 879,347 fully transparent pixels,
-    // and with background=opaque returned RGB with none.
-    expect(prompt).toContain('Transparency comes from the prompt')
+    expect(prompt).toContain('GPT Image 2.5')
     expect(prompt).toContain('You MUST omit background entirely')
 
     const guidePath = prompt.match(/(\/\S+gpt-image-prompting-guide\.md)/)?.[1]

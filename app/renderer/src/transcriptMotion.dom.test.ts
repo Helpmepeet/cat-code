@@ -120,7 +120,7 @@ test('generated image body fades on a mounted pending result and stays still aft
         result: {
           isError: false, content: 'saved', diff: null,
           generatedImage: {
-            filePath: '/tmp/cat.png', model: 'gpt-image-2', size: '1024x1024',
+            filePath: '/tmp/cat.png', model: 'gpt-image-2-codex', size: '1024x1024',
             outputFormat: 'png', bytes: 4,
             preview: { mediaType: 'image/png', data: 'AAAA' },
           },

@@ -3006,7 +3006,7 @@ test('a GenerateImage result and preview merge into one completed image row', ()
       isSynthetic: true,
       tool_use_result: {
         filePath: '/tmp/generated-cat.png',
-        model: 'gpt-image-2',
+        model: 'gpt-image-2-codex',
         size: '1024x1024',
         outputFormat: 'png',
         bytes: 4,
@@ -3028,7 +3028,7 @@ test('a GenerateImage result and preview merge into one completed image row', ()
   expect(row.status).toBe('success')
   expect(row.result?.generatedImage).toEqual({
     filePath: '/tmp/generated-cat.png',
-    model: 'gpt-image-2',
+    model: 'gpt-image-2-codex',
     size: '1024x1024',
     outputFormat: 'png',
     bytes: 4,
@@ -3094,7 +3094,7 @@ test('GenerateImage previews merge before results and stay isolated by session',
         isSynthetic: true,
         tool_use_result: {
           filePath: `/tmp/${sessionId}.png`,
-          model: 'gpt-image-2',
+          model: 'gpt-image-2-codex',
           size: '1024x1024',
           outputFormat: 'png',
           bytes: 4,
@@ -3187,7 +3187,7 @@ test('GenerateImage previews stay isolated by tool-use id within one session', (
         isSynthetic: true,
         tool_use_result: {
           filePath: image.path,
-          model: 'gpt-image-2',
+          model: 'gpt-image-2-codex',
           size: '1024x1024',
           outputFormat: 'png',
           bytes: 4,

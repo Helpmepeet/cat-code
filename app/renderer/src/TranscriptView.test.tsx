@@ -1013,7 +1013,7 @@ test('a completed GenerateImage card shows the generated image by default', () =
         diff: null,
         generatedImage: {
           filePath: '/tmp/cat.png',
-          model: 'gpt-image-2',
+          model: 'gpt-image-2-codex',
           size: '1024x1024',
           outputFormat: 'png',
           bytes: 4,
@@ -1025,7 +1025,7 @@ test('a completed GenerateImage card shows the generated image by default', () =
 
   expect(html).toContain('alt="Generated image"')
   expect(html).toContain('data:image/png;base64,AAAA')
-  expect(html).toContain('gpt-image-2')
+  expect(html).toContain('gpt-image-2-codex')
   expect(html).toContain('1024x1024')
   expect(html).toContain('4 B')
   expect(html).toContain('Saved to')

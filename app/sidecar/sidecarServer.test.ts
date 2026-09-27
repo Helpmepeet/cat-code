@@ -446,7 +446,7 @@ test('a live GenerateImage result emits a read-only inline preview frame', async
         },
         tool_use_result: {
           filePath: '/generated/cat.png',
-          model: 'gpt-image-2',
+          model: 'gpt-image-2-codex',
           size: '1024x1024',
           outputFormat: 'png',
           bytes: 4,
@@ -509,7 +509,7 @@ test('a structured image result without a live GenerateImage tool id cannot trig
         },
         tool_use_result: {
           filePath: '/generated/unobserved.png',
-          model: 'gpt-image-2',
+          model: 'gpt-image-2-codex',
           size: '1024x1024',
           outputFormat: 'png',
           bytes: 4,
