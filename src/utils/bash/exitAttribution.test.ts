@@ -78,6 +78,24 @@ describe('planExitAttribution: where the marker goes', () => {
     })
   })
 
+  test('the marker never changes how quoteShellCommand quotes the command', () => {
+    // A `'` in the marker would switch a command without one to shell-quote's
+    // double-quote path, which rewrites `!` to `\!`.
+    for (const command of [
+      'true && test "$!" -eq 1',
+      'true && grep -v "!" f',
+      "true && grep 'x' f",
+      'grep x f',
+    ]) {
+      const p = plan(command)!
+      expect(p).not.toBeNull()
+      expect(quoteShellCommand(p.instrumentedCommand, false)[0]).toBe(
+        quoteShellCommand(command, false)[0],
+      )
+    }
+    expect(buildExitMarker(EVIDENCE, 'abc', '[')).not.toMatch(/['!]/)
+  })
+
   test('each run gets its own token', () => {
     expect(plan('grep x f')!.token).not.toBe(plan('grep x f')!.token)
   })
@@ -409,6 +427,7 @@ beforeAll(async () => {
   runs = mkdtempSync(join(tmpdir(), 'exit-attribution-runs-'))
   mkdirSync(join(work, 'x'))
   writeFileSync(join(work, 'file.txt'), 'hello\n')
+  writeFileSync(join(work, 'lines.txt'), '1\n2\n3\n4\n')
   spawnSync('git', ['init', '-q'], { cwd: work })
   const server = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } })
   closedPort = server.port
@@ -540,6 +559,20 @@ for (const shell of SHELLS) {
       // inside an eval that is itself part of an && list, so grep did run.
       expect(r.attribution?.semanticCommandStarted).toBe(kind === 'zsh')
       expect(r.isError).toBe(kind !== 'zsh')
+    })
+
+    test('$! and LINENO read by the final command are unchanged', () => {
+      // $! must still be the background job started before the marker.
+      const bang = judge(shell, 'sleep 0 & p=$!; true && test "$!" -eq "$p"')
+      expect(bang.planned).toBe(true)
+      expect(bang.instrumented).toEqual(bang.original)
+      expect(bang.original.code).toBe(0)
+
+      // The marker adds no newline, so the line grep sees is the same line.
+      const line = judge(shell, 'true &&\n  grep -x "$LINENO" lines.txt')
+      expect(line.planned).toBe(true)
+      expect(line.instrumented).toEqual(line.original)
+      expect(line.original.output).not.toBe('')
     })
 
     test('$? and $_ read by the user command are unchanged', () => {

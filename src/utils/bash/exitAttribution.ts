@@ -97,6 +97,10 @@ const MARKER_BUILTINS = new Set([':', 'set', 'command', 'builtin'])
 const SAFE_SET_OPTIONS = new Set(['errexit', 'nounset', 'pipefail'])
 
 /**
+ * The marker contains no `'` or `!`: quoteShellCommand single-quotes a command
+ * without `'` but double-quotes one with it, rewriting `!` to `\!` on the way,
+ * so a `'` in the marker would change how the user's own text is quoted.
+ *
  * Evidence layout, one section per line group, each opened by `<token> <name>`:
  * the header `<token> <$->`, `set -o`, then `identity` (every resolution of
  * the name, in lookup order), `alias` and `function` (their definitions, if
@@ -110,15 +114,15 @@ export function buildExitMarker(
 ): string {
   const path = quote([evidenceFilePath])
   const name = quote([semanticCommand])
-  const section = (label: string) => `command printf '%s ${label}\\n' ${token} >>${path}`
+  const section = (label: string) => `command printf "%s ${label}\\n" ${token} >>${path}`
   // `(pattern)` form: inside $(...), bash 3.2 (macOS /bin/bash) ends the
   // substitution at a case pattern's unbalanced `)`. Each lookup ends in
   // `|| :` because a name with no alias or function makes it exit 1, and
   // POSIX-mode bash carries `set -e` into the substitution.
   const byShell = (bash: string, zsh: string) =>
-    `case \${ZSH_VERSION-} in ('') ${bash} ;; (*) ${zsh} ;; esac >>${path} || :`
+    `case \${ZSH_VERSION-} in ("") ${bash} ;; (*) ${zsh} ;; esac >>${path} || :`
   return [
-    `: "$( { command printf '%s %s\\n' ${token} "$-" >|${path}`,
+    `: "$( { command printf "%s %s\\n" ${token} "$-" >|${path}`,
     `set -o >>${path}`,
     section('identity'),
     byShell(`builtin type -at ${name}`, `builtin whence -wa ${name}`),
@@ -163,6 +167,7 @@ export function planExitAttribution(
 
   const token = randomBytes(16).toString('hex')
   const marker = buildExitMarker(evidenceFilePath, token, candidate.name)
+  if (/['!]/.test(marker)) return null
   const followsAnd = located.relation === 'and'
   const insertAt = followsAnd
     ? located.operand.startIndex
