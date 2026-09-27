@@ -131,9 +131,8 @@ svg { display: block; }
 .s-rail.p .s-lane { height: 17px; align-self: center; }
 .s-rail.p .s-title { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 400; line-height: 17px; }
 .s-rail.p .s-row.is-active .s-title { font-weight: 500; }
+.s-rail.p .s-row.is-pinned .s-title { padding-right: 20px; }
 .s-rail.p .s-more { padding: 3px 8px 3px 18px; font-size: 11px; }
-.s-time { flex-shrink: 0; font: 400 10.5px/17px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-ghost); }
-.s-row.is-pinned .s-time { visibility: hidden; }
 .s-rail.p .s-foot { padding: 5px 8px 7px; }
 .s-rail.p .s-nav { padding-bottom: 4px; }
 .s-rail.p .s-nav-item { padding: 3px 0; font-size: 12px; border-radius: 5px; }
@@ -155,8 +154,6 @@ svg { display: block; }
 .s-rail.d-marker .s-sbtn.on::after { content: ''; position: absolute; left: 9px; right: 9px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--accent); }
 
 .s-rail.d-halo .s-dot { box-shadow: 0 0 0 2.5px rgb(var(--tone-good-rgb) / .18); }
-
-.s-rail.d-fresh .s-time.fresh { color: var(--text-muted); }
 
 .s-rail.d-tree .s-grp-rows { margin-left: 12.5px; padding-left: 4px; border-left: 1px solid var(--shell-seam); }
 .s-rail.d-tree .s-more { padding-left: 13px; }
@@ -253,13 +250,12 @@ const GROUPS = [
 ];
 
 const DECOR = [
-  ['paw', 'Paw'], ['marker', 'Active marker'], ['halo', 'Live halo'], ['fresh', 'Fresh time'],
+  ['paw', 'Paw'], ['marker', 'Active marker'], ['halo', 'Live halo'],
   ['tree', 'Tree guide'], ['rule', 'Section rule'], ['count', 'Project count'], ['kbd', 'Shortcut'],
 ];
-const decorOn = { paw: true, marker: false, halo: true, fresh: true, tree: false, rule: true, count: true, kbd: true };
+const decorOn = { paw: true, marker: false, halo: true, tree: false, rule: true, count: true, kbd: true };
 
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-const isFresh = r => r === 'now' || r.endsWith('m');
 
 function actions(r) {
   return `<div class="s-acts${r.pinned ? ' pinned' : ''}">` +
@@ -275,7 +271,7 @@ function row(r, v) {
     const sub = [r.r ? `<span>${r.r}</span>` : '', r.r && r.n ? '<span class="dim">·</span>' : '', r.n ? `<span class="nm">${r.n}</span>` : ''].join('');
     return `<div class="${cls}">${lane}<div class="s-body${r.pinned ? ' pin-pad' : ''}">${title}<div class="s-sub">${sub}</div></div>${actions(r)}</div>`;
   }
-  return `<div class="${cls}">${lane}${title}<span class="s-time${isFresh(r.r) ? ' fresh' : ''}">${r.r}</span>${actions(r)}</div>`;
+  return `<div class="${cls}">${lane}${title}${actions(r)}</div>`;
 }
 
 const rows = (list, v) => list.map(r => row(r, v)).join('');
