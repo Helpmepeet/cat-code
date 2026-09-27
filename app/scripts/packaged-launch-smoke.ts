@@ -23,6 +23,7 @@
 import { spawnSync } from 'node:child_process'
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -227,6 +228,33 @@ assert(
   catalog.status === 0 && `${catalog.stdout ?? ''}`.includes('"type":"catalog"'),
   'catalog mode enumerates and emits its record',
   `${catalog.stdout ?? ''}${catalog.stderr ?? ''}`.slice(0, 400),
+)
+
+// A5 — the engine's own ripgrep lookup inside the binary. A0 runs the bundled
+// rg directly, which cannot see whether the engine finds it: packagedEntry
+// appends Resources/bin to PATH at runtime, and a lookup that ignores the
+// current PATH falls back to an unexecutable /$bunfs path. settings-inventory
+// loads user agents through the engine's ripgrep file listing, so the probe agent
+// appears only if that search ran.
+const inventoryHome = scratch('catcode-packaged-inventory-')
+mkdirSync(join(inventoryHome, 'agents'))
+writeFileSync(
+  join(inventoryHome, 'agents', 'packaged-search-probe.md'),
+  '---\nname: packaged-search-probe\ndescription: Packaged search probe\n---\nProbe.\n',
+)
+const inventory = spawnSync(sidecar, launchPlan.argsFor('settings-inventory'), {
+  encoding: 'utf8',
+  cwd: workDir,
+  env: { PATH: NO_BUN_PATH, HOME: inventoryHome, CLAUDE_CONFIG_DIR: inventoryHome },
+  timeout: 180_000,
+})
+const inventoryText = `${inventory.stdout ?? ''}${inventory.stderr ?? ''}`
+assert(
+  inventory.status === 0 &&
+    `${inventory.stdout ?? ''}`.includes('packaged-search-probe') &&
+    !inventoryText.includes('Ripgrep validation failed'),
+  'engine search finds the bundled ripgrep through its runtime PATH',
+  inventoryText.slice(0, 400),
 )
 
 if (process.argv.includes('--headless-only')) {

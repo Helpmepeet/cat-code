@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-09-13
+Last refreshed: 2026-09-21
 
 ## Purpose
 

@@ -103,6 +103,14 @@ describe('sidecar launch resolution (P5-1)', () => {
       '--bare',
       '--usage-stats',
     ])
+    expect(plan.argsFor('settings-inventory')).toEqual([
+      'run',
+      '/repo/app/sidecar/settingsInventoryWorker.ts',
+    ])
+    expect(plan.argsFor('settings-write')).toEqual([
+      'run',
+      '/repo/app/sidecar/settingsWriteWorker.ts',
+    ])
   })
 
   test('debug cleanup keeps the feature flags the session sidecar has', () => {

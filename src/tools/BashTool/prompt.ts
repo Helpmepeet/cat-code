@@ -4,6 +4,7 @@ import { prependBullets } from '../../constants/prompts.js'
 import { isGPTPromptStyle } from '../../constants/promptStyle.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
+import { getManagedSessionPolicy, isManagedSession } from '../../utils/managedSessionPolicy.js'
 import { shouldIncludeGitInstructions } from '../../utils/gitSettings.js'
 import { getClaudeTempDir } from '../../utils/permissions/filesystem.js'
 import { SandboxManager } from '../../utils/sandbox/sandbox-adapter.js'
@@ -100,6 +101,7 @@ function getSimpleSandboxSection(): string {
     return ''
   }
 
+  const managedPolicy = getManagedSessionPolicy()
   const fsReadConfig = SandboxManager.getFsReadConfig()
   const fsWriteConfig = SandboxManager.getFsWriteConfig()
   const networkRestrictionConfig = SandboxManager.getNetworkRestrictionConfig()
@@ -182,7 +184,9 @@ function getSimpleSandboxSection(): string {
 
   const items: Array<string | string[]> = [
     ...sandboxOverrideItems,
-    'For temporary files, always use the `$TMPDIR` environment variable. TMPDIR is automatically set to the correct sandbox-writable directory in sandbox mode. Do NOT use `/tmp` directly - use `$TMPDIR` instead.',
+    managedPolicy
+      ? `For intermediate files in this chat, use ${managedPolicy.temporaryDirectory}. The selected sandbox and permission mode still control access.`
+      : 'For temporary files, always use the `$TMPDIR` environment variable. TMPDIR is automatically set to the correct sandbox-writable directory in sandbox mode. Do NOT use `/tmp` directly - use `$TMPDIR` instead.',
   ]
 
   return [
@@ -318,7 +322,9 @@ export function getBashPrompt(
       '',
       `FILE MUTATIONS: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
       '',
-      `SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+      isManagedSession()
+        ? `INSPECT CHANGES: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
+        : `SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
       '',
       `READS AND SEARCH: \`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run here. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`,
       '',

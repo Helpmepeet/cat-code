@@ -1780,6 +1780,43 @@ describe('session storage', () => {
     expect(logs[0]?.entrypoint).toBe('sdk-cli')
   })
 
+  test('lite catalog retains the session binding after a large first message', async () => {
+    const originalBinding = process.env.CATCODE_SESSION_BINDING_JSON
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const binding = {
+      kind: 'managed',
+      storageRootId: randomUUID(),
+      storageId: randomUUID(),
+    } as const
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'config')
+      process.env.CATCODE_SESSION_BINDING_JSON = JSON.stringify(binding)
+      const copiedMessage = {
+        ...createUserMessage({ content: 'x'.repeat(70 * 1024) }),
+        sessionBinding: { kind: 'project' as const },
+      }
+      await recordTranscript([copiedMessage])
+      await flushCurrentTranscriptDurably()
+
+      const lite = await getSessionFilesLite(tempDir)
+      const { logs } = await enrichLogs(lite, 0, lite.length)
+      expect(logs).toHaveLength(1)
+      expect(logs[0]?.sessionBinding).toEqual(binding)
+    } finally {
+      if (originalBinding === undefined) {
+        delete process.env.CATCODE_SESSION_BINDING_JSON
+      } else {
+        process.env.CATCODE_SESSION_BINDING_JSON = originalBinding
+      }
+      if (originalConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+      }
+    }
+  })
+
   test('durable transcript barrier requires the accepted UUID to be readable', async () => {
     const acceptedUuid = randomUUID()
     // Record through the real writer so the session takes ownership of the

@@ -1,3 +1,5 @@
+import { useLayoutEffect, useRef } from 'react'
+import { useEntranceLatch } from './entranceLatch.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
 import {
@@ -39,6 +41,18 @@ export function PermissionQueue({
   onRestore: (requestId: string) => void
   onSnooze?: (requestId: string) => void
 }) {
+  // This component stays mounted when the queue is empty. A new request can
+  // then be distinguished from one restored with the pane on its first render.
+  const seenIds = useRef<Set<string> | null>(null)
+  seenIds.current ??= new Set(items.map(item => item.request.requestId))
+  const arrivals = new Set(
+    items.map(item => item.request.requestId).filter(id => !seenIds.current?.has(id)),
+  )
+  const entrance = useEntranceLatch(arrivals)
+  useLayoutEffect(() => {
+    for (const item of items) seenIds.current?.add(item.request.requestId)
+  })
+
   if (items.length === 0) return null
 
   const active = items.filter(item => !item.dismissed)
@@ -85,6 +99,11 @@ export function PermissionQueue({
             pendingCount={index === 0 ? awaitingAnswer : undefined}
             request={item.request}
             submitted={item.submitted}
+            animateArrival={entrance.active.has(item.request.requestId)}
+            arrivalRef={entrance.refFor(item.request.requestId, 'animate-toast-in')}
+            onArrivalAnimationEnd={event =>
+              entrance.onAnimationEnd(item.request.requestId, event)
+            }
             workers={workers}
           />
         )

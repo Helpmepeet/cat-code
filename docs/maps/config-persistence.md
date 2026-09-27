@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-09-11
+Last refreshed: 2026-09-21
 
 ## Purpose
 
@@ -40,7 +40,7 @@ for the config and persistence slice.
 | Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.tsx` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
 | Global config file location | `src/utils/env.ts` | `src/utils/envUtils.ts`, `src/constants/oauth.ts` | `getGlobalClaudeFile()` uses legacy `~/.cat-code/.config.json` if present, otherwise `${CLAUDE_CONFIG_DIR:-~/.cat-code}/.cat-code*.json`. The suffix can vary for OAuth config. |
 | Global config reads and writes | `src/utils/config.ts` | `src/utils/env.ts`, `src/utils/lockfile.ts` | `enableConfigs()` gates reads. `saveGlobalConfig()` uses a lock, backups, cache write-through, and an auth-loss guard. |
-| Project instruction files and rule globs | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/markdownConfigLoader.ts` | Project instruction discovery now checks `CLAUDE.md`, `.cat-code/CLAUDE.md`, and `.cat-code/rules/*.md` before legacy `.claude` fallbacks, across cwd ancestors and additional dirs. |
+| Project instruction files and rule globs | `src/utils/claudemd.ts`, `src/utils/instructionFiles.ts` | `src/utils/config.ts`, `src/utils/settings/settings.ts`, `src/utils/markdownConfigLoader.ts` | Project discovery checks Cat Code CLAUDE candidates and mode-selected `AGENTS.md`/`.claude/AGENTS.md` candidates, plus rules. The Project instructions mode uses user (when enabled), flag, then policy settings; project/local settings and `--add-dir` cannot enable AGENTS discovery. |
 | Memory type and scope selection | `src/memdir/memoryTypes.ts` | `src/memdir/memdir.ts`, `src/memdir/teamMemPrompts.ts`, `src/services/extractMemories/prompts.ts` | Feedback defaults to private; preserve an explicit team scope only when the guidance is clearly project-wide. Private corrections must not modify team memory. |
 | Project-keyed user state | `src/utils/config.ts` | `src/utils/git.ts`, `src/utils/path.ts` | `getProjectPathForConfig()` keys by canonical git root when available, otherwise original cwd. Values are stored inside the global config `projects` object, not in repo files. |
 | Trust persistence | `src/utils/config.ts` | `src/bootstrap/state.ts`, `src/components/TrustDialog/` | Trust can be session-only for some cases, or persisted as `projects[projectPath].hasTrustDialogAccepted`. Parent-directory checks are part of trust lookup. |

@@ -1,11 +1,9 @@
 /**
- * The live code canvas that heads Settings ▸ This app ▸ Appearance (the
- * prototype's `OutputPreview`, `Settings.jsx:282-304`, placed as a hero above
- * the controls at `Settings.jsx:328`).
+ * The live code canvas inside the Code theme disclosure in Appearance.
  *
  * IT MUST BE THE TRANSCRIPT'S OWN CODE BLOCK, NOT A LOOKALIKE. A preview that
  * renders its own panel would drift from what a fenced block actually looks
- * like the moment either side is touched, and the picker it sits above would
+ * like the moment either side is touched, and the related picker would
  * then be advertising the wrong thing. So the sample goes through the exported
  * `CodeBlock` (`TranscriptView.tsx`), which brings the real frame and copy
  * control with it. The copy control is not in the prototype's preview; it is

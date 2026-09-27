@@ -103,6 +103,27 @@ test('the projectless launcher has no branch choice or worktree option', () => {
   expect(html).toContain('Open a project')
 })
 
+test('launcher leaves New chat to the sidebar and managed chat omits project and branch context', () => {
+  const launcher = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={null}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+  expect(launcher).not.toContain('New chat')
+
+  const managed = renderToStaticMarkup(
+    <WelcomeScreen variant="session" managedChat cwd="/managed/id" branch={null} accounts={null} />,
+  )
+  expect(managed).not.toContain('Project')
+  expect(managed).not.toContain('Branch')
+  expect(managed).not.toContain('/managed/id')
+  expect(managed).not.toContain('Locally')
+  expect(managed).not.toContain('Sandboxed')
+})
+
 test('P4-59 keeps Open folder actionable without advertising an unbound shortcut', () => {
   // The package has no DOM harness, and the menu is closed during SSR. Pin the
   // menu item's handler wiring in its exact source region, following App.test.tsx.
@@ -156,7 +177,7 @@ test('P4-55 keeps the failure visible and disables duplicate retries while readi
   expect(html).toContain('aria-busy="true"')
 })
 
-const FIRST_RUN_ORDER = 'Open a project to start. Sign in once it opens.'
+const FIRST_RUN_ORDER = 'Start a chat or open a project. Sign in once it opens.'
 
 test('P4-48 — with no account anywhere, the launcher states the order of the first two steps', () => {
   // The defect: the sign-in card cannot render before a project is open, so a

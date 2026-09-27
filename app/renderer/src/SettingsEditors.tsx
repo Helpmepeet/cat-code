@@ -1,5 +1,5 @@
 /**
- * Settings core value-editors — the renderer→engine settings WRITE path. Toggle
+ * Settings core value-editors for the durable host settings write path. Toggle
  * / select / validated-int controls bound to REAL settings keys, rebuilt in
  * TS/Tailwind from the prototype's `Settings.jsx` Sw* controls (port zero code,
  * no inline style). Every editor is driven by the canonical `EDITABLE_SETTINGS`
@@ -87,9 +87,8 @@ export type SettingWriteInput = {
 /**
  * Renders every core value-editor for one pane, in one scope.
  *
- * `layer` is the scope's write target (Law 3). `engine` is `absent` when the
- * chosen project has no running session, in which case its files were never
- * read and the pane states that instead of showing another project's values.
+ * `layer` is the scope's write target (Law 3). `engine` is `absent` when no
+ * project was selected, so the pane cannot show or write a project's values.
  */
 export function SettingsPane({
   pane,
@@ -100,6 +99,8 @@ export function SettingsPane({
   engine = 'live',
   noEngineNote,
   sessionOpen = false,
+  keys,
+  showTarget = true,
 }: {
   pane: EditableSettingPane
   title?: string
@@ -107,27 +108,33 @@ export function SettingsPane({
   onWrite: (input: SettingWriteInput) => void
   layer: EditableSettingSource
   engine?: SettingsProjectEngine
-  /** Names the project that has no engine; falls back to a generic sentence. */
+  /** Explains an unavailable project target. */
   noEngineNote?: string
   /** Whether a session is attached, so the unread sentence can stop claiming
    * none is (`settingsReadState.ts`). */
   sessionOpen?: boolean
+  /** Render a subset when a category combines settings from multiple panes. */
+  keys?: readonly string[]
+  /** A composed category states its destination once, above its first pane. */
+  showTarget?: boolean
 }) {
-  const specs = settingsPaneSpecs(pane)
+  const specs = settingsPaneSpecs(pane).filter(
+    spec => keys === undefined || keys.includes(spec.key),
+  )
   const unavailable =
     engine === 'absent'
       ? (noEngineNote ??
-        'No engine is running in this project, so its settings files have not been read.')
+        'Choose a project to read and edit its settings.')
       : snapshot
         ? null
-        : settingsUnreadNote(sessionOpen, 'Open a session to read and edit them.')
+        : settingsUnreadNote(sessionOpen)
 
   return (
     <PaneSection title={title}>
       {/* Law 3, before the edit: one destination for every row below. Stated
        * only when a write could actually land — an unread pane promises
        * nothing. */}
-      {unavailable ? (
+      {!showTarget ? null : unavailable ? (
         <p className="mb-3 text-[12px] leading-4 text-text-subtle">
           {unavailable}
         </p>
@@ -197,6 +204,19 @@ function SettingEditor({
   // "User" the moment an overridden row could show the user's own value.
   const badgeOrigin = badgeSource ? selectLayerOrigin(snapshot, badgeSource) : null
   const note = settingsRowNote(row)
+  const inheritedSources =
+    layer === 'localSettings'
+      ? ['projectSettings', 'userSettings']
+      : layer === 'projectSettings'
+        ? ['userSettings']
+        : []
+  const resetLabel = snapshot?.layers.some(
+    candidate =>
+      inheritedSources.includes(candidate.source) &&
+      candidate.keys.includes(spec.key),
+  )
+    ? 'Use inherited value'
+    : 'Reset to default'
   // The persistent half of the destructive-value gate: the confirm covers the
   // moment of the edit, this covers every later visit to the page. It rides
   // `Field`'s existing error slot because that is the row's one attention
@@ -212,8 +232,11 @@ function SettingEditor({
       label={spec.label}
       managed={managed}
       modified={reset !== null}
+      note={note}
       onReset={reset ? () => onWrite(reset) : undefined}
       origin={badgeOrigin}
+      resetLabel={resetLabel}
+      settingKey={spec.key}
       source={badgeSource}
     >
       <SettingControl
@@ -223,11 +246,6 @@ function SettingEditor({
         snapshot={snapshot}
         spec={spec}
       />
-      {note ? (
-        <span className="block max-w-[240px] text-right text-[10.5px] leading-tight text-text-subtle">
-          {note}
-        </span>
-      ) : null}
     </Field>
   )
 }
@@ -299,7 +317,7 @@ function SettingControl({
     )
   }
   if (control.kind === 'dynamic-enum') {
-    // Options are engine truth from the snapshot (captured at spawn). If the
+    // Options are engine truth from the inventory snapshot. If the
     // on-disk value is not in the live set (e.g. a style whose dir was removed)
     // still show it, so the field reflects truth. No live options ⇒ disabled.
     const available = selectAvailableOptions(snapshot, spec.key)
@@ -349,23 +367,28 @@ export function ToggleSwitch({
   label: string
 }) {
   return (
-    <button
-      aria-checked={value}
-      aria-label={label}
-      className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-        value ? 'bg-accent' : 'bg-white/10'
-      }`}
-      disabled={disabled}
-      onClick={() => onChange(!value)}
-      role="switch"
-      type="button"
-    >
-      <span
-        className={`inline-block h-[16px] w-[16px] rounded-full shadow-sm transition-transform ${
-          value ? 'bg-on-fill translate-x-[18px]' : 'bg-text-subtle translate-x-[3px]'
+    <div className="flex items-center justify-end gap-2.5">
+      <span aria-hidden="true" className="min-w-[18px] text-[11px] text-text-subtle">
+        {value ? 'On' : 'Off'}
+      </span>
+      <button
+        aria-checked={value}
+        aria-label={label}
+        className={`relative inline-flex h-[18px] w-[31px] shrink-0 items-center rounded-full border border-shell-seam transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+          value ? 'border-accent bg-accent' : 'bg-shell-hover'
         }`}
-      />
-    </button>
+        disabled={disabled}
+        onClick={() => onChange(!value)}
+        role="switch"
+        type="button"
+      >
+        <span
+          className={`inline-block h-[12px] w-[12px] rounded-full transition-transform ${
+            value ? 'bg-on-fill translate-x-[16px]' : 'bg-text-subtle translate-x-[2px]'
+          }`}
+        />
+      </button>
+    </div>
   )
 }
 
@@ -389,7 +412,7 @@ export function SelectControl({
   return (
     <select
       aria-label={label}
-      className="min-w-[128px] rounded-lg border border-shell-seam bg-shell-hover px-2.5 py-1.5 text-[12.5px] text-text-primary outline-none transition-colors focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
+      className="h-[33px] w-[192px] max-w-full rounded-[5px] border border-shell-seam bg-surface-raised px-2 text-[12px] text-text-primary outline-none transition-colors focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
       disabled={disabled}
       onChange={event => onChange(event.target.value)}
       value={value}
@@ -431,7 +454,7 @@ function SaveableSelect({
   showSave: boolean
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex max-w-full items-center justify-end gap-2">
       <SelectControl
         disabled={disabled}
         label={label}
@@ -442,12 +465,12 @@ function SaveableSelect({
       />
       {showSave ? (
         <button
-          aria-label={`Save ${label}`}
-          className="shrink-0 rounded-lg border border-shell-seam px-2.5 py-1.5 text-[11.5px] text-text-muted transition-colors hover:bg-shell-hover"
+          aria-label={`Set ${label} for this scope`}
+          className="shrink-0 rounded-[5px] border border-shell-seam px-2 py-1.5 text-[11px] text-text-muted transition-colors hover:bg-shell-hover"
           onClick={() => onChange(value)}
           type="button"
         >
-          Save
+          Set for this scope
         </button>
       ) : null}
     </div>
@@ -540,7 +563,7 @@ function IntField({
     <div className="flex flex-col items-end gap-1">
       <input
         aria-label={label}
-        className={`w-[96px] rounded-lg border bg-shell-hover px-2.5 py-1.5 text-right text-[12.5px] text-text-primary outline-none transition-colors focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50 ${
+        className={`h-[33px] w-[82px] rounded-[5px] border bg-surface-raised px-2 text-right text-[12px] text-text-primary outline-none transition-colors focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50 ${
           error ? 'border-tone-danger/50' : 'border-shell-seam'
         }`}
         disabled={disabled}

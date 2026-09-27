@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
   estimateFilePathMenuHeight,
+  canOpenFilePathInSession,
   extractLineSuffix,
   placeFilePathActionsMenu,
   resolveFilePathActionItems,
@@ -155,6 +156,24 @@ test('resolveFilePathActionItems creates Copy and Open in structure with flyouts
   const linuxItems = resolveFilePathActionItems(parts, 'Linux x86_64')
   const finderItem = linuxItems[1].flyout?.find(item => item.kind === 'open-finder')
   expect(finderItem?.label).toBe('Show in file manager')
+})
+
+test('external and unresolved destinations offer copy actions without open actions', () => {
+  const outside = resolveFilePathParts({
+    rawPath: '/repo-other/output.txt',
+    cwd: '/repo',
+  })
+  expect(canOpenFilePathInSession(outside, '/repo')).toBe(false)
+  expect(resolveFilePathActionItems(outside, 'Mac', false).map(item => item.kind)).toEqual(['copy'])
+  const traversed = resolveFilePathParts({
+    rawPath: '/repo/../repo-private/output.txt',
+    cwd: '/repo',
+  })
+  expect(canOpenFilePathInSession(traversed, '/repo')).toBe(false)
+
+  const inside = resolveFilePathParts({ rawPath: 'output.txt', cwd: '/repo' })
+  expect(canOpenFilePathInSession(inside, '/repo')).toBe(true)
+  expect(resolveFilePathActionItems(inside, 'Mac', true).map(item => item.kind)).toEqual(['copy', 'open'])
 })
 
 test('disabled absolute path when cwd is missing', () => {

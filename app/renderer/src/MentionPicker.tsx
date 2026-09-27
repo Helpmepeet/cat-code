@@ -137,7 +137,7 @@ export function MentionPicker({
               data-mention-active={index === activeIndex}
               onClick={() => onPick(item)}
               className={
-                'flex w-full flex-col items-start border-b border-white/[0.03] px-3 py-2 text-left transition-colors ' +
+                'flex w-full flex-col items-start border-b border-white/[0.03] px-3 py-2 text-left ' +
                 (index === activeIndex
                   ? 'bg-white/[0.04]'
                   : 'hover:bg-white/[0.04]')

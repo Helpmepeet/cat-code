@@ -40,20 +40,20 @@ test('auto-mode attempts count as activity even without token records', () => {
 
 test('populated page presents five metrics and the agreed panels without duplicate disclosures', () => {
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot: populated(), status: 'ready' }}/>);
-    for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Activity by hour', 'Auto mode', 'View as table']) expect(html).toContain(label);
+    for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Daily activity', 'Auto mode', 'View as table']) expect(html).toContain(label);
     expect(html.match(/class="usage-values"/g)).toHaveLength(1);
-    for (const removed of ['Execution timing', 'Tool activity', 'Partial history', 'Token volume by hour']) expect(html).not.toContain(removed);
+    for (const removed of ['Execution timing', 'Tool activity', 'Partial history', 'Token volume by hour', 'Activity by hour']) expect(html).not.toContain(removed);
 });
 
-test('partial coverage retains visible counts without history banners or an unqualified cache ratio', () => {
+test('partial coverage retains visible counts and qualifies the recorded cache rate', () => {
     const copy = populated();
     copy.coverage.state = 'partial';
     copy.coverage.parseErrors = 1;
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
     expect(html).toContain('123');
     expect(html).not.toContain('Partial history');
-    expect(html).toContain('Cache reads over time');
-    expect(html).not.toContain('Cached input share,');
+    expect(html).toContain('Cache read rate, 0 to 100 percent');
+    expect(html).toContain('partial history');
 });
 
 test('refresh failure retains saved values and exposes retry', () => {
@@ -86,13 +86,13 @@ test('cache writes distinguish unavailable, measured zero, and known partial cou
     range.cachedInputShare = 0;
     const measuredHtml = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
     expect(measuredHtml).toContain('Cache writes</dt><dd title="0">0');
-    expect(measuredHtml).toContain('Cached input share, 0 to 100 percent');
+    expect(measuredHtml).toContain('Cache read rate, 0 to 100 percent');
     range.cacheWriteReporting = 'partial';
     range.tokens.write = 125;
     expect(renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>)).toContain('Cache writes</dt><dd title="125 reported">125 reported');
 });
 
-test('cache reads remain visible when cache-write reporting is mixed', () => {
+test('cache percentage remains visible when cache-write reporting is mixed', () => {
     const range = structuredClone(snapshot.ranges['7d']);
     range.cacheWriteReporting = 'partial';
     range.cachedInputShare = null;
@@ -100,24 +100,25 @@ test('cache reads remain visible when cache-write reporting is mixed', () => {
     range.days[0]!.tokens = { fresh: 10, read: 90, write: 0, output: 0 };
     range.days[1]!.cacheWriteReporting = 'unreported';
     const html = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
-    expect(html).toContain('Cache reads over time');
+    expect(html).toContain('Cache read rate, 0 to 100 percent');
     expect(html).toContain('usage-area-line');
-    expect(html).toContain('Cache reads, 0 to');
+    expect(html).toContain('90.0% cache read rate');
 });
 
-test('cache-read history stays plotted when cache writes are unreported', () => {
+test('cache percentage stays plotted when cache writes are unreported', () => {
     const range = structuredClone(snapshot.ranges['7d']);
     range.cacheWriteReporting = 'unreported';
     range.cachedInputShare = null;
     range.tokens.read = 3_000;
+    range.tokens.fresh = 300;
     range.days[0]!.tokens.read = 1_000;
+    range.days[0]!.tokens.fresh = 100;
     range.days[1]!.tokens.read = 2_000;
+    range.days[1]!.tokens.fresh = 200;
     const html = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
-    expect(html).toContain('Cache reads over time');
-    expect(html).toContain('Cache reads, 0 to');
-    expect(html).toContain('1,000 cache-read tokens');
+    expect(html).toContain('Cache read rate, 0 to 100 percent');
+    expect(html).toContain('90.9% cache read rate');
     expect(html).toMatch(/<path d="[^"]+" class="usage-area-line"/);
-    expect(html).not.toContain('Cached input share unavailable');
 });
 
 test('missing contributor details do not erase recorded daily totals', () => {

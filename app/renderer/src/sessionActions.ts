@@ -80,6 +80,8 @@ export type SessionActionKind =
    * for that to read as a setting rather than as an action.
    */
   | 'peer-wake-blocked'
+  | 'open-chat-folder'
+  | 'copy-chat-folder-path'
 
 /** Menu grouping (dividers between non-empty sections), mirroring the prototype. */
 export type SessionActionSection = 'primary' | 'view' | 'transfer'
@@ -305,6 +307,24 @@ export function resolveSessionActions(
       enabled: exportable,
       ...(exportable ? {} : { reason: live ? DEFER.exporting : DEFER.notLive }),
     },
+    ...(row.binding?.kind === 'managed'
+      ? [
+          {
+            kind: 'open-chat-folder' as const,
+            label: 'Open chat folder',
+            section: 'transfer' as const,
+            enabled: row.appSessionId != null,
+            ...(row.appSessionId != null ? {} : { reason: 'This chat folder is unavailable.' }),
+          },
+          {
+            kind: 'copy-chat-folder-path' as const,
+            label: 'Copy folder path',
+            section: 'transfer' as const,
+            enabled: row.appSessionId != null,
+            ...(row.appSessionId != null ? {} : { reason: 'This chat folder is unavailable.' }),
+          },
+        ]
+      : []),
   ]
 }
 

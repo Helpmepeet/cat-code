@@ -26,6 +26,7 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { PermissionQueue } from './PermissionQueue.js'
+import { useEntranceOnChange } from './entranceLatch.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
@@ -275,6 +276,61 @@ export function SessionPane({
     [activeSessionId],
   )
   const toast = useToast()
+  const [managedFolderState, setManagedFolderState] = useState<
+    | 'checking'
+    | 'available'
+    | 'missing'
+    | { error: string; retryCreate?: boolean }
+  >(activeDescriptor?.binding?.kind === 'managed' ? 'checking' : 'available')
+  const [recreatingManagedFolder, setRecreatingManagedFolder] = useState(false)
+  const isManagedChat = activeDescriptor?.binding?.kind === 'managed'
+  useEffect(() => {
+    if (!activeSessionId || !isManagedChat) {
+      setManagedFolderState('available')
+      return
+    }
+    let current = true
+    setManagedFolderState('checking')
+    void getBridge()
+      .getSessionFolderState(activeSessionId)
+      .then(result => {
+        if (!current) return
+        setManagedFolderState(
+          result.ok ? result.value : { error: result.error.message },
+        )
+      })
+      .catch(() => {
+        if (current) {
+          setManagedFolderState({ error: 'Could not check this chat folder.' })
+        }
+      })
+    return () => {
+      current = false
+    }
+  }, [activeSessionId, isManagedChat])
+
+  const recreateManagedFolder = () => {
+    if (!activeSessionId || recreatingManagedFolder) return
+    setRecreatingManagedFolder(true)
+    void getBridge()
+      .recreateManagedChatFolder(activeSessionId)
+      .then(result => {
+        if (result.ok) setManagedFolderState('available')
+        else {
+          setManagedFolderState({
+            error: result.error.message,
+            retryCreate: true,
+          })
+        }
+      })
+      .catch(() => {
+        setManagedFolderState({
+          error: 'Could not recreate this chat folder.',
+          retryCreate: true,
+        })
+      })
+      .finally(() => setRecreatingManagedFolder(false))
+  }
   const [previewImageId, setPreviewImageId] = useState<number | null>(null)
   const previewImage =
     previewImageId === null
@@ -593,6 +649,12 @@ export function SessionPane({
     (scrollCapturePumpRef.current ??= createTranscriptScrollCapturePump())
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
+  const latestEntrance = useEntranceOnChange(
+    generating, !generating && !atBottom, 'animate-settle',
+  )
+  const questionEntrance = useEntranceOnChange(
+    askQuestion?.request.requestId ?? null, askQuestion !== null, 'animate-toast-in',
+  )
   // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
   // now, `connectPending` is "no engine attached yet, and your own
   // focus/keystroke is what attaches one", `turnPending` is "attached, a turn is
@@ -606,20 +668,24 @@ export function SessionPane({
     connectionInputEnabled: activeConnection.inputEnabled,
     logInputEnabled: activeLog.inputEnabled,
   })
+  const managedFolderUnavailable = isManagedChat && managedFolderState !== 'available'
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
-  const composerReadOnly = branchSwitchPending || !composerGate.editable
+  const composerReadOnly =
+    branchSwitchPending || managedFolderUnavailable || !composerGate.editable
   // A named session is addressed by its own name (PEER-SESSIONS §6): the user
   // is talking to Bear, not to "Cat Code" in general, and the name is what its
   // peers use for it too. A row with no name (one that predates the field and
   // has not been spawned since) keeps the original prompt verbatim. The
   // connection copy is untouched either way.
-  const composerPlaceholder = composerGate.editable
-    ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
-    : 'Connecting…'
+  const composerPlaceholder = managedFolderUnavailable
+    ? 'Recreate the chat folder to continue'
+    : composerGate.editable
+      ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
+      : 'Connecting…'
   // The name carries the peer colour; the connection copy has no name in it.
-  const composerPlaceholderName = composerGate.editable
+  const composerPlaceholderName = composerGate.editable && !managedFolderUnavailable
     ? composerPlaceholderParts(activeDescriptor?.name ?? null)
     : null
   const paused = permissionQueue.length > 0
@@ -900,7 +966,7 @@ export function SessionPane({
   const jumpToBottom = (): void => {
     const el = transcriptScrollRef.current
     if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
     previousScrollTopRef.current = el.scrollTop
     applyAtBottom(true)
   }
@@ -1146,6 +1212,54 @@ export function SessionPane({
         connection={activeConnection}
         sessionId={activeSessionId}
       />
+      {isManagedChat && managedFolderState === 'missing' ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-tone-warn/30 bg-tone-warn/[0.06] px-3 py-2 text-[12px] text-text-muted">
+          <span className="min-w-0 flex-1">
+            This chat’s files are missing. Recreating an empty folder will not
+            restore earlier files.
+          </span>
+          <button
+            type="button"
+            disabled={recreatingManagedFolder}
+            onClick={recreateManagedFolder}
+            className="shrink-0 rounded border border-shell-seam px-2.5 py-1 font-medium text-text-primary hover:bg-shell-hover disabled:opacity-50"
+          >
+            {recreatingManagedFolder ? 'Recreating…' : 'Recreate empty folder'}
+          </button>
+        </div>
+      ) : null}
+      {isManagedChat && typeof managedFolderState === 'object' ? (
+        <div role="status" className="flex items-center gap-3 text-[12px] text-tone-danger">
+          <span>{managedFolderState.error}</span>
+          <button
+            type="button"
+            disabled={!activeSessionId || recreatingManagedFolder}
+            onClick={() => {
+              if (managedFolderState.retryCreate) {
+                recreateManagedFolder()
+                return
+              }
+              if (!activeSessionId) return
+              setManagedFolderState('checking')
+              void getBridge()
+                .getSessionFolderState(activeSessionId)
+                .then(result => {
+                  setManagedFolderState(
+                    result.ok ? result.value : { error: result.error.message },
+                  )
+                })
+                .catch(() =>
+                  setManagedFolderState({
+                    error: 'Could not check this chat folder.',
+                  }),
+                )
+            }}
+            className="shrink-0 underline underline-offset-2 disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
 
       {/* P4-24 reflow: the transcript is the primary surface — it fills the
        * viewport as the sole `flex-1` scroller directly under the header, with
@@ -1161,10 +1275,12 @@ export function SessionPane({
           className="min-h-0 flex-1 overflow-auto"
         >
           <TranscriptView
+            turnLive={generating}
             accounts={accountsSnapshot}
             accountsUsagePending={accountsUsagePending}
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
+            managedChat={activeDescriptor?.binding?.kind === 'managed'}
             branch={branch}
             onListBranches={onSwitchBranch ? listBranches : undefined}
             onSwitchBranch={onSwitchBranch ? branchName => {
@@ -1297,7 +1413,7 @@ export function SessionPane({
           <button
             type="button"
             onClick={jumpToBottom}
-            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur ${
+            className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur transition-colors duration-[var(--motion-arrive)] ${
               generating
                 ? paused
                   ? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'
@@ -1322,7 +1438,13 @@ export function SessionPane({
                 <span aria-hidden>↓</span>
               </>
             ) : (
-              <span>↓ Latest</span>
+              <span
+                className={`inline-block ${latestEntrance.active ? 'animate-settle' : ''}`}
+                ref={latestEntrance.ref}
+                onAnimationEnd={latestEntrance.onAnimationEnd}
+              >
+                ↓ Latest
+              </span>
             )}
           </button>
         ) : null}
@@ -1391,16 +1513,22 @@ export function SessionPane({
        * cards and any error/notice sit directly above the input, then the
        * in-turn activity row hugs the composer. */}
       {askQuestion ? (
-        <AskQuestionFlow
-          key={askQuestion.request.requestId}
-          isActivePane={isActivePane}
-          onAnswer={onAnswerQuestions}
-          onCancel={onCancelQuestions}
-          pendingCount={askPendingCount}
-          questions={askQuestion.questions}
-          requestId={askQuestion.request.requestId}
-          submitted={askQuestion.submitted}
-        />
+        <div
+          className={`${questionEntrance.active ? 'animate-toast-in' : ''} ${askQuestion.submitted ? 'opacity-55' : ''} transition-opacity duration-[var(--motion-fast)]`}
+          ref={questionEntrance.ref}
+          onAnimationEnd={questionEntrance.onAnimationEnd}
+        >
+          <AskQuestionFlow
+            key={askQuestion.request.requestId}
+            isActivePane={isActivePane}
+            onAnswer={onAnswerQuestions}
+            onCancel={onCancelQuestions}
+            pendingCount={askPendingCount}
+            questions={askQuestion.questions}
+            requestId={askQuestion.request.requestId}
+            submitted={askQuestion.submitted}
+          />
+        </div>
       ) : null}
 
       <PermissionQueue
@@ -1467,6 +1595,10 @@ export function SessionPane({
         />
       ) : null}
 
+      {activeDescriptor?.forked && isManagedChat ? (
+        <p className="text-[11px] text-text-subtle">Files are shared with the source chat.</p>
+      ) : null}
+
       {/* P4-24 composer, trued to Chat.jsx:1318's "minimal, borderless" input:
        * a transparent auto-growing field (no box), a pink up-arrow SEND icon
        * (not a "Send" button), a focus-rule underline that lights on focus, and
@@ -1486,6 +1618,10 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (managedFolderUnavailable) {
+            event.preventDefault()
+            return
+          }
           if (branchSwitchPending) {
             event.preventDefault()
             return
@@ -1664,6 +1800,7 @@ export function SessionPane({
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
                 branchSwitchPending ||
+                managedFolderUnavailable ||
                 !composerGate.editable ||
                 preparingImage ||
                 (prompt.trim().length === 0 &&
@@ -1701,7 +1838,12 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
-          attachDisabled={!composerGate.editable || preparingImage || pickingFile}
+          attachDisabled={
+            !composerGate.editable ||
+            managedFolderUnavailable ||
+            preparingImage ||
+            pickingFile
+          }
           onAttach={() => void attachFile()}
           model={railModel}
           modelLabel={railModelLabel}
@@ -1725,7 +1867,11 @@ export function SessionPane({
           onRequestContextBreakdown={onRequestContextBreakdown}
           // No engine to take it, no row. `canSendUntypedSubmit` owns which gate
           // arms qualify and why `editable` is not one of them.
-          onCompact={canSendUntypedSubmit(composerGate) ? onCompact : undefined}
+          onCompact={
+            !managedFolderUnavailable && canSendUntypedSubmit(composerGate)
+              ? onCompact
+              : undefined
+          }
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />

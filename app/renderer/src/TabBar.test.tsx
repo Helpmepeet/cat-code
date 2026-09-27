@@ -192,6 +192,11 @@ test('tabLabel prefers title, falls back to cwd basename, then a default', () =>
   expect(tabLabel(descriptor('a', { cwd: '/', title: null }))).toBe(
     'New session',
   )
+  expect(tabLabel(descriptor('a', {
+    cwd: '/managed/storage-id',
+    title: null,
+    binding: { kind: 'managed', storageRootId: 'root', storageId: 'id' },
+  }))).toBe('New chat')
 })
 
 test('a previewed tab shows its title alone, never the word preview', () => {

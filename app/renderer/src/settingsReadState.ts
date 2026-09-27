@@ -2,11 +2,9 @@
  * One rule for the whole Settings surface: whether any settings file has been
  * read at all.
  *
- * The settings snapshot is keyed by session (`settingsState.ts`
- * `selectSettingsSnapshot`) because settings resolve engine-side and there is
- * no engine without a session (N-process). So a null snapshot does NOT mean
- * "read, and the answer is nothing" — it means the app has opened no settings
- * file whatsoever and knows nothing.
+ * A snapshot may come from the session-independent settings inventory or a
+ * session-specific read. A null snapshot does NOT mean "read, and the answer
+ * is nothing" — it means no settings values are available to that pane.
  *
  * Collapsing those two into one empty state is a defect this surface has
  * produced repeatedly and independently: "Default mode: not set" (fixed,
@@ -37,23 +35,18 @@ export function settingsWereRead(snapshot: SettingsSnapshot | null): boolean {
 }
 
 /**
- * The shared explanation for the unread case. Deliberately NOT phrased as
- * "waiting…": with no session attached nothing is in flight and nothing will
- * arrive, so a waiting message would be a second false statement. Panes append
- * their own specific follow-on sentence.
+ * A neutral unread explanation. The caller knows whether a read is in flight;
+ * this helper cannot infer that from a null snapshot.
  */
 export const SETTINGS_UNREAD_NOTE =
-  'No session is open, so your settings files have not been read yet.'
+  'Settings files have not been read for this configuration.'
 
 /**
- * The unread case WITH a session attached — a genuinely different fact, and the
- * one the note above got wrong.
+ * The unread case for a session-specific view.
  *
  * A null snapshot is not proof that no session exists: the spawn-time read can
- * throw (no frame is ever sent, so a running session stays unread forever), the
- * attach window has not delivered one yet, and a process reset clears the one
- * already held. Saying "No session is open" in any of those denies a session the
- * operator is looking at.
+ * throw, the attach window has not delivered one yet, or a process reset may
+ * have cleared a previously held snapshot.
  *
  * No follow-on directive, on purpose: those three cases want different actions
  * and this surface cannot tell them apart, so it states the fact rather than
@@ -63,13 +56,11 @@ export const SETTINGS_UNREAD_WITH_SESSION_NOTE =
   'Your settings files have not been read for this session yet.'
 
 /**
- * Which of the two sentences applies. `sessionOpen` is the SHELL's knowledge (it
- * holds the focused session's cwd) and is deliberately independent of whether a
- * snapshot arrived — that independence is the whole point.
+ * Which of the two sentences applies. `sessionOpen` is the caller's knowledge
+ * and is independent of whether a snapshot arrived.
  *
- * `noSessionDirective` is appended only to the no-session sentence, because a
- * pane's "Open a session to …" advice is true there and false the moment one is
- * already open.
+ * `noSessionDirective` is used only by session-specific views that genuinely
+ * require a session. Durable settings panes do not pass one.
  */
 export function settingsUnreadNote(
   sessionOpen: boolean,

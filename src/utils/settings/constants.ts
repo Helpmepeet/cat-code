@@ -1,4 +1,5 @@
 import { getAllowedSettingSources } from '../../bootstrap/state.js'
+import { isManagedSession } from '../managedSessionPolicy.js'
 
 /**
  * All possible sources where settings can come from
@@ -157,7 +158,11 @@ export function parseSettingSourcesFlag(flag: string): SettingSource[] {
  * @returns Array of enabled SettingSource values
  */
 export function getEnabledSettingSources(): SettingSource[] {
-  const allowed = getAllowedSettingSources()
+  const allowed = getAllowedSettingSources().filter(
+    source =>
+      !isManagedSession() ||
+      (source !== 'projectSettings' && source !== 'localSettings'),
+  )
 
   // Always include policy and flag settings
   const result = new Set<SettingSource>(allowed)
@@ -172,6 +177,14 @@ export function getEnabledSettingSources(): SettingSource[] {
  * @returns true if the source should be loaded
  */
 export function isSettingSourceEnabled(source: SettingSource): boolean {
+  // Managed chats keep user/global and enterprise policy settings, but never
+  // discover configuration attached to their working directory or ancestors.
+  if (
+    isManagedSession() &&
+    (source === 'projectSettings' || source === 'localSettings')
+  ) {
+    return false
+  }
   const enabled = getEnabledSettingSources()
   return enabled.includes(source)
 }

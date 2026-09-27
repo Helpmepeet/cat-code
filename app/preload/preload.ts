@@ -50,6 +50,8 @@ import type {
   HostResult,
   SaveTextInput,
   SaveTextResult,
+  SettingsInventoryReadResult,
+  SettingsWriteReadResult,
   SessionDescriptor,
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
@@ -92,8 +94,16 @@ import {
   CH_DELIVERY_HEALTH_RESPONSE,
   CH_REFRESH_ACCOUNTS_POOL,
   CH_REFRESH_USAGE_DASHBOARD,
+  CH_READ_SETTINGS_INVENTORY,
+  CH_WRITE_DURABLE_SETTING,
+  CH_PICK_SETTINGS_PROJECT,
   // Control plane (HC3 — fixed, per-method senders).
   CH_HOST_CREATE,
+  CH_HOST_CREATE_MANAGED,
+  CH_HOST_FOLDER_STATE,
+  CH_HOST_FOLDER_RECREATE,
+  CH_HOST_FOLDER_OPEN,
+  CH_HOST_FOLDER_COPY,
   CH_HOST_CREATE_IN_WORKSPACE,
   CH_HOST_LIST_BRANCHES,
   CH_HOST_SWITCH_BRANCH,
@@ -495,6 +505,30 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ refreshUsageDashboard: true })
     ipcRenderer.send(CH_REFRESH_USAGE_DASHBOARD)
   },
+  readSettingsInventory(projectCwd: string | null): Promise<SettingsInventoryReadResult> {
+    if (projectCwd !== null && (typeof projectCwd !== 'string' || projectCwd.length > 4096)) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'invalid_project', message: 'Choose a known project.' },
+      })
+    }
+    sendGuard.assertAllowed({ projectCwd })
+    return ipcRenderer.invoke(CH_READ_SETTINGS_INVENTORY, projectCwd) as Promise<SettingsInventoryReadResult>
+  },
+  pickSettingsProject(): Promise<{ cwd: string; name: string } | null> {
+    sendGuard.assertAllowed({ pickSettingsProject: true })
+    return ipcRenderer.invoke(CH_PICK_SETTINGS_PROJECT) as Promise<{ cwd: string; name: string } | null>
+  },
+  writeDurableSetting(projectCwd: string | null, verb: SettingsVerbMessage): Promise<SettingsWriteReadResult> {
+    if (projectCwd !== null && (typeof projectCwd !== 'string' || projectCwd.length > 4096)) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'invalid_project', message: 'Choose a known project.' },
+      })
+    }
+    sendGuard.assertAllowed({ projectCwd, verb })
+    return ipcRenderer.invoke(CH_WRITE_DURABLE_SETTING, projectCwd, verb) as Promise<SettingsWriteReadResult>
+  },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })
     ipcRenderer.send(CH_OPEN_LOGS)
@@ -544,6 +578,26 @@ const bridge: CatCodeBridge = {
     return ipcRenderer.invoke(CH_HOST_CREATE, input) as Promise<
       HostResult<SessionDescriptor>
     >
+  },
+  createManagedChat(): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ createManagedChat: true })
+    return ipcRenderer.invoke(CH_HOST_CREATE_MANAGED) as Promise<HostResult<SessionDescriptor>>
+  },
+  getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_STATE, appSessionId) as Promise<HostResult<'available' | 'missing'>>
+  },
+  recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_RECREATE, appSessionId) as Promise<HostResult<SessionDescriptor>>
+  },
+  openSessionFolder(appSessionId: SessionId): Promise<HostResult<void>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_OPEN, appSessionId) as Promise<HostResult<void>>
+  },
+  copySessionFolderPath(appSessionId: SessionId): Promise<HostResult<void>> {
+    sendGuard.assertAllowed({ appSessionId })
+    return ipcRenderer.invoke(CH_HOST_FOLDER_COPY, appSessionId) as Promise<HostResult<void>>
   },
   restoreSession(
     appSessionId: SessionId,

@@ -155,6 +155,7 @@ function BridgePanel({
           ) : null}
         </div>
         <button
+          data-setting-key="remoteBridge"
           className={`shrink-0 rounded-lg border px-3.5 py-2 text-[12.5px] font-semibold transition-colors disabled:opacity-50 ${
             bridge.enabled
               ? 'border-tone-danger/40 bg-tone-danger/10 text-tone-danger'
@@ -288,6 +289,7 @@ function DirectConnectSection({
           Server URL
         </label>
         <input
+          data-setting-key="remoteDirectConnect"
           className="mb-3 w-full rounded-lg border border-shell-seam bg-app-bg px-2.5 py-2 font-mono text-[12.5px] text-text-primary outline-none"
           disabled={connecting}
           id="remote-server-url"

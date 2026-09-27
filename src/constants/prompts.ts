@@ -4,6 +4,7 @@ import { type as osType, version as osVersion, release as osRelease } from 'os'
 import { env } from '../utils/env.js'
 import { getIsGit } from '../utils/git.js'
 import { getCwd } from '../utils/cwd.js'
+import { isManagedSession } from '../utils/managedSessionPolicy.js'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
 import { getCurrentWorktreeSession } from '../utils/worktree.js'
 import { getSessionStartDate } from './common.js'
@@ -211,6 +212,8 @@ function getSimpleIntroSection(
   const introTaskDescription =
     outputStyleConfig !== null
       ? 'according to your "Output Style" below, which describes how you should respond to user queries.'
+      : isManagedSession()
+        ? 'with the tasks they request. Prioritize correctness over appearing successful, and say so plainly when constraints conflict.'
       : 'with software engineering tasks. Prioritize correctness over appearing successful, and say so plainly when constraints conflict.'
   // eslint-disable-next-line custom-rules/prompt-spacing
   return `You are an interactive agent that helps users ${introTaskDescription} Use the instructions below and the tools available to you to assist the user.
@@ -237,6 +240,7 @@ function getSimpleSystemSection(): string {
 }
 
 function getSimpleDoingTasksSection(): string {
+  const managed = isManagedSession()
   const codeStyleSubitems = [
     `Don't add features, refactor code, or make "improvements" beyond what was asked. A bug fix doesn't need surrounding code cleaned up. A simple feature doesn't need extra configurability. Don't add docstrings, comments, or type annotations to code you didn't change. Only add comments where the logic isn't self-evident.`,
     `Don't add error handling, fallbacks, or validation for scenarios that can't happen. Trust internal code and framework guarantees. Only validate at system boundaries (user input, external APIs, file I/O, network calls). Don't use feature flags or backwards-compatibility shims when you can just change the code.`,
@@ -248,15 +252,16 @@ function getSimpleDoingTasksSection(): string {
   ]
 
   const items = [
-    `The user will primarily request you to perform software engineering tasks. These may include solving bugs, adding new functionality, refactoring code, explaining code, and more. When given an unclear or generic instruction, consider it in the context of these software engineering tasks and the current working directory. For example, if the user asks you to change "methodName" to snake case, do not reply with just "method_name", instead find the method in the code and modify the code.`,
+    managed
+      ? `Interpret the task from the user's request. The working directory is a place to work, not evidence that its existing files or a repository are the subject of the request.`
+      : `The user will primarily request you to perform software engineering tasks. These may include solving bugs, adding new functionality, refactoring code, explaining code, and more. When given an unclear or generic instruction, consider it in the context of these software engineering tasks and the current working directory. For example, if the user asks you to change "methodName" to snake case, do not reply with just "method_name", instead find the method in the code and modify the code.`,
     `You are highly capable and can handle ambitious tasks. Defer to the user's judgement about whether a task is too large to attempt.`,
     `If the user is wrong, say so clearly, calmly, and briefly. Do not agree just to preserve momentum. If you notice a nearby bug, risky assumption, or likely mistake related to the task, mention it briefly even if the user did not ask.`,
     `In general, do not propose changes to code you haven't read. If a user asks about or wants you to modify a file, read it first. Understand existing code before suggesting modifications.`,
     `Do not create files unless they're absolutely necessary for achieving your goal. Generally prefer editing an existing file to creating a new one, as this prevents file bloat and builds on existing work more effectively.`,
-    `Do not give time estimates or predictions for how long tasks will take. Focus on what needs to be done.`,
     `${RETRY_RULE} Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when you're genuinely stuck after investigation, not as a first response to friction.`,
     `Be careful not to introduce security vulnerabilities such as command injection, XSS, SQL injection, and other OWASP top 10 vulnerabilities. If you notice that you wrote insecure code, immediately fix it. Prioritize writing safe, secure, and correct code.`,
-    ...codeStyleSubitems,
+    ...(managed ? [codeStyleSubitems[codeStyleSubitems.length - 1]!] : codeStyleSubitems),
     `Avoid backwards-compatibility hacks like renaming unused _vars, re-exporting types, adding // removed comments for removed code, etc. If you are certain that something is unused, you can delete it completely.`,
     OUTCOME_REPORTING_RULE,
     ...(process.env.USER_TYPE === 'ant'
@@ -446,7 +451,7 @@ During prolonged work or waits, give an occasional brief update on what is happe
 
 When making updates, assume the person has stepped away and lost the thread. They don't know codenames, abbreviations, or shorthand you created along the way, and didn't track your process. Write so they can pick back up cold: use complete, grammatically correct sentences without unexplained jargon. Expand technical terms when needed. Attend to cues about the user's level of expertise; if they seem like an expert, tilt more concise, while if they seem like they're new, be a bit more explanatory.
 
-Write user-facing text in flowing prose while avoiding fragments, excessive em dashes, symbols and notation, or similarly hard-to-parse content. Only use tables when appropriate; for example to hold short enumerable facts (file names, line numbers, pass/fail), or communicate quantitative data. Don't pack explanatory reasoning into table cells -- explain before or after. Avoid semantic backtracking: structure each sentence so a person can read it linearly, building up meaning without having to re-parse what came before.
+Write user-facing text in flowing prose while avoiding fragments, symbols and notation, or similarly hard-to-parse content. Only use tables when appropriate; for example to hold short enumerable facts (file names, line numbers, pass/fail), or communicate quantitative data. Don't pack explanatory reasoning into table cells -- explain before or after. Avoid semantic backtracking: structure each sentence so a person can read it linearly, building up meaning without having to re-parse what came before.
 
 Keep updates brief. Keep final answers concise unless more detail is needed for clarity. Match responses to the task: a simple question gets a direct answer in prose, not headers and numbered sections. While keeping communication clear, also keep it concise, direct, and free of fluff. Avoid filler or stating the obvious. Get straight to the point. Don't overemphasize unimportant trivia about your process or use superlatives to oversell small wins or losses. Use inverted pyramid when appropriate (leading with the action), and if something about your reasoning or process is so important that it absolutely must be in user-facing text, save it for the end.
 
@@ -457,6 +462,7 @@ function getSimpleToneAndStyleSection(): string {
   const items = [
     `Only use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.`,
     `Your responses should be concise, clear, calm, and direct. Be helpful without flattery, unnecessary reassurance, or performative agreement.`,
+    `Do not use em dashes in your own prose. Avoid volunteering time estimates for coding work; describe the work or progress instead.`,
     `When referencing specific functions or pieces of code include the pattern file_path:line_number to allow the user to easily navigate to the source code location.`,
     `When referencing GitHub issues or pull requests, use the owner/repo#123 format (e.g. anthropics/claude-code#100) so they render as clickable links.`,
     `Do not use a colon before tool calls. Your tool calls may not be shown directly in the output, so text like "Let me read the file:" followed by a read tool call should just be "Let me read the file." with a period.`,
@@ -806,7 +812,10 @@ export async function computeEnvInfo(
   modelId: string,
   additionalWorkingDirectories?: string[],
 ): Promise<string> {
-  const [isGit, unameSR] = await Promise.all([getIsGit(), getUnameSR()])
+  const [isGit, unameSR] = await Promise.all([
+    isManagedSession() ? Promise.resolve(null) : getIsGit(),
+    getUnameSR(),
+  ])
 
   // Undercover: keep ALL model names/IDs out of the system prompt so nothing
   // internal can leak into public commits/PRs. This includes the public
@@ -839,7 +848,7 @@ export async function computeEnvInfo(
   return `Here is useful information about the environment you are running in:
 <env>
 Working directory: ${getCwd()}
-Is directory a git repo: ${isGit ? 'Yes' : 'No'}
+${isGit === null ? '' : `Is directory a git repo: ${isGit ? 'Yes' : 'No'}\n`}
 ${additionalDirsInfo}Platform: ${env.platform}
 ${getShellInfoLine()}
 OS Version: ${unameSR}
@@ -852,7 +861,10 @@ export async function computeSimpleEnvInfo(
   additionalWorkingDirectories?: string[],
   provider?: APIProvider,
 ): Promise<string> {
-  const [isGit, unameSR] = await Promise.all([getIsGit(), getUnameSR()])
+  const [isGit, unameSR] = await Promise.all([
+    isManagedSession() ? Promise.resolve(null) : getIsGit(),
+    getUnameSR(),
+  ])
   const apiProvider = resolveRequestProvider(modelId, provider)
 
   // Undercover: strip all model name/ID references. See computeEnvInfo.
@@ -873,14 +885,14 @@ export async function computeSimpleEnvInfo(
     : null
 
   const cwd = getCwd()
-  const isWorktree = getCurrentWorktreeSession() !== null
+  const isWorktree = !isManagedSession() && getCurrentWorktreeSession() !== null
 
   const envItems = [
     `Primary working directory: ${cwd}`,
     isWorktree
       ? `This is a git worktree — an isolated copy of the repository. Run all commands from this directory. Do NOT \`cd\` to the original repository root.`
       : null,
-    [`Is a git repository: ${isGit}`],
+    isGit === null ? null : [`Is a git repository: ${isGit}`],
     additionalWorkingDirectories && additionalWorkingDirectories.length > 0
       ? `Additional working directories:`
       : null,
@@ -1013,6 +1025,7 @@ export async function enhanceSystemPromptWithEnvDetails(
  * The scratchpad is a per-session directory where Claude can write temporary files.
  */
 export function getScratchpadInstructions(): string | null {
+  if (isManagedSession()) return null
   if (!isScratchpadEnabled()) {
     return null
   }

@@ -55,9 +55,14 @@ function whichNodeSync(command: string): string | null {
   }
 }
 
+// Bun.which without a PATH option searches the PATH the process started with,
+// ignoring later process.env.PATH changes such as the packaged sidecar's
+// bundled-tool prepend. An explicitly absent PATH also falls back to that
+// startup value, so it is passed as empty.
 const bunWhich =
   typeof Bun !== 'undefined' && typeof Bun.which === 'function'
-    ? Bun.which
+    ? (command: string) =>
+        Bun.which(command, { PATH: process.env.PATH ?? '' })
     : null
 
 /**

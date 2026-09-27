@@ -205,7 +205,6 @@ import {
 import {
   createGoalMemoryState,
   reduceGoalMemoryState,
-  selectMemorySnapshot,
   selectThreadGoalRows,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
@@ -268,6 +267,7 @@ import {
 import {
   createSessionsCatalogState,
   filterInteractiveSessionDescriptors,
+  groupByWorkspace,
   reduceSessionsCatalogState,
   resolveCreatedPeerSessionRoute,
   resolveRecentOpenRoute,
@@ -365,7 +365,6 @@ import {
 import type { RecallRequests } from './verbAckResultState.js'
 import { SettingsShell } from './SettingsShell.js'
 import { selectSettingsProjectBinding } from './settingsProjectBinding.js'
-import type { SettingWriteInput } from './SettingsEditors.js'
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import type {
   AccountVerbMessage,
@@ -593,6 +592,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
   const newChatInFlightRef = useRef(false)
+  const newManagedChatInFlightRef = useRef(false)
   // The window's face registries, one per SESSION, mounted at the shell so every
   // surface that draws a worker shares one. The transcript, the docked roster,
   // the Workers list and a relayed permission card can all show the same worker
@@ -1537,6 +1537,10 @@ export function App() {
     () => selectSettingsProjectBinding(sessionCatalogRows, activeSessionId),
     [activeSessionId, sessionCatalogRows],
   )
+  const settingsProjects = useMemo(
+    () => groupByWorkspace(sessionCatalogRows, null).filter(group => group.cwd),
+    [sessionCatalogRows],
+  )
 
   // P4-17 Welcome launcher — derived inputs, read from the SAME domain seams as
   // the other surfaces (no new feed, D5/WELCOME-LAUNCHER §6). Recents = a
@@ -1689,6 +1693,21 @@ export function App() {
     }
   }, [activeSessionId, focusCreatedSession])
 
+  const newManagedChat = useCallback(async () => {
+    if (newManagedChatInFlightRef.current) return
+    newManagedChatInFlightRef.current = true
+    try {
+      const bridge = getBridge()
+      const result = await bridge.createManagedChat()
+      if (result.ok) focusCreatedSession(result.value.appSessionId)
+      else setShellError(hostErrorMessage(result.error))
+    } catch (error) {
+      setShellError(errorMessage(error))
+    } finally {
+      newManagedChatInFlightRef.current = false
+    }
+  }, [focusCreatedSession])
+
   const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
     const bridge = getBridge()
     try {
@@ -1707,27 +1726,20 @@ export function App() {
     }
   }, [focusCreatedSession])
 
-  /**
-   * The sidebar's "New chat" (design source `components/sidebar/index.html`).
-   * The design source leaves it unwired; here a session cannot exist without a
-   * workspace, so it opens one in the workspace already on screen — no picker,
-   * no prompt — and only falls back to the picker when nothing is open. The
-   * Projects "+" is the deliberate picker path, so routing both there would give
-   * the rail two identical buttons.
-   */
+  /** Start in the active project, or choose one when no project is active. */
   const newChat = useCallback(async () => {
     if (newChatInFlightRef.current) return
     newChatInFlightRef.current = true
 
     try {
-      // Only a REGISTRY row can name a workspace to the host (HC1), so this asks
-      // the merged catalog rather than trusting `activeSessionId` on its own.
-      const repId = activeSessionRow?.appSessionId ?? null
-      if (repId) {
-        await newSessionInWorkspace(repId)
-        return
+      if (
+        activeSessionRow?.appSessionId &&
+        activeSessionRow.binding?.kind !== 'managed'
+      ) {
+        await newSessionInWorkspace(activeSessionRow.appSessionId)
+      } else {
+        await newSession()
       }
-      await newSession()
     } finally {
       newChatInFlightRef.current = false
     }
@@ -1954,23 +1966,6 @@ export function App() {
     (verb: RemoteVerbMessage) => {
       if (!activeSessionId) return
       getBridge().remoteSettingsVerb(activeSessionId, verb)
-    },
-    [activeSessionId],
-  )
-
-  const sendSettingWrite = useCallback(
-    (input: SettingWriteInput) => {
-      if (!activeSessionId) return
-      // P4-19 — the renderer names {source,key,value}; the sidecar re-validates
-      // and applies it under the cross-process settings lock. requestId is a
-      // UX correlation field only (the sidecar bounds it structurally).
-      getBridge().settingsVerb(activeSessionId, {
-        type: 'settings.setValue',
-        requestId: crypto.randomUUID(),
-        source: input.source,
-        key: input.key,
-        value: input.value,
-      })
     },
     [activeSessionId],
   )
@@ -4071,6 +4066,7 @@ export function App() {
         <TabBar
           tabs={tabs}
           activeSessionId={activeSessionId}
+          rosterReady={hostSnapshotReady}
           onSelect={selectTab}
           onClose={closeTab}
           onRestart={restartTab}
@@ -4109,6 +4105,7 @@ export function App() {
           }
           onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
           onNewChat={() => void newChat()}
+          onNewManagedChat={() => void newManagedChat()}
           /* The Projects header's "+": the native picker, so the renderer never
            * authors a cwd (HC1). The session created in the chosen folder is what
            * makes the group appear — there is no empty-workspace record to keep. */
@@ -4198,6 +4195,19 @@ export function App() {
                           targetId,
                           targetRow.peerWakeBlocked !== true,
                         )
+                      else if (kind === 'open-chat-folder') {
+                        void getBridge().openSessionFolder(targetId).then(result => {
+                          if (!result.ok) toast(hostErrorMessage(result.error), { tone: 'warn' })
+                        }).catch(() => toast('Could not open this chat folder.', { tone: 'warn' }))
+                      } else if (kind === 'copy-chat-folder-path') {
+                        void getBridge().copySessionFolderPath(targetId).then(result => {
+                          if (!result.ok) {
+                            toast(hostErrorMessage(result.error), { tone: 'warn' })
+                            return
+                          }
+                          toast('Chat folder path copied to clipboard', { tone: 'success' })
+                        }).catch(() => toast('Could not copy this chat folder path.', { tone: 'warn' }))
+                      }
                       // P4-29 — was a bare `selectTab`, which merely re-focused a
                       // stale pane for the very rows whose menu says "Restore".
                       else if (kind === 'open') openCatalogRow(targetRow)
@@ -4391,24 +4401,18 @@ export function App() {
             </div>
           ) : null}
 
-          {/* The workspace panels are renderer-owned layout over the P3-4
-           * session-keyed stores. Each panel reads its own session slice, so visible
-           * background sessions keep rendering without becoming the active tab. */}
+          {/* Settings reads durable configuration through the host inventory;
+           * session views below continue reading their own session slices. */}
           {activeView === 'settings' ? (
             <SettingsShell
-              agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
               cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
-              extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
-              initialCategory="agents"
-              memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
               onRemoteVerb={sendRemoteSettingsVerb}
               onOpenLogs={() => getBridge().openLogsFolder()}
               onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
-              onSettingWrite={sendSettingWrite}
               remoteLastResult={remoteSettings.lastResult}
               remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
               projectBinding={settingsProjectBinding}
-              snapshot={selectSettingsSnapshot(settings, activeSessionId)}
+              projects={settingsProjects}
             />
           ) : activeView === 'goals' ? (
             <GoalsPage rows={selectThreadGoalRows(goalMemory, sessionCatalogRows)} />

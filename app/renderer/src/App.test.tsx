@@ -1514,16 +1514,18 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
 
   // The composer's three consumers all read the SAME gate object, so
   // "typeable" can never drift apart from "sendable" again.
-  expect(paneSource).toContain('const composerReadOnly = branchSwitchPending || !composerGate.editable')
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
+    'const composerReadOnly = branchSwitchPending || managedFolderUnavailable || !composerGate.editable',
+  )
   expect(paneSource).toContain('readOnly={composerReadOnly}')
   // Whitespace-normalised: the assertion is about which gate the send button
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ branchSwitchPending || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={ branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
-  expect(paneSource).toContain(
-    'attachDisabled={!composerGate.editable || preparingImage || pickingFile}',
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
+    'attachDisabled={ !composerGate.editable || managedFolderUnavailable || preparingImage || pickingFile }',
   )
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
     "if (preparingImage) { event.preventDefault() toast('Wait for the image to finish attaching.', { tone: 'info' }) return }",
@@ -2926,44 +2928,6 @@ test('the model a session displays comes from the live run-controls seam', () =>
   expect(inspectorBody).toContain('runControls: selectRunControlsSnapshot(')
 })
 
-/**
- * ⌘T opens a tab in the workspace you are already in, not a directory picker.
- * The picker path (`newSession`) is still reachable and deliberate, through
- * "Add project" and "Open folder"; what changed is that the new-tab gesture no
- * longer asks. Pinned structurally because all three surfaces live in a keydown
- * branch, a prop, and a handler map that no SSR render reaches — and because
- * they must agree: the palette row advertises the literal string ⌘T, so a
- * palette that ran a different function than the chord would be the same
- * advertise-what-you-cannot-do defect the slash catalog had.
- */
-test('the new-tab gesture inherits the current workspace on every surface', () => {
-  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-
-  // (1) The ⌘T branch itself.
-  const tBranch = app.slice(
-    app.indexOf("if (event.key === 't' || event.key === 'T') {"),
-  )
-  const tBody = tBranch.slice(0, tBranch.indexOf('return'))
-  expect(tBody).toContain('void newChat()')
-  expect(tBody).not.toContain('void newSession()')
-
-  // (2) The tab bar's "+" is the mouse equivalent of the same gesture.
-  expect(app).toContain('onNewTab={newChat}')
-
-  // (3) The palette row labelled ⌘T runs the same thing the chord does.
-  const palette = readFileSync(
-    new URL('./commandPaletteModel.ts', import.meta.url),
-    'utf8',
-  )
-  expect(palette).toContain("detail: '⌘T'")
-  expect(app).toContain('newSession: () => void newChat(),')
-
-  // (4) The picker has NOT been orphaned: the two deliberate
-  // choose-a-directory entry points still call it.
-  expect(app).toContain('onAddProject={() => void newSession()}')
-  expect(app).toContain('onOpenFolder={() => void newSession()}')
-})
-
 // Three composer behaviours a contentEditable does NOT inherit from the
 // textarea it replaced: the modified-Enter newline and the paste pill's remove
 // button are pressed for real in App.dom.test.tsx, and the drop handler is
@@ -3124,25 +3088,6 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
   expect(source).toContain('onRetry: () => void hydrateHostRoster()')
   expect(source).toContain(
     "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
-  )
-})
-
-test('New chat ignores repeated clicks while its fresh session is being created', () => {
-  // This file is SSR-only, so it cannot mount App and dispatch clicks.
-  // This pins the re-entrancy guard at the caller that starts the host spawn.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const newChatStart = source.indexOf('  const newChat = useCallback(async () => {')
-  const newChatEnd = source.indexOf('\n\n  useEffect(() => {', newChatStart)
-  expect(newChatStart).toBeGreaterThan(-1)
-  expect(newChatEnd).toBeGreaterThan(newChatStart)
-  const newChatBody = source.slice(newChatStart, newChatEnd)
-
-  expect(newChatBody).toContain('if (newChatInFlightRef.current) return')
-  expect(newChatBody).toContain('newChatInFlightRef.current = true')
-  expect(newChatBody).toContain('await newSessionInWorkspace(repId)')
-  expect(newChatBody).toContain('await newSession()')
-  expect(newChatBody.replace(/\s+/g, ' ')).toContain(
-    'finally { newChatInFlightRef.current = false',
   )
 })
 

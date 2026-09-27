@@ -97,6 +97,28 @@ function closestPair(masks: readonly Uint8Array[]): number {
   return closest
 }
 
+const EAR = ['pointy', 'outer', 'broad', 'leanin', 'tipin'] as const
+const FILL = ['solid', 'notch'] as const
+const WIDTH = ['wide', 'narrow'] as const
+const CHIN = ['round', 'flat', 'pointed'] as const
+const MOUTH = ['none', 'slit', 'smile', 'omega'] as const
+const MARK = ['none', 'stripe', 'chindot'] as const
+const HEAD = ['square', 'rounded'] as const
+
+/** Every axis combination the hash can propose. */
+function everyAxes(): FaceAxes[] {
+  const out: FaceAxes[] = []
+  for (const ear of EAR)
+    for (const fill of FILL)
+      for (const width of WIDTH)
+        for (const chin of CHIN)
+          for (const mouth of MOUTH)
+            for (const mark of MARK)
+              for (const head of HEAD)
+                out.push({ ear, fill, width, chin, mouth, mark, head })
+  return out
+}
+
 describe('the stamp itself', () => {
   test('every face that draws is one 4-connected mass', () => {
     for (const name of NAMES) {
@@ -219,9 +241,10 @@ describe('telling two workers apart', () => {
   })
 
   test('the well-separated supply lasts well past any real session', () => {
-    // 336 workers before the ladder has to drop a bar. Stated as a floor rather
-    // than pinned exactly: the figure moves with the axis space, and what the
-    // rule promises is "far more than a session holds", not a constant.
+    // 143 workers before the ladder has to drop a bar, against a largest real
+    // session of 32 (2026-09-27, 159 transcripts). Stated as a floor rather than
+    // pinned exactly: the figure moves with the axis space, and what the rule
+    // promises is "far more than a session holds", not a constant.
     const registry = createAgentFaceRegistry()
     const masks: Uint8Array[] = []
     let separated = 0
@@ -232,7 +255,7 @@ describe('telling two workers apart', () => {
       separated += 1
       masks.push(mask)
     }
-    expect(separated).toBeGreaterThanOrEqual(250)
+    expect(separated).toBeGreaterThanOrEqual(120)
   })
 
   test('outrunning the supply degrades to distinct, never to shared', () => {
@@ -252,24 +275,24 @@ describe('telling two workers apart', () => {
     // them notices the dedupe ladder being re-ordered or an axis rotating through
     // a different value list. This pins the answers themselves: one registry, one
     // fixed registration order, and the face each of these names ends up wearing.
-    // The picks span the whole ladder — `deckard` and `worker-20` move on mouth,
-    // `worker-7`/`worker-13`/`worker-25` on chin, `worker-35`/`worker-47` on
-    // width, `worker-40`/`worker-58` on ear, `worker-59` on fill — plus `Wren`
-    // and `Ledger`, which the walk never touches, as controls.
+    // The picks span the whole ladder — `Odo` and `worker-6` move on mouth,
+    // `Nim` on marking, `worker-5`/`worker-7` on chin, `worker-3` on ear,
+    // `worker-38` on fill, `worker-13` on width, `worker-34` on head, and
+    // `worker-52` is the sweep, where every single-axis substitution was crowded —
+    // plus `Wren` and `Ledger`, which the walk never touches, as controls.
     const PINNED: Record<string, [string, number]> = {
-      Wren: ['tuft|notch|wide|fringe|smile|brow|square', 4],
-      Ledger: ['tall|deep|narrow|round|slit|brow|rounded', 0],
-      deckard: ['pointy|solid|wide|flat|none|temple|square', 3],
-      'worker-6': ['tall|notch|narrow|round|smile|cheek|rounded', 2],
-      'worker-7': ['pointy|solid|wide|round|smile|brow|square', 1],
-      'worker-13': ['pointy|solid|narrow|fringe|slit|chindot|rounded', 2],
-      'worker-20': ['folded|deep|narrow|round|none|none|rounded', 8],
-      'worker-25': ['folded|deep|wide|pointed|none|chindot|square', 1],
-      'worker-35': ['tall|solid|wide|pointed|slit|none|rounded', 2],
-      'worker-40': ['outer|deep|narrow|pointed|slit|cheek|rounded', 8],
-      'worker-47': ['folded|solid|narrow|fringe|none|none|square', 3],
-      'worker-58': ['pointy|deep|wide|fringe|none|chindot|square', 5],
-      'worker-59': ['outer|deep|narrow|round|omega|none|rounded', 6],
+      Wren: ['broad|notch|wide|pointed|smile|none|square', 4],
+      Ledger: ['tipin|solid|narrow|round|slit|chindot|rounded', 0],
+      Nim: ['pointy|notch|wide|flat|none|stripe|square', 6],
+      Odo: ['outer|notch|wide|flat|slit|stripe|square', 7],
+      'worker-3': ['leanin|notch|wide|flat|smile|stripe|square', 7],
+      'worker-5': ['broad|notch|wide|pointed|none|stripe|square', 9],
+      'worker-6': ['tipin|solid|narrow|flat|smile|none|rounded', 2],
+      'worker-7': ['pointy|notch|wide|pointed|smile|chindot|square', 1],
+      'worker-13': ['pointy|solid|wide|pointed|slit|stripe|rounded', 2],
+      'worker-34': ['pointy|notch|wide|round|smile|none|rounded', 1],
+      'worker-38': ['outer|solid|wide|pointed|smile|stripe|square', 5],
+      'worker-52': ['pointy|solid|wide|round|none|none|rounded', 5],
     }
     const order = [
       'scout', 'deckard', 'Wren', 'Ledger', 'Beacon', 'Drift', 'Quill', 'Ash', 'Nim', 'Odo',
@@ -288,54 +311,28 @@ describe('telling two workers apart', () => {
 })
 
 describe('the relaxation search', () => {
-  const EAR = ['pointy', 'outer', 'tuft', 'folded', 'tall'] as const
-  const FILL = ['solid', 'notch', 'deep'] as const
-  const WIDTH = ['wide', 'narrow'] as const
-  const CHIN = ['round', 'flat', 'pointed', 'fringe'] as const
-  const MOUTH = ['none', 'slit', 'smile', 'omega'] as const
-  const MARK = ['none', 'brow', 'cheek', 'temple', 'chindot'] as const
-  const HEAD = ['square', 'rounded'] as const
-
-  /** Every axis combination the hash can propose. */
-  function everyAxes(): FaceAxes[] {
-    const out: FaceAxes[] = []
-    for (const ear of EAR)
-      for (const fill of FILL)
-        for (const width of WIDTH)
-          for (const chin of CHIN)
-            for (const mouth of MOUTH)
-              for (const mark of MARK)
-                for (const head of HEAD)
-                  out.push({ ear, fill, width, chin, mouth, mark, head })
-    return out
-  }
-
   /**
    * A face with nothing cut out of its head reads as a slab with ears, not as an
-   * animal. Rows 2, 3, 5 and 6 are where every interior carve lands (ear fill,
-   * mouth, markings); solid across all four means the search gave everything up.
+   * animal. Featureless means it draws exactly what the same face draws with
+   * every carve withdrawn, i.e. the search gave everything up (or nothing was
+   * asked for).
    */
   function isFeatureless(axes: FaceAxes): boolean {
-    const grid = rasterize(faceRects(axes))
-    const left = axes.width === 'wide' ? 0 : 1
-    const right = axes.width === 'wide' ? 8 : 7
-    const solid = (row: number): boolean => {
-      for (let c = left; c <= right; c += 1) if (!grid[row][c]) return false
-      return true
-    }
-    return solid(2) && solid(3) && solid(5) && solid(6)
+    const bare: FaceAxes = { ...axes, fill: 'solid', mouth: 'none', mark: 'none' }
+    return silhouette(axes) === silhouette(bare)
   }
 
   test('the reported case draws a face, not a slab', () => {
     // @Backus, seen on a real card as a featureless blob (2026-08-19). Its hash
-    // asked for a deep ear fill, an omega mouth and a chin-dot; the design
-    // source's linear ladder dropped all three. The omega really does sever a
-    // narrow pointed chin, so the mouth has to go — but giving it up RESTORES
-    // the chin-dot the mouth-vs-chin-dot exclusion was suppressing, and the face
+    // asked for an omega mouth and a chin-dot on a narrow pointed chin (with a
+    // `folded` ear and `deep` fill, both since retired); the design source's
+    // linear ladder dropped everything. The omega really does sever a narrow
+    // pointed chin, so the mouth has to go — but giving it up RESTORES the
+    // chin-dot the mouth-vs-chin-dot exclusion was suppressing, and the face
     // keeps a mark of its own.
     const backus: FaceAxes = {
-      ear: 'folded',
-      fill: 'deep',
+      ear: 'broad',
+      fill: 'notch',
       width: 'narrow',
       chin: 'pointed',
       mouth: 'omega',
@@ -348,30 +345,86 @@ describe('the relaxation search', () => {
 
   test('a featureless slab stays the rare exception, not a third of the space', () => {
     // The linear ladder this replaced left 838 of 2,400 (35%) with no interior
-    // feature at all — 75% of `folded` ears and 76% of `tall`. Pinned well above
-    // the current 168 of 4,800 so ordinary tuning does not trip it, and far below
-    // the regression it exists to catch. `head` is a shape axis, so doubling the
-    // space with it left the slab COUNT untouched and halved its share.
+    // feature at all. Now 130 of 1,440, and 90 of those asked for no carve in the
+    // first place. Pinned well above that so ordinary tuning does not trip it, and
+    // far below the regression it exists to catch.
     const all = everyAxes()
     const bare = all.filter(isFeatureless).length
-    expect(all).toHaveLength(4800)
-    expect(bare).toBeLessThan(300)
+    expect(all).toHaveLength(1440)
+    expect(bare).toBeLessThan(200)
   })
 
   test('a face gives up the cheaper carve before the more legible one', () => {
     // The search is ordered by what a relaxation costs a reader. Concretely: no
-    // face may lose its mouth while a merely-softened ear fill would have kept
-    // it whole, which is the mistake the fixed ladder made on every `folded` and
-    // `tall` ear.
+    // face may lose its mouth while dropping a cheaper carve would have kept it
+    // whole, which is the mistake the fixed ladder made on every ear that
+    // severed.
     const keptMouth = everyAxes().filter(axes => {
       if (axes.mouth === 'none') return false
       const grid = rasterize(faceRects(axes))
-      const mid = axes.width === 'wide' ? 4 : 4
+      const mid = 4
       // Any mouth carves row 5 or row 6 near the midline.
       return !grid[5][mid] || !grid[6][mid - 1] || !grid[6][mid + 1] || !grid[6][mid]
     }).length
-    // 1,800 combinations ask for a mouth; the fixed ladder delivered 960.
-    expect(keptMouth).toBeGreaterThan(1400)
+    // 1,080 combinations ask for a mouth and 1,000 keep it. The fixed ladder
+    // delivered 960 of 1,800.
+    expect(keptMouth).toBeGreaterThan(900)
+  })
+})
+
+describe('every face reads as a cat', () => {
+  // The rules the 2026-09-27 redraw exists for. Each one failed on the
+  // vocabulary it replaced, where 74% of the faces drawn for 163 real agent ids
+  // had antennae, legs, horns or a second pair of eyes.
+
+  function filledColumns(row: readonly boolean[]): number[] {
+    return row.flatMap((cell, column) => (cell ? [column] : []))
+  }
+
+  test('every ear comes to a one-cell tip over a wider base', () => {
+    // A one-cell stalk (`tall`) read as an antenna; a flat top (`tuft`,
+    // `folded`) read as a box.
+    for (const axes of everyAxes()) {
+      const grid = rasterize(faceRects(axes))
+      const top = grid.findIndex(row => row.some(Boolean))
+      expect(filledColumns(grid[top])).toHaveLength(2)
+      const base = filledColumns(grid[top + 1])
+      expect(base.filter(column => column < 4).length).toBeGreaterThanOrEqual(2)
+      expect(base.filter(column => column > 4).length).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  test('the ears stand on the head, never past its edge', () => {
+    // A `rounded` head used to clear the corners the ears stand on, leaving each
+    // ear's outer cell hanging in the air, which reads as a horn.
+    for (const axes of everyAxes()) {
+      const grid = rasterize(faceRects(axes))
+      const top = grid.findIndex(row => row.some(Boolean))
+      const base = filledColumns(grid[top + 1])
+      const head = filledColumns(grid[top + 2])
+      expect(head[0]).toBeLessThanOrEqual(base[0])
+      expect(head[head.length - 1]).toBeGreaterThanOrEqual(base[base.length - 1])
+    }
+  })
+
+  test('no carve lines up with an eye to make a second one', () => {
+    // A hole in an eye's column, walled on both sides, reads as another eye. On
+    // a narrow face the mouth corners and the brow used to sit exactly there,
+    // which drew an X, a dice four, or a skull.
+    for (const axes of everyAxes()) {
+      const grid = rasterize(faceRects(axes))
+      const eyes = [1, 2, 3, 4, 5, 6, 7].filter(
+        column => !grid[4][column] && grid[4][column - 1] && grid[4][column + 1],
+      )
+      expect(eyes).toHaveLength(2)
+      for (const column of eyes) {
+        for (let row = 2; row <= 7; row += 1) {
+          if (row === 4) continue
+          const walled = grid[row][column - 1] && grid[row][column + 1]
+          expect(!grid[row][column] && walled).toBe(false)
+        }
+      }
+    }
   })
 })
 
@@ -386,11 +439,11 @@ describe('the head axis and the chin-dot', () => {
     head: 'square',
   }
 
-  test('a rounded head clears the distance bar on its own', () => {
+  test('a rounded wide head clears the distance bar on its own', () => {
     // The reason `head` is a SHAPE axis and not another carve: under the distance
     // rule an axis worth one or two cells adds no faces the registry will accept,
     // because every pair it creates is a near-twin it then refuses.
-    for (const ear of ['pointy', 'outer', 'tuft', 'folded', 'tall'] as const) {
+    for (const ear of EAR) {
       const square = maskOf({ ...BASE, ear })
       const rounded = maskOf({ ...BASE, ear, head: 'rounded' })
       expect(cellsApart(square, rounded)).toBeGreaterThanOrEqual(4)

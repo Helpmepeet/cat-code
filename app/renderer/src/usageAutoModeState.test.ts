@@ -55,14 +55,15 @@ test('uses stable outcome/category order and conserves route edges', () => {
   }
 })
 
-test('builds a conserved flow for all attempts and groups the four display outcomes', () => {
+test('builds a conserved flow for allowed and blocked outcomes', () => {
   const edges = autoModeOverviewEdges(summary)
   expect(edges.filter(edge => edge.from === 'Attempts')).toEqual([
-    { from: 'Attempts', to: 'Base paths', count: 60 },
-    { from: 'Attempts', to: 'Stage 1', count: 33 },
-    { from: 'Attempts', to: 'Stage 2', count: 7 },
+    { from: 'Attempts', to: 'Base paths', count: 55 },
+    { from: 'Attempts', to: 'Stage 1', count: 32 },
+    { from: 'Attempts', to: 'Stage 2', count: 5 },
   ])
-  expect(edges.filter(edge => edge.from === 'Base paths' || edge.from === 'Stage 1' || edge.from === 'Stage 2').reduce((total, edge) => total + edge.count, 0)).toBe(100)
+  expect(edges.filter(edge => edge.from === 'Base paths' || edge.from === 'Stage 1' || edge.from === 'Stage 2').reduce((total, edge) => total + edge.count, 0)).toBe(92)
+  expect(edges.every(edge => edge.to !== 'error' && edge.to !== 'cancelled')).toBe(true)
   expect(autoModeDisplayCounts(summary)).toEqual([
     { group: 'allowed', label: 'Allowed', count: 85 },
     { group: 'blocked', label: 'Blocked', count: 7 },

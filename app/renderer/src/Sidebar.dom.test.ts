@@ -110,15 +110,18 @@ test('a hover-expanded destination remains direct and dismisses the overlay afte
   expect(aside!.className).toContain('sidebar-expanded')
 
   const destination = tree.container.querySelector<HTMLButtonElement>(
-    '[data-sidebar-nav-id="sessions"]',
+    '[data-sidebar-nav-id="goals"]',
   )
-  expect(destination?.textContent).toContain('Sessions')
+  expect(destination?.textContent).toContain('Goals')
+  expect(
+    tree.container.querySelector('[data-sidebar-nav-id="sessions"]'),
+  ).toBeNull()
   expect(tree.container.textContent).not.toContain('Show destinations')
 
   await act(async () => {
     destination!.click()
   })
-  expect(selections).toEqual(['sessions'])
+  expect(selections).toEqual(['goals'])
   expect(aside!.className).toContain('w-12')
 })
 
@@ -182,4 +185,38 @@ test('an outside click collapses a pinned sidebar on a non-Chat page', async () 
   })
   expect(aside!.className).toContain('w-12')
   expect(tree.container.querySelector('[aria-label="Pin sidebar open"]')).not.toBeNull()
+})
+
+test('New chat, Chats plus, and Add project dispatch separate actions with no sessions', async () => {
+  const calls: string[] = []
+  const tree = await harness.mount(
+    sidebar({
+      menuActive: true,
+      onNewChat: () => calls.push('project-aware'),
+      onNewManagedChat: () => calls.push('managed'),
+      onAddProject: () => calls.push('project-picker'),
+    }),
+  )
+
+  expect(tree.container.textContent).toContain('Chats')
+  const newChat = [...tree.container.querySelectorAll('button')].find(button =>
+    button.textContent?.includes('New chat'),
+  )
+  const managedChat = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="New chat without a project"]',
+  )
+  const addProject = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Add project"]',
+  )
+  expect(newChat).not.toBeUndefined()
+  expect(managedChat).not.toBeNull()
+  expect(addProject).not.toBeNull()
+
+  await act(async () => {
+    newChat!.click()
+    managedChat!.click()
+    addProject!.click()
+  })
+
+  expect(calls).toEqual(['project-aware', 'managed', 'project-picker'])
 })

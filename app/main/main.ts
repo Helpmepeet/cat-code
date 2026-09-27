@@ -21,6 +21,7 @@ import {
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   nativeImage,
@@ -34,6 +35,7 @@ import {
 } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { basename, dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import {
@@ -57,12 +59,15 @@ import {
   SessionRegistry,
 } from '../host/registry.js'
 import { Host, type CwdValidation } from '../host/host.js'
+import { ManagedStorage } from '../host/managedStorage.js'
 import {
   MAX_ATTACHMENT_SOURCE_IMAGE_BYTES,
   type AttachmentFileSelection,
   type HostEvent,
   type HostResult,
   type SaveTextResult,
+  type SettingsInventoryReadResult,
+  type SettingsWriteReadResult,
   type SessionDescriptor,
   type SwitchWorkspaceBranchResult,
   type WorkspaceBranches,
@@ -112,10 +117,18 @@ import {
   CH_DELIVERY_HEALTH_RESPONSE,
   CH_REFRESH_ACCOUNTS_POOL,
   CH_REFRESH_USAGE_DASHBOARD,
+  CH_READ_SETTINGS_INVENTORY,
+  CH_WRITE_DURABLE_SETTING,
+  CH_PICK_SETTINGS_PROJECT,
   // Control plane (HC3 — fixed, per-method structured senders). `invoke`
   // channels return a typed HostResult; `pick-directory` returns a realpath or
   // null (the native picker, HC1); the host-event channel is a one-way stream.
   CH_HOST_CREATE,
+  CH_HOST_CREATE_MANAGED,
+  CH_HOST_FOLDER_STATE,
+  CH_HOST_FOLDER_RECREATE,
+  CH_HOST_FOLDER_OPEN,
+  CH_HOST_FOLDER_COPY,
   CH_HOST_CREATE_IN_WORKSPACE,
   CH_HOST_LIST_BRANCHES,
   CH_HOST_SWITCH_BRANCH,
@@ -232,6 +245,10 @@ import {
   createAccountsPoolPublicationGate,
   runAccountsPoolWorker,
 } from './accountsPoolRunner.js'
+import { runSettingsInventoryWorker } from './settingsInventoryRunner.js'
+import { resolveSettingsInventoryCwd, settingsInventoryScopeArgs, settingsWriteMatchesScope } from './settingsInventoryAccess.js'
+import { runSettingsWriteWorker } from './settingsWriteRunner.js'
+import { parseSettingsWriteWorkerRequest } from '../shared/settingsWriteWorker.js'
 import {
   createIdleParkDriver,
   type IdleParkDriver,
@@ -332,12 +349,26 @@ function rememberBranchOpenSeed(
     ?.listSessions()
     .find(descriptor => descriptor.appSessionId === appSessionId)
   if (!source || source.cwd.trim().length === 0) return
+  // The branch transcript exists as soon as this result arrives. Persist its
+  // managed-storage ownership before forwarding the result makes it openable;
+  // the bounded seed below only covers catalog lag in this process.
+  if (
+    source.binding?.kind === 'managed' &&
+    !host?.recordManagedBranch(appSessionId, frame.branchEngineSessionId)
+  ) {
+    logLegacyDiagnostic(
+      `could not durably record managed branch ${frame.branchEngineSessionId}`,
+      'host',
+      'main',
+    )
+  }
   const now = Date.now()
   branchOpenSeeds.delete(frame.branchEngineSessionId)
   branchOpenSeeds.set(frame.branchEngineSessionId, {
     engineSessionId: frame.branchEngineSessionId,
     cwd: source.cwd,
     forked: true,
+    ...(source.binding !== undefined ? { binding: source.binding } : {}),
     ...(typeof frame.branchTitle === 'string' &&
     frame.branchTitle.trim().length > 0
       ? { title: frame.branchTitle }
@@ -742,6 +773,13 @@ const accountInvalidation = createAccountInvalidationDispatcher({
  */
 let sessionsCatalogAbort: AbortController | null = null
 let accountsPoolAbort: AbortController | null = null
+const settingsInventoryReads = new Set<AbortController>()
+const settingsWriteRuns = new Set<AbortController>()
+/** Directories explicitly chosen for Settings in this app process. */
+const settingsPickedProjects = new Set<string>()
+let settingsWriteTail: Promise<void> = Promise.resolve()
+let settingsWritePending = 0
+let settingsWriteGeneration = 0
 
 /**
  * IDLE-PARK (decisions/IDLE-PARK.md §4) — one main-supervised policy driver per
@@ -2580,6 +2618,145 @@ function registerIpcHandlers(): void {
     refreshUsageDashboardNow()
   })
 
+  ipcMain.handle(CH_PICK_SETTINGS_PROJECT, async (event): Promise<{ cwd: string; name: string } | null> => {
+    if (!isMainWindowSender(event)) return null
+    const parent = mainWindow ?? undefined
+    const result = parent
+      ? await dialog.showOpenDialog(parent, { properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const selected = validateCwd(result.filePaths[0])
+    if (!selected.ok) return null
+    settingsPickedProjects.add(selected.realpath)
+    return { cwd: selected.realpath, name: basename(selected.realpath) }
+  })
+
+  ipcMain.handle(
+    CH_READ_SETTINGS_INVENTORY,
+    async (event, projectCwd: unknown): Promise<SettingsInventoryReadResult> => {
+      const unavailable = (): SettingsInventoryReadResult => ({
+        ok: false,
+        error: { code: 'unavailable', message: 'Could not load configuration. Try again.' },
+      })
+      if (!isMainWindowSender(event)) return unavailable()
+
+      const knownProjects = new Set([
+        ...settingsPickedProjects,
+        ...(host?.listSessions().map(row => row.cwd) ?? []),
+        ...(readSessionsCatalogCache(defaultRegistryDir())?.entries.map(row => row.cwd) ?? []),
+      ])
+      const cwd = resolveSettingsInventoryCwd(
+        projectCwd,
+        app.getPath('home'),
+        knownProjects,
+        validateCwd,
+        process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+      )
+      if (!cwd) {
+        return { ok: false, error: { code: 'invalid_project', message: 'Choose a known project.' } }
+      }
+      if (settingsInventoryReads.size >= 4) return unavailable()
+
+      const abort = new AbortController()
+      settingsInventoryReads.add(abort)
+      let accepted: SettingsInventoryReadResult | null = null
+      try {
+        await runSettingsInventoryWorker({
+          command: sidecarLaunch().command,
+          args: sidecarLaunch().argsFor(
+            'settings-inventory',
+            settingsInventoryScopeArgs(projectCwd),
+          ),
+          cwd,
+          signal: abort.signal,
+          onWorkerLifecycle: createWorkerLifecycleLogger('settings-inventory'),
+          onInventory: inventory => {
+            if (inventory.cwd === cwd) accepted = { ok: true, inventory }
+          },
+          log: line => process.stderr.write(`${line}\n`),
+        })
+      } catch (error) {
+        process.stderr.write(
+          `[main] settings inventory read failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+      } finally {
+        settingsInventoryReads.delete(abort)
+      }
+      return abort.signal.aborted ? unavailable() : accepted ?? unavailable()
+    },
+  )
+
+  ipcMain.handle(
+    CH_WRITE_DURABLE_SETTING,
+    async (event, projectCwd: unknown, rawVerb: unknown): Promise<SettingsWriteReadResult> => {
+      const unavailable = (): SettingsWriteReadResult => ({
+        ok: false,
+        error: { code: 'unavailable', message: 'Could not save this setting. Try again.' },
+      })
+      if (!isMainWindowSender(event)) return unavailable()
+      const request = parseSettingsWriteWorkerRequest({
+        type: 'settings-write',
+        version: 1,
+        verb: rawVerb,
+      })
+      if (!request || !settingsWriteMatchesScope(request.verb.source, projectCwd)) {
+        return { ok: false, error: { code: 'invalid_write', message: 'Choose a valid setting and scope.' } }
+      }
+      const knownProjects = new Set([
+        ...settingsPickedProjects,
+        ...(host?.listSessions().map(row => row.cwd) ?? []),
+        ...(readSessionsCatalogCache(defaultRegistryDir())?.entries.map(row => row.cwd) ?? []),
+      ])
+      const cwd = resolveSettingsInventoryCwd(
+        projectCwd,
+        app.getPath('home'),
+        knownProjects,
+        validateCwd,
+        process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+      )
+      if (!cwd) {
+        return { ok: false, error: { code: 'invalid_project', message: 'Choose a known project.' } }
+      }
+      if (settingsWritePending >= 8) return unavailable()
+      settingsWritePending += 1
+      const generation = settingsWriteGeneration
+      const priorWrite = settingsWriteTail
+      let releaseWrite!: () => void
+      settingsWriteTail = new Promise<void>(resolve => { releaseWrite = resolve })
+      try {
+        await priorWrite
+        if (generation !== settingsWriteGeneration) return unavailable()
+        const abort = new AbortController()
+        settingsWriteRuns.add(abort)
+        try {
+          const result = await runSettingsWriteWorker({
+            command: sidecarLaunch().command,
+            args: sidecarLaunch().argsFor('settings-write'),
+            cwd,
+            request,
+            signal: abort.signal,
+            onWorkerLifecycle: createWorkerLifecycleLogger('settings-write'),
+            log: line => process.stderr.write(`${line}\n`),
+          })
+          if (abort.signal.aborted) return unavailable()
+          return result.ok
+            ? { ok: true, message: result.message }
+            : { ok: false, error: { code: 'unavailable', message: result.message } }
+        } finally {
+          settingsWriteRuns.delete(abort)
+        }
+      } catch (error) {
+        process.stderr.write(
+          `[main] durable setting write failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+        return unavailable()
+      } finally {
+        settingsWritePending -= 1
+        releaseWrite()
+      }
+    },
+  )
+
   ipcMain.on(CH_OPEN_LOGS, () => {
     void shell.openPath(operationalLog.getDirectory())
   })
@@ -2755,6 +2932,37 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(CH_HOST_CREATE_MANAGED, async (): Promise<HostResult<SessionDescriptor>> => {
+    if (!host) return noHost<SessionDescriptor>()
+    return host.createManagedChat()
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_STATE, async (_e, id: unknown) => {
+    if (!host) return noHost<'available' | 'missing'>()
+    return host.getSessionFolderState(String(id))
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_RECREATE, async (_e, id: unknown) => {
+    if (!host) return noHost<SessionDescriptor>()
+    return host.recreateManagedChatFolder(String(id))
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_OPEN, async (_e, id: unknown): Promise<HostResult<void>> => {
+    if (!host) return noHost<void>()
+    const path = await host.copySessionFolderPath(String(id))
+    if (!path.ok) return path
+    const error = await shell.openPath(path.value)
+    return error ? { ok: false, error: { code: 'invalid_cwd', message: 'could not open this chat folder' } } : { ok: true, value: undefined }
+  })
+
+  ipcMain.handle(CH_HOST_FOLDER_COPY, async (_e, id: unknown): Promise<HostResult<void>> => {
+    if (!host) return noHost<void>()
+    const path = await host.copySessionFolderPath(String(id))
+    if (!path.ok) return path
+    clipboard.writeText(path.value)
+    return { ok: true, value: undefined }
+  })
+
   ipcMain.handle(
     CH_HOST_RESTORE,
     async (_e, appSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
@@ -2874,8 +3082,12 @@ function registerHostControlPlane(): void {
     },
   )
 
-  ipcMain.handle(CH_HOST_LIST, (): SessionDescriptor[] => {
-    return host ? host.listSessions() : []
+  ipcMain.handle(CH_HOST_LIST, async (): Promise<SessionDescriptor[]> => {
+    const currentHost = host
+    if (!currentHost) return []
+    await currentHost.whenReady()
+    if (host !== currentHost) return []
+    return currentHost.listSessions()
   })
 
   ipcMain.handle(
@@ -3025,10 +3237,48 @@ function registerHostControlPlane(): void {
     string,
     Promise<HostResult<SessionDescriptor>>
   >()
+  async function ensureManagedHistoryPreview(
+    descriptor: SessionDescriptor,
+    engineId: string,
+  ): Promise<HostResult<SessionDescriptor>> {
+    const result = { ok: true as const, value: descriptor }
+    if (!host?.canPreview(descriptor.appSessionId)) return result
+    const existingCache = readCache(TRANSCRIPT_CACHE_DIR, descriptor.appSessionId)
+    if (existingCache?.header.engineSessionId === engineId) return result
+
+    // Registry eviction can remove the preview cache. Rebuild it from the
+    // host-owned transcript before opening the pane, without starting an engine.
+    await runTranscriptBackfill({
+      items: [{
+        appSessionId: descriptor.appSessionId,
+        engineSessionId: engineId,
+        transcriptPath: defaultTranscriptPath(descriptor.cwd, engineId),
+      }],
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('transcript-backfill', ['--bare']),
+      cwd: process.cwd(),
+      onSession: workerResult => {
+        const currentHost = host
+        if (!currentHost?.canPreview(descriptor.appSessionId)) return
+        persistTranscriptBackfillResult({
+          cacheDir: TRANSCRIPT_CACHE_DIR,
+          getCurrentSession: id => currentHost.listSessions().find(row => row.appSessionId === id),
+          transcriptExists: row => row.engineSessionId !== null &&
+            existsSync(defaultTranscriptPath(row.cwd, row.engineSessionId)),
+        }, workerResult)
+      },
+    })
+    return readCache(TRANSCRIPT_CACHE_DIR, descriptor.appSessionId)?.header.engineSessionId === engineId
+      ? result
+      : { ok: false, error: { code: 'session_unreachable', message: 'Could not load this chat history.' } }
+  }
   ipcMain.handle(
     CH_HOST_OPEN_HISTORY,
-    (_e, engineSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
-      if (!host) return Promise.resolve(noHost<SessionDescriptor>())
+    async (_e, engineSessionId: unknown): Promise<HostResult<SessionDescriptor>> => {
+      const openingHost = host
+      if (!openingHost) return noHost<SessionDescriptor>()
+      await openingHost.whenReady()
+      if (host !== openingHost) return noHost<SessionDescriptor>()
       // SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-
       // created session (a transcript with no desktop registry row) as a real
       // desktop session. HC1: the renderer supplies ONLY an ENGINE session id; it
@@ -3045,14 +3295,46 @@ function registerHostControlPlane(): void {
       if (resolution.kind === 'reject') {
         return Promise.resolve({ ok: false, error: resolution.error })
       }
+      const engineId = resolution.kind === 'existing'
+        ? resolution.descriptor.engineSessionId!
+        : resolution.resumeEngineSessionId
+      const inflight = openHistoryInFlight.get(engineId)
+      if (inflight) return inflight
       if (resolution.kind === 'existing') {
         // Already a ready app row — the renderer switches/restores it; no spawn.
         branchOpenSeeds.delete(resolution.descriptor.engineSessionId ?? '')
+        if (resolution.descriptor.binding?.kind === 'managed' && resolution.descriptor.restorable) {
+          const promise = ensureManagedHistoryPreview(resolution.descriptor, engineId)
+            .catch(() => ({
+              ok: false as const,
+              error: { code: 'session_unreachable' as const, message: 'Could not load this chat history.' },
+            })).finally(() => openHistoryInFlight.delete(engineId))
+          openHistoryInFlight.set(engineId, promise)
+          return promise
+        }
         return Promise.resolve({ ok: true, value: resolution.descriptor })
       }
-      const engineId = resolution.resumeEngineSessionId
-      const inflight = openHistoryInFlight.get(engineId)
-      if (inflight) return inflight
+      // A just-created branch normally has its ledger identity already. If a
+      // transient write failed, its trusted in-process seed can still take the
+      // existing resume-create path and retry recording ownership on open.
+      if (resolution.binding?.kind === 'managed' &&
+        (!branchOpenSeed(engineId) || host.hasManagedHistoryIdentity(engineId))) {
+        const promise = host.adoptManagedHistorySession(
+          engineId,
+          resolution.title,
+          resolution.forked === true,
+        ).then(async result => {
+          if (!result.ok) return result
+          return ensureManagedHistoryPreview(result.value, engineId)
+        }).catch(() => ({
+          ok: false as const,
+          error: { code: 'session_unreachable' as const, message: 'Could not load this chat history.' },
+        })).finally(() => {
+          openHistoryInFlight.delete(engineId)
+        })
+        openHistoryInFlight.set(engineId, promise)
+        return promise
+      }
       // Spawn a resume through the SAME machinery restore uses: createSession with
       // a MAIN-resolved cwd + resumeEngineSessionId → supervisor sets
       // CATCODE_SIDECAR_RESUME_SESSION_ID → sessionResume.ts (the engine's real
@@ -3070,6 +3352,7 @@ function registerHostControlPlane(): void {
           // of the cwd basename (bug-sweep #2, 2026-07-21).
           ...(resolution.title !== undefined ? { title: resolution.title } : {}),
           ...(resolution.forked === true ? { forked: true } : {}),
+          ...(resolution.binding !== undefined ? { binding: resolution.binding } : {}),
         })
         .then(result => {
           // Bootstrap coalescing, the same guard `CH_HOST_RESTORE` arms: this
@@ -3612,6 +3895,23 @@ function handOff(
     return 'session_not_found'
   }
   try {
+    if (message.type === 'app.submit' && !host?.ensureManagedSubmitIdentity(sessionId)) {
+      const messageText = "This chat's storage could not be verified. Check its folder, then retry."
+      if (audience === 'renderer') {
+        const frame: ServerFrame = {
+          kind: 'error',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId,
+          requestId: message.requestId,
+          code: 'session_not_ready',
+          message: messageText,
+          retryable: true,
+        }
+        deliver(attachmentGate.onFrame(sessionId, frame))
+      }
+      process.stderr.write(`[main] forward to ${sessionId} failed: ${messageText}\n`)
+      return 'session_not_ready'
+    }
     supervisor.send(sessionId, message)
     if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
     return null
@@ -3784,6 +4084,10 @@ function ensureHost(): Host {
     sidecarCommandMarker: sidecarLaunch().identityMarker,
     log: line => logLegacyDiagnostic(line, 'registry', 'host'),
   })
+  const managedStorage = new ManagedStorage({
+    appDataBase: app.getPath('userData'),
+    ownershipDir: join(defaultRegistryDir(), 'chat-workspaces'),
+  })
   registryForDebug = registry
 
   // B4 — kick off the launch sequence (read → sweep orphans → reap) and hand the
@@ -3799,6 +4103,7 @@ function ensureHost(): Host {
     supervisor,
     registry,
     validateCwd,
+    managedStorage,
     launched,
     log: line => logLegacyDiagnostic(line, 'host', 'host'),
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
@@ -3991,6 +4296,11 @@ function stopBackgroundDrivers(): void {
   accountsPoolDriver = null
   accountsPoolAbort?.abort()
   accountsPoolAbort = null
+  for (const read of settingsInventoryReads) read.abort()
+  settingsInventoryReads.clear()
+  for (const write of settingsWriteRuns) write.abort()
+  settingsWriteRuns.clear()
+  settingsWriteGeneration += 1
   accountProfileMutationAbort?.abort()
   accountProfileMutationAbort = null
   accountInvalidation.clearAll()

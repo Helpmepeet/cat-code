@@ -259,6 +259,7 @@ export function createSidecarSettingsDomain(
   availableOptions: AvailableSettingOptions = [],
   options: {
     reloadAvailableOptions?: () => Promise<AvailableSettingOptions>
+    userScope?: boolean
   } = {},
 ): SidecarSettingsDomain {
   // Read ONCE at spawn (see the module header for why: the attach path must do no
@@ -269,22 +270,25 @@ export function createSidecarSettingsDomain(
   // the re-read reflects the just-written file). `availableOptions` is spawn-frozen
   // like the layers (the option registries do not change on a settings write), so
   // the SAME captured list is reused on every refresh + membership check.
-  let snapshot = readSettingsSnapshotOnce(availableOptions)
+  let snapshot = readSettingsSnapshotOnce(availableOptions, options.userScope)
   return {
     getSnapshot() {
       return snapshot
     },
     runVerb(verb: SettingsVerbMessage): SettingsWriteResult {
+      if (options.userScope && verb.source !== 'userSettings') {
+        return { ok: false, message: 'not a user setting', changed: false }
+      }
       const result = applySettingsVerb(verb, availableOptions)
       if (result.changed) {
-        snapshot = readSettingsSnapshotOnce(availableOptions)
+        snapshot = readSettingsSnapshotOnce(availableOptions, options.userScope)
       }
       return result
     },
     async refreshAvailableOptions(): Promise<void> {
       if (!options.reloadAvailableOptions) return
       availableOptions = await options.reloadAvailableOptions()
-      snapshot = readSettingsSnapshotOnce(availableOptions)
+      snapshot = readSettingsSnapshotOnce(availableOptions, options.userScope)
     },
   }
 }
@@ -379,10 +383,12 @@ function applySettingsVerb(
  */
 function readSettingsSnapshotOnce(
   availableOptions: AvailableSettingOptions,
+  userScope = false,
 ): SettingsSnapshot | null {
   try {
     const layers: SettingsSourceLayer[] = []
     for (const source of SETTING_SOURCES) {
+      if (userScope && (source === 'projectSettings' || source === 'localSettings')) continue
       if (!isSettingSourceEnabled(source)) continue
       const settings = getSettingsForSource(source)
       if (settings && Object.keys(settings).length > 0) {

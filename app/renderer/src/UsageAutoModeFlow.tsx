@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
-import { autoModeAttempts, autoModeOverviewEdges, type AutoModeDisplayGroup } from './usageAutoModeState.js'
+import { autoModeAttempts, autoModeOverviewEdges, type AutoModeDecisionGroup } from './usageAutoModeState.js'
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js'
 import {
   layoutAutoModeFlow,
@@ -11,16 +11,16 @@ import {
 } from './usageAutoModeFlowState.js'
 import './usageAutoModeFlow.css'
 
-const GROUPS = new Set(['allowed', 'blocked', 'error', 'cancelled'])
+const GROUPS = new Set(['allowed', 'blocked'])
 
-function linkOutcome(link: UsageAutoModeFlowLink): AutoModeDisplayGroup | null {
+function linkOutcome(link: UsageAutoModeFlowLink): AutoModeDecisionGroup | null {
   if (link.outcome) return link.outcome
-  return GROUPS.has(link.to) ? link.to as AutoModeDisplayGroup : null
+  return GROUPS.has(link.to) ? link.to as AutoModeDecisionGroup : null
 }
 
 function usageAutoModeFlowLinkLabel(edge: UsageAutoModeFlowEdge, total: number): string {
   const percent = total ? usagePercent(edge.count / total * 100) : 'Not applicable'
-  return `${usageAutoModeFlowNodeLabel(edge.from)} to ${usageAutoModeFlowNodeLabel(edge.to)}: ${usageNumber(edge.count)} recorded ${edge.count === 1 ? 'attempt' : 'attempts'}, ${percent} of ${usageNumber(total)} attempts`
+  return `${usageAutoModeFlowNodeLabel(edge.from)} to ${usageAutoModeFlowNodeLabel(edge.to)}: ${usageNumber(edge.count)} recorded ${edge.count === 1 ? 'decision' : 'decisions'}, ${percent} of ${usageNumber(total)} allowed or blocked decisions`
 }
 
 function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
@@ -56,6 +56,7 @@ function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
 export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }) {
   const chart = useUsageChartWidth()
   const attempts = autoModeAttempts(summary)
+  const decisions = summary.allTools.outcomes.allowed + summary.allTools.outcomes.policy_blocked
   const overviewEdges = autoModeOverviewEdges(summary)
   const layout = layoutAutoModeFlow(overviewEdges, chart.width)
   const [previewLinkId, setPreviewLinkId] = useState<string | null>(null)
@@ -75,10 +76,16 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
       <p className="usage-note">No decisions</p>
     </section>
   }
+  if (decisions === 0) {
+    return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
+      <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
+      <p className="usage-note">No allowed or blocked decisions</p>
+    </section>
+  }
   if (!layout) {
     return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
       <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-      <p className="usage-note">No decisions</p>
+      <p className="usage-note">Decision flow unavailable</p>
     </section>
   }
 
@@ -92,7 +99,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         height={layout.height}
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         role="group"
-        aria-label={`Decision flow for ${usageNumber(layout.total)} recorded automatic permission attempts`}
+        aria-label={`Decision flow for ${usageNumber(layout.total)} recorded allowed or blocked automatic permission decisions`}
         onMouseLeave={() => setPreviewLinkId(null)}
       >
         {layout.links.map(link => {
@@ -125,16 +132,15 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         {layout.nodes.map(node => {
           const label = nodeLabelPosition(node)
           const outcome = GROUPS.has(node.id) ? node.id : ''
-          const title = node.id === 'error' ? 'Error (review required, operational error, unknown outcome, and incomplete)' : node.label
           return <g key={node.id}>
             <rect className={`usage-auto-flow-node usage-auto-flow-node-${outcome || node.id.toLowerCase().replaceAll(' ', '-')}`} x={node.x} y={node.y} width={node.width} height={node.height} rx="2">
-              <title>{`${title}: ${usageNumber(Math.max(node.incoming, node.outgoing))} recorded attempts`}</title>
+              <title>{`${node.label}: ${usageNumber(Math.max(node.incoming, node.outgoing))} recorded decisions`}</title>
             </rect>
             <text className="usage-auto-flow-node-label" x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline={label.baseline}>{node.label}</text>
           </g>
         })}
       </svg>
     </div>
-    {activeLink && <div className="usage-auto-flow-readout" role="status"><p><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} · {usagePercent(activeLink.count / layout.total * 100)}</p>{pinnedLinkId && <button type="button" onClick={() => { setPinnedLinkId(null); setPreviewLinkId(null) }}>Clear selection</button>}</div>}
+    {activeLink && <div className="usage-auto-flow-readout" role="status"><p><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} allowed or blocked decisions · {usagePercent(activeLink.count / layout.total * 100)}</p>{pinnedLinkId && <button type="button" onClick={() => { setPinnedLinkId(null); setPreviewLinkId(null) }}>Clear selection</button>}</div>}
   </section>
 }

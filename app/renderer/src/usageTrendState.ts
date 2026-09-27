@@ -1,10 +1,21 @@
-import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
-import { usageShare } from './usageDashboardState.js';
+import type { UsageDay, UsageRangeSummary, UsageWindow } from '../../shared/usageDashboard.js';
+import { usageCacheReadRate } from './usageDashboardState.js';
 
 const DAY_MS = 86400000;
 const civilDay = (date: string): number => Date.parse(`${date}T00:00:00.000Z`);
 const dayKey = (time: number): string => new Date(time).toISOString().slice(0, 10);
 export type UsageTrendPoint = { date: string; value: number | null };
+/** Per-day history from firstDate through lastDate; a date inside that span with no entry recorded nothing. */
+export type UsageDailyActivity = { firstDate: string; lastDate: string; days: ReadonlyMap<string, UsageDay> };
+export function usageDailyActivity(ranges: Record<UsageWindow, UsageRangeSummary>): UsageDailyActivity {
+    const recent = ranges['30d'], all = ranges.all;
+    // All is sparse daily until it outgrows its bucket budget; after that only the
+    // dense 30-day range still resolves individual days.
+    const allDaily = usageBucketDays(all) === 1;
+    const days = new Map<string, UsageDay>();
+    for (const day of [...(allDaily ? all.days : []), ...recent.days]) days.set(day.date, day);
+    return { firstDate: allDaily && all.startDate < recent.startDate ? all.startDate : recent.startDate, lastDate: dayKey(civilDay(recent.endDateExclusive) - DAY_MS), days };
+}
 export function usageBucketDays(summary: UsageRangeSummary): number {
     return 'bucketDays' in summary && typeof summary.bucketDays === 'number' ? summary.bucketDays : 1;
 }
@@ -16,8 +27,8 @@ export function usageDatePosition(summary: UsageRangeSummary, date: string): num
     const first = civilDay(summary.startDate), last = civilDay(summary.endDateExclusive) - DAY_MS;
     return last === first ? 0.5 : (civilDay(date) - first) / (last - first);
 }
-export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | 'cacheReads' | 'requests' | 'errors'): UsageTrendPoint[] {
-    const values = new Map(summary.days.map(day => [day.date, metric === 'cache' ? day.cacheWriteReporting === 'reported' ? usageShare(day.tokens) : null : metric === 'cacheReads' ? day.tokens.read : metric === 'errors' ? day.results ? day.errors / day.results * 100 : null : day.requests]));
+export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | 'requests' | 'errors'): UsageTrendPoint[] {
+    const values = new Map(summary.days.map(day => [day.date, metric === 'cache' ? usageCacheReadRate(day.tokens) : metric === 'errors' ? day.results ? day.errors / day.results * 100 : null : day.requests]));
     const step = usageBucketDays(summary) * DAY_MS;
     const first = civilDay(summary.startDate), last = civilDay(summary.endDateExclusive) - DAY_MS;
     // Two boundary points describe even very long empty spans without allocating every day.
@@ -25,13 +36,13 @@ export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | '
     for (const day of summary.days) {
         const time = civilDay(day.date);
         if (time - previous > step) {
-            for (const boundary of [previous + step, time - step]) values.set(dayKey(boundary), metric === 'requests' || metric === 'cacheReads' ? 0 : null);
+            for (const boundary of [previous + step, time - step]) values.set(dayKey(boundary), metric === 'requests' ? 0 : null);
         }
         previous = time;
     }
     const finalBucket = first + Math.floor((last - first) / step) * step;
     if (previous < finalBucket) {
-        for (const boundary of [previous + step, finalBucket]) values.set(dayKey(boundary), metric === 'requests' || metric === 'cacheReads' ? 0 : null);
+        for (const boundary of [previous + step, finalBucket]) values.set(dayKey(boundary), metric === 'requests' ? 0 : null);
     }
     return [...values].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value }));
 }

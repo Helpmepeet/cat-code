@@ -41,6 +41,14 @@
 }
 
 :root {
+  --motion-fast: 120ms;
+  --motion-arrive: 180ms;
+  --motion-panel: 200ms;
+  --motion-value: 400ms;
+  --motion-land: 900ms;
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
   /* Without this, Chromium paints its LIGHT-mode form controls and scrollbars on
    * this near-black shell: a white scrollbar track down the side of every scroller
    * (visible whenever the OS is set to always-show scroll bars, or a mouse is
@@ -1038,7 +1046,7 @@ html[data-glass='on'] [data-window-overlay] {
  * said nothing more specific than "a turn is running".
  *
  * Written as keyframes rather than Tailwind utilities because all four animate
- * `transform`/`left`/`right` over a cycle, which no utility expresses. */
+ * `transform` over a cycle, which no utility expresses. */
 @keyframes catcode-compact-ingest {
   0% {
     transform: translateX(26px);
@@ -1079,20 +1087,55 @@ html[data-glass='on'] [data-window-overlay] {
 
 @keyframes catcode-compact-sweep-left {
   from {
-    left: -40%;
+    transform: translateX(-100%);
   }
   to {
-    left: 100%;
+    transform: translateX(250%);
   }
 }
 
 @keyframes catcode-compact-sweep-right {
   from {
-    right: -40%;
+    transform: translateX(100%);
   }
   to {
-    right: 100%;
+    transform: translateX(-250%);
   }
+}
+
+@keyframes catcode-arrive {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes catcode-pop-up {
+  from { opacity: 0; transform: translateY(3px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes catcode-drawer-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes catcode-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes catcode-settle {
+  from { opacity: 0.6; scale: 0.96; }
+  to { opacity: 1; scale: 1; }
+}
+
+@keyframes catcode-land {
+  from { background-color: rgb(var(--accent-rgb) / 0.1); }
+  to { background-color: transparent; }
+}
+
+@keyframes catcode-tab-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @layer components {
@@ -1121,6 +1164,35 @@ html[data-glass='on'] [data-window-overlay] {
     animation: catcode-token-warn-in 0.18s ease both;
   }
 
+  .animate-arrive {
+    animation: catcode-arrive var(--motion-arrive) var(--ease-enter);
+  }
+
+  .animate-pop-up {
+    transform-origin: bottom;
+    animation: catcode-pop-up var(--motion-fast) var(--ease-enter);
+  }
+
+  .animate-drawer-in {
+    animation: catcode-drawer-in var(--motion-panel) var(--ease-enter);
+  }
+
+  .animate-scrim-in {
+    animation: catcode-scrim-in var(--motion-fast) var(--ease-enter);
+  }
+
+  .animate-settle {
+    animation: catcode-settle var(--motion-arrive) var(--ease-enter);
+  }
+
+  .animate-land {
+    animation: catcode-land var(--motion-land) var(--ease-standard);
+  }
+
+  .animate-tab-in {
+    animation: catcode-tab-in var(--motion-arrive) var(--ease-enter);
+  }
+
   .animate-face-pulse {
     animation: catcode-face-pulse 1.4s ease-in-out infinite;
   }
@@ -1138,19 +1210,21 @@ html[data-glass='on'] [data-window-overlay] {
     animation: catcode-compact-star 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 
-  /* The resting `left`/`right` is a real declaration, not just the keyframe's
-   * `from`. Parked off-track it is clipped away by the rule's own
+  /* The resting transform is a real declaration, not just the keyframe's
+   * `from`. The 40%-wide mark is parked off-track and clipped by the rule's own
    * `overflow-hidden`, so `animation: none` under reduced motion removes the
    * highlight instead of freezing a bright stub at the start of the hairline —
    * and the reduced-motion block below stays the single rule its guard expects. */
   .animate-compact-sweep-left {
-    left: -40%;
+    left: 0;
+    transform: translateX(-100%);
     animation: catcode-compact-sweep-left 1.5s cubic-bezier(0.4, 0, 0.2, 1)
       infinite;
   }
 
   .animate-compact-sweep-right {
-    right: -40%;
+    right: 0;
+    transform: translateX(100%);
     animation: catcode-compact-sweep-right 1.5s cubic-bezier(0.4, 0, 0.2, 1)
       infinite;
   }
@@ -1432,6 +1506,13 @@ html[data-glass='on'] [data-window-overlay] {
   .animate-toast-in,
   .animate-sa-pop,
   .animate-token-warn-in,
+  .animate-arrive,
+  .animate-pop-up,
+  .animate-drawer-in,
+  .animate-scrim-in,
+  .animate-settle,
+  .animate-land,
+  .animate-tab-in,
   .animate-face-pulse,
   .animate-compact-ingest,
   .animate-compact-absorb,
@@ -1441,6 +1522,18 @@ html[data-glass='on'] [data-window-overlay] {
   .prose-arrive-smooth,
   .prose-arrive-flowing {
     animation: none !important;
+  }
+}
+
+/* Tailwind transition utilities that can move geometry or opacity. Colour-only
+ * transitions stay available; arbitrary property utilities are covered too. */
+@media (prefers-reduced-motion: reduce) {
+  .transition,
+  .transition-all,
+  .transition-opacity,
+  .transition-transform,
+  [class*='transition-['] {
+    transition-duration: 0s !important;
   }
 }
 

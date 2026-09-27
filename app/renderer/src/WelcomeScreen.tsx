@@ -110,6 +110,7 @@ type WelcomeScreenProps =
     }
   | {
       variant: 'session'
+      managedChat?: boolean
       /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
       cwd: string | null
       /** The session's git branch. App reads it from this session's
@@ -167,40 +168,48 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
               </div>
               {showFirstRunOrder ? (
                 <p className="mt-2 text-[14px] text-text-muted">
-                  Open a project to start. Sign in once it opens.
+                  Start a chat or open a project. Sign in once it opens.
                 </p>
               ) : null}
             </div>
 
             {/* Meta strip with vertical dividers */}
             <div className="flex items-stretch border-t border-shell-seam pt-5">
-              <MetaCol icon={<FolderIcon />} label="Project">
-                {props.variant === 'session' ? (
-                  <SessionProject cwd={props.cwd} />
-                ) : (
-                  <ProjectPicker
-                    recents={props.recents}
-                    onOpenRecent={props.onOpenRecent}
-                    onOpenFolder={props.onOpenFolder}
-                    rosterFailure={props.rosterFailure}
-                  />
-                )}
-              </MetaCol>
-              <div className="w-px bg-shell-seam" />
-              <MetaCol icon={<MonitorIcon />} label="Start in">
+              {props.variant !== 'session' || !props.managedChat ? (
+                <MetaCol icon={<FolderIcon />} label="Project">
+                  {props.variant === 'session' ? (
+                    <SessionProject cwd={props.cwd} />
+                  ) : (
+                    <ProjectPicker
+                      recents={props.recents}
+                      onOpenRecent={props.onOpenRecent}
+                      onOpenFolder={props.onOpenFolder}
+                      rosterFailure={props.rosterFailure}
+                    />
+                  )}
+                </MetaCol>
+              ) : null}
+              {(props.variant !== 'session' || !props.managedChat || props.sandboxed) ? (
+                <>
+                  {props.variant === 'session' && props.managedChat ? null : (
+                    <div className="w-px bg-shell-seam" />
+                  )}
+                  <MetaCol icon={<MonitorIcon />} label="Start in">
                 {/* This reads the one thing about where a session runs that is
                     genuinely variable: whether its tools are sandboxed
                     (`diagnostics.snapshot`). The launcher has no session to ask,
                     so it states the plain default. */}
-                <span className="text-[13px] text-text-muted">
-                  {props.variant === 'session' && props.sandboxed
-                    ? 'Sandboxed'
-                    : 'Locally'}
-                </span>
-              </MetaCol>
+                    <span className="text-[13px] text-text-muted">
+                      {props.variant === 'session' && props.sandboxed
+                        ? 'Sandboxed'
+                        : 'Locally'}
+                    </span>
+                  </MetaCol>
+                </>
+              ) : null}
               {/* Branch is available once a session fixes the project path. The
                   host resolves that path from the session id for Git actions. */}
-              {props.variant === 'session' ? (
+              {props.variant === 'session' && !props.managedChat ? (
                 <>
                   <div className="w-px bg-shell-seam" />
                   <MetaCol icon={<BranchIcon />} label="Branch">

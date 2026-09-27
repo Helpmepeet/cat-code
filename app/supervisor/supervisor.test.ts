@@ -145,6 +145,33 @@ test('clears an inherited resume id when the session does not request a resume',
   expect(readFileSync(observedResumePath, 'utf8')).toBe('')
 })
 
+test('only a host-marked managed recreation reaches the sidecar spawn environment', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-recreated-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(process.argv[1] + process.env.CATCODE_SIDECAR_SESSION_ID, process.env.CATCODE_SESSION_RECREATED_FOLDER ?? 'missing')",
+  ].join(';')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script, join(socketDir, 'observed-')],
+    sidecarCwd: sessionCwd,
+    sidecarEnv: { CATCODE_SESSION_RECREATED_FOLDER: 'true' },
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('fresh', { cwd: sessionCwd })
+  supervisor.spawnSession('recreated', { cwd: sessionCwd, recreatedFolderNotice: true })
+  const freshPath = join(socketDir, 'observed-fresh')
+  const recreatedPath = join(socketDir, 'observed-recreated')
+  await waitFor(
+    () => existsSync(freshPath) && existsSync(recreatedPath),
+    'sidecars did not report their recreation notice environment',
+  )
+  expect(readFileSync(freshPath, 'utf8')).toBe('false')
+  expect(readFileSync(recreatedPath, 'utf8')).toBe('true')
+})
+
 test('rejects an oversized prompt before writing it and keeps the session usable', async () => {
   const socketDir = makeTempDir('catcode-supervisor-live-')
   const supervisor = new SidecarSupervisor({

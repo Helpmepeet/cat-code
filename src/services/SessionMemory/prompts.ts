@@ -48,7 +48,7 @@ const SESSION_MEMORY_CONTENT_RULES = [
   'Do NOT reference this note-taking process or these instructions anywhere in the notes.',
   'It is acceptable to skip a section that has no substantial new information. Do not add filler such as "No info yet".',
   'Write detailed, information-dense content. Include specifics such as file paths, function names, error messages, exact commands, and technical details when they materially help continuity.',
-  'Do not include information that is already present in the CLAUDE.md files included in context.',
+  'Do not include information that is already present in the project instruction files included in context.',
   `Keep each section under ~${MAX_SECTION_LENGTH} tokens/words. If a section approaches this limit, condense it by removing less important detail while preserving the most critical information.`,
   'Focus on actionable, specific information that would help someone understand or recreate the work discussed in the conversation.',
 ] as const
@@ -144,7 +144,7 @@ CRITICAL RULES FOR EDITING:
 - It's OK to skip updating a section if there are no substantial new insights to add. Do not add filler content like "No info yet", just leave sections blank/unedited if appropriate.
 - Write DETAILED, INFO-DENSE content for each section - include specifics like file paths, function names, error messages, exact commands, technical details, etc.
 - For "Key results", include the complete, exact output the user requested (e.g., full table, full answer, etc.)
-- Do not include information that's already in the CLAUDE.md files included in the context
+- Do not include information that's already in the project instruction files included in context
 - Keep each section under ~${MAX_SECTION_LENGTH} tokens/words - if a section is approaching this limit, condense it by cycling out less important details while preserving the most critical information
 - Focus on actionable, specific information that would help someone understand or recreate the work discussed in the conversation
 - IMPORTANT: Always update "Current State" to reflect the most recent work - this is critical for continuity after compaction

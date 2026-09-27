@@ -357,3 +357,22 @@ Newly materialized main and agent transcripts write a bounded capability marker
 before their first transcript message. That marker proves the observation path
 was available for the source's entire retained interval, including zero-attempt
 periods. A resumed older source remains Partial before its first marker.
+
+## Prompt cache percentage amendment, 2026-09-26
+
+The Analytics prompt cache trend, headline, and overview card show cache read
+rate: cache reads divided by cache reads plus uncached input. This percentage
+uses recorded values even when a provider does not report cache writes. The
+chart keeps gaps where neither category was recorded, and partial history is
+identified on the prompt cache panel. The table includes the same daily rate
+and retains the separate cache share calculation that includes reported cache
+writes only when that denominator is complete.
+
+## Decision flow outcome amendment, 2026-09-26
+
+Decision flow visualizes only recorded Allowed and Blocked automatic permission
+outcomes. Route widths and percentages use this displayed population, so an
+error, cancellation, incomplete attempt, or review request cannot dilute the
+decision comparison. Other Auto mode views retain their existing outcome data.
+If the selected period has attempts but none with these two outcomes, the flow
+states that there are no allowed or blocked decisions.

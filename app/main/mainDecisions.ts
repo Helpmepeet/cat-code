@@ -59,7 +59,7 @@ export const SIDECAR_RUNTIME_ARGS = [
  * Every sidecar entry main can spawn, mode token -> dev entry file (P5-1).
  *
  * Development runs each file directly under `bun run`. A packaged build has
- * neither `bun` nor a checkout, so one compiled binary serves all five and
+ * neither `bun` nor a checkout, so one compiled binary serves all modes and
  * picks the module by mode token (`app/sidecar/packagedEntry.ts`). Both sides
  * read this table, so a new entry cannot exist in one topology only.
  *
@@ -69,16 +69,16 @@ export const SIDECAR_RUNTIME_ARGS = [
  * and expose it to the launch sweep. `mainDecisions.test.ts` asserts this.
  *
  * `runtimeFlags` records which modes carry `SIDECAR_RUNTIME_ARGS` in
- * DEVELOPMENT. The three disposable workers deliberately do not: they run under
- * `CLAUDE_CODE_SIMPLE` and never reach the feature-gated branches those flags
- * exist for.
+ * DEVELOPMENT. Disposable readers do not carry session runtime flags. The
+ * settings inventory reader keeps full config discovery so user/project skills
+ * and agents remain visible before a chat starts.
  *
  * KNOWN DIVERGENCE — the packaged build does not reproduce that split. Features
  * are folded in at compile time, and `package-app.ts` compiles ONE binary for
- * all five modes, so the three workers run WITH `TRANSCRIPT_CLASSIFIER` and
+ * all modes, so the readers run WITH `TRANSCRIPT_CLASSIFIER` and
  * `REACTIVE_COMPACT` when packaged and without them in development. Preserving
  * the split would mean shipping a second ~80 MB feature-free binary for the
- * workers. That was not judged worth it for a difference with no observed
+ * readers. That was not judged worth it for a difference with no observed
  * behavioural harm, but it is a real dev-versus-packaged engine difference, not
  * an equivalence: see the P5-1 row in `docs/migration/STATUS.md`.
  */
@@ -87,6 +87,8 @@ export const SIDECAR_MODE_ENTRIES = {
   'transcript-backfill': { file: 'transcriptBackfillWorker.ts', runtimeFlags: false },
   'catalog': { file: 'sessionsCatalogWorker.ts', runtimeFlags: false },
   'accounts-pool': { file: 'accountsPoolWorker.ts', runtimeFlags: false },
+  'settings-inventory': { file: 'settingsInventoryWorker.ts', runtimeFlags: false },
+  'settings-write': { file: 'settingsWriteWorker.ts', runtimeFlags: false },
   'usage-stats': { file: 'usageStatsWorker.ts', runtimeFlags: false },
   'debug-cleanup': { file: 'debugCleanupWorker.ts', runtimeFlags: true },
 } as const
@@ -107,7 +109,7 @@ export type SidecarLaunchPlan = Readonly<{
    *
    * It has to select SESSION sidecars alone. Development gets that for free
    * because every mode has a distinct entry path, but the packaged build gives
-   * all five the same executable, so the marker carries the mode token too.
+   * all modes the same executable, so the marker carries the mode token too.
    * Without it a pid recycled onto a live catalog or accounts worker would
    * satisfy the identity check and be killed.
    */
@@ -119,7 +121,7 @@ export type SidecarLaunchPlan = Readonly<{
  *
  * Development: `bun` off PATH (or `CATCODE_BUN_BIN`) running repository
  * TypeScript, resolved relative to the built `main/` directory exactly as the
- * five entry constants did before.
+ * entry constants did before.
  *
  * Packaged: the compiled binary inside the bundle. No PATH lookup, no `.ts`,
  * and no path that can reach back into a checkout, which is what makes a

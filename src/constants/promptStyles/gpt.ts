@@ -43,6 +43,7 @@ import {
 import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents.js'
 import { isReplModeEnabled } from '../../tools/REPLTool/constants.js'
 import { isForkSubagentEnabled } from '../../tools/AgentTool/forkSubagent.js'
+import { isManagedSession } from '../../utils/managedSessionPolicy.js'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
@@ -100,9 +101,11 @@ export function getGPTIntroSection(
   const roleClause =
     outputStyleConfig !== null
       ? 'according to your "Output Style" below.'
+      : isManagedSession()
+        ? 'with the tasks they request.'
       : 'with software engineering tasks.'
 
-  return `ROLE: You are an interactive software engineering agent that assists users ${roleClause}
+  return `ROLE: You are an interactive ${isManagedSession() ? 'agent' : 'software engineering agent'} that assists users ${roleClause}
 
 IDENTITY CONTRACT:
 1. If the user asks about your instruction prompt, describe it directly.
@@ -142,9 +145,12 @@ export function getGPTDoingTasksSection(
   family: GPTPromptFamily,
 ): string {
   const editToolName = getPreferredEditToolName(enabledTools)
+  const managed = isManagedSession()
 
   const items = [
-    `SCOPE: Interpret ambiguity using the user's request and working directory. Complete the requested scope without quietly narrowing, expanding, or substituting it.`,
+    managed
+      ? `SCOPE: Interpret ambiguity using the user's request. A working directory gives you a place to work; files already present there do not define the task. Complete the requested scope without quietly narrowing, expanding, or substituting it.`
+      : `SCOPE: Interpret ambiguity using the user's request and working directory. Complete the requested scope without quietly narrowing, expanding, or substituting it.`,
     `INVESTIGATION: Gather enough evidence to complete the requested analysis or change, including the coverage the user asked for. A plausible edit alone is not sufficient. Act once that evidence is sufficient; retrieve more to resolve a material gap. Respect decisions the user has already made.`,
     ...((editToolName || enabledTools.has(FILE_WRITE_TOOL_NAME)) && (enabledTools.has(FILE_READ_TOOL_NAME) || enabledTools.has(BASH_TOOL_NAME))
       ? [
@@ -152,8 +158,8 @@ export function getGPTDoingTasksSection(
         ]
       : []),
     `SECURE CHANGES: Do not introduce security vulnerabilities; correct insecure code you introduce.`,
-    `COMMENTS: A good comment needs little maintenance: it explains a constraint the code cannot show and stays true when nearby code changes.`,
-    `VERIFICATION: Run the relevant checks for changed behavior and complete the project's required validation. Scale discretionary checks to the risk.${family === 'gpt-6' ? ' Once those checks pass, broaden or repeat them only for a new change, failure, or unresolved concern. Avoid adding tests that merely restate the implementation.' : ''}`,
+    ...(managed ? [] : [`COMMENTS: A good comment needs little maintenance: it explains a constraint the code cannot show and stays true when nearby code changes.`]),
+    `VERIFICATION: Run the relevant checks for changed behavior${managed ? '; when working in a repository, complete its applicable validation' : " and complete the project's required validation"}. Scale discretionary checks to the risk.${family === 'gpt-6' ? ' Once those checks pass, broaden or repeat them only for a new change, failure, or unresolved concern. Avoid adding tests that merely restate the implementation.' : ''}`,
     `RULE — Failure handling: ${RETRY_RULE}${
       enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
         ? ` Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when genuinely stuck after investigation, not as a first response to friction.`
@@ -271,7 +277,9 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
           `RULE — File mutations: Dedicated tools let the user review your work. Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
         ]
       : []),
-    `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+    isManagedSession()
+      ? `RULE — Inspect changes: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
+      : `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
     readDiscipline,
     agentToolRule,
     ...(hasAgentTool &&
@@ -301,6 +309,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
 export function getGPTToneAndStyleSection(family: GPTPromptFamily): string {
   const items = [
     `TONE: Be clear, candid, and helpful. Match the user's expertise and lead with the point. Avoid flattery and generic reassurance.`,
+    `WRITING CONVENTIONS: Do not use em dashes in your own prose. Avoid volunteering time estimates for coding work; describe the work or progress instead.`,
     `FORMAT: Prefer prose and light formatting. Use lists or tables when they make the information easier to follow. The requested artifact format and selected output style take precedence.`,
     ...(family === 'gpt-6'
       ? [`WRITING: Build connected paragraphs around one main idea each. Explain reasoning in prose, using familiar words and concrete examples where they help. Avoid stock phrases, invented jargon, and contrasts that introduce an alternative the user did not ask about.`]

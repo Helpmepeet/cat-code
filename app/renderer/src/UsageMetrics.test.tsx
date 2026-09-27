@@ -17,7 +17,7 @@ test('each tile uses its matching prior metric and exposes the precise compariso
     expect(html).toContain('Per active day: 60% increase');
     expect(html).toContain('Sessions: 20% decrease');
     expect(html).toContain('Tool requests: 20% decrease');
-    expect(html).toContain('Cached input: 5 percentage points increase');
+    expect(html).toContain('Cache read rate: 5 percentage points increase');
     expect(html).toContain('▲ 5 pp');
     expect(html).toContain('usage-delta-up');
     expect(html).toContain('usage-delta-down');
@@ -38,14 +38,14 @@ test('All, incomplete history, absent baseline and zero count baseline omit delt
     expect(renderToStaticMarkup(<UsageMetrics unknown="Loading" partial={false}/>)).not.toContain('usage-metric-delta');
 });
 
-test('unreported cache writes show recorded cache reads without a share comparison', () => {
+test('unreported cache writes retain the read rate and comparable trend', () => {
     const summary = comparable();
     summary.cacheWriteReporting = 'unreported';
-    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('<h2>Cached input</h2><strong>1.1K tokens</strong>');
-    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).not.toContain('Cached input: 5 percentage points increase');
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('<h2>Cache read rate</h2><strong>95.0%</strong>');
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('Cache read rate: 5 percentage points increase');
     summary.cacheWriteReporting = 'reported';
     summary.previousPeriod!.cacheWriteReporting = 'unreported';
-    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).not.toContain('Cached input: 5 percentage points increase');
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="Loading" partial={false}/>)).toContain('Cache read rate: 5 percentage points increase');
 });
 test('per-active-day tile plots the running average for daily ranges', () => {
     const summary = comparable();

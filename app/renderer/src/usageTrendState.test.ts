@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
-import { usageBucketLabel, usageDatePosition, usageTrendPoints } from './usageTrendState.js';
+import { usageBucketLabel, usageDailyActivity, usageDatePosition, usageTrendPoints } from './usageTrendState.js';
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 
-test('sparse dates keep calendar spacing, empty requests are zero, empty cache share breaks the line', () => {
+test('sparse dates keep calendar spacing, empty requests are zero, empty cache rates break the line', () => {
     const summary = structuredClone(snapshot.ranges.all);
     summary.startDate = '2026-09-01';
     summary.days = ['2026-09-01', '2026-09-10'].map(date => ({ ...structuredClone(snapshot.ranges['7d'].days[0]!), date, requests: 4, cacheWriteReporting: 'reported' as const, tokens: { fresh: 1, read: 9, write: 0, output: 0 } }));
@@ -35,4 +35,18 @@ test('error trend uses matched results, preserves measured zero, and gaps missin
     summary.days[0]!.errors = 2;
     summary.days[1]!.results = 5;
     expect(usageTrendPoints(summary, 'errors').map(point => point.value)).toEqual([20, 0, null, null, null, null, null]);
+});
+
+test('daily activity extends the 30-day window with daily All history and drops bucketed All', () => {
+    const ranges = structuredClone(snapshot.ranges);
+    ranges.all.startDate = '2026-06-01';
+    ranges.all.days = [{ ...structuredClone(ranges['7d'].days[0]!), date: '2026-06-03', requests: 2 }];
+    const daily = usageDailyActivity(ranges);
+    expect([daily.firstDate, daily.lastDate]).toEqual(['2026-06-01', '2026-09-13']);
+    expect(daily.days.get('2026-06-03')?.requests).toBe(2);
+    expect(daily.days.has(ranges['30d'].startDate)).toBe(true);
+    ranges.all.bucketDays = 5;
+    const bucketed = usageDailyActivity(ranges);
+    expect(bucketed.firstDate).toBe(ranges['30d'].startDate);
+    expect(bucketed.days.has('2026-06-03')).toBe(false);
 });

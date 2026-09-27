@@ -21,7 +21,7 @@ This file is intentionally:
 | Change default assistant behavior (coding deployment) | `src/constants/prompts.ts` | `src/constants/systemPromptSections.ts`, `src/QueryEngine.ts` |
 | Change deployment-aware prompt behavior | `src/constants/prompts.ts` | `src/tools/AgentTool/runAgent.ts`, `src/constants/system.ts` |
 | Change prompt priority / override behavior | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/coordinator/coordinatorMode.ts`, `src/tools/AgentTool/loadAgentsDir.ts` |
-| Change injected repo or user instructions | `src/utils/claudemd.ts` | `src/context.ts`, repo `CLAUDE.md`, `.claude/rules/*.md`, `CLAUDE.local.md` |
+| Change injected repo or user instructions | `src/utils/claudemd.ts` | `src/utils/instructionFiles.ts`, `src/context.ts`, repo `CLAUDE.md`/`AGENTS.md`, `.claude/rules/*.md`, `CLAUDE.local.md` |
 | Change final prompt assembly before model invocation | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/services/api/claude.ts` |
 | Change output-style prompt content | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts` |
 | Change subagent or coordinator prompt behavior | `src/coordinator/coordinatorMode.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/ResumeAgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts` |
@@ -53,7 +53,7 @@ That path covers:
 - the default system prompt text
 - runtime prompt selection and replacement
 - auto-injected git/date/user instruction context
-- `CLAUDE.md` and `.claude/rules/*.md` loading
+- `CLAUDE.md`, selected `AGENTS.md`, and rules loading
 - `customSystemPrompt` and `appendSystemPrompt`
 - final assembly before model invocation
 
@@ -96,7 +96,7 @@ These are the surfaces you are most likely to configure directly.
 | Deployment-aware system prompt behavior | `src/constants/prompts.ts`, `src/tools/AgentTool/runAgent.ts` | Main prompt behavior, agent runtime prompt assembly, and deployment-related behavior checks |
 | Effective prompt selection | `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | Override vs default vs coordinator vs agent prompt, plus appended prompt text |
 | Auto-injected context | `src/context.ts`, `src/utils/queryContext.ts` | Git snapshot, current date, injected prompt sections, user context |
-| Repo/user/admin instructions | `src/utils/claudemd.ts` | Managed, user, project, and local `CLAUDE.md` and `.claude/rules/*.md` loading order |
+| Repo/user/admin instructions | `src/utils/claudemd.ts`, `src/utils/instructionFiles.ts` | Managed, user, project, and local `CLAUDE.md`, selected project `AGENTS.md`, and rules loading order |
 | Output style prompts | `src/constants/outputStyles.ts`, `src/outputStyles/loadOutputStylesDir.ts` | Style-specific prompt text layered into the main prompt |
 | Coordinator and subagent prompts | `src/coordinator/coordinatorMode.ts`, `src/tools/AgentTool/prompt.ts`, `src/tools/ResumeAgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts`, `src/tools/AgentTool/loadAgentsDir.ts` | Worker orchestration policy, agent spawning/resume guidance, built-in and custom agent system prompts |
 
@@ -108,7 +108,7 @@ Usually safe for content changes:
 - `src/constants/outputStyles.ts`
 - `src/tools/*/prompt.ts`
 - `src/tools/AgentTool/built-in/*.ts`
-- repo `CLAUDE.md` and `.claude/rules/*.md`
+- repo `CLAUDE.md`, selected `AGENTS.md`, and rules
 
 Core plumbing: edit carefully:
 
@@ -133,7 +133,8 @@ Core plumbing: edit carefully:
 | `src/utils/systemPrompt.ts` | Chooses the effective system prompt array at runtime |
 | `src/utils/queryContext.ts` | Fetches prompt pieces used to build cache-safe prompt context |
 | `src/context.ts` | Injects git status, current date, and loaded instruction memory |
-| `src/utils/claudemd.ts` | Loads instruction files and wraps them for prompt injection |
+| `src/utils/claudemd.ts` | Discovers, parses, and wraps instruction files for prompt injection |
+| `src/utils/instructionFiles.ts` | Resolves the Project instructions mode and updates its user-owned plugin option |
 | `src/QueryEngine.ts` | Final assembly of `defaultSystemPrompt`, `customSystemPrompt`, memory prompt, and `appendSystemPrompt` |
 
 ## How Instructions Stack
@@ -146,7 +147,8 @@ This section describes the instruction stack in three complementary ways:
 
 ### 1. File Discovery Order
 
-This is the `CLAUDE.md` and rules loading order handled by `src/utils/claudemd.ts`.
+This is the instruction-file and rules loading order handled by
+`src/utils/claudemd.ts`.
 
 Low priority to high priority:
 
@@ -161,7 +163,10 @@ Concretely, that means:
 - `~/.cat-code/CLAUDE.md`
 - `~/.cat-code/rules/*.md`
 - repo `CLAUDE.md`
+- repo `.cat-code/CLAUDE.md`
 - repo `.claude/CLAUDE.md`
+- repo `AGENTS.md` and `.claude/AGENTS.md` when selected by Project instructions
+- repo `.cat-code/rules/*.md`
 - repo `.claude/rules/*.md`
 - repo `CLAUDE.local.md`
 
@@ -169,6 +174,17 @@ Two important details:
 
 - Directory traversal matters: instruction files closer to the current working directory are higher priority than ones higher up the tree.
 - `src/utils/claudemd.ts` explicitly frames these loaded files as overriding default behavior.
+- The `Project instructions` setting is stored at
+  `pluginConfigs["agents-md@builtin"].options.instructionFiles`. Its default
+  uses AGENTS fallback only when no eligible root-to-CWD Cat Code CLAUDE file
+  claims the project; both mode loads both families, CLAUDE-only ignores
+  AGENTS, and managed-only keeps managed instructions and recalled memory.
+- Mode resolution reads user settings only when enabled, then flag and policy
+  settings. Project and local settings cannot choose which instruction family
+  is loaded. AGENTS discovery does not use `--add-dir`.
+- Managed chats skip project/local directory discovery. They also reject
+  AGENTS includes resolved inside the managed working directory or its
+  ancestors.
 
 ### 2. Runtime Prompt Assembly
 
@@ -288,6 +304,8 @@ These are not `src/` files, but they are first-class instruction inputs to the s
 | `.claude/CLAUDE.md` | `src/utils/claudemd.ts` | Project-shared instructions under `.claude/` |
 | `.claude/rules/*.md` | `src/utils/claudemd.ts` | Project rule fragments |
 | `CLAUDE.local.md` | `src/utils/claudemd.ts` | Project-local private instructions |
+| `AGENTS.md` | `src/utils/claudemd.ts` | Project instructions when selected by the Project instructions mode |
+| `.claude/AGENTS.md` | `src/utils/claudemd.ts` | Project instructions under `.claude/` when selected by the Project instructions mode |
 | Managed `CLAUDE.md` locations | `src/utils/claudemd.ts`, `src/utils/config.ts` | Admin-controlled global instructions |
 | `.claude/output-styles/*.md` | `src/outputStyles/loadOutputStylesDir.ts` | Project output style prompt files |
 | `~/.cat-code/output-styles/*.md` | `src/outputStyles/loadOutputStylesDir.ts` | User output style prompt files |
@@ -309,9 +327,9 @@ The auto-mode classifier carries its own prompt, separate from the assistant's.
 ## Common Mistakes
 
 - Editing `src/constants/prompts.ts` but seeing no change because `src/utils/systemPrompt.ts` selected coordinator, agent, custom, or override prompt instead.
-- Editing repo instruction files but getting overridden by a closer `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`, or `CLAUDE.local.md`.
+- Editing repo instruction files but getting overridden by a closer `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`, or `CLAUDE.local.md`, or expecting AGENTS fallback despite a root-to-CWD CLAUDE claim.
 - Treating `appendSystemPrompt` as replacement behavior. It appends to the selected branch; it does not become the branch.
-- Debugging only the system prompt and forgetting that `CLAUDE.md` is injected through `userContext`, not built inside `src/constants/prompts.ts`.
+- Debugging only the system prompt and forgetting that project instruction files are injected through `userContext`, not built inside `src/constants/prompts.ts`.
 - Changing prompt text and then reading stale assumptions from cached prompt sections or old diagnostics instead of checking the emitted request again.
 
 ## How To Debug The Final Emitted Prompt
@@ -340,7 +358,7 @@ Practical checks:
   - if the emitted system prompt starts with coordinator text, `src/coordinator/coordinatorMode.ts` won
   - if it starts with a built-in or custom agent prompt, the agent branch won
   - if your `src/constants/prompts.ts` edits are absent, a replacement branch won
-- To confirm whether `CLAUDE.md` was loaded:
+- To confirm whether project instruction files were loaded:
   - inspect `getUserContext()` in `src/context.ts`
   - inspect discovery and excludes in `src/utils/claudemd.ts`
   - use `/context` or request dumps to confirm the user-context side actually changed
@@ -469,4 +487,4 @@ These are not primary prompt owners, but they often matter when prompt changes a
 - If you want to change worker or subagent behavior, start at `src/coordinator/coordinatorMode.ts` and `src/tools/AgentTool/`.
 - If you want to change tool instructions, start in `src/tools/*/prompt.ts`.
 - If you want to change output styles, start at `src/constants/outputStyles.ts` and `.claude/output-styles/*.md`.
-- If you want to inspect everything prompt-related before editing, read this file first, then `docs/maps/WORKSPACE_MAP.md`.
+- For prompt-related repository work, read `docs/maps/WORKSPACE_MAP.md` first, then this file before editing.

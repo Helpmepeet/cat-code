@@ -44,6 +44,8 @@ import {
   type SessionId,
 } from '../types/ids.js'
 import type { AttributionSnapshotMessage } from '../types/logs.js'
+import type { SessionBinding } from '../../app/shared/sessionBinding.js'
+import { isSessionBinding } from '../../app/shared/sessionBinding.js'
 import {
   type ActiveConversationTipEntry,
   type ContentReplacementEntry,
@@ -1900,6 +1902,14 @@ class Project {
 
       for (const message of messages) {
         const isCompactBoundary = isCompactBoundaryMessage(message)
+        // Keep the session binding near the start of the serialized row so
+        // lite catalog readers can recover it from their bounded head scan,
+        // even when the first message has a very large body. Source bindings
+        // on resumed/forked messages must not override this session's binding.
+        const {
+          sessionBinding: _sourceSessionBinding,
+          ...sourceMessageFields
+        } = message
 
         // For tool_result messages, use the assistant message UUID from the message
         // if available (set at creation time), otherwise fall back to sequential parent
@@ -1913,6 +1923,7 @@ class Project {
         }
 
         const transcriptMessage: TranscriptMessage = {
+          sessionBinding: readSessionBindingFromEnv(),
           parentUuid: isCompactBoundary ? null : effectiveParentUuid,
           logicalParentUuid: isCompactBoundary ? parentUuid : undefined,
           isSidechain,
@@ -1921,7 +1932,7 @@ class Project {
           promptId:
             message.type === 'user' ? (getPromptId() ?? undefined) : undefined,
           agentId,
-          ...message,
+          ...sourceMessageFields,
           // Session-stamp fields MUST come after the spread. On --fork-session
           // and --resume, messages arrive as SerializedMessage (carries source
           // sessionId/cwd/etc. because removeExtraFields only strips parentUuid
@@ -3735,6 +3746,7 @@ function convertToLogOption(
     firstPrompt,
     messageCount: countVisibleMessages(transcript),
     forked: transcript.some(message => message.forkedFrom !== undefined),
+    sessionBinding: firstMessage.sessionBinding,
     isSidechain: firstMessage.isSidechain,
     teamName: firstMessage.teamName,
     agentName: firstMessage.agentName,
@@ -6335,6 +6347,7 @@ type LiteMetadata = {
    */
   hasConversation?: boolean
   forked: boolean
+  sessionBinding?: SessionBinding
 }
 
 /**
@@ -6499,6 +6512,7 @@ async function readLiteMetadata(
   const entrypoint = extractJsonStringField(head, 'entrypoint')
   const teamName = extractJsonStringField(head, 'teamName')
   const agentSetting = extractJsonStringField(head, 'agentSetting')
+  const sessionBinding = extractSessionBinding(head)
 
   // Prefer the last-prompt tail entry — captured by extractFirstPrompt at
   // write time (filtered, authoritative) and shows what the user was most
@@ -6577,6 +6591,7 @@ async function readLiteMetadata(
     firstPrompt,
     hasConversation,
     forked,
+    sessionBinding,
     gitBranch,
     entrypoint,
     isSidechain,
@@ -6590,6 +6605,26 @@ async function readLiteMetadata(
     prUrl,
     prRepository,
     lastTimestamp,
+  }
+}
+
+function readSessionBindingFromEnv(): SessionBinding {
+  try {
+    const parsed: unknown = JSON.parse(process.env.CATCODE_SESSION_BINDING_JSON ?? '')
+    return isSessionBinding(parsed) ? parsed : { kind: 'project' }
+  } catch {
+    return { kind: 'project' }
+  }
+}
+
+function extractSessionBinding(chunk: string): SessionBinding | undefined {
+  const match = chunk.match(/"sessionBinding"\s*:\s*(\{[^}]*\})/)
+  if (!match) return undefined
+  try {
+    const parsed: unknown = JSON.parse(match[1])
+    return isSessionBinding(parsed) ? parsed : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -6837,6 +6872,7 @@ async function enrichLog(
     projectPath: meta.projectPath ?? log.projectPath,
     hasConversation: meta.hasConversation,
     forked: meta.forked,
+    sessionBinding: meta.sessionBinding,
   }
 
   // Provide a fallback title for sessions where we couldn't extract the first

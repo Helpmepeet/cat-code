@@ -208,6 +208,8 @@ import {
   type ToolRunMember,
   type TranscriptLayoutItem,
 } from './toolRunLayout.js'
+import { TranscriptMotionContext, useTranscriptMotion } from './transcriptMotion.js'
+import { useEntranceOnChange } from './entranceLatch.js'
 import {
   formatGrepDigest,
   grepDigest,
@@ -330,10 +332,12 @@ const CreatedPeerNavigationContext = createContext<CreatedPeerNavigation | null>
 export const TranscriptView = memo(function TranscriptView({
   state,
   compacting,
+  turnLive = false,
   activeSessionId,
   accounts,
   accountsUsagePending = false,
   cwd,
+  managedChat,
   branch,
   onListBranches,
   onSwitchBranch,
@@ -353,12 +357,15 @@ export const TranscriptView = memo(function TranscriptView({
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
   compacting?: boolean
+  /** SessionPane's current turn liveness, never inferred from historical rows. */
+  turnLive?: boolean
   activeSessionId: SessionId | null
   /** In-session empty-state Welcome context (Chat.jsx:1272). */
   accounts?: AccountsSnapshot | null
   /** Presentation-only account usage loading state from the app shell. */
   accountsUsagePending?: boolean
   cwd?: string | null
+  managedChat?: boolean
   branch?: string | null
   onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
   onSwitchBranch?: (branch: string) => Promise<string | null>
@@ -405,9 +412,11 @@ export const TranscriptView = memo(function TranscriptView({
         selectNestedTranscriptRows(state, activeSessionId, revealHidden),
       )}
       compacting={compacting ?? false}
+      turnLive={turnLive}
       accounts={accounts ?? null}
       accountsUsagePending={accountsUsagePending}
       cwd={cwd ?? null}
+      managedChat={managedChat ?? false}
       branch={branch ?? null}
       onListBranches={onListBranches}
       onSwitchBranch={onSwitchBranch}
@@ -429,10 +438,12 @@ export const TranscriptView = memo(function TranscriptView({
 export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
   compacting = false,
+  turnLive = false,
   leases = null,
   accounts = null,
   accountsUsagePending = false,
   cwd = null,
+  managedChat = false,
   branch = null,
   onListBranches,
   onSwitchBranch,
@@ -451,6 +462,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
   compacting?: boolean
+  turnLive?: boolean
   /** This session's Codex leases; null on an Anthropic path and after a restore. */
   leases?: LeaseSnapshot | null
   /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
@@ -458,6 +470,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   accounts?: AccountsSnapshot | null
   accountsUsagePending?: boolean
   cwd?: string | null
+  managedChat?: boolean
   branch?: string | null
   onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
   onSwitchBranch?: (branch: string) => Promise<string | null>
@@ -496,6 +509,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [cwd, openFilePathMenu],
   )
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
+  const motion = useTranscriptMotion(
+    rows, restorePhase === null && !loadEarlierPending, turnLive,
+  )
   // Owned ABOVE the derivations below, which is the whole point: a card that gets
   // re-keyed or re-typed when rows regroup finds its own expansion again through
   // the engine's `toolUseId` (`toolCardExpansion.ts`). A ref, not state — a toggle
@@ -550,6 +566,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         <WelcomeScreen
           variant="session"
           cwd={cwd}
+          managedChat={managedChat}
           branch={branch}
           onListBranches={onListBranches}
           onSwitchBranch={onSwitchBranch}
@@ -614,12 +631,16 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           // off as ordinary conversation. `isHidden` is only ever present when
           // the caller asked for the revealed view.
           const key = displayItemKey(item)
+          const firstRowId = displayItemFirstRowId(item)
+          const arriving = motion.rows.active.has(firstRowId)
           return (
             <div
               data-row-key={key}
               data-tool-row={isContainerlessToolItem(item) ? '' : undefined}
-              key={key}
-              className={isRevealedHiddenItem(item) ? 'opacity-55' : undefined}
+              key={firstRowId}
+              className={`${isRevealedHiddenItem(item) ? 'opacity-55 ' : ''}${arriving ? 'animate-arrive' : ''}`}
+              ref={arriving ? motion.rows.refFor(firstRowId, 'animate-arrive') : undefined}
+              onAnimationEnd={event => motion.rows.onAnimationEnd(firstRowId, event)}
             >
               {isHistoryBoundaryItem(item) ? (
                 <HistoryBoundaryRow
@@ -642,6 +663,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   }
 
   return (
+    <TranscriptMotionContext.Provider value={motion}>
     <ToolCardExpansionContext.Provider value={expansionStore}>
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
@@ -671,6 +693,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
+    </TranscriptMotionContext.Provider>
   )
 })
 
@@ -691,6 +714,8 @@ export function ToolInspectorOverlay({
   row: ToolUseNestedRow | null
   onClose: () => void
 }) {
+  const scrimEntrance = useEntranceOnChange(row !== null, row !== null, 'animate-scrim-in')
+  const panelEntrance = useEntranceOnChange(row !== null, row !== null, 'animate-drawer-in')
   const dialogRef = useRef<HTMLDivElement>(null)
   useModalFocus({
     open: row !== null,
@@ -701,13 +726,19 @@ export function ToolInspectorOverlay({
   return (
     <div className="fixed inset-0 z-[200] flex justify-end">
       <div
-        className="absolute inset-0 bg-scrim backdrop-blur-[1px]"
+        className={`${scrimEntrance.active ? 'animate-scrim-in ' : ''}absolute inset-0 bg-scrim backdrop-blur-[1px]`}
+        ref={scrimEntrance.ref}
+        onAnimationEnd={scrimEntrance.onAnimationEnd}
         onClick={onClose}
         aria-hidden
       />
       <div
-        ref={dialogRef}
-        className="relative flex h-full shadow-2xl"
+        ref={element => {
+          dialogRef.current = element
+          panelEntrance.ref(element)
+        }}
+        className={`${panelEntrance.active ? 'animate-drawer-in ' : ''}relative flex h-full shadow-2xl`}
+        onAnimationEnd={panelEntrance.onAnimationEnd}
         role="dialog"
         aria-modal="true"
         aria-label="Full output"
@@ -765,6 +796,16 @@ function groupDisplayItems(
 
 function displayItemKey(item: TranscriptLayoutItem): string {
   return item.kind === 'single' ? item.row.id : item.id
+}
+
+/** The first member survives a lone card becoming a run in the next commit. */
+function displayItemFirstRowId(item: TranscriptLayoutItem): string {
+  switch (item.kind) {
+    case 'single': return item.row.id
+    case 'agent-group':
+    case 'tool-run': return item.members[0].id
+    case 'reasoning-run': return item.id.slice('reasoning-run:'.length)
+  }
 }
 
 /**
@@ -1342,27 +1383,50 @@ function AssistantProse({
   // copy control can dequote by source position rather than re-deriving text
   // from the parsed tree. Keep its component type stable until that source
   // changes: otherwise React remounts each quote and loses its copy feedback.
-  const components = useMemo(
+  const pathComponents = useMemo(
     () => ({
       ...MARKDOWN_COMPONENTS,
-      blockquote: createBlockquoteComponent(content),
       a: createPathAwareAnchor(openFile, onContextMenu),
       p: createPathAwareParagraph(openFile, onContextMenu),
       li: createPathAwareListItem(openFile, onContextMenu),
       code: createPathAwareCode(openFile, onContextMenu),
     }),
-    [content, openFile, onContextMenu],
+    [openFile, onContextMenu],
+  )
+  const components = useMemo(
+    () => ({ ...pathComponents, blockquote: createBlockquoteComponent(content) }),
+    [content, pathComponents],
   )
   const { arrival } = useContext(ProseArrivalContext)
-  // The source only ever grows by append, so the characters past the length this
-  // row rendered at last is exactly what the newest batch delivered — an answer
-  // that survives the tree restructuring retroactively when closing syntax
-  // lands (`proseArrivalMark.ts`). Read during render, advanced after paint.
-  const renderedLengthRef = useRef(0)
-  const arrivalFrom = streaming === true ? renderedLengthRef.current : -1
+  const { freshProse } = useContext(TranscriptMotionContext)
+  // Keep the earliest still-fading batch marked across faster streaming commits.
+  // Starting at the previous commit's length would remove its spans every 8ms,
+  // before their animation finishes. Static markup shows the first batch;
+  // in a live pane only a newly arrived row fades, not a restored/remounted one.
+  const renderedLengthRef = useRef(
+    typeof window === 'undefined' || freshProse.has(sourceId) ? 0 : content.length,
+  )
+  const batches = useRef<{ from: number; expires: number }[]>([])
+  const [, expire] = useReducer((value: number) => value + 1, 0)
+  const now = Date.now()
+  const className = PROSE_ARRIVAL_WORD_CLASS[arrival]
+  const activeBatches = streaming && className !== null
+    ? batches.current.filter(batch => batch.expires > now)
+    : []
+  if (streaming && className !== null && content.length > renderedLengthRef.current) {
+    activeBatches.push({
+      from: renderedLengthRef.current,
+      expires: now + (arrival === 'flowing' ? 160 + MAX_PROSE_ARRIVAL_STAGGER_MS : 220),
+    })
+  }
+  const arrivalFrom = activeBatches[0]?.from ?? -1
   useEffect(() => {
-    renderedLengthRef.current = streaming === true ? content.length : 0
-  }, [content, streaming])
+    renderedLengthRef.current = content.length
+    batches.current = activeBatches
+    if (!streaming || activeBatches.length === 0) return
+    const timeout = setTimeout(expire, Math.max(0, activeBatches[0]!.expires - Date.now()))
+    return () => clearTimeout(timeout)
+  })
   const markArrival = useCallback(
     (tree: HastRoot): HastRoot => {
       const className = PROSE_ARRIVAL_WORD_CLASS[arrival]
@@ -2360,6 +2424,9 @@ function ToolCardShell({
   targetHover,
   targetFilePath,
   collapsedExtra,
+  animateCollapsedExtra = false,
+  animateExpandedBody = false,
+  entranceKey,
   defaultExpanded,
   expansionKey,
   presentation,
@@ -2381,6 +2448,9 @@ function ToolCardShell({
   targetHover?: string
   targetFilePath?: { rawPath: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
+  animateCollapsedExtra?: boolean
+  animateExpandedBody?: boolean
+  entranceKey?: string
   defaultExpanded?: boolean
   /**
    * The engine's `toolUseId`, so the user's expansion outlives this component.
@@ -2420,8 +2490,10 @@ function ToolCardShell({
     color: tone ?? base.color,
   }
   const st = STATE_STYLE[status]
+  const { turnLive } = useContext(TranscriptMotionContext)
   const hasBody = children !== undefined && children !== null
   const { style } = useContext(ToolCardStyleContext)
+  const { results } = useContext(TranscriptMotionContext)
   const filePathContext = useContext(FilePathMenuContext)
   return (
     <div className={TOOL_CARD_SHELL_CLASS[style]}>
@@ -2480,18 +2552,32 @@ function ToolCardShell({
             carries the same state in color is redundant chrome; the dot alone,
             colour-coded, is enough (operator call). */}
         <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+          className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-[var(--motion-fast)] ${st.dot} ${st.pulse && turnLive ? 'animate-pulse' : ''}`}
           role="img"
           aria-label={st.word}
         />
       </button>
-      {!expanded && collapsedExtra ? collapsedExtra : null}
+      {!expanded && collapsedExtra ? (
+        <div
+          className={animateCollapsedExtra ? 'animate-arrive' : undefined}
+          ref={animateCollapsedExtra && entranceKey ? results.refFor(entranceKey, 'animate-arrive') : undefined}
+          onAnimationEnd={entranceKey ? event => results.onAnimationEnd(entranceKey, event) : undefined}
+        >
+          {collapsedExtra}
+        </div>
+      ) : null}
       {expanded && hasBody ? (
         <div className={TOOL_CARD_BODY_CLASS[style]}>
           {sub ? (
             <div className={TOOL_CARD_SUB_CLASS[style]}>{sub}</div>
           ) : null}
-          <div className={TOOL_CARD_BODY_INNER_CLASS[style]}>{children}</div>
+          <div
+            className={`${TOOL_CARD_BODY_INNER_CLASS[style]}${animateExpandedBody ? ' animate-arrive' : ''}`}
+            ref={animateExpandedBody && entranceKey ? results.refFor(entranceKey, 'animate-arrive') : undefined}
+            onAnimationEnd={entranceKey ? event => results.onAnimationEnd(entranceKey, event) : undefined}
+          >
+            {children}
+          </div>
         </div>
       ) : null}
     </div>
@@ -2682,6 +2768,7 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
  * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  const resolving = useContext(TranscriptMotionContext).results.active.has(row.id)
   // The weakest of the three expansion inputs: a user's own click still wins
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
@@ -2775,6 +2862,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone || hasResultImages
         }
+        animateCollapsedExtra={resolving}
+        animateExpandedBody={resolving && (row.status === 'error' || isImageDone || hasResultImages)}
+        entranceKey={row.id}
         collapsedExtra={
           ack !== null ? (
             <AckPeek ack={ack} />
@@ -3222,7 +3312,10 @@ const ToolRunRow = memo(function ToolRunRow({
     store?.set(runKey, true)
   }
   const content = row.result?.content ?? ''
+  const resultEntrance = useContext(TranscriptMotionContext).results
+  const resolving = resultEntrance.active.has(row.id)
   const st = STATE_STYLE[row.status]
+  const { turnLive } = useContext(TranscriptMotionContext)
   const fam = FAMILY_STYLE[family]
   return (
     <div>
@@ -3255,7 +3348,7 @@ const ToolRunRow = memo(function ToolRunRow({
         {row.status !== 'success' ? (
           <span className="flex shrink-0 items-center gap-1.5">
             <span
-              className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+              className={`h-1.5 w-1.5 rounded-full transition-colors duration-[var(--motion-fast)] ${st.dot} ${st.pulse && turnLive ? 'animate-pulse' : ''}`}
               aria-hidden
             />
             <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
@@ -3263,7 +3356,14 @@ const ToolRunRow = memo(function ToolRunRow({
         ) : null}
       </button>
       {open ? (
-        <div className="mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3">
+        <div
+          className={`mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3${
+          resolving && (row.status === 'error' || (row.result?.images?.length ?? 0) > 0)
+            ? ' animate-arrive' : ''
+          }`}
+          ref={resolving ? resultEntrance.refFor(row.id, 'animate-arrive') : undefined}
+          onAnimationEnd={event => resultEntrance.onAnimationEnd(row.id, event)}
+        >
           <ToolCardBody
             row={row}
             content={content}
@@ -3917,6 +4017,7 @@ function RejectedResumeCard({
  * frame, and is never fabricated here.
  */
 function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
+  const { turnLive } = useContext(TranscriptMotionContext)
   const { style: cardStyle } = useContext(ToolCardStyleContext)
   const faces = useAgentFaceRegistry()
   const leases = useContext(LeaseSnapshotContext)
@@ -3972,7 +4073,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // The id, with the name only as an alias: an id is unique per spawn and a name
   // is not, so two workers running under one handle stay two faces.
   const face = faces.faceFor(vocab.identity.id, vocab.identity.name)
-  const facePulse = agentFacePulse(state, { isLaunchRecord })
+  const facePulse = turnLive && agentFacePulse(state, { isLaunchRecord })
   const nameToneClass = (
     vocab.type ? AGENT_TYPE_TONE_CLASS[vocab.type.tone] : AGENT_TYPE_TONE_CLASS.neutral
   ).text
@@ -4155,6 +4256,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
 const MAX_STACKED_GROUP_FACES = 5
 
 function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
+  const { turnLive } = useContext(TranscriptMotionContext)
   const faces = useAgentFaceRegistry()
   const memberKeys = useMemo(() => members.map(member => member.id), [members])
   const vocabs = members.map(member => deriveAgentDisplayVocabulary(agentToolSourceOf(member)))
@@ -4183,7 +4285,7 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
           {members.slice(0, MAX_STACKED_GROUP_FACES).map((member, index) => {
             const vocab = vocabs[index]
             const memberFace = faces.faceFor(vocab.identity.id, vocab.identity.name)
-            const memberPulse = agentFacePulse(vocab.state.key, {
+            const memberPulse = turnLive && agentFacePulse(vocab.state.key, {
               isLaunchRecord:
                 (member.toolName === 'Agent' || member.toolName === 'Task') &&
                 member.input.run_in_background === true,
@@ -4970,6 +5072,8 @@ function PlainLinesBody({
 }
 
 function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
+  const resultEntrance = useContext(TranscriptMotionContext).results
+  const resolving = resultEntrance.active.has(row.id)
   const toast = useToast()
   const [copied, setCopied] = useState(false)
   const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -5043,7 +5147,11 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
         <span className="h-1.5 w-1.5 rounded-full bg-tone-success" aria-hidden="true" />
         <span className="text-[10.5px] text-tone-success">Done</span>
       </div>
-      <div className="px-3 pb-3">
+      <div
+        className={`px-3 pb-3${resolving ? ' animate-arrive' : ''}`}
+        ref={resolving ? resultEntrance.refFor(row.id, 'animate-arrive') : undefined}
+        onAnimationEnd={event => resultEntrance.onAnimationEnd(row.id, event)}
+      >
         <img
           alt="Generated image"
           className="mx-auto max-h-[520px] w-auto max-w-full rounded-[10px] border border-shell-seam object-contain"
@@ -5597,6 +5705,7 @@ function isVisibleStep(step: ReasoningStepModel): step is VisibleReasoningStep {
  * steps never fold away.
  */
 function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepModel[] }) {
+  const { steps: stepEntrances } = useContext(TranscriptMotionContext)
   const listId = useId()
   const visible = steps.filter(isVisibleStep)
   // Kept OUTSIDE this component, for the same reason a tool card's expansion is
@@ -5660,7 +5769,7 @@ function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepMod
           className="ml-2 mt-0.5 border-l border-white/10 pl-[17px] transition-colors duration-100 ease-out group-hover:border-white/[0.16]"
         >
           {shown.map(step => (
-            <ReasoningStep key={step.key} step={step} />
+            <ReasoningStep key={step.key} step={step} arriving={stepEntrances.active.has(step.key)} />
           ))}
         </ol>
       )}
@@ -5676,12 +5785,17 @@ function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepMod
  */
 const ReasoningStep = memo(function ReasoningStep({
   step,
+  arriving,
 }: {
   step: VisibleReasoningStep
+  arriving: boolean
 }) {
+  const { steps: stepEntrances } = useContext(TranscriptMotionContext)
   return (
     <li
-      className="relative py-0.5 text-[12.5px] leading-normal text-text-subtle"
+      className={`relative py-0.5 text-[12.5px] leading-normal text-text-subtle${arriving ? ' animate-arrive' : ''}`}
+      ref={arriving ? stepEntrances.refFor(step.key, 'animate-arrive') : undefined}
+      onAnimationEnd={event => stepEntrances.onAnimationEnd(step.key, event)}
       title={REASONING_TITLE}
     >
       <ReasoningNode placement="rail" />

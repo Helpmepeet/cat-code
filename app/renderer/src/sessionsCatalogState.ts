@@ -33,6 +33,7 @@ import type {
   SessionsCatalogSnapshot,
 } from '../../shared/protocol.js'
 import { basename } from './pathUtils.js'
+import type { SessionBinding } from '../../shared/sessionBinding.js'
 
 export type SessionsCatalogState = {
   /**
@@ -100,6 +101,8 @@ export type MergedSessionRow = {
   /** Present ⇒ a live/restorable registry row exists (openable). */
   appSessionId: SessionId | null
   cwd: string
+  /** Explicit host association; legacy rows retain their project/unknown behavior. */
+  binding?: SessionBinding
   /**
    * Whether `cwd` is a currently-existing directory (bug-sweep #1). A live
    * registry row remains openable by appSessionId even when its old workspace
@@ -182,8 +185,13 @@ export type MergedSessionRow = {
  * to consult the catalog title (the P4-6 rider) before falling back to the cwd
  * basename. Kept in lockstep with `tabLabel` so every surface reads one name.
  */
-export function resolveSessionLabel(title: string | null, cwd: string): string {
+export function resolveSessionLabel(
+  title: string | null,
+  cwd: string,
+  binding?: SessionBinding,
+): string {
   if (title && title.trim().length > 0) return title.trim()
+  if (binding?.kind === 'managed') return 'New chat'
   const base = basename(cwd)
   return base.length > 0 ? base : 'New session'
 }
@@ -235,11 +243,12 @@ export function selectMergedSessionRows(
       sessionId: key,
       appSessionId: descriptor.appSessionId,
       cwd: descriptor.cwd,
+      binding: descriptor.binding ?? { kind: 'project' },
       // A matching catalog entry has a fresh cwd stat. Unknown registry-only rows
       // remain unknown rather than being treated as known-dead.
       cwdExists: entry?.cwdExists ?? true,
       title,
-      displayLabel: resolveSessionLabel(title, descriptor.cwd),
+      displayLabel: resolveSessionLabel(title, descriptor.cwd, descriptor.binding),
       name: descriptor.name ?? null,
       peerWakeBlocked: descriptor.peerWakeBlocked === true,
       live: !descriptor.restorable && descriptor.status !== 'exited',
@@ -268,9 +277,10 @@ export function selectMergedSessionRows(
       sessionId: entry.sessionId,
       appSessionId: null,
       cwd: entry.cwd,
+      binding: entry.binding ?? { kind: 'project' },
       cwdExists: entry.cwdExists,
       title: entry.title,
-      displayLabel: resolveSessionLabel(entry.title, entry.cwd),
+      displayLabel: resolveSessionLabel(entry.title, entry.cwd, entry.binding),
       // No row, so no peer identity — which is the honest reading, not a gap.
       // Two different histories land here. A transcript the registry never
       // tracked (a terminal session) was never allocated a name at all. A
@@ -472,16 +482,22 @@ export type SessionOpenRoute =
 export function resolveSessionOpenRoute(
   row: Pick<
     MergedSessionRow,
-    'appSessionId' | 'live' | 'cwd' | 'cwdExists' | 'sessionId' | 'inRegistry'
+    'appSessionId' | 'live' | 'cwd' | 'cwdExists' | 'sessionId' | 'inRegistry' | 'binding'
   >,
 ): SessionOpenRoute {
   if (row.appSessionId != null) {
-    if (!row.live && !row.cwdExists) return { kind: 'none' }
+    if (!row.live && !row.cwdExists && row.binding?.kind !== 'managed') {
+      return { kind: 'none' }
+    }
     return row.live
       ? { kind: 'focus', appSessionId: row.appSessionId }
       : { kind: 'restore', appSessionId: row.appSessionId }
   }
-  if (!row.inRegistry && row.cwd.trim().length > 0 && row.cwdExists) {
+  if (
+    !row.inRegistry &&
+    row.cwd.trim().length > 0 &&
+    (row.cwdExists || row.binding?.kind === 'managed')
+  ) {
     return { kind: 'history', engineSessionId: row.sessionId }
   }
   return { kind: 'none' }
@@ -527,7 +543,10 @@ export function collectSessionTags(rows: readonly MergedSessionRow[]): string[] 
 /** The distinct workspaces (cwds) in a row list. */
 export function countWorkspaces(rows: readonly MergedSessionRow[]): number {
   const cwds = new Set<string>()
-  for (const row of rows) cwds.add(row.cwd)
+  for (const row of rows) {
+    if (row.binding?.kind === 'managed') continue
+    cwds.add(row.cwd)
+  }
   return cwds.size
 }
 
@@ -635,6 +654,7 @@ export function groupByWorkspace(
 ): WorkspaceGroup[] {
   const groups = new Map<string, MergedSessionRow[]>()
   for (const row of rows) {
+    if (row.binding?.kind === 'managed') continue
     const list = groups.get(row.cwd)
     if (list) list.push(row)
     else groups.set(row.cwd, [row])
@@ -650,6 +670,13 @@ export function groupByWorkspace(
       rows: groupRows,
     }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd))
+}
+
+/** Flat, recency ordered rows for the Chats section. */
+export function selectManagedChatRows(
+  rows: readonly MergedSessionRow[],
+): MergedSessionRow[] {
+  return rows.filter(row => row.binding?.kind === 'managed')
 }
 
 /**
@@ -711,7 +738,10 @@ export type RecentWorkspace = {
  */
 function openableHistoryId(row: MergedSessionRow): string | null {
   if (row.inRegistry || row.appSessionId != null) return null
-  if (row.cwd.trim().length === 0 || !row.cwdExists) return null
+  if (
+    row.cwd.trim().length === 0 ||
+    (!row.cwdExists && row.binding?.kind !== 'managed')
+  ) return null
   return row.sessionId
 }
 
@@ -746,6 +776,7 @@ export function selectRecentWorkspaces(
 ): RecentWorkspace[] {
   const byCwd = new Map<string, RecentWorkspace>()
   for (const row of rows) {
+    if (row.binding?.kind === 'managed') continue
     // A recent is a PROJECT the operator can open. A row whose workspace could
     // not be reconciled (MAJOR-1, `cwd === ''`) names no project, and it would
     // render as a nameless entry: `basename('') || ''` is the empty string, so

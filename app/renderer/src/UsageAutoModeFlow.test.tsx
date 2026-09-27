@@ -9,7 +9,7 @@ const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture())
 test('renders the simplified route groups and outcome labels without a duplicate legend', () => {
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={summary} />)
   expect(html).toContain('Decision flow')
-  expect(html).toContain('Decision flow for 100 recorded automatic permission attempts')
+  expect(html).toContain('Decision flow for 92 recorded allowed or blocked automatic permission decisions')
   expect(html).toContain('>Base paths</text>')
   expect(html).toContain('>Stage 1</text>')
   expect(html).toContain('>Stage 2</text>')
@@ -17,10 +17,10 @@ test('renders the simplified route groups and outcome labels without a duplicate
   expect(html).not.toContain('usage-auto-flow-legend')
   expect(html).toContain('Allowed')
   expect(html).toContain('Blocked')
-  expect(html).toContain('Error')
+  expect(html).not.toContain('>Error</text>')
   expect(html).not.toContain('>Cancelled</text>')
-  expect(html).toContain('Error (review required, operational error, unknown outcome, and incomplete)')
-  expect(html).toContain('of 100 attempts')
+  expect(html).toContain('of 92 allowed or blocked decisions')
+  expect(html).toContain('Stage 2 to Blocked: 2 recorded decisions, 2.2% of 92 allowed or blocked decisions')
 })
 
 test('does not render a zero-valued flow for unavailable or empty coverage', () => {
@@ -39,10 +39,10 @@ test('does not narrate partial history', () => {
   partial.allTools.coverage.state = 'partial'
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={partial} />)
   expect(html).not.toContain('Partial history')
-  expect(html).toContain('Decision flow for 100 recorded automatic permission attempts')
+  expect(html).toContain('Decision flow for 92 recorded allowed or blocked automatic permission decisions')
 })
 
-test('renders exceptional-only histories as a full Error flow', () => {
+test('exceptional-only histories have no allowed or blocked flow', () => {
   const exceptional = structuredClone(summary)
   exceptional.allTools.outcomes = {
     allowed: 0,
@@ -55,7 +55,6 @@ test('renders exceptional-only histories as a full Error flow', () => {
   }
   exceptional.routes = [{ route: 'base', outcome: 'operational_error', count: 1 }]
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={exceptional} />)
-  expect(html).toContain('Decision flow for 1 recorded automatic permission attempt')
-  expect(html).toContain('Error: 1 recorded attempt')
-  expect(html).not.toContain('No decisions')
+  expect(html).toContain('No allowed or blocked decisions')
+  expect(html).not.toContain('>Error</text>')
 })

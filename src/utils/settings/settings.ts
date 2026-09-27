@@ -24,6 +24,7 @@ import { uniq } from '../array.js'
 import { logForDebugging } from '../debug.js'
 import { logForDiagnosticsNoPII } from '../diagLogs.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../envUtils.js'
+import { isManagedSession } from '../managedSessionPolicy.js'
 import { getErrnoCode, isENOENT } from '../errors.js'
 import { readFileSync } from '../fileRead.js'
 import { getFsImplementation, safeResolvePath } from '../fsOperations.js'
@@ -60,6 +61,13 @@ import {
   setCachedSettingsForSource,
   setSessionSettingsCache,
 } from './settingsCache.js'
+import {
+  getInstructionFilesOptionMetadata,
+  isPluginConfigOptionValue,
+  readInstructionFilesOptionFromSettings,
+  setInstructionFilesOptionMetadata,
+  type InstructionFilesOptionMetadata,
+} from './instructionFilesOptionMetadata.js'
 import { type SettingsJson, SettingsSchema } from './types.js'
 import {
   dropInvalidSettingsSections,
@@ -95,15 +103,30 @@ export function loadManagedFileSettings(): {
   const errors: ValidationError[] = []
   let merged: SettingsJson = {}
   let found = false
+  let instructionFilesOption: InstructionFilesOptionMetadata | undefined
+
+  const mergeFileSettings = (
+    settings: SettingsJson | null,
+    fileErrors: ValidationError[],
+  ): void => {
+    const option =
+      getInstructionFilesOptionMetadata(settings) ??
+      readInstructionFilesOptionFromSettings(settings) ??
+      getDroppedInstructionFilesOption(fileErrors)
+    if (option) {
+      instructionFilesOption = option
+    }
+    if (settings && Object.keys(settings).length > 0) {
+      merged = mergeWith(merged, settings, settingsMergeCustomizer)
+      found = true
+    }
+  }
 
   const { settings, errors: baseErrors } = parseSettingsFile(
     getManagedSettingsFilePath(),
   )
   errors.push(...baseErrors)
-  if (settings && Object.keys(settings).length > 0) {
-    merged = mergeWith(merged, settings, settingsMergeCustomizer)
-    found = true
-  }
+  mergeFileSettings(settings, baseErrors)
 
   const dropInDir = getManagedSettingsDropInDir()
   try {
@@ -122,16 +145,18 @@ export function loadManagedFileSettings(): {
         join(dropInDir, name),
       )
       errors.push(...fileErrors)
-      if (settings && Object.keys(settings).length > 0) {
-        merged = mergeWith(merged, settings, settingsMergeCustomizer)
-        found = true
-      }
+      mergeFileSettings(settings, fileErrors)
     }
   } catch (e) {
     const code = getErrnoCode(e)
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
       logError(e)
     }
+  }
+
+  if (instructionFilesOption) {
+    setInstructionFilesOptionMetadata(merged, instructionFilesOption)
+    found = true
   }
 
   return { settings: found ? merged : null, errors }
@@ -186,6 +211,31 @@ function handleFileSystemError(error: unknown, path: string): void {
   }
 }
 
+function getDroppedInstructionFilesOption(
+  errors: ValidationError[],
+): InstructionFilesOptionMetadata | undefined {
+  for (const error of errors) {
+    if (error.droppedSection !== 'pluginConfigs') continue
+    const option = readInstructionFilesOptionFromSettings({
+      pluginConfigs: error.invalidValue,
+    })
+    if (option) return option
+  }
+  return undefined
+}
+
+function cloneParsedSettings(result: {
+  settings: SettingsJson | null
+  errors: ValidationError[]
+}): { settings: SettingsJson | null; errors: ValidationError[] } {
+  const settings = result.settings ? clone(result.settings) : null
+  const option = getDroppedInstructionFilesOption(result.errors)
+  if (settings && option) {
+    setInstructionFilesOptionMetadata(settings, option)
+  }
+  return { settings, errors: result.errors }
+}
+
 /**
  * Parses a settings file into a structured format
  * @param path The path to the permissions file
@@ -200,19 +250,13 @@ export function parseSettingsFile(path: string): {
   if (cached) {
     // Clone so callers (e.g. mergeWith in getSettingsForSourceUncached,
     // updateSettingsForSource) can't mutate the cached entry.
-    return {
-      settings: cached.settings ? clone(cached.settings) : null,
-      errors: cached.errors,
-    }
+    return cloneParsedSettings(cached)
   }
   const result = parseSettingsFileUncached(path)
   setCachedParsedFile(path, result)
   // Clone the first return too — the caller may mutate before
   // another caller reads the same cache entry.
-  return {
-    settings: result.settings ? clone(result.settings) : null,
-    errors: result.errors,
-  }
+  return cloneParsedSettings(result)
 }
 
 function parseSettingsFileUncached(path: string): {
@@ -227,7 +271,8 @@ function parseSettingsFileUncached(path: string): {
       return { settings: {}, errors: [] }
     }
 
-    const data = safeParseJSON(content, false)
+    // Validation mutates parsed data, but safeParseJSON caches by content.
+    const data = clone(safeParseJSON(content, false))
 
     // Filter invalid permission rules before schema validation so one bad
     // rule doesn't cause the entire settings file to be rejected.
@@ -343,6 +388,12 @@ export function getRelativeSettingsFilePathForSource(
 export function getSettingsForSource(
   source: SettingSource,
 ): SettingsJson | null {
+  if (
+    isManagedSession() &&
+    (source === 'projectSettings' || source === 'localSettings')
+  ) {
+    return null
+  }
   const cached = getCachedSettingsForSource(source)
   if (cached !== undefined) return cached
   const result = getSettingsForSourceUncached(source)
@@ -361,7 +412,10 @@ function getSettingsForSourceUncached(
     }
 
     const mdmResult = getMdmSettings()
-    if (Object.keys(mdmResult.settings).length > 0) {
+    if (
+      Object.keys(mdmResult.settings).length > 0 ||
+      getInstructionFilesOptionMetadata(mdmResult.settings)
+    ) {
       return mdmResult.settings
     }
 
@@ -371,7 +425,10 @@ function getSettingsForSourceUncached(
     }
 
     const hkcu = getHkcuSettings()
-    if (Object.keys(hkcu.settings).length > 0) {
+    if (
+      Object.keys(hkcu.settings).length > 0 ||
+      getInstructionFilesOptionMetadata(hkcu.settings)
+    ) {
       return hkcu.settings
     }
 
@@ -387,13 +444,26 @@ function getSettingsForSourceUncached(
   if (source === 'flagSettings') {
     const inlineSettings = getFlagSettingsInline()
     if (inlineSettings) {
+      const inlineOption =
+        readInstructionFilesOptionFromSettings(inlineSettings)
       const parsed = SettingsSchema().safeParse(inlineSettings)
       if (parsed.success) {
-        return mergeWith(
+        const merged = mergeWith(
           fileSettings || {},
           parsed.data,
           settingsMergeCustomizer,
         ) as SettingsJson
+        const option =
+          inlineOption ?? getInstructionFilesOptionMetadata(fileSettings)
+        if (option) {
+          setInstructionFilesOptionMetadata(merged, option)
+        }
+        return merged
+      }
+      if (inlineOption && !isPluginConfigOptionValue(inlineOption.value)) {
+        const settings = fileSettings ?? {}
+        setInstructionFilesOptionMetadata(settings, inlineOption)
+        return settings
       }
     }
   }

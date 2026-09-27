@@ -9,6 +9,7 @@ import {
 import {
   createTranscriptState,
   groupAgentDelegates,
+  nestedRowsChange,
   projectServerFrame,
   projectServerFrames,
   selectHasHiddenRows,
@@ -62,6 +63,55 @@ function messageFrame(
     event: { type: 'message' as const, message },
   }
 }
+
+test('nested row change spans identify tail updates, head inserts and middle reorders', () => {
+  const sessionId = 'motion-change-spans'
+  let state = projectServerFrame(createTranscriptState(), ready(sessionId))
+  for (let i = 0; i < 3; i++) {
+    state = projectServerFrame(state, messageFrame(sessionId, {
+      type: 'user',
+      uuid: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      session_id: 'engine-motion-change-spans', parent_tool_use_id: null,
+      message: { role: 'user', content: `row ${i}` },
+    }))
+  }
+  const first = selectNestedTranscriptRows(state, sessionId)
+  const session = state.sessions[sessionId]!
+  const tail = {
+    ...state, sessions: { ...state.sessions, [sessionId]: {
+      ...session, rows: [...session.rows.slice(0, -1), { ...session.rows.at(-1)!, content: 'updated' }],
+    } },
+  } as typeof state
+  const updated = selectNestedTranscriptRows(tail, sessionId)
+  expect(nestedRowsChange(updated)).toMatchObject({
+    previous: first, start: 2, previousEnd: 3, nextEnd: 3,
+  })
+  const head = {
+    ...tail, sessions: { ...tail.sessions, [sessionId]: {
+      ...tail.sessions[sessionId]!, rows: [
+        { ...session.rows[0]!, id: 'earlier' }, ...tail.sessions[sessionId]!.rows,
+      ],
+    } },
+  } as typeof state
+  const inserted = selectNestedTranscriptRows(head, sessionId)
+  expect(nestedRowsChange(inserted)).toMatchObject({
+    previous: updated, start: 0, previousEnd: 0, nextEnd: 1,
+  })
+  const reordered = {
+    ...head, sessions: { ...head.sessions, [sessionId]: {
+      ...head.sessions[sessionId]!, rows: [
+        head.sessions[sessionId]!.rows[0]!,
+        head.sessions[sessionId]!.rows[2]!,
+        head.sessions[sessionId]!.rows[1]!,
+        head.sessions[sessionId]!.rows[3]!,
+      ],
+    } },
+  } as typeof state
+  const moved = selectNestedTranscriptRows(reordered, sessionId)
+  expect(nestedRowsChange(moved)).toMatchObject({
+    previous: inserted, start: 1, previousEnd: 3, nextEnd: 3,
+  })
+})
 
 test('transcript reset discards projected rows before retained replay', () => {
   const sessionId = 'session-reset'

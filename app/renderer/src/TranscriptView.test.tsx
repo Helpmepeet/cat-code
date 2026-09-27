@@ -432,13 +432,9 @@ test('P4-18c: a streaming assistant row marks the text that just arrived', () =>
     isStreaming: true,
   })
 
-  // The words are separate spans while streaming, so the phrase is no longer
-  // one text node. Both words must still be present and both must be marked:
-  // the marking IS the streaming signal now that the caret is gone.
   expect(html).toContain('>partial<')
   expect(html).toContain('>answer<')
   expect(html).toContain('prose-arrive-smooth')
-  // And nothing is lost between them: the separator survives the split.
   expect(html.replace(/<[^>]*>/g, '')).toContain('partial answer')
 })
 
@@ -1157,8 +1153,11 @@ test('the Agent card keeps its Background control OUTSIDE the collapse button', 
 })
 
 test('P4-8c: an Agent card derives type/state/task from the row input + status (data-path honest)', () => {
-  const html = render(
-    agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending'),
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending')]}
+      turnLive
+    />,
   )
 
   expect(html).toContain('explore') // worker type from input.subagent_type
@@ -2237,8 +2236,11 @@ test('a rejected resume has no identity line at all', () => {
 
 
 test('the pulse runs on a running face and on nothing else on the card', () => {
-  const running = render(
-    agentRow('p1', { subagent_type: 'Explore', description: 'live' }, 'pending'),
+  const running = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[agentRow('p1', { subagent_type: 'Explore', description: 'live' }, 'pending')]}
+      turnLive
+    />,
   )
   expect(running.match(/animate-face-pulse/g)).toHaveLength(1)
   expect(running).not.toContain('animate-pulse"')
@@ -3907,6 +3909,27 @@ test('an errored bash body stays one danger tone rather than tinting its trace',
   expect(html).not.toContain('text-[light-dark(#dc2626,#fca5a5)]') // no per-line heuristic on a known failure
 })
 
+test('a successful compound bash body is not washed in the danger tone', () => {
+  // `ls && git status && lsof` with no listener exits 1; the engine classifies
+  // that as a no-match, so the ls/git output must render as ordinary lines.
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'ls -la && git status -sb && lsof -nP -iTCP:8001 -sTCP:LISTEN' },
+      status: 'success',
+      result: {
+        isError: false,
+        content: 'total 64\n-rw-r--r--  1 pt  staff  1024 README.md\n## main...origin/main',
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('README.md')
+  expect(html).not.toContain('text-tone-danger')
+})
+
 test('"Tools open by default" opens a card that would otherwise be closed', () => {
   // The prototype's `toolsExpandedByDefault` (AppV2.jsx:19), which this app had
   // never exposed. Proof it reaches the card: the full body renders on a
@@ -4783,9 +4806,6 @@ test('P4-38 — the assistant body is the positioned hover group the chip needs'
 
 test('P4-38 — no copy chip while the reply is still streaming', () => {
   const html = render(assistantRow('partial ans', true))
-  // Proof the row really is in the streaming state, so the missing chip below
-  // is the suppression under test and not an empty render. The caret used to
-  // carry this; the arrival marking carries it now.
   expect(html).toContain('prose-arrive-smooth')
   expect(html).not.toContain('Copy response')
 })

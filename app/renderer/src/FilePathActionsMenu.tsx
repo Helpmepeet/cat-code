@@ -16,6 +16,7 @@ import {
 import { useToast } from './toastContext.js'
 import {
   estimateFilePathMenuHeight,
+  canOpenFilePathInSession,
   placeFilePathActionsMenu,
   resolveFilePathActionItems,
   resolveFilePathParts,
@@ -108,7 +109,11 @@ export function FilePathActionsMenu({
   })
 
   const parts = resolveFilePathParts({ rawPath, cwd })
-  const items = resolveFilePathActionItems(parts)
+  const items = resolveFilePathActionItems(
+    parts,
+    undefined,
+    canOpenFilePathInSession(parts, cwd),
+  )
   const placement = placeFilePathActionsMenu(
     anchor,
     readViewport(),

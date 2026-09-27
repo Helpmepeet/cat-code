@@ -1,43 +1,11 @@
 /**
- * Settings shell — rebuilt on `docs/migration/specs/2026-07-27-settings-redesign.md`
- * after the operator rejected the previous surface wholesale ("very bad in
- * grouping and everything… needs a full rebuild in philosophy").
- *
- * The old page displayed the RESOLVER's output: it bound silently to whichever
- * session was focused, so switching tabs changed what most panes meant, and it
- * showed a running session's permission mode under a heading ("Default mode")
- * that promised durable configuration. Both are one error — answering *"what did
- * the engine compute for whoever happens to be focused?"* where a Settings page
- * must answer *"what will happen next time, and for whom?"*.
- *
- * So this shell edits FILES, and its subject is CHOSEN:
- *
- *  - **Law 1 — Settings edits sources; sessions show state.** No live session
- *    value renders here. The live permission context, workspace trust, IDE/LSP
- *    status and doctor output moved to the session inspector (tab ⋯ → "Inspect
- *    metadata…", `MetadataInspector.tsx`), which already hosts every one of
- *    them — so this is a relocation, not a cut.
- *  - **Law 2 — Scope is chosen, never inherited.** The page head carries the
- *    subject: My defaults · a named Project · This app · Enforced. Switching
- *    session tabs never changes it. The focused session's project is offered
- *    FIRST and labeled "current", but selecting it is an act.
- *  - **Law 3 — Every write names its file before it happens.** The scope decides
- *    the write layer (`settingsScope.ts`); the pane states the destination path
- *    above the controls. `targetSourceFor` resolve-time targeting is deleted.
- *
- * The rail is FUNCTIONAL again — the resolver's five-way source taxonomy became
- * the scope selector plus a per-row annotation, and never structures the nav.
- *
- * v1 limits, stated on screen rather than papered over (spec §6): the settings
- * snapshot is one session's spawn-time read (`app/sidecar/settingsDomain.ts:16-17`),
- * so the user layer is trustworthy from any session while a PROJECT other than
- * the focused session's has not been read at all — and must not be written
- * either, since the write verb reaches that session's sidecar and would land in
- * its cwd's file. Scope-addressed reads (`settings.refresh`) are a later task.
+ * Stable settings navigation and local scope selection. Search and the category
+ * rail share settingsScope/settingsSearch metadata. Durable settings and memory
+ * read through the host inventory for the selected project.
  */
 
-import { useContext, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
+import type { SettingsInventoryReadResult } from '../../shared/hostApi.js'
 import type {
   AgentConfigSnapshot,
   ExtensionsSnapshot,
@@ -46,6 +14,7 @@ import type {
   RemoteSettingsSnapshot,
   RemoteVerbMessage,
   SettingsSnapshot,
+  SettingsVerbMessage,
 } from '../../shared/protocol.js'
 import type { EditableSettingPane } from '../../shared/settingsEditable.js'
 import {
@@ -67,13 +36,13 @@ import {
   isColorSchemeKey,
 } from './colorScheme.js'
 import { AgentsPage } from './AgentsPage.js'
+import { getBridge } from './bridge.js'
 import {
   CODE_THEME_KEYS,
   CODE_THEME_LABELS,
   CodeThemeContext,
   DEFAULT_CODE_THEME,
   isCodeThemeKey,
-  selectCodeThemeNote,
 } from './codeTheme.js'
 import { CodeThemePreview } from './CodeThemePreview.js'
 import { ToolCardStylePreview } from './ToolCardStylePreview.js'
@@ -113,30 +82,24 @@ import {
   settingsWereRead,
 } from './settingsReadState.js'
 import {
-  SETTINGS_APPLY_NOTE,
   SETTINGS_PROJECT_LAYER_DESC,
   SETTINGS_PROJECT_LAYER_LABEL,
   SETTINGS_PROJECT_LAYERS,
-  SETTINGS_SCOPE_KINDS,
   SETTINGS_SCOPE_LABEL,
-  SETTINGS_SCOPE_SUBTITLE,
-  SETTINGS_SESSION_STATE_NOTE,
+  SETTINGS_NAVIGATION_GROUPS,
+  selectSettingsCategory,
   selectPermissionDefaultModeRow,
-  selectProjectEngine,
   selectSettingsProjects,
-  selectSettingsRail,
-  selectSettingsRailItem,
   selectSettingsWriteLayer,
-  settingsApplyNote,
-  settingsNoEngineNote,
-  settingsRailItem,
   settingsRowNote,
+  type SettingsCategoryId,
   type SettingsProjectEngine,
   type SettingsProjectLayer,
   type SettingsProjectOption,
-  type SettingsRailItemId,
   type SettingsScopeKind,
 } from './settingsScope.js'
+import { settingsPaneSpecs } from './settingsEditorModel.js'
+import { selectSettingsSearchResults } from './settingsSearch.js'
 import {
   HooksPanel,
   McpPanel,
@@ -145,73 +108,79 @@ import {
 } from './SettingsExtensions.js'
 import { Field, LockIcon, PaneSection, SourceBadge } from './SettingsField.js'
 import {
-  selectEditableValue,
   selectLayerOrigin,
   selectManagedFields,
 } from './settingsState.js'
 
+let rememberedCategory: SettingsCategoryId | null = null
+
 export function SettingsShell({
-  snapshot,
-  agentsSnapshot,
   cwd,
-  memorySnapshot,
-  extensionsSnapshot,
   remoteSnapshot,
   remoteLastResult,
   onRemoteVerb,
-  onSettingWrite,
   projectBinding,
   projects,
   initialScope = 'user',
-  initialCategory = 'general',
+  initialCategory,
   onOpenLogs,
   onSaveDiagnostics,
 }: {
-  snapshot: SettingsSnapshot | null
-  agentsSnapshot?: AgentConfigSnapshot | null
   /** The focused session's cwd. Used ONLY as project IDENTITY — which project
-   * the picker can offer and whose files this window has actually read. It never
-   * chooses the scope (Law 2). */
+   * the picker can offer first. It never chooses the scope (Law 2). */
   cwd?: string | null
-  memorySnapshot?: MemorySnapshot | null
-  extensionsSnapshot?: ExtensionsSnapshot | null
   remoteSnapshot?: RemoteSettingsSnapshot | null
   remoteLastResult?: RemoteSettingsResultFrame | null
   onRemoteVerb?: (verb: RemoteVerbMessage) => void
-  /** Sends one editable-setting write to the sidecar. The SOURCE it carries is
-   * decided by the chosen scope (Law 3), never by where the value resolves. */
-  onSettingWrite?: (input: SettingWriteInput) => void
   /** Names the focused session's project (`settingsProjectBinding.ts`), so the
    * picker's "current" entry gets the roster-disambiguated label instead of a
    * bare basename. Optional: without it the cwd's last segment is used. */
   projectBinding?: SettingsProjectBinding
-  /** Every project the picker may offer (the merged workspace roster). Only the
-   * focused session's project can be READ or WRITTEN in v1; the rest render the
-   * honest limit. App wires this in one line when it is free to edit. */
+  /** Every known project the picker may offer (the merged workspace roster). */
   projects?: readonly SettingsProjectOption[]
-  /**
-   * Which scope the page opens on. Law 2 makes My defaults the landing scope,
-   * so this defaults to `user` and App passes nothing; it exists because the
-   * renderer suite is SSR-only and cannot click a scope tab, and every scope but
-   * the landing one would otherwise be unrenderable in a test.
-   */
+  /** Initial scope remains available for direct page entry and SSR checks. */
   initialScope?: SettingsScopeKind
   initialCategory?: string
   onOpenLogs?: () => void
   onSaveDiagnostics?: () => void
 
 }) {
-  const [scope, setScope] = useState<SettingsScopeKind>(initialScope)
-  const [item, setItem] = useState<string>(initialCategory)
+  const [category, setCategory] = useState<SettingsCategoryId>(() => {
+    if (initialScope === 'app') return 'appearance'
+    if (initialScope === 'enforced') return 'policy'
+    const initial = initialCategory ?? rememberedCategory ?? 'general'
+    const requested = initial === 'interface' || initial === 'notifications'
+      ? 'appearance'
+      : initial
+    const valid = SETTINGS_NAVIGATION_GROUPS.some(group =>
+      group.items.some(entry => entry.id === requested),
+    )
+    return valid ? requested as SettingsCategoryId : 'general'
+  })
+  const [preferredEngineScope, setPreferredEngineScope] =
+    useState<'user' | 'project'>(initialScope === 'project' ? 'project' : 'user')
   const [query, setQuery] = useState('')
+  const [selectedResult, setSelectedResult] = useState(0)
+  const [focusKey, setFocusKey] = useState<string | null>(null)
   const [projectLayer, setProjectLayer] =
     useState<SettingsProjectLayer>('projectSettings')
   const [projectCwd, setProjectCwd] = useState<string | null>(null)
+  const [pickedProjects, setPickedProjects] = useState<SettingsProjectOption[]>([])
+  const [projectPickError, setProjectPickError] = useState<string | null>(null)
+  const [inventoryUserOnly, setInventoryUserOnly] = useState(false)
+  const [inventoryRead, setInventoryRead] = useState<{
+    cwd: string | null
+    result: SettingsInventoryReadResult | null
+  } | null>(null)
+  const [writeStatus, setWriteStatus] = useState<{
+    kind: 'saving' | 'saved' | 'failed'
+    message: string
+  } | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
+  const inventoryReadToken = useRef(0)
+  const writeActionToken = useRef(0)
 
-  // Whether a session is ATTACHED, which is not the same question as whether
-  // its settings arrived: a spawn-time read that threw, the attach window, and a
-  // process reset all leave a running session with no snapshot. Only the cwd
-  // answers it, so the unread copy is picked from here rather than from `null`.
   const sessionOpen = typeof cwd === 'string' && cwd.trim().length > 0
   const activeCwd =
     cwd && cwd.trim().length > 0
@@ -219,217 +188,419 @@ export function SettingsShell({
       : projectBinding?.bound
         ? projectBinding.cwd
         : null
-  const known =
-    projects ??
-    (projectBinding?.bound
+  const known = [
+    ...(projects ?? (projectBinding?.bound
       ? [{ cwd: projectBinding.cwd, name: projectBinding.name }]
-      : undefined)
+      : [])),
+    ...pickedProjects,
+  ]
   const projectChoices = selectSettingsProjects(known, activeCwd)
-  // Law 2: the current project is offered first but never auto-selected — until
-  // the operator picks one, the picker's own first entry is merely what the
-  // control displays, and the pane says which project it is describing.
   const selectedProject =
     projectChoices.find(choice => choice.cwd === projectCwd) ??
     projectChoices[0] ??
     null
+  const engineCategory =
+    category === 'general' || category === 'model' ||
+    category === 'permissions' || category === 'privacy' ||
+    category === 'memory'
+  const inventoryCategory =
+    category === 'agents' || category === 'skills' ||
+    category === 'plugins' || category === 'mcp' || category === 'hooks'
+  const inventoryCwd = engineCategory || category === 'policy'
+    ? preferredEngineScope === 'project' ? selectedProject?.cwd ?? null : null
+    : inventoryCategory && !inventoryUserOnly ? selectedProject?.cwd ?? null : null
+  const inventoryCwdRef = useRef(inventoryCwd)
+  inventoryCwdRef.current = inventoryCwd
+  const currentInventory = inventoryRead?.cwd === inventoryCwd ? inventoryRead.result : null
+  const inventoryLoading = currentInventory === null
+  const inventoryError = currentInventory?.ok === false ? currentInventory.error.message : null
+  const inventory = currentInventory?.ok === true ? currentInventory.inventory : null
+
+  const chooseProject = (): void => {
+    setProjectPickError(null)
+    void getBridge().pickSettingsProject().then(project => {
+      if (!project) return
+      setPickedProjects(current => [
+        ...current.filter(choice => choice.cwd !== project.cwd),
+        project,
+      ])
+      setProjectCwd(project.cwd)
+      setInventoryUserOnly(false)
+    }, () => {
+      setProjectPickError('Project could not be opened.')
+    })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const token = ++inventoryReadToken.current
+    setInventoryRead({ cwd: inventoryCwd, result: null })
+    void Promise.resolve().then(() => getBridge().readSettingsInventory(inventoryCwd)).then(
+      result => {
+        if (!cancelled && token === inventoryReadToken.current) {
+          setInventoryRead({ cwd: inventoryCwd, result })
+        }
+      },
+      () => {
+        if (!cancelled && token === inventoryReadToken.current) setInventoryRead({
+          cwd: inventoryCwd,
+          result: {
+            ok: false,
+            error: {
+              code: 'unavailable',
+              message: 'Configuration could not be read.',
+            },
+          },
+        })
+      },
+    )
+    return () => { cancelled = true }
+  }, [inventoryCwd])
   const engine: SettingsProjectEngine =
-    scope === 'project'
-      ? selectProjectEngine(selectedProject?.cwd ?? null, activeCwd)
-      : 'live'
-  const writeLayer = selectSettingsWriteLayer(scope, projectLayer)
-  const activeItem = selectSettingsRailItem(scope, item)
-  const rail = selectSettingsRail(scope, query)
+    preferredEngineScope === 'project' && !selectedProject ? 'absent' : 'live'
+  const writeLayer = selectSettingsWriteLayer(preferredEngineScope, projectLayer)
+
+  useEffect(() => {
+    ++writeActionToken.current
+    setWriteStatus(null)
+  }, [category, inventoryCwd, writeLayer])
+
+  const searching = query.trim().length > 0
+  const results = searching
+    ? selectSettingsSearchResults(query, preferredEngineScope)
+    : []
+  const currentCategory = selectSettingsCategory(category)
+
+  const handleSettingWrite = (input: SettingWriteInput): void => {
+    const targetCwd = input.source === 'userSettings' ? null : selectedProject?.cwd ?? null
+    if (input.source !== 'userSettings' && !targetCwd) {
+      setWriteStatus({ kind: 'failed', message: 'Choose a project before saving.' })
+      return
+    }
+    const verb: SettingsVerbMessage = {
+      type: 'settings.setValue',
+      requestId: crypto.randomUUID(),
+      source: input.source,
+      key: input.key,
+      value: input.value,
+    }
+    const actionToken = ++writeActionToken.current
+    setWriteStatus({ kind: 'saving', message: 'Saving…' })
+    void (async () => {
+      let failure: string | null = null
+      try {
+        const result = await getBridge().writeDurableSetting(targetCwd, verb)
+        if (!result.ok) failure = result.error.message
+      } catch {
+        failure = 'Setting could not be saved.'
+      }
+      try {
+        const refreshed = await getBridge().readSettingsInventory(targetCwd)
+        if (inventoryCwdRef.current === targetCwd && actionToken === writeActionToken.current) {
+          ++inventoryReadToken.current
+          setInventoryRead({ cwd: targetCwd, result: refreshed })
+        }
+        if (!refreshed.ok && !failure) failure = refreshed.error.message
+      } catch {
+        if (!failure) {
+          failure = 'Setting was saved, but could not be reloaded.'
+        }
+      }
+      if (actionToken === writeActionToken.current && inventoryCwdRef.current === targetCwd) {
+        setWriteStatus(failure
+          ? { kind: 'failed', message: failure }
+          : { kind: 'saved', message: 'Saved' })
+      }
+    })()
+  }
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      } else if (event.key === 'Escape' && searching) {
+        setQuery('')
+        searchRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onShortcut)
+    return () => window.removeEventListener('keydown', onShortcut)
+  }, [searching])
+
+  useEffect(() => {
+    if (focusKey === null || searching) return
+    const target = Array.from(
+      pageRef.current?.querySelectorAll<HTMLElement>('[data-setting-key]') ?? [],
+    ).find(node => node.dataset.settingKey === focusKey)
+    const controlArea = target?.querySelector<HTMLElement>('[data-setting-control]')
+    const control =
+      controlArea?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]:not(:disabled)') ??
+      controlArea?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
+    const destination = control ?? target ?? pageRef.current?.querySelector<HTMLElement>('[data-settings-heading]')
+    destination?.focus({ preventScroll: true })
+    destination?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+    if (target) {
+      target.classList.remove('animate-land')
+      target.classList.add('animate-land')
+      const onLandingEnd = (event: AnimationEvent) => {
+        if (event.target !== target) return
+        target.classList.remove('animate-land')
+        target.removeEventListener('animationend', onLandingEnd)
+      }
+      target.addEventListener('animationend', onLandingEnd)
+    }
+    setFocusKey(null)
+  }, [category, focusKey, preferredEngineScope, searching])
+
+  const openResult = (result: (typeof results)[number]) => {
+    setCategory(result.category)
+    rememberedCategory = result.category
+    if ((result.scope === 'user' || result.scope === 'project') &&
+      (result.category === 'general' || result.category === 'model' ||
+        result.category === 'permissions' || result.category === 'privacy' ||
+        result.category === 'memory')) {
+      setPreferredEngineScope(result.scope)
+    }
+    setQuery('')
+    setFocusKey(result.key ?? '')
+  }
 
   return (
     <div
       aria-label="Settings"
-      className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-app-bg text-text-primary md:flex-row"
+      data-window-ground
     >
-      <header className="shrink-0 border-b border-shell-seam bg-shell-chrome px-6 py-4">
-        <h1 className="mb-2.5 text-base font-semibold tracking-tight text-text-primary">
-          Settings
-        </h1>
-        <div
-          aria-label="Settings scope"
-          className="flex flex-wrap items-center gap-1.5"
-          role="group"
-        >
-          {SETTINGS_SCOPE_KINDS.map(kind => {
-            const on = kind === scope
-            return (
-              <button
-                aria-pressed={on}
-                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] transition-colors ${
-                  on
-                    ? 'border-accent/40 bg-accent/10 font-semibold text-accent-soft'
-                    : 'border-shell-seam text-text-muted hover:bg-shell-hover'
-                }`}
-                key={kind}
-                onClick={() => {
-                  setScope(kind)
-                  setItem(selectSettingsRailItem(kind, item))
-                }}
-                type="button"
-              >
-                {kind === 'project' && selectedProject
-                  ? `${SETTINGS_SCOPE_LABEL.project}: ${selectedProject.name}`
-                  : SETTINGS_SCOPE_LABEL[kind]}
-                {kind === 'enforced' ? <LockIcon className="h-2.5 w-2.5" /> : null}
-              </button>
-            )
-          })}
-        </div>
-        <p className="mt-2 text-[12px] leading-relaxed text-text-subtle">
-          {SETTINGS_SCOPE_SUBTITLE[scope]}
-        </p>
-        {scope === 'project' ? (
-          <ProjectScopeControls
-            choices={projectChoices}
-            engine={engine}
-            layer={projectLayer}
-            onSelectLayer={setProjectLayer}
-            onSelectProject={setProjectCwd}
-            selected={selectedProject}
-          />
-        ) : null}
-        {writeLayer ? (
-          <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
-            {activeItem === 'memory'
-              ? 'Auto memory edits are saved immediately. Features use the new value when they next check the setting.'
-              : settingsApplyNote(activeItem)}
-          </p>
-        ) : null}
-      </header>
-
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <nav className="flex w-[240px] shrink-0 flex-col overflow-y-auto border-r border-shell-seam bg-shell-chrome px-3 py-5">
-          <input
-            aria-label="Search settings"
-            className="mb-4 w-full rounded-lg border border-shell-seam bg-shell-hover px-2.5 py-1.5 text-[12.5px] text-text-primary outline-none placeholder:text-text-subtle"
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Search settings"
-            value={query}
-          />
-          {rail.map((group, index) => (
+      <aside className="shrink-0 border-b border-shell-seam bg-shell-chrome px-4 py-4 md:w-[220px] md:overflow-y-auto md:border-b-0 md:border-r md:px-4 md:py-6" data-window-chrome>
+        <h1 className="mb-3 px-2 text-[20px] font-semibold tracking-tight md:mb-6">Settings</h1>
+        <nav aria-label="Settings categories" className="flex gap-2 overflow-x-auto md:block md:overflow-visible">
+          {SETTINGS_NAVIGATION_GROUPS.map((group, index) => (
             <div
               aria-label={group.heading ?? undefined}
-              className="mb-3"
-              key={group.heading ?? `block-${index}`}
+              className="flex shrink-0 gap-1 md:mb-5 md:block"
+              key={group.heading ?? `group-${index}`}
               role="group"
             >
               {group.heading ? (
-                <div className="mb-1.5 truncate px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-subtle">
+                <div className="hidden px-2 pb-1.5 text-[12px] font-medium text-text-subtle md:block">
                   {group.heading}
                 </div>
               ) : null}
-              <div className="flex flex-col gap-px">
-                {group.items.map(entry => {
-                  const on = entry.id === activeItem
-                  return (
-                    <button
-                      aria-current={on ? 'page' : undefined}
-                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors ${
-                        on
-                          ? 'bg-accent/10 font-semibold text-accent-soft'
-                          : 'text-text-muted hover:bg-shell-hover'
-                      }`}
-                      key={entry.id}
-                      onClick={() => setItem(entry.id)}
-                      type="button"
-                    >
-                      <span className="flex-1 truncate">{entry.label}</span>
-                      {entry.locked ? (
-                        <LockIcon
-                          className={
-                            on
-                              ? 'h-2.5 w-2.5 text-accent-soft'
-                              : 'h-2.5 w-2.5 text-text-subtle'
-                          }
-                        />
-                      ) : null}
-                    </button>
-                  )
-                })}
-              </div>
+              {group.items.map(entry => (
+                <button
+                  aria-current={entry.id === category && !searching ? 'page' : undefined}
+                  className={`flex h-[34px] shrink-0 items-center gap-2 rounded-md px-2.5 text-left text-[13px] transition-colors md:mb-0.5 md:w-full ${
+                    entry.id === category && !searching
+                      ? 'bg-accent/10 font-semibold text-accent-soft'
+                      : 'text-text-muted hover:bg-shell-hover hover:text-text-primary'
+                  }`}
+                  key={entry.id}
+                  onClick={() => {
+                    setCategory(entry.id)
+                    rememberedCategory = entry.id
+                    setQuery('')
+                    setFocusKey(null)
+                  }}
+                  type="button"
+                >
+                  <span className="truncate">{entry.label}</span>
+                  {entry.locked ? <LockIcon className="ml-auto h-3 w-3" /> : null}
+                </button>
+              ))}
             </div>
           ))}
-          {rail.length === 0 ? (
-            <div className="px-2 text-xs text-text-subtle">No matches</div>
-          ) : null}
-          {onOpenLogs || onSaveDiagnostics ? (
-            <div className="mt-auto border-t border-shell-seam px-2 pt-4">
-              <p className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.1em] text-text-subtle">
-                Diagnostics
-              </p>
-              <div className="flex flex-col gap-1.5">
-                {onOpenLogs ? <button className="rounded-md border border-shell-seam px-2 py-1.5 text-left text-[11.5px] text-text-muted hover:bg-shell-hover" onClick={onOpenLogs} type="button">Open logs folder</button> : null}
-                {onSaveDiagnostics ? <button className="rounded-md border border-shell-seam px-2 py-1.5 text-left text-[11.5px] text-text-muted hover:bg-shell-hover" onClick={onSaveDiagnostics} type="button">Save diagnostics bundle</button> : null}
-              </div>
-            </div>
-          ) : null}
-          {/* Where the categories that left this page went. Rendered in the rail
-           * because that is where someone looks for a missing one. */}
-          <p className="px-2 pt-6 text-[10.5px] leading-relaxed text-text-subtle">
-            {SETTINGS_SESSION_STATE_NOTE}
-          </p>
         </nav>
+      </aside>
 
-        <div className="flex-1 overflow-y-auto px-8 py-7">
-          <div className="mx-auto max-w-[660px]">
-            <header className="mb-5">
-              <h2 className="text-lg font-semibold tracking-tight text-text-primary">
-                {settingsRailItem(activeItem).label}
-              </h2>
-              <p className="text-[13px] text-text-subtle">
-                {settingsRailItem(activeItem).desc}
-              </p>
-            </header>
-            <ScopeBody
-              agentsSnapshot={agentsSnapshot ?? null}
-              engine={engine}
-              extensionsSnapshot={extensionsSnapshot ?? null}
-              item={activeItem}
-              layer={writeLayer}
-              memorySnapshot={memorySnapshot ?? null}
-              onRemoteVerb={onRemoteVerb ?? (() => {})}
-              onSettingWrite={onSettingWrite ?? (() => {})}
-              projectName={selectedProject?.name ?? 'this project'}
-              remoteLastResult={remoteLastResult ?? null}
-              remoteSnapshot={remoteSnapshot ?? null}
-              scope={scope}
-              sessionOpen={sessionOpen}
-              snapshot={snapshot}
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5 md:px-8 md:py-7 xl:px-12">
+        <div className="max-w-[760px]" ref={pageRef}>
+          <div className="mb-7 flex h-[38px] items-center gap-2 rounded-md border border-shell-seam bg-surface-raised px-3 focus-within:border-accent">
+            <svg aria-hidden="true" className="h-4 w-4 shrink-0 text-text-subtle" fill="none" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24">
+              <circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" />
+            </svg>
+            <input
+              aria-label="Search all settings"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-text-primary outline-none placeholder:text-text-subtle"
+              onChange={event => {
+                setQuery(event.target.value)
+                setSelectedResult(0)
+              }}
+              onKeyDown={event => {
+                if (event.key === 'ArrowDown' && results.length > 0) {
+                  event.preventDefault()
+                  setSelectedResult(index => Math.min(index + 1, results.length - 1))
+                } else if (event.key === 'ArrowUp' && results.length > 0) {
+                  event.preventDefault()
+                  setSelectedResult(index => Math.max(index - 1, 0))
+                } else if (event.key === 'Enter' && results[selectedResult]) {
+                  event.preventDefault()
+                  openResult(results[selectedResult])
+                }
+              }}
+              placeholder="Search all settings"
+              ref={searchRef}
+              type="search"
+              value={query}
             />
+            {searching ? (
+              <button aria-label="Clear search" className="text-[12px] text-text-subtle hover:text-text-primary" onClick={() => { setQuery(''); searchRef.current?.focus() }} type="button">Clear</button>
+            ) : <kbd className="text-[11px] text-text-subtle">⌘ K</kbd>}
           </div>
+
+          {searching ? (
+            <section aria-label="Search results">
+              <h2 className="text-[24px] font-semibold tracking-tight" data-settings-heading tabIndex={-1}>Search results</h2>
+              <p className="mb-2 mt-1 text-[13px] text-text-subtle" role="status">
+                {results.length === 0 ? 'No matching settings' : `${results.length} ${results.length === 1 ? 'result' : 'results'}`}
+              </p>
+              {results.length === 0 ? (
+                <p className="border-b border-shell-seam py-5 text-[13px] text-text-muted">
+                  Try a setting name such as code theme, retention, or model.
+                </p>
+              ) : null}
+              {results.map((result, index) => (
+                <button
+                  className={`block w-full border-b border-shell-seam px-1 py-4 text-left hover:bg-shell-hover ${index === selectedResult ? 'bg-shell-hover' : ''}`}
+                  key={result.id}
+                  onClick={() => openResult(result)}
+                  onMouseEnter={() => setSelectedResult(index)}
+                  type="button"
+                >
+                  <span className="block text-[11px] text-text-subtle">{selectSettingsCategory(result.category).label} · {result.scopeLabel}</span>
+                  <span className="mt-1 block text-[14px] font-medium text-text-primary">{result.label}</span>
+                  <span className="mt-0.5 block text-[13px] text-text-subtle">{result.description}</span>
+                </button>
+              ))}
+            </section>
+          ) : (
+            <>
+              <header className="mb-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="text-[25px] font-semibold tracking-tight" data-settings-heading tabIndex={-1}>
+                    {currentCategory.label}
+                  </h2>
+                  {engineCategory ? (
+                    <div aria-label="Settings scope" className="flex gap-1.5" role="group">
+                      {(['user', 'project'] as const).map(kind => (
+                        <button
+                          aria-pressed={preferredEngineScope === kind}
+                          className={`rounded-md border px-2.5 py-1 text-[12px] ${preferredEngineScope === kind ? 'border-accent/40 bg-accent/10 font-semibold text-accent-soft' : 'border-shell-seam text-text-muted hover:bg-shell-hover'}`}
+                          key={kind}
+                          onClick={() => setPreferredEngineScope(kind)}
+                          type="button"
+                        >
+                          {kind === 'project' && selectedProject ? `${SETTINGS_SCOPE_LABEL.project}: ${selectedProject.name}` : SETTINGS_SCOPE_LABEL[kind]}
+                        </button>
+                      ))}
+                    </div>
+                  ) : category === 'appearance' || category === 'diagnostics' ? (
+                    <span className="text-[12px] text-text-subtle">This app</span>
+                  ) : category === 'remote' ? (
+                    <span className="text-[12px] text-text-subtle">This session</span>
+                  ) : inventoryCategory ? (
+                    <span className="text-[12px] text-text-subtle">{selectedProject && !inventoryUserOnly ? selectedProject.name : 'User configuration'}</span>
+                  ) : category === 'policy' ? (
+                    <span className="flex items-center gap-1 text-[12px] text-text-subtle"><LockIcon className="h-3 w-3" /> Enforced</span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-[13px] leading-5 text-text-muted">{currentCategory.desc}</p>
+                {writeStatus && engineCategory ? (
+                  <p
+                    className={`mt-2 text-[12px] ${writeStatus.kind === 'failed' ? 'text-tone-warn' : 'text-text-subtle'}`}
+                    role={writeStatus.kind === 'failed' ? 'alert' : 'status'}
+                  >
+                    {writeStatus.message}
+                  </p>
+                ) : null}
+                {engineCategory && preferredEngineScope === 'project' ? (
+                  <ProjectScopeControls
+                    choices={projectChoices}
+                    layer={projectLayer}
+                    onChooseProject={chooseProject}
+                    onSelectLayer={setProjectLayer}
+                    onSelectProject={setProjectCwd}
+                    selected={selectedProject}
+                  />
+                ) : null}
+                {inventoryCategory ? (
+                  <div className="mt-2.5">
+                    <SelectControl
+                      label="Configuration for"
+                      onChange={value => {
+                        setInventoryUserOnly(value === '')
+                        if (value) setProjectCwd(value)
+                      }}
+                      optionLabels={{
+                        '': 'User configuration',
+                        ...Object.fromEntries(projectChoices.map(choice => [choice.cwd, choice.name])),
+                      }}
+                      options={['', ...projectChoices.map(choice => choice.cwd)]}
+                      value={inventoryCwd ?? ''}
+                    />
+                    <button
+                      className="ml-2 rounded-md border border-shell-seam px-2.5 py-1 text-[12px] text-text-muted hover:bg-shell-hover"
+                      onClick={chooseProject}
+                      type="button"
+                    >
+                      Choose project…
+                    </button>
+                  </div>
+                ) : null}
+                {projectPickError && (engineCategory || inventoryCategory) ? (
+                  <p className="mt-2 text-[12px] text-tone-warn" role="alert">{projectPickError}</p>
+                ) : null}
+              </header>
+              <ScopeBody
+                agentsSnapshot={inventory?.agents ?? null}
+                category={category}
+                engine={engine}
+                extensionsSnapshot={inventory?.extensions ?? null}
+                inventoryError={inventoryError}
+                inventoryLoading={inventoryLoading}
+                layer={writeLayer}
+                memorySnapshot={inventory?.memory ?? null}
+                onOpenLogs={onOpenLogs}
+                onRemoteVerb={onRemoteVerb ?? (() => {})}
+                onSaveDiagnostics={onSaveDiagnostics}
+                onSettingWrite={handleSettingWrite}
+                remoteLastResult={remoteLastResult ?? null}
+                remoteSnapshot={remoteSnapshot ?? null}
+                selectedProject={selectedProject}
+                sessionOpen={sessionOpen}
+                snapshot={inventory?.settings ?? null}
+              />
+            </>
+          )}
         </div>
-      </div>
+      </main>
     </div>
   )
 }
 
-/** The project picker plus the Shared / Just-me layer choice (Law 3's one
- * further explicit choice per write, made once for the pane). */
+/** The project picker and its explicit write layer. */
 function ProjectScopeControls({
   choices,
   selected,
+  onChooseProject,
   onSelectProject,
   layer,
   onSelectLayer,
-  engine,
 }: {
   choices: readonly { cwd: string; name: string; current: boolean }[]
   selected: { cwd: string; name: string; current: boolean } | null
+  onChooseProject: () => void
   onSelectProject: (cwd: string) => void
   layer: SettingsProjectLayer
   onSelectLayer: (layer: SettingsProjectLayer) => void
-  engine: SettingsProjectEngine
 }) {
   if (!selected) {
     return (
-      <p className="mt-2.5 text-[12px] leading-relaxed text-text-subtle">
-        No project is open, so there is none to name. Open a session in a project
-        to edit its settings files.
-      </p>
+      <div className="mt-2.5 flex items-center gap-3">
+        <p className="text-[12px] leading-relaxed text-text-subtle">Choose a project to read and edit its settings files.</p>
+        <button className="rounded-md border border-shell-seam px-2.5 py-1 text-[12px] text-text-muted hover:bg-shell-hover" onClick={onChooseProject} type="button">Choose project…</button>
+      </div>
     )
   }
   return (
@@ -447,6 +618,7 @@ function ProjectScopeControls({
           options={choices.map(choice => choice.cwd)}
           value={selected.cwd}
         />
+        <button className="rounded-md border border-shell-seam px-2.5 py-1 text-[12px] text-text-muted hover:bg-shell-hover" onClick={onChooseProject} type="button">Choose project…</button>
         <span className="truncate font-mono text-[11px] text-text-subtle">
           {selected.cwd}
         </span>
@@ -478,85 +650,101 @@ function ProjectScopeControls({
           {SETTINGS_PROJECT_LAYER_DESC[layer]}
         </span>
       </div>
-      {engine === 'absent' ? (
-        <p className="text-[11.5px] leading-relaxed text-tone-warn">
-          {settingsNoEngineNote(selected.name)}
-        </p>
-      ) : null}
     </div>
   )
 }
 
 function ScopeBody({
-  scope,
-  item,
+  category,
   layer,
   engine,
-  projectName,
+  selectedProject,
   snapshot,
   agentsSnapshot,
   extensionsSnapshot,
+  inventoryError,
+  inventoryLoading,
   memorySnapshot,
   remoteSnapshot,
   remoteLastResult,
   onRemoteVerb,
   onSettingWrite,
+  onOpenLogs,
+  onSaveDiagnostics,
   sessionOpen,
 }: {
-  scope: SettingsScopeKind
-  item: SettingsRailItemId
+  category: SettingsCategoryId
   layer: ReturnType<typeof selectSettingsWriteLayer>
   engine: SettingsProjectEngine
-  projectName: string
+  selectedProject: { cwd: string; name: string; current: boolean } | null
   sessionOpen: boolean
   snapshot: SettingsSnapshot | null
   agentsSnapshot: AgentConfigSnapshot | null
   extensionsSnapshot: ExtensionsSnapshot | null
+  inventoryError: string | null
+  inventoryLoading: boolean
   memorySnapshot: MemorySnapshot | null
   remoteSnapshot: RemoteSettingsSnapshot | null
   remoteLastResult: RemoteSettingsResultFrame | null
   onRemoteVerb: (verb: RemoteVerbMessage) => void
   onSettingWrite: (input: SettingWriteInput) => void
+  onOpenLogs?: () => void
+  onSaveDiagnostics?: () => void
 }) {
-  if (scope === 'app') return <AppScopeBody item={item} snapshot={snapshot} />
-  if (scope === 'enforced')
-    return <ManagedPanel sessionOpen={sessionOpen} snapshot={snapshot} />
-
-  // One gate for the whole project scope: nothing in this window has read the
-  // chosen project's files, so no pane may show values from the focused
-  // session's project as if they were this one's.
-  if (engine === 'absent') {
-    return (
-      <PaneSection title={settingsRailItem(item).label}>
-        <p className="text-[12.5px] leading-relaxed text-text-subtle">
-          {settingsNoEngineNote(projectName)}
-        </p>
-      </PaneSection>
-    )
-  }
-
-  // `layer` is non-null for the user and project scopes (settingsScope.ts).
   const writeLayer = layer ?? 'userSettings'
-  const noEngineNote = settingsNoEngineNote(projectName)
-  // Every engine-key pane below takes the same seven props and differs only in
-  // which pane it draws, so the item switch names the pane and nothing else.
-  const settingsPane = (pane: EditableSettingPane) => (
+  const engineCategory =
+    category === 'general' || category === 'model' ||
+    category === 'permissions' || category === 'privacy' ||
+    category === 'memory'
+  const inventoryCategory =
+    category === 'agents' || category === 'skills' ||
+    category === 'plugins' || category === 'mcp' || category === 'hooks'
+  if ((inventoryCategory || engineCategory || category === 'policy') && inventoryLoading) {
+    return <p className="text-[13px] leading-5 text-text-muted">Loading configuration…</p>
+  }
+  if ((inventoryCategory || engineCategory || category === 'policy') && inventoryError) {
+    return <p role="alert" className="text-[13px] leading-5 text-tone-warn">{inventoryError}</p>
+  }
+  if (engineCategory && engine === 'absent') {
+    return <p className="text-[13px] leading-5 text-text-muted">Choose a project to read and edit its settings.</p>
+  }
+  if (engineCategory && !snapshot) {
+    return <p className="text-[13px] leading-5 text-text-muted">Settings are unavailable for this scope.</p>
+  }
+  const settingsPane = (
+    pane: EditableSettingPane,
+    keys?: readonly string[],
+    title?: string,
+    showTarget = true,
+  ) => (
     <SettingsPane
       engine={engine}
+      keys={keys}
       layer={writeLayer}
-      noEngineNote={noEngineNote}
+      noEngineNote="Choose a project to read and edit its settings."
       onWrite={onSettingWrite}
       pane={pane}
       sessionOpen={sessionOpen}
+      showTarget={showTarget}
       snapshot={snapshot}
+      title={title}
     />
   )
 
-  switch (item) {
+  switch (category) {
     case 'general':
-      return settingsPane('general')
+      return (
+        <>
+          {settingsPane('general', undefined, 'Behavior')}
+          {settingsPane('model', ['promptSuggestionEnabled'], 'Suggestions', false)}
+          {settingsPane('theme', undefined, 'Output', false)}
+        </>
+      )
     case 'model':
-      return settingsPane('model')
+      return settingsPane(
+        'model',
+        settingsPaneSpecs('model').filter(spec => spec.key !== 'promptSuggestionEnabled').map(spec => spec.key),
+      )
     case 'permissions':
       return (
         <PermissionsPane
@@ -565,13 +753,6 @@ function ScopeBody({
           sessionOpen={sessionOpen}
           snapshot={snapshot}
         />
-      )
-    case 'interface':
-      return (
-        <>
-          {settingsPane('theme')}
-          {scope === 'user' ? <KeybindingsRow /> : null}
-        </>
       )
     case 'privacy':
       return settingsPane('privacy')
@@ -582,6 +763,8 @@ function ScopeBody({
           <MemoryPage snapshot={memorySnapshot} />
         </>
       )
+    case 'appearance':
+      return <AppScopeBody />
     case 'agents':
       return <AgentsPage snapshot={agentsSnapshot} />
     case 'skills':
@@ -600,11 +783,18 @@ function ScopeBody({
           snapshot={remoteSnapshot}
         />
       )
-    default:
-      // `appearance` / `notifications` / `policy` belong to the other two scopes
-      // and cannot reach here (selectSettingsRailItem keeps the rail and the
-      // active item in the same scope).
-      return null
+    case 'diagnostics':
+      return (
+        <PaneSection title="Diagnostics">
+          <p className="mb-4 text-[13px] leading-5 text-text-muted">Open application logs or save a diagnostics bundle.</p>
+          <div className="flex flex-wrap gap-2">
+            {onOpenLogs ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="openLogs" onClick={onOpenLogs} type="button">Open logs folder</button> : null}
+            {onSaveDiagnostics ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="saveDiagnostics" onClick={onSaveDiagnostics} type="button">Save diagnostics bundle</button> : null}
+          </div>
+        </PaneSection>
+      )
+    case 'policy':
+      return <ManagedPanel sessionOpen={sessionOpen} snapshot={snapshot} />
   }
 }
 
@@ -664,6 +854,7 @@ function PermissionsPane({
           desc="The mode a session starts in. Change it from the CLI."
           editable={false}
           label="Default permission mode"
+          settingKey="permissions.defaultMode"
           managed={row.annotation.kind === 'enforced'}
           origin={badgeSource ? selectLayerOrigin(snapshot, badgeSource) : null}
           source={badgeSource}
@@ -710,75 +901,17 @@ function PermissionsPane({
   )
 }
 
-/** Keybindings are one file for this machine, so no project can override them —
- * the annotation is the whole point of the row. No read seam exists for the
- * file's contents, and one is not invented here. */
-function KeybindingsRow() {
-  return (
-    <PaneSection title="Keybindings">
-      <Field
-        desc="One file for this machine. Not readable from this app yet."
-        editable={false}
-        label="Keyboard shortcuts"
-      >
-        <span className="font-mono text-[12.5px] text-text-subtle">
-          {SETTINGS_UNKNOWN_VALUE}
-        </span>
-      </Field>
-    </PaneSection>
-  )
-}
-
-/**
- * The This-app scope: desktop preferences with no settings layer at all.
- *
- * The old page had no home for these, so its first control (reasoning layout)
- * sat under a heading that promised engine configuration. Only the Appearance
- * controls are real today; the rest of the scope is named, not faked.
- *
- * Appearance opens on the live code canvas, as the prototype's Theme pane does
- * (`Settings.jsx:328`): the hero is the thing the controls under it change, so
- * it goes above them and carries no heading of its own.
- */
-function AppScopeBody({
-  item,
-  snapshot,
-}: {
-  item: SettingsRailItemId
-  snapshot: SettingsSnapshot | null
-}) {
-  if (item === 'notifications') {
-    return (
-      <PaneSection title="Notifications">
-        <p className="text-[12.5px] leading-relaxed text-text-subtle">
-          Not built yet. This app raises in-window toasts only, so it needs the
-          window visible.
-        </p>
-      </PaneSection>
-    )
-  }
+/** Renderer-owned appearance and transcript preferences. */
+function AppScopeBody() {
   return (
     <>
-      <PaneSection>
-        <CodeThemePreview />
-      </PaneSection>
       <AppearanceSection />
-      <TranscriptDisplaySection snapshot={snapshot} />
+      <TranscriptDisplaySection />
     </>
   )
 }
 
-/**
- * Accent colour — the prototype's first Appearance control
- * (`Settings.jsx:332-343`), and the only one of that section's four that belongs
- * to this scope: syntax highlighting is an engine key on the project's Interface
- * pane, code theme sits with the transcript preferences below, and code font is
- * unbuilt.
- *
- * A radiogroup rather than five buttons, because the swatches are one choice.
- * Each swatch names its colour for anything that cannot see it, and the current
- * one is marked by a ring instead of by colour alone.
- */
+/** App palette controls use a radiogroup so each swatch has a named choice. */
 function AppearanceSection() {
   const { accent, setAccent } = useContext(AccentThemeContext)
   const { glass, setGlass } = useContext(GlassModeContext)
@@ -795,6 +928,7 @@ function AppearanceSection() {
             : 'Light or dark for the whole window, the frosted blur included.'
         }
         label="Appearance"
+        settingKey="scheme"
         modified={scheme !== DEFAULT_COLOR_SCHEME}
         onReset={() => setScheme(DEFAULT_COLOR_SCHEME)}
       >
@@ -811,6 +945,7 @@ function AppearanceSection() {
       <Field
         desc="Let the desktop show through the window as a blur, instead of a solid background. macOS only."
         label="Frosted window"
+        settingKey="glass"
         modified={glass !== DEFAULT_GLASS_ENABLED}
         onReset={() => setGlass(DEFAULT_GLASS_ENABLED)}
       >
@@ -819,6 +954,7 @@ function AppearanceSection() {
       <Field
         desc="Used for active states, the live indicator, and toggles."
         label="Accent color"
+        settingKey="accent"
         modified={accent !== DEFAULT_ACCENT}
         onReset={() => setAccent(DEFAULT_ACCENT)}
       >
@@ -856,17 +992,13 @@ const CODE_THEME_DESC =
  * has a settings layer — they are renderer view preferences in the renderer's
  * own storage, not `SettingsSchema` keys the sidecar writes.
  *
- * The code theme lives HERE rather than beside the syntax-highlighting toggle
- * the prototype pairs it with (`Settings.jsx:341-347`), because that toggle is a
- * real engine key (`settingsEditable.ts:198`) and engine keys are on the project
- * scope's Interface pane. `snapshot` is read for that toggle only, to disable a
- * picker that could not change anything.
+ * The code theme lives here because it is a renderer preference. The engine's
+ * syntax-highlighting option applies to the terminal, not the desktop transcript.
  */
-function TranscriptDisplaySection({
-  snapshot,
-}: {
-  snapshot: SettingsSnapshot | null
-}) {
+function TranscriptDisplaySection() {
+  const [arrivalPreviewOpen, setArrivalPreviewOpen] = useState(false)
+  const [toolPreviewOpen, setToolPreviewOpen] = useState(false)
+  const [codePreviewOpen, setCodePreviewOpen] = useState(false)
   const { mode, setMode } = useContext(ReasoningLayoutContext)
   const { theme, setTheme } = useContext(CodeThemeContext)
   const { expanded: toolsExpanded, setExpanded: setToolsExpanded } =
@@ -874,19 +1006,12 @@ function TranscriptDisplaySection({
   const { style: toolCardStyle, setStyle: setToolCardStyle } =
     useContext(ToolCardStyleContext)
   const { arrival, setArrival } = useContext(ProseArrivalContext)
-  // `EditableSettingValue` is `boolean | string | number`, so the identity test
-  // both narrows it and keeps an unread snapshot (null) on the enabled path —
-  // the key's built-in default is highlighting ON (`settingsEditable.ts:201`).
-  const highlightingOff =
-    selectEditableValue(snapshot, 'syntaxHighlightingDisabled') === true
-  const codeThemeNote = selectCodeThemeNote(highlightingOff)
   return (
     <PaneSection title="Transcript">
-      <ToolCardStylePreview />
-      <ProseArrivalPreview />
       <Field
         desc="How a reply appears as it arrives. Every option shows text the moment it is delivered."
         label="Text arrival"
+        settingKey="arrival"
         modified={arrival !== DEFAULT_PROSE_ARRIVAL}
         onReset={() => setArrival(DEFAULT_PROSE_ARRIVAL)}
       >
@@ -900,9 +1025,14 @@ function TranscriptDisplaySection({
           value={arrival}
         />
       </Field>
+      <details className="border-b border-shell-seam py-2.5 text-[12px] text-text-muted" onToggle={event => setArrivalPreviewOpen(event.currentTarget.open)}>
+        <summary className="w-fit cursor-pointer">Preview text arrival</summary>
+        {arrivalPreviewOpen ? <div className="max-w-[520px] pt-3"><ProseArrivalPreview /></div> : null}
+      </details>
       <Field
         desc="How each tool call is drawn in the transcript."
         label="Tool calls"
+        settingKey="toolCardStyle"
         modified={toolCardStyle !== DEFAULT_TOOL_CARD_STYLE}
         onReset={() => setToolCardStyle(DEFAULT_TOOL_CARD_STYLE)}
       >
@@ -916,9 +1046,14 @@ function TranscriptDisplaySection({
           value={toolCardStyle}
         />
       </Field>
+      <details className="border-b border-shell-seam py-2.5 text-[12px] text-text-muted" onToggle={event => setToolPreviewOpen(event.currentTarget.open)}>
+        <summary className="w-fit cursor-pointer">Preview tool calls</summary>
+        {toolPreviewOpen ? <div className="max-w-[520px] pt-3"><ToolCardStylePreview /></div> : null}
+      </details>
       <Field
         desc="Open every tool card as it arrives, instead of showing a preview you click to expand."
         label="Tools open by default"
+        settingKey="toolsExpanded"
         modified={toolsExpanded !== DEFAULT_TOOLS_EXPANDED}
         onReset={() => setToolsExpanded(DEFAULT_TOOLS_EXPANDED)}
       >
@@ -931,6 +1066,7 @@ function TranscriptDisplaySection({
       <Field
         desc="How reasoning summaries are laid out."
         label="Reasoning layout"
+        settingKey="reasoningLayout"
       >
         <SelectControl
           label="Reasoning layout"
@@ -943,15 +1079,13 @@ function TranscriptDisplaySection({
         />
       </Field>
       <Field
-        desc={
-          codeThemeNote ? `${CODE_THEME_DESC} ${codeThemeNote}` : CODE_THEME_DESC
-        }
+        desc={CODE_THEME_DESC}
         label="Code theme"
+        settingKey="codeTheme"
         modified={theme !== DEFAULT_CODE_THEME}
         onReset={() => setTheme(DEFAULT_CODE_THEME)}
       >
         <SelectControl
-          disabled={highlightingOff}
           label="Code theme"
           onChange={next => {
             if (isCodeThemeKey(next)) setTheme(next)
@@ -961,6 +1095,10 @@ function TranscriptDisplaySection({
           value={theme}
         />
       </Field>
+      <details className="border-b border-shell-seam py-2.5 text-[12px] text-text-muted" onToggle={event => setCodePreviewOpen(event.currentTarget.open)}>
+        <summary className="w-fit cursor-pointer">Preview code theme</summary>
+        {codePreviewOpen ? <div className="max-w-[520px] pt-3"><CodeThemePreview /></div> : null}
+      </details>
     </PaneSection>
   )
 }

@@ -8,7 +8,11 @@
  * ⌘1..9 chords (App) or with typing in the prompt input.
  */
 
-import { useRef, type KeyboardEvent } from 'react'
+import {
+  useLayoutEffect, useRef,
+  type AnimationEventHandler, type KeyboardEvent,
+} from 'react'
+import { useEntranceLatch } from './entranceLatch.js'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import {
@@ -32,6 +36,7 @@ export type TabModel = {
 export function TabBar({
   tabs,
   activeSessionId,
+  rosterReady = true,
   onSelect,
   onClose,
   onRestart,
@@ -45,6 +50,8 @@ export function TabBar({
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
+  /** App's host roster snapshot has completed, including an empty roster. */
+  rosterReady?: boolean
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
@@ -84,6 +91,14 @@ export function TabBar({
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
   const tabRefs = useRef<Array<HTMLDivElement | null>>([])
+  const committedTabIds = useRef<Set<SessionId> | null>(null)
+  const hydrationCommitted = useRef(false)
+  const freshTabs = new Set(
+    tabs.map(tab => tab.descriptor.appSessionId).filter(id =>
+      rosterReady && hydrationCommitted.current && !committedTabIds.current?.has(id),
+    ),
+  )
+  const entrance = useEntranceLatch(freshTabs)
 
   // Exactly one tab is tabbable (roving tabindex): the active one, or the first
   // tab when nothing is active yet, so the tablist is always keyboard-reachable.
@@ -91,6 +106,22 @@ export function TabBar({
     tab => tab.descriptor.appSessionId === activeSessionId,
   )
   const tabbableIndex = activeIndex >= 0 ? activeIndex : 0
+
+  useLayoutEffect(() => {
+    committedTabIds.current = new Set(tabs.map(tab => tab.descriptor.appSessionId))
+    if (rosterReady) hydrationCommitted.current = true
+  }, [tabs, rosterReady])
+
+  useLayoutEffect(() => {
+    if (activeIndex < 0) return
+    tabRefs.current[activeIndex]?.scrollIntoView?.({
+      inline: 'nearest',
+      block: 'nearest',
+      behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+        ? 'instant'
+        : 'smooth',
+    })
+  }, [activeIndex, activeSessionId])
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
     const id = tabs[index]?.descriptor.appSessionId
@@ -161,10 +192,15 @@ export function TabBar({
             key={tab.descriptor.appSessionId}
             ref={element => {
               tabRefs.current[index] = element
+              entrance.refFor(tab.descriptor.appSessionId, 'animate-tab-in')(element)
             }}
             tab={tab}
             index={index}
             isActive={tab.descriptor.appSessionId === activeSessionId}
+            arriving={entrance.active.has(tab.descriptor.appSessionId)}
+            onArrivalAnimationEnd={event =>
+              entrance.onAnimationEnd(tab.descriptor.appSessionId, event)
+            }
             isTabbable={index === tabbableIndex}
             onSelect={onSelect}
             onClose={onClose}
@@ -254,6 +290,8 @@ function Tab({
   tab,
   index,
   isActive,
+  arriving,
+  onArrivalAnimationEnd,
   isTabbable,
   onSelect,
   onClose,
@@ -265,6 +303,8 @@ function Tab({
   tab: TabModel
   index: number
   isActive: boolean
+  arriving: boolean
+  onArrivalAnimationEnd: AnimationEventHandler<HTMLDivElement>
   isTabbable: boolean
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
@@ -286,6 +326,7 @@ function Tab({
   return (
     <div
       ref={ref}
+      onAnimationEnd={onArrivalAnimationEnd}
       className={
         // `grow shrink-0`: tabs SHARE leftover bar width up to the 176px cap, so
         // a handful of sessions read in full instead of every title clipping
@@ -295,7 +336,8 @@ function Tab({
         // OS swallows the pointer: no click to select, and no `draggable`
         // drag-to-split (the tab's own `onDragStart` below).
         'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors [-webkit-app-region:no-drag] ' +
-        (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]')
+        (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]') +
+        (arriving ? ' animate-tab-in' : '')
       }
       role="tab"
       aria-selected={isActive}
@@ -426,7 +468,7 @@ function Tab({
           title it was hidden to protect. Collapsing the WIDTH too gives that
           space back until the tab is hovered or the button is keyboard-focused. */}
       <button
-        className="flex h-[18px] w-0 shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-all hover:bg-white/10 hover:text-text-primary group-hover:w-[18px] group-hover:opacity-100 focus-visible:w-[18px] focus-visible:opacity-100"
+        className="flex h-[18px] w-0 shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-[opacity,background-color,color] hover:bg-white/10 hover:text-text-primary group-hover:w-[18px] group-hover:opacity-100 focus-visible:w-[18px] focus-visible:opacity-100"
         onClick={event => {
           event.stopPropagation()
           onClose(id)

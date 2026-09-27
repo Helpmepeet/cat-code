@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect, useMemo, useRef, useState,
+  type AnimationEventHandler, type ReactNode, type RefCallback,
+} from 'react'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
 import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
 import { AgentFace } from './AgentChrome.js'
@@ -77,6 +80,9 @@ export function PermissionPrompt({
   request,
   workers = [],
   submitted,
+  animateArrival = false,
+  arrivalRef,
+  onArrivalAnimationEnd,
   denyOnly,
   keyboardTarget,
   pendingCount,
@@ -89,6 +95,10 @@ export function PermissionPrompt({
   workers?: readonly LiveWorkerItem[]
   /** True while an answer for this card is in flight. */
   submitted?: boolean
+  /** Request arrived after this pane's first committed render. */
+  animateArrival?: boolean
+  arrivalRef?: RefCallback<HTMLElement>
+  onArrivalAnimationEnd?: AnimationEventHandler<HTMLElement>
   /** Hide every allow path: this request can only be answered by denying it. */
   denyOnly?: boolean
   /**
@@ -318,13 +328,17 @@ export function PermissionPrompt({
   return (
     <section
       aria-labelledby={titleId}
-      className="border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3 focus:outline-none"
+      className={`border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3 transition-opacity duration-[var(--motion-fast)] focus:outline-none ${submitted ? 'opacity-55' : ''} ${animateArrival ? 'animate-toast-in' : ''}`}
+      onAnimationEnd={onArrivalAnimationEnd}
       // Literal because JSX needs a literal attribute name; the reader is
       // `PERMISSION_KEY_HOST_ATTR` in `permissionPromptModel.ts`.
       data-permission-key-host={keyboardTarget ? '' : undefined}
       onBlur={event => setKeysLive(permissionKeysAreLive(event.relatedTarget))}
       onFocus={event => setKeysLive(permissionKeysAreLive(event.target))}
-      ref={sectionRef}
+      ref={element => {
+        sectionRef.current = element
+        arrivalRef?.(element)
+      }}
       role="alertdialog"
       tabIndex={keyboardTarget ? -1 : undefined}
     >

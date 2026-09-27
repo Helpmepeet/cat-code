@@ -38,6 +38,8 @@ export type NdjsonWorkerOptions = {
   args: string[]
   cwd: string
   env?: NodeJS.ProcessEnv
+  /** Inventory reads need the full user/project command and agent catalogs. */
+  simpleMode?: boolean
   signal?: AbortSignal
   timeoutMs: number
   spawnWorker?: typeof spawn
@@ -93,9 +95,10 @@ export async function runNdjsonWorker(
     env: {
       ...process.env,
       ...options.env,
-      // Defense in depth with the worker's own pre-import assignment + --bare
-      // argv: SessionStart hooks must stay suppressed even if one gate drifts.
-      CLAUDE_CODE_SIMPLE: '1',
+      // Existing disposable workers stay in SIMPLE mode. The Settings
+      // inventory opts out to read user/project skills and agents; its worker
+      // never calls full init or starts a session.
+      CLAUDE_CODE_SIMPLE: options.simpleMode === false ? '' : '1',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as ChildProcessWithoutNullStreams

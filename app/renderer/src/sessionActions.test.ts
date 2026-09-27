@@ -50,6 +50,19 @@ describe('resolveSessionActions', () => {
     expect(kinds).not.toContain('delete' as SessionActionKind)
   })
 
+  test('managed chat menus offer session-scoped folder access', () => {
+    const actions = byKind(resolveSessionActions(row({
+      binding: {
+        kind: 'managed',
+        storageRootId: '00000000-0000-4000-8000-000000000001',
+        storageId: '00000000-0000-4000-8000-000000000002',
+      },
+    }), { isActiveOpen: true }))
+    expect(actions.get('open-chat-folder')).toMatchObject({ label: 'Open chat folder', enabled: true })
+    expect(actions.get('copy-chat-folder-path')).toMatchObject({ label: 'Copy folder path', enabled: true })
+    expect(byKind(resolveSessionActions(row(), { isActiveOpen: true })).has('open-chat-folder')).toBe(false)
+  })
+
   test('every disabled item carries a source-cited reason; every enabled one does not', () => {
     for (const ctx of [{ isActiveOpen: true }, { isActiveOpen: false }]) {
       // P4-30 — walks flyout CHILDREN too, so a submenu row can never smuggle in

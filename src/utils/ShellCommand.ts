@@ -2,6 +2,7 @@ import type { ChildProcess } from 'child_process'
 import { stat } from 'fs/promises'
 import type { Readable } from 'stream'
 import { generateTaskId } from '../Task.js'
+import type { CommandAttribution } from './bash/exitAttribution.js'
 import { formatDuration } from './format.js'
 import { killProcessGroupSync, killProcessTree } from './processTree.js'
 import {
@@ -27,6 +28,11 @@ export type ExecResult = {
   outputTaskId?: string
   /** Error message when the command failed before spawning (e.g., deleted cwd). */
   preSpawnError?: string
+  /**
+   * Runtime proof about the command whose exit-code rule would apply. Absent
+   * or null means unproven: judge the exit code by the default rule.
+   */
+  exitAttribution?: CommandAttribution | null
 }
 
 export type ShellCommand = {

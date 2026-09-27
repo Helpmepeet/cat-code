@@ -27,6 +27,9 @@ import {
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
+import { join } from 'node:path'
+import { isSessionBinding, type SessionBinding } from '../shared/sessionBinding.js'
+import { setManagedSessionPolicy } from '../../src/utils/managedSessionPolicy.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { getUserSpecifiedModelSetting } from '../../src/utils/model/model.js'
 import type { Message } from '../../src/types/message.js'
@@ -155,6 +158,9 @@ type SidecarArgs = {
   resumeEngineSessionId: string | undefined
   /** P1-0 only: inject the probe tool_use frame on first attach. */
   probeOnAttach: boolean
+  binding: SessionBinding
+  forked: boolean
+  recreatedFolderNotice: boolean
 }
 
 async function projectCurrentDisplayHistory(
@@ -189,6 +195,15 @@ function parseArgs(): SidecarArgs {
     )
   }
   const probeOnAttach = process.env.CATCODE_SIDECAR_PROBE === '1'
+  let binding: SessionBinding = { kind: 'project' }
+  const bindingJson = process.env.CATCODE_SESSION_BINDING_JSON
+  if (bindingJson) {
+    const value: unknown = JSON.parse(bindingJson)
+    if (!isSessionBinding(value)) {
+      throw new Error('CATCODE_SESSION_BINDING_JSON is invalid')
+    }
+    binding = value
+  }
   // The cwd is required for a real session (the engine roots project identity on
   // it). Probe mode has no engine, so tolerate its absence there. Fail loudly on
   // a missing/non-directory cwd rather than silently booting somewhere wrong
@@ -215,11 +230,28 @@ function parseArgs(): SidecarArgs {
     cwd: cwd ?? process.cwd(),
     resumeEngineSessionId: process.env.CATCODE_SIDECAR_RESUME_SESSION_ID || undefined,
     probeOnAttach,
+    binding,
+    forked: process.env.CATCODE_SESSION_FORKED === 'true',
+    recreatedFolderNotice: binding.kind === 'managed' &&
+      process.env.CATCODE_SESSION_RECREATED_FOLDER === 'true',
   }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs()
+  // Install before runtime init, transcript restore, catalogs, hooks, or any
+  // cwd-dependent settings and instruction discovery.
+  setManagedSessionPolicy(
+    args.binding.kind === 'managed'
+      ? {
+          workingDirectory: args.cwd,
+          temporaryDirectory: join(args.cwd, 'tmp'),
+          storageRootId: args.binding.storageRootId,
+          storageId: args.binding.storageId,
+          sharedFilesNotice: args.forked,
+        }
+      : null,
+  )
   const operational = createSidecarOperationalLogger({ appSessionId: args.sessionId })
   activeOperationalLogger = operational
   activeAppSessionId = args.sessionId
@@ -374,6 +406,8 @@ async function main(): Promise<void> {
     probe: args.probeOnAttach,
     cwd: runtimeCwd,
     appSessionId: args.sessionId,
+    binding: args.binding,
+    recreatedFolderNotice: args.recreatedFolderNotice,
     // Mutually exclusive by construction: a resume seeds the restored
     // transcript, whose tail already carries its own 'resume' hook messages; a
     // fresh session seeds the 'startup' hook messages computed just above.

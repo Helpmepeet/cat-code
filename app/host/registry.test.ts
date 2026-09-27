@@ -102,6 +102,7 @@ function baseRow(overrides: Partial<RegistrySession>): RegistrySession {
     // Preserve an explicit `null` engineSessionId — `?? 'engine-x'` would mangle it.
     engineSessionId: 'engineSessionId' in overrides ? overrides.engineSessionId! : 'engine-x',
     cwd: overrides.cwd ?? '/Users/pt/cat-code',
+    binding: overrides.binding ?? { kind: 'project' },
     forked: overrides.forked ?? false,
     createdAt: overrides.createdAt ?? 1_700_000_000_000,
     lastAttachedAt: overrides.lastAttachedAt ?? 1_700_000_000_000,

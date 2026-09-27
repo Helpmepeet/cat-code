@@ -754,7 +754,10 @@ test('CC-63: a composite container reports its height change to the pane', async
  * for either version of the rejected fix.
  */
 describe('the face stamp across a restore', () => {
-  const WORKER_IDS = Array.from({ length: 12 }, (_unused, index) => `agent_740_${index}`)
+  // The prefix is chosen, not arbitrary: the teeth check below needs one of the
+  // previewed ids to collide under the face vocabulary in force. Re-pick it when
+  // that vocabulary changes.
+  const WORKER_IDS = Array.from({ length: 12 }, (_unused, index) => `agent_745_${index}`)
   /** How many of the transcript's 12 workers the cached preview holds. */
   const PREVIEW_FROM = 7
 

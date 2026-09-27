@@ -195,6 +195,7 @@ export function mapLogOptionToCatalogEntry(
   const cwd = resolveEntryCwd(log, storageDirToCwd)
   return {
     sessionId: log.sessionId,
+    ...(log.sessionBinding !== undefined ? { binding: log.sessionBinding } : {}),
     forked: log.forked === true,
     isInteractive: log.entrypoint !== 'sdk-cli',
     cwd,

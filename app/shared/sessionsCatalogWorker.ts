@@ -19,6 +19,7 @@ import type {
   SessionCatalogEntry,
   SessionsCatalogSnapshot,
 } from './protocol.js'
+import { isSessionBinding } from './sessionBinding.js'
 import {
   isBoolean,
   isNumber,
@@ -155,6 +156,7 @@ export function parseSessionCatalogEntry(
     // Additive (terminal-rename title precedence): absent ⇒ null, i.e. this entry
     // can never outrank the registry title — the pre-fix behavior.
     transcriptTitle: optional(isStringOrNull),
+    binding: optional(isSessionBinding),
   })
   if (!entry) return null
   return {

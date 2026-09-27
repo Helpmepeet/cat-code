@@ -4320,16 +4320,16 @@ export function hasInstructionsLoadedHook(): boolean {
 }
 
 /**
- * Execute InstructionsLoaded hooks when an instruction file (CLAUDE.md or
- * .claude/rules/*.md) is loaded into context. Fire-and-forget — this hook is
+ * Execute InstructionsLoaded hooks when an instruction file (CLAUDE.md,
+ * AGENTS.md, or a rule file) is loaded into context. Fire-and-forget — this hook is
  * for observability/audit only and does not support blocking.
  *
  * Dispatch sites:
  * - Eager load at session start (getMemoryFiles in claudemd.ts)
  * - Eager reload after compaction (getMemoryFiles cache cleared by
  *   runPostCompactCleanup; next call reports load_reason: 'compact')
- * - Lazy load when Claude touches a file that triggers nested CLAUDE.md or
- *   conditional rules with paths: frontmatter (memoryFilesToAttachments in
+ * - Lazy load when Claude touches a file that triggers nested project
+ *   instructions or conditional rules with paths: frontmatter (memoryFilesToAttachments in
  *   attachments.ts)
  */
 export async function executeInstructionsLoadedHooks(

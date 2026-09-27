@@ -71,10 +71,13 @@ import type {
   HostResult,
   SaveTextInput,
   SaveTextResult,
+  SettingsInventoryReadResult,
+  SettingsWriteReadResult,
   SessionDescriptor,
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
 } from './hostApi.js'
+import type { SessionBinding } from './sessionBinding.js'
 import type { DebugRendererSnapshot } from './debugState.js'
 import type {
   EditableSettingSource,
@@ -3263,6 +3266,8 @@ export type DiagnosticsSnapshotFrame = {
 export type SessionCatalogEntry = {
   /** The transcript session id (matches a live row's `engineSessionId`). */
   sessionId: string
+  /** Explicit host-originated association persisted in transcript metadata. */
+  binding?: SessionBinding
   /** Engine-authored fork provenance derived from transcript `forkedFrom`. */
   forked: boolean
   /**
@@ -4196,6 +4201,12 @@ export type CatCodeBridge = {
    * This has no payload, starts no session, and never becomes sidecar vocabulary.
    */
   refreshUsageDashboard(): void
+  /** Read configured agents and extensions without opening a chat session. */
+  readSettingsInventory(projectCwd: string | null): Promise<SettingsInventoryReadResult>
+  /** Select a project for Settings through a native directory picker, without a chat session. */
+  pickSettingsProject(): Promise<{ cwd: string; name: string } | null>
+  /** Persist one durable setting in its chosen scope without a chat session. */
+  writeDurableSetting(projectCwd: string | null, verb: SettingsVerbMessage): Promise<SettingsWriteReadResult>
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>
@@ -4254,6 +4265,12 @@ export type CatCodeBridge = {
    * `restoreSession`, not this.
    */
   createSession(input: CreateSessionInput): Promise<HostResult<SessionDescriptor>>
+  /** Create a new host-owned managed chat without a renderer-supplied path. */
+  createManagedChat(): Promise<HostResult<SessionDescriptor>>
+  getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>>
+  recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
+  openSessionFolder(appSessionId: SessionId): Promise<HostResult<void>>
+  copySessionFolderPath(appSessionId: SessionId): Promise<HostResult<void>>
   /** Restore a registry row's session by id (registry-mediated; HC2). */
   restoreSession(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   /**

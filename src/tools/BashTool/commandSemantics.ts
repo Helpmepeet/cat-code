@@ -5,7 +5,7 @@
  * For example, grep returns 1 when no matches are found, which is not an error condition.
  */
 
-import { splitCommand_DEPRECATED } from '../../utils/bash/commands.js'
+import type { CommandAttribution } from '../../utils/bash/exitAttribution.js'
 
 export type CommandSemantic = (
   exitCode: number,
@@ -84,57 +84,58 @@ const COMMAND_SEMANTICS: Map<string, CommandSemantic> = new Map([
     }),
   ],
 
+  // lsof: 0=files listed, 1=a search item was not located OR a real error.
+  // Both share exit 1, so only the output tells them apart: usage errors,
+  // unknown users/files/services, and warnings all print an `lsof: ` line,
+  // while a clean no-match prints nothing. BashTool merges stderr into stdout,
+  // so the diagnostic is looked for in both.
+  [
+    'lsof',
+    (exitCode, stdout, stderr) => {
+      if (exitCode !== 1) {
+        return DEFAULT_SEMANTIC(exitCode, stdout, stderr)
+      }
+      const hasDiagnostic = /^lsof: /m.test(`${stdout}\n${stderr}`)
+      return hasDiagnostic
+        ? DEFAULT_SEMANTIC(exitCode, stdout, stderr)
+        : { isError: false, message: 'No matching open files' }
+    },
+  ],
+
   // wc, head, tail, cat, etc.: these typically only fail on real errors
   // so we use default semantics
 ])
 
-/**
- * Get the semantic interpretation for a command
- */
-function getCommandSemantic(command: string): CommandSemantic {
-  // Extract the base command (first word, handling pipes)
-  const baseCommand = heuristicallyExtractBaseCommand(command)
-  const semantic = COMMAND_SEMANTICS.get(baseCommand)
-  return semantic !== undefined ? semantic : DEFAULT_SEMANTIC
-}
+export const SEMANTIC_COMMAND_NAMES: ReadonlySet<string> = new Set(
+  COMMAND_SEMANTICS.keys(),
+)
 
 /**
- * Extract just the command name (first word) from a single command string.
- */
-function extractBaseCommand(command: string): string {
-  return command.trim().split(/\s+/)[0] || ''
-}
-
-/**
- * Extract the primary command from a complex command line;
- * May get it super wrong - don't depend on this for security
- */
-function heuristicallyExtractBaseCommand(command: string): string {
-  const segments = splitCommand_DEPRECATED(command)
-
-  // Take the last command as that's what determines the exit code
-  const lastCommand = segments[segments.length - 1] || command
-
-  return extractBaseCommand(lastCommand)
-}
-
-/**
- * Interpret command result based on semantic rules
+ * Interpret command result based on semantic rules.
+ *
+ * A command-specific rule applies only when `attribution` proves that command
+ * started and owns the final status; otherwise any non-zero exit is an error.
+ * In `cd /missing && grep x f`, grep never ran, so its "exit 1 = no matches"
+ * rule must not turn cd's failure into a success.
  */
 export function interpretCommandResult(
-  command: string,
   exitCode: number,
   stdout: string,
   stderr: string,
+  attribution: CommandAttribution | null,
 ): {
   isError: boolean
   message?: string
 } {
-  const semantic = getCommandSemantic(command)
-  const result = semantic(exitCode, stdout, stderr)
-
-  return {
-    isError: result.isError,
-    message: result.message,
+  if (
+    exitCode === 0 ||
+    attribution === null ||
+    !attribution.semanticCommandStarted ||
+    (attribution.pipelineHasMultipleCommands && attribution.pipefailEnabled)
+  ) {
+    return DEFAULT_SEMANTIC(exitCode, stdout, stderr)
   }
+  const semantic =
+    COMMAND_SEMANTICS.get(attribution.semanticCommand) ?? DEFAULT_SEMANTIC
+  return semantic(exitCode, stdout, stderr)
 }

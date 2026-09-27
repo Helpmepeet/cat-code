@@ -20,30 +20,51 @@
  * run-length the grid into rects. A missing identifier skips the hash and uses
  * the featureless base.
  *
- * Ported deliberately from the design source
- * (`docs/design-html/2026-08-19-subagent-card-spec.html`,
- * 2026-08-19) rather than reimplemented: the algorithm is the contract, so the
- * grid arithmetic, the fallback order and the dedupe walk are the source's, step
- * for step.
+ * The pipeline was ported from the design source
+ * (`docs/design-html/2026-08-19-subagent-card-spec.html`, 2026-08-19). The
+ * vocabulary was not kept: 74% of the faces it drew for 163 real agent ids read
+ * as something other than a cat (antennae, legs, a bucket, a four-eyed grille),
+ * so it was redrawn on 2026-09-27 against
+ * `docs/design-html/2026-09-27-agent-face-cat-before-after.html`. THE RULE EVERY
+ * AXIS VALUE MUST PASS: the face still reads as a cat at 13px.
  */
 
 import { createContext, useContext, useRef } from 'react'
 
-export type FaceEar = 'pointy' | 'outer' | 'tuft' | 'folded' | 'tall'
-export type FaceFill = 'solid' | 'notch' | 'deep'
-export type FaceWidth = 'wide' | 'narrow'
-export type FaceChin = 'round' | 'flat' | 'pointed' | 'fringe'
-export type FaceMouth = 'none' | 'slit' | 'smile' | 'omega'
-export type FaceMark = 'none' | 'brow' | 'cheek' | 'temple' | 'chindot'
 /**
- * The head's own outline: `rounded` clears the four corners of the head block.
+ * Every ear is a triangle: a tip one cell wide over a base two or three wide.
+ * The retired `tall` (a one-cell stalk) read as an antenna, and `folded` and
+ * `tuft` (no tip at all) read as a bucket or a box.
+ */
+export type FaceEar = 'pointy' | 'outer' | 'broad' | 'leanin' | 'tipin'
+/**
+ * `deep` was retired: a two-cell carve under each ear, one diagonal step from the
+ * eye, reads as a frown, and an expression is state (see the eye carve).
+ */
+export type FaceFill = 'solid' | 'notch'
+export type FaceWidth = 'wide' | 'narrow'
+/** `fringe` was retired: a gapped chin row reads as legs, and on a narrow head as a box. */
+export type FaceChin = 'round' | 'flat' | 'pointed'
+export type FaceMouth = 'none' | 'slit' | 'smile' | 'omega'
+/**
+ * `stripe` is a tabby's forehead mark. It replaced `brow`, whose two forehead
+ * holes read as a second pair of eyes, and the single-cell `cheek` and `temple`
+ * spots, which read as noise at 13px.
+ */
+export type FaceMark = 'none' | 'stripe' | 'chindot'
+/**
+ * The head's own outline: `rounded` tapers the jaw by clearing the head block's
+ * bottom corners (and, on a wide face, the chin row's ends).
+ *
+ * Never the TOP corners. The ears stand on them, and clearing them left each
+ * ear's outer cell hanging past the head, which reads as a horn.
  *
  * A SHAPE axis, deliberately, not another carve. Under the distance rule
  * (`MIN_FACE_DISTANCE`) an axis that moves fewer cells than the bar adds no
  * distinguishable faces at all — it produces near-twins the registry then
- * refuses. A carve worth one or two cells would have been free supply on paper
- * and none in practice. Four corners is the smallest change that clears the bar
- * on its own.
+ * refuses. On a wide face the taper is four cells, which clears the bar on its
+ * own. On a narrow face it is two, because the chin row there is already short
+ * and clearing its ends leaves a snout.
  */
 export type FaceHead = 'square' | 'rounded'
 
@@ -63,13 +84,24 @@ export type FaceRect = { x: number; y: number; w: number; h: number }
 
 const GRID = 9
 
-const EARS: readonly FaceEar[] = ['pointy', 'outer', 'tuft', 'folded', 'tall']
-const FILLS: readonly FaceFill[] = ['solid', 'notch', 'deep']
+const EARS: readonly FaceEar[] = ['pointy', 'outer', 'broad', 'leanin', 'tipin']
+const FILLS: readonly FaceFill[] = ['solid', 'notch']
 const WIDTHS: readonly FaceWidth[] = ['wide', 'narrow']
-const CHINS: readonly FaceChin[] = ['round', 'flat', 'pointed', 'fringe']
+const CHINS: readonly FaceChin[] = ['round', 'flat', 'pointed']
 const MOUTHS: readonly FaceMouth[] = ['none', 'slit', 'smile', 'omega']
-const MARKS: readonly FaceMark[] = ['none', 'brow', 'cheek', 'temple', 'chindot']
+const MARKS: readonly FaceMark[] = ['none', 'stripe', 'chindot']
 const HEADS: readonly FaceHead[] = ['square', 'rounded']
+
+/**
+ * One ear, measured from the head's outer edge and mirrored for the other side:
+ * the tip's column on the top row, then the base's first and last column on the
+ * row below. A narrow `leanin` keeps its tip one cell in, because two cells in on
+ * a seven-wide head puts the tips one cell apart, which reads as horns.
+ */
+const EAR_SHAPE: Record<FaceWidth, Record<FaceEar, readonly [number, number, number]>> = {
+  wide: { pointy: [1, 0, 2], outer: [0, 0, 1], broad: [0, 0, 2], leanin: [2, 0, 2], tipin: [1, 1, 2] },
+  narrow: { pointy: [1, 0, 2], outer: [0, 0, 1], broad: [0, 0, 2], leanin: [1, 0, 1], tipin: [1, 1, 2] },
+}
 
 /**
  * The nameless card's stamp: pointy ears, solid fill, wide head, round chin, no
@@ -177,8 +209,8 @@ function isConnected(grid: boolean[][]): boolean {
  * not get one. That is what put a featureless blob on a card whose hash had
  * asked for a deep ear fill, an omega mouth and a chin-dot.
  *
- * Each candidate is scored by what it costs the reader: an ear fill is one or
- * two cells at the tips, a marking is a single cell, a mouth is the most legible
+ * Each candidate is scored by what it costs the reader: an ear fill is a cell
+ * under each ear, a marking is a single cell, a mouth is the most legible
  * carve on the face. First candidate that draws as one mass wins; ties break by
  * list order, so the choice stays deterministic.
  *
@@ -186,14 +218,14 @@ function isConnected(grid: boolean[][]): boolean {
  * which is why the two are searched rather than stripped in sequence.
  */
 type Relaxation = {
-  readonly fill: FaceFill | 'keep' | 'soften'
+  readonly fill: 'keep' | 'solid'
   readonly dropMouth: boolean
   readonly dropMark: boolean
 }
 
 const RELAXATIONS: readonly Relaxation[] = ([] as Relaxation[])
   .concat(
-    ...(['keep', 'soften', 'solid'] as const).map(fill =>
+    ...(['keep', 'solid'] as const).map(fill =>
       [false, true].flatMap(dropMark =>
         [false, true].map(dropMouth => ({ fill, dropMouth, dropMark })),
       ),
@@ -202,7 +234,7 @@ const RELAXATIONS: readonly Relaxation[] = ([] as Relaxation[])
   .map(candidate => ({
     candidate,
     cost:
-      (candidate.fill === 'keep' ? 0 : candidate.fill === 'soften' ? 1 : 2) +
+      (candidate.fill === 'keep' ? 0 : 2) +
       (candidate.dropMark ? 3 : 0) +
       (candidate.dropMouth ? 5 : 0),
   }))
@@ -211,11 +243,19 @@ const RELAXATIONS: readonly Relaxation[] = ([] as Relaxation[])
 
 /**
  * Draw one grid under a given relaxation (an index into `RELAXATIONS`).
+ *
+ * A narrow face is not a wide face with its sides trimmed. It sits one row lower
+ * (a shorter forehead), because seven wide by nine tall is a fox's proportions,
+ * not a cat's, and its eyes stay in the SAME columns as a wide face's. Inset two
+ * from a seven-wide edge they would share columns with the mouth corners and the
+ * forehead, which is what drew narrow faces as an X, a dice four, or a skull.
  */
 function drawFace(axes: FaceAxes, level: number): boolean[][] {
   const grid = blankGrid()
-  const L = axes.width === 'wide' ? 0 : 1
-  const R = axes.width === 'wide' ? 8 : 7
+  const wide = axes.width === 'wide'
+  const L = wide ? 0 : 1
+  const R = wide ? 8 : 7
+  const top = wide ? 0 : 1
   const mid = Math.round((L + R) / 2)
   const set = (x: number, y: number): void => {
     if (x >= 0 && x < GRID && y >= 0 && y < GRID) grid[y][x] = true
@@ -224,44 +264,14 @@ function drawFace(axes: FaceAxes, level: number): boolean[][] {
     if (x >= 0 && x < GRID && y >= 0 && y < GRID) grid[y][x] = false
   }
 
-  for (let r = 2; r <= 6; r += 1) for (let c = L; c <= R; c += 1) set(c, r)
+  for (let r = top + 2; r <= 6; r += 1) for (let c = L; c <= R; c += 1) set(c, r)
 
-  const eL = L + 1
-  const eR = R - 1
-  if (axes.ear === 'pointy' || axes.ear === 'tuft' || axes.ear === 'folded') {
-    for (let c = L; c <= L + 2; c += 1) set(c, 1)
-    for (let c = R - 2; c <= R; c += 1) set(c, 1)
-    if (axes.ear === 'pointy') {
-      set(eL, 0)
-      set(eR, 0)
-    }
-    if (axes.ear === 'tuft') {
-      set(L, 0)
-      set(eL, 0)
-      set(eR, 0)
-      set(R, 0)
-    }
-  } else if (axes.ear === 'outer') {
-    set(L, 0)
-    set(R, 0)
-    set(L, 1)
-    set(L + 1, 1)
-    set(R - 1, 1)
-    set(R, 1)
-  } else {
-    set(eL, 0)
-    set(eL, 1)
-    set(eR, 0)
-    set(eR, 1)
-  }
-
-  // The head's corners, cleared before every carve below so a marking or a mouth
-  // that lands on a corner cell is not silently spent on an already-empty one.
-  if (axes.head === 'rounded') {
-    clr(L, 2)
-    clr(R, 2)
-    clr(L, 6)
-    clr(R, 6)
+  const [tip, baseFrom, baseTo] = EAR_SHAPE[axes.width][axes.ear]
+  set(L + tip, top)
+  set(R - tip, top)
+  for (let c = baseFrom; c <= baseTo; c += 1) {
+    set(L + c, top + 1)
+    set(R - c, top + 1)
   }
 
   if (axes.chin === 'round') {
@@ -269,26 +279,27 @@ function drawFace(axes: FaceAxes, level: number): boolean[][] {
     for (let c = L + 2; c <= R - 2; c += 1) set(c, 8)
   } else if (axes.chin === 'flat') {
     for (let c = L + 1; c <= R - 1; c += 1) set(c, 7)
-  } else if (axes.chin === 'pointed') {
-    for (let c = L + 2; c <= R - 2; c += 1) set(c, 7)
-    for (let c = mid - 1; c <= mid + 1; c += 1) set(c, 8)
   } else {
-    set(L, 7)
-    set(L + 1, 7)
-    for (let c = mid - 1; c <= mid + 1; c += 1) set(c, 7)
-    set(R - 1, 7)
-    set(R, 7)
+    for (let c = L + 2; c <= R - 2; c += 1) set(c, 7)
+    // A narrow chin tapers to one cell. Three wide under a three-wide row is a
+    // two-row post, which reads as a snout.
+    if (wide) for (let c = mid - 1; c <= mid + 1; c += 1) set(c, 8)
+    else set(mid, 8)
+  }
+
+  // The jaw taper, cleared before every carve below so a marking or a mouth that
+  // lands on one of these cells is not silently spent on an already-empty one.
+  if (axes.head === 'rounded') {
+    clr(L, 6)
+    clr(R, 6)
+    if (wide) {
+      clr(L + 1, 7)
+      clr(R - 1, 7)
+    }
   }
 
   const step = RELAXATIONS[Math.min(level, RELAXATIONS.length - 1)] as Relaxation
-  const fill: FaceFill =
-    step.fill === 'keep'
-      ? axes.fill
-      : step.fill === 'soften'
-        ? axes.fill === 'deep'
-          ? 'notch'
-          : axes.fill
-        : step.fill
+  const fill: FaceFill = step.fill === 'keep' ? axes.fill : step.fill
   const mouth: FaceMouth = step.dropMouth ? 'none' : axes.mouth
   // A chin-dot and a mouth both want row 6, so the dot MOVES DOWN to row 7 when
   // a mouth is present rather than being dropped, which is what it used to be
@@ -303,23 +314,22 @@ function drawFace(axes: FaceAxes, level: number): boolean[][] {
       : axes.mark
   const chinDotRow = mouth === 'none' ? 6 : 7
 
-  if (fill !== 'solid') {
-    // Ear-tip columns are the filled columns of the TOPMOST filled row, so the
-    // ear fill follows whichever ear shape the hash chose.
-    const cols: number[] = []
-    for (let r = 0; r < GRID && cols.length === 0; r += 1) {
-      for (let c = 0; c < GRID; c += 1) if (grid[r][c]) cols.push(c)
-    }
-    for (const col of cols) {
-      clr(col, 2)
-      if (fill === 'deep') clr(col, 3)
-    }
+  // The ear fill is a cell under each ear, on a wide face only: a narrow face's
+  // column under its ear is its eye's column, and a hole two rows above an eye
+  // reads as a second eye.
+  if (wide && fill === 'notch') {
+    clr(L + 1, 2)
+    clr(R - 1, 2)
   }
 
   if (mouth === 'slit') {
-    clr(mid - 1, 6)
+    // One cell on a narrow face: three is most of its five-wide jaw row, and
+    // reads as a gaping mouth.
     clr(mid, 6)
-    clr(mid + 1, 6)
+    if (wide) {
+      clr(mid - 1, 6)
+      clr(mid + 1, 6)
+    }
   } else if (mouth === 'smile') {
     clr(mid - 1, 6)
     clr(mid + 1, 6)
@@ -330,13 +340,8 @@ function drawFace(axes: FaceAxes, level: number): boolean[][] {
     clr(mid + 1, 6)
   }
 
-  if (mark === 'brow') {
-    clr(mid - 1, 2)
-    clr(mid + 1, 2)
-  } else if (mark === 'cheek') {
-    clr(L + 1, 5)
-  } else if (mark === 'temple') {
-    clr(R - 1, 2)
+  if (mark === 'stripe') {
+    clr(mid, top + 2)
   } else if (mark === 'chindot') {
     clr(mid, chinDotRow)
   }
@@ -346,8 +351,9 @@ function drawFace(axes: FaceAxes, level: number): boolean[][] {
   // backgrounded), which is why a fan-out of five backgrounded workers drew five
   // blank slabs at the one moment a reader most needs to tell them apart. They
   // are also what stops a mouth being read as a pair of eyes two rows too low.
-  clr(L + 2, 4)
-  clr(R - 2, 4)
+  const eyeInset = wide ? 2 : 1
+  clr(L + eyeInset, 4)
+  clr(R - eyeInset, 4)
 
   return grid
 }
@@ -392,7 +398,7 @@ const levelByAxes = new Map<string, number>()
  * The fallback level this face draws at.
  *
  * Memoised by axes rather than by identity: the map is bounded by the axis
- * product (4,800 entries at the absolute worst), and a face is redrawn on every
+ * product (1,440 entries at the absolute worst), and a face is redrawn on every
  * render of every card.
  */
 function fallbackLevelFor(axes: FaceAxes): number {
@@ -430,7 +436,7 @@ const silhouetteByAxes = new Map<string, Uint8Array>()
  * lost by the change: byte-identical is `differsBy(..., 1) === false`.
  *
  * Memoised on the same bound as `levelByAxes` (the axis product), because the
- * dedupe sweep below asks for up to 4,800 of these in one call and each one is a
+ * dedupe sweep below asks for up to 1,440 of these in one call and each one is a
  * fresh draw. Without it a session past the distinct-silhouette supply pays that
  * sweep, in the render phase, for every worker after the first collision.
  */
@@ -469,15 +475,15 @@ function differsBy(a: Uint8Array, b: Uint8Array, bar: number): boolean {
  * The bar used to be byte-inequality — one differing cell counted as a different
  * face. A cell is ~2px at the 19px a card renders, so the registry was handing
  * out pairs no reader could tell apart and reporting them as distinct: measured
- * over the whole axis space, 467 pairs of drawn silhouettes differ by exactly one
- * cell and 1,836 by two, and in simulation 155 of 300 eight-worker sessions
- * contained a pair within two cells.
+ * over the axis space of the time, 467 pairs of drawn silhouettes differed by
+ * exactly one cell and 1,836 by two, and in simulation 155 of 300 eight-worker
+ * sessions contained a pair within two cells.
  *
- * 4 is what the supply affords. A greedy packing of the 1,897 distinct
- * silhouettes yields 592 faces at 3 cells apart, 340 at 4, and 200 at 5; 340 is
- * far past any plausible session, and 4 is the point where both measured
- * near-twins separate (a lone marking is 1 cell, two isolated single cells are
- * 4).
+ * 4 is what the supply affords. A greedy packing of the 820 distinct silhouettes
+ * yields 250 faces at 3 cells apart, 135 at 4, and 80 at 5. Real sessions spawn
+ * far fewer workers (2026-09-27, 159 transcripts: median 1, p99 22, max 32), and
+ * 4 is the point where both measured near-twins separate (a lone marking is 1
+ * cell, two isolated single cells are 4).
  */
 const MIN_FACE_DISTANCE = 4
 
@@ -602,7 +608,9 @@ export type AgentFaceRegistry = {
  *
  * The consequence, stated because it is easy to promise otherwise: a face is
  * stable for the life of a window, and identical across sessions only for the
- * ~89% of workers the distance rule never had to move. Making it stable in
+ * workers the distance rule never had to move: about 90% in a five-worker
+ * session, 80% in a ten-worker one (simulated over random agent ids,
+ * 2026-09-27). Making it stable in
  * general needs the assignment persisted with the transcript, or the drawn face
  * made a pure function of the identifier, which reopens `MIN_FACE_DISTANCE`.
  * Both are larger than this module.
@@ -632,7 +640,7 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
    *
    * RESUMED, not restarted, because a candidate rejected once can never come
    * back: `taken` only ever grows, so a face already too close to a live one
-   * stays too close forever. That turns the sweep from a full 4,800-candidate
+   * stays too close forever. That turns the sweep from a full 1,440-candidate
    * scan per colliding worker into a single walk of the space spread across the
    * session.
    */
@@ -772,8 +780,8 @@ export function useSessionAgentFaceRegistry(sessionId: string | null): AgentFace
  * least-recently-ASKED entry is the one that goes.
  *
  * The cost of an eviction is that a session nobody has drawn a worker for in
- * this many session-switches re-rolls the ~11% of its faces the distance rule
- * had moved. That is the same re-roll a reload already produces, and it is the
+ * this many session-switches re-rolls the faces the distance rule had moved
+ * (see `createAgentFaceRegistry`). That is the same re-roll a reload already produces, and it is the
  * price of not holding every session a window has ever shown.
  */
 export const MAX_HELD_FACE_REGISTRIES = 12

@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Motion audit · current vs proposed</title>
+<style>
+@font-face { font-family: 'DM Sans'; src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2'); font-weight: 100 1000; }
+@font-face { font-family: 'DM Mono'; src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2'); font-weight: 400; }
+@font-face { font-family: 'DM Mono'; src: url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2'); font-weight: 500; }
+
+/* ---------- app tokens (theme.css, dark) ---------- */
+:root {
+  --accent: #f472b6; --accent-rgb: 244 114 182;
+  --tone-good: #4ade80; --tone-warn: #fbbf24; --tone-danger: #f87171;
+  --app-bg: #09090b; --shell-chrome: #070709; --surface-raised: #111113; --surface-panel: #0a0a0c;
+  --shell-seam: rgba(255,255,255,.06); --shell-hover: rgba(255,255,255,.045);
+  --text-primary: #f4f4f5; --text-muted: #a1a1aa; --text-subtle: #98989f; --text-faint: #838389; --text-ghost: #75757b;
+  --scrim: rgba(0,0,0,.6);
+  --elev-menu: 0 18px 44px rgba(0,0,0,.6); --elev-modal: 0 30px 80px rgba(0,0,0,.6);
+  --elev-popover: 0 14px 38px rgba(0,0,0,.5); --elev-drawer: -20px 0 60px rgba(0,0,0,.6);
+  --elev-rail: 4px 0 24px rgba(0,0,0,.45);
+  --tw-ease: cubic-bezier(.4,0,.2,1);
+  --ease-enter: cubic-bezier(.2,0,0,1);
+  --ease-exit: cubic-bezier(.4,0,1,1);
+  color-scheme: dark;
+}
+html, body { margin: 0; background: var(--app-bg); }
+
+/* ---------- chrome (x-) : not the app ---------- */
+.x-page { max-width: 1260px; margin: 0 auto; padding: 28px 28px 160px; font: 500 10px/1.4 Menlo, ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; color: #8f8a80; }
+.x-nav { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-bottom: 20px; }
+.x-nav a { color: #8f8a80; text-decoration: none; }
+.x-nav a:hover { color: #cfc9bd; }
+.x-group { margin-top: 36px; padding-bottom: 6px; color: #cfc9bd; }
+.x-row { border-top: 1px solid #2c2a27; padding: 14px 0 30px; }
+.x-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 14px; }
+.x-title { color: #cfc9bd; }
+.x-btn { font: inherit; letter-spacing: inherit; text-transform: inherit; color: #b3ada1; background: none; border: 1px solid #45413b; padding: 5px 9px; cursor: pointer; }
+.x-btn:hover { border-color: #8f8a80; color: #e6e0d4; }
+.x-btn[aria-pressed="true"] { border-color: #cfc9bd; color: #e6e0d4; }
+.x-sep { width: 1px; height: 14px; background: #2c2a27; }
+.x-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.x-grid.x-three { grid-template-columns: 1fr 1fr 1fr; }
+.x-grid > div { min-width: 0; }
+.x-col-label { margin-bottom: 8px; }
+.x-stage { position: relative; overflow: hidden; background: var(--app-bg); }
+
+/* ---------- specimen base ---------- */
+.s { font-family: 'DM Sans', system-ui, sans-serif; color: var(--text-primary); letter-spacing: normal; text-transform: none; font-size: 12px; line-height: 16px; font-weight: 400; }
+.s *, .s *::before, .s *::after { box-sizing: border-box; }
+.s .mono { font-family: 'DM Mono', ui-monospace, monospace; }
+.s .dot { width: 6px; height: 6px; border-radius: 9999px; flex: none; display: inline-block; }
+.s .pulse { animation: tw-pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
+@keyframes tw-pulse { 50% { opacity: .5; } }
+
+/* existing app keyframes */
+@keyframes catcode-toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes catcode-sa-pop { from { opacity: 0; transform: scale(.97) translateY(-3px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes catcode-token-warn-in { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
+@keyframes catcode-prose-arrive { from { opacity: 0; } to { opacity: 1; } }
+.animate-toast-in { animation: catcode-toast-in .18s ease-out both; }
+.animate-sa-pop { animation: catcode-sa-pop .13s ease both; }
+.animate-token-warn-in { animation: catcode-token-warn-in .18s ease both; }
+.prose-arrive-smooth { animation: catcode-prose-arrive 220ms linear both; }
+@keyframes catcode-face-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.animate-face-pulse { animation: catcode-face-pulse 1.4s ease-in-out infinite; }
+
+/* proposed keyframes */
+@keyframes p-pop-up { from { opacity: 0; transform: translateY(3px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes p-drawer-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@keyframes p-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes p-settle { from { opacity: .6; transform: scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes p-land { from { background-color: rgb(var(--accent-rgb) / .10); } to { background-color: transparent; } }
+@keyframes p-tab-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.p-pop-up { animation: p-pop-up 120ms var(--ease-enter) both; transform-origin: bottom left; }
+.p-drawer-in { animation: p-drawer-in 200ms var(--ease-enter) both; }
+.p-fade-in-120 { animation: p-fade-in 120ms var(--ease-enter) both; }
+.p-fade-in-180 { animation: p-fade-in 180ms var(--ease-enter) both; }
+.p-settle { animation: p-settle 180ms var(--ease-enter) both; display: inline-flex; align-items: center; gap: 6px; }
+.p-land { animation: p-land 900ms var(--tw-ease) both; }
+.p-tab-in { animation: p-tab-in 180ms var(--ease-enter) both; }
+
+/* ---- picker ---- */
+.s .pick { border-radius: 12px; border: 1px solid rgba(255,255,255,.1); background: var(--surface-raised); box-shadow: var(--elev-popover), 0 0 0 1px rgb(var(--accent-rgb) / .06); overflow: hidden; margin: 12px; }
+.s .pick-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--shell-seam); padding: 6px 12px; }
+.s .pick-slash { border-radius: 4px; background: rgb(var(--accent-rgb) / .15); padding: 0 6px; font-size: 11px; font-weight: 600; color: var(--accent); }
+.s .pick-kicker { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em; color: var(--text-ghost); margin-left: 8px; }
+.s .pick-list { list-style: none; margin: 0; padding: 4px 0; }
+.s .pick-row { display: flex; width: 100%; align-items: baseline; border-left: 2px solid transparent; padding: 4px 12px; }
+.s .pick-row.cur-t { transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke; transition-duration: 150ms; transition-timing-function: var(--tw-ease); }
+.s .pick-row.cur-t .pick-name, .s .pick-row.cur-t .pick-desc { transition: color 150ms var(--tw-ease); }
+.s .pick-row.on { border-left-color: var(--accent); background: rgb(var(--accent-rgb) / .07); }
+.s .pick-name { min-width: 148px; flex: none; font-size: 12.5px; font-weight: 500; letter-spacing: -.01em; color: var(--text-primary); }
+.s .pick-row.on .pick-name { color: var(--accent); }
+.s .pick-mid { margin-right: 10px; color: var(--text-ghost); }
+.s .pick-desc { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
+.s .pick-row.on .pick-desc { color: var(--text-muted); }
+
+/* ---- warning glyph ---- */
+.s .warn-btn { display: flex; height: 22px; width: 22px; align-items: center; justify-content: center; border-radius: 5px; color: var(--tone-warn); }
+
+/* ---- tabs ---- */
+.s .tabbar { display: flex; height: 40px; border-bottom: 1px solid var(--shell-seam); background: var(--shell-chrome); }
+.s .tabscroll { display: flex; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.s .tab { position: relative; display: flex; min-width: 90px; max-width: 176px; flex-grow: 1; flex-shrink: 0; align-items: center; gap: 6px; border-right: 1px solid rgba(255,255,255,.05); padding-left: 12px; padding-right: 6px; cursor: pointer; transition: background-color 150ms var(--tw-ease); }
+.s .tab:hover { background: rgba(255,255,255,.025); }
+.s .tab.active { background: rgba(255,255,255,.05); }
+.s .tab .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 1.5px; border-radius: 2px 2px 0 0; background: var(--accent); }
+.s .tab .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-subtle); }
+.s .tab.active .title { color: var(--text-primary); }
+.s .tab .close { display: flex; height: 18px; width: 0; flex: none; align-items: center; justify-content: center; overflow: hidden; border-radius: 4px; font-size: 14px; line-height: 1; color: rgb(152 152 159 / .6); opacity: 0; border: 0; background: none; padding: 0; }
+.s .tab .close.cur-t { transition: all 150ms var(--tw-ease); }
+.s .tab .close.pro-t { transition: opacity 150ms var(--tw-ease), background-color 150ms var(--tw-ease), color 150ms var(--tw-ease); }
+.s .tab:hover .close { width: 18px; opacity: 1; }
+.s .tab .close:hover { background: rgba(255,255,255,.1); color: var(--text-primary); }
+
+/* ---- sidebar ---- */
+.s .rail { position: absolute; top: 0; bottom: 0; left: 0; z-index: 5; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid rgba(255,255,255,.05); background: var(--surface-panel); width: 48px; }
+.s .rail.cur-t { transition: width 200ms ease-out, box-shadow 200ms ease-out; }
+.s .rail.cur-t.open { width: 288px; box-shadow: var(--elev-rail); }
+.s .rail.pro-t { width: 288px; clip-path: inset(0 240px 0 0); transition: clip-path 180ms var(--ease-enter), box-shadow 180ms var(--ease-enter); }
+.s .rail.pro-t.open { clip-path: inset(0 0 0 0); box-shadow: var(--elev-rail); }
+.s .rail-rows { padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+.s .srow { padding: 6px 8px; border-radius: 6px; min-width: 0; }
+.s .srow .t { font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s .srow .m { font-size: 11px; color: var(--text-ghost); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s .page-lines { position: absolute; left: 64px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 9px; }
+.s .page-lines i { display: block; height: 7px; border-radius: 2px; background: rgba(255,255,255,.05); }
+
+/* ---- tool card ---- */
+.s .card { width: 100%; overflow: hidden; border-radius: 6px; border: 1px solid var(--shell-seam); background: rgba(255,255,255,.025); }
+.s .card-head { display: flex; width: 100%; align-items: center; gap: 10px; padding: 8px 12px; }
+.s .fam-mark { width: 16px; flex: none; text-align: center; font-size: 13px; color: #a3e635; }
+.s .fam-word { flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #a3e635; }
+.s .card-target { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.s .dot.pro-t { transition: background-color 120ms ease-out; }
+
+/* ---- prose ---- */
+.s .prose { font-size: 14px; line-height: 1.6; color: var(--text-primary); padding: 14px 16px; max-width: 560px; min-height: 150px; }
+
+/* ---- permission card ---- */
+.s .dock { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+.s .perm { border-left: 2px solid var(--accent); background: rgb(244 244 245 / .04); padding: 12px 16px; }
+.s .perm.pro-t { transition: opacity 120ms var(--tw-ease); }
+.s .perm.dim { opacity: .55; }
+.s .kick { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); }
+.s .perm h2 { margin: 8px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 14px; line-height: 20px; font-weight: 600; }
+.s .perm h2 code, .s .opt code { border-radius: 4px; background: rgb(var(--accent-rgb) / .1); padding: 2px 6px; font-family: 'DM Mono', monospace; font-size: 11px; color: var(--accent); font-weight: 400; }
+.s .opts { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+.s .opt { display: flex; width: 100%; align-items: center; gap: 8px; border-radius: 6px; padding: 6px 10px; border: 1px solid transparent; background: none; color: inherit; font: inherit; text-align: left; }
+.s .opt.on { border-color: rgb(var(--accent-rgb) / .45); background: rgb(var(--accent-rgb) / .1); }
+.s .opt .n { display: flex; height: 15px; width: 15px; flex: none; align-items: center; justify-content: center; border-radius: 4px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 600; background: rgb(244 244 245 / .06); color: var(--text-subtle); }
+.s .opt.on .n { background: var(--accent); color: var(--app-bg); }
+.s .opt .l { min-width: 0; flex: 1; font-size: 12px; line-height: 1.375; }
+.s .opt.deny .l { color: var(--text-muted); }
+.s .composer { border-radius: 12px; border: 1px solid var(--shell-seam); background: var(--surface-raised); padding: 10px 12px; font-size: 13px; color: var(--text-primary); min-height: 42px; }
+
+/* ---- composer popover ---- */
+.s .chip { position: absolute; left: 16px; bottom: 16px; font-size: 12px; color: var(--text-muted); }
+.s .popover { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px; width: 200px; border-radius: 8px; border: 1px solid var(--shell-seam); background: var(--surface-raised); padding: 6px; box-shadow: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1); }
+.s .pop-h { padding: 2px 8px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .025em; color: var(--text-subtle); }
+.s .pop-r { padding: 4px 8px; border-radius: 4px; font-size: 12px; color: var(--text-primary); }
+.s .pop-r.on { background: rgba(255,255,255,.06); }
+
+/* ---- palette ---- */
+.s .scrim { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; background: var(--scrim); padding: 34px 16px 0; backdrop-filter: blur(8px); }
+.s .palette { width: 100%; max-width: 576px; overflow: hidden; border-radius: 16px; border: 1px solid rgba(255,255,255,.1); background: var(--surface-raised); box-shadow: var(--elev-modal); }
+.s .pal-in { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--shell-seam); padding: 12px 16px; font-size: 14px; color: var(--text-subtle); }
+.s .pal-in span { flex: 1; }
+.s kbd { border-radius: 4px; background: var(--shell-hover); padding: 2px 6px; font-size: 10px; color: var(--text-ghost); font-family: inherit; }
+.s .pal-list { padding: 4px 0; }
+.s .pal-r { padding: 8px 16px; font-size: 14px; color: var(--text-primary); }
+.s .pal-r.on { background: rgba(255,255,255,.04); }
+.s .behind { position: absolute; inset: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+.s .behind p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-primary); }
+
+/* ---- palette (real) ---- */
+.s .pal-in svg { flex: none; color: var(--text-subtle); }
+.s .pal-gh { padding: 8px 16px 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--text-ghost); }
+.s .pal-row { display: flex; width: 100%; align-items: center; gap: 10px; border-left: 2px solid transparent; padding: 6px 16px; }
+.s .pal-row.on { border-left-color: var(--accent); background: rgba(255,255,255,.06); }
+.s .pal-row .lb { flex: none; font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s .pal-row.on .lb { color: var(--text-primary); }
+.s .pal-row .sess { max-width: 45%; }
+.s .pal-row .dt { min-width: 0; flex: 1; font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s .pal-row kbd { flex: none; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-subtle); }
+.s .pal-foot { display: flex; align-items: center; gap: 16px; border-top: 1px solid var(--shell-seam); padding: 6px 16px; }
+.s .pal-foot span { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-ghost); }
+.s .pal-foot kbd { border: 1px solid var(--shell-seam); font-family: 'DM Mono', monospace; font-size: 9.5px; color: var(--text-faint); padding: 2px 6px; }
+/* ---- drawer (real) ---- */
+.s .drawer-hd { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--shell-seam); padding: 16px 20px; }
+.s .drawer-hd .tt { font-size: 14px; font-weight: 600; }
+.s .drawer-hd .sub { margin-top: 2px; font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s .ro { flex: none; border-radius: 4px; border: 1px solid var(--shell-seam); padding: 2px 6px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .025em; color: var(--text-subtle); }
+.s .xbtn { display: flex; height: 26px; width: 26px; flex: none; align-items: center; justify-content: center; font-size: 16px; line-height: 1; color: var(--text-subtle); }
+.s .dbody { flex: 1; overflow: hidden; padding: 16px 20px; }
+.s .dsec { margin-bottom: 20px; }
+.s .dsec-t { margin-bottom: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--text-subtle); }
+.s .drow { display: grid; grid-template-columns: 128px 1fr; align-items: baseline; column-gap: 12px; padding: 3px 0; }
+.s .drow .k { font-size: 11.5px; color: var(--text-subtle); }
+.s .drow .v { font-size: 12.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+/* ---- settings (real) ---- */
+.s .setmain { position: absolute; inset: 0; overflow-y: auto; padding: 28px 32px; scrollbar-width: none; }
+.s .setsearch { margin-bottom: 28px; display: flex; height: 38px; align-items: center; gap: 8px; border-radius: 6px; border: 1px solid var(--shell-seam); background: var(--surface-raised); padding: 0 12px; font-size: 13px; }
+.s .setsearch .q { flex: 1; color: var(--text-primary); }
+.s .setsearch .ph { flex: 1; color: var(--text-subtle); }
+.s .setsearch .cl { font-size: 12px; color: var(--text-subtle); }
+.s .setsearch kbd { font-size: 11px; color: var(--text-subtle); font-family: inherit; }
+.s .set-h2r { font-size: 24px; font-weight: 600; letter-spacing: -.025em; line-height: 32px; }
+.s .set-h2 { font-size: 25px; font-weight: 600; letter-spacing: -.025em; line-height: 32px; margin-bottom: 20px; }
+.s .set-st { margin: 4px 0 8px; font-size: 13px; color: var(--text-subtle); }
+.s .res { display: block; width: 100%; border-bottom: 1px solid var(--shell-seam); padding: 16px 4px; }
+.s .res.sel { background: var(--shell-hover); }
+.s .res .c { display: block; font-size: 11px; color: var(--text-subtle); }
+.s .res .l { margin-top: 4px; display: block; font-size: 14px; font-weight: 500; }
+.s .res .d { margin-top: 2px; display: block; font-size: 13px; color: var(--text-subtle); }
+/* ---- drawer ---- */
+.s .drawer { position: absolute; top: 0; bottom: 0; right: 0; width: min(520px, 92%); display: flex; flex-direction: column; border-left: 1px solid var(--shell-seam); background: var(--surface-panel); box-shadow: var(--elev-drawer); }
+.s .drawer-h { border-bottom: 1px solid var(--shell-seam); padding: 16px 20px; font-size: 14px; font-weight: 600; }
+.s .kv { display: flex; justify-content: space-between; padding: 8px 20px; font-size: 12px; }
+.s .kv b { font-weight: 400; color: var(--text-subtle); }
+
+/* ---- latest pill ---- */
+.s .pill { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; border-radius: 9999px; border: 1px solid; padding: 4px 12px; font-size: 11px; box-shadow: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1); backdrop-filter: blur(8px); background: rgb(7 7 9 / .9); white-space: nowrap; }
+.s .pill.pro-t { transition: color 180ms var(--tw-ease), border-color 180ms var(--tw-ease); }
+.s .pill.run { border-color: rgb(var(--accent-rgb) / .5); color: var(--accent); }
+.s .pill.idle { border-color: var(--shell-seam); color: var(--text-muted); }
+.s .pill .sb { font-weight: 600; }
+.s .pill .el { color: var(--text-subtle); }
+
+/* ---- gauge ---- */
+.s .gauge { display: flex; align-items: center; gap: 6px; }
+.s .gauge .pc { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.s .gauge .arc.pro-t { transition: stroke-dasharray 400ms var(--tw-ease), color 400ms var(--tw-ease); }
+.s .gauge.pro-t { transition: color 400ms var(--tw-ease); }
+.s .rail-row { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; font-size: 12px; color: var(--text-muted); }
+
+/* ---- settings ---- */
+.s .setpage { position: absolute; inset: 0; overflow-y: auto; padding: 0 24px; scrollbar-width: none; }
+.s .setrow { display: flex; min-height: 69px; align-items: center; justify-content: space-between; gap: 32px; border-bottom: 1px solid var(--shell-seam); padding: 16px 0; }
+.s .setrow .lab { font-size: 14px; font-weight: 500; line-height: 21px; }
+.s .setrow .des { margin-top: 2px; max-width: 58ch; font-size: 13px; line-height: 20px; color: var(--text-subtle); }
+
+/* ---- byline / dock ---- */
+.s .pane { position: absolute; inset: 0; display: flex; flex-direction: column; padding: 0 16px 12px; }
+.s .scroller { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.s .scroller p { margin: 0 0 10px; font-size: 14px; line-height: 1.6; }
+.s .byline { display: flex; align-items: center; gap: 10px; padding: 6px 4px; font-size: 12px; }
+.s .byline .dots { display: flex; align-items: center; gap: 4px; }
+.s .byline .v { font-weight: 600; color: var(--accent); }
+.s .byline .el { flex: none; font-family: 'DM Mono', monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-subtle); }
+.s .byline .tg { font-family: 'DM Mono', monospace; font-size: 11.5px; color: var(--text-subtle); }
+.s .slot { height: 28px; }
+.s .by-fade-out { animation: p-fade-out 120ms var(--ease-exit) both; }
+@keyframes p-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+/* ---- tasks pill ---- */
+.s .tasks { position: absolute; bottom: 16px; right: 16px; display: flex; align-items: center; gap: 6px; border-radius: 9999px; border: 1px solid var(--shell-seam); background: var(--shell-chrome); padding: 6px 12px; font-size: 12px; color: var(--text-muted); box-shadow: var(--elev-popover); }
+
+/* ---- live turn: transcript column, bottom-pinned ---- */
+.s .lt { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.s .lt-scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.s .lt-col { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 10px; }
+.s .lt-dock { padding: 0 12px 12px; }
+.s .composer.ph { color: var(--text-ghost); }
+.s .byline .clk { flex: none; font-family: 'DM Mono', monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-subtle); }
+.s .lt-user { display: flex; flex-direction: column; align-items: flex-end; }
+.s .ub { max-width: 82%; overflow-wrap: break-word; border-radius: 16px 16px 4px 16px; border: 1px solid rgb(var(--accent-rgb) / .2); background: rgb(var(--accent-rgb) / .1); padding: 10px 16px; font-size: 14px; line-height: 1.625; color: var(--text-primary); }
+.s .ub.queued { border-style: dashed; border-color: rgb(var(--accent-rgb) / .3); background: rgb(var(--accent-rgb) / .035); color: var(--text-subtle); }
+.s .ub.pro-t { transition: border-color 180ms var(--ease-enter), background-color 180ms var(--ease-enter), color 180ms var(--ease-enter); }
+.s .ub-acts { height: 25px; }
+.s .q-block { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding: 10px 16px 0; }
+.s .q-stack { display: flex; width: 100%; flex-direction: column; align-items: flex-end; gap: 6px; }
+.s .q-cap { padding-right: 4px; font-size: 11px; color: var(--text-ghost); }
+.s .q-ctl { display: flex; gap: 6px; }
+.s .q-btn { display: flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 6px; color: var(--text-subtle); }
+.s .rl { position: relative; padding: 2px 0 2px 26px; font-size: 12.5px; line-height: 1.5; color: var(--text-subtle); }
+.s .rn { position: absolute; top: 9px; left: 5.5px; width: 5px; height: 5px; border-radius: 9999px; background: var(--text-ghost); }
+.s .rn.rail { left: -20px; }
+.s .rlab { margin-right: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-subtle); }
+.s .rr-h { display: flex; align-items: center; gap: 10px; padding: 1px 0; }
+.s .rr-chev { display: inline-block; width: 16px; flex: none; text-align: center; font-size: 9px; line-height: 1; color: var(--text-ghost); }
+.s .rr-lab { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-subtle); }
+.s .rr-n { font-size: 10.5px; color: var(--text-faint); }
+.s .rr-ol { list-style: none; margin: 2px 0 0 8px; padding: 0 0 0 17px; border-left: 1px solid rgba(255,255,255,.1); }
+.s .rr-li { position: relative; padding: 2px 0; font-size: 12.5px; line-height: 1.5; color: var(--text-subtle); }
+.s .lt-pfx { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-faint); }
+.s .lt-diff { display: flex; flex: none; align-items: center; gap: 6px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.s .band { border-top: 1px solid var(--shell-seam); background: rgba(0,0,0,.2); padding: 6px 12px; }
+.s .band pre { margin: 0; overflow: hidden; white-space: pre; font-size: 11px; line-height: 1.625; }
+.s .cbody { border-top: 1px solid var(--shell-seam); background: rgba(0,0,0,.28); }
+.s .cbody-in { max-height: 340px; overflow: auto; padding: 4px 12px 10px; white-space: pre; font-size: 11.5px; line-height: 1.625; }
+.s .ll { display: flex; }
+.s .gut { width: 48px; flex: none; padding-right: 11px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-ghost); user-select: none; }
+.s .lt-prose { font-size: 14px; line-height: 1.625; font-weight: 500; }
+.s .lt-prose p { margin: 0; }
+.s .ag-id { display: flex; align-items: center; gap: 9px; padding: 7px 12px; }
+.s .ag-who { display: inline-flex; min-width: 0; align-items: baseline; gap: 6px; }
+.s .ag-name { flex: none; font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 600; }
+.s .ag-name.nameless { letter-spacing: .04em; color: var(--text-muted); }
+.s .ag-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'DM Mono', monospace; font-size: 11px; text-transform: lowercase; color: var(--text-faint); }
+.s .ag-slot { margin-left: auto; flex: none; white-space: nowrap; font-family: 'DM Mono', monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: #60a5fa; }
+.s .ag-task { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--shell-seam); padding: 7px 12px; }
+.s .ag-task .t { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; line-height: 18px; color: var(--text-primary); }
+.s .ag-model { flex: none; font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-subtle); }
+.s .dg { width: 100%; overflow: hidden; border-radius: 6px; border: 1px solid var(--shell-seam); background: rgba(255,255,255,.02); }
+.s .dg-h { display: flex; align-items: center; gap: 9px; border-bottom: 1px solid var(--shell-seam); padding: 6px 12px; }
+.s .dg-faces { display: inline-flex; flex: none; align-items: center; }
+.s .dg-faces svg + svg { margin-left: -3px; }
+.s .dg-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.s .dg-tail { margin-left: auto; flex: none; white-space: nowrap; font-family: 'DM Mono', monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: #60a5fa; }
+.s .dg-list { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<div class="x-page">
+  <nav class="x-nav" id="x-nav"></nav>
+  <div id="x-rows"></div>
+</div>
+
+<script>
+'use strict'
+const $ = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild }
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const restartAnim = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls) }
+
+const DEMOS = []
+const def = (d) => DEMOS.push(d)
+
+/* ============ FIXES ============ */
+
+def({
+  id: 'picker', group: 'Fix', title: 'Slash picker · arrow-key cursor', h: 250,
+  actions: ['Hold ↓', 'Hold ↑'],
+  build(side, stage) {
+    const cmds = [
+      ['compact', 'Summarize the conversation'], ['clear', 'Start a fresh conversation'],
+      ['model', 'Choose the model'], ['resume', 'Open an earlier session'],
+      ['memory', 'Edit memory files'], ['status', 'Show session status'],
+      ['permissions', 'Manage permission rules'], ['review', 'Review the current changes']]
+    const box = $(`<div class="pick"><div class="pick-head"><div style="display:flex;align-items:center"><span class="pick-slash mono">/</span><span class="pick-kicker">Commands</span></div><span class="mono" style="font-size:10px;color:var(--text-ghost)">8</span></div><ul class="pick-list"></ul></div>`)
+    const ul = box.querySelector('ul')
+    const rows = cmds.map(([n, d]) => {
+      const li = $(`<li><div class="pick-row ${side === 'cur' ? 'cur-t' : ''}"><span class="pick-name mono">/${n}</span><span class="pick-mid">·</span><span class="pick-desc">${d}</span></div></li>`)
+      ul.appendChild(li); return li.firstElementChild })
+    stage.appendChild(box)
+    let i = 0; rows[0].classList.add('on')
+    const setI = (n) => { rows[i].classList.remove('on'); i = n; rows[i].classList.add('on') }
+    let run = 0
+    const hold = async (dir) => { const me = ++run; for (let k = 0; k < 7; k++) { if (me !== run) return; const n = Math.max(0, Math.min(7, i + dir)); if (n === i) return; setI(n); await sleep(33) } }
+    return { 'Hold ↓': () => hold(1), 'Hold ↑': () => hold(-1) }
+  }
+})
+
+const WARN_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/></svg>`
+def({
+  id: 'warn', group: 'Fix', title: 'Context warning glyph · tab switch', h: 70,
+  actions: ['Cross threshold', 'Switch tab and back'],
+  build(side, stage) {
+    const wrap = $(`<div style="position:absolute;left:16px;bottom:16px;display:flex;align-items:center;gap:10px"></div>`)
+    stage.appendChild(wrap)
+    const mount = (fresh) => {
+      wrap.innerHTML = ''
+      const b = $(`<button class="warn-btn" style="border:0;background:none;padding:0">${WARN_SVG}</button>`)
+      if (side === 'cur' || fresh) b.classList.add('animate-token-warn-in')
+      wrap.appendChild(b)
+    }
+    mount(false)
+    return {
+      'Cross threshold': async () => { wrap.innerHTML = ''; await sleep(250); mount(true) },
+      'Switch tab and back': async () => { wrap.style.visibility = 'hidden'; wrap.innerHTML = ''; await sleep(350); wrap.style.visibility = ''; mount(false) },
+    }
+  }
+})
+
+def({
+  id: 'tabclose', group: 'Fix', title: 'Tab close button · hover', h: 56, hint: 'Hover',
+  actions: [],
+  build(side, stage) {
+    const titles = ['Refactor the account pool', 'Fix sidebar ordering', 'Review permission flow']
+    const bar = $(`<div class="tabbar" style="width:380px"><div class="tabscroll"></div></div>`)
+    const sc = bar.firstElementChild
+    titles.forEach((t, k) => sc.appendChild($(`<div class="tab ${k === 0 ? 'active' : ''}">${k === 0 ? '<span class="bar"></span>' : ''}<span class="title">${t}</span><button class="close ${side === 'cur' ? 'cur-t' : 'pro-t'}">×</button></div>`)))
+    stage.appendChild(bar)
+    return {}
+  }
+})
+
+def({
+  id: 'sidebar', group: 'Fix', title: 'Sidebar expand', h: 240,
+  actions: ['Open', 'Close'],
+  build(side, stage) {
+    stage.appendChild($(`<div class="page-lines"><i style="width:82%"></i><i style="width:64%"></i><i style="width:90%"></i><i style="width:48%"></i><i style="width:76%"></i><i style="width:58%"></i></div>`))
+    const rail = $(`<aside class="rail ${side === 'cur' ? 'cur-t' : 'pro-t'}"><div class="rail-rows"></div></aside>`)
+    const rows = rail.firstElementChild
+    const items = [['Refactor the account pool and its refresh path', '2h · GPT-6 Sol'], ['Fix sidebar ordering after restore', '5h · GPT-6 Sol'], ['Review permission flow for relayed requests', 'Yesterday · GPT-5.6 Terra'], ['Motion audit across the desktop renderer', 'Yesterday · GPT-6 Sol'], ['Investigate renderer memory growth', 'Sep 21 · GPT-6 Luna']]
+    stage.appendChild(rail)
+    return {
+      'Open': () => { if (rail.classList.contains('open')) return; rows.innerHTML = items.map(([t, m]) => `<div class="srow"><div class="t">${t}</div><div class="m">${m}</div></div>`).join(''); void rail.offsetWidth; rail.classList.add('open') },
+      'Close': () => { rail.classList.remove('open'); rows.innerHTML = '' },
+    }
+  }
+})
+
+def({
+  id: 'deadpulse', group: 'Fix', title: 'Tool card without a result · finished chat', h: 70,
+  actions: [],
+  build(side, stage) {
+    stage.appendChild($(`<div style="padding:12px 16px"><div class="card"><div class="card-head"><span class="fam-mark">$</span><span class="fam-word">Bash</span><span class="card-target mono">bun test app/renderer/src/TabBar.test.tsx</span><span class="dot ${side === 'cur' ? 'pulse' : ''}" style="background:var(--accent)"></span></div></div></div>`))
+    return {}
+  }
+})
+
+/* prose arrival */
+const PROSE = 'The sidebar keeps its rows in the order you last sent a message, so opening or restoring a session never moves it. When a new turn starts, the row rises to the top of its group, and a pinned row stays where you put it until you unpin it. Hidden projects collect at the bottom of the list behind a single row that shows how many there are.'
+function chunks(text) { let s = 7, out = [], i = 0; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647; while (i < text.length) { const n = 2 + Math.floor(rnd() * 9); out.push(text.slice(i, i + n)); i += n } return out }
+const PROSE_CHUNKS = chunks(PROSE)
+const splitParts = (s) => s.split(/(\s+)/).filter(x => x !== '')
+let proseRate = 16
+def({
+  id: 'prose', group: 'Needs a live look', title: 'Streaming prose · word fade', h: 190,
+  actions: ['Stream'], rates: [16, 50, 120],
+  build(side, stage) {
+    const p = $(`<div class="prose"></div>`)
+    stage.appendChild(p)
+    let run = 0
+    // current: React keyless reconciliation of [settled text, (ws text | word span)*]
+    const renderCur = (content, from) => {
+      const settled = content.slice(0, from), arriving = content.slice(from)
+      const next = [{ t: 'text', v: settled }]
+      for (const part of splitParts(arriving)) next.push(/^\s+$/.test(part) ? { t: 'text', v: part } : { t: 'span', v: part })
+      const kids = Array.from(p.childNodes)
+      next.forEach((n, k) => {
+        const old = kids[k]
+        const same = old && ((n.t === 'text' && old.nodeType === 3) || (n.t === 'span' && old.nodeType === 1))
+        if (same) { if (n.t === 'text') old.nodeValue = n.v; else old.textContent = n.v }
+        else { const node = n.t === 'text' ? document.createTextNode(n.v) : Object.assign(document.createElement('span'), { className: 'prose-arrive-smooth', textContent: n.v }); if (old) p.replaceChild(node, old); else p.appendChild(node) }
+      })
+      for (let k = kids.length - 1; k >= next.length; k--) p.removeChild(kids[k])
+    }
+    return {
+      'Stream': async () => {
+        const me = ++run; p.innerHTML = ''
+        let content = ''
+        if (side === 'cur') {
+          for (const c of PROSE_CHUNKS) { if (me !== run) return; const from = content.length; content += c; renderCur(content, from); await sleep(proseRate) }
+          renderCur(content, content.length)
+        } else {
+          const settled = document.createTextNode(''); p.appendChild(settled)
+          const live = [] // {node, at}
+          let pendingWord = null
+          const age = () => { const now = performance.now(); while (live.length && now - live[0].at > 220) { const x = live.shift(); if (x.node === pendingWord) pendingWord = null; settled.nodeValue += x.node.textContent; x.node.remove() } }
+          for (const c of PROSE_CHUNKS) {
+            if (me !== run) return
+            const now = performance.now()
+            for (const part of c.split(/(\s+)/).filter(x => x !== '')) {
+              if (/^\s+$/.test(part)) { pendingWord = null; const t = document.createTextNode(part); p.appendChild(t); live.push({ node: t, at: now }) }
+              else if (pendingWord) { pendingWord.textContent += part }
+              else { const s = document.createElement('span'); s.className = 'prose-arrive-smooth'; s.textContent = part; p.appendChild(s); pendingWord = s; live.push({ node: s, at: now }) }
+            }
+            age(); await sleep(proseRate)
+          }
+          while (live.length) { if (me !== run) return; age(); await sleep(30) }
+        }
+      }
+    }
+  }
+})
+
+/* ============ LIVE TURN ============ */
+
+const FAM = { bash: ['$', 'Bash', '#a3e635'], read: ['≡', 'Read', '#60a5fa'], grep: ['⌕', 'Search', '#fbbf24'], edit: ['±', 'Edit', 'var(--accent)'] }
+const DOT_BG = { pending: 'var(--accent)', success: 'var(--tone-good)', error: 'var(--tone-danger)' }
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+const fmtEl = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(t / 60), s = t % 60; return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s` }
+const ARRIVE = 'p-fade-in-180', ARRIVE_MS = 180
+let turnGaps = 'Short'
+const turnGap = (ms) => (turnGaps === 'Real' || ms <= 1200 ? ms : 900)
+
+const LT_PROMPT = 'Check why restored sessions move in the sidebar'
+const LT_R1 = 'Locating the sidebar ordering logic'
+const LT_R2 = ['Tracing where restore updates the timestamp', 'Checking the sort comparator']
+const LT_R3 = 'Keeping the stored order when a session is restored'
+const LT_CMD = 'bun test app/renderer/src/Sidebar.test.tsx'
+const LT_PASS = [['18 pass', '#86efac'], ['0 fail', 'var(--text-muted)'], ['Ran 18 tests across 1 file. [412.00ms]', 'var(--text-muted)']]
+const LT_FAIL = ['(fail) sidebar keeps restored rows in place [3.10ms]', '17 pass', '1 fail', 'Ran 18 tests across 1 file. [398.00ms]']
+const LT_ANSWER = 'Restoring a session rewrote its last activity time, so the sort moved it to the top of its group. The restore path now keeps the stored time, and the sidebar test covers a restored row staying in place.'
+const LT_ANSWER_CHUNKS = chunks(LT_ANSWER)
+const LT_DIFF = `<span class="lt-diff mono"><span style="color:#86efac">+4</span><span style="color:#fca5a5">−2</span></span>`
+const FACE_A = [[0,0,2,1],[7,0,2,1],[0,1,3,1],[6,1,3,1],[2,2,5,1],[0,3,9,1],[0,4,2,1],[3,4,3,1],[7,4,2,1],[0,5,1,1],[2,5,7,1],[0,6,9,1],[1,7,7,1]]
+const FACE_B = [[1,1,3,1],[5,1,3,1],[2,2,1,1],[4,2,1,1],[6,2,1,1],[1,3,7,1],[1,4,2,1],[4,4,1,1],[6,4,2,1],[1,5,7,1],[2,6,5,1],[3,7,3,2]]
+const LT_WORKERS = [
+  { id: 'w1', face: FACE_A, fill: '#5eead4', name: 'onyx', task: 'Find where restore sets lastActivityAt', act: 'Read app/renderer/src/sidebarOrder.ts' },
+  { id: 'w2', face: FACE_B, fill: '#93c5fd', name: 'quartz', task: 'Find the sidebar sort comparator', act: 'Search compareSidebarRows' },
+]
+
+const ltUser = (k, text) => `<div class="lt-row lt-user" data-k="${k}"><div class="ub">${esc(text)}</div><div class="ub-acts"></div></div>`
+const ltCard = (k, fam, target, badge = '') => { const [m, w, c] = FAM[fam]; return `<div class="lt-row" data-k="${k}"><div class="card"><div class="card-head"><span class="fam-mark" style="color:${c}">${m}</span><span class="fam-word" style="color:${c}">${w}</span><span class="card-target mono">${esc(target)}</span>${badge}<span class="dot pulse" style="background:${DOT_BG.pending}"></span></div></div></div>` }
+const ltRun = (k, n) => ltCard(k, 'read', `${n} files`, `<span class="lt-pfx mono">app/renderer/src/</span>`)
+const ltLine = (k, text) => `<div class="lt-row" data-k="${k}"><div class="rl"><span class="rn"></span><span class="rlab">Reasoning</span><span>${esc(text)}</span></div></div>`
+const ltSteps = (steps) => `<div class="rr"><div class="rr-h"><span class="rr-chev">▾</span><span class="rr-lab">Reasoning</span><span class="rr-n">${steps.length} steps</span></div><ol class="rr-ol">${steps.map((s, i) => `<li class="rr-li" data-step="${i}"><span class="rn rail"></span>${esc(s)}</li>`).join('')}</ol></div>`
+const ltBand = (lines) => `<div class="band"><pre class="mono">${lines.map(([t, c]) => `<div style="color:${c}">${esc(t)}</div>`).join('')}</pre></div>`
+const ltErrBody = (lines) => `<div class="cbody"><div class="cbody-in mono">${lines.map((t, i) => `<div class="ll"><span class="gut">${i + 1}</span><span style="color:var(--tone-danger)">${esc(t)}</span></div>`).join('')}</div></div>`
+const ltFace = (rects, fill, size, pulse) => `<svg width="${size}" height="${size}" viewBox="0 0 9 9" shape-rendering="crispEdges" class="${pulse ? 'animate-face-pulse' : ''}" style="flex:none;fill:${fill}">${rects.map(([x, y, w, h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}"/>`).join('')}</svg>`
+const ltAgent = (w) => `<div class="card" data-m="${w.id}"><span class="ag-id">${ltFace(w.face, w.fill, 19, true)}<span class="ag-who"><span class="ag-name nameless">AGENT</span><span class="ag-type">explore</span></span><span class="ag-slot">starting</span></span><span class="ag-task"><span class="t">${esc(w.task)}</span><span class="ag-model"></span></span></div>`
+const ltGroup = (k, ws) => `<div class="lt-row" data-k="${k}"><div class="dg"><div class="dg-h"><span class="dg-faces">${ws.map(w => ltFace(w.face, w.fill, 17, true)).join('')}</span><span class="dg-l">${ws.length} explore workers</span><span class="dg-tail">${ws.length} still running</span></div><div class="dg-list">${ws.map(ltAgent).join('')}</div></div></div>`
+const LT_BYLINE = `<div class="byline"><span class="dots"><span class="dot pulse" style="background:var(--accent)"></span><span class="dot pulse" style="background:var(--accent);animation-delay:150ms"></span><span class="dot pulse" style="background:var(--accent);animation-delay:300ms"></span></span><span class="v"></span><span class="tg"></span><span class="clk"></span></div>`
+const Q_ICON_SEND = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 11 5-5 5 5"/><path d="m7 17 5-5 5 5"/></svg>`
+const Q_ICON_BACK = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg>`
+
+/* One pane. CURRENT and PROPOSED share every call; `pro` only adds the proposed motion. */
+function ltView(stage, pro, dock = false) {
+  const root = $(`<div class="lt"><div class="lt-scroll"><div class="lt-col"></div></div>${dock ? '<div class="lt-dock"><div class="byslot"></div><div class="composer ph">Ask Cat Code anything or describe a task…</div></div>' : ''}</div>`)
+  stage.appendChild(root)
+  const scroll = root.querySelector('.lt-scroll'), col = root.querySelector('.lt-col'), slot = root.querySelector('.byslot')
+  const born = new Map()
+  let clock = 0, t0 = 0
+  const q = (k) => col.querySelector(`[data-k="${k}"]`)
+  const arrive = (el, age = 0) => { if (!pro) return; el.classList.add(ARRIVE); if (age > 0) el.style.animationDelay = `-${Math.round(age)}ms` }
+  const prep = (el) => { if (pro) el.querySelectorAll('.dot').forEach(d => d.classList.add('pro-t')); return el }
+  return {
+    scroll, col, q,
+    add(html, live = true) { const el = prep($(html)); col.appendChild(el); if (live) { born.set(el.dataset.k, performance.now()); arrive(el) } return el },
+    replace(oldK, html) {
+      const old = q(oldK); if (!old) return null
+      const el = prep($(html)); old.replaceWith(el)
+      const b = born.get(oldK)
+      if (b !== undefined) { born.set(el.dataset.k, b); const age = performance.now() - b; if (age < ARRIVE_MS) arrive(el, age) }
+      return el
+    },
+    status(k, st) { const d = q(k)?.querySelector('.card-head > .dot'); if (!d) return; d.style.background = DOT_BG[st]; d.classList.toggle('pulse', st === 'pending') },
+    grow(k, html) { const card = q(k)?.querySelector('.card'); if (!card) return; const el = $(html); card.appendChild(el); if (pro) el.classList.add(ARRIVE) },
+    badge(k, html) { const d = q(k)?.querySelector('.card-head > .dot'); if (!d) return; const el = $(html); d.before(el); if (pro) el.classList.add(ARRIVE) },
+    steps(k, steps) { const row = q(k); if (!row) return; row.innerHTML = ltSteps(steps); if (pro) row.querySelector(`[data-step="${steps.length - 1}"]`).classList.add(ARRIVE) },
+    by(verb, target = null) {
+      if (!slot) return
+      if (!slot.firstElementChild) slot.appendChild($(LT_BYLINE))
+      const b = slot.firstElementChild
+      b.querySelector('.v').textContent = verb
+      const tg = b.querySelector('.tg'); tg.textContent = target ?? ''; tg.style.display = target ? '' : 'none'
+      b.querySelector('.clk').textContent = fmtEl(t0 ? performance.now() - t0 : 0)
+    },
+    startClock() { clearInterval(clock); t0 = performance.now(); clock = setInterval(() => { const c = slot?.querySelector('.clk'); if (c) c.textContent = fmtEl(performance.now() - t0) }, 250) },
+    endTurn() { clearInterval(clock); t0 = 0; if (slot) slot.innerHTML = '' },
+    reset() { clearInterval(clock); t0 = 0; col.innerHTML = ''; born.clear(); if (slot) slot.innerHTML = ''; scroll.querySelector('.q-block')?.remove() },
+    async remount() {
+      root.style.visibility = 'hidden'
+      await sleep(350)
+      col.innerHTML = col.innerHTML
+      col.querySelectorAll('.' + ARRIVE).forEach(n => { n.classList.remove(ARRIVE); n.style.animationDelay = '' })
+      born.clear()
+      root.style.visibility = ''
+    },
+  }
+}
+
+async function ltStream(v, alive) {
+  v.add(`<div class="lt-row" data-k="ans"><div class="lt-prose"><p></p></div></div>`, false)
+  for (const c of LT_ANSWER_CHUNKS) {
+    if (!alive()) return false
+    const s = document.createElement('span'); s.className = 'prose-arrive-smooth'; s.textContent = c
+    v.q('ans')?.querySelector('p').appendChild(s)
+    await sleep(80)
+  }
+  return alive()
+}
+
+def({
+  id: 'ltturn', group: 'Live turn', title: 'Full turn', h: 460,
+  actions: ['Play turn', 'Switch tab and back', 'Reset'],
+  modes: { label: 'Gaps', values: ['Short', 'Real'], get: () => turnGaps, set: (x) => { turnGaps = x } },
+  build(side, stage) {
+    const v = ltView(stage, side === 'pro', true)
+    let run = 0
+    const idle = () => { v.reset(); v.add(ltUser('u1', LT_PROMPT), false) }
+    idle()
+    const play = async () => {
+      const me = ++run
+      const w = async (ms) => { await sleep(turnGap(ms)); return me === run }
+      v.reset(); v.add(ltUser('u1', LT_PROMPT), false); v.startClock(); v.by('Working')
+      if (!await w(4100)) return; v.add(ltLine('r1', LT_R1)); v.by('Thinking')
+      if (!await w(1200)) return; v.add(ltCard('rd1', 'read', 'app/renderer/src/Sidebar.tsx')); v.by('Running', 'Read')
+      if (!await w(10)) return; v.replace('rd1', ltRun('run1', 2)); v.add(ltCard('gr1', 'grep', 'lastActivityAt'))
+      if (!await w(200)) return; v.status('run1', 'success'); v.by('Running', 'Grep')
+      if (!await w(90)) return; v.status('gr1', 'success'); v.by('Working')
+      if (!await w(8100)) return; v.add(ltLine('r2', LT_R2[0])); v.by('Thinking')
+      if (!await w(350)) return; v.steps('r2', LT_R2)
+      if (!await w(360)) return; v.add(ltCard('b1', 'bash', LT_CMD)); v.by('Running', 'Bash')
+      if (!await w(4000)) return; v.status('b1', 'error'); v.grow('b1', ltErrBody(LT_FAIL)); v.by('Working')
+      if (!await w(8100)) return; v.add(ltLine('r3', LT_R3)); v.by('Thinking')
+      if (!await w(360)) return; v.add(ltCard('e1', 'edit', 'app/renderer/src/sidebarOrder.ts')); v.by('Running', 'Edit')
+      if (!await w(180)) return; v.status('e1', 'success'); v.badge('e1', LT_DIFF); v.by('Working')
+      if (!await w(6200)) return; v.add(ltCard('b2', 'bash', LT_CMD)); v.by('Running', 'Bash')
+      if (!await w(4000)) return; v.status('b2', 'success'); v.grow('b2', ltBand(LT_PASS)); v.by('Working')
+      if (!await w(7400)) return; v.by('Responding')
+      if (!await ltStream(v, () => me === run)) return
+      v.endTurn()
+    }
+    return { 'Play turn': play, 'Switch tab and back': () => v.remount(), 'Reset': () => { run++; idle() } }
+  }
+})
+
+def({
+  id: 'ltburst', group: 'Live turn', title: 'Tool burst', h: 270,
+  actions: ['One commit', 'Split commit', 'Switch tab and back', 'Reset'],
+  build(side, stage) {
+    const v = ltView(stage, side === 'pro')
+    let run = 0
+    const base = () => { v.reset(); v.add(ltUser('u1', LT_PROMPT), false); v.add(ltLine('r1', LT_R1), false) }
+    base()
+    const burst = async (split) => {
+      const me = ++run; base()
+      const w = async (ms) => { await sleep(ms); return me === run }
+      if (!await w(250)) return
+      if (split) { v.add(ltCard('rd1', 'read', 'app/renderer/src/Sidebar.tsx')); if (!await w(10)) return; v.replace('rd1', ltRun('run1', 3)) }
+      else v.add(ltRun('run1', 3))
+      v.add(ltCard('gr1', 'grep', 'lastActivityAt')); v.add(ltCard('b1', 'bash', 'bun run --cwd app typecheck'))
+      if (!await w(200)) return; v.status('run1', 'success')
+      if (!await w(90)) return; v.status('gr1', 'success')
+    }
+    return { 'One commit': () => burst(false), 'Split commit': () => burst(true), 'Switch tab and back': () => v.remount(), 'Reset': () => { run++; base() } }
+  }
+})
+
+def({
+  id: 'ltresult', group: 'Live turn', title: 'Result lands', h: 250,
+  actions: ['Passes', 'Fails', 'Reset'],
+  build(side, stage) {
+    const v = ltView(stage, side === 'pro')
+    let run = 0
+    const base = () => { v.reset(); v.add(ltLine('r1', LT_R2[1]), false); v.add(ltCard('b1', 'bash', LT_CMD), false) }
+    base()
+    const land = async (ok) => {
+      const me = ++run; base(); await sleep(400); if (me !== run) return
+      v.status('b1', ok ? 'success' : 'error')
+      v.grow('b1', ok ? ltBand(LT_PASS) : ltErrBody(LT_FAIL))
+    }
+    return { 'Passes': () => land(true), 'Fails': () => land(false), 'Reset': () => { run++; base() } }
+  }
+})
+
+def({
+  id: 'ltreason', group: 'Live turn', title: 'Reasoning · second step', h: 150,
+  actions: ['First step', 'Second step', 'Reset'],
+  build(side, stage) {
+    const v = ltView(stage, side === 'pro')
+    const base = () => { v.reset(); v.add(ltCard('gr1', 'grep', 'lastActivityAt'), false); v.status('gr1', 'success') }
+    base()
+    return {
+      'First step': () => { base(); v.add(ltLine('r2', LT_R2[0])) },
+      'Second step': () => { if (!v.q('r2')) v.add(ltLine('r2', LT_R2[0]), false); v.steps('r2', LT_R2) },
+      'Reset': base,
+    }
+  }
+})
+
+def({
+  id: 'ltagents', group: 'Live turn', title: 'Parallel workers · regroup', h: 300,
+  actions: ['Spawn', 'Workers report', 'Reset'],
+  build(side, stage) {
+    const v = ltView(stage, side === 'pro')
+    let run = 0
+    const base = () => { v.reset(); v.add(ltUser('u1', LT_PROMPT), false); v.add(ltLine('r1', LT_R1), false) }
+    base()
+    return {
+      'Spawn': async () => {
+        const me = ++run; base(); await sleep(250); if (me !== run) return
+        v.add(`<div class="lt-row" data-k="a1">${ltAgent(LT_WORKERS[0])}</div>`)
+        await sleep(70); if (me !== run) return
+        v.replace('a1', ltGroup('g1', LT_WORKERS))
+      },
+      'Workers report': () => {
+        for (const w of LT_WORKERS) {
+          const m = v.q('g1')?.querySelector(`[data-m="${w.id}"]`); if (!m) continue
+          const n = m.querySelector('.ag-name'); n.classList.remove('nameless'); n.style.color = '#7dd3fc'; n.textContent = w.name
+          m.querySelector('.ag-slot').textContent = w.act
+          m.querySelector('.ag-model').textContent = 'GPT-6 Sol'
+        }
+      },
+      'Reset': () => { run++; base() },
+    }
+  }
+})
+
+def({
+  id: 'ltqueued', group: 'Live turn', title: 'Queued message · delivered', h: 300,
+  actions: ['Engine takes it', 'Reset'],
+  build(side, stage) {
+    const pro = side === 'pro'
+    const v = ltView(stage, pro, true)
+    const Q = 'Also check the pinned rows'
+    const base = () => {
+      v.reset(); v.add(ltLine('r1', LT_R1), false); v.add(ltCard('gr1', 'grep', 'lastActivityAt'), false); v.status('gr1', 'success')
+      v.scroll.appendChild($(`<div class="q-block"><div class="q-stack"><span class="q-cap">Queued</span><div class="ub queued">${esc(Q)}</div></div><div class="q-ctl"><span class="q-btn">${Q_ICON_SEND}</span><span class="q-btn">${Q_ICON_BACK}</span></div></div>`))
+      v.startClock(); v.by('Working')
+    }
+    base()
+    return {
+      'Engine takes it': () => {
+        const qb = v.scroll.querySelector('.q-block'); if (!qb) return
+        qb.remove()
+        const row = v.add(ltUser('u2', Q), false)
+        if (pro) { const b = row.querySelector('.ub'); b.classList.add('queued'); void b.offsetWidth; b.classList.add('pro-t'); b.classList.remove('queued') }
+      },
+      'Reset': base,
+    }
+  }
+})
+
+/* ============ ADDITIONS ============ */
+
+const PERM_HTML = `<section class="perm"><div class="kick">Bash</div><h2><span>Allow</span><code>git push origin main</code></h2><div class="opts"><button class="opt on"><span class="n">1</span><span class="l">Yes</span></button><button class="opt"><span class="n">2</span><span class="l">Yes, and don’t ask again for <code>git push</code></span></button><button class="opt deny"><span class="n">3</span><span class="l">No</span></button></div></section>`
+def({
+  id: 'permarrive', group: 'Add', title: 'Permission card arrives while typing', h: 310,
+  actions: ['Request arrives', 'Switch tab and back', 'Reset'],
+  build(side, stage) {
+    const dock = $(`<div class="dock"><div class="slot-card"></div><div class="composer">Rename the helper and update its callers</div></div>`)
+    const slot = dock.firstElementChild
+    stage.appendChild(dock)
+    const mount = (fresh) => { slot.innerHTML = ''; const c = $(PERM_HTML); if (side === 'pro' && fresh) c.classList.add('animate-toast-in'); slot.appendChild(c) }
+    return {
+      'Request arrives': async () => { slot.innerHTML = ''; await sleep(200); mount(true) },
+      'Switch tab and back': async () => { if (!slot.firstChild) return; dock.style.visibility = 'hidden'; slot.innerHTML = ''; await sleep(350); dock.style.visibility = ''; mount(false) },
+      'Reset': () => { slot.innerHTML = '' },
+    }
+  }
+})
+
+def({
+  id: 'permsubmit', group: 'Add', title: 'Permission card · after you answer', h: 310,
+  actions: ['Approve', 'Approve · send fails', 'Reset'],
+  build(side, stage) {
+    const dock = $(`<div class="dock"><div class="slot-card"></div><div class="composer">Rename the helper and update its callers</div></div>`)
+    const slot = dock.firstElementChild
+    stage.appendChild(dock)
+    let card = null, run = 0
+    const show = () => { slot.innerHTML = ''; card = $(PERM_HTML); if (side === 'pro') card.classList.add('pro-t'); slot.appendChild(card) }
+    show()
+    const answer = async (fail) => {
+      if (!card) return; const me = ++run
+      card.querySelectorAll('button').forEach(b => b.disabled = true)
+      if (side === 'pro') card.classList.add('dim')
+      await sleep(900); if (me !== run) return
+      if (fail) { card.querySelectorAll('button').forEach(b => b.disabled = false); card.classList.remove('dim') }
+      else { slot.innerHTML = ''; card = null }
+    }
+    return { 'Approve': () => answer(false), 'Approve · send fails': () => answer(true), 'Reset': () => { run++; show() } }
+  }
+})
+
+def({
+  id: 'popover', group: 'Add', title: 'Composer popover · model', h: 200,
+  actions: ['Open', 'Close'],
+  build(side, stage) {
+    const chip = $(`<div class="chip">GPT-6 Sol ▾</div>`)
+    stage.appendChild(chip)
+    return {
+      'Open': () => { chip.querySelector('.popover')?.remove(); const p = $(`<div class="popover"><div class="pop-h">Model</div><div class="pop-r on">GPT-6 Sol</div><div class="pop-r">GPT-5.6 Terra</div><div class="pop-r">GPT-6 Luna</div></div>`); if (side === 'pro') p.classList.add('p-pop-up'); chip.appendChild(p) },
+      'Close': () => chip.querySelector('.popover')?.remove(),
+    }
+  }
+})
+
+const BEHIND = `<div class="behind"><p>The sidebar keeps its rows in the order you last sent a message, so opening or restoring a session never moves it.</p><p>When a new turn starts, the row rises to the top of its group, and a pinned row stays where you put it until you unpin it.</p></div>`
+def({
+  id: 'palette', group: 'Add', title: 'Command palette', h: 400,
+  actions: ['Open', 'Close'],
+  build(side, stage) {
+    stage.appendChild($(BEHIND))
+    let el = null
+    return {
+      'Open': () => { el?.remove(); el = $(`<div class="scrim"><div class="palette"><div class="pal-in"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span>Search sessions and actions…</span><kbd>esc</kbd></div><div class="pal-list"><div class="pal-gh">Actions</div><div class="pal-row on"><span class="lb">New session</span><span style="flex:1"></span><kbd>⌘T</kbd></div><div class="pal-row"><span class="lb">Close active session</span><span style="flex:1"></span><kbd>⌘W</kbd></div><div class="pal-row"><span class="lb">Restart active session</span><span style="flex:1"></span></div><div class="pal-row"><span class="lb">Copy active transcript for LLM</span><span style="flex:1"></span></div><div class="pal-gh">Sessions</div><div class="pal-row"><span class="lb sess">Fix sidebar ordering</span><span class="dt">~/cat-code</span></div><div class="pal-row"><span class="lb sess">Review permission flow</span><span class="dt">~/cat-code</span></div></div><div class="pal-foot"><span><kbd>↑↓</kbd>navigate</span><span><kbd>↵</kbd>run</span><span><kbd>esc</kbd>dismiss</span></div></div></div>`); if (side === 'pro') { el.classList.add('p-fade-in-120'); el.firstElementChild.classList.add('animate-sa-pop') } stage.appendChild(el) },
+      'Close': () => { el?.remove(); el = null },
+    }
+  }
+})
+
+def({
+  id: 'drawer', group: 'Add', title: 'Right drawer · session metadata', h: 320,
+  actions: ['Open', 'Close'],
+  build(side, stage) {
+    stage.appendChild($(BEHIND))
+    let el = null
+    return {
+      'Open': () => { el?.remove(); el = $(`<div class="drawer ${side === 'cur' ? 'animate-toast-in' : 'p-drawer-in'}"><div class="drawer-hd"><div style="min-width:0;flex:1"><div class="tt">Metadata</div><div class="sub">none · 3f0c2a91-5d7e-4b8a-9c1e-6a2b7d4e8f10</div></div><span class="ro">read-only</span><span class="xbtn">×</span></div><div class="dbody"><div class="dsec"><div class="dsec-t">Session</div><div class="drow"><span class="k">Session ID</span><span class="v mono">3f0c2a91-5d7e-4b8a-9c1e-6a2b7d4e8f10</span></div><div class="drow"><span class="k">Mode</span><span class="v">normal</span></div><div class="drow"><span class="k">Permission mode</span><span class="v mono">default</span></div><div class="drow"><span class="k">Tag</span><span class="v">none</span></div></div><div class="dsec"><div class="dsec-t">Thread goal</div><div class="drow"><span class="k"></span><span class="v">No goal on this thread.</span></div></div></div></div>`); stage.appendChild(el) },
+      'Close': () => { el?.remove(); el = null },
+    }
+  }
+})
+
+def({
+  id: 'tooldot', group: 'Add', title: 'Tool card · run resolves', h: 70,
+  actions: ['Succeeds', 'Fails', 'Reset'],
+  build(side, stage) {
+    stage.appendChild($(`<div style="padding:12px 16px"><div class="card"><div class="card-head"><span class="fam-mark">$</span><span class="fam-word">Bash</span><span class="card-target mono">bun test app/renderer/src/TabBar.test.tsx</span><span class="dot pulse"></span></div></div></div>`))
+    const dot = stage.querySelector('.dot')
+    if (side === 'pro') dot.classList.add('pro-t')
+    const set = (c, pulse) => { dot.style.background = c; dot.classList.toggle('pulse', pulse) }
+    set('var(--accent)', true)
+    return { 'Succeeds': () => set('var(--tone-good)', false), 'Fails': () => set('var(--tone-danger)', false), 'Reset': () => set('var(--accent)', true) }
+  }
+})
+
+def({
+  id: 'latest', group: 'Add', title: 'Latest button · run ends while scrolled up', h: 150,
+  actions: ['Run ends', 'Reset'],
+  build(side, stage) {
+    stage.appendChild($(BEHIND))
+    const pill = $(`<button class="pill ${side === 'pro' ? 'pro-t' : ''}"></button>`)
+    stage.appendChild(pill)
+    const running = () => { pill.className = `pill run ${side === 'pro' ? 'pro-t' : ''}`; pill.innerHTML = `<span class="dot pulse" style="background:var(--accent)"></span><span class="sb">Responding</span><span class="el mono">42s</span><span>↓</span>` }
+    running()
+    return {
+      'Run ends': () => { pill.classList.remove('run'); pill.classList.add('idle'); pill.innerHTML = side === 'pro' ? `<span class="p-settle">↓ Latest</span>` : `<span>↓ Latest</span>` },
+      'Reset': running,
+    }
+  }
+})
+
+def({
+  id: 'gauge', group: 'Add', title: 'Context gauge · value change', h: 60,
+  actions: ['Compact · 88% → 22%', 'Turn · +6%', 'Reset'],
+  build(side, stage) {
+    const R = 6.5, C = 2 * Math.PI * R
+    const row = $(`<div class="rail-row"><span class="gauge ${side === 'pro' ? 'pro-t' : ''}"><svg width="16" height="16" viewBox="0 0 16 16" style="transform:rotate(-90deg)"><circle cx="8" cy="8" r="6.5" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/><circle class="arc ${side === 'pro' ? 'pro-t' : ''}" cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg><span class="pc"></span></span></div>`)
+    stage.appendChild(row)
+    const g = row.querySelector('.gauge'), arc = row.querySelector('.arc'), pc = row.querySelector('.pc')
+    let pct = 88
+    const set = (v) => { pct = Math.max(0, Math.min(100, v)); arc.style.strokeDasharray = `${pct / 100 * C} ${C}`; pc.textContent = `${Math.round(pct)}%`; g.style.color = pct >= 90 ? 'var(--tone-danger)' : pct >= 70 ? 'var(--tone-warn)' : 'var(--accent)' }
+    set(88)
+    return { 'Compact · 88% → 22%': () => set(22), 'Turn · +6%': () => set(pct + 6), 'Reset': () => set(88) }
+  }
+})
+
+def({
+  id: 'settings', group: 'Add', title: 'Settings search · landing on a result', h: 340,
+  actions: ['Open search result', 'Reset'],
+  build(side, stage) {
+    const SEARCH_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" style="flex:none;color:var(--text-subtle)"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`
+    const rows = [['Appearance', 'Light or dark for the whole window.'], ['Frosted window', 'Show the desktop through the window as a blur on macOS.'], ['Accent color', 'Color for active navigation, selections, and switches.'], ['Text arrival', 'How a reply appears as it arrives.'], ['Tool calls', 'How each tool call is drawn in the transcript.'], ['Tools open by default', 'Open every tool card as it arrives.'], ['Reasoning layout', 'How reasoning summaries are laid out.'], ['Code theme', 'Color theme for code blocks in the transcript.']]
+    const main = $(`<div class="setmain"></div>`)
+    stage.appendChild(main)
+    const results = () => {
+      main.innerHTML = `<div class="setsearch">${SEARCH_ICON}<span class="q">code</span><span class="cl">Clear</span></div><div class="set-h2r">Search results</div><p class="set-st">1 result</p><div class="res sel"><span class="c">Appearance · This app</span><span class="l">Code theme</span><span class="d">Color theme for code blocks in the transcript.</span></div>`
+      main.scrollTop = 0
+    }
+    results()
+    return {
+      'Open search result': () => {
+        main.innerHTML = `<div class="setsearch">${SEARCH_ICON}<span class="ph">Search all settings</span><kbd>⌘ K</kbd></div><div class="set-h2">Appearance</div>${rows.map(([l, d], k) => `<div class="setrow" data-k="${k}" tabindex="-1"><div><div class="lab">${l}</div><div class="des">${d}</div></div></div>`).join('')}`
+        const t = main.querySelector('[data-k="7"]')
+        main.scrollTop = t.offsetTop - main.clientHeight / 2 + t.offsetHeight / 2
+        if (side === 'pro') restartAnim(t, 'p-land')
+      },
+      'Reset': results,
+    }
+  }
+})
+
+def({
+  id: 'newtab', group: 'Add', title: 'Opening a session with many tabs', h: 56,
+  actions: ['Open session', 'Reset'],
+  build(side, stage) {
+    const base = ['Refactor the account pool', 'Fix sidebar ordering', 'Review permission flow', 'Renderer memory', 'Analytics refresh', 'Branch switching']
+    const bar = $(`<div class="tabbar" style="width:420px"><div class="tabscroll"></div></div>`)
+    const sc = bar.firstElementChild
+    stage.appendChild(bar)
+    const reset = () => { sc.innerHTML = base.map((t, k) => `<div class="tab ${k === 0 ? 'active' : ''}">${k === 0 ? '<span class="bar"></span>' : ''}<span class="title">${t}</span></div>`).join(''); sc.scrollLeft = 0 }
+    reset()
+    return {
+      'Open session': () => {
+        sc.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.querySelector('.bar')?.remove() })
+        const t = $(`<div class="tab active"><span class="bar"></span><span class="title">Motion audit</span></div>`)
+        sc.appendChild(t)
+        if (side === 'pro') { t.classList.add('p-tab-in'); t.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' }) }
+      },
+      'Reset': reset,
+    }
+  }
+})
+
+/* ============ DECISIONS ============ */
+
+def({
+  id: 'byline', group: 'Decide', title: 'Working line above the composer', h: 260, cols: ['Current', 'Fade only', 'Reserved space'],
+  actions: ['Turn starts', 'Turn ends'],
+  build(side, stage) {
+    const pane = $(`<div class="pane"><div class="scroller"><p>The sidebar keeps its rows in the order you last sent a message, so opening or restoring a session never moves it.</p><p>When a new turn starts, the row rises to the top of its group, and a pinned row stays where you put it until you unpin it.</p></div><div class="byslot"></div><div class="composer">Rename the helper and update its callers</div></div>`)
+    stage.appendChild(pane)
+    const slot = pane.querySelector('.byslot')
+    if (side === 2) slot.classList.add('slot')
+    const BY = `<div class="byline"><span class="dots"><span class="dot pulse" style="background:var(--accent)"></span><span class="dot pulse" style="background:var(--accent);animation-delay:150ms"></span><span class="dot pulse" style="background:var(--accent);animation-delay:300ms"></span></span><span class="v">Responding</span><span class="tg">app/renderer/src/Sidebar.tsx</span><span class="el">12s</span></div>`
+    let run = 0
+    return {
+      'Turn starts': () => { run++; slot.innerHTML = ''; const b = $(BY); if (side !== 0) b.classList.add('p-fade-in-180'); slot.appendChild(b) },
+      'Turn ends': async () => { const me = ++run; const b = slot.firstElementChild; if (!b) return; if (side === 0) { b.remove(); return } b.classList.remove('p-fade-in-180'); b.classList.add('by-fade-out'); await sleep(120); if (me === run) b.remove() },
+    }
+  }
+})
+
+def({
+  id: 'tasks', group: 'Decide', title: 'Tasks pill · background work running', h: 70, cols: ['Current', 'Static dot'],
+  actions: [],
+  build(side, stage) {
+    stage.appendChild($(`<button class="tasks"><span class="dot ${side === 0 ? 'pulse' : ''}" style="background:var(--accent)"></span><span>2 background tasks</span></button>`))
+    return {}
+  }
+})
+
+/* ============ render ============ */
+const nav = document.getElementById('x-nav'), root = document.getElementById('x-rows')
+let lastGroup = null
+for (const d of DEMOS) {
+  if (d.group !== lastGroup) { lastGroup = d.group; root.appendChild($(`<div class="x-group">${d.group}</div>`)) }
+  nav.appendChild($(`<a href="#${d.id}">${d.title}</a>`))
+  const cols = d.cols || ['Current', 'Proposed']
+  const row = $(`<section class="x-row" id="${d.id}"><div class="x-head"><span class="x-title">${d.title}</span></div><div class="x-grid ${cols.length === 3 ? 'x-three' : ''}"></div></section>`)
+  const head = row.querySelector('.x-head'), grid = row.querySelector('.x-grid')
+  const ctrls = cols.map((c, k) => {
+    const col = $(`<div><div class="x-col-label">${c}</div><div class="x-stage s" style="height:${d.h}px"></div></div>`)
+    grid.appendChild(col)
+    const side = d.cols ? k : (k === 0 ? 'cur' : 'pro')
+    return d.build(side, col.querySelector('.x-stage'))
+  })
+  if (d.hint) head.appendChild($(`<span>${d.hint}</span>`))
+  for (const a of d.actions) { const b = $(`<button class="x-btn">${a}</button>`); b.onclick = () => ctrls.forEach(c => c[a] && c[a]()); head.appendChild(b) }
+  if (d.rates) {
+    head.appendChild($(`<span class="x-sep"></span>`)); head.appendChild($(`<span>Commit every</span>`))
+    const btns = d.rates.map(r => { const b = $(`<button class="x-btn" aria-pressed="${r === proseRate}">${r}ms</button>`); b.onclick = () => { proseRate = r; btns.forEach(x => x.setAttribute('aria-pressed', String(x === b))) }; head.appendChild(b); return b })
+  }
+  if (d.modes) {
+    const m = d.modes
+    head.appendChild($(`<span class="x-sep"></span>`)); head.appendChild($(`<span>${m.label}</span>`))
+    const btns = m.values.map(val => { const b = $(`<button class="x-btn" aria-pressed="${val === m.get()}">${val}</button>`); b.onclick = () => { m.set(val); btns.forEach(x => x.setAttribute('aria-pressed', String(x === b))) }; head.appendChild(b); return b })
+  }
+  root.appendChild(row)
+}
+</script>
+</body>
+</html>

@@ -436,7 +436,7 @@ test('matches the prototype chrome and source-backed conditional sections', () =
   const childHtml = renderToStaticMarkup(
     <MetadataInspector session={session} log={log([child])} tasks={tasks} onClose={noop} />,
   )
-  expect(childHtml).toContain('animate-toast-in')
+  expect(childHtml).toContain('animate-drawer-in')
   expect(childHtml).toContain('Subagent')
   expect(childHtml).toContain('Ritchie')
   expect(childHtml).toContain('verification')

@@ -144,8 +144,13 @@ async function createForkFromActiveConversation(
 
   for (const entry of mainConversationEntries) {
     // Create forked transcript entry preserving all original metadata
+    // A legacy source can carry a large first message before its binding.
+    // Put the copied binding ahead of variable-size content so bounded catalog
+    // reads retain the managed identity even before the branch is opened.
+    const { sessionBinding, ...sourceEntry } = entry
     const forkedEntry: TranscriptEntry = {
-      ...entry,
+      ...(sessionBinding !== undefined ? { sessionBinding } : {}),
+      ...sourceEntry,
       sessionId: forkSessionId,
       parentUuid,
       isSidechain: false,
@@ -157,7 +162,8 @@ async function createForkFromActiveConversation(
 
     // Build serialized message for LogOption
     const serialized: SerializedMessage = {
-      ...entry,
+      ...(sessionBinding !== undefined ? { sessionBinding } : {}),
+      ...sourceEntry,
       sessionId: forkSessionId,
       forkedFrom: {
         sessionId: originalSessionId,

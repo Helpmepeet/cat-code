@@ -451,9 +451,9 @@ export async function measureNonMessageOverheadTokens(params: {
       params.toolUseContext,
       params.model,
     )
-    // Both blocks are prose (CLAUDE.md files, env descriptions, git status), so
+    // Both blocks are prose (instruction files, env descriptions, git status), so
     // they take the estimator's default ratio, with its CJK escalation intact —
-    // a Japanese CLAUDE.md is 1.3 chars/token, not 4.
+    // Japanese instruction text is 1.3 chars/token, not 4.
     const systemPromptTokens = roughTokenCountEstimationForContent(
       params.systemPrompt.join('\n'),
     )

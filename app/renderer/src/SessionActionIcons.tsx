@@ -62,6 +62,10 @@ export function SessionActionIcon({
       return <ActionEyeOffIcon />
     case 'peer-wake-blocked':
       return <ActionBellOffIcon />
+    case 'open-chat-folder':
+      return <ActionOpenIcon />
+    case 'copy-chat-folder-path':
+      return <ActionCopyIcon />
     default: {
       const exhaustive: never = kind
       void exhaustive

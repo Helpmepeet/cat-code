@@ -6,15 +6,15 @@ import { autoModeFlowConserves, layoutAutoModeFlow } from './usageAutoModeFlowSt
 
 const edges = autoModeOverviewEdges(reduceAutoModeUsage(hundredAttemptAutoModeFixture()))
 
-test('lays out every attempt through a route into a display group', () => {
+test('lays out allowed and blocked decisions through their routes', () => {
   const layout = layoutAutoModeFlow(edges)
   expect(layout).not.toBeNull()
   expect(autoModeFlowConserves(edges)).toBe(true)
-  expect(layout!.total).toBe(100)
+  expect(layout!.total).toBe(92)
   expect(layout!.nodes.map(node => node.id)).toEqual([
-    'Attempts', 'Base paths', 'Stage 1', 'Stage 2', 'allowed', 'blocked', 'error',
+    'Attempts', 'Base paths', 'Stage 1', 'Stage 2', 'allowed', 'blocked',
   ])
-  expect(layout!.nodes.filter(node => node.column === 2).reduce((total, node) => total + node.incoming, 0)).toBe(100)
+  expect(layout!.nodes.filter(node => node.column === 2).reduce((total, node) => total + node.incoming, 0)).toBe(92)
   expect(layout!.links.every(link => Math.abs(link.height - link.count * layout!.scale) < 0.000001)).toBe(true)
   for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 2)) {
     expect(node.incoming).toBe(node.outgoing)
@@ -22,14 +22,14 @@ test('lays out every attempt through a route into a display group', () => {
   expect(layoutAutoModeFlow([...edges].reverse())!.nodes.map(node => node.id)).toEqual(layout!.nodes.map(node => node.id))
 })
 
-test('preserves rare outcome sizes without a visual minimum', () => {
+test('preserves rare blocked decisions without a visual minimum', () => {
   const layout = layoutAutoModeFlow([
     { from: 'Attempts', to: 'Base paths', count: 10 },
     { from: 'Base paths', to: 'allowed', outcome: 'allowed', count: 9 },
-    { from: 'Base paths', to: 'error', outcome: 'error', count: 1 },
+    { from: 'Base paths', to: 'blocked', outcome: 'blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
-  expect(layout!.links.find(link => link.to === 'error')!.height).toBe(layout!.scale)
+  expect(layout!.links.find(link => link.to === 'blocked')!.height).toBe(layout!.scale)
   expect(layout!.links.find(link => link.from === 'Base paths' && link.to === 'allowed')!.height).toBe(layout!.scale * 9)
 })
 

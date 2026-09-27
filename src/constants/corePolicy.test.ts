@@ -1,11 +1,39 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  getAllowedSettingSources,
+  getFlagSettingsInline,
+  getFlagSettingsPath,
+  setAllowedSettingSources,
+  setFlagSettingsInline,
+  setFlagSettingsPath,
+} from '../bootstrap/state.js'
 import { getSystemPrompt } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
+import { getManagedSessionPolicy, setManagedSessionPolicy } from '../utils/managedSessionPolicy.js'
+import { clearMdmSettingsCache } from '../utils/settings/mdm/settings.js'
+import {
+  getManagedFilePath,
+  getManagedSettingsDropInDir,
+} from '../utils/settings/managedPath.js'
+import { resetSettingsCache } from '../utils/settings/settingsCache.js'
+import { _setGlobalConfigCacheForTesting } from '../utils/config.js'
+import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 import {
   getCorePolicySection,
   getCyberPolicyInstruction,
   HOOK_AUTHORITY_RULE,
   INSTRUCTION_AUTHORITY_RULE,
+  PROJECT_INSTRUCTION_AUTHORITY_RULE,
   OUTCOME_REPORTING_RULE,
   PROMPT_INJECTION_RULE,
   RETRY_RULE,
@@ -33,6 +61,71 @@ const GPT_MODEL = 'gpt-5.6-terra'
 const promptsSource = await Bun.file(
   new URL('./prompts.ts', import.meta.url),
 ).text()
+
+const environmentNames = [
+  'HOME',
+  'CLAUDE_CONFIG_DIR',
+  'CLAUDE_CODE_MANAGED_SETTINGS_PATH',
+  'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+  'CLAUDE_CODE_SIMPLE',
+  'NODE_ENV',
+  'USER_TYPE',
+] as const
+const originalEnvironment = new Map(
+  environmentNames.map(name => [name, process.env[name]]),
+)
+const originalSettingSources = getAllowedSettingSources()
+const originalFlagSettingsPath = getFlagSettingsPath()
+const originalFlagSettingsInline = getFlagSettingsInline()
+const originalManagedSessionPolicy = getManagedSessionPolicy()
+let isolatedSettingsDirectory: string
+
+beforeAll(() => {
+  isolatedSettingsDirectory = mkdtempSync(
+    join(tmpdir(), 'core-policy-settings-'),
+  )
+  const home = join(isolatedSettingsDirectory, 'home')
+  const config = join(isolatedSettingsDirectory, 'config')
+  const managed = join(isolatedSettingsDirectory, 'managed')
+  mkdirSync(home)
+  mkdirSync(config)
+  mkdirSync(managed)
+  process.env.HOME = home
+  process.env.CLAUDE_CONFIG_DIR = config
+  process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH = managed
+  process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'
+  process.env.NODE_ENV = 'test'
+  delete process.env.CLAUDE_CODE_SIMPLE
+  setAllowedSettingSources(['userSettings'])
+  setFlagSettingsPath(undefined)
+  setFlagSettingsInline(null)
+  setManagedSessionPolicy(null)
+  getManagedSettingsDropInDir.cache.clear?.()
+  getManagedFilePath.cache.clear?.()
+  getManagedFilePath.cache.set(undefined, managed)
+  getClaudeConfigHomeDir.cache.clear?.()
+  clearMdmSettingsCache()
+  resetSettingsCache()
+  _setGlobalConfigCacheForTesting(null)
+})
+
+afterAll(() => {
+  for (const [name, value] of originalEnvironment) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  setAllowedSettingSources(originalSettingSources)
+  setFlagSettingsPath(originalFlagSettingsPath)
+  setFlagSettingsInline(originalFlagSettingsInline)
+  setManagedSessionPolicy(originalManagedSessionPolicy)
+  getManagedSettingsDropInDir.cache.clear?.()
+  getManagedFilePath.cache.clear?.()
+  getClaudeConfigHomeDir.cache.clear?.()
+  clearMdmSettingsCache()
+  resetSettingsCache()
+  _setGlobalConfigCacheForTesting(null)
+  rmSync(isolatedSettingsDirectory, { recursive: true, force: true })
+})
 
 /**
  * Each prompt mode is explicit because this helper clears the environment by
@@ -117,6 +210,21 @@ describe('policy core coverage across provider and mode variants', () => {
       expect(prompt).toContain(PROMPT_INJECTION_RULE)
       expect(prompt).toContain(INSTRUCTION_AUTHORITY_RULE)
       expect(prompt).toContain(OUTCOME_REPORTING_RULE)
+    },
+  )
+
+  test.each(VARIANTS.map(v => [v.label, v.build] as const))(
+    '%s scopes AGENTS authority to the selected Project instructions mode',
+    async (_label, build) => {
+      const prompt = await withPromptEnv(async () => (await build()).join('\n'))
+
+      expect(prompt).toContain(PROJECT_INSTRUCTION_AUTHORITY_RULE)
+      expect(prompt).toContain(
+        'AGENTS.md when selected by the Project instructions setting',
+      )
+      expect(prompt).not.toContain(
+        'Loaded instruction files (CLAUDE.md, AGENTS.md, rule files)',
+      )
     },
   )
 

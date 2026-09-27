@@ -86,6 +86,7 @@ describe('map routing nudge lifecycle', () => {
     }
     const first = runMapRoutingNudge(input, { ...options, logFile: false })
     expect(first).toContain('docs/maps/WORKSPACE_MAP.md')
+    expect(first).toContain('even if an owner file or focused map was supplied')
     expect(first).not.toContain('permissionDecision')
     expect(runMapRoutingNudge(input, { ...options, logFile: false })).toBeNull()
   })

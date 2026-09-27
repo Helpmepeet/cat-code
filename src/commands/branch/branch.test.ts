@@ -3,7 +3,7 @@ import { randomUUID, type UUID } from 'crypto'
 import { mkdtempSync, rmSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import {
   getSessionId,
   getSessionProjectDir,
@@ -12,6 +12,8 @@ import {
 import { asSessionId } from '../../types/ids.js'
 import { deriveUUID } from '../../utils/messages.js'
 import {
+  enrichLogs,
+  getSessionFilesLite,
   getTranscriptPathForSession,
   loadTranscriptFromFile,
   resetProjectForTesting,
@@ -79,6 +81,27 @@ describe('conversation branching', () => {
       firstUser,
       firstAssistant,
     ])
+  })
+
+  test('a branch of a legacy large managed prompt remains a managed catalog entry', async () => {
+    const binding = {
+      kind: 'managed' as const,
+      storageRootId: randomUUID(),
+      storageId: randomUUID(),
+    }
+    await writeTranscript([{
+      ...messageEntry('user', randomUUID(), null, '2026-09-26T00:00:00.000Z', {
+        role: 'user',
+        content: 'x'.repeat(70 * 1024),
+      }),
+      // Older writers stamped this after the large message payload.
+      sessionBinding: binding,
+    }])
+
+    const fork = await createFork()
+    const lite = await getSessionFilesLite(dirname(fork.forkPath))
+    const { logs } = await enrichLogs(lite, 0, lite.length)
+    expect(logs.find(row => row.sessionId === fork.sessionId)?.sessionBinding).toEqual(binding)
   })
 
   test('forks before a normalized user target and keeps only valid replacements', async () => {
