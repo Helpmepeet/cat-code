@@ -5076,6 +5076,8 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
   const resolving = resultEntrance.active.has(row.id)
   const toast = useToast()
   const [copied, setCopied] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const closePreview = useCallback(() => setPreviewOpen(false), [])
   const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
     () => () => {
@@ -5091,15 +5093,8 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
   const prompt =
     image.revisedPrompt ??
     (typeof row.input['prompt'] === 'string' ? row.input['prompt'] : null)
-  const formattedBytes =
-    image.bytes >= 1_048_576
-      ? `${(image.bytes / 1_048_576).toFixed(1)} MB`
-      : image.bytes >= 1_024
-        ? `${Math.round(image.bytes / 1_024)} KB`
-        : `${image.bytes} B`
-  const directory = dirname(image.filePath).replace(/[/\\]+$/, '')
-  const directoryLabel = basename(directory)
-  const savedTo = directoryLabel ? `${directoryLabel}/` : directory || image.filePath
+  const src = `data:${preview.mediaType};base64,${preview.data}`
+  const success = STATE_STYLE.success
   const copyPath = (): void => {
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
@@ -5135,47 +5130,53 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
       })
   }
   return (
-    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025]">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-[light-dark(#a21caf,#e879f9)]" aria-hidden="true">◰</span>
-        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[light-dark(#a21caf,#e879f9)]">
-          Generate Image
+    // The card hugs the image: `w-fit` sizes it from the picture, and the
+    // header's `w-0 min-w-full` keeps a long prompt from widening it.
+    <div className="w-fit max-w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025]">
+      <div className="flex w-0 min-w-full items-center gap-2.5 px-3 py-2">
+        <span className={`w-4 shrink-0 text-center text-[13px] ${FAMILY_STYLE.imagegen.color}`} aria-hidden>
+          {FAMILY_STYLE.imagegen.mark}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
-          {image.model}
+        <span
+          className={`shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] ${FAMILY_STYLE.imagegen.color}`}
+        >
+          {FAMILY_STYLE.imagegen.word}
         </span>
-        <span className="h-1.5 w-1.5 rounded-full bg-tone-success" aria-hidden="true" />
-        <span className="text-[10.5px] text-tone-success">Done</span>
+        <span
+          className="min-w-0 flex-1 truncate text-xs text-text-primary"
+          title={prompt ?? undefined}
+        >
+          {prompt}
+        </span>
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${success.dot}`}
+          role="img"
+          aria-label={success.word}
+        />
       </div>
       <div
         className={`px-3 pb-3${resolving ? ' animate-arrive' : ''}`}
         ref={resolving ? resultEntrance.refFor(row.id, 'animate-arrive') : undefined}
         onAnimationEnd={event => resultEntrance.onAnimationEnd(row.id, event)}
       >
-        <img
-          alt="Generated image"
-          className="mx-auto max-h-[520px] w-auto max-w-full rounded-[10px] border border-shell-seam object-contain"
-          src={`data:${preview.mediaType};base64,${preview.data}`}
-        />
-        {prompt ? (
-          <p className="mt-[11px] text-xs leading-relaxed text-text-muted">{prompt}</p>
-        ) : null}
-        <div className="mt-[11px] font-mono text-[11px] text-text-ghost">
-          {[image.model, image.size, image.outputFormat.toUpperCase(), formattedBytes].join(
-            ' · ',
-          )}
-        </div>
-        <div className="mt-[11px] flex flex-wrap items-center gap-2.5">
-          <span
-            className="min-w-0 flex-1 truncate text-[11px] text-text-ghost"
-            title={image.filePath}
+        <div className="group relative w-fit max-w-full">
+          <button
+            type="button"
+            aria-label="Expand generated image"
+            onClick={() => setPreviewOpen(true)}
+            className="block max-w-full cursor-zoom-in rounded-[10px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
-            Saved to <span className="font-mono text-text-subtle">{savedTo}</span>
-          </span>
+            <img
+              alt="Generated image"
+              className="block max-h-[520px] w-auto max-w-full rounded-[10px] border border-shell-seam object-contain"
+              src={src}
+            />
+          </button>
           <button
             aria-label={copied ? 'Path copied' : 'Copy path'}
-            className="rounded-md border border-shell-seam bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:text-text-primary"
+            className="absolute bottom-2 right-2 rounded-md border border-white/10 bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
             onClick={copyPath}
+            title={image.filePath}
             type="button"
           >
             {copied ? 'Copied' : 'Copy path'}
@@ -5186,6 +5187,9 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
         <div className="border-l border-accent/20 px-3 pb-3">
           <NestedRowList rows={row.children} />
         </div>
+      ) : null}
+      {previewOpen ? (
+        <ImagePreview src={src} label="Generated image preview" onClose={closePreview} />
       ) : null}
     </div>
   )

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Generated image card</title>
+<style>
+@font-face { font-family: "DM Sans"; src: url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2"); font-weight: 100 1000; }
+@font-face { font-family: "DM Mono"; src: url("../../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "DM Mono"; src: url("../../app/renderer/src/assets/fonts/DMMono-Medium.woff2") format("woff2"); font-weight: 500; }
+
+:root {
+  --ground: #232424;
+  --shell-seam: rgba(255, 255, 255, 0.06);
+  --text-primary: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #98989f;
+  --text-ghost: #75757b;
+  --accent: #f472b6;
+  --tone-good: #4ade80;
+  --imagegen: #e879f9;
+  --placeholder: #6b6b70;
+  --sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--ground); }
+body { font-family: var(--sans); color: var(--text-primary); -webkit-font-smoothing: antialiased; }
+
+/* ---------- chrome ---------- */
+.x-bar {
+  display: flex; gap: 28px; align-items: center; flex-wrap: wrap;
+  padding: 14px 32px; border-bottom: 1px solid #3a3a3a;
+  font: 500 9.5px/1 ui-monospace, Menlo, monospace; letter-spacing: .14em; text-transform: uppercase; color: #8c8c8c;
+}
+.x-group { display: flex; gap: 10px; align-items: center; }
+.x-opt { cursor: pointer; background: none; border: 0; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: #6a6a6a; }
+.x-opt[aria-pressed="true"] { color: #d0d0d0; text-decoration: underline; text-underline-offset: 4px; }
+.x-grid { display: flex; flex-wrap: wrap; gap: 48px; padding: 24px 32px 64px; }
+.x-col { width: 836px; max-width: 100%; }
+.x-label {
+  font: 500 9.5px/1 ui-monospace, Menlo, monospace; letter-spacing: .14em; text-transform: uppercase; color: #8c8c8c;
+  padding-bottom: 10px; margin-bottom: 20px; border-bottom: 1px solid #3a3a3a;
+}
+
+/* ---------- specimen: shared transcript rows ---------- */
+.lane { display: flex; flex-direction: column; gap: 16px; }
+.user { display: flex; justify-content: flex-end; }
+.user-bubble {
+  max-width: 82%; border-radius: 16px 16px 4px 16px;
+  border: 1px solid rgba(244, 114, 182, .2); background: rgba(244, 114, 182, .1);
+  padding: 10px 16px; font-size: 14px; line-height: 1.625; color: var(--text-primary);
+}
+.reasoning { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-subtle); }
+.reasoning .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--text-ghost); }
+.reasoning .word { font: 700 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-ghost); }
+.reply { font-size: 14px; line-height: 1.625; color: var(--text-primary); }
+
+.img { background: var(--placeholder); border: 1px solid var(--shell-seam); border-radius: 10px; display: block; }
+.portrait .img { width: 390px; height: 520px; }
+.landscape .img { width: 780px; height: 520px; }
+
+.card { overflow: hidden; border-radius: 6px; border: 1px solid var(--shell-seam); background: rgba(255, 255, 255, .025); }
+.mark { color: var(--imagegen); font-size: 13px; }
+.word { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--imagegen); flex-shrink: 0; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tone-good); flex-shrink: 0; }
+
+/* ---------- specimen: current (CompletedGeneratedImageCard) ---------- */
+.cur { width: 100%; }
+.cur-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+.cur-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.4 var(--mono); color: var(--text-primary); }
+.cur-done { font-size: 10.5px; color: var(--tone-good); }
+.cur-body { padding: 0 12px 12px; }
+.cur-body .img { margin: 0 auto; }
+.cur-prompt { margin: 11px 0 0; font-size: 12px; line-height: 1.625; color: var(--text-muted); }
+.cur-meta { margin-top: 11px; font: 11px/1.4 var(--mono); color: var(--text-ghost); }
+.cur-foot { margin-top: 11px; display: flex; align-items: center; gap: 10px; }
+.cur-saved { flex: 1; min-width: 0; font-size: 11px; color: var(--text-ghost); }
+.cur-saved span { font-family: var(--mono); color: var(--text-subtle); }
+.cur-btn {
+  border-radius: 6px; border: 1px solid var(--shell-seam); background: rgba(255, 255, 255, .04);
+  padding: 2px 8px; font: 500 11px/1.5 var(--sans); color: var(--text-muted);
+}
+
+/* ---------- specimen: proposed ---------- */
+.pro { max-width: 100%; }
+.portrait .pro { width: 416px; }
+.landscape .pro { width: 806px; }
+.pro-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+.pro-head .mark { width: 16px; text-align: center; flex-shrink: 0; }
+.pro-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.4 var(--sans); color: var(--text-primary); }
+.pro-body { padding: 0 12px 12px; }
+.pro-frame { position: relative; width: fit-content; cursor: zoom-in; }
+.pro-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; opacity: 0; }
+.pro-frame:hover .pro-actions,
+.pro-frame:focus-within .pro-actions,
+.force-hover .pro-actions { opacity: 1; }
+.pro-btn {
+  border-radius: 6px; border: 1px solid rgba(255, 255, 255, .1); background: rgba(9, 9, 11, .72);
+  padding: 2px 8px; font: 500 11px/1.5 var(--sans); color: var(--text-primary); cursor: pointer;
+}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <div class="x-group" data-axis="shape">
+    <span>Image</span>
+    <button class="x-opt" data-value="portrait" aria-pressed="true">Portrait 1086×1448</button>
+    <button class="x-opt" data-value="landscape" aria-pressed="false">Landscape 1536×1024</button>
+  </div>
+  <div class="x-group" data-axis="state">
+    <span>Proposed state</span>
+    <button class="x-opt" data-value="rest" aria-pressed="true">Rest</button>
+    <button class="x-opt" data-value="hover" aria-pressed="false">Hover</button>
+  </div>
+</div>
+
+<div class="x-grid" id="grid">
+  <section class="x-col">
+    <div class="x-label">Current</div>
+    <div class="lane portrait" data-shape>
+      <div class="user"><div class="user-bubble">Generate a photo of a lighthouse at dusk.</div></div>
+      <div class="reasoning"><span class="dot"></span><span class="word">Reasoning</span><span>Preparing image prompt</span></div>
+      <div class="card cur">
+        <div class="cur-head">
+          <span class="mark" aria-hidden="true">◰</span>
+          <span class="word">Generate Image</span>
+          <span class="cur-model">gpt-image-2-codex</span>
+          <span class="status-dot"></span>
+          <span class="cur-done">Done</span>
+        </div>
+        <div class="cur-body">
+          <div class="img"></div>
+          <p class="cur-prompt">Generate a photo of a lighthouse at dusk.</p>
+          <div class="cur-meta" data-meta>gpt-image-2-codex · 1086x1448 · PNG · 2.0 MB</div>
+          <div class="cur-foot">
+            <span class="cur-saved">Saved to <span>generated-images/</span></span>
+            <button class="cur-btn" type="button">Copy path</button>
+          </div>
+        </div>
+      </div>
+      <div class="reply">Here is the lighthouse at dusk.</div>
+    </div>
+  </section>
+
+  <section class="x-col">
+    <div class="x-label">Proposed</div>
+    <div class="lane portrait" data-shape>
+      <div class="user"><div class="user-bubble">Generate a photo of a lighthouse at dusk.</div></div>
+      <div class="reasoning"><span class="dot"></span><span class="word">Reasoning</span><span>Preparing image prompt</span></div>
+      <div class="card pro" id="pro">
+        <div class="pro-head">
+          <span class="mark" aria-hidden="true">◰</span>
+          <span class="word">Image</span>
+          <span class="pro-target" title="Generate a photo of a lighthouse at dusk.">Generate a photo of a lighthouse at dusk.</span>
+          <span class="status-dot" role="img" aria-label="done"></span>
+        </div>
+        <div class="pro-body">
+          <div class="pro-frame" tabindex="0">
+            <div class="img"></div>
+            <div class="pro-actions">
+              <button class="pro-btn" type="button">Copy path</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="reply">Here is the lighthouse at dusk.</div>
+    </div>
+  </section>
+</div>
+
+<script>
+const meta = { portrait: '1086x1448', landscape: '1536x1024' };
+document.querySelectorAll('.x-group').forEach(group => {
+  group.addEventListener('click', e => {
+    const btn = e.target.closest('.x-opt');
+    if (!btn) return;
+    group.querySelectorAll('.x-opt').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+    const v = btn.dataset.value;
+    if (group.dataset.axis === 'shape') {
+      document.querySelectorAll('[data-shape]').forEach(l => { l.classList.remove('portrait', 'landscape'); l.classList.add(v); });
+      document.querySelector('[data-meta]').textContent = `gpt-image-2-codex · ${meta[v]} · PNG · 2.0 MB`;
+    } else {
+      document.getElementById('pro').classList.toggle('force-hover', v === 'hover');
+    }
+  });
+});
+</script>
+</body>
+</html>

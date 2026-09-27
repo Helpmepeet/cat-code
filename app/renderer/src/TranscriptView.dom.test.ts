@@ -94,6 +94,28 @@ function imageReadRow(): NestedToolUseRow {
   }
 }
 
+function generatedImageRow(): NestedToolUseRow {
+  return {
+    ...readRow(0),
+    toolName: 'GenerateImage',
+    toolFamily: 'imagegen',
+    input: { prompt: 'a cat' },
+    result: {
+      content: 'saved to /tmp/cat.png',
+      isError: false,
+      diff: null,
+      generatedImage: {
+        filePath: '/tmp/cat.png',
+        model: 'gpt-image-2-codex',
+        size: '1024x1024',
+        outputFormat: 'png',
+        bytes: 4,
+        preview: { mediaType: 'image/png', data: 'AAAA' },
+      },
+    },
+  }
+}
+
 function reads(count: number): NestedToolUseRow[] {
   return Array.from({ length: count }, (_unused, index) => readRow(index))
 }
@@ -375,6 +397,31 @@ test('a tool-result image opens the shared image preview', async () => {
   })
   expect(dialog?.isConnected).toBe(false)
   expect(document.activeElement).toBe(trigger)
+})
+
+test('clicking a generated image opens the shared image preview', async () => {
+  const tree = await harness.mount(
+    createElement(TranscriptRowsView, { rows: [generatedImageRow()] }),
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand generated image"]',
+  )
+  expect(trigger?.querySelector('img')?.getAttribute('src')).toBe(
+    'data:image/png;base64,AAAA',
+  )
+
+  await click(trigger)
+  await harness.nextFrame()
+
+  const dialog = document.body.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Generated image preview"]',
+  )
+  expect(dialog?.querySelector('img')?.getAttribute('src')).toBe(
+    'data:image/png;base64,AAAA',
+  )
+
+  await click(document.body.querySelector<HTMLElement>('[data-window-overlay]'))
+  expect(dialog?.isConnected).toBe(false)
 })
 
 test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {

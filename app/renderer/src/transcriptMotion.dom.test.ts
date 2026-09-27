@@ -129,7 +129,7 @@ test('generated image body fades on a mounted pending result and stays still aft
     : row)
   await tree.render(createElement(TranscriptRowsView, { rows: done }))
   expect(tree.container.querySelector('img[alt="Generated image"]')).not.toBeNull()
-  expect(tree.container.querySelector('img[alt="Generated image"]')?.parentElement?.classList.contains('animate-arrive')).toBe(true)
+  expect(tree.container.querySelector('img[alt="Generated image"]')?.closest('.animate-arrive')).not.toBeNull()
   await tree.unmount()
   const remount = await harness.mount(createElement(TranscriptRowsView, { rows: done }))
   expect(remount.container.querySelector('.animate-arrive')).toBeNull()
