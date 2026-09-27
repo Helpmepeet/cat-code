@@ -97,9 +97,8 @@ const MARKER_BUILTINS = new Set([':', 'set', 'command', 'builtin'])
 const SAFE_SET_OPTIONS = new Set(['errexit', 'nounset', 'pipefail'])
 
 /**
- * The marker contains no `'` or `!`: quoteShellCommand single-quotes a command
- * without `'` but double-quotes one with it, rewriting `!` to `\!` on the way,
- * so a `'` in the marker would change how the user's own text is quoted.
+ * The marker contains no `'` or `!`, keeping its punctuation independent of
+ * the user's command text when quoteShellCommand wraps both for eval.
  *
  * Evidence layout, one section per line group, each opened by `<token> <name>`:
  * the header `<token> <$->`, `set -o`, then `identity` (every resolution of

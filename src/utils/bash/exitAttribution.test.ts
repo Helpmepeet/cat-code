@@ -79,8 +79,8 @@ describe('planExitAttribution: where the marker goes', () => {
   })
 
   test('the marker never changes how quoteShellCommand quotes the command', () => {
-    // A `'` in the marker would switch a command without one to shell-quote's
-    // double-quote path, which rewrites `!` to `\!`.
+    // Keep the marker's punctuation from changing the command's quote style,
+    // including if a future wrapper reintroduces shell-quote's quote path.
     for (const command of [
       'true && test "$!" -eq 1',
       'true && grep -v "!" f',
