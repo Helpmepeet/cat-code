@@ -282,6 +282,7 @@ const rows = (list, v) => list.map(r => row(r, v)).join('');
 
 function footer(v, mode) {
   const acct = `<button class="s-acct"><span class="s-av">M</span><span class="s-acct-name">main</span></button>`;
+  if (mode === 'icons') return `<nav class="s-foot icons">${railNav()}</nav>`;
   if (v !== 'cur' && mode === 'strip') {
     return `<nav class="s-foot"><div class="s-strip">${acct}` +
       NAV.map(([l, ic, on]) => `<button class="s-sbtn${on ? ' on' : ''}" title="${l}">${I[ic]}</button>`).join('') +
@@ -310,12 +311,58 @@ function rail(v, foot, decor) {
     `</div>${footer(v, foot)}</aside>`;
 }
 
+/* Collapsed rail nav (NavItemRail + account dot). */
+function railNav() {
+  return `<div class="s-rnav">` +
+    NAV.map(([l, ic, on]) => `<button class="s-rbtn${on ? ' on' : ''}" title="${l}">${I[ic]}</button>`).join('') +
+    `<span class="s-av">M</span></div>`;
+}
+
 const COLS = [['cur', 'Current', false], ['A', 'A', false], ['A', 'A · decorated', true]];
 let foot = 'list';
+let rest = 'strip';
 function render() {
   document.getElementById('grid').innerHTML = COLS.map(([v, l, d]) =>
-    `<div class="x-col"><div class="x-label">${l}</div>${rail(v, foot, d)}</div>`).join('');
+    `<div class="x-col"><div class="x-label">${l}</div>${rail(v, foot, d)}</div>`).join('') +
+    `<div class="x-col"><div class="x-label">A · decorated · live</div><div class="x-stage" id="stage"></div></div>`;
+  live.mount();
 }
+
+/* Hover-open rail. Footer: list when the pointer is within ZONE px of the
+ * footer's top edge, else the resting form. */
+const HOVER_DELAY = 120, HIDE_DELAY = 200, ZONE = 48;
+const live = {
+  open: false, near: false, y: 0, show: null, hide: null,
+  mount() {
+    this.el = document.getElementById('stage');
+    this.open = false; this.near = false;
+    this.draw();
+  },
+  draw() {
+    this.el.innerHTML = this.open
+      ? rail('A', this.near ? 'list' : rest, true).replace('class="s-rail', 'class="s-rail is-open')
+      : `<aside class="s-rail p is-closed"><div class="s-head"></div>${railNav()}</aside>`;
+    const aside = this.el.firstElementChild;
+    aside.onmouseenter = e => {
+      clearTimeout(this.hide); this.y = e.clientY;
+      if (this.open) return;
+      this.show = setTimeout(() => { this.open = true; this.near = false; this.draw(); this.track(); }, HOVER_DELAY);
+    };
+    aside.onmousemove = e => { this.y = e.clientY; if (this.open) this.track(); };
+    aside.onmouseleave = () => {
+      clearTimeout(this.show);
+      this.hide = setTimeout(() => { this.open = false; this.near = false; this.draw(); }, HIDE_DELAY);
+    };
+  },
+  track() {
+    const f = this.el.querySelector('.s-foot');
+    const near = this.y >= f.getBoundingClientRect().top - ZONE;
+    if (near !== this.near) {
+      this.near = near;
+      f.outerHTML = footer('A', near ? 'list' : rest);
+    }
+  },
+};
 
 const decorBar = document.getElementById('decor');
 DECOR.forEach(([k, l]) => {
@@ -333,6 +380,11 @@ document.querySelectorAll('[data-app]').forEach(b => b.onclick = () => {
 document.querySelectorAll('[data-foot]').forEach(b => b.onclick = () => {
   foot = b.dataset.foot;
   document.querySelectorAll('[data-foot]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  render();
+});
+document.querySelectorAll('[data-rest]').forEach(b => b.onclick = () => {
+  rest = b.dataset.rest;
+  document.querySelectorAll('[data-rest]').forEach(x => x.setAttribute('aria-pressed', x === b));
   render();
 });
 </script>
