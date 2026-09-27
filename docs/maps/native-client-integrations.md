@@ -1,6 +1,6 @@
 # Native Client Integrations Map
 
-Last refreshed: 2026-05-12 against the current source tree.
+Last refreshed: 2026-09-21 against the current source tree.
 
 ## Purpose
 

@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-06-16
+Last refreshed: 2026-09-21
 
 ## Purpose
 

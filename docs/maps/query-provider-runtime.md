@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-09-21
+Last refreshed: 2026-09-23
 
 ## Purpose
 
@@ -171,7 +171,7 @@ Use focused checks first, then the documented build for broader confidence:
 | Area | Command |
 |---|---|
 | Query loop behavior | `bun test src/query.test.ts` |
-| Model catalog labels/options/agent downgrades | `bun test src/utils/model/gpt56LunaLabel.test.ts src/utils/model/agent.test.ts` |
+| Model catalog labels/options/agent downgrades | `bun test src/utils/model/gptModelCatalog.test.ts src/utils/model/agent.test.ts` |
 | Provider instruction placement | `bun test src/utils/providerPromptRegressions.test.ts` |
 | Prompt/context behavior | `bun test src/constants/prompts.test.ts` |
 | Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts src/services/compact/reactiveCompact.test.ts` |

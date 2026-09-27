@@ -1,6 +1,6 @@
 # Bridge, Remote, And CLI Transport Map
 
-Last refreshed: 2026-09-06 against the current source tree and the current
+Last refreshed: 2026-09-21 against the current source tree and the current
 ChatGPT review-bridge validation record.
 
 ## Purpose
