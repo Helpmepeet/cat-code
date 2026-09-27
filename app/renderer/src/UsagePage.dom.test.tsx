@@ -60,6 +60,9 @@ test('daily heatmap exposes recorded values and selects only days in the current
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     const cells = tree.container.querySelectorAll<SVGGElement>('.usage-heat-cell');
     expect(cells).toHaveLength(30);
+    const boxes = [...tree.container.querySelectorAll<SVGRectElement>('.usage-heatmap rect')];
+    expect(Math.min(...boxes.map(box => Number(box.getAttribute('x'))))).toBe(0);
+    expect(Math.max(...boxes.map(box => Number(box.getAttribute('width'))))).toBe(44);
     const cell = tree.container.querySelector<SVGGElement>(`[data-date="${recorded}"]`)!;
     expect(cell.getAttribute('aria-label')).toBe(`${recorded}: 123 tokens`);
     const older = cells[0]!;

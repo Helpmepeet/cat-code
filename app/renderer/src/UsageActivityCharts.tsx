@@ -4,7 +4,7 @@ import { usageChartDate } from './usageGraphState.js';
 import { useUsageChartWidth, usageNumber, usageTotal } from './usageDashboardState.js';
 import type { UsageDailyActivity } from './usageTrendState.js';
 
-const DAY_MS = 86400000, BOX = 28, GAP = 4;
+const DAY_MS = 86400000, BOX = 28, MAX_BOX = 44, GAP = 4;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const civilDay = (date: string): number => Date.parse(`${date}T00:00:00.000Z`);
 const dayKey = (time: number): string => new Date(time).toISOString().slice(0, 10);
@@ -24,11 +24,13 @@ export function UsageHeatmap({ activity, range, onSelect, selected = '', selecte
     const [hovered, setHovered] = useState<string | null>(null);
     const chart = useUsageChartWidth();
     const width = chart.width;
-    // Columns are Monday-first weeks ending with the latest day; boxes stretch so the grid fills the panel.
-    const columns = Math.max(1, Math.floor((width + GAP) / (BOX + GAP)));
-    const size = (width - (columns - 1) * GAP) / columns;
+    // Columns are Monday-first weeks ending with the latest day. Short history shows only its own
+    // weeks, so boxes stretch to fill the panel up to MAX_BOX instead of leaving empty weeks.
     const last = civilDay(activity.lastDate), first = civilDay(activity.firstDate);
     const lastMonday = last - (new Date(last).getUTCDay() + 6) % 7 * DAY_MS;
+    const historyWeeks = Math.floor((lastMonday - (first - (new Date(first).getUTCDay() + 6) % 7 * DAY_MS)) / (7 * DAY_MS)) + 1;
+    const columns = Math.max(1, Math.min(historyWeeks, Math.floor((width + GAP) / (BOX + GAP))));
+    const size = Math.min(MAX_BOX, (width - (columns - 1) * GAP) / columns);
     const cells: HeatCell[] = [];
     for (let column = 0; column < columns; column++) {
         for (let row = 0; row < 7; row++) {
