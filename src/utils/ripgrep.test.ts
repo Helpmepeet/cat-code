@@ -90,6 +90,41 @@ describe('ripGrep', () => {
     }
   })
 
+  test('reports why a ripgrep executable could not start', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'catcode-ripgrep-spawn-'))
+    const fakeRg = join(root, 'rg')
+    // A missing interpreter fails at spawn with no exit code or output.
+    writeFileSync(fakeRg, '#!/definitely/missing/interpreter\n')
+    chmodSync(fakeRg, 0o755)
+
+    try {
+      const code = `
+        import { ripGrep } from ${JSON.stringify(MODULE_URL)}
+        try {
+          await ripGrep(['needle'], ${JSON.stringify(TARGET)}, new AbortController().signal)
+          process.exit(2)
+        } catch (error) {
+          process.stdout.write(String(error instanceof Error ? error.message : error))
+        }
+      `
+      const child = Bun.spawn([process.execPath, '-e', code], {
+        env: { ...process.env, PATH: [root, '/usr/bin', '/bin'].join(':') },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const [stdout, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        child.exited,
+      ])
+
+      expect(exitCode).toBe(0)
+      expect(stdout).toContain('Ripgrep validation failed')
+      expect(stdout).toContain('ENOENT')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('rejects malformed regular expressions with ripgrep diagnostics', async () => {
     await expectRipgrepError(['['], 'unclosed character class')
   })

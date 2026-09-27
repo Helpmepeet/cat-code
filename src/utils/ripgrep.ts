@@ -575,7 +575,7 @@ const ensureRipgrepAvailable = memoize(async (): Promise<void> => {
   const config = getRipgrepConfig()
 
   try {
-    let test: { code: number; stdout: string; stderr: string }
+    let test: { code: number; stdout: string; stderr: string; error?: string }
 
     // For embedded ripgrep, use Bun.spawn with argv0
     if (config.argv0) {
@@ -627,7 +627,7 @@ const ensureRipgrepAvailable = memoize(async (): Promise<void> => {
     })
     if (!working) {
       const diagnostic = boundedRipgrepDiagnostic(
-        test.stderr || test.stdout || `exit ${test.code}`,
+        test.stderr || test.stdout || test.error || `exit ${test.code}`,
       )
       throw new Error(
         `Ripgrep validation failed (mode=${config.mode}, path=${config.command}): ${diagnostic}`,
