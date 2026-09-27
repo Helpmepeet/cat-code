@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily activity · options</title>
+<style>
+@font-face { font-family:'DM Sans'; font-weight:100 1000; src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2'); }
+@font-face { font-family:'DM Mono'; font-weight:400; src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2'); }
+@font-face { font-family:'DM Mono'; font-weight:500; src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2'); }
+
+:root {
+  --app-bg:#09090b; --surface-raised:#111113; --surface-panel:#0a0a0c; --shell-seam:rgba(255,255,255,.06);
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f; --accent:#f472b6;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+:root[data-theme=light] {
+  --app-bg:#fcfcfd; --surface-raised:#ffffff; --surface-panel:#f7f7f9; --shell-seam:rgba(9,9,11,.1);
+  --text-primary:#18181b; --text-muted:#52525b; --text-subtle:#575761; --accent:#bb3e84;
+}
+html,body { margin:0; background:var(--app-bg); }
+
+/* ---------- chrome (x-) ---------- */
+.x-page { padding:20px 28px 60px; }
+.x-controls,.x-label,.x-section { font:10px/1.4 ui-monospace,Menlo,monospace; letter-spacing:.12em; text-transform:uppercase; color:#80808a; }
+.x-controls { display:flex; flex-wrap:wrap; gap:8px 28px; padding-bottom:14px; border-bottom:1px solid rgba(128,128,138,.25); margin-bottom:22px; }
+.x-group { display:flex; gap:10px; align-items:baseline; }
+.x-group b { font-weight:400; opacity:.6; }
+.x-opt { all:unset; cursor:pointer; color:#80808a; font:inherit; letter-spacing:inherit; text-transform:inherit; }
+.x-opt[aria-pressed=true] { text-decoration:underline; text-underline-offset:3px; color:#b4b4bc; }
+.x-section { margin:44px 0 18px; padding-top:10px; border-top:1px solid rgba(128,128,138,.25); font-size:11px; color:#a0a0a8; }
+.x-variant { margin-bottom:28px; }
+.x-label { display:block; margin:0 0 8px; }
+button.x-label { font:10px/1.4 ui-monospace,Menlo,monospace; letter-spacing:.12em; text-transform:uppercase; }
+
+/* ---------- specimen (app tokens, usageDashboard.css) ---------- */
+.usage-content {
+  --usage-panel:var(--surface-raised); --usage-muted:var(--text-subtle); --usage-grid:var(--shell-seam); --usage-secondary:var(--text-muted);
+  max-width:100%; color:var(--text-primary); font-family:var(--font-sans);
+}
+.usage-panel { box-sizing:border-box; max-width:100%; min-width:0; padding:17px 17px 15px; border:1px solid var(--shell-seam); border-radius:10px; background:var(--usage-panel); }
+.usage-panel-heading { display:flex; align-items:center; gap:8px; margin:0 0 12px; font-size:14px; font-weight:600; letter-spacing:0; color:var(--text-primary); }
+.usage-chart-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; color:var(--usage-secondary); font-size:12px; }
+.usage-heat-key { display:flex; align-items:center; gap:4px; }
+.usage-heat-key i { display:block; width:10px; height:10px; border-radius:2px; }
+.usage-heat-selected { stroke:var(--text-primary); stroke-width:1.5px; }
+.usage-heatmap { display:block; width:100%; height:auto; font-family:var(--font-mono); }
+.usage-heatmap [data-d] { cursor:pointer; }
+.usage-axis { fill:var(--usage-muted); font-size:10px; font-variant-numeric:tabular-nums; }
+.usage-interaction-readout { display:flex; flex-wrap:wrap; gap:6px 16px; min-height:18px; margin-top:10px; color:var(--usage-secondary); font-size:12px; font-family:var(--font-mono); }
+.usage-interaction-readout strong { color:var(--text-primary); font-weight:500; }
+
+/* ramps: lv-0 is zero activity, lv-1..5 the five steps */
+.lv-0 { fill:var(--h0); background:var(--h0); } .lv-1 { fill:var(--h1); background:var(--h1); } .lv-2 { fill:var(--h2); background:var(--h2); }
+.lv-3 { fill:var(--h3); background:var(--h3); } .lv-4 { fill:var(--h4); background:var(--h4); } .lv-5 { fill:var(--h5); background:var(--h5); }
+.pal-a { /* current */
+  --h0:var(--surface-panel);
+  --h1:color-mix(in srgb,var(--accent) 18%,var(--usage-panel)); --h2:color-mix(in srgb,var(--accent) 36%,var(--usage-panel));
+  --h3:color-mix(in srgb,var(--accent) 56%,var(--usage-panel)); --h4:color-mix(in srgb,var(--accent) 78%,var(--usage-panel)); --h5:var(--accent);
+}
+.pal-b,.pal-c,.pal-d { --lift:color-mix(in srgb,var(--text-primary) 8%,var(--usage-panel)); --h0:var(--lift); }
+.pal-b {
+  --h1:color-mix(in oklch,var(--accent) 30%,var(--lift)); --h2:color-mix(in oklch,var(--accent) 48%,var(--lift));
+  --h3:color-mix(in oklch,var(--accent) 66%,var(--lift)); --h4:color-mix(in oklch,var(--accent) 84%,var(--lift)); --h5:var(--accent);
+}
+.pal-c {
+  --h1:color-mix(in srgb,var(--text-primary) 20%,var(--usage-panel)); --h2:color-mix(in srgb,var(--text-primary) 34%,var(--usage-panel));
+  --h3:color-mix(in srgb,var(--text-primary) 52%,var(--usage-panel)); --h4:color-mix(in srgb,var(--text-primary) 72%,var(--usage-panel)); --h5:color-mix(in srgb,var(--text-primary) 92%,var(--usage-panel));
+}
+.pal-d {
+  --h1:oklch(from var(--accent) .40 calc(c * .60) h); --h2:oklch(from var(--accent) .50 calc(c * .75) h);
+  --h3:oklch(from var(--accent) .60 calc(c * .85) h); --h4:oklch(from var(--accent) .70 calc(c * .95) h); --h5:var(--accent);
+}
+:root[data-theme=light] .pal-d {
+  --h1:oklch(from var(--accent) .90 calc(c * .35) h); --h2:oklch(from var(--accent) .81 calc(c * .55) h);
+  --h3:oklch(from var(--accent) .72 calc(c * .75) h); --h4:oklch(from var(--accent) .63 calc(c * .90) h);
+}
+</style>
+</head>
+<body>
+<div class="x-page">
+  <div class="x-controls">
+    <div class="x-group"><b>Theme</b><button class="x-opt" data-set="theme" data-val="dark">dark</button><button class="x-opt" data-set="theme" data-val="light">light</button></div>
+    <div class="x-group"><b>Panel width</b><button class="x-opt" data-set="width" data-val="1124">1124</button><button class="x-opt" data-set="width" data-val="720">720</button><button class="x-opt" data-set="width" data-val="420">420</button></div>
+  </div>
+  <div id="x-root"></div>
+</div>
+
+<script>
+/* ---- sample data: one value per local day, ending today (Sun Sep 27 2026) ---- */
+const DAY = 86400000, TODAY = Date.UTC(2026, 8, 27);
+const key = t => new Date(t).toISOString().slice(0, 10);
+const LAST_WEEK = { '2026-09-21':5450000, '2026-09-22':13330000, '2026-09-23':2280000, '2026-09-24':1930000, '2026-09-25':2550000, '2026-09-26':2120000, '2026-09-27':680000 };
+const TOKENS = {};
+let seed = 7;
+const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+for (let t = TODAY - 370 * DAY; t <= TODAY; t += DAY) {
+  const dow = new Date(t).getUTCDay(), weekend = dow === 0 || dow === 6, r = rand();
+  TOKENS[key(t)] = LAST_WEEK[key(t)] ?? (r < (weekend ? .55 : .2) ? 0 : Math.round((weekend ? 1.2e6 : 3e6) * (0.3 + rand() * 1.7) * (rand() < .06 ? 3 : 1) / 1000) * 1000);
+}
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const num = n => n.toLocaleString('en-US');
+const mondayIndex = t => (new Date(t).getUTCDay() + 6) % 7; // Mon = 0 … Sun = 6
+
+/* ---- axis: layout ---- */
+// Returns columns of weeks; each column is 7 day timestamps (or null) plus an x offset.
+function weeksLayout(cw, box, gap, labeled) {
+  const left = labeled ? 30 : 0, top = labeled ? 16 : 0, avail = cw - left;
+  const cols = Math.max(1, Math.floor((avail + gap) / (box + gap)));
+  const size = (avail - (cols - 1) * gap) / cols;
+  const lastMonday = TODAY - mondayIndex(TODAY) * DAY;
+  const columns = Array.from({length:cols}, (_, c) => {
+    const monday = lastMonday - (cols - 1 - c) * 7 * DAY;
+    return { x:left + c * (size + gap), days:Array.from({length:7}, (_, r) => monday + r * DAY) };
+  });
+  const labels = [];
+  if (labeled) columns.forEach((col, c) => {
+    const first = col.days.find(t => new Date(t).getUTCDate() === 1);
+    if (first !== undefined || c === 0) labels.push({ x:col.x, text:MONTHS[new Date(first ?? col.days[0]).getUTCMonth()] });
+  });
+  if (labels.length > 1 && labels[1].x - labels[0].x < 28) labels.shift();
+  return { size, gap, top, left, columns, labels, rowLabels:labeled };
+}
+function monthsLayout(cw, box, gap) {
+  const top = 16, monthGap = Math.max(gap * 3, 10);
+  const monthWeeks = (y, m) => { // week columns covering month m
+    const first = Date.UTC(y, m, 1), last = Math.min(Date.UTC(y, m + 1, 0), TODAY);
+    const start = first - mondayIndex(first) * DAY;
+    return Array.from({length:Math.floor((last - start) / DAY / 7) + 1}, (_, i) => start + i * 7 * DAY)
+      .map(monday => Array.from({length:7}, (_, r) => { const t = monday + r * DAY; return t >= first && t <= last ? t : null; }));
+  };
+  const months = [];
+  let y = 2026, m = 8, cols = 0;
+  while (true) {
+    const weeks = monthWeeks(y, m), nextCols = cols + weeks.length;
+    const need = nextCols * box + (nextCols - months.length - 1) * gap + months.length * monthGap;
+    if (months.length && need > cw) break;
+    months.unshift({ y, m, weeks }); cols = nextCols;
+    if (--m < 0) { m = 11; y--; }
+  }
+  const gaps = (cols - months.length) * gap + (months.length - 1) * monthGap;
+  const size = (cw - gaps) / cols;
+  const columns = [], labels = [];
+  let x = 0;
+  months.forEach(({ m, weeks }) => {
+    labels.push({ x, text:MONTHS[m] });
+    weeks.forEach(days => { columns.push({ x, days }); x += size + gap; });
+    x += monthGap - gap;
+  });
+  return { size, gap, top, left:0, columns, labels, rowLabels:false };
+}
+const LAYOUT = {
+  a:{ label:'Weeks · labeled', build:(cw, box, gap) => weeksLayout(cw, box, gap, true) },
+  b:{ label:'Weeks · no labels', build:(cw, box, gap) => weeksLayout(cw, box, gap, false) },
+  c:{ label:'Months', build:monthsLayout },
+};
+const SIZE = { a:{ label:'Small · 20px', box:20 }, b:{ label:'Medium · 28px', box:28 }, c:{ label:'Large · 36px', box:36 } };
+const COLOR = { a:{ label:'Current' }, b:{ label:'Soft pink' }, c:{ label:'Neutral gray' }, d:{ label:'Vivid pink' } };
+const GAP = 4;
+
+const state = { theme:'dark', width:1124, pick:{ layout:'a', size:'b', color:'b' }, selected:'', hover:null };
+
+function chart(cw, o) {
+  const L = LAYOUT[o.layout].build(cw, SIZE[o.size].box, GAP);
+  const shown = L.columns.flatMap(c => c.days).filter(t => t !== null && t <= TODAY);
+  const max = Math.max(1, ...shown.map(t => TOKENS[key(t)] ?? 0));
+  const level = v => v === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(v / max * 5)));
+  const rx = Math.max(2, Math.round(L.size * .12));
+  const height = L.top + 7 * L.size + 6 * L.gap;
+  let s = '';
+  L.labels.forEach(l => s += `<text x="${l.x}" y="10" class="usage-axis">${l.text}</text>`);
+  if (L.rowLabels) [0, 2, 4].forEach(r => s += `<text x="0" y="${L.top + r * (L.size + L.gap) + L.size / 2 + 4}" class="usage-axis">${WEEKDAYS[(r + 1) % 7]}</text>`);
+  L.columns.forEach(col => col.days.forEach((t, r) => {
+    if (t === null || t > TODAY) return;
+    const d = key(t), sel = state.selected === d;
+    s += `<rect data-d="${d}" x="${col.x}" y="${L.top + r * (L.size + L.gap)}" width="${L.size}" height="${L.size}" rx="${rx}" class="lv-${level(TOKENS[d] ?? 0)}${sel ? ' usage-heat-selected' : ''}"/>`;
+  }));
+  const period = o.layout === 'c' ? `Last ${L.labels.length} months` : `Last ${L.columns.length} weeks`;
+  return { svg:`<svg class="usage-heatmap pal-${o.color}" viewBox="0 0 ${cw} ${height}" role="group" aria-label="Tokens by local day">${s}</svg>`, period };
+}
+
+function readout(d) {
+  const t = Date.parse(`${d}T00:00:00Z`), v = TOKENS[d] ?? 0, dt = new Date(t);
+  return `<strong>${WEEKDAYS[dt.getUTCDay()]}, ${MONTHS[dt.getUTCMonth()]} ${dt.getUTCDate()}</strong><span>${num(v)} tokens, ${num(Math.round(v / 11800))} tool requests</span>`;
+}
+
+function panel(id, o) {
+  return `<div class="usage-content"><section class="usage-panel" data-p="${id}" data-o='${JSON.stringify(o)}'>
+    <h2 class="usage-panel-heading">Daily activity</h2>
+    <div class="usage-chart-toolbar"><span data-period></span><div class="usage-heat-key pal-${o.color}"><span>Less</span>${[0,1,2,3,4,5].map(l => `<i class="lv-${l}"></i>`).join('')}<span>More</span></div></div>
+    <div data-chart></div>
+    <div class="usage-interaction-readout" role="status"></div>
+  </section></div>`;
+}
+
+const AXES = [['layout','Layout',LAYOUT],['size','Box size',SIZE],['color','Color',COLOR]];
+function build() {
+  const p = state.pick;
+  let html = `<h3 class="x-label">Picked · layout ${p.layout.toUpperCase()} · size ${p.size.toUpperCase()} · color ${p.color.toUpperCase()}</h3>${panel('picked', p)}`;
+  for (const [axis, title, opts] of AXES) {
+    html += `<div class="x-section">${title}</div>`;
+    for (const [k, opt] of Object.entries(opts)) {
+      html += `<div class="x-variant"><button class="x-opt x-label" data-pick="${axis}" data-val="${k}" aria-pressed="${p[axis] === k}">${k.toUpperCase()} · ${opt.label}</button>${panel(`${axis}-${k}`, { ...p, [axis]:k })}</div>`;
+    }
+  }
+  document.getElementById('x-root').innerHTML = html;
+  render();
+}
+
+function render() {
+  document.documentElement.dataset.theme = state.theme;
+  document.querySelectorAll('[data-set]').forEach(b => b.setAttribute('aria-pressed', String(
+    (b.dataset.set === 'theme' && b.dataset.val === state.theme) || (b.dataset.set === 'width' && Number(b.dataset.val) === state.width))));
+  document.querySelectorAll('[data-p]').forEach(el => {
+    el.style.width = `${state.width}px`;
+    const c = chart(el.clientWidth - 34, JSON.parse(el.dataset.o));
+    el.querySelector('[data-chart]').innerHTML = c.svg;
+    el.querySelector('[data-period]').textContent = c.period;
+    el.querySelector('.usage-interaction-readout').innerHTML = state.hover && state.hover.p === el.dataset.p ? readout(state.hover.d) : '';
+  });
+}
+
+document.addEventListener('click', e => {
+  const set = e.target.closest('[data-set]'), pick = e.target.closest('[data-pick]'), cell = e.target.closest('[data-d]');
+  if (set) { state[set.dataset.set] = set.dataset.set === 'width' ? Number(set.dataset.val) : set.dataset.val; render(); }
+  else if (pick) { state.pick[pick.dataset.pick] = pick.dataset.val; build(); }
+  else if (cell) { state.selected = state.selected === cell.dataset.d ? '' : cell.dataset.d; render(); }
+});
+document.addEventListener('mouseover', e => {
+  const cell = e.target.closest('[data-d]'), el = e.target.closest('[data-p]'); if (!cell || !el) return;
+  state.hover = { p:el.dataset.p, d:cell.dataset.d };
+  el.querySelector('.usage-interaction-readout').innerHTML = readout(cell.dataset.d);
+});
+document.addEventListener('mouseout', e => {
+  const el = e.target.closest('[data-p]'); if (!el || el.contains(e.relatedTarget)) return;
+  state.hover = null; el.querySelector('.usage-interaction-readout').innerHTML = '';
+});
+window.addEventListener('resize', render);
+build();
+</script>
+</body>
+</html>
