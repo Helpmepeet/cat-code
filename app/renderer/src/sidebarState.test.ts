@@ -7,6 +7,7 @@ import {
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
+  selectSidebarFooterExpanded,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
   selectShellDescriptors,
@@ -587,5 +588,18 @@ describe('sidebarActivityKey / compareSidebarActivity (CC-2 warp-free)', () => {
     const tieA = mergedRow({ sessionId: 'z', lastMessageSentAt: 1 })
     const tieB = mergedRow({ sessionId: 'y', lastMessageSentAt: 1 })
     expect(compareSidebarActivity(tieA, tieB)).toBeGreaterThan(0)
+  })
+})
+
+describe('selectSidebarFooterExpanded', () => {
+  test('the list shows only while the pointer is inside the band above the rail bottom', () => {
+    expect(selectSidebarFooterExpanded(712, 900, 188)).toBe(true)
+    expect(selectSidebarFooterExpanded(899, 900, 188)).toBe(true)
+    expect(selectSidebarFooterExpanded(711, 900, 188)).toBe(false)
+  })
+
+  test('an unknown pointer or an unmeasured band keeps the strip', () => {
+    expect(selectSidebarFooterExpanded(null, 900, 188)).toBe(false)
+    expect(selectSidebarFooterExpanded(850, 900, 0)).toBe(false)
   })
 })

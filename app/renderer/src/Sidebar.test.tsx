@@ -175,43 +175,35 @@ test('a history row never renders a ⋮ kebab (no desktop session to act on)', (
   expect(html).not.toContain('Session actions for')
 })
 
-test('CC-2: registry-row recency derives from lastMessageSentAt (createdAt fallback)', () => {
+/**
+ * One-line rows (operator, 2026-09-27): a row renders its title and the live
+ * dot, and nothing under it. The recency that used to fill a subtitle is gone.
+ */
+test('a row is one line: no recency and no subtitle under the title', () => {
   const now = Date.now()
   const hour = 60 * 60 * 1000
-
-  // Last message 2h ago: the subtitle reads the message time (never an attach —
-  // the merged row carries no lastAttachedAt at all).
-  const sent = renderRow(
+  const html = renderRow(
     registryRow('a', {
       displayLabel: 'Alpha',
+      name: 'Bear',
       lastMessageSentAt: now - 2 * hour,
-      createdAtMs: now - 72 * hour,
     }),
   )
-  expect(sent).toContain('<span class="shrink-0">2h</span>')
-
-  // Never sent → fall back to createdAt (3d ago).
-  const neverSent = renderRow(
-    registryRow('b', {
-      displayLabel: 'Beta',
-      lastMessageSentAt: null,
-      createdAtMs: now - 72 * hour,
-    }),
-  )
-  expect(neverSent).toContain('<span class="shrink-0">3d</span>')
+  expect(html).not.toContain('>2h<')
+  expect(html).not.toContain('>Bear<')
+  expect(html).toContain('>Alpha</span></div>')
 })
 
 /**
- * The `time · name` subtitle (PEER-SESSIONS R4). The name replaced the running
- * model here on 2026-09-03: it is a registry field carried on the merged row
- * itself, so it needs no per-row resolver callback and it renders identically
- * whether the row is live, parked or closed.
+ * The session name (PEER-SESSIONS R4) lives in the row tooltip now, since the
+ * one-line row has no subtitle. It is a registry field carried on the merged row
+ * itself, so it reads identically whether the row is live, parked or closed.
  */
-test('the subtitle renders the session name, for a live row and a closed one alike', () => {
+test('the tooltip leads with the session name, for a live row and a closed one alike', () => {
   const live = renderRow(registryRow('a', { displayLabel: 'Alpha', name: 'Bear' }))
-  expect(live).toContain('<span class="truncate">Bear</span>')
+  expect(live).toContain('title="Bear · /tmp/proj"')
 
-  // Registry field, not a live-process one: a closed row still shows its name.
+  // Registry field, not a live-process one: a closed row still names itself.
   const closed = renderRow(
     registryRow('b', {
       displayLabel: 'Beta',
@@ -221,33 +213,26 @@ test('the subtitle renders the session name, for a live row and a closed one ali
       status: 'exited',
     }),
   )
-  expect(closed).toContain('<span class="truncate">Quartz</span>')
+  expect(closed).toContain('title="Quartz · /tmp/proj · restore"')
 
   // Parked is the third state R4 names.
   const parked = renderRow(
     registryRow('c', { displayLabel: 'Gamma', name: 'Cinnabar', parked: true }),
   )
-  expect(parked).toContain('<span class="truncate">Cinnabar</span>')
+  expect(parked).toContain('title="Cinnabar · /tmp/proj')
 })
 
 /**
- * R4: an unnamed row keeps `time` alone. That is every history row, plus any
- * registry row written before the field existed — the common case for an
- * existing install, not an edge.
+ * An unnamed row's tooltip carries no name and no leading separator. That is
+ * every history row, plus any registry row written before the field existed,
+ * the common case for an existing install, not an edge.
  */
-test('an unnamed row shows the time alone, with no separator and no placeholder', () => {
-  const now = Date.now()
-  const unnamed = renderRow(
-    registryRow('a', { displayLabel: 'Alpha', name: null, lastMessageSentAt: now }),
-  )
-  expect(unnamed).toContain('<span class="shrink-0">now</span>')
-  // No trailing half at all: neither a value nor the middot that joins one.
-  expect(unnamed).not.toContain('class="truncate"')
-  expect(unnamed).not.toContain('text-text-ghost">·<')
+test('an unnamed row tooltip has no name and no leading separator', () => {
+  const unnamed = renderRow(registryRow('a', { displayLabel: 'Alpha', name: null }))
+  expect(unnamed).toContain('title="/tmp/proj"')
 
-  // A history row is unnamed by construction and behaves the same way.
-  const history = renderRow(historyRow('h', { lastMessageSentAt: now }))
-  expect(history).not.toContain('class="truncate"')
+  const history = renderRow(historyRow('h', { cwd: '/tmp/proj' }))
+  expect(history).toContain('title="/tmp/proj · open"')
 })
 
 test('every registry row in a group gets its own action kebab (target-session-bound)', () => {
@@ -316,9 +301,9 @@ test('no row renders a visible status label; status stays in aria-label only', (
 // The lane's geometry (centred on the title's line box, reserved on every row so
 // live and not-live share a text edge) is operator-verified only.
 const LIVE_DOT_LANE_OPEN =
-  '<span aria-hidden="true" class="pointer-events-none flex h-4 w-1.5 shrink-0 items-center self-start">'
+  '<span aria-hidden="true" class="pointer-events-none flex h-[17px] w-1.5 shrink-0 items-center self-start">'
 const LIVE_DOT =
-  `${LIVE_DOT_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-good"></span></span>`
+  `${LIVE_DOT_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]"></span></span>`
 const EMPTY_DOT_LANE = `${LIVE_DOT_LANE_OPEN}</span>`
 
 test('a live registry row carries the O1 dot, unlabeled and announced only once', () => {
@@ -541,7 +526,7 @@ test('P4-53 — the collapsed rail keeps the pin as its stable keyboard entry ta
   const html = renderSidebar()
   expect(html).toContain('aria-label="Pin sidebar open"')
   expect(html).toContain(
-    'class="pointer-events-none absolute inset-0 h-[50px] w-12 opacity-0"',
+    'class="pointer-events-none absolute inset-0 h-10 w-12 opacity-0"',
   )
   expect(html).not.toContain('aria-label="Search sessions"')
   // SSR proves the pin is present and natively focusable before expansion. It
@@ -888,26 +873,20 @@ test('no account resolved yet leaves the expanded footer with direct destination
   expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
-test('expanded destinations are directly available without an intermediary toggle', () => {
+test('the open rail rests with every destination directly available, no intermediary toggle', () => {
+  // Server markup has no pointer, so the footer renders in its resting strip.
+  // The labelled list and its pointer band are covered in `Sidebar.dom.test.ts`.
   const html = renderSidebar({ menuActive: true })
   expect(html).not.toContain('Show destinations')
   expect(html).not.toContain('Hide destinations')
   expect(html).not.toContain('inert=""')
   expect(html).not.toContain('data-sidebar-nav-id="sessions"')
   expect(html).not.toContain('data-sidebar-nav-id="chat"')
-  expect(html).toContain('data-sidebar-nav-id="settings"')
-  expect(html).toContain('>Analytics</span>')
-  expect(html).not.toContain('>Usage</span>')
-})
-
-test('expanded destinations use the session-row hover treatment', () => {
-  const html = renderSidebar({ menuActive: true, activeView: 'goals' })
-  expect(html).toContain(
-    'border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07]',
-  )
-  expect(html).toContain(
-    'border-accent/[0.18] bg-accent/[0.09] text-accent-soft',
-  )
+  for (const id of ['goals', 'accounts', 'usage', 'settings']) {
+    expect(html).toContain(`data-sidebar-nav-id="${id}"`)
+  }
+  expect(html).toContain('aria-label="Analytics"')
+  expect(html).not.toContain('aria-label="Usage"')
 })
 
 test('the collapsed rail keeps the account glyph below the destinations like the expanded footer', () => {
@@ -952,9 +931,8 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
   expect(healthy).not.toContain('data-sidebar-nav-badge')
   expect(healthy).not.toContain('aria-label="Accounts,')
-  // Unmarked, the expanded row keeps its visible label as its accessible name
-  // rather than carrying an aria-label that would have to be kept in sync.
-  expect(healthy).toContain('>Accounts</span>')
+  // Unmarked, the resting strip's icon button is named by the plain label.
+  expect(healthy).toContain('aria-label="Accounts"')
 })
 
 test('the rail starts below the tab bar so the traffic lights are never covered', () => {

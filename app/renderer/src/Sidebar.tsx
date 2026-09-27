@@ -5,10 +5,17 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * section, workspace ("Projects") grouping by cwd, and a footer that carries the
  * active account plus the nav destinations.
  *
+ * One-line rows (operator, 2026-09-27, `docs/design-html/2026-09-27-sidebar-one-line-rows.html`):
+ * a row is its title and the live dot, nothing else. The recency and the session
+ * name left the row; the name moved into the row tooltip. Resting titles use the
+ * muted ink and brighten under the pointer. The open rail's footer rests as one
+ * strip of icons and grows into the labelled list only while the pointer is
+ * inside the band the collapsed rail's icon column occupies.
+ *
  * Design source (2026-08-01): the operator's Claude Design project "Cat Code
  * Sidebar", `components/sidebar/index.html`. It supersedes the older
  * `Sidebar.jsx` prototype grammar for THIS surface; anything it does not speak
- * to (recency subtitle, workspace reordering, the live dot) is unchanged from
+ * to (workspace reordering, the live dot) is unchanged from
  * the P4-4 true-up below.
  *
  * Data (SESSIONS-UNIFICATION — operator ruling 2026-07-20): it renders the
@@ -20,13 +27,10 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
  * §0 fidelity flags (divergences from the design source, by design):
- *  - ➕ KEPT, not in the design source: the recency subtitle and the O1 live
- *    dot. The design source's rows are title-only because its sample data
- *    carries no timestamps at all, not because the operator asked for the
- *    subtitle to go; dropping real, already-shipped information on that reading
- *    would be a silent cut. Both stay. Its trailing half is the session NAME
- *    (PEER-SESSIONS R4); it carried the running model until 2026-09-03, and the
- *    model now reads from the open session's run controls instead.
+ *  - ➕ KEPT, not in the design source: the O1 live dot. The recency subtitle
+ *    it used to sit beside was cut by the operator on 2026-09-27 (one-line rows);
+ *    the session NAME that shared that line (PEER-SESSIONS R4) moved into the
+ *    row tooltip.
  *  - 🔁 adapted: the design source also drags SESSION rows to reorder them
  *    inside a project. That is not built. A manual per-project row order would
  *    fight the CC-2 float-to-top ruling (a row rises only when its session sends
@@ -57,7 +61,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    (`aria-hidden`): the state is already in the row's `aria-label`, and a
  *    second announcement would be a duplicate. It sits in a fixed leading lane
  *    that EVERY row reserves, centred on the title's line box, so its presence
- *    never reflows the title or the subtitle line. Richer per-state status
+ *    never reflows the title. Richer per-state status
  *    still surfaces on the TabBar.
  *  - Every nav destination is wired; none is mocked. The same destination set is
  *    directly visible in both rail states so hover expansion cannot replace the
@@ -131,6 +135,7 @@ import {
   normalizeSidebarGroupExpansion,
   reorderDragHandlers,
   resolveNavSelection,
+  selectSidebarFooterExpanded,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
   selectVisibleSidebarRows,
@@ -409,6 +414,13 @@ export function Sidebar({
    * whose focus must survive the branch replacement. */
   const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
   const refocusNavId = useRef<NavItem['id'] | null>(null)
+  /** Footer form while open: the labelled list, or the one-line icon strip.
+   * `selectSidebarFooterExpanded` decides it from the pointer's last y and the
+   * height of the collapsed rail's icon column, measured while collapsed. */
+  const [footerExpanded, setFooterExpanded] = useState(false)
+  const pointerY = useRef<number | null>(null)
+  const collapsedNavRef = useRef<HTMLElement | null>(null)
+  const footerBandHeight = useRef(0)
 
   const open =
     !dismissed &&
@@ -419,6 +431,17 @@ export function Sidebar({
       focusWithin,
     })
 
+  const readFooterExpanded = useCallback(() => {
+    const aside = asideRef.current
+    return (
+      aside != null &&
+      selectSidebarFooterExpanded(
+        pointerY.current,
+        aside.getBoundingClientRect().bottom,
+        footerBandHeight.current,
+      )
+    )
+  }, [])
   const onEnter = () => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setDismissed(false)
@@ -759,12 +782,51 @@ export function Sidebar({
     rowRefs.current.get(id)?.focus()
   }, [pinnedSessions])
 
+  // The band the footer list answers to is the collapsed icon column, so it is
+  // measured while that column is on screen.
+  useLayoutEffect(() => {
+    if (open) return
+    const aside = asideRef.current
+    const nav = collapsedNavRef.current
+    if (aside == null || nav == null) return
+    footerBandHeight.current =
+      aside.getBoundingClientRect().bottom - nav.getBoundingClientRect().top
+  }, [open, accountAlias])
+
+  // Opening decides the footer form from where the pointer already is.
+  useLayoutEffect(() => {
+    setFooterExpanded(open && readFooterExpanded())
+  }, [open, readFooterExpanded])
+
   useLayoutEffect(() => {
     const navId = refocusNavId.current
     if (navId == null || !open) return
+    // Wait out a footer swap the open transition is about to make, or focus
+    // would land on a button that unmounts one render later.
+    if (footerExpanded !== readFooterExpanded()) return
     refocusNavId.current = null
     navRefs.current.get(navId)?.focus()
-  }, [open])
+  }, [open, footerExpanded, readFooterExpanded])
+
+  const accountButton = accountAlias ? (
+    <button
+      type="button"
+      onClick={() => selectView('accounts')}
+      title={`Active account: ${accountAlias}`}
+      aria-label={`Active account: ${accountAlias}`}
+      className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
+    >
+      <span
+        aria-hidden="true"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+      >
+        {accountAlias.slice(0, 1).toUpperCase()}
+      </span>
+      <span className="min-w-0 truncate text-[11px] font-medium">
+        {accountAlias}
+      </span>
+    </button>
+  ) : null
 
   const rowProps = {
     activeSessionId,
@@ -783,8 +845,18 @@ export function Sidebar({
 
       <aside
         ref={asideRef}
-        onMouseEnter={onEnter}
-        onMouseLeave={onLeave}
+        onMouseEnter={event => {
+          pointerY.current = event.clientY
+          onEnter()
+        }}
+        onMouseMove={event => {
+          pointerY.current = event.clientY
+          if (open) setFooterExpanded(readFooterExpanded())
+        }}
+        onMouseLeave={() => {
+          pointerY.current = null
+          onLeave()
+        }}
         onFocusCapture={event => {
           console.log('[Sidebar] focus capture', {
             target: event.target,
@@ -838,22 +910,27 @@ export function Sidebar({
          * focus capture expands the rail before it paints. */}
         <div
           className={
-            'relative flex h-[50px] shrink-0 items-center ' +
-            (open ? 'justify-between pl-4 pr-2.5' : 'justify-center')
+            'relative flex h-10 shrink-0 items-center ' +
+            (open ? 'justify-between pl-3.5 pr-2.5' : 'justify-center')
           }
         >
-          <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex min-w-0 items-center gap-2">
             {open ? (
-              <span className="truncate text-[13px] font-semibold tracking-tight text-text-primary">
-                Cat Code
-              </span>
+              <>
+                <span aria-hidden="true" className="flex shrink-0 text-accent">
+                  <PawLogo />
+                </span>
+                <span className="truncate text-[12.5px] font-semibold tracking-tight text-text-primary">
+                  Cat Code
+                </span>
+              </>
             ) : null}
           </div>
           <div
             className={
               open
                 ? 'flex items-center gap-1'
-                : 'pointer-events-none absolute inset-0 h-[50px] w-12 opacity-0'
+                : 'pointer-events-none absolute inset-0 h-10 w-12 opacity-0'
             }
           >
             <button
@@ -897,7 +974,7 @@ export function Sidebar({
                   placeholder="Search sessions…"
                   value={search}
                   onChange={event => setSearch(event.target.value)}
-                  className="w-full rounded-lg border border-white/[0.07] bg-white/[0.04] py-1.5 pl-[26px] pr-2 text-xs text-[light-dark(#3f3f46,#d4d4d8)] outline-none placeholder:text-text-subtle focus:border-accent/35"
+                  className="w-full rounded-md border border-white/[0.07] bg-white/[0.04] py-1 pl-[26px] pr-2 text-[11.5px] text-[light-dark(#3f3f46,#d4d4d8)] outline-none placeholder:text-text-subtle focus:border-accent/35"
                 />
               </div>
             </div>
@@ -907,7 +984,8 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={onNewChat}
-                className="mx-2 mb-2 flex shrink-0 items-center gap-[9px] rounded-md px-2 py-1.5 text-[12.5px] font-medium text-[light-dark(#3f3f46,#d4d4d8)] transition-colors hover:bg-accent/10 hover:text-accent-soft"
+                aria-keyshortcuts="Meta+T"
+                className="mx-2 mb-1.5 flex shrink-0 items-center gap-[9px] rounded-md px-2 py-[5px] text-xs font-medium text-[light-dark(#3f3f46,#d4d4d8)] transition-colors hover:bg-accent/10 hover:text-accent-soft"
               >
                 <span
                   aria-hidden="true"
@@ -916,6 +994,12 @@ export function Sidebar({
                   <ComposeIcon />
                 </span>
                 <span>New chat</span>
+                <kbd
+                  aria-hidden="true"
+                  className="ml-auto font-mono text-[10px] tracking-[0.04em] text-text-ghost"
+                >
+                  ⌘T
+                </kbd>
               </button>
             ) : null}
 
@@ -925,11 +1009,12 @@ export function Sidebar({
               className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
               {pinnedRows.length > 0 ? (
-                <section className="mb-2.5">
-                  <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
-                    <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+                <section className="mb-[18px]">
+                  <div className="flex items-center gap-1 pb-[5px] pl-2 pr-1 pt-0.5">
+                    <span className="shrink-0 truncate text-[11px] font-medium text-text-ghost">
                       Pinned
                     </span>
+                    <span aria-hidden="true" className="ml-1.5 mr-1 h-px min-w-0 flex-1 bg-shell-seam" />
                   </div>
                   {pinnedRows.map(row => (
                     <SidebarRowItem
@@ -961,18 +1046,19 @@ export function Sidebar({
                 </section>
               ) : null}
 
-              <section className="mb-2.5">
-                <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
-                  <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+              <section className="mb-[18px]">
+                <div className="flex items-center gap-1 pb-[5px] pl-2 pr-1 pt-0.5">
+                  <span className="shrink-0 truncate text-[11px] font-medium text-text-ghost">
                     Chats
                   </span>
+                  <span aria-hidden="true" className="ml-1.5 mr-1 h-px min-w-0 flex-1 bg-shell-seam" />
                   {onNewManagedChat ? (
                     <button
                       type="button"
                       onClick={onNewManagedChat}
                       title="New chat without a project"
                       aria-label="New chat without a project"
-                      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
+                      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-transparent text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
                     >
                       <PlusIcon />
                     </button>
@@ -996,18 +1082,19 @@ export function Sidebar({
                * created there, and the group appears with that row. No empty
                * group is ever persisted, because the model has no
                * empty-workspace record to persist. */}
-              <section className="mb-2.5">
-                <div className="flex items-center gap-1 px-1 pb-1.5 pt-0.5">
-                  <span className="min-w-0 flex-1 truncate text-[10px] font-bold uppercase tracking-[0.08em] text-text-faint">
+              <section className="mb-[18px]">
+                <div className="flex items-center gap-1 pb-[5px] pl-2 pr-1 pt-0.5">
+                  <span className="shrink-0 truncate text-[11px] font-medium text-text-ghost">
                     Projects
                   </span>
+                  <span aria-hidden="true" className="ml-1.5 mr-1 h-px min-w-0 flex-1 bg-shell-seam" />
                   {onAddProject ? (
                     <button
                       type="button"
                       onClick={onAddProject}
                       title="Add project: choose a folder"
                       aria-label="Add project"
-                      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-white/8 text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
+                      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-transparent text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
                     >
                       <PlusIcon />
                     </button>
@@ -1101,56 +1188,64 @@ export function Sidebar({
               </section>
             </div>
 
-            {/* Footer: direct destinations above the active account. Keeping
-             * them visible prevents hover expansion from moving a destination
-             * behind another click target. */}
+            {/* Footer: direct destinations and the active account. At rest it
+             * is one strip of icons; it grows into the labelled list only while
+             * the pointer is in the collapsed icon column's band
+             * (`selectSidebarFooterExpanded`), so opening the rail to reach a
+             * session never spends rows on destinations. Both forms keep every
+             * destination directly clickable. */}
             <nav
               aria-label="Views"
-              className="flex shrink-0 flex-col items-stretch border-t border-shell-seam px-2 pb-2 pt-1.5"
+              className="flex shrink-0 flex-col items-stretch border-t border-shell-seam px-2 pb-[7px] pt-[5px]"
             >
-              <div className="flex flex-col pb-1.5">
-                {NAV.map(item => (
-                  <NavItemExpanded
-                    activeView={activeView}
-                    buttonRef={element => {
-                      if (element) navRefs.current.set(item.id, element)
-                      else navRefs.current.delete(item.id)
-                    }}
-                    item={item}
-                    key={item.id}
-                    needsSignIn={
-                      item.id === 'accounts' ? accountsNeedingSignIn : 0
-                    }
-                    onSelectView={selectView}
-                  />
-                ))}
-              </div>
-
-              {accountAlias ? (
-                <button
-                  type="button"
-                  onClick={() => selectView('accounts')}
-                  title={`Active account: ${accountAlias}`}
-                  aria-label={`Active account: ${accountAlias}`}
-                  className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
-                  >
-                    {accountAlias.slice(0, 1).toUpperCase()}
-                  </span>
-                  <span className="min-w-0 truncate text-[11px] font-medium">
-                    {accountAlias}
-                  </span>
-                </button>
-              ) : null}
+              {footerExpanded ? (
+                <>
+                  <div className="flex flex-col pb-1">
+                    {NAV.map(item => (
+                      <NavItemExpanded
+                        activeView={activeView}
+                        buttonRef={element => {
+                          if (element) navRefs.current.set(item.id, element)
+                          else navRefs.current.delete(item.id)
+                        }}
+                        item={item}
+                        key={item.id}
+                        needsSignIn={
+                          item.id === 'accounts' ? accountsNeedingSignIn : 0
+                        }
+                        onSelectView={selectView}
+                      />
+                    ))}
+                  </div>
+                  {accountButton}
+                </>
+              ) : (
+                <div className="flex items-center gap-0.5">
+                  <div className="flex min-w-0 flex-1">{accountButton}</div>
+                  {NAV.map(item => (
+                    <NavItemRail
+                      activeView={activeView}
+                      buttonRef={element => {
+                        if (element) navRefs.current.set(item.id, element)
+                        else navRefs.current.delete(item.id)
+                      }}
+                      item={item}
+                      key={item.id}
+                      needsSignIn={
+                        item.id === 'accounts' ? accountsNeedingSignIn : 0
+                      }
+                      onSelectView={selectView}
+                    />
+                  ))}
+                </div>
+              )}
             </nav>
           </>
         ) : (
           /* Collapsed rail: destinations above the bottom-anchored account,
            * matching the expanded footer so neither changes sides on hover. */
           <nav
+            ref={collapsedNavRef}
             aria-label="Views"
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
           >
@@ -1411,7 +1506,7 @@ export function SessionGroup({
      * group that release would not have dropped onto. It is also what physically
      * MOVES, so the drop indicator belongs on its edges too. */
     <div
-      className="relative mb-1"
+      className="relative mb-2.5"
       onDragOver={
         reorderable
           ? event => {
@@ -1472,7 +1567,7 @@ export function SessionGroup({
        * workspace drag handle. */}
       <div
         className={
-          'group/head flex select-none items-center gap-[5px] px-1 pb-1 pt-0.5 ' +
+          'group/head relative flex select-none items-center gap-[5px] pb-1 pl-[7px] pr-1 pt-[5px] ' +
           (reorderable ? 'cursor-grab ' : '') +
           (dragging ? 'opacity-50' : '')
         }
@@ -1524,14 +1619,14 @@ export function SessionGroup({
               ? `${group.cwd}. Drag to reorder, or ⌥↑/⌥↓`
               : group.cwd || 'Sessions with no recorded workspace'
           }
-          className="flex min-w-0 flex-1 items-center gap-1"
+          className="flex min-w-0 flex-1 items-center gap-1.5"
         >
           {group.cwd.trim().length > 0 ? (
-            <span className="flex h-[13px] w-[13px] shrink-0 items-center justify-center text-text-subtle group-hover/head:text-accent-soft">
+            <span className="flex h-3 w-3 shrink-0 items-center justify-center text-text-subtle group-hover/head:text-accent-soft [&_svg]:size-3">
               {collapsed ? <FolderClosedIcon /> : <FolderOpenIcon />}
             </span>
           ) : null}
-          <span className="truncate text-[12.5px] font-medium text-text-muted group-hover/head:text-[light-dark(#3f3f46,#d4d4d8)]">
+          <span className="truncate text-xs font-medium text-text-muted group-hover/head:text-[light-dark(#3f3f46,#d4d4d8)]">
             {group.name}
           </span>
         </button>
@@ -1570,6 +1665,14 @@ export function SessionGroup({
             <KebabIcon />
           </button>
         ) : null}
+        {/* The project's session count sits where the hover-revealed "+" and ⋮
+         * appear, and yields that slot to them under the pointer or focus. */}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 font-mono text-[10px] tabular-nums text-text-ghost transition-opacity group-hover/head:opacity-0 group-focus-within/head:opacity-0"
+        >
+          {group.rows.length}
+        </span>
       </div>
 
       {collapsed ? null : (
@@ -1604,7 +1707,7 @@ export function SessionGroup({
               type="button"
               onClick={() => setExpanded(value => !value)}
               aria-expanded={expanded}
-              className="flex w-full items-center gap-1 rounded-md px-2 py-1 pl-[26px] text-[11px] font-medium text-text-faint transition-colors hover:bg-shell-hover hover:text-text-muted"
+              className="flex w-full items-center gap-1 rounded-md px-2 py-[3px] pl-[18px] text-[11px] font-medium text-text-faint transition-colors hover:bg-shell-hover hover:text-text-muted"
             >
               {expanded ? 'Show less' : `Show ${hiddenCount} more`}
             </button>
@@ -1660,16 +1763,10 @@ export function SidebarRowItem({
   const visual = deriveMergedRowVisual(row)
   const title = row.displayLabel
   const appSessionId = row.appSessionId
-  // CC-2 recency: last MESSAGE SENT for a registry row (falling back to createdAt),
-  // the transcript mtime for a history row — `sidebarActivityKey` folds both, and
-  // never `lastAttachedAt` (open/attach bumps that; see `sidebarState.ts`).
-  const recency = formatRecency(sidebarActivityKey(row))
-  // The subtitle is `time · name` (PEER-SESSIONS R4). The name replaced the
-  // model here: it is the session's identity rather than a run setting, it is a
-  // registry field so it renders the same live, parked or closed, and the model
-  // is still on screen in the open session's run controls. A row with no name (a
-  // history row, or a registry row that predates the field) keeps the time
-  // alone, exactly as a row with no model did.
+  // The session name (PEER-SESSIONS R4) leads the tooltip: the one-line row
+  // (operator, 2026-09-27) has no subtitle to carry it. A registry field, so it
+  // reads the same live, parked or closed; a row with no name (a history row, or
+  // a registry row that predates the field) omits it.
   const name = row.name
 
   const openable = visual.openable
@@ -1694,7 +1791,7 @@ export function SidebarRowItem({
     <div
       ref={rowRef}
       className={
-        'group relative flex select-none items-center gap-2 rounded-md border py-1.5 pl-1 pr-2 transition-colors ' +
+        'group relative flex select-none items-center gap-[7px] rounded-[5px] border py-[5.5px] pl-[5px] pr-1.5 transition-colors ' +
         // Exactly one cursor class: two of them in the same attribute would be
         // resolved by Tailwind's own emit order, not by the order written here.
         (reorderable
@@ -1717,7 +1814,7 @@ export function SidebarRowItem({
       aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
       title={
         openable
-          ? `${row.binding?.kind === 'managed' ? title : row.cwd || title}${
+          ? `${name ? `${name} · ` : ''}${row.binding?.kind === 'managed' ? title : row.cwd || title}${
               visual.kind === 'restorable'
                 ? ' · restore'
                 : visual.kind === 'history'
@@ -1851,53 +1948,34 @@ export function SidebarRowItem({
       {/* O1 (operator ruling 2026-07-31) — the live-only dot. One tone, no
        * label. The LANE renders on every row and only the dot inside it is
        * conditional, so a live row and a not-live row share one text edge and
-       * neither reflows. `self-start` plus a lane exactly as tall as the title's
-       * line box centres the dot on the TITLE; centring it on the row instead
-       * dropped it into the gap between the title and the subtitle line
-       * and read as floating (operator, 2026-07-31). Static classes: an
-       * interpolated arbitrary value silently no-ops in this Tailwind v4 setup. */}
+       * neither reflows. The lane is exactly as tall as the title's line box, so
+       * the dot centres on the title. The soft ring around it is the "live halo"
+       * the operator picked on 2026-09-27. Static classes: an interpolated
+       * arbitrary value silently no-ops in this Tailwind v4 setup. */}
       <span
         aria-hidden="true"
-        className="pointer-events-none flex h-4 w-1.5 shrink-0 items-center self-start"
+        className="pointer-events-none flex h-[17px] w-1.5 shrink-0 items-center self-start"
       >
         {row.live ? (
-          <span className="h-1.5 w-1.5 rounded-full bg-tone-good" />
+          <span className="h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]" />
         ) : null}
       </span>
 
-      <div
+      {/* Resting titles take the muted ink so a long roster does not read as one
+       * block of bright text; the pointer and the open session brighten it. */}
+      <span
         className={
-          'min-w-0 flex-1 ' + (pinned && showActions ? 'pr-5' : '')
+          'min-w-0 flex-1 truncate text-[12.5px] leading-[17px] ' +
+          (pinned && showActions ? 'pr-5 ' : '') +
+          (isActive
+            ? 'font-medium text-[light-dark(#9d174d,#fce7f3)]'
+            : openable
+              ? 'text-text-muted group-hover:text-text-primary'
+              : 'text-text-faint')
         }
       >
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span
-            className={
-              'truncate text-[13px] font-medium ' +
-              (isActive
-                ? 'text-[light-dark(#9d174d,#fce7f3)]'
-                : openable
-                  ? 'text-[light-dark(#52525b,#c4c4c8)] group-hover:text-text-primary'
-                  : 'text-text-subtle')
-            }
-          >
-            {title}
-          </span>
-        </div>
-        {recency || name ? (
-          /* `min-w-0` so the trailing half's `truncate` can actually shrink: a
-           * flex child's automatic minimum size is its content, so without it a
-           * long value widens the row instead of ellipsing. Recency keeps its
-           * `shrink-0` and is never the part cut. */
-          <div className="flex min-w-0 items-center gap-[5px] text-[10px] text-text-faint">
-            {recency ? <span className="shrink-0">{recency}</span> : null}
-            {recency && name ? (
-              <span className="shrink-0 text-text-ghost">·</span>
-            ) : null}
-            {name ? <span className="truncate">{name}</span> : null}
-          </div>
-        ) : null}
-      </div>
+        {title}
+      </span>
 
       {/* Actions OVERLAY the row's right edge rather than sitting in flow, so a
        * title gets the rail's full width at rest and only gives it up under the
@@ -1999,12 +2077,12 @@ function NavItemExpanded({
         aria-disabled="true"
         data-sidebar-nav-id={item.id}
         title={`${item.label} is not available yet`}
-        className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
+        className="flex w-full cursor-not-allowed items-center gap-1 rounded-[5px] py-[3px] text-text-subtle/55"
       >
-        <span className="flex h-5 w-8 shrink-0 items-center justify-center">
+        <span className="flex h-[18px] w-[26px] shrink-0 items-center justify-center [&_svg]:size-3.5">
           {item.icon}
         </span>
-        <span className="text-[13px]">{item.label}</span>
+        <span className="text-xs">{item.label}</span>
       </button>
     )
   }
@@ -2020,16 +2098,16 @@ function NavItemExpanded({
         if (view) onSelectView(view)
       }}
       className={
-        'flex w-full items-center gap-1 rounded-md border py-1.5 transition-colors ' +
+        'flex w-full items-center gap-1 rounded-[5px] border py-[3px] transition-colors ' +
         (active
           ? ' border-accent/[0.18] bg-accent/[0.09] text-accent-soft'
           : ' border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07] hover:text-[light-dark(#3f3f46,#d4d4d8)]')
       }
     >
-      <span className="flex h-5 w-8 shrink-0 items-center justify-center">
+      <span className="flex h-[18px] w-[26px] shrink-0 items-center justify-center [&_svg]:size-3.5">
         {item.icon}
       </span>
-      <span className={'text-[13px] ' + (active ? 'font-medium' : '')}>
+      <span className={'text-xs ' + (active ? 'font-medium' : '')}>
         {item.label}
       </span>
       {signInLabel ? (
@@ -2049,11 +2127,14 @@ function NavItemExpanded({
 function NavItemRail({
   item,
   activeView,
+  buttonRef,
   needsSignIn = 0,
   onSelectView,
 }: {
   item: NavItem
   activeView: SidebarView
+  /** Registered by the open rail's footer strip for focus handoff. */
+  buttonRef?: (element: HTMLButtonElement | null) => void
   /** Accounts needing a fresh sign-in; 0 renders no mark. */
   needsSignIn?: number
   onSelectView: (view: SidebarView) => void
@@ -2063,6 +2144,7 @@ function NavItemRail({
   if (!item.enabled) {
     return (
       <button
+        ref={buttonRef}
         type="button"
         disabled
         aria-disabled="true"
@@ -2077,6 +2159,7 @@ function NavItemRail({
   }
   return (
     <button
+      ref={buttonRef}
       type="button"
       aria-current={active ? 'page' : undefined}
       aria-label={signInLabel ? `${item.label}, ${signInLabel}` : item.label}
@@ -2107,20 +2190,21 @@ function NavItemRail({
   )
 }
 
-/** Relative recency from `lastMessageSentAt` (the CC-2 message-sent signal),
- * falling back to `createdAt` — the real, source-backed subtitle. */
-function formatRecency(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return ''
-  const diff = Date.now() - ms
-  if (diff < 60_000) return 'now'
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 60) return `${mins}m`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h`
-  return `${Math.floor(hrs / 24)}d`
-}
-
 /* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
+
+/** The brand paw beside "Cat Code" in the open rail's header (operator,
+ * 2026-09-27; the collapsed rail stays bare). */
+function PawLogo() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
+      <ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65" />
+      <ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
+      <ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45" />
+      <path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z" />
+    </svg>
+  )
+}
 
 function GoalsIcon() {
   return (

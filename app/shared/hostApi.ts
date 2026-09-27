@@ -187,7 +187,7 @@ export type SessionDescriptor = {
   lastAttachedAt: number
   /**
    * Wall-clock of the last MESSAGE SENT this session (a turn actually ran), or
-   * null if none. The Sidebar's recency subtitle reads THIS, falling back to
+   * null if none. The Sidebar's row order reads THIS, falling back to
    * `createdAt` when null — NOT `lastAttachedAt`, which every attach/open bumps
    * (the CC-2 bug; see `app/renderer/src/sidebarState.ts` deferred spec + the
    * registry's `markMessageSent`). Additive control-plane descriptor field — not

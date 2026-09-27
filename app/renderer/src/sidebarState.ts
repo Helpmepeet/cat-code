@@ -18,16 +18,16 @@
  * the GROUPS reorder, current-workspace-first).
  *
  * An earlier version sorted rows by `lastAttachedAt` (recency) — but restore
- * bumps `lastAttachedAt`, so that jumped a restored row. The same
- * `lastMessageSentAt` now drives BOTH the displayed recency (`Sidebar.tsx`
- * `formatRecency`) and this order, so the two are consistent.
+ * bumps `lastAttachedAt`, so that jumped a restored row. `lastMessageSentAt`
+ * drives this order. (It also drove a displayed recency on each row until the
+ * operator cut that on 2026-09-27.)
  *
  * DONE (CC-2 message-sent signal, 2026-07-19): the data model now carries
  * `lastMessageSentAt` — a persisted registry field bumped ONLY by the host's
  * `markMessageSent` on a live (non-replay) turn-end frame, never by
  * attach/restore/spawn (`registry.ts`, `host.ts onSupervisorEvent`). It drives
- * the DISPLAYED recency (above), which was the bug: merely opening a session
- * used to read "now".
+ * the row order (above); when rows still showed a recency, merely opening a
+ * session used to read "now".
  *
  * DONE (float-to-top, 2026-07-20): the operator's fuller CC-2 spec — a row floats
  * to the top ONLY when its session SENDS a message — is now the actual order
@@ -73,6 +73,22 @@ export function selectSidebarNavFocusHandoff<Id extends string>(
   focusedNavId: Id | null,
 ): Id | null {
   return sidebarOpen ? null : focusedNavId
+}
+
+/**
+ * Whether the open rail's footer shows its labelled destination list rather than
+ * the one-line icon strip (operator, 2026-09-27). The list is for a pointer that
+ * is going to the footer: it shows while the pointer is inside the band, measured
+ * up from the rail's bottom edge, that the collapsed rail's icon column occupies.
+ * An unknown pointer or an unmeasured band keeps the strip.
+ */
+export function selectSidebarFooterExpanded(
+  pointerY: number | null,
+  railBottom: number,
+  bandHeight: number,
+): boolean {
+  if (pointerY == null || bandHeight <= 0) return false
+  return pointerY >= railBottom - bandHeight
 }
 
 /**

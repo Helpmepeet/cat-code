@@ -112,7 +112,7 @@ test('a hover-expanded destination remains direct and dismisses the overlay afte
   const destination = tree.container.querySelector<HTMLButtonElement>(
     '[data-sidebar-nav-id="goals"]',
   )
-  expect(destination?.textContent).toContain('Goals')
+  expect(destination?.getAttribute('aria-label')).toBe('Goals')
   expect(
     tree.container.querySelector('[data-sidebar-nav-id="sessions"]'),
   ).toBeNull()
@@ -219,4 +219,99 @@ test('New chat, Chats plus, and Add project dispatch separate actions with no se
   })
 
   expect(calls).toEqual(['project-aware', 'managed', 'project-picker'])
+})
+
+/**
+ * The footer's pointer band (operator, 2026-09-27). happy-dom has no layout, so
+ * the rects the band is measured from are stubbed: the rail's bottom edge at
+ * RAIL_BOTTOM and the collapsed icon column's top at BAND_TOP. The band is
+ * measured from the COLLAPSED column, so its height must not depend on which
+ * footer form the open rail shows.
+ */
+const RAIL_BOTTOM = 900
+const BAND_TOP = 712
+
+async function withStubbedRects(run: () => Promise<void>): Promise<void> {
+  const original = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    const rect = original.call(this)
+    if (this.tagName === 'ASIDE') return { ...rect, top: 40, bottom: RAIL_BOTTOM }
+    if (this.tagName === 'NAV' && this.className.includes('mt-auto')) {
+      return { ...rect, top: BAND_TOP, bottom: RAIL_BOTTOM }
+    }
+    return rect
+  }
+  try {
+    await run()
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = original
+  }
+}
+
+async function hoverOpenAt(aside: HTMLElement, clientY: number): Promise<void> {
+  await act(async () => {
+    aside.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientY }))
+    await new Promise(resolve => setTimeout(resolve, 140))
+  })
+}
+
+function footerShowsList(container: HTMLElement): boolean {
+  return (
+    container.querySelector('[data-sidebar-nav-id="goals"]')?.textContent ===
+    'Goals'
+  )
+}
+
+test('opening from above the band rests the footer as the icon strip', async () => {
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar({ accountAlias: 'main' }))
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, BAND_TOP - 20)
+    expect(aside.className).toContain('sidebar-expanded')
+    expect(footerShowsList(tree.container)).toBe(false)
+    expect(
+      tree.container.querySelector('[data-sidebar-nav-id="goals"]')?.getAttribute('aria-label'),
+    ).toBe('Goals')
+  })
+})
+
+test('opening inside the band shows the labelled list at once', async () => {
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar({ activeView: 'goals' }))
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, BAND_TOP + 4)
+    expect(footerShowsList(tree.container)).toBe(true)
+    // The list keeps the session-row hover and active treatments.
+    const html = tree.container.innerHTML
+    expect(html).toContain(
+      'border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07]',
+    )
+    expect(html).toContain('border-accent/[0.18] bg-accent/[0.09] text-accent-soft')
+  })
+})
+
+test('an open rail grows the footer when the pointer enters the band and rests it on leaving', async () => {
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar())
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, 200)
+    expect(footerShowsList(tree.container)).toBe(false)
+
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP + 1 }))
+    })
+    expect(footerShowsList(tree.container)).toBe(true)
+
+    // Still inside the band measured from the collapsed column, even though the
+    // list is now the footer on screen.
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP + 60 }))
+    })
+    expect(footerShowsList(tree.container)).toBe(true)
+
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP - 1 }))
+    })
+    expect(footerShowsList(tree.container)).toBe(false)
+  })
 })
