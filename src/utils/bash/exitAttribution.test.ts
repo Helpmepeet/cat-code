@@ -36,7 +36,10 @@ const plan = (command: string, state: ExitMarkerShellState = NO_USER_COMMANDS) =
 const placed = (command: string) => {
   const p = plan(command)
   if (!p) return null
-  return p.instrumentedCommand.replace(buildExitMarker(EVIDENCE, p.token), 'M')
+  return p.instrumentedCommand.replace(
+    buildExitMarker(EVIDENCE, p.token, p.semanticCommand),
+    'M',
+  )
 }
 
 describe('planExitAttribution: where the marker goes', () => {
@@ -284,6 +287,15 @@ describe.skipIf(!existsSync('/bin/bash'))('analyzeSnapshotForExitMarker on real 
 
 describe('readExitEvidence', () => {
   const p = { token: 'abc', semanticCommand: 'grep', pipelineHasMultipleCommands: true }
+  // The layout buildExitMarker writes: header, `set -o`, then the sections.
+  const evidence = ({
+    header = 'abc hB',
+    options = 'pipefail  off',
+    identity = 'file',
+    alias = '',
+    fn = '',
+  }: { header?: string; options?: string; identity?: string; alias?: string; fn?: string } = {}) =>
+    [header, options, 'abc identity', identity, 'abc alias', alias, 'abc function', fn, 'abc end', ''].join('\n')
 
   test('a missing file means the command never started', () => {
     expect(readExitEvidence(undefined, p)).toMatchObject({
@@ -292,24 +304,88 @@ describe('readExitEvidence', () => {
   })
 
   test('a matching token proves the start and reads pipefail', () => {
-    expect(readExitEvidence('abc hB\npipefail  off\n', p)).toEqual({
+    expect(readExitEvidence(evidence(), p)).toEqual({
       semanticCommand: 'grep',
       semanticCommandStarted: true,
       pipelineHasMultipleCommands: true,
       pipefailEnabled: false,
     })
-    expect(readExitEvidence('abc hB\npipefail  on\n', p)?.pipefailEnabled).toBe(true)
+    expect(readExitEvidence(evidence({ options: 'pipefail  on' }), p)?.pipefailEnabled).toBe(true)
   })
 
   test('pipefail is assumed on when the option list is missing', () => {
-    expect(readExitEvidence('abc hB\n', p)?.pipefailEnabled).toBe(true)
+    expect(readExitEvidence(evidence({ options: '' }), p)?.pipefailEnabled).toBe(true)
+  })
+
+  test('a pipefail line in a later section is not the option list', () => {
+    expect(
+      readExitEvidence(evidence({ options: '', alias: 'pipefail off' }), p)?.pipefailEnabled,
+    ).toBe(true)
   })
 
   test('a wrong token, or tracing active at the marker, is not trusted', () => {
-    expect(readExitEvidence('zzz hB\npipefail off\n', p)).toBeNull()
+    expect(readExitEvidence(evidence({ header: 'zzz hB' }), p)).toBeNull()
     expect(readExitEvidence('', p)).toBeNull()
-    expect(readExitEvidence('abc hxB\npipefail off\n', p)).toBeNull()
-    expect(readExitEvidence('abc hvB\npipefail off\n', p)).toBeNull()
+    expect(readExitEvidence(evidence({ header: 'abc hxB' }), p)).toBeNull()
+    expect(readExitEvidence(evidence({ header: 'abc hvB' }), p)).toBeNull()
+  })
+
+  test('missing or out-of-order sections are not trusted', () => {
+    expect(readExitEvidence('abc hB\npipefail off\n', p)).toBeNull()
+    expect(readExitEvidence(evidence().replace('abc end\n', ''), p)).toBeNull()
+  })
+
+  describe('the name must resolve to the real program at run time', () => {
+    test.each([
+      ['a bash file', 'file'],
+      ['a bash builtin', 'builtin\nfile'],
+      ['a zsh command', 'grep: command'],
+      ['a zsh hashed command', 'grep: hashed'],
+      ['a zsh builtin', 'grep: builtin'],
+    ])('%s is trusted', (_label, identity) => {
+      expect(readExitEvidence(evidence({ identity }), p)).not.toBeNull()
+    })
+
+    test.each([
+      ['a function returning 1', 'function\nfile', { fn: 'grep () \n{ \n    return 1\n}' }],
+      ['a zsh function', 'grep: function\ngrep: command', { fn: 'grep () {\n\treturn 1\n}' }],
+      ['an alias to another command', 'alias\nfile', { alias: "alias grep='false'" }],
+      ['a zsh alias to another command', 'grep: alias\ngrep: command', { alias: "grep='false'" }],
+      ['an alias with no recorded definition', 'alias\nfile', {}],
+      ['a keyword', 'keyword', {}],
+      ['nothing at all', 'grep: none', {}],
+      ['an empty lookup', '', {}],
+    ])('%s is not trusted', (_label, identity, extra) => {
+      expect(readExitEvidence(evidence({ identity, ...extra }), p)).toBeNull()
+    })
+
+    test.each([
+      ['a self-alias', 'alias\nfile', { alias: "alias grep='grep --color=auto'" }],
+      ['a zsh self-alias', 'grep: alias\ngrep: command', { alias: "grep='grep --color=auto'" }],
+      [
+        'a forwarding wrapper',
+        'function\nfile',
+        { fn: 'grep () \n{ \n    command grep --color "$@"\n}' },
+      ],
+      [
+        'a self-alias over a forwarding wrapper',
+        'grep: alias\ngrep: function\ngrep: command',
+        { alias: "grep='grep -i'", fn: 'grep () {\n\tcommand grep "$@"\n}' },
+      ],
+    ])('%s running the same program is trusted', (_label, identity, extra) => {
+      expect(readExitEvidence(evidence({ identity, ...extra }), p)).not.toBeNull()
+    })
+
+    test('a zsh quoted special name is matched', () => {
+      const bracket = { ...p, semanticCommand: '[' }
+      expect(readExitEvidence(evidence({ identity: '[: builtin' }), bracket)).not.toBeNull()
+      expect(
+        readExitEvidence(
+          evidence({ identity: '[: alias\n[: builtin', alias: "'['=false" }),
+          bracket,
+        ),
+      ).toBeNull()
+    })
   })
 })
 
@@ -354,6 +430,7 @@ function runWrapped(
   runDir: string,
   flags: string[] = [],
   snapshot?: Snapshot,
+  env: Record<string, string> = {},
 ): Run {
   const cwdFile = join(runDir, 'cwd')
   const outFile = join(runDir, 'out')
@@ -365,6 +442,7 @@ function runWrapped(
   const proc = spawnSync(shell, [...flags, '-c', script], {
     cwd: work,
     stdio: ['ignore', out, out],
+    env: { ...process.env, ...env },
   })
   closeSync(out)
   return {
@@ -374,10 +452,16 @@ function runWrapped(
   }
 }
 
-function judge(shell: string, command: string, flags: string[] = [], snapshot?: Snapshot) {
+function judge(
+  shell: string,
+  command: string,
+  flags: string[] = [],
+  snapshot?: Snapshot,
+  env: Record<string, string> = {},
+) {
   const runDir = mkdtempSync(join(runs, 'run-'))
   const evidencePath = join(runDir, 'evidence')
-  const original = runWrapped(shell, command, runDir, flags, snapshot)
+  const original = runWrapped(shell, command, runDir, flags, snapshot, env)
   const p = planExitAttribution(
     command,
     SEMANTIC_COMMAND_NAMES,
@@ -385,7 +469,7 @@ function judge(shell: string, command: string, flags: string[] = [], snapshot?: 
     snapshot?.state ?? NO_USER_COMMANDS,
   )
   const instrumented = p
-    ? runWrapped(shell, p.instrumentedCommand, runDir, flags, snapshot)
+    ? runWrapped(shell, p.instrumentedCommand, runDir, flags, snapshot, env)
     : original
   const evidence = existsSync(evidencePath) ? readFileSync(evidencePath, 'utf8') : undefined
   const attribution = p ? readExitEvidence(evidence, p) : null
@@ -538,3 +622,51 @@ for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
     })
   })
 }
+
+// Shadowing from a source no static check sees: the planner is told nothing
+// (empty user-defined table), so it instruments, and only the marker's
+// runtime identity record can refuse the rule.
+describe('runtime identity catches shadowing no static check saw', () => {
+  const startupFile = (shell: string, text: string): Record<string, string> => {
+    const dir = mkdtempSync(join(runs, 'startup-'))
+    if (shell.endsWith('zsh')) {
+      writeFileSync(join(dir, '.zshenv'), text)
+      return { ZDOTDIR: dir }
+    }
+    writeFileSync(join(dir, 'env.sh'), text)
+    return { BASH_ENV: join(dir, 'env.sh') }
+  }
+
+  for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
+    const kind = shell.split('/').pop()!
+    const via = kind === 'zsh' ? 'ZDOTDIR/.zshenv' : 'BASH_ENV'
+
+    test(`${kind}: a diff function from ${via} returning 1 is a failure`, () => {
+      const r = judge(shell, 'diff', [], undefined, startupFile(shell, 'diff() { return 1; }\n'))
+      expect(r.planned).toBe(true)
+      expect(r.original.code).toBe(1)
+      expect(r.attribution).toBeNull()
+      expect(r.isError).toBe(true)
+    })
+
+    test(`${kind}: an lsof function from ${via} is not lsof`, () => {
+      const r = judge(shell, 'true && lsof', [], undefined, startupFile(shell, 'lsof() { return 1; }\n'))
+      expect(r.planned).toBe(true)
+      expect(r.attribution).toBeNull()
+      expect(r.isError).toBe(true)
+    })
+  }
+
+  test.skipIf(!existsSync('/bin/zsh'))('zsh: a self-alias from ZDOTDIR/.zshenv keeps the rule', () => {
+    const r = judge(
+      '/bin/zsh',
+      'true && grep missing file.txt',
+      [],
+      undefined,
+      startupFile('/bin/zsh', "alias grep='grep -i'\n"),
+    )
+    expect(r.planned).toBe(true)
+    expect(r.instrumented).toEqual(r.original)
+    expect(r.isError).toBe(false)
+  })
+})

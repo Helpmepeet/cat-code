@@ -19,10 +19,14 @@
  * (xtrace, verbose, DEBUG traps).
  *
  * Proving the command started is not enough if the name runs user code: a
- * `diff` function returning 1 is not diff reporting differences. Any command
- * name the user's shell defines as a function or alias (other than a wrapper
- * provably running the same program) disables the marker, which also keeps
- * user code from running unseen before it.
+ * `diff` function returning 1 is not diff reporting differences. So the
+ * marker also records how the shell resolves the name at that moment (bash
+ * `type -at`, zsh `whence -wa`, plus any alias or function definition), and
+ * the rule applies only when that resolves to a builtin or a program on PATH,
+ * directly or through a wrapper provably running the same program. That holds
+ * whatever defined the name. Separately, any name the snapshot defines as user
+ * code disables the marker up front, which keeps user code from running
+ * unseen before it.
  *
  * Every refusal here means "no attribution": the caller falls back to
  * non-zero-is-error, which can only over-report failure, never hide one.
@@ -88,13 +92,42 @@ const OPAQUE_BUILTINS = new Set([
 
 // Names the marker itself relies on. A user function with one of these names
 // would run in place of the marker's builtin.
-const MARKER_BUILTINS = new Set([':', 'set', 'command'])
+const MARKER_BUILTINS = new Set([':', 'set', 'command', 'builtin'])
 
 const SAFE_SET_OPTIONS = new Set(['errexit', 'nounset', 'pipefail'])
 
-export function buildExitMarker(evidenceFilePath: string, token: string): string {
+/**
+ * Evidence layout, one section per line group, each opened by `<token> <name>`:
+ * the header `<token> <$->`, `set -o`, then `identity` (every resolution of
+ * the name, in lookup order), `alias` and `function` (their definitions, if
+ * any), and `end`. The random token keeps a definition's text from forging a
+ * section boundary.
+ */
+export function buildExitMarker(
+  evidenceFilePath: string,
+  token: string,
+  semanticCommand: string,
+): string {
   const path = quote([evidenceFilePath])
-  return `: "$( { command printf '%s %s\\n' ${token} "$-" >|${path}; set -o >>${path}; } 2>/dev/null )" "$_"`
+  const name = quote([semanticCommand])
+  const section = (label: string) => `command printf '%s ${label}\\n' ${token} >>${path}`
+  // `(pattern)` form: inside $(...), bash 3.2 (macOS /bin/bash) ends the
+  // substitution at a case pattern's unbalanced `)`. Each lookup ends in
+  // `|| :` because a name with no alias or function makes it exit 1, and
+  // POSIX-mode bash carries `set -e` into the substitution.
+  const byShell = (bash: string, zsh: string) =>
+    `case \${ZSH_VERSION-} in ('') ${bash} ;; (*) ${zsh} ;; esac >>${path} || :`
+  return [
+    `: "$( { command printf '%s %s\\n' ${token} "$-" >|${path}`,
+    `set -o >>${path}`,
+    section('identity'),
+    byShell(`builtin type -at ${name}`, `builtin whence -wa ${name}`),
+    section('alias'),
+    `builtin alias ${name} >>${path} || :`,
+    section('function'),
+    byShell(`builtin declare -f ${name}`, `builtin functions ${name}`),
+    `${section('end')}; } 2>/dev/null )" "$_"`,
+  ].join('; ')
 }
 
 /**
@@ -129,7 +162,7 @@ export function planExitAttribution(
   if (readsStatusTheMarkerResets(located)) return null
 
   const token = randomBytes(16).toString('hex')
-  const marker = buildExitMarker(evidenceFilePath, token)
+  const marker = buildExitMarker(evidenceFilePath, token, candidate.name)
   const followsAnd = located.relation === 'and'
   const insertAt = followsAnd
     ? located.operand.startIndex
@@ -154,7 +187,8 @@ export function planExitAttribution(
 
 /**
  * Turn the side file into an attribution. A missing file means the marker
- * never ran. A wrong token, or xtrace/verbose active when it ran, means the
+ * never ran. A wrong token, xtrace/verbose active when it ran, a missing
+ * section, or a name that does not resolve to the real program means the
  * evidence is not trusted at all.
  */
 export function readExitEvidence(
@@ -171,16 +205,84 @@ export function readExitEvidence(
   if (contents === undefined) {
     return { ...base, semanticCommandStarted: false, pipefailEnabled: true }
   }
-  const newline = contents.indexOf('\n')
-  const header = newline === -1 ? contents : contents.slice(0, newline)
+  const [header = '', ...lines] = contents.split('\n')
   const [token, flags = ''] = header.split(' ')
   if (token !== plan.token || /[xv]/.test(flags)) return null
+  const sections = splitEvidenceSections(lines, plan.token)
+  if (!sections) return null
+  if (!resolvesToProgram(plan.semanticCommand, sections)) return null
   return {
     ...base,
     semanticCommandStarted: true,
     // Unknown counts as enabled: only an explicit `off` line clears it.
-    pipefailEnabled: !/^pipefail\s+off\s*$/m.test(contents),
+    pipefailEnabled: !/^pipefail\s+off\s*$/m.test(sections.options),
   }
+}
+
+type EvidenceSections = {
+  options: string
+  identity: string[]
+  alias: string
+  function: string
+}
+
+function splitEvidenceSections(
+  lines: string[],
+  token: string,
+): EvidenceSections | null {
+  const at = (label: string) => lines.indexOf(`${token} ${label}`)
+  const identity = at('identity')
+  const alias = at('alias')
+  const fn = at('function')
+  const end = at('end')
+  if (!(identity >= 0 && identity < alias && alias < fn && fn < end)) return null
+  return {
+    options: lines.slice(0, identity).join('\n'),
+    identity: lines.slice(identity + 1, alias).filter(Boolean),
+    alias: lines.slice(alias + 1, fn).join('\n'),
+    function: lines.slice(fn + 1, end).join('\n'),
+  }
+}
+
+/**
+ * Walk the shell's own lookup order for the name: an alias, then a function,
+ * then the builtin or file that finally runs. An alias or function passes only
+ * when its recorded definition provably runs the same program; the walk must
+ * end at a builtin or a file. bash prints one kind per line (`alias`,
+ * `function`, `builtin`, `file`, `keyword`); zsh prints `name: kind` with
+ * `command`/`hashed` for files and `reserved` for keywords.
+ */
+function resolvesToProgram(name: string, sections: EvidenceSections): boolean {
+  const kinds = sections.identity.map(line => {
+    const kind = line.startsWith(`${name}: `) ? line.slice(name.length + 2) : line
+    return kind === 'command' || kind === 'hashed' ? 'file' : kind.trim()
+  })
+  for (const kind of kinds) {
+    if (kind === 'builtin' || kind === 'file') return true
+    if (kind === 'alias') {
+      const value = aliasValue(name, sections.alias)
+      if (value === null || !isTransparentAlias(name, value)) return false
+      continue
+    }
+    if (kind === 'function') {
+      if (!isTransparentFunction(name, sections.function)) return false
+      continue
+    }
+    return false
+  }
+  return false
+}
+
+/** bash prints `alias name='value'`, zsh prints `name='value'`. */
+function aliasValue(name: string, printed: string): string | null {
+  const line = printed.trim().replace(/^alias /, '')
+  const prefixes = [`${name}=`, `'${name}'=`, `${quote([name])}=`]
+  const prefix = prefixes.find(p => line.startsWith(p))
+  if (prefix === undefined) return null
+  const raw = line.slice(prefix.length)
+  return raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")
+    ? raw.slice(1, -1).replace(/'\\''/g, "'")
+    : raw
 }
 
 /**
