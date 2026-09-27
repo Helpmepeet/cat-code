@@ -1,5 +1,22 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  spyOn,
+  test,
+} from 'bun:test'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getSystemPrompt } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
@@ -17,6 +34,23 @@ import {
   RUNTIME_METADATA_RULE,
   TOOL_OUTPUT_IS_DATA_RULE,
 } from './corePolicy.js'
+import {
+  getAllowedSettingSources,
+  getFlagSettingsInline,
+  getFlagSettingsPath,
+  setAllowedSettingSources,
+  setFlagSettingsInline,
+  setFlagSettingsPath,
+} from '../bootstrap/state.js'
+import {
+  getManagedSessionPolicy,
+  setManagedSessionPolicy,
+} from '../utils/managedSessionPolicy.js'
+import { clearMdmSettingsCache } from '../utils/settings/mdm/settings.js'
+import { getManagedFilePath } from '../utils/settings/managedPath.js'
+import { resetSettingsCache } from '../utils/settings/settingsCache.js'
+import { _setGlobalConfigCacheForTesting } from '../utils/config.js'
+import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 
 // The targeted assertions in prompts.test.ts pin under a quarter of the
 // assembled prompt, so a refactor can drop the rest and leave every test green.
@@ -28,6 +62,68 @@ import {
 
 const SNAPSHOT_DIR = join(import.meta.dir, '__prompt_snapshots__')
 const UPDATING = process.env.UPDATE_PROMPT_SNAPSHOTS === '1'
+const environmentNames = [
+  'HOME',
+  'CLAUDE_CONFIG_DIR',
+  'CLAUDE_CODE_MANAGED_SETTINGS_PATH',
+  'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+  'CLAUDE_CODE_SIMPLE',
+  'NODE_ENV',
+  'USER_TYPE',
+] as const
+const originalEnvironment = new Map(
+  environmentNames.map(name => [name, process.env[name]]),
+)
+const originalSettingSources = getAllowedSettingSources()
+const originalFlagSettingsPath = getFlagSettingsPath()
+const originalFlagSettingsInline = getFlagSettingsInline()
+const originalManagedSessionPolicy = getManagedSessionPolicy()
+let isolatedSettingsDirectory: string
+
+beforeAll(() => {
+  isolatedSettingsDirectory = mkdtempSync(
+    join(tmpdir(), 'prompt-assembly-settings-'),
+  )
+  const home = join(isolatedSettingsDirectory, 'home')
+  const config = join(isolatedSettingsDirectory, 'config')
+  const managed = join(isolatedSettingsDirectory, 'managed')
+  mkdirSync(home)
+  mkdirSync(config)
+  mkdirSync(managed)
+  process.env.HOME = home
+  process.env.CLAUDE_CONFIG_DIR = config
+  process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH = managed
+  process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'
+  process.env.NODE_ENV = 'test'
+  delete process.env.CLAUDE_CODE_SIMPLE
+  setAllowedSettingSources(['userSettings'])
+  setFlagSettingsPath(undefined)
+  setFlagSettingsInline(null)
+  setManagedSessionPolicy(null)
+  getManagedFilePath.cache.clear?.()
+  getManagedFilePath.cache.set(undefined, managed)
+  getClaudeConfigHomeDir.cache.clear?.()
+  clearMdmSettingsCache()
+  resetSettingsCache()
+  _setGlobalConfigCacheForTesting(null)
+})
+
+afterAll(() => {
+  for (const [name, value] of originalEnvironment) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  setAllowedSettingSources(originalSettingSources)
+  setFlagSettingsPath(originalFlagSettingsPath)
+  setFlagSettingsInline(originalFlagSettingsInline)
+  setManagedSessionPolicy(originalManagedSessionPolicy)
+  getManagedFilePath.cache.clear?.()
+  getClaudeConfigHomeDir.cache.clear?.()
+  clearMdmSettingsCache()
+  resetSettingsCache()
+  _setGlobalConfigCacheForTesting(null)
+  rmSync(isolatedSettingsDirectory, { recursive: true, force: true })
+})
 
 type ToolList = Parameters<typeof getSystemPrompt>[0]
 
