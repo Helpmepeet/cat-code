@@ -18,6 +18,12 @@
  * would reset (`$?`, `PIPESTATUS`) or where something could observe it
  * (xtrace, verbose, DEBUG traps).
  *
+ * Proving the command started is not enough if the name runs user code: a
+ * `diff` function returning 1 is not diff reporting differences. Any command
+ * name the user's shell defines as a function or alias (other than a wrapper
+ * provably running the same program) disables the marker, which also keeps
+ * user code from running unseen before it.
+ *
  * Every refusal here means "no attribution": the caller falls back to
  * non-zero-is-error, which can only over-report failure, never hide one.
  */
@@ -32,6 +38,16 @@ export type CommandAttribution = {
   semanticCommandStarted: boolean
   pipelineHasMultipleCommands: boolean
   pipefailEnabled: boolean
+}
+
+/** What the snapshot lets the marker rely on; null means never instrument. */
+export type ExitMarkerShellState = {
+  /**
+   * Names that run user-defined code: snapshot functions and aliases, minus
+   * aliases to the same command with literal arguments and functions whose
+   * whole body is `command <same name> <literal args> "$@"`.
+   */
+  userDefinedCommands: ReadonlySet<string>
 }
 
 export type ExitAttributionPlan = {
@@ -89,9 +105,12 @@ export function planExitAttribution(
   command: string,
   semanticCommands: ReadonlySet<string>,
   evidenceFilePath: string,
+  shellState: ExitMarkerShellState,
 ): ExitAttributionPlan | null {
   const root = parse(command)
-  if (!root || !isInstrumentableProgram(root)) return null
+  if (!root || !isInstrumentableProgram(root, semanticCommands, shellState)) {
+    return null
+  }
   const located = locateFinalOperand(root)
   if (!located) return null
   const candidate = candidateOf(located.operand)
@@ -159,38 +178,47 @@ export function readExitEvidence(
 }
 
 /**
- * Shell state that runs before the command and could observe the marker:
- * the snapshot (options, zsh trap functions, aliases) and the session
- * environment script. Bash traps are not captured by the snapshot, so they
- * can only come from the command or the session script, both checked.
+ * The snapshot runs before every command. Null when it could observe the
+ * marker (tracing on, DEBUG/ZERR trap functions, a marker builtin redefined);
+ * otherwise the names it gives user-defined meaning. Bash traps are not
+ * captured by the snapshot, so they can only come from the command or the
+ * session script, both checked separately.
  */
-export function shellStateAllowsExitMarker(
+export function analyzeSnapshotForExitMarker(
   snapshotText: string | undefined,
-  sessionEnvScript: string | null,
-): boolean {
-  if (snapshotText === undefined) return false
+): ExitMarkerShellState | null {
+  if (snapshotText === undefined) return null
   if (
     /^setopt\s+(xtrace|verbose)\s*$/m.test(snapshotText) ||
     /^set -o (xtrace|verbose|functrace)\s*$/m.test(snapshotText) ||
-    /^\s*trap\b/m.test(snapshotText) ||
-    /^(TRAP[A-Z]+|:|set|command) \(\)/m.test(snapshotText) ||
-    /^alias -- (:|set|command)=/m.test(snapshotText)
+    /^\s*trap\b/m.test(snapshotText)
   ) {
-    return false
+    return null
   }
-  // Bash snapshots store each function base64-encoded inside an eval, so the
-  // function-name check above cannot see them until they are decoded.
-  const bashFunctions = decodeBashSnapshotFunctions(snapshotText)
-  if (/^(:|set|command) \(\)/m.test(bashFunctions)) return false
-  if (
+  const functions = snapshotFunctions(snapshotText)
+  const aliases = snapshotAliases(snapshotText)
+  const names = [...functions.keys(), ...aliases.keys()]
+  if (names.some(n => n.startsWith('TRAP') || MARKER_BUILTINS.has(n))) {
+    return null
+  }
+  const userDefinedCommands = new Set<string>()
+  for (const [name, definition] of functions) {
+    if (!isTransparentFunction(name, definition)) userDefinedCommands.add(name)
+  }
+  for (const [name, value] of aliases) {
+    if (!isTransparentAlias(name, value)) userDefinedCommands.add(name)
+  }
+  return { userDefinedCommands }
+}
+
+/** The session environment script is sourced before every command too. */
+export function sessionEnvAllowsExitMarker(sessionEnvScript: string | null): boolean {
+  return !(
     sessionEnvScript &&
     /\b(set|setopt|unsetopt|shopt|trap|source|eval|emulate|alias)\b|^\s*\.\s/m.test(
       sessionEnvScript,
     )
-  ) {
-    return false
-  }
-  return true
+  )
 }
 
 /**
@@ -208,14 +236,93 @@ function readsStatusTheMarkerResets(located: Located): boolean {
   )
 }
 
-function decodeBashSnapshotFunctions(snapshotText: string): string {
-  const decoded: string[] = []
+/**
+ * Function name → definition text. zsh snapshots hold `typeset -f` output
+ * (`name () {` ... `}` at column 0); bash snapshots hold one base64-encoded
+ * `declare -f` definition per eval line. The generator's own rg/find/grep
+ * shims are written as indented `function name {` text, so they never match:
+ * they dispatch to the embedded tool with the same exit codes.
+ */
+function snapshotFunctions(snapshotText: string): Map<string, string> {
+  const functions = new Map<string, string>()
+  const collect = (text: string) => {
+    for (const match of text.matchAll(/^(\S+) \(\) ?\n?\{[\s\S]*?^\}$/gm)) {
+      functions.set(match[1]!, match[0])
+    }
+  }
+  collect(snapshotText)
   for (const match of snapshotText.matchAll(
     /^eval "\$\(echo '([A-Za-z0-9+/=\s]+)' \| base64 -d\)"/gm,
   )) {
-    decoded.push(Buffer.from(match[1]!.replace(/\s/g, ''), 'base64').toString('utf8'))
+    collect(Buffer.from(match[1]!.replace(/\s/g, ''), 'base64').toString('utf8'))
   }
-  return decoded.join('\n')
+  return functions
+}
+
+/** Alias name → expansion, from the snapshot's `alias -- name=value` lines. */
+function snapshotAliases(snapshotText: string): Map<string, string> {
+  const aliases = new Map<string, string>()
+  for (const match of snapshotText.matchAll(/^alias -- ([^=\s]+)=(.*)$/gm)) {
+    const raw = match[2]!
+    const value =
+      raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")
+        ? raw.slice(1, -1).replace(/'\\''/g, "'")
+        : raw
+    aliases.set(match[1]!, value)
+  }
+  return aliases
+}
+
+// Argument shapes with no expansion or substitution: the word the shell runs
+// is the word written.
+const LITERAL_ARG_TYPES = new Set([
+  'word',
+  'concatenation',
+  'raw_string',
+  'string',
+  'string_content',
+  '"',
+])
+
+function isLiteralArg(node: TsNode): boolean {
+  for (const inner of walk(node)) {
+    if (!LITERAL_ARG_TYPES.has(inner.type)) return false
+  }
+  return true
+}
+
+/** `alias grep='grep --color=auto'`: the same program with literal flags. */
+function isTransparentAlias(name: string, value: string): boolean {
+  const root = parse(value)
+  const [only] = root?.children ?? []
+  if (root?.children.length !== 1 || only?.type !== 'command') return false
+  const [nameNode, ...args] = only.children
+  return (
+    nameNode?.type === 'command_name' &&
+    literalWord(nameNode) === name &&
+    args.every(isLiteralArg)
+  )
+}
+
+/** `diff () { command diff --color "$@" }`: the real program, same args. */
+function isTransparentFunction(name: string, definition: string): boolean {
+  const root = parse(definition)
+  const fn = root?.children.length === 1 ? root.children[0] : undefined
+  if (fn?.type !== 'function_definition') return false
+  const body = fn.children.find(c => c.type === 'compound_statement')
+  const inner = body?.children.filter(c => c.type !== '{' && c.type !== '}')
+  const call = inner?.length === 1 ? inner[0] : undefined
+  if (call?.type !== 'command') return false
+  const [nameNode, target, ...rest] = call.children
+  const forwarded = rest[rest.length - 1]
+  return (
+    nameNode?.type === 'command_name' &&
+    literalWord(nameNode) === 'command' &&
+    target?.type === 'word' &&
+    target.text === name &&
+    forwarded?.text === '"$@"' &&
+    rest.slice(0, -1).every(isLiteralArg)
+  )
 }
 
 function parse(command: string): TsNode | null {
@@ -231,25 +338,38 @@ function* walk(node: TsNode): Generator<TsNode> {
   for (const child of node.children) yield* walk(child)
 }
 
-function isInstrumentableProgram(root: TsNode): boolean {
+function isInstrumentableProgram(
+  root: TsNode,
+  semanticCommands: ReadonlySet<string>,
+  shellState: ExitMarkerShellState,
+): boolean {
   if (root.type !== 'program') return false
   for (const node of walk(root)) {
     if (node.type === 'ERROR' || node.type === 'heredoc_redirect') return false
     if (node.type === 'function_definition') {
       const name = node.children.find(c => c.type === 'word')?.text ?? ''
-      if (name.startsWith('TRAP') || MARKER_BUILTINS.has(name)) return false
+      if (
+        name.startsWith('TRAP') ||
+        MARKER_BUILTINS.has(name) ||
+        semanticCommands.has(name)
+      ) {
+        return false
+      }
     }
-    if (node.type === 'command' && !isSafeCommand(node)) return false
+    if (node.type === 'command' && !isSafeCommand(node, shellState)) {
+      return false
+    }
   }
   return true
 }
 
-function isSafeCommand(node: TsNode): boolean {
+function isSafeCommand(node: TsNode, shellState: ExitMarkerShellState): boolean {
   const nameNode = node.children.find(c => c.type === 'command_name')
   if (!nameNode) return true
   const name = literalWord(nameNode)
   if (name === null) return false
   if (OPAQUE_BUILTINS.has(name)) return false
+  if (shellState.userDefinedCommands.has(name)) return false
   const args = node.children.filter(
     c => c !== nameNode && c.type !== 'variable_assignment',
   )

@@ -7,9 +7,11 @@ import { join as nativeJoin } from 'path'
 import { join as posixJoin } from 'path/posix'
 import { rearrangePipeCommand } from '../bash/bashPipeCommand.js'
 import {
+  analyzeSnapshotForExitMarker,
   type ExitAttributionPlan,
+  type ExitMarkerShellState,
   planExitAttribution,
-  shellStateAllowsExitMarker,
+  sessionEnvAllowsExitMarker,
 } from '../bash/exitAttribution.js'
 import { createAndSaveSnapshot } from '../bash/ShellSnapshot.js'
 import { formatShellPrefixCommand } from '../bash/shellPrefix.js'
@@ -75,19 +77,23 @@ export async function createBashShellProvider(
       })
   // Track the last resolved snapshot path for use in getSpawnArgs
   let lastSnapshotFilePath: string | undefined
-  // The snapshot is immutable once written; read it once per path.
-  let snapshotTextCache: { path: string; text: string | undefined } | undefined
-  const readSnapshotText = (path: string): string | undefined => {
-    if (snapshotTextCache?.path !== path) {
+  // The snapshot is immutable once written; analyze it once per path.
+  let snapshotStateCache:
+    | { path: string; state: ExitMarkerShellState | null }
+    | undefined
+  const exitMarkerSnapshotState = (
+    path: string,
+  ): ExitMarkerShellState | null => {
+    if (snapshotStateCache?.path !== path) {
       let text: string | undefined
       try {
         text = readFileSync(path, 'utf8')
       } catch {
         text = undefined
       }
-      snapshotTextCache = { path, text }
+      snapshotStateCache = { path, state: analyzeSnapshotForExitMarker(text) }
     }
-    return snapshotTextCache.text
+    return snapshotStateCache.state
   }
 
   return {
@@ -163,18 +169,17 @@ export async function createBashShellProvider(
       // shell prefix or BASH_ENV runs code this process never sees; any of
       // those leaves the exit unattributed. Windows paths are not handled.
       let exitAttributionPlan: ExitAttributionPlan | undefined
-      if (
+      const exitMarkerState =
         opts.exitSemanticCommands &&
         !isWindows &&
         !process.env.CLAUDE_CODE_SHELL_PREFIX &&
         !process.env.BASH_ENV &&
         !getSessionEnvVars().has('BASH_ENV') &&
         snapshotFilePath &&
-        shellStateAllowsExitMarker(
-          readSnapshotText(snapshotFilePath),
-          sessionEnvScript,
-        )
-      ) {
+        sessionEnvAllowsExitMarker(sessionEnvScript)
+          ? exitMarkerSnapshotState(snapshotFilePath)
+          : null
+      if (opts.exitSemanticCommands && exitMarkerState) {
         const evidenceFilePath = opts.useSandbox
           ? posixJoin(
               opts.sandboxTmpDir!,
@@ -189,6 +194,7 @@ export async function createBashShellProvider(
             normalizedCommand,
             opts.exitSemanticCommands,
             evidenceFilePath,
+            exitMarkerState,
           ) ?? undefined
       }
       const executedCommand =

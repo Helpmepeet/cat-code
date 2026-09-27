@@ -17,17 +17,20 @@ import {
   SEMANTIC_COMMAND_NAMES,
 } from '../../tools/BashTool/commandSemantics.js'
 import {
+  analyzeSnapshotForExitMarker,
   buildExitMarker,
+  type ExitMarkerShellState,
   planExitAttribution,
   readExitEvidence,
-  shellStateAllowsExitMarker,
+  sessionEnvAllowsExitMarker,
 } from './exitAttribution.js'
 import { quote } from './shellQuote.js'
 import { quoteShellCommand } from './shellQuoting.js'
 
 const EVIDENCE = '/tmp/claude-test-exit'
-const plan = (command: string) =>
-  planExitAttribution(command, SEMANTIC_COMMAND_NAMES, EVIDENCE)
+const NO_USER_COMMANDS: ExitMarkerShellState = { userDefinedCommands: new Set() }
+const plan = (command: string, state: ExitMarkerShellState = NO_USER_COMMANDS) =>
+  planExitAttribution(command, SEMANTIC_COMMAND_NAMES, EVIDENCE, state)
 // The instrumented command with the marker collapsed to `M`, so placement
 // reads at a glance.
 const placed = (command: string) => {
@@ -106,8 +109,19 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
     ['shopt -o', 'shopt -o xtrace; true && grep x f'],
     ['a zsh trap function', 'TRAPDEBUG() { :; }; true && grep x f'],
     ['a function shadowing the marker', 'set() { :; }; true && grep x f'],
+    // The name would run user code, not the program whose rule applies.
+    ['a function shadowing the final command', 'diff() { echo boom >&2; return 1; }; diff'],
+    ['a function shadowing lsof', 'lsof() { return 1; }; lsof'],
   ])('%s', (_label, command) => {
     expect(plan(command)).toBeNull()
+  })
+
+  test('a snapshot-defined name disables it, final or earlier in the command', () => {
+    const state = { userDefinedCommands: new Set(['diff', 'arm']) }
+    expect(plan('diff a b', state)).toBeNull()
+    expect(plan('arm && grep missing f', state)).toBeNull()
+    expect(plan('true && grep x "$(arm)"', state)).toBeNull()
+    expect(plan('true && grep missing f', state)).not.toBeNull()
   })
 
   test('$? after && is 0 with or without the marker, so it is allowed', () => {
@@ -121,66 +135,111 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
   })
 })
 
-describe('shellStateAllowsExitMarker', () => {
+describe('analyzeSnapshotForExitMarker', () => {
   const clean = '# Functions\nfoo () {\n\techo hi\n}\n# Shell Options\nsetopt autocd\n'
 
-  test('a clean snapshot with no session script allows it', () => {
-    expect(shellStateAllowsExitMarker(clean, null)).toBe(true)
+  test('a clean snapshot is usable and its functions are user-defined', () => {
+    expect(analyzeSnapshotForExitMarker(clean)?.userDefinedCommands).toEqual(new Set(['foo']))
   })
 
   test.each([
-    ['no snapshot (login-shell fallback)', undefined, null],
-    ['zsh xtrace already on', `${clean}setopt xtrace\n`, null],
-    ['bash verbose already on', `${clean}set -o verbose\n`, null],
-    ['bash functrace', `${clean}set -o functrace\n`, null],
-    ['a zsh TRAPDEBUG function', `${clean}TRAPDEBUG () {\n\t:\n}\n`, null],
-    ['an alias for the marker builtin', `${clean}alias -- set='set -x'\n`, null],
-    ['a session script that sets options', clean, 'export A=1\nset -x\n'],
-    ['a session script that traps', clean, "trap 'x' DEBUG\n"],
-  ])('%s blocks it', (_label, snapshot, sessionScript) => {
-    expect(shellStateAllowsExitMarker(snapshot, sessionScript)).toBe(false)
+    ['no snapshot (login-shell fallback)', undefined],
+    ['zsh xtrace already on', `${clean}setopt xtrace\n`],
+    ['bash verbose already on', `${clean}set -o verbose\n`],
+    ['bash functrace', `${clean}set -o functrace\n`],
+    ['a zsh TRAPDEBUG function', `${clean}TRAPDEBUG () {\n\t:\n}\n`],
+    ['an alias for the marker builtin', `${clean}alias -- set='set -x'\n`],
+  ])('%s makes it unusable', (_label, snapshot) => {
+    expect(analyzeSnapshotForExitMarker(snapshot)).toBeNull()
+  })
+
+  test('aliases are user-defined unless they are the same command with literal flags', () => {
+    const state = analyzeSnapshotForExitMarker(
+      [
+        clean,
+        "alias -- grep='grep --color=auto --exclude-dir={.git,.hg}'",
+        "alias -- ls='ls -G'",
+        "alias -- ll='ls -lh'",
+        'alias -- diff=false',
+        "alias -- rg='rg $(pick-flags)'",
+        "alias -- _='sudo '",
+      ].join('\n'),
+    )
+    expect([...state!.userDefinedCommands].sort()).toEqual(['_', 'diff', 'foo', 'll', 'rg'])
+  })
+
+  test('a function is user-defined unless it only forwards to the same program', () => {
+    const state = analyzeSnapshotForExitMarker(
+      [
+        'diff () {',
+        '\tcommand diff --color "$@"',
+        '}',
+        'lsof () {',
+        '\tcommand lsof "$@"; set -x',
+        '}',
+        'find () {',
+        '\tcommand grep "$@"',
+        '}',
+        'test () {',
+        '\tcommand test "$1"',
+        '}',
+      ].join('\n'),
+    )
+    expect([...state!.userDefinedCommands].sort()).toEqual(['find', 'lsof', 'test'])
   })
 })
 
-// Snapshots written by the production generator for a bash whose .bashrc
-// defines each function. HOME is only read at process start, so the generator
-// runs in a child with an isolated HOME and config dir.
-describe.skipIf(!existsSync('/bin/bash'))('shellStateAllowsExitMarker on real bash snapshots', () => {
-  const generator = join(import.meta.dir, 'ShellSnapshot.ts')
-  const snapshotFor = (bashrc: string): string => {
-    const home = mkdtempSync(join(tmpdir(), 'exit-attr-home-'))
-    const config = mkdtempSync(join(tmpdir(), 'exit-attr-config-'))
-    try {
-      writeFileSync(join(home, '.bashrc'), bashrc)
-      const proc = spawnSync(
-        process.execPath,
-        [
-          '-e',
-          `const { createAndSaveSnapshot } = await import(${JSON.stringify(generator)}); process.stdout.write(await createAndSaveSnapshot('/bin/bash') ?? '')`,
-        ],
-        { env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: config }, encoding: 'utf8' },
-      )
-      const path = proc.stdout.trim()
-      expect(path).not.toBe('')
-      return readFileSync(path, 'utf8')
-    } finally {
-      rmSync(home, { recursive: true, force: true })
-      rmSync(config, { recursive: true, force: true })
-    }
-  }
+describe('sessionEnvAllowsExitMarker', () => {
+  test('exports only are fine; options, traps, and sourcing are not', () => {
+    expect(sessionEnvAllowsExitMarker(null)).toBe(true)
+    expect(sessionEnvAllowsExitMarker('export A=1\n')).toBe(true)
+    expect(sessionEnvAllowsExitMarker('export A=1\nset -x\n')).toBe(false)
+    expect(sessionEnvAllowsExitMarker("trap 'x' DEBUG\n")).toBe(false)
+  })
+})
 
-  test('an ordinary function is stored encoded and allowed', () => {
-    const snapshot = snapshotFor('plain_helper() { echo hi; }\n')
-    expect(snapshot).toMatch(/^eval "\$\(echo '[A-Za-z0-9+/=]+' \| base64 -d\)"/m)
-    expect(shellStateAllowsExitMarker(snapshot, null)).toBe(true)
+// Snapshots written by the production generator for a shell whose rc file
+// holds the given text. HOME is only read at process start, so the generator
+// runs in a child with an isolated HOME and config dir.
+const GENERATOR = join(import.meta.dir, 'ShellSnapshot.ts')
+function withSnapshot<T>(shell: string, rc: string, use: (path: string, text: string) => T): T {
+  const home = mkdtempSync(join(tmpdir(), 'exit-attr-home-'))
+  const config = mkdtempSync(join(tmpdir(), 'exit-attr-config-'))
+  try {
+    writeFileSync(join(home, shell.endsWith('zsh') ? '.zshrc' : '.bashrc'), rc)
+    const proc = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const { createAndSaveSnapshot } = await import(${JSON.stringify(GENERATOR)}); process.stdout.write(await createAndSaveSnapshot(${JSON.stringify(shell)}) ?? '')`,
+      ],
+      { env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: config }, encoding: 'utf8' },
+    )
+    const path = proc.stdout.trim()
+    expect(path).not.toBe('')
+    return use(path, readFileSync(path, 'utf8'))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(config, { recursive: true, force: true })
+  }
+}
+
+describe.skipIf(!existsSync('/bin/bash'))('analyzeSnapshotForExitMarker on real bash snapshots', () => {
+  test('an ordinary function is stored encoded and seen as user-defined', () => {
+    withSnapshot('/bin/bash', 'plain_helper() { echo hi; }\n', (_path, text) => {
+      expect(text).toMatch(/^eval "\$\(echo '[A-Za-z0-9+/=]+' \| base64 -d\)"/m)
+      expect(analyzeSnapshotForExitMarker(text)?.userDefinedCommands.has('plain_helper')).toBe(true)
+    })
   })
 
   test.each([
     ['set', 'set() { builtin set "$@"; }\n'],
     ['command', 'command() { builtin command "$@"; }\n'],
     [':', ':() { true; }\n'],
-  ])('a function named %s, which the marker calls, blocks it', (_name, bashrc) => {
-    expect(shellStateAllowsExitMarker(snapshotFor(bashrc), null)).toBe(false)
+  ])('a function named %s, which the marker calls, makes it unusable', (_name, bashrc) => {
+    withSnapshot('/bin/bash', bashrc, (_path, text) => {
+      expect(analyzeSnapshotForExitMarker(text)).toBeNull()
+    })
   })
 })
 
@@ -248,12 +307,22 @@ afterAll(() => {
 
 type Run = { output: string; code: number; cwd: string | null }
 
-function runWrapped(shell: string, command: string, runDir: string, flags: string[] = []): Run {
+type Snapshot = { path: string; state: ExitMarkerShellState }
+
+function runWrapped(
+  shell: string,
+  command: string,
+  runDir: string,
+  flags: string[] = [],
+  snapshot?: Snapshot,
+): Run {
   const cwdFile = join(runDir, 'cwd')
   const outFile = join(runDir, 'out')
   rmSync(cwdFile, { force: true })
   const out = openSync(outFile, 'w')
-  const script = `eval ${quoteShellCommand(command, false)} && pwd -P >| ${quote([cwdFile])}`
+  // Sourced the way bashProvider sources it, ahead of the eval.
+  const source = snapshot ? `source ${quote([snapshot.path])} 2>/dev/null || true && ` : ''
+  const script = `${source}eval ${quoteShellCommand(command, false)} && pwd -P >| ${quote([cwdFile])}`
   const proc = spawnSync(shell, [...flags, '-c', script], {
     cwd: work,
     stdio: ['ignore', out, out],
@@ -266,12 +335,19 @@ function runWrapped(shell: string, command: string, runDir: string, flags: strin
   }
 }
 
-function judge(shell: string, command: string, flags: string[] = []) {
+function judge(shell: string, command: string, flags: string[] = [], snapshot?: Snapshot) {
   const runDir = mkdtempSync(join(runs, 'run-'))
   const evidencePath = join(runDir, 'evidence')
-  const original = runWrapped(shell, command, runDir, flags)
-  const p = planExitAttribution(command, SEMANTIC_COMMAND_NAMES, evidencePath)
-  const instrumented = p ? runWrapped(shell, p.instrumentedCommand, runDir, flags) : original
+  const original = runWrapped(shell, command, runDir, flags, snapshot)
+  const p = planExitAttribution(
+    command,
+    SEMANTIC_COMMAND_NAMES,
+    evidencePath,
+    snapshot?.state ?? NO_USER_COMMANDS,
+  )
+  const instrumented = p
+    ? runWrapped(shell, p.instrumentedCommand, runDir, flags, snapshot)
+    : original
   const evidence = existsSync(evidencePath) ? readFileSync(evidencePath, 'utf8') : undefined
   const attribution = p ? readExitEvidence(evidence, p) : null
   const verdict = interpretCommandResult(instrumented.code, instrumented.output, '', attribution)
@@ -300,6 +376,8 @@ for (const shell of SHELLS) {
       ['brace group falls back', () => 'true && { grep missing file.txt; }', true],
       ['subshell falls back', () => 'true && (grep missing file.txt)', true],
       ['xtrace in the command falls back', () => 'set -x; true && grep missing file.txt', true],
+      ['a diff function in the command is not diff', () => 'diff() { echo boom >&2; return 1; }; diff', true],
+      ['an lsof function in the command is not lsof', () => 'lsof() { return 1; }; lsof', true],
       ['false && lsof: lsof never ran', () => `false && ${lsofQuery()}`, true, HAS_LSOF],
       ['true && lsof: lsof ran, no listener', () => `true && ${lsofQuery()}`, false, HAS_LSOF],
       [
@@ -355,6 +433,56 @@ for (const shell of SHELLS) {
       expect(r.planned).toBe(true)
       expect(r.attribution).toBeNull()
       expect(r.isError).toBe(true)
+    })
+  })
+}
+
+// The user's shell as the snapshot restores it: functions and aliases from
+// the rc file, sourced before the command exactly as bashProvider does.
+for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
+  const kind = shell.split('/').pop()!
+
+  describe(`real ${kind} with a snapshot from its rc file`, () => {
+    const inSnapshot = (rc: string, command: string) =>
+      withSnapshot(shell, rc, (path, text) => {
+        const state = analyzeSnapshotForExitMarker(text)
+        expect(state).not.toBeNull()
+        return judge(shell, command, [], { path, state: state! })
+      })
+
+    test.each([
+      ['a diff function returning 1', 'diff() { echo boom >&2; return 1; }\n', 'diff'],
+      ['an alias of diff to false', 'alias diff=false\n', 'diff'],
+      ['an lsof function returning 1', 'lsof() { return 1; }\n', 'lsof'],
+    ])('%s is a failure, not the real program', (_label, rc, command) => {
+      const r = inSnapshot(rc, command)
+      expect(r.planned).toBe(false)
+      expect(r.original.code).toBe(1)
+      expect(r.isError).toBe(true)
+    })
+
+    test('a function that turns on tracing before the marker leaves output unchanged', () => {
+      const r = inSnapshot('arm() { set -x; }\n', 'arm && grep missing file.txt')
+      expect(r.planned).toBe(false)
+      expect(r.instrumented).toEqual(r.original)
+      expect(r.isError).toBe(true)
+    })
+
+    test('a wrapper forwarding to the same program keeps its rule', () => {
+      writeFileSync(join(work, 'a.txt'), 'one\n')
+      writeFileSync(join(work, 'b.txt'), 'two\n')
+      const r = inSnapshot('diff() { command diff -u "$@"; }\n', 'diff a.txt b.txt')
+      expect(r.planned).toBe(true)
+      expect(r.instrumented).toEqual(r.original)
+      expect(r.original.code).toBe(1)
+      expect(r.isError).toBe(false)
+    })
+
+    test('a self-alias with literal flags keeps its rule', () => {
+      const r = inSnapshot("alias grep='grep -i'\n", 'true && grep missing file.txt')
+      expect(r.planned).toBe(true)
+      expect(r.instrumented).toEqual(r.original)
+      expect(r.isError).toBe(false)
     })
   })
 }
