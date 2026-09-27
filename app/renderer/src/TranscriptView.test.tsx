@@ -1157,8 +1157,11 @@ test('the Agent card keeps its Background control OUTSIDE the collapse button', 
 })
 
 test('P4-8c: an Agent card derives type/state/task from the row input + status (data-path honest)', () => {
-  const html = render(
-    agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending'),
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending')]}
+      turnLive
+    />,
   )
 
   expect(html).toContain('explore') // worker type from input.subagent_type
@@ -2237,8 +2240,11 @@ test('a rejected resume has no identity line at all', () => {
 
 
 test('the pulse runs on a running face and on nothing else on the card', () => {
-  const running = render(
-    agentRow('p1', { subagent_type: 'Explore', description: 'live' }, 'pending'),
+  const running = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[agentRow('p1', { subagent_type: 'Explore', description: 'live' }, 'pending')]}
+      turnLive
+    />,
   )
   expect(running.match(/animate-face-pulse/g)).toHaveLength(1)
   expect(running).not.toContain('animate-pulse"')

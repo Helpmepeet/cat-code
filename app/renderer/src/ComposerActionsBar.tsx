@@ -2,9 +2,11 @@ import {
   useEffect,
   useRef,
   useState,
+  type AnimationEventHandler,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type Ref,
+  type RefCallback,
 } from 'react'
 import {
   formatResetLabel,
@@ -14,7 +16,7 @@ import {
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
-import { useChangedWhileMounted } from './useChangedWhileMounted.js'
+import { useEntranceOnChange } from './entranceLatch.js'
 import { ContextGauge } from './ContextGauge.js'
 import {
   pressureTone,
@@ -1278,10 +1280,14 @@ function TokenWarningChip({
   warning,
   faceProps,
   animateArrival = false,
+  arrivalRef,
+  onArrivalAnimationEnd,
 }: {
   warning: TokenWarning
   faceProps?: ComposerFaceProps
   animateArrival?: boolean
+  arrivalRef?: RefCallback<HTMLButtonElement>
+  onArrivalAnimationEnd?: AnimationEventHandler<HTMLButtonElement>
 }) {
   const { open, setOpen, ref, triggerRef } = usePopover()
   const { percentLeft, autoCompactEnabled } = warning
@@ -1294,7 +1300,10 @@ function TokenWarningChip({
   return (
     <div ref={ref} className="relative flex shrink-0">
       <button
-        ref={triggerRef}
+        ref={element => {
+          triggerRef.current = element
+          arrivalRef?.(element)
+        }}
         {...faceProps}
         type="button"
         aria-haspopup="dialog"
@@ -1303,6 +1312,7 @@ function TokenWarningChip({
         title={title}
         onClick={() => setOpen(value => !value)}
         className={`${animateArrival ? 'animate-token-warn-in' : ''} flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn`}
+        onAnimationEnd={onArrivalAnimationEnd}
       >
         <ActionWarningIcon size={14} />
       </button>
@@ -1522,7 +1532,9 @@ export function ComposerActionsBar({
     contextUsage ?? null,
     runControls?.autoCompact,
   )
-  const warningChangedWhileMounted = useChangedWhileMounted(tokenWarning !== null)
+  const warningEntrance = useEntranceOnChange(
+    tokenWarning !== null, tokenWarning !== null, 'animate-token-warn-in',
+  )
 
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
   // follows the last-focused face; when nothing in the bar is focused it rests on
@@ -1783,7 +1795,9 @@ export function ComposerActionsBar({
           {tokenWarning ? (
             <TokenWarningChip
               warning={tokenWarning}
-              animateArrival={warningChangedWhileMounted}
+              animateArrival={warningEntrance.active}
+              arrivalRef={warningEntrance.ref}
+              onArrivalAnimationEnd={warningEntrance.onAnimationEnd}
               faceProps={faceProps('token-warning')}
             />
           ) : null}

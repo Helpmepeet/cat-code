@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor } from './sessionDescriptorFixture.js'
 import { TabBar, type TabModel } from './TabBar.js'
@@ -14,10 +14,10 @@ function tab(id: string): TabModel {
   }
 }
 
-function bar(tabs: TabModel[], activeSessionId: string | null) {
+function bar(tabs: TabModel[], activeSessionId: string | null, rosterReady = true) {
   return createElement(TabBar, {
     tabs, activeSessionId, onSelect: noop, onClose: noop,
-    onRestart: noop, onNewTab: noop,
+    onRestart: noop, onNewTab: noop, rosterReady,
   })
 }
 
@@ -33,12 +33,12 @@ afterAll(async () => {
   await harness.teardown()
 })
 
-test('roster hydration stays still; a later new tab enters for one render', async () => {
+test('roster hydration stays still; a later new tab keeps its entrance through rerenders', async () => {
   const first = tab('first')
   const second = tab('second')
   const later = tab('later')
-  const tree = await harness.mount(bar([], null))
-  await tree.render(bar([first, second], 'first'))
+  const tree = await harness.mount(bar([], null, false))
+  await tree.render(bar([first, second], 'first', true))
   expect(tree.container.querySelectorAll('.animate-tab-in')).toHaveLength(0)
 
   await tree.render(bar([first, second, later], 'later'))
@@ -47,11 +47,29 @@ test('roster hydration stays still; a later new tab enters for one render', asyn
   expect(entering[0]?.getAttribute('aria-label')).toContain('later')
 
   await tree.render(bar([first, second, later], 'later'))
+  expect(tree.container.querySelectorAll('.animate-tab-in')).toHaveLength(1)
+  await act(async () => {
+    tree.container.querySelector('[role="tab"].animate-tab-in')?.dispatchEvent(
+      new Event('animationend', { bubbles: true }),
+    )
+  })
   expect(tree.container.querySelectorAll('.animate-tab-in')).toHaveLength(0)
   await tree.unmount()
 
   const remounted = await harness.mount(bar([first, second, later], 'later'))
   expect(remounted.container.querySelectorAll('.animate-tab-in')).toHaveLength(0)
+})
+
+test('a first tab added after an empty roster has hydrated enters once', async () => {
+  const first = tab('first')
+  const tree = await harness.mount(bar([], null, false))
+  await tree.render(bar([], null, true))
+  expect(tree.container.querySelector('.animate-tab-in')).toBeNull()
+  await tree.render(bar([first], 'first', true))
+  expect(tree.container.querySelectorAll('.animate-tab-in')).toHaveLength(1)
+  await tree.unmount()
+  const remounted = await harness.mount(bar([first], 'first', true))
+  expect(remounted.container.querySelector('.animate-tab-in')).toBeNull()
 })
 
 test('the selected tab scrolls into view with reduced-motion-aware behavior', async () => {

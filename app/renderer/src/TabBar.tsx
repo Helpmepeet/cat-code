@@ -8,7 +8,11 @@
  * ⌘1..9 chords (App) or with typing in the prompt input.
  */
 
-import { useLayoutEffect, useRef, type KeyboardEvent } from 'react'
+import {
+  useLayoutEffect, useRef,
+  type AnimationEventHandler, type KeyboardEvent,
+} from 'react'
+import { useEntranceLatch } from './entranceLatch.js'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import {
@@ -32,6 +36,7 @@ export type TabModel = {
 export function TabBar({
   tabs,
   activeSessionId,
+  rosterReady = true,
   onSelect,
   onClose,
   onRestart,
@@ -45,6 +50,8 @@ export function TabBar({
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
+  /** App's host roster snapshot has completed, including an empty roster. */
+  rosterReady?: boolean
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
@@ -85,7 +92,13 @@ export function TabBar({
   // DOM focus to the neighbouring tab.
   const tabRefs = useRef<Array<HTMLDivElement | null>>([])
   const committedTabIds = useRef<Set<SessionId> | null>(null)
-  const rosterWasLive = useRef(false)
+  const hydrationCommitted = useRef(false)
+  const freshTabs = new Set(
+    tabs.map(tab => tab.descriptor.appSessionId).filter(id =>
+      rosterReady && hydrationCommitted.current && !committedTabIds.current?.has(id),
+    ),
+  )
+  const entrance = useEntranceLatch(freshTabs)
 
   // Exactly one tab is tabbable (roving tabindex): the active one, or the first
   // tab when nothing is active yet, so the tablist is always keyboard-reachable.
@@ -96,8 +109,8 @@ export function TabBar({
 
   useLayoutEffect(() => {
     committedTabIds.current = new Set(tabs.map(tab => tab.descriptor.appSessionId))
-    if (tabs.length > 0) rosterWasLive.current = true
-  }, [tabs])
+    if (rosterReady) hydrationCommitted.current = true
+  }, [tabs, rosterReady])
 
   useLayoutEffect(() => {
     if (activeIndex < 0) return
@@ -179,11 +192,15 @@ export function TabBar({
             key={tab.descriptor.appSessionId}
             ref={element => {
               tabRefs.current[index] = element
+              entrance.refFor(tab.descriptor.appSessionId, 'animate-tab-in')(element)
             }}
             tab={tab}
             index={index}
             isActive={tab.descriptor.appSessionId === activeSessionId}
-            arriving={rosterWasLive.current && !committedTabIds.current?.has(tab.descriptor.appSessionId)}
+            arriving={entrance.active.has(tab.descriptor.appSessionId)}
+            onArrivalAnimationEnd={event =>
+              entrance.onAnimationEnd(tab.descriptor.appSessionId, event)
+            }
             isTabbable={index === tabbableIndex}
             onSelect={onSelect}
             onClose={onClose}
@@ -274,6 +291,7 @@ function Tab({
   index,
   isActive,
   arriving,
+  onArrivalAnimationEnd,
   isTabbable,
   onSelect,
   onClose,
@@ -286,6 +304,7 @@ function Tab({
   index: number
   isActive: boolean
   arriving: boolean
+  onArrivalAnimationEnd: AnimationEventHandler<HTMLDivElement>
   isTabbable: boolean
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
@@ -307,6 +326,7 @@ function Tab({
   return (
     <div
       ref={ref}
+      onAnimationEnd={onArrivalAnimationEnd}
       className={
         // `grow shrink-0`: tabs SHARE leftover bar width up to the 176px cap, so
         // a handful of sessions read in full instead of every title clipping

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ServerFrame } from '../../shared/protocol.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
@@ -47,8 +47,12 @@ const project = (state: ReturnType<typeof createTranscriptState>, message: SDKMe
   projectServerFrame(state, frame(message))
 const rows = (state: ReturnType<typeof createTranscriptState>) =>
   selectNestedTranscriptRows(state, sessionId)
-const view = (state: ReturnType<typeof createTranscriptState>, restorePhase: 'preview' | null = null) =>
-  createElement(TranscriptRowsView, { rows: rows(state), restorePhase })
+const view = (
+  state: ReturnType<typeof createTranscriptState>,
+  restorePhase: 'preview' | null = null,
+  accountsUsagePending = false,
+  turnLive = false,
+) => createElement(TranscriptRowsView, { rows: rows(state), restorePhase, accountsUsagePending, turnLive })
 test('a split-commit regroup alone does not animate result bodies; the pending member resolving does', async () => {
   let state = projectServerFrame(createTranscriptState(), ready)
   state = project(state, assistant(b, 'read-1', 'Read', { file_path: '/repo/one.ts' }))
@@ -60,6 +64,8 @@ test('a split-commit regroup alone does not animate result bodies; the pending m
 
   state = project(state, result(d, 'read-1', 'File not found', true))
   await tree.render(view(state))
+  expect(tree.container.querySelector('.animate-arrive')).not.toBeNull()
+  await tree.render(view(state, null, true))
   expect(tree.container.querySelector('.animate-arrive')).not.toBeNull()
   await tree.unmount()
   const remount = await harness.mount(view(state))
@@ -74,6 +80,8 @@ test('projected pending tool result fades its new peek or expanded error body on
 
   state = project(state, result(b, 'bash-1', 'hello'))
   await tree.render(view(state))
+  expect(tree.container.querySelector('.animate-arrive')).not.toBeNull()
+  await tree.render(view(state, null, true))
   expect(tree.container.querySelector('.animate-arrive')).not.toBeNull()
   await tree.unmount()
   const settled = await harness.mount(view(state))
@@ -138,6 +146,10 @@ test('an added reasoning step fades while its existing head stays instant', asyn
   }))
   expect(tree.container.querySelectorAll('li.animate-arrive')).toHaveLength(1)
   expect(tree.container.querySelector('button.animate-arrive')).toBeNull()
+  await tree.render(createElement(TranscriptRowsView, {
+    rows: [{ ...source, content: 'Inspecting files\n\nChecking output' }],
+  }))
+  expect(tree.container.querySelectorAll('li.animate-arrive')).toHaveLength(1)
   await tree.unmount()
   const remount = await harness.mount(createElement(TranscriptRowsView, {
     rows: [{ ...source, content: 'Inspecting files\n\nChecking output' }],
@@ -160,8 +172,81 @@ test('inspector animates an open action, not a pre-opened mount or remount', asy
   await closed.render(createElement(ToolInspectorOverlay, { row, onClose: () => {} }))
   expect(closed.container.querySelector('.animate-scrim-in')).not.toBeNull()
   expect(closed.container.querySelector('.animate-drawer-in')).not.toBeNull()
+  await closed.render(createElement(ToolInspectorOverlay, { row, onClose: () => {} }))
+  expect(closed.container.querySelector('.animate-drawer-in')).not.toBeNull()
   await closed.unmount()
   const remount = await harness.mount(createElement(ToolInspectorOverlay, { row, onClose: () => {} }))
   expect(remount.container.querySelector('.animate-scrim-in')).toBeNull()
   expect(remount.container.querySelector('.animate-drawer-in')).toBeNull()
+})
+
+test('live row arrival survives a split-commit regroup without restarting the wrapper', async () => {
+  let state = projectServerFrame(createTranscriptState(), ready)
+  state = project(state, assistant(a, 'bash-base', 'Bash', { command: 'echo base' }))
+  const tree = await harness.mount(view(state, null, false, true))
+  expect(tree.container.querySelector('[data-row-key].animate-arrive')).toBeNull()
+
+  state = project(state, assistant(b, 'read-live-1', 'Read', { file_path: '/repo/one.ts' }))
+  await tree.render(view(state, null, false, true))
+  const arriving = tree.container.querySelector<HTMLElement>('[data-row-key].animate-arrive')
+  expect(arriving).not.toBeNull()
+  expect(arriving?.dataset.rowKey).toBe(rows(state).at(-1)?.id)
+
+  await new Promise(resolve => setTimeout(resolve, 80))
+  state = project(state, assistant(c, 'read-live-2', 'Read', { file_path: '/repo/two.ts' }))
+  await tree.render(view(state, null, false, true))
+  const grouped = tree.container.querySelector<HTMLElement>('[data-row-key^="read-run:"]')
+  expect(grouped).toBe(arriving)
+  expect(grouped?.classList.contains('animate-arrive')).toBe(true)
+  await tree.render(view(state, null, true, true))
+  expect(grouped?.classList.contains('animate-arrive')).toBe(true)
+  await act(async () => {
+    grouped?.dispatchEvent(new Event('animationend', { bubbles: true }))
+  })
+  expect(grouped?.classList.contains('animate-arrive')).toBe(false)
+  await tree.render(view(state, null, false, true))
+  expect(grouped?.classList.contains('animate-arrive')).toBe(false)
+  await tree.unmount()
+  const remounted = await harness.mount(view(state, null, false, true))
+  expect(remounted.container.querySelector('[data-row-key].animate-arrive')).toBeNull()
+})
+
+test('finished turns and load-earlier inserts do not enter; pending dots and faces pulse only live', async () => {
+  let state = projectServerFrame(createTranscriptState(), ready)
+  state = project(state, assistant(a, 'bash-old', 'Bash', { command: 'echo old' }))
+  const tree = await harness.mount(view(state))
+  expect(tree.container.querySelector('[aria-label="running"]')?.classList.contains('animate-pulse')).toBe(false)
+  state = project(state, assistant(b, 'bash-finished', 'Bash', { command: 'echo done' }))
+  await tree.render(view(state))
+  expect(tree.container.querySelector('[data-row-key].animate-arrive')).toBeNull()
+  await tree.render(view(state, null, false, true))
+  expect(tree.container.querySelector('[aria-label="running"]')?.classList.contains('animate-pulse')).toBe(true)
+
+  let agents = projectServerFrame(createTranscriptState(), ready)
+  agents = project(agents, assistant(c, 'agent-live', 'Agent', { prompt: 'Inspect the repo' }))
+  const still = await harness.mount(view(agents))
+  expect(still.container.querySelector('svg.animate-face-pulse')).toBeNull()
+  await still.render(view(agents, null, false, true))
+  expect(still.container.querySelector('svg.animate-face-pulse')).not.toBeNull()
+
+  const old = rows(state)
+  const inserted = [{ ...old[0], id: 'history-insert' }, ...old]
+  const loaded = await harness.mount(createElement(TranscriptRowsView, { rows: old, turnLive: true }))
+  await loaded.render(createElement(TranscriptRowsView, { rows: inserted, turnLive: true }))
+  expect(loaded.container.querySelector('[data-row-key="history-insert"]')?.classList.contains('animate-arrive')).toBe(false)
+
+  const streaming: NestedTranscriptRow = {
+    kind: 'assistant-text', id: 'streaming-answer', sessionId, frameId: d,
+    messageId: d, blockIndex: 0, parentToolUseId: null, role: 'assistant',
+    content: 'Still answering', isStreaming: true, children: [],
+  }
+  const boundary: NestedTranscriptRow = {
+    kind: 'history-boundary', id: 'history-boundary', sessionId,
+    frameId: 'history-boundary', children: [],
+  }
+  await loaded.render(createElement(TranscriptRowsView, {
+    rows: [...inserted, streaming, boundary], turnLive: true,
+  }))
+  expect(loaded.container.querySelector('[data-row-key="streaming-answer"]')?.classList.contains('animate-arrive')).toBe(false)
+  expect(loaded.container.querySelector('[data-row-key="history-boundary"]')?.classList.contains('animate-arrive')).toBe(false)
 })

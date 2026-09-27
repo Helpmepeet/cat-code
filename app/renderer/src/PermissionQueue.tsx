@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
+import { useEntranceLatch } from './entranceLatch.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
 import {
@@ -47,6 +48,7 @@ export function PermissionQueue({
   const arrivals = new Set(
     items.map(item => item.request.requestId).filter(id => !seenIds.current?.has(id)),
   )
+  const entrance = useEntranceLatch(arrivals)
   useLayoutEffect(() => {
     for (const item of items) seenIds.current?.add(item.request.requestId)
   })
@@ -97,7 +99,11 @@ export function PermissionQueue({
             pendingCount={index === 0 ? awaitingAnswer : undefined}
             request={item.request}
             submitted={item.submitted}
-            animateArrival={arrivals.has(item.request.requestId)}
+            animateArrival={entrance.active.has(item.request.requestId)}
+            arrivalRef={entrance.refFor(item.request.requestId, 'animate-toast-in')}
+            onArrivalAnimationEnd={event =>
+              entrance.onAnimationEnd(item.request.requestId, event)
+            }
             workers={workers}
           />
         )

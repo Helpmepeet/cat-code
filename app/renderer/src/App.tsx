@@ -4066,6 +4066,7 @@ export function App() {
         <TabBar
           tabs={tabs}
           activeSessionId={activeSessionId}
+          rosterReady={hostSnapshotReady}
           onSelect={selectTab}
           onClose={closeTab}
           onRestart={restartTab}

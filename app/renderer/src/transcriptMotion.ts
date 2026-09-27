@@ -1,46 +1,77 @@
 import { createContext, useLayoutEffect, useRef } from 'react'
+import { useEntranceLatch } from './entranceLatch.js'
 import { reasoningStepsForRow } from './reasoningLayout.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
+type EntranceLatch = ReturnType<typeof useEntranceLatch>
+
 export type TranscriptMotion = {
-  resolvingTools: ReadonlySet<string>
-  arrivingSteps: ReadonlySet<string>
+  turnLive: boolean
+  results: EntranceLatch
+  steps: EntranceLatch
+  rows: EntranceLatch
 }
 
 const EMPTY = new Set<string>()
+const EMPTY_LATCH: EntranceLatch = {
+  active: EMPTY,
+  refFor: () => () => {},
+  onAnimationEnd: () => {},
+}
 export const TranscriptMotionContext = createContext<TranscriptMotion>({
-  resolvingTools: EMPTY,
-  arrivingSteps: EMPTY,
+  turnLive: false,
+  results: EMPTY_LATCH,
+  steps: EMPTY_LATCH,
+  rows: EMPTY_LATCH,
 })
 
-/** Status and step history is kept by row id before display grouping can re-key a card. */
+/** Status, step, and arrival history is keyed by row id before display grouping. */
 export function useTranscriptMotion(
   rows: readonly NestedTranscriptRow[],
-  live: boolean,
+  allowArrival: boolean,
+  turnLive: boolean,
 ): TranscriptMotion {
   const committed = useRef(false)
   const statuses = useRef(new Map<string, string>())
   const seenSteps = useRef(new Set<string>())
-  const resolvingTools = new Set<string>()
-  const arrivingSteps = new Set<string>()
+  const seenRows = useRef(new Set<string>())
+  const freshResults = new Set<string>()
+  const freshSteps = new Set<string>()
+  const freshRows = new Set<string>()
+
+  // Load-earlier inserts land before the first row that was already on screen.
+  const firstOldIndex = rows.findIndex(row => seenRows.current.has(row.id))
+  rows.forEach((row, index) => {
+    if (committed.current && allowArrival && turnLive &&
+        !seenRows.current.has(row.id) &&
+        (firstOldIndex < 0 || index >= firstOldIndex) &&
+        row.kind !== 'history-boundary' &&
+        !(row.kind === 'assistant-text' && row.isStreaming)) {
+      freshRows.add(row.id)
+    }
+  })
 
   const visit = (row: NestedTranscriptRow): void => {
-    if (row.kind === 'tool-use' && committed.current && live &&
+    if (row.kind === 'tool-use' && committed.current && allowArrival &&
         statuses.current.get(row.id) === 'pending' && row.status !== 'pending') {
-      resolvingTools.add(row.id)
+      freshResults.add(row.id)
     }
     if (row.kind === 'thinking' || row.kind === 'redacted-thinking') {
       const steps = reasoningStepsForRow(row)
       const hadStep = steps.some(step => seenSteps.current.has(step.key))
-      if (committed.current && live && hadStep) {
+      if (committed.current && allowArrival && hadStep) {
         for (const step of steps) {
-          if (!seenSteps.current.has(step.key)) arrivingSteps.add(step.key)
+          if (!seenSteps.current.has(step.key)) freshSteps.add(step.key)
         }
       }
     }
     for (const child of row.children) visit(child)
   }
   for (const row of rows) visit(row)
+
+  const results = useEntranceLatch(freshResults)
+  const steps = useEntranceLatch(freshSteps)
+  const rowEntrances = useEntranceLatch(freshRows)
 
   useLayoutEffect(() => {
     const remember = (row: NestedTranscriptRow): void => {
@@ -50,9 +81,12 @@ export function useTranscriptMotion(
       }
       for (const child of row.children) remember(child)
     }
-    for (const row of rows) remember(row)
+    for (const row of rows) {
+      seenRows.current.add(row.id)
+      remember(row)
+    }
     committed.current = true
   })
 
-  return { resolvingTools, arrivingSteps }
+  return { turnLive, results, steps, rows: rowEntrances }
 }

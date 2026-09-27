@@ -26,7 +26,7 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { PermissionQueue } from './PermissionQueue.js'
-import { useChangedWhileMounted } from './useChangedWhileMounted.js'
+import { useEntranceOnChange } from './entranceLatch.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
@@ -649,9 +649,11 @@ export function SessionPane({
     (scrollCapturePumpRef.current ??= createTranscriptScrollCapturePump())
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
-  const runChangedWhileMounted = useChangedWhileMounted(generating)
-  const questionChangedWhileMounted = useChangedWhileMounted(
-    askQuestion?.request.requestId ?? null,
+  const latestEntrance = useEntranceOnChange(
+    generating, !generating && !atBottom, 'animate-settle',
+  )
+  const questionEntrance = useEntranceOnChange(
+    askQuestion?.request.requestId ?? null, askQuestion !== null, 'animate-toast-in',
   )
   // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
   // now, `connectPending` is "no engine attached yet, and your own
@@ -1273,6 +1275,7 @@ export function SessionPane({
           className="min-h-0 flex-1 overflow-auto"
         >
           <TranscriptView
+            turnLive={generating}
             accounts={accountsSnapshot}
             accountsUsagePending={accountsUsagePending}
             activeSessionId={activeSessionId}
@@ -1436,7 +1439,9 @@ export function SessionPane({
               </>
             ) : (
               <span
-                className={`inline-block ${runChangedWhileMounted ? 'animate-settle' : ''}`}
+                className={`inline-block ${latestEntrance.active ? 'animate-settle' : ''}`}
+                ref={latestEntrance.ref}
+                onAnimationEnd={latestEntrance.onAnimationEnd}
               >
                 ↓ Latest
               </span>
@@ -1509,7 +1514,9 @@ export function SessionPane({
        * in-turn activity row hugs the composer. */}
       {askQuestion ? (
         <div
-          className={`${questionChangedWhileMounted ? 'animate-toast-in' : ''} ${askQuestion.submitted ? 'opacity-55' : ''} transition-opacity duration-[var(--motion-fast)]`}
+          className={`${questionEntrance.active ? 'animate-toast-in' : ''} ${askQuestion.submitted ? 'opacity-55' : ''} transition-opacity duration-[var(--motion-fast)]`}
+          ref={questionEntrance.ref}
+          onAnimationEnd={questionEntrance.onAnimationEnd}
         >
           <AskQuestionFlow
             key={askQuestion.request.requestId}
