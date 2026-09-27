@@ -114,7 +114,13 @@ export function planExitAttribution(
   const located = locateFinalOperand(root)
   if (!located) return null
   const candidate = candidateOf(located.operand)
-  if (!candidate || !semanticCommands.has(candidate.name)) return null
+  if (
+    !candidate ||
+    !semanticCommands.has(candidate.name) ||
+    shellState.userDefinedCommands.has(candidate.name)
+  ) {
+    return null
+  }
   // Only `&&` and a direct statement leave nothing between the marker and the
   // command. After `||` the left side runs after the marker and can end the
   // shell (`exit 1 || grep x f`), so evidence would claim a start that never
@@ -251,7 +257,7 @@ function snapshotFunctions(snapshotText: string): Map<string, string> {
   const functions = new Map<string, string>()
   const collect = (text: string) => {
     for (const match of text.matchAll(/^(\S+) \(\) ?\n?\{[\s\S]*?^\}$/gm)) {
-      functions.set(match[1]!, match[0])
+      functions.set(unquoteName(match[1]!), match[0])
     }
   }
   collect(snapshotText)
@@ -272,9 +278,16 @@ function snapshotAliases(snapshotText: string): Map<string, string> {
       raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")
         ? raw.slice(1, -1).replace(/'\\''/g, "'")
         : raw
-    aliases.set(match[1]!, value)
+    aliases.set(unquoteName(match[1]!), value)
   }
   return aliases
+}
+
+/** zsh prints names with special characters quoted: `'[' () {`, `'['=false`. */
+function unquoteName(name: string): string {
+  return name.length >= 2 && name.startsWith("'") && name.endsWith("'")
+    ? name.slice(1, -1).replace(/'\\''/g, "'")
+    : name
 }
 
 // Argument shapes with no expansion or substitution: the word the shell runs
@@ -361,6 +374,15 @@ function isInstrumentableProgram(
       }
     }
     if (node.type === 'command' && !isSafeCommand(node, shellState)) {
+      return false
+    }
+    // `[ ... ]` parses as test_command, not command, but runs whatever the
+    // shell defines as `[`.
+    if (
+      node.type === 'test_command' &&
+      node.children[0]?.type === '[' &&
+      shellState.userDefinedCommands.has('[')
+    ) {
       return false
     }
   }

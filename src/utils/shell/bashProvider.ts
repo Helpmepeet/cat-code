@@ -25,6 +25,7 @@ import { logForDebugging } from '../debug.js'
 import { getPlatform } from '../platform.js'
 import { getSessionEnvironmentScript } from '../sessionEnvironment.js'
 import { getSessionEnvVars } from '../sessionEnvVars.js'
+import { subprocessEnv } from '../subprocessEnv.js'
 import {
   ensureSocketInitialized,
   getClaudeTmuxEnv,
@@ -62,6 +63,14 @@ function getDisableExtglobCommand(shellPath: string): string | null {
   }
   // Unknown shell - do nothing, we don't know the right command
   return null
+}
+
+function exportsBashFunctions(): boolean {
+  const isExportedFunction = (name: string) => name.startsWith('BASH_FUNC_')
+  return (
+    Object.keys(subprocessEnv()).some(isExportedFunction) ||
+    [...getSessionEnvVars().keys()].some(isExportedFunction)
+  )
 }
 
 export async function createBashShellProvider(
@@ -168,6 +177,10 @@ export async function createBashShellProvider(
       // marker. No snapshot means a login shell runs the user's profile, and a
       // shell prefix or BASH_ENV runs code this process never sees; any of
       // those leaves the exit unattributed. Windows paths are not handled.
+      // Exported bash functions (BASH_FUNC_*) reach the command through the
+      // environment, but the snapshot misses them when there is no .bashrc
+      // or under CLAUDE_CODE_DONT_INHERIT_ENV, so their names could shadow
+      // a command unseen.
       let exitAttributionPlan: ExitAttributionPlan | undefined
       const exitMarkerState =
         opts.exitSemanticCommands &&
@@ -175,6 +188,7 @@ export async function createBashShellProvider(
         !process.env.CLAUDE_CODE_SHELL_PREFIX &&
         !process.env.BASH_ENV &&
         !getSessionEnvVars().has('BASH_ENV') &&
+        !exportsBashFunctions() &&
         snapshotFilePath &&
         sessionEnvAllowsExitMarker(sessionEnvScript)
           ? exitMarkerSnapshotState(snapshotFilePath)

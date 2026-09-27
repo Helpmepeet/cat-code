@@ -124,6 +124,14 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
     expect(plan('true && grep missing f', state)).not.toBeNull()
   })
 
+  test('a user-defined [ disables it, as the final test or before the marker', () => {
+    const state = { userDefinedCommands: new Set(['[']) }
+    expect(plan('[ -n x ]', state)).toBeNull()
+    expect(plan('true && [ -n x ]', state)).toBeNull()
+    expect(plan('[ -n x ] && grep missing f', state)).toBeNull()
+    expect(plan('[ -n x ]')).not.toBeNull()
+  })
+
   test('$? after && is 0 with or without the marker, so it is allowed', () => {
     expect(plan('true && test "$?" -eq 0')).not.toBeNull()
   })
@@ -166,6 +174,16 @@ describe('analyzeSnapshotForExitMarker', () => {
       ].join('\n'),
     )
     expect([...state!.userDefinedCommands].sort()).toEqual(['_', 'diff', 'foo', 'll', 'rg'])
+  })
+
+  test('names zsh prints quoted are read unquoted', () => {
+    expect(
+      analyzeSnapshotForExitMarker(["'[' () {", '\treturn 1', '}'].join('\n'))
+        ?.userDefinedCommands,
+    ).toEqual(new Set(['[']))
+    expect(
+      analyzeSnapshotForExitMarker("alias -- '['=false")?.userDefinedCommands,
+    ).toEqual(new Set(['[']))
   })
 
   test('a function is user-defined unless it only forwards to the same program', () => {
@@ -285,8 +303,8 @@ const HAS_LSOF = ['/usr/sbin/lsof', '/usr/bin/lsof'].some(existsSync)
 const HAS_GIT = spawnSync('git', ['--version']).status === 0
 
 let work: string
-// Per-run scratch lives outside `work`: `ls -la` and `git status` in the
-// matrix list `work`, and files appearing there between the original and the
+// Per-run scratch lives outside `work`: `git status` in the matrix lists
+// `work`, and files appearing there between the original and the
 // instrumented run would make identical commands print different output.
 let runs: string
 let closedPort: number
@@ -384,7 +402,9 @@ for (const shell of SHELLS) {
       ['true && lsof: lsof ran, no listener', () => `true && ${lsofQuery()}`, false, HAS_LSOF],
       [
         'the reported command',
-        () => `ls -la && git status -sb && ${lsofQuery()}`,
+        // Lists `x`, not `work`: git status rewrites .git/index, which moves
+        // the mtime `ls -la work` prints for .git between the two runs.
+        () => `ls -la x && git status -sb && ${lsofQuery()}`,
         false,
         HAS_LSOF && HAS_GIT,
       ],
@@ -452,10 +472,21 @@ for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
         return judge(shell, command, [], { path, state: state! })
       })
 
+    // bash runs its `[` builtin even when a function has that name, so only
+    // the alias shadows it there.
+    const shadowsBracket: [string, string, string][] =
+      kind === 'zsh'
+        ? [
+            ['a [ function returning 1', '[() { return 1; }\n', '[ -n x ]'],
+            ['an alias of [ to false', "alias '['=false\n", '[ -n x ]'],
+          ]
+        : [['an alias of [ to false', "alias '['=false\n", '[ -n x ]']]
+
     test.each([
       ['a diff function returning 1', 'diff() { echo boom >&2; return 1; }\n', 'diff'],
       ['an alias of diff to false', 'alias diff=false\n', 'diff'],
       ['an lsof function returning 1', 'lsof() { return 1; }\n', 'lsof'],
+      ...shadowsBracket,
     ])('%s is a failure, not the real program', (_label, rc, command) => {
       const r = inSnapshot(rc, command)
       expect(r.planned).toBe(false)
