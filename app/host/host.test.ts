@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -611,7 +612,9 @@ test('managed submit waits for a durable ready identity after storage failure', 
 
   // An invalid root record makes `readRoot` throw on the ready callback. The
   // callback must settle, and a submit must remain blocked until repair.
-  const recordPath = join(ownershipDir, 'managed-storage-root.json')
+  const record = readdirSync(ownershipDir).find(name => name.startsWith('managed-storage-root-'))
+  if (!record) throw new Error('expected managed root record')
+  const recordPath = join(ownershipDir, record)
   const validRoot = readFileSync(recordPath, 'utf8')
   writeFileSync(recordPath, '{broken')
   h.supervisor.emitReady(created.value.appSessionId, engineId)

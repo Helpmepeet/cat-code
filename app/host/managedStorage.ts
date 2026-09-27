@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   closeSync,
   fsyncSync,
@@ -24,12 +24,15 @@ export type ManagedStorageResolution =
 export class ManagedStorage {
   private readonly appDataBase: string
   private readonly recordPath: string
+  private readonly legacyRecordPath: string
   private readonly ownershipDir: string
   private rootRecord: RootRecord | null = null
 
   constructor(options: { appDataBase: string; ownershipDir: string }) {
     this.appDataBase = resolve(options.appDataBase)
-    this.recordPath = join(options.ownershipDir, 'managed-storage-root.json')
+    const profileId = createHash('sha256').update(this.appDataBase).digest('hex')
+    this.recordPath = join(options.ownershipDir, `managed-storage-root-${profileId}.json`)
+    this.legacyRecordPath = join(options.ownershipDir, 'managed-storage-root.json')
     this.ownershipDir = join(options.ownershipDir, 'managed-storage')
   }
 
@@ -176,9 +179,9 @@ export class ManagedStorage {
   }
 
   private getOrCreateRoot(): RootRecord {
+    mkdirSync(this.appDataBase, { recursive: true, mode: 0o700 })
     const existing = this.readRoot()
     if (existing) return existing
-    mkdirSync(this.appDataBase, { recursive: true, mode: 0o700 })
     const canonicalBase = realpathSync(this.appDataBase)
     const storageRootId = randomUUID()
     const rootPath = join(canonicalBase, 'Chat Files', storageRootId)
@@ -186,29 +189,38 @@ export class ManagedStorage {
     const canonicalRoot = realpathSync(rootPath)
     if (!isContained(canonicalBase, canonicalRoot)) throw new Error('managed root escaped app data')
     const record = { version: 1 as const, storageRootId, rootPath: canonicalRoot }
-    this.writeRoot(record)
+    this.writeRoot(record, this.recordPath)
     this.rootRecord = record
     return record
   }
 
   private readRoot(): RootRecord | null {
     this.rootRecord = null
+    let recordPath = this.recordPath
     try {
-      const st = lstatSync(this.recordPath)
+      lstatSync(recordPath)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      recordPath = this.legacyRecordPath
+    }
+    try {
+      const st = lstatSync(recordPath)
       if (!st.isFile() || st.isSymbolicLink()) throw new Error('managed root record is not a regular file')
     } catch (error) {
       if (isNotFound(error)) return null
       throw error
     }
-    const parsed: unknown = JSON.parse(readFileSync(this.recordPath, 'utf8'))
+    const parsed: unknown = JSON.parse(readFileSync(recordPath, 'utf8'))
     if (!parsed || typeof parsed !== 'object') throw new Error('invalid managed root record')
     const row = parsed as Record<string, unknown>
     if (row.version !== 1 || !validUuid(row.storageRootId) || typeof row.rootPath !== 'string') {
       throw new Error('invalid managed root record')
     }
     const canonicalBase = realpathSync(this.appDataBase)
-    const canonicalRoot = realpathSync(row.rootPath)
     const expectedRoot = join(canonicalBase, 'Chat Files', row.storageRootId)
+    // The original shared record belongs to whichever app profile created it.
+    if (recordPath === this.legacyRecordPath && row.rootPath !== expectedRoot) return null
+    const canonicalRoot = realpathSync(row.rootPath)
     if (!isContained(canonicalBase, canonicalRoot) || canonicalRoot !== row.rootPath || canonicalRoot !== expectedRoot) {
       throw new Error('managed root is outside app data or noncanonical')
     }
@@ -237,14 +249,14 @@ export class ManagedStorage {
     }
   }
 
-  private writeRoot(record: RootRecord): void {
-    mkdirSync(dirname(this.recordPath), { recursive: true, mode: 0o700 })
-    const temp = `${this.recordPath}.${process.pid}.${randomUUID()}.tmp`
+  private writeRoot(record: RootRecord, path: string): void {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
     writeFileSync(temp, JSON.stringify(record), { mode: 0o600 })
     const fileFd = openSync(temp, 'r')
     try { fsyncSync(fileFd) } finally { closeSync(fileFd) }
-    renameSync(temp, this.recordPath)
-    const dirFd = openSync(dirname(this.recordPath), 'r')
+    renameSync(temp, path)
+    const dirFd = openSync(dirname(path), 'r')
     try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
   }
 
