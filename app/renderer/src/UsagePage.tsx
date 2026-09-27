@@ -6,7 +6,7 @@ import { UsageHeatmap } from './UsageActivityCharts.js';
 import { UsageCacheSummary, UsageModelDonut, UsageToolBreakdown } from './UsageOverviewDetails.js';
 import { UsageSessionContributors } from './UsageSessionContributors.js';
 import type { MergedSessionRow } from './sessionsCatalogState.js';
-import { usageBucketDays, usageBucketLabel } from './usageTrendState.js';
+import { usageBucketDays, usageBucketLabel, usageDailyActivity } from './usageTrendState.js';
 import { UsageMetrics } from './UsageMetrics.js';
 import { usageModelColors } from './usageGraphState.js';
 import { UsageAutoMode } from './UsageAutoMode.js';
@@ -59,6 +59,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const unavailable = state.status === 'unavailable';
     const partial = snapshot?.coverage.state === 'partial';
     const selected = summary?.days.find(day => day.date === selectedDate);
+    const activity = snapshot ? usageDailyActivity(snapshot.ranges) : null;
     const colors = usageModelColors(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(item => item.models) : []);
     const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0 && Object.values(summary.autoMode.allTools.outcomes).every(count => count === 0);
     const refreshing = state.status === 'loading';
@@ -67,7 +68,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     return <main className="usage-page" aria-labelledby="usage-title"><div className="usage-content">
         <header className="usage-header"><div><h1 id="usage-title">Analytics</h1>{snapshot && summary && !unavailable && <p className="usage-freshness"><span>{usageDayText(summary.startDate, false, summary.startDate.slice(0, 4) !== usageLastDate(summary.endDateExclusive).slice(0, 4))} to {usageDayText(usageLastDate(summary.endDateExclusive), false, summary.startDate.slice(0, 4) !== usageLastDate(summary.endDateExclusive).slice(0, 4))}</span><span>{usageUpdated(snapshot.asOf, snapshot.timezone)}</span></p>}</div><div className="usage-header-actions">{onRefresh && <button className={`usage-refresh${refreshFailed ? ' usage-refresh-failed' : ''}`} type="button" onClick={onRefresh} disabled={refreshing || unavailable} aria-label={refreshLabel} title={refreshLabel}><svg className={`usage-refresh-icon${refreshing ? ' animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg></button>}<div className="usage-range" role="group" aria-label="Analytics period">{(['7d', '30d', 'all'] as const).map(value => <button key={value} type="button" aria-pressed={value === range} onClick={() => setRange(value)}>{value === 'all' ? 'All' : value === '7d' ? '7 days' : '30 days'}</button>)}</div></div></header>
         {(unavailable || !snapshot || empty) && <div className="usage-status" role="status">{unavailable ? 'Analytics is unavailable.' : !snapshot ? (state.status === 'loading' ? 'Loading analytics…' : usageFailureMessage(state.errorCode)) : partial ? 'Activity for this period is incomplete.' : 'No recorded activity in this period.'}</div>}
-        {summary && snapshot && !unavailable && !empty && <>
+        {summary && snapshot && activity && !unavailable && !empty && <>
             <UsageMetrics summary={summary} unknown="–" partial={!!partial}/>
             <div className="usage-panels">
                 <UsagePanel wide className="usage-token-flow-panel">
@@ -84,10 +85,10 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
                     <UsagePanel title="Model usage"><UsageModelDonut summary={summary} colors={colors}/></UsagePanel>
                 </div>
                 <UsagePanel title="Tools" wide><UsageToolBreakdown summary={summary} timezone={snapshot.timezone}/></UsagePanel>
-                <UsagePanel title="Activity by hour" wide><UsageHeatmap summary={snapshot.ranges['7d']} metric="tokens" asOf={snapshot.asOf} selected={selectedDate} selectedBucketDays={range === 'all' ? usageBucketDays(summary) : 1} onSelect={setSelectedDate}/></UsagePanel>
+                <UsagePanel title="Daily activity" wide><UsageHeatmap activity={activity} range={summary} selected={selectedDate} selectedBucketDays={range === 'all' ? usageBucketDays(summary) : 1} onSelect={setSelectedDate}/></UsagePanel>
                 <UsagePanel title="Auto mode" wide><UsageAutoMode summary={summary}/></UsagePanel>
             </div>
-            <UsageValuesTable summary={summary} hourlySummary={snapshot.ranges['7d']} asOf={snapshot.asOf} timezone={snapshot.timezone} partial={!!partial}/>
+            <UsageValuesTable summary={summary} activity={activity} timezone={snapshot.timezone} partial={!!partial}/>
         </>}
     </div></main>;
 }

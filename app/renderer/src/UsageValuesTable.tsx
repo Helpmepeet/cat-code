@@ -3,8 +3,7 @@ import type { AutoModeUsageOutcome, AutoModeUsagePopulation } from '../../shared
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { autoModeCommandRatePoints } from './usageAutoModeState.js';
 import { usageCacheReadRate, usageCacheWrites, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
-import { usageBucketLabel } from './usageTrendState.js';
-import { usageHourLabel } from './usageGraphState.js';
+import { usageBucketLabel, type UsageDailyActivity } from './usageTrendState.js';
 
 const outcomes: readonly { key: AutoModeUsageOutcome; label: string }[] = [
     { key: 'allowed', label: 'Allowed' },
@@ -28,11 +27,12 @@ function outcomeCells(population: AutoModeUsagePopulation) {
     return outcomes.map(({ key }) => <Cell key={key} value={population.outcomes[key]} available={population.coverage.state !== 'unavailable'}/>);
 }
 
-export function UsageValuesTable({ summary, hourlySummary, asOf, timezone, partial }: { summary: UsageRangeSummary; hourlySummary: UsageRangeSummary; asOf: string; timezone: string; partial: boolean }) {
+export function UsageValuesTable({ summary, activity, timezone, partial }: { summary: UsageRangeSummary; activity: UsageDailyActivity; timezone: string; partial: boolean }) {
     const [open, setOpen] = useState(false);
     const toolDays = summary.days.flatMap(day => day.tools.map(tool => ({ date: day.date, tool })));
     const builds = summary.days.flatMap(day => day.tools.flatMap(tool => (tool.builds?.items ?? []).map(build => ({ date: day.date, tool, build }))));
     const commandRates = autoModeCommandRatePoints(summary.autoMode);
+    const recordedDays = [...activity.days.values()].filter(day => usageTotal(day.tokens) > 0 || day.requests > 0).sort((a, b) => a.date.localeCompare(b.date));
     return <details className="usage-values" onToggle={event => setOpen(event.currentTarget.open)}>
         <summary>View as table</summary>
         {open && <div className="usage-values-sections">
@@ -55,9 +55,9 @@ export function UsageValuesTable({ summary, hourlySummary, asOf, timezone, parti
                 <caption>Observed Cat Code builds</caption><thead><tr><th scope="col">Period</th><th scope="col">Tool</th><th scope="col">Commit</th><th scope="col">First observed</th><th scope="col">Requests</th><th scope="col">Matched results</th><th scope="col">Errors</th></tr></thead>
                 <tbody>{builds.map(({ date, tool, build }, index) => <tr key={`${date}:${tool.id}:${build.sha}:${index}`}><th scope="row">{usageBucketLabel(summary, date)}</th><td>{summary.tools.find(item => item.id === tool.id)?.label ?? tool.id}</td><td>{build.sha.slice(0, 8)}{build.dirty ? ' dirty' : ''}</td><td>{new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(build.firstObservedAt))}</td><Cell value={build.requests}/><Cell value={build.results}/><Cell value={build.errors}/></tr>)}</tbody>
             </table></div>}</section>
-            {hourlySummary.days.some(day => day.hours?.length) && <section><h2>Activity by hour</h2><div className="usage-table-scroll"><table>
-                <caption>Recorded activity by local hour</caption><thead><tr><th scope="col">Day</th><th scope="col">Hour</th><th scope="col">UTC offset</th><th scope="col">Tokens</th><th scope="col">Tool requests</th></tr></thead>
-                <tbody>{hourlySummary.days.flatMap(day => (day.hours ?? []).map((hour, index) => { const future = !!hour.startAt && Date.parse(hour.startAt) > Date.parse(asOf); return <tr key={`${day.date}:${index}`}><th scope="row">{day.date}</th><td>{usageHourLabel(hour)}</td><td>{hour.offsetMinutes >= 0 ? '+' : '−'}{String(Math.floor(Math.abs(hour.offsetMinutes) / 60)).padStart(2, '0')}:{String(Math.abs(hour.offsetMinutes) % 60).padStart(2, '0')}</td><Cell value={hour.tokens ?? 0} available={!future && hour.tokens !== undefined}/><Cell value={hour.requests} available={!future}/></tr>; }))}</tbody>
+            {recordedDays.length > 0 && <section><h2>Daily activity</h2><div className="usage-table-scroll"><table>
+                <caption>Recorded activity by local day</caption><thead><tr><th scope="col">Day</th><th scope="col">Tokens</th><th scope="col">Tool requests</th></tr></thead>
+                <tbody>{recordedDays.map(day => <tr key={day.date}><th scope="row">{day.date}</th><Cell value={usageTotal(day.tokens)}/><Cell value={day.requests}/></tr>)}</tbody>
             </table></div></section>}
             <section><h2>Auto mode</h2><div className="usage-table-scroll"><table>
                 <caption>Raw decision outcomes by local period</caption><thead><tr><th scope="col">Period</th><th scope="col">Coverage</th>{outcomes.map(outcome => <th scope="col" key={outcome.key}>{outcome.label}</th>)}</tr></thead>

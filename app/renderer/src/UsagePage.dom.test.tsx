@@ -53,18 +53,24 @@ test('day focus does not select until activated; selection opens the session det
     expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
 });
 
-test('local hourly heatmap exposes offset and recorded values without selecting on focus', async () => {
+test('daily heatmap exposes recorded values and selects only days in the current range', async () => {
     const snapshot = await recordedSnapshot();
+    const recorded = snapshot.ranges['7d'].days[0]!.date;
+    snapshot.ranges['30d'].days.find(day => day.date === recorded)!.tokens.fresh = 123;
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     const cells = tree.container.querySelectorAll<SVGGElement>('.usage-heat-cell');
-    expect(cells).toHaveLength(168);
-    expect(cells[1]!.getAttribute('aria-label')).toContain('123 tokens');
-    expect(cells[1]!.getAttribute('aria-label')).toContain(`UTC${snapshot.ranges['7d'].days[0]!.hours![1]!.offsetMinutes >= 0 ? '+' : '−'}`);
-    await act(async () => cells[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
-    expect(document.activeElement).toBe(cells[1]);
+    expect(cells).toHaveLength(30);
+    const cell = tree.container.querySelector<SVGGElement>(`[data-date="${recorded}"]`)!;
+    expect(cell.getAttribute('aria-label')).toBe(`${recorded}: 123 tokens`);
+    const older = cells[0]!;
+    expect(older.getAttribute('aria-disabled')).toBe('true');
+    await act(async () => older.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
-    await act(async () => cells[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
-    expect(tree.container.querySelector('.usage-day-detail')).not.toBeNull();
+    await act(async () => cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+    expect(document.activeElement?.getAttribute('data-date')).toBe(snapshot.ranges['7d'].days[1]!.date);
+    expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
+    await act(async () => cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('123 tokens');
 });
 
 test('exact values are mounted only after opening the single disclosure', async () => {
@@ -75,13 +81,15 @@ test('exact values are mounted only after opening the single disclosure', async 
     snapshot.ranges['7d'].cacheWriteReporting = 'partial';
     snapshot.ranges['7d'].days[0]!.tokens.write = 125;
     snapshot.ranges['7d'].days[0]!.cacheWriteReporting = 'partial';
+    snapshot.ranges['30d'].days.at(-1)!.tokens.fresh = 67_890;
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     const disclosure = tree.container.querySelector<HTMLDetailsElement>('.usage-values')!;
     expect(disclosure.querySelectorAll('table')).toHaveLength(0);
     await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
     expect(disclosure.querySelectorAll('table').length).toBeGreaterThanOrEqual(5);
     expect(disclosure.textContent).toContain('Raw decision outcomes by local period');
-    expect(disclosure.textContent).toContain('UTC offset');
+    const daily = [...disclosure.querySelectorAll('table')].find(table => table.caption?.textContent === 'Recorded activity by local day');
+    expect(daily?.querySelector('tbody')?.textContent).toBe(`${snapshot.ranges['30d'].days.at(-1)!.date}67,8900`);
     expect(disclosure.textContent).toContain('12,345');
     expect(disclosure.querySelector('table tbody tr')?.textContent).toContain('125 reported');
     expect([...disclosure.querySelectorAll('table')].find(table => table.caption?.textContent === 'Raw decision outcomes by local period')?.querySelector('thead')?.textContent).toContain('Needs reviewOperational errorCancelledUnknownIncomplete');
@@ -187,7 +195,7 @@ test('heatmap selection in All resolves to its local aggregate bucket', async ()
     all.days = [{ ...structuredClone(snapshot.ranges['7d'].days[0]!), date: '2026-09-06', hours: undefined }];
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     await act(async () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'All')!.click());
-    const cell = tree.container.querySelector<SVGGElement>('.usage-heat-cell')!;
+    const cell = tree.container.querySelector<SVGGElement>('[data-date="2026-09-07"]')!;
     await act(async () => cell.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.getAttribute('aria-label')).toContain('2026-09-06 to 2026-09-10');
     expect(cell.getAttribute('aria-pressed')).toBe('true');

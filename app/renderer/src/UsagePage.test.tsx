@@ -40,9 +40,9 @@ test('auto-mode attempts count as activity even without token records', () => {
 
 test('populated page presents five metrics and the agreed panels without duplicate disclosures', () => {
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot: populated(), status: 'ready' }}/>);
-    for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Activity by hour', 'Auto mode', 'View as table']) expect(html).toContain(label);
+    for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Daily activity', 'Auto mode', 'View as table']) expect(html).toContain(label);
     expect(html.match(/class="usage-values"/g)).toHaveLength(1);
-    for (const removed of ['Execution timing', 'Tool activity', 'Partial history', 'Token volume by hour']) expect(html).not.toContain(removed);
+    for (const removed of ['Execution timing', 'Tool activity', 'Partial history', 'Token volume by hour', 'Activity by hour']) expect(html).not.toContain(removed);
 });
 
 test('partial coverage retains visible counts and qualifies the recorded cache rate', () => {
