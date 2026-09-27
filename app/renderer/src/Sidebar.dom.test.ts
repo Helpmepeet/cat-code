@@ -110,15 +110,18 @@ test('a hover-expanded destination remains direct and dismisses the overlay afte
   expect(aside!.className).toContain('sidebar-expanded')
 
   const destination = tree.container.querySelector<HTMLButtonElement>(
-    '[data-sidebar-nav-id="sessions"]',
+    '[data-sidebar-nav-id="goals"]',
   )
-  expect(destination?.textContent).toContain('Sessions')
+  expect(destination?.textContent).toContain('Goals')
+  expect(
+    tree.container.querySelector('[data-sidebar-nav-id="sessions"]'),
+  ).toBeNull()
   expect(tree.container.textContent).not.toContain('Show destinations')
 
   await act(async () => {
     destination!.click()
   })
-  expect(selections).toEqual(['sessions'])
+  expect(selections).toEqual(['goals'])
   expect(aside!.className).toContain('w-12')
 })
 

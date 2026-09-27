@@ -246,7 +246,7 @@ export type RowReorderHandlers = {
 }
 
 type NavItem = {
-  id: 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
+  id: 'goals' | 'accounts' | 'usage' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -256,7 +256,6 @@ type NavItem = {
 // Chat is reached by opening a session from this roster, so repeating it as a
 // destination only spends vertical space and competes with the primary path.
 const NAV: NavItem[] = [
-  { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'usage', label: 'Analytics', enabled: true, icon: <UsageBarsIcon className="size-4" strokeWidth="1.5" /> },
@@ -2122,28 +2121,6 @@ function formatRecency(ms: number): string {
 }
 
 /* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
-
-function SessionsIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="8" y1="6" x2="21" y2="6" />
-      <line x1="8" y1="12" x2="21" y2="12" />
-      <line x1="8" y1="18" x2="21" y2="18" />
-      <line x1="3" y1="6" x2="3.01" y2="6" />
-      <line x1="3" y1="12" x2="3.01" y2="12" />
-      <line x1="3" y1="18" x2="3.01" y2="18" />
-    </svg>
-  )
-}
 
 function GoalsIcon() {
   return (

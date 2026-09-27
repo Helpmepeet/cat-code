@@ -553,7 +553,6 @@ test('P4-53 — collapsed and expanded nav buttons share generic focus-handoff i
   const collapsed = renderSidebar()
   const expanded = renderSidebar({ menuActive: true })
   for (const id of [
-    'sessions',
     'goals',
     'accounts',
     'usage',
@@ -563,6 +562,8 @@ test('P4-53 — collapsed and expanded nav buttons share generic focus-handoff i
     expect(collapsed.match(new RegExp(marker, 'g'))).toHaveLength(1)
     expect(expanded.match(new RegExp(marker, 'g'))).toHaveLength(1)
   }
+  expect(collapsed).not.toContain('data-sidebar-nav-id="sessions"')
+  expect(expanded).not.toContain('data-sidebar-nav-id="sessions"')
   expect(collapsed).not.toContain('data-sidebar-nav-id="chat"')
   expect(expanded).not.toContain('data-sidebar-nav-id="chat"')
   // The shared id pins the generic ref handoff for reverse entry, including
@@ -882,7 +883,7 @@ test('the footer names the active account, and links it to the Accounts page', (
 test('no account resolved yet leaves the expanded footer with direct destinations', () => {
   const html = renderSidebar({ menuActive: true, accountAlias: null })
   expect(html).not.toContain('Active account')
-  expect(html).toContain('data-sidebar-nav-id="sessions"')
+  expect(html).not.toContain('data-sidebar-nav-id="sessions"')
   expect(html).not.toContain('data-sidebar-nav-id="chat"')
   expect(html).toContain('data-sidebar-nav-id="settings"')
 })
@@ -892,7 +893,7 @@ test('expanded destinations are directly available without an intermediary toggl
   expect(html).not.toContain('Show destinations')
   expect(html).not.toContain('Hide destinations')
   expect(html).not.toContain('inert=""')
-  expect(html).toContain('data-sidebar-nav-id="sessions"')
+  expect(html).not.toContain('data-sidebar-nav-id="sessions"')
   expect(html).not.toContain('data-sidebar-nav-id="chat"')
   expect(html).toContain('data-sidebar-nav-id="settings"')
   expect(html).toContain('>Analytics</span>')
@@ -914,7 +915,6 @@ test('the collapsed rail keeps the account glyph below the destinations like the
   expect(html).toContain('title="Active account: pubmtaki"')
   expect(html).toContain('>P<')
   for (const id of [
-    'sessions',
     'goals',
     'accounts',
     'usage',
@@ -922,6 +922,7 @@ test('the collapsed rail keeps the account glyph below the destinations like the
   ]) {
     expect(html).toContain(`data-sidebar-nav-id="${id}"`)
   }
+  expect(html).not.toContain('data-sidebar-nav-id="sessions"')
   expect(html.indexOf('title="Active account: pubmtaki"')).toBeGreaterThan(
     html.indexOf('data-sidebar-nav-id="settings"'),
   )
