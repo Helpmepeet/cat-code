@@ -961,6 +961,7 @@ Rules:
 - If the user references an existing image, pass its local path as reference_image_path. This uploads the image to the image-generation backend.
 - Use .png unless the user asks for another supported format.
 - Do not overwrite existing files unless the user explicitly asks to replace them.
+- Do not include markdown images ![...](path) in your text response; the interface automatically displays the generated image to the user, so you do not need to show or embed it.
 
 Image model limits:
 - Cat Code requests GPT Image 2.5 through the ChatGPT/Codex backend. Do not specify a model in tool arguments.

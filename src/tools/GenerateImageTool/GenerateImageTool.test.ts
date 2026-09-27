@@ -1286,6 +1286,9 @@ describe('GenerateImageTool', () => {
     expect(prompt).toContain(
       'This uploads the image to the image-generation backend',
     )
+    expect(prompt).toContain(
+      'Do not include markdown images ![...](path) in your text response; the interface automatically displays the generated image to the user, so you do not need to show or embed it.',
+    )
   })
 
   test('parses Codex Responses image-generation SSE output', () => {
