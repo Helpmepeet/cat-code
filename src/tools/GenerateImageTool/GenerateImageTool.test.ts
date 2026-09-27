@@ -1313,7 +1313,7 @@ describe('GenerateImageTool', () => {
     })
 
     expect(prompt).toContain(
-      'write a self-contained prompt yourself: the image model cannot see the conversation',
+      'write a self-contained prompt yourself, as detailed as it takes to match what was discussed: the image model cannot see the conversation',
     )
     expect(prompt).toContain('do not rewrite, expand, stylize, or add details')
     expect(prompt).toContain(
