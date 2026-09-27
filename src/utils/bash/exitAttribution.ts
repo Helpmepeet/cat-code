@@ -11,9 +11,12 @@
  *
  * The marker `: "$(...)" "$_"` is one builtin that always exits 0, prints
  * nothing, keeps `$_` (its last argument is the old `$_`), and writes from a
- * subshell so no variable, trap, or option of the user's shell changes. It is
- * inserted only where `$?` is already 0 or is never read, and never when
- * something could observe an extra command (xtrace, verbose, DEBUG traps).
+ * subshell so no variable, trap, or option of the user's shell changes. It
+ * sits directly in front of the final command, or after the `&&` that guards
+ * it, so nothing can run between the marker and that command. It is still one
+ * more command, so it is skipped where the command reads status the marker
+ * would reset (`$?`, `PIPESTATUS`) or where something could observe it
+ * (xtrace, verbose, DEBUG traps).
  *
  * Every refusal here means "no attribution": the caller falls back to
  * non-zero-is-error, which can only over-report failure, never hide one.
@@ -43,8 +46,11 @@ type Located = {
   statement: TsNode
   /** The pipeline or command whose status is the statement's status. */
   operand: TsNode
-  /** operand is the right side of `&&`, so it may not run at all. */
-  followsAnd: boolean
+  /**
+   * direct: operand is the whole statement. and/or: operand is the right side
+   * of `&&`/`||`, so the left side runs first and may never reach it.
+   */
+  relation: 'direct' | 'and' | 'or'
 }
 
 type Candidate = { name: string; stages: number }
@@ -90,17 +96,20 @@ export function planExitAttribution(
   if (!located) return null
   const candidate = candidateOf(located.operand)
   if (!candidate || !semanticCommands.has(candidate.name)) return null
-  // A statement-start marker resets `$?` for the statement's first command.
-  if (!located.followsAnd && /\$\{?\?/.test(located.statement.text)) {
-    return null
-  }
+  // Only `&&` and a direct statement leave nothing between the marker and the
+  // command. After `||` the left side runs after the marker and can end the
+  // shell (`exit 1 || grep x f`), so evidence would claim a start that never
+  // happened.
+  if (located.relation === 'or') return null
+  if (readsStatusTheMarkerResets(located)) return null
 
   const token = randomBytes(16).toString('hex')
   const marker = buildExitMarker(evidenceFilePath, token)
-  const insertAt = located.followsAnd
+  const followsAnd = located.relation === 'and'
+  const insertAt = followsAnd
     ? located.operand.startIndex
     : located.statement.startIndex
-  const insertion = located.followsAnd ? `${marker} && ` : `${marker}; `
+  const insertion = followsAnd ? `${marker} && ` : `${marker}; `
   const bytes = Buffer.from(command, 'utf8')
   const instrumentedCommand =
     bytes.subarray(0, insertAt).toString('utf8') +
@@ -169,6 +178,10 @@ export function shellStateAllowsExitMarker(
   ) {
     return false
   }
+  // Bash snapshots store each function base64-encoded inside an eval, so the
+  // function-name check above cannot see them until they are decoded.
+  const bashFunctions = decodeBashSnapshotFunctions(snapshotText)
+  if (/^(:|set|command) \(\)/m.test(bashFunctions)) return false
   if (
     sessionEnvScript &&
     /\b(set|setopt|unsetopt|shopt|trap|source|eval|emulate|alias)\b|^\s*\.\s/m.test(
@@ -178,6 +191,31 @@ export function shellStateAllowsExitMarker(
     return false
   }
   return true
+}
+
+/**
+ * The marker is a completed command, so reading `$?` (or zsh `$status`) right
+ * after it sees 0, and `PIPESTATUS`/`pipestatus` describe the marker instead
+ * of the user's previous pipeline. After `&&` the previous command already
+ * succeeded, so `$?` is 0 either way; the pipeline arrays still differ.
+ */
+function readsStatusTheMarkerResets(located: Located): boolean {
+  const text =
+    located.relation === 'and' ? located.operand.text : located.statement.text
+  if (/\b(PIPESTATUS|pipestatus)\b/.test(text)) return true
+  return (
+    located.relation === 'direct' && /\$\{?(\?|status\b)/.test(text)
+  )
+}
+
+function decodeBashSnapshotFunctions(snapshotText: string): string {
+  const decoded: string[] = []
+  for (const match of snapshotText.matchAll(
+    /^eval "\$\(echo '([A-Za-z0-9+/=\s]+)' \| base64 -d\)"/gm,
+  )) {
+    decoded.push(Buffer.from(match[1]!.replace(/\s/g, ''), 'base64').toString('utf8'))
+  }
+  return decoded.join('\n')
 }
 
 function parse(command: string): TsNode | null {
@@ -255,12 +293,13 @@ function locateFinalOperand(root: TsNode): Located | null {
   const body = withoutFileRedirects(statement)
   if (!body) return null
   if (body.type !== 'list') {
-    return { statement, operand: body, followsAnd: false }
+    return { statement, operand: body, relation: 'direct' }
   }
   const [, operator, right] = body.children
   if (body.children.length !== 3 || !operator || !right) return null
-  if (operator.type !== '&&' && operator.type !== '||') return null
-  return { statement, operand: right, followsAnd: operator.type === '&&' }
+  if (operator.type === '&&') return { statement, operand: right, relation: 'and' }
+  if (operator.type === '||') return { statement, operand: right, relation: 'or' }
+  return null
 }
 
 /**
@@ -315,8 +354,8 @@ function verifyInstrumentation(
   const located = locateFinalOperand(root)
   if (!located || located.operand.text !== original.operand.text) return false
 
-  if (original.followsAnd) {
-    if (!located.followsAnd) return false
+  if (original.relation === 'and') {
+    if (located.relation !== 'and') return false
     const list = withoutFileRedirects(located.statement)
     const left = list?.children[0]
     const leftRight =

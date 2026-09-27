@@ -50,9 +50,8 @@ describe('planExitAttribution: where the marker goes', () => {
     expect(placed('true && [ -f x ]')).toBe('true && M && [ -f x ]')
   })
 
-  test('otherwise it opens the final statement, which then always reaches the command', () => {
+  test('a direct final statement gets it immediately in front', () => {
     expect(placed('grep x f')).toBe('M; grep x f')
-    expect(placed('false || grep x f')).toBe('M; false || grep x f')
     expect(placed('false ; grep x f')).toBe('false ; M; grep x f')
     expect(placed('printf foo | grep bar')).toBe('M; printf foo | grep bar')
     expect(placed('set -e; false; grep x f')).toBe('set -e; false; M; grep x f')
@@ -81,6 +80,15 @@ describe('planExitAttribution: where the marker goes', () => {
 describe('planExitAttribution: no marker, so the default rule applies', () => {
   test.each([
     ['a final command without its own rule', 'cd /missing && ls'],
+    // After `||` the left side runs after any marker and can end the shell.
+    ['the right side of ||', 'false || grep x f'],
+    ['exit on the left of ||', 'exit 1 || grep x f'],
+    ['a trailing || after an && chain', 'true && grep x f || grep y f'],
+    // The marker is a completed command and would reset these.
+    ['PIPESTATUS after &&', 'false | true && test "${PIPESTATUS[0]}" -eq 1'],
+    ['zsh pipestatus after &&', 'false | true && test "${pipestatus[1]}" -eq 1'],
+    ['zsh $status at a statement start', 'false; test "$status" -eq 1'],
+    ['$? at a statement start', 'false; test "$?" -eq 1'],
     ['a final echo after grep', 'true && grep x f; echo "$?"'],
     ['a brace group', 'true && { grep x f; }'],
     ['a subshell', 'true && (grep x f)'],
@@ -100,6 +108,10 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
     ['a function shadowing the marker', 'set() { :; }; true && grep x f'],
   ])('%s', (_label, command) => {
     expect(plan(command)).toBeNull()
+  })
+
+  test('$? after && is 0 with or without the marker, so it is allowed', () => {
+    expect(plan('true && test "$?" -eq 0')).not.toBeNull()
   })
 
   test('safe option changes still allow the marker', () => {
@@ -127,6 +139,48 @@ describe('shellStateAllowsExitMarker', () => {
     ['a session script that traps', clean, "trap 'x' DEBUG\n"],
   ])('%s blocks it', (_label, snapshot, sessionScript) => {
     expect(shellStateAllowsExitMarker(snapshot, sessionScript)).toBe(false)
+  })
+})
+
+// Snapshots written by the production generator for a bash whose .bashrc
+// defines each function. HOME is only read at process start, so the generator
+// runs in a child with an isolated HOME and config dir.
+describe.skipIf(!existsSync('/bin/bash'))('shellStateAllowsExitMarker on real bash snapshots', () => {
+  const generator = join(import.meta.dir, 'ShellSnapshot.ts')
+  const snapshotFor = (bashrc: string): string => {
+    const home = mkdtempSync(join(tmpdir(), 'exit-attr-home-'))
+    const config = mkdtempSync(join(tmpdir(), 'exit-attr-config-'))
+    try {
+      writeFileSync(join(home, '.bashrc'), bashrc)
+      const proc = spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `const { createAndSaveSnapshot } = await import(${JSON.stringify(generator)}); process.stdout.write(await createAndSaveSnapshot('/bin/bash') ?? '')`,
+        ],
+        { env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: config }, encoding: 'utf8' },
+      )
+      const path = proc.stdout.trim()
+      expect(path).not.toBe('')
+      return readFileSync(path, 'utf8')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      rmSync(config, { recursive: true, force: true })
+    }
+  }
+
+  test('an ordinary function is stored encoded and allowed', () => {
+    const snapshot = snapshotFor('plain_helper() { echo hi; }\n')
+    expect(snapshot).toMatch(/^eval "\$\(echo '[A-Za-z0-9+/=]+' \| base64 -d\)"/m)
+    expect(shellStateAllowsExitMarker(snapshot, null)).toBe(true)
+  })
+
+  test.each([
+    ['set', 'set() { builtin set "$@"; }\n'],
+    ['command', 'command() { builtin command "$@"; }\n'],
+    [':', ':() { true; }\n'],
+  ])('a function named %s, which the marker calls, blocks it', (_name, bashrc) => {
+    expect(shellStateAllowsExitMarker(snapshotFor(bashrc), null)).toBe(false)
   })
 })
 
@@ -170,10 +224,16 @@ const HAS_LSOF = ['/usr/sbin/lsof', '/usr/bin/lsof'].some(existsSync)
 const HAS_GIT = spawnSync('git', ['--version']).status === 0
 
 let work: string
+// Per-run scratch lives outside `work`: `ls -la` and `git status` in the
+// matrix list `work`, and files appearing there between the original and the
+// instrumented run would make identical commands print different output.
+let runs: string
 let closedPort: number
 
 beforeAll(async () => {
   work = mkdtempSync(join(tmpdir(), 'exit-attribution-'))
+  runs = mkdtempSync(join(tmpdir(), 'exit-attribution-runs-'))
+  mkdirSync(join(work, 'x'))
   writeFileSync(join(work, 'file.txt'), 'hello\n')
   spawnSync('git', ['init', '-q'], { cwd: work })
   const server = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } })
@@ -183,6 +243,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   rmSync(work, { recursive: true, force: true })
+  rmSync(runs, { recursive: true, force: true })
 })
 
 type Run = { output: string; code: number; cwd: string | null }
@@ -206,8 +267,7 @@ function runWrapped(shell: string, command: string, runDir: string, flags: strin
 }
 
 function judge(shell: string, command: string, flags: string[] = []) {
-  const runDir = mkdtempSync(join(work, 'run-'))
-  mkdirSync(join(runDir, 'x'), { recursive: true })
+  const runDir = mkdtempSync(join(runs, 'run-'))
   const evidencePath = join(runDir, 'evidence')
   const original = runWrapped(shell, command, runDir, flags)
   const p = planExitAttribution(command, SEMANTIC_COMMAND_NAMES, evidencePath)
@@ -229,7 +289,8 @@ for (const shell of SHELLS) {
       ['false && grep: grep never ran', () => 'false && grep x file.txt', true],
       ['cd /does-not-exist && grep: grep never ran', () => 'cd /does-not-exist && grep hello file.txt', true],
       ['true && grep: grep ran, no match', () => 'true && grep missing file.txt', false],
-      ['false || grep: grep owns the status', () => 'false || grep missing file.txt', false],
+      ['false || grep falls back: || is never instrumented', () => 'false || grep missing file.txt', true],
+      ['exit 1 || grep: grep never ran', () => 'exit 1 || grep missing file.txt', true],
       ['false ; grep: grep owns the status', () => 'false ; grep missing file.txt', false],
       ['printf | grep without pipefail', () => 'printf foo | grep bar', false],
       ['pipefail with a failing earlier stage', () => 'set -o pipefail; true && false | grep missing file.txt', true],
@@ -249,7 +310,16 @@ for (const shell of SHELLS) {
       ],
     ]
     if (kind === 'bash') {
-      rows.push(['a DEBUG trap falls back', () => "trap 'n=1' DEBUG; true && grep missing file.txt", true])
+      rows.push(
+        ['a DEBUG trap falls back', () => "trap 'n=1' DEBUG; true && grep missing file.txt", true],
+        ['PIPESTATUS read after && keeps its value', () => 'false | true && test "${PIPESTATUS[0]}" -eq 1', false],
+      )
+    }
+    if (kind === 'zsh') {
+      rows.push(
+        ['pipestatus read after && keeps its value', () => 'false | true && test "${pipestatus[1]}" -eq 1', false],
+        ['$status read at a statement start keeps its value', () => 'false; test "$status" -eq 1', false],
+      )
     }
 
     for (const [label, command, expectedError, runs = true] of rows) {
