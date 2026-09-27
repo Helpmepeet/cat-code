@@ -14,6 +14,7 @@ type EntranceRecord = {
 
 /** Long enough for the renderer's 120–200ms entrances when animationend is absent. */
 const ENTRANCE_FALLBACK_MS = 260
+const INACTIVE_REF: RefCallback<HTMLElement> = () => {}
 
 /**
  * Keeps an entrance on its original DOM element until animationend. A replaced
@@ -54,7 +55,8 @@ export function useEntranceLatch(freshKeys: ReadonlySet<string>) {
     records.current.clear()
   }, [])
 
-  const refFor = useCallback((key: string, className: string): RefCallback<HTMLElement> => {
+  const refFor = (key: string, className: string): RefCallback<HTMLElement> => {
+    if (!active.has(key)) return INACTIVE_REF
     const callbackKey = `${key}\0${className}`
     let callback = refs.current.get(callbackKey)
     if (!callback) {
@@ -71,7 +73,7 @@ export function useEntranceLatch(freshKeys: ReadonlySet<string>) {
       refs.current.set(callbackKey, callback)
     }
     return callback
-  }, [finish])
+  }
 
   const onAnimationEnd = useCallback((key: string, event: AnimationEvent<HTMLElement>) => {
     if (event.target === event.currentTarget) finish(key)
