@@ -12,6 +12,8 @@ user requirement or security constraint. Flag meaningful documentation drift.
 
 - `src/`, `scripts/`: terminal engine and shared runtime, using the root package.
 - `app/`: desktop package with separate build and typecheck boundaries.
+- `DESIGN.md`: visual design guidance for desktop renderer work. Read it when
+  creating or changing UI; `app/renderer/src/theme.css` owns exact tokens.
 - `docs/maps/`: navigation maintained against source. Dated plans and migration
   program records describe past work; decision records may contain later amendments.
 - `renderer-theme/` and `scripts/typecheck/renderer-engine-types/`: legacy
