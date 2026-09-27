@@ -10,7 +10,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   getAllowedSettingSources,
+  getFlagSettingsInline,
+  getFlagSettingsPath,
   setAllowedSettingSources,
+  setFlagSettingsInline,
+  setFlagSettingsPath,
 } from '../bootstrap/state.js'
 import {
   DEFAULT_INSTRUCTION_FILES_MODE,
@@ -20,11 +24,21 @@ import {
   resolveInstructionFilesSetting,
   updateUserInstructionFilesOption,
 } from './instructionFiles.js'
-import { getManagedFilePath } from './settings/managedPath.js'
+import {
+  getManagedFilePath,
+  getManagedSettingsDropInDir,
+} from './settings/managedPath.js'
+import {
+  getSettingsForSource,
+  loadManagedFileSettings,
+} from './settings/settings.js'
+import { parseCommandOutputAsSettings } from './settings/mdm/settings.js'
 import { resetSettingsCache } from './settings/settingsCache.js'
 import type { SettingsJson } from './settings/types.js'
 
 const originalSources = getAllowedSettingSources()
+const originalFlagSettingsInline = getFlagSettingsInline()
+const originalFlagSettingsPath = getFlagSettingsPath()
 const originalEnv = {
   home: process.env.HOME,
   configDir: process.env.CLAUDE_CONFIG_DIR,
@@ -36,7 +50,10 @@ const scratchDirectories: string[] = []
 
 afterEach(() => {
   setAllowedSettingSources(originalSources)
+  setFlagSettingsInline(originalFlagSettingsInline)
+  setFlagSettingsPath(originalFlagSettingsPath)
   getManagedFilePath.cache.clear?.()
+  getManagedSettingsDropInDir.cache.clear?.()
   resetSettingsCache()
   for (const [name, value] of [
     ['HOME', originalEnv.home],
@@ -157,6 +174,7 @@ test('reads user mode from the isolated user settings source', () => {
   process.env.NODE_ENV = 'test'
   process.env.USER_TYPE = 'ant'
   setAllowedSettingSources(['userSettings'])
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   writeFileSync(
     join(configDir, 'settings.json'),
@@ -185,6 +203,7 @@ test('updates and reverts only the builtin instruction option', () => {
   process.env.NODE_ENV = 'test'
   process.env.USER_TYPE = 'ant'
   setAllowedSettingSources(['userSettings'])
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
 
   const originalSettings = {
@@ -231,4 +250,85 @@ test('updates and reverts only the builtin instruction option', () => {
   expect(updateUserInstructionFilesOption('claude-md').error).toBeNull()
   const reverted = JSON.parse(readFileSync(settingsPath, 'utf8'))
   expect(reverted).toEqual(originalSettings)
+})
+
+test('schema-rejected flag and policy options remain present and select the default', () => {
+  const directory = mkdtempSync(
+    join(tmpdir(), 'instruction-files-invalid-source-'),
+  )
+  scratchDirectories.push(directory)
+  const home = join(directory, 'home')
+  const configDir = join(directory, 'config')
+  const managedDir = join(directory, 'managed')
+  for (const path of [home, configDir, managedDir]) mkdirSync(path)
+  process.env.HOME = home
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH = managedDir
+  process.env.NODE_ENV = 'test'
+  process.env.USER_TYPE = 'ant'
+  setAllowedSettingSources(['userSettings'])
+  setFlagSettingsInline(null)
+  const invalidOption = {
+    pluginConfigs: {
+      'agents-md@builtin': {
+        options: { instructionFiles: { invalid: true } },
+      },
+    },
+  } as unknown as SettingsJson
+  const userSettings = settingsWithMode('claude-md')
+  const flagPath = join(directory, 'flag-settings.json')
+  writeFileSync(flagPath, JSON.stringify(invalidOption))
+  setFlagSettingsPath(flagPath)
+  getManagedFilePath.cache.clear?.()
+  getManagedFilePath.cache.set(undefined, managedDir)
+  getManagedSettingsDropInDir.cache.clear?.()
+  resetSettingsCache()
+
+  const flagFileSettings = getSettingsForSource('flagSettings')
+  expect(
+    resolve({
+      userSettings,
+      flagSettings: flagFileSettings,
+      policySettings: null,
+    }),
+  ).toEqual({ mode: DEFAULT_INSTRUCTION_FILES_MODE, source: 'flagSettings' })
+
+  setFlagSettingsPath(undefined)
+  setFlagSettingsInline(invalidOption)
+  resetSettingsCache()
+  const inlineFlagSettings = getSettingsForSource('flagSettings')
+  expect(
+    resolve({
+      userSettings,
+      flagSettings: inlineFlagSettings,
+      policySettings: null,
+    }),
+  ).toEqual({ mode: DEFAULT_INSTRUCTION_FILES_MODE, source: 'flagSettings' })
+
+  setFlagSettingsInline(null)
+  writeFileSync(
+    join(managedDir, 'managed-settings.json'),
+    JSON.stringify(invalidOption),
+  )
+  resetSettingsCache()
+  const { settings: policySettings } = loadManagedFileSettings()
+  expect(
+    resolve({
+      userSettings,
+      flagSettings: null,
+      policySettings,
+    }),
+  ).toEqual({ mode: DEFAULT_INSTRUCTION_FILES_MODE, source: 'policySettings' })
+
+  const mdmSettings = parseCommandOutputAsSettings(
+    JSON.stringify(invalidOption),
+    'isolated MDM fixture',
+  ).settings
+  expect(
+    resolve({
+      userSettings,
+      flagSettings: null,
+      policySettings: mdmSettings,
+    }),
+  ).toEqual({ mode: DEFAULT_INSTRUCTION_FILES_MODE, source: 'policySettings' })
 })

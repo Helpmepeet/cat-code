@@ -29,6 +29,11 @@ import {
   getManagedFilePath,
   getManagedSettingsDropInDir,
 } from '../managedPath.js'
+import {
+  isPluginConfigOptionValue,
+  readInstructionFilesOptionFromSettings,
+  setInstructionFilesOptionMetadata,
+} from '../instructionFilesOptionMetadata.js'
 import { type SettingsJson, SettingsSchema } from '../types.js'
 import {
   filterInvalidPermissionRules,
@@ -190,10 +195,19 @@ export function parseCommandOutputAsSettings(
   }
 
   const ruleWarnings = filterInvalidPermissionRules(data, sourcePath)
+  const instructionFilesOption =
+    readInstructionFilesOptionFromSettings(data)
   const parseResult = SettingsSchema().safeParse(data)
   if (!parseResult.success) {
     const errors = formatZodError(parseResult.error, sourcePath)
-    return { settings: {}, errors: [...ruleWarnings, ...errors] }
+    const settings: SettingsJson = {}
+    if (
+      instructionFilesOption &&
+      !isPluginConfigOptionValue(instructionFilesOption.value)
+    ) {
+      setInstructionFilesOptionMetadata(settings, instructionFilesOption)
+    }
+    return { settings, errors: [...ruleWarnings, ...errors] }
   }
   return { settings: parseResult.data, errors: ruleWarnings }
 }

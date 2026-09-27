@@ -19,13 +19,20 @@ import {
   setProjectRoot,
 } from '../../bootstrap/state.js'
 import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
+import {
+  clearUserContextCache,
+  getUserContext,
+} from '../../context.js'
 import type { LocalJSXCommandContext } from '../../commands.js'
 import { render } from '../../ink.js'
 import {
   getManagedSessionPolicy,
   setManagedSessionPolicy,
 } from '../../utils/managedSessionPolicy.js'
-import { getManagedFilePath } from '../../utils/settings/managedPath.js'
+import {
+  getManagedFilePath,
+  getManagedSettingsDropInDir,
+} from '../../utils/settings/managedPath.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { _setGlobalConfigCacheForTesting } from '../../utils/config.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
@@ -97,8 +104,10 @@ await mock.module('./Status.js', () => ({
 const { Settings } = await import('./Settings.js')
 
 function resetCaches(): void {
+  clearUserContextCache()
   getMemoryFiles.cache.clear?.()
   getAutoMemPath.cache.clear?.()
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   getClaudeConfigHomeDir.cache.clear?.()
   resetSettingsCache()
@@ -186,7 +195,9 @@ async function waitForRender(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 100))
 }
 
-async function renderSettings(): Promise<{
+async function renderSettings(
+  onClose: Parameters<typeof Settings>[0]['onClose'] = () => undefined,
+): Promise<{
   output(): string
   stdin: ReturnType<typeof passThroughStdin>
   unmount(): void
@@ -208,7 +219,7 @@ async function renderSettings(): Promise<{
     instance = await render(
       <AppStateProvider initialState={getDefaultAppState()}>
         <Settings
-          onClose={() => undefined}
+          onClose={onClose}
           context={
             {
               options: { mcpClients: [] },
@@ -301,6 +312,78 @@ test('Project instructions exposes the four friendly choices and writes each mod
         ),
       ).toBe(mode === 'claude-md-and-agents-md' || mode === 'claude-md-or-agents-md')
     }
+  } finally {
+    ui.unmount()
+  }
+})
+
+test('changing Project instructions refreshes cached user context', async () => {
+  const { project, config } = createFixture()
+  writeSettings(config, {})
+  writeFileSync(
+    join(project, 'AGENTS.md'),
+    'CONTEXT_INVALIDATION_AGENTS_MARKER',
+  )
+
+  const before = await getUserContext()
+  expect(before.claudeMd).toContain('CONTEXT_INVALIDATION_AGENTS_MARKER')
+
+  const ui = await renderSettings()
+  try {
+    await filterProjectInstructions(ui.stdin)
+    await invokeAccept()
+    expect(userInstructionMode(config)).toBe('claude-md')
+
+    const after = await getUserContext()
+    expect(after.claudeMd ?? '').not.toContain(
+      'CONTEXT_INVALIDATION_AGENTS_MARKER',
+    )
+  } finally {
+    ui.unmount()
+  }
+})
+
+test('Escape stays open and can retry when Project instructions rollback fails', async () => {
+  const { config } = createFixture()
+  writeSettings(config, {
+    pluginConfigs: {
+      'agents-md@builtin': {
+        options: { instructionFiles: 'claude-md' },
+      },
+    },
+  })
+  let closeCalls = 0
+  const onClose: Parameters<typeof Settings>[0]['onClose'] = () => {
+    closeCalls += 1
+  }
+  const ui = await renderSettings(onClose)
+  const settingsPath = join(config, 'settings.json')
+  try {
+    await filterProjectInstructions(ui.stdin)
+    await invokeAccept()
+    expect(userInstructionMode(config)).toBe('claude-md-and-agents-md')
+    const changedSettings = readFileSync(settingsPath)
+
+    rmSync(settingsPath)
+    mkdirSync(settingsPath)
+    const escape = actionHandlers.get('confirm:no')
+    expect(escape).toBeDefined()
+    await act(async () => {
+      escape?.()
+    })
+    await waitForRender()
+    expect(closeCalls).toBe(0)
+
+    rmSync(settingsPath, { recursive: true })
+    writeFileSync(settingsPath, changedSettings)
+    resetSettingsCache()
+    await act(async () => {
+      actionHandlers.get('confirm:no')?.()
+    })
+    await waitForRender()
+
+    expect(closeCalls).toBe(1)
+    expect(userInstructionMode(config)).toBe('claude-md')
   } finally {
     ui.unmount()
   }

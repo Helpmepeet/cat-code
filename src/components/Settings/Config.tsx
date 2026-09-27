@@ -44,6 +44,7 @@ import {
   updateUserInstructionFilesOption,
 } from '../../utils/instructionFiles.js';
 import { getUserMsgOptIn, setUserMsgOptIn } from '../../bootstrap/state.js';
+import { clearUserContextCache } from '../../context.js';
 import { DEFAULT_OUTPUT_STYLE_NAME } from 'src/constants/outputStyles.js';
 import { isEnvTruthy, isRunningOnHomespace } from 'src/utils/envUtils.js';
 import type { LocalJSXCommandContext, CommandResultDisplay } from '../../commands.js';
@@ -524,6 +525,7 @@ export function Config({
               return
             }
             clearMemoryFileCaches()
+            clearUserContextCache()
             projectInstructionsChanged.current = true
             isDirty.current = true
             setProjectInstructions(getInstructionFilesSetting())
@@ -1218,6 +1220,7 @@ export function Config({
   // applied to disk/AppState immediately on toggle, so "cancel" means
   // actively writing the old values back.
   const revertChanges = useCallback(() => {
+    let projectInstructionsReverted = true
     // Theme: restores ThemeProvider React state. Must run before the global
     // config overwrite since setTheme internally calls saveGlobalConfig with
     // a partial update — we want the full snapshot to be the last write.
@@ -1269,11 +1272,13 @@ export function Config({
       );
       if (result.error) {
         logError(result.error);
+        projectInstructionsReverted = false
       } else {
         clearMemoryFileCaches();
+        clearUserContextCache();
         setProjectInstructions(getInstructionFilesSetting());
+        projectInstructionsChanged.current = false;
       }
-      projectInstructionsChanged.current = false;
     }
     // AppState: batch-restore all possibly-touched fields.
     const ia = initialAppState;
@@ -1299,15 +1304,16 @@ export function Config({
     if (getUserMsgOptIn() !== initialUserMsgOptIn) {
       setUserMsgOptIn(initialUserMsgOptIn);
     }
+    return projectInstructionsReverted
   }, [themeSetting, setTheme, initialLocalSettings, initialUserSettings, initialProjectInstructionFilesOption, initialAppState, initialUserMsgOptIn, setAppState]);
 
-  // Escape: revert all changes (if any) and close.
+  // Escape: close only after the targeted Project instructions revert succeeds.
   const handleEscape = useCallback(() => {
     if (showSubmenu !== null) {
       return;
     }
     if (isDirty.current) {
-      revertChanges();
+      if (!revertChanges()) return;
     }
     onClose('Config dialog dismissed', {
       display: 'system'

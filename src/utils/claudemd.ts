@@ -558,7 +558,11 @@ const MAX_INCLUDE_DEPTH = 5
  * Matches both the original path and the realpath-resolved path to handle symlinks
  * (e.g., /tmp -> /private/tmp on macOS).
  */
-function isClaudeMdExcluded(filePath: string, type: MemoryType): boolean {
+function isClaudeMdExcluded(
+  filePath: string,
+  type: MemoryType,
+  resolvedPath: string,
+): boolean {
   if (type !== 'User' && type !== 'Project' && type !== 'Local') {
     return false
   }
@@ -569,7 +573,9 @@ function isClaudeMdExcluded(filePath: string, type: MemoryType): boolean {
   }
 
   const matchOpts = { dot: true }
-  const normalizedPath = filePath.replaceAll('\\', '/')
+  const normalizedPaths = [filePath, resolvedPath].map(path =>
+    path.replaceAll('\\', '/'),
+  )
 
   // Build an expanded pattern list that includes realpath-resolved versions of
   // absolute patterns. This handles symlinks like /tmp -> /private/tmp on macOS:
@@ -583,7 +589,9 @@ function isClaudeMdExcluded(filePath: string, type: MemoryType): boolean {
     return false
   }
 
-  return picomatch.isMatch(normalizedPath, expandedPatterns, matchOpts)
+  return normalizedPaths.some(path =>
+    picomatch.isMatch(path, expandedPatterns, matchOpts),
+  )
 }
 
 /**
@@ -645,16 +653,16 @@ export async function processMemoryFile(
     return []
   }
 
-  // Skip if path is excluded by claudeMdExcludes setting
-  if (isClaudeMdExcluded(filePath, type)) {
-    return []
-  }
-
   // Resolve symlink path early for @import resolution and deduplicate aliases.
   const { resolvedPath } = safeResolvePath(
     getFsImplementation(),
     filePath,
   )
+
+  // Skip if either the spelled or resolved path is excluded.
+  if (isClaudeMdExcluded(filePath, type, resolvedPath)) {
+    return []
+  }
 
   const isAgentsFile =
     basename(filePath) === 'AGENTS.md' || basename(resolvedPath) === 'AGENTS.md'
@@ -1522,14 +1530,6 @@ export async function getMemoryFilesForNestedDirectory(
     }
   }
 
-  // Process local memory file (CLAUDE.local.md)
-  if (isSettingSourceEnabled('localSettings')) {
-    const localPath = join(dir, 'CLAUDE.local.md')
-    result.push(
-      ...(await processMemoryFile(localPath, 'Local', processedPaths, false)),
-    )
-  }
-
   const catCodeRulesDir = join(dir, '.cat-code', 'rules')
   const rulesDir = join(dir, '.claude', 'rules')
 
@@ -1576,6 +1576,14 @@ export async function getMemoryFilesForNestedDirectory(
         processedPaths,
         false,
       )),
+    )
+  }
+
+  // Process local memory file (CLAUDE.local.md) after project rules.
+  if (isSettingSourceEnabled('localSettings')) {
+    const localPath = join(dir, 'CLAUDE.local.md')
+    result.push(
+      ...(await processMemoryFile(localPath, 'Local', processedPaths, false)),
     )
   }
 

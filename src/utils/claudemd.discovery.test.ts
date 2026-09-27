@@ -39,7 +39,10 @@ import {
 } from './managedSessionPolicy.js'
 import { _setGlobalConfigCacheForTesting } from './config.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
-import { getManagedFilePath } from './settings/managedPath.js'
+import {
+  getManagedFilePath,
+  getManagedSettingsDropInDir,
+} from './settings/managedPath.js'
 import { resetSettingsCache } from './settings/settingsCache.js'
 import type { InstructionFilesMode } from './instructionFiles.js'
 import { normalizePathForComparison } from './file.js'
@@ -74,6 +77,7 @@ const scratchDirectories: string[] = []
 function resetDiscoveryCaches(): void {
   getMemoryFiles.cache.clear?.()
   getAutoMemPath.cache.clear?.()
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   getClaudeConfigHomeDir.cache.clear?.()
   resetSettingsCache()
@@ -362,6 +366,33 @@ test('claude-md mode ignores AGENTS while both mode loads the pinned directory o
   )
 })
 
+test('nested instructions put CLAUDE.local.md after project rules', async () => {
+  const { project, config } = createFixture()
+  const directory = join(project, 'child')
+  const orderedPaths = [
+    join(directory, 'CLAUDE.md'),
+    join(directory, '.cat-code', 'CLAUDE.md'),
+    join(directory, '.claude', 'CLAUDE.md'),
+    join(directory, 'AGENTS.md'),
+    join(directory, '.claude', 'AGENTS.md'),
+    join(directory, '.cat-code', 'rules', 'a.md'),
+    join(directory, '.claude', 'rules', 'b.md'),
+    join(directory, 'CLAUDE.local.md'),
+  ]
+  for (const path of orderedPaths) {
+    writeInstruction(path, `NESTED_ORDER_${basename(path)}`)
+  }
+  writeInstructionMode(config, 'claude-md-and-agents-md')
+
+  const files = await getMemoryFilesForNestedDirectory(
+    directory,
+    join(directory, 'file.ts'),
+    new Set(),
+  )
+
+  expect(files.map(file => pathKey(file.path))).toEqual(orderedPaths.map(pathKey))
+})
+
 test('CLAUDE.local.md only claims fallback when localSettings is enabled', async () => {
   const { project } = createFixture()
   const agentsPath = join(project, 'AGENTS.md')
@@ -422,6 +453,24 @@ test('claudeMdExcludes applies to AGENTS while another AGENTS candidate remains 
 
   expect(agentPaths(files)).toEqual([pathKey(includedPath)])
   expect(isMemoryFilePath(includedPath)).toBe(true)
+})
+
+test('claudeMdExcludes applies to the resolved target of an AGENTS symlink', async () => {
+  const { project, config } = createFixture()
+  const targetPath = join(project, 'excluded', 'AGENTS.md')
+  const aliasPath = join(project, 'AGENTS.md')
+  writeInstruction(targetPath, 'EXCLUDED_SYMLINK_TARGET_MARKER')
+  symlinkSync(targetPath, aliasPath)
+  writeInstructionMode(config, 'claude-md-and-agents-md', {
+    claudeMdExcludes: [targetPath],
+  })
+
+  const files = await getMemoryFiles()
+
+  expect(agentPaths(files)).toEqual([])
+  expect(
+    files.some(file => file.content.includes('EXCLUDED_SYMLINK_TARGET_MARKER')),
+  ).toBe(false)
 })
 
 test('AGENTS symlink aliases do not duplicate CLAUDE while both mode still loads other AGENTS', async () => {

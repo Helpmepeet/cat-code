@@ -238,3 +238,8 @@ export const getUserContext = memoize(
     }
   },
 )
+
+export function clearUserContextCache(): void {
+  getUserContext.cache.clear?.()
+  setCachedClaudeMdContent(null)
+}

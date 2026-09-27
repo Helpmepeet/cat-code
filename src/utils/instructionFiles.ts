@@ -4,6 +4,10 @@ import {
   updateSettingsForSource,
 } from './settings/settings.js'
 import type { SettingsJson } from './settings/types.js'
+import {
+  getInstructionFilesOptionMetadata,
+  readInstructionFilesOptionFromSettings,
+} from './settings/instructionFilesOptionMetadata.js'
 
 export const INSTRUCTION_FILES_MODES = [
   'claude-md-or-agents-md',
@@ -53,17 +57,13 @@ function readInstructionFilesOption(settings: SettingsJson | null): {
   present: boolean
   value: unknown
 } {
-  const options =
-    settings?.pluginConfigs?.[BUILTIN_AGENTS_PLUGIN_ID]?.options as
-      | Record<string, unknown>
-      | undefined
-  if (
-    !options ||
-    !Object.prototype.hasOwnProperty.call(options, INSTRUCTION_FILES_OPTION)
-  ) {
+  const option =
+    getInstructionFilesOptionMetadata(settings) ??
+    readInstructionFilesOptionFromSettings(settings)
+  if (!option) {
     return { present: false, value: undefined }
   }
-  return { present: true, value: options[INSTRUCTION_FILES_OPTION] }
+  return { present: true, value: option.value }
 }
 
 function isInstructionFilesMode(value: unknown): value is InstructionFilesMode {

@@ -47,7 +47,10 @@ import {
   setManagedSessionPolicy,
 } from '../utils/managedSessionPolicy.js'
 import { clearMdmSettingsCache } from '../utils/settings/mdm/settings.js'
-import { getManagedFilePath } from '../utils/settings/managedPath.js'
+import {
+  getManagedFilePath,
+  getManagedSettingsDropInDir,
+} from '../utils/settings/managedPath.js'
 import { resetSettingsCache } from '../utils/settings/settingsCache.js'
 import { _setGlobalConfigCacheForTesting } from '../utils/config.js'
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
@@ -100,6 +103,7 @@ beforeAll(() => {
   setFlagSettingsPath(undefined)
   setFlagSettingsInline(null)
   setManagedSessionPolicy(null)
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   getManagedFilePath.cache.set(undefined, managed)
   getClaudeConfigHomeDir.cache.clear?.()
@@ -117,6 +121,7 @@ afterAll(() => {
   setFlagSettingsPath(originalFlagSettingsPath)
   setFlagSettingsInline(originalFlagSettingsInline)
   setManagedSessionPolicy(originalManagedSessionPolicy)
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   getClaudeConfigHomeDir.cache.clear?.()
   clearMdmSettingsCache()

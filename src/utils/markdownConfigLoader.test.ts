@@ -9,7 +9,10 @@ import {
 import { loadMarkdownFilesForSubdir } from './markdownConfigLoader.js'
 import { setManagedSessionPolicy } from './managedSessionPolicy.js'
 import * as ripgrep from './ripgrep.js'
-import { getManagedFilePath } from './settings/managedPath.js'
+import {
+  getManagedFilePath,
+  getManagedSettingsDropInDir,
+} from './settings/managedPath.js'
 import { resetSettingsCache } from './settings/settingsCache.js'
 
 const scratchDirectories: string[] = []
@@ -29,6 +32,7 @@ afterEach(() => {
   }
   setAllowedSettingSources(originalSources)
   setManagedSessionPolicy(null)
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   loadMarkdownFilesForSubdir.cache.clear?.()
   resetSettingsCache()
@@ -47,6 +51,7 @@ function createFixture(): { directory: string; cwd: string } {
   process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH = join(directory, 'missing-managed')
   delete process.env.CLAUDE_CODE_USE_NATIVE_FILE_SEARCH
   setAllowedSettingSources(['userSettings', 'projectSettings', 'localSettings'])
+  getManagedSettingsDropInDir.cache.clear?.()
   getManagedFilePath.cache.clear?.()
   resetSettingsCache()
   return { directory, cwd }
