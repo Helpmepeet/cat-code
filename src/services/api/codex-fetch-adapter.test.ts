@@ -4394,6 +4394,67 @@ describe('codex tool-result truncation (Item 2)', () => {
     )
   })
 
+  test('a multimodal tool_result with text and image translates to input_text and input_image', () => {
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.6-terra',
+      _openaiInstructionAssembly: {
+        instructions: 'test instructions',
+        inputMessages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_img_2',
+                name: 'GenerateImage',
+                input: { prompt: 'cat' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_img_2',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Generated image: /tmp/cat.png\nModel: gpt-image-2.5-flare',
+                  },
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'ZmFrZQ==',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    })
+    const input = codexBody.input as Array<Record<string, unknown>>
+    const fco = input.find(i => i.type === 'function_call_output') as Record<
+      string,
+      unknown
+    >
+    expect(Array.isArray(fco.output)).toBe(true)
+    const outputs = fco.output as Array<Record<string, string>>
+    expect(outputs).toHaveLength(2)
+    expect(outputs[0]).toEqual({
+      type: 'input_text',
+      text: 'Generated image: /tmp/cat.png\nModel: gpt-image-2.5-flare',
+    })
+    expect(outputs[1]).toEqual({
+      type: 'input_image',
+      image_url: 'data:image/png;base64,ZmFrZQ==',
+    })
+  })
+
   test('an under-cap tool_result passes through unchanged in the wire request', () => {
     const small = 'ok result'
     const wire = outputStringFor(buildBodyWithToolResult('Read', small))

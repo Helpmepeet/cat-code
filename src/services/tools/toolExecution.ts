@@ -1497,10 +1497,16 @@ async function checkPermissionsAndCallTool(
 
     // Map the tool result to API format once and cache it. This block is reused
     // by addToolResult (skipping the remap) and measured here for analytics.
-    const mappedToolResultBlock = tool.mapToolResultToToolResultBlockParam(
-      result.data,
-      toolUseID,
-    )
+    const mappedToolResultBlock = result.modelResultContent
+      ? {
+          type: 'tool_result' as const,
+          tool_use_id: toolUseID,
+          content: result.modelResultContent,
+        }
+      : tool.mapToolResultToToolResultBlockParam(
+          result.data,
+          toolUseID,
+        )
     recordExecutionEnd(
       classifyReturnedToolExecution(mappedToolResultBlock),
       executionDurationMs,

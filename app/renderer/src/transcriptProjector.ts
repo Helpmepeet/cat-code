@@ -2463,12 +2463,37 @@ function projectToolResultBlock(
   const taskOutput = extractTaskOutput(toolUseResult)
   const createdPeer =
     block.is_error === true ? null : extractCreatedPeer(toolUseResult)
+  const contentProjection = projectToolResultContent(block.content)
+  const generatedImageProjection =
+    extractGeneratedImageProjection(toolUseResult)
+  let generatedImage = generatedImageProjection.generatedImage
+  let images = contentProjection.images
+  if (generatedImage && block.is_error !== true) {
+    if (images && images.length > 0) {
+      const firstImage = images[0]
+      if (
+        firstImage.mediaType === 'image/png' ||
+        firstImage.mediaType === 'image/jpeg' ||
+        firstImage.mediaType === 'image/webp'
+      ) {
+        generatedImage = {
+          ...generatedImage,
+          preview: {
+            mediaType: firstImage.mediaType,
+            data: firstImage.data,
+          },
+        }
+      }
+    }
+    images = undefined
+  }
   return {
     isError: block.is_error === true,
     ...(isCancelled ? { isCancelled: true as const } : {}),
-    ...projectToolResultContent(block.content),
+    content: contentProjection.content,
+    ...(images !== undefined ? { images } : {}),
     diff: extractDiffProjection(toolUseResult),
-    ...extractGeneratedImageProjection(toolUseResult),
+    ...(generatedImage !== undefined ? { generatedImage } : {}),
     ...(agentName !== null ? { agentName } : {}),
     ...(agentId !== null ? { agentId } : {}),
     ...(agentModel !== null ? { agentModel } : {}),

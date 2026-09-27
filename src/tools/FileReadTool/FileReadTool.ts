@@ -47,7 +47,9 @@ import {
   detectImageFormatFromBuffer,
   type ImageDimensions,
   ImageResizeError,
+  ImageTokenBudgetError,
   maybeResizeAndDownsampleImageBuffer,
+  prepareImageBufferForModel,
 } from '../../utils/imageResizer.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { logError } from '../../utils/log.js'
@@ -1396,71 +1398,22 @@ export async function readImageWithTokenBudget(
   const detectedMediaType = detectImageFormatFromBuffer(imageBuffer)
   const detectedFormat = detectedMediaType.split('/')[1] || 'png'
 
-  // Try standard resize
-  let result: ImageResult
   try {
-    const resized = await maybeResizeAndDownsampleImageBuffer(
-      imageBuffer,
-      originalSize,
-      detectedFormat,
-    )
-    result = createImageResponse(
-      resized.buffer,
-      resized.mediaType,
-      originalSize,
-      resized.dimensions,
-    )
-  } catch (e) {
-    if (e instanceof ImageResizeError) throw e
-    logError(e)
-    result = createImageResponse(imageBuffer, detectedFormat, originalSize)
-  }
-
-  // Check if it fits in token budget
-  const estimatedTokens = Math.ceil(result.file.base64.length * 0.125)
-  if (estimatedTokens > maxTokens) {
-    // Aggressive compression from the SAME buffer (no re-read)
-    try {
-      const compressed = await compressImageBufferWithTokenLimit(
-        imageBuffer,
-        maxTokens,
-        detectedMediaType,
-      )
-      return {
-        type: 'image',
-        file: {
-          base64: compressed.base64,
-          type: compressed.mediaType,
-          originalSize,
-        },
-      }
-    } catch (e) {
-      logError(e)
-      // Fallback: heavily compressed version from the SAME buffer
-      try {
-        const sharpModule = await import('sharp')
-        const sharp =
-          (
-            sharpModule as {
-              default?: typeof sharpModule
-            } & typeof sharpModule
-          ).default || sharpModule
-
-        const fallbackBuffer = await sharp(imageBuffer)
-          .resize(400, 400, {
-            fit: 'inside',
-            withoutEnlargement: true,
-          })
-          .jpeg({ quality: 20 })
-          .toBuffer()
-
-        return createImageResponse(fallbackBuffer, 'jpeg', originalSize)
-      } catch (error) {
-        logError(error)
-        return createImageResponse(imageBuffer, detectedFormat, originalSize)
-      }
+    const prepared = await prepareImageBufferForModel(imageBuffer, maxTokens)
+    return {
+      type: 'image',
+      file: {
+        base64: prepared.base64,
+        type: prepared.mediaType,
+        originalSize: prepared.originalSize,
+        dimensions: prepared.dimensions,
+      },
     }
+  } catch (e) {
+    if (e instanceof ImageResizeError && !(e instanceof ImageTokenBudgetError)) {
+      throw e
+    }
+    logError(e)
+    return createImageResponse(imageBuffer, detectedFormat, originalSize)
   }
-
-  return result
 }

@@ -3036,6 +3036,104 @@ test('a GenerateImage result and preview merge into one completed image row', ()
   })
 })
 
+test('GenerateImage inline image becomes immediate preview and is later replaced by dedicated preview without duplicate generic images', () => {
+  const toolUseId = 'toolu_inline_img_1'
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_gen_1',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'GenerateImage',
+            input: { prompt: 'A landscape' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0001',
+    }),
+  )
+
+  const inlineBase64 = Buffer.from('inline preview data').toString('base64')
+  const dedicatedBase64 = Buffer.from('dedicated preview data').toString('base64')
+
+  // 1. Tool result arrives with inline image from modelResultContent
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: [
+              { type: 'text', text: 'Generated image: /tmp/landscape.png' },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: inlineBase64,
+                },
+              },
+            ],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      tool_use_result: {
+        filePath: '/tmp/landscape.png',
+        model: 'gpt-image-2.5-flare',
+        size: '1024x1024',
+        outputFormat: 'png',
+        bytes: 1024,
+      },
+      uuid: '00000000-0000-4000-8000-0000000c0002',
+    }),
+  )
+
+  let row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('success')
+  // Inline image promoted to temporary generatedImage.preview
+  expect(row.result?.generatedImage?.preview).toEqual({
+    mediaType: 'image/png',
+    data: inlineBase64,
+  })
+  // Generic result.images is omitted to prevent duplicate rendering
+  expect(row.result?.images).toBeUndefined()
+
+  // 2. Dedicated generated-image-preview frame arrives later
+  state = projectServerFrame(state, {
+    kind: 'generated-image-preview',
+    protocolVersion: 2,
+    sessionId: 'session-1',
+    toolUseId,
+    mediaType: 'image/png',
+    data: dedicatedBase64,
+  })
+
+  row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  // Replaced with dedicated preview
+  expect(row.result?.generatedImage?.preview).toEqual({
+    mediaType: 'image/png',
+    data: dedicatedBase64,
+  })
+  expect(row.result?.images).toBeUndefined()
+})
+
 test('GenerateImage previews merge before results and stay isolated by session', () => {
   const toolUseId = 'toolu_shared_generate_image'
   let state = createTranscriptState()

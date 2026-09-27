@@ -42,6 +42,16 @@ export class ImageResizeError extends Error {
 }
 
 /**
+ * Error thrown when an image exceeds the model token budget and cannot be compressed to fit.
+ */
+export class ImageTokenBudgetError extends ImageResizeError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ImageTokenBudgetError'
+  }
+}
+
+/**
  * Classifies image processing errors for analytics.
  *
  * Uses error codes when available (Node.js module errors), falls back to
@@ -812,6 +822,52 @@ export function detectImageFormatFromBuffer(buffer: Buffer): ImageMediaType {
 }
 
 /**
+ * Detect image format from a buffer using magic bytes, returning null if format is not recognized.
+ */
+export function detectSupportedImageMediaType(
+  buffer: Buffer,
+): ImageMediaType | null {
+  if (buffer.length < 4) return null
+
+  // Check PNG signature
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return 'image/png'
+  }
+
+  // Check JPEG signature (FFD8FF)
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg'
+  }
+
+  // Check GIF signature (GIF87a or GIF89a)
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+    return 'image/gif'
+  }
+
+  // Check WebP signature (RIFF....WEBP)
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return 'image/webp'
+  }
+
+  return null
+}
+
+/**
  * Detect image format from base64 data using magic bytes
  * @param base64Data Base64 encoded image data
  * @returns Media type string (e.g., 'image/png', 'image/jpeg') or 'image/png' as default
@@ -878,3 +934,122 @@ export function createImageMetadataText(
 
   return `[Image: ${parts.join(', ')}]`
 }
+
+export interface PreparedModelImage {
+  base64: string
+  mediaType: Base64ImageSource['media_type']
+  originalSize: number
+  dimensions?: ImageDimensions
+}
+
+/**
+ * Strict buffer-based helper that prepares an image buffer for model consumption.
+ *
+ * Guarantees:
+ * - Returns a valid supported image (image/png, image/jpeg, image/gif, image/webp)
+ * - Resulting model token estimate <= maxTokens
+ * - Strict: throws ImageResizeError if the buffer is empty, invalid, or cannot fit within maxTokens
+ * - Never returns an oversized original image as a fallback
+ * - Operates entirely in-memory with zero filesystem I/O
+ */
+export async function prepareImageBufferForModel(
+  imageBuffer: Buffer,
+  maxTokens: number,
+): Promise<PreparedModelImage> {
+  if (!imageBuffer || imageBuffer.length === 0) {
+    throw new ImageResizeError('Image buffer is empty (0 bytes)')
+  }
+
+  const detectedMediaType = detectSupportedImageMediaType(imageBuffer)
+  if (!detectedMediaType) {
+    throw new ImageResizeError(
+      'Unable to detect supported image format from magic bytes',
+    )
+  }
+  const detectedFormat = detectedMediaType.split('/')[1] || 'png'
+
+  const resized = await maybeResizeAndDownsampleImageBuffer(
+    imageBuffer,
+    imageBuffer.length,
+    detectedFormat,
+  )
+
+  let buffer = resized.buffer
+  let mediaType = (
+    resized.mediaType.startsWith('image/')
+      ? resized.mediaType
+      : `image/${resized.mediaType}`
+  ) as Base64ImageSource['media_type']
+  let dimensions: ImageDimensions | undefined = resized.dimensions
+  let base64 = buffer.toString('base64')
+  let estimatedTokens = Math.ceil(base64.length * 0.125)
+
+  if (estimatedTokens > maxTokens) {
+    let compressedSuccessfully = false
+    try {
+      const compressed = await compressImageBufferWithTokenLimit(
+        imageBuffer,
+        maxTokens,
+        detectedMediaType,
+      )
+      const compressedTokens = Math.ceil(compressed.base64.length * 0.125)
+      if (compressedTokens <= maxTokens) {
+        base64 = compressed.base64
+        mediaType = compressed.mediaType
+        dimensions = undefined
+        estimatedTokens = compressedTokens
+        compressedSuccessfully = true
+      }
+    } catch {
+      // Fall through to aggressive fallback
+    }
+
+    if (!compressedSuccessfully) {
+      try {
+        const sharp = await getImageProcessor()
+        const fallbackBuffer = await sharp(imageBuffer)
+          .resize(400, 400, {
+            fit: 'inside',
+            withoutEnlargement: true,
+          })
+          .jpeg({ quality: 20 })
+          .toBuffer()
+        const fallbackBase64 = fallbackBuffer.toString('base64')
+        const fallbackTokens = Math.ceil(fallbackBase64.length * 0.125)
+        if (fallbackTokens <= maxTokens) {
+          base64 = fallbackBase64
+          mediaType = 'image/jpeg'
+          dimensions = undefined
+          estimatedTokens = fallbackTokens
+          compressedSuccessfully = true
+        }
+      } catch {
+        // Fall through to strict error
+      }
+    }
+
+    if (!compressedSuccessfully || estimatedTokens > maxTokens) {
+      throw new ImageTokenBudgetError(
+        `Image cannot be compressed to fit within model token limit of ${maxTokens} tokens (best: ${estimatedTokens} tokens)`,
+      )
+    }
+  }
+
+  const supportedMediaTypes = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+  ])
+  if (!supportedMediaTypes.has(mediaType)) {
+    throw new ImageResizeError(`Unsupported image media type: ${mediaType}`)
+  }
+
+  return {
+    base64,
+    mediaType,
+    originalSize: imageBuffer.length,
+    ...(dimensions ? { dimensions } : {}),
+  }
+}
+

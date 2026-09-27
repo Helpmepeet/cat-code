@@ -555,3 +555,108 @@ describe('streaming terminal handoff', () => {
     expect(effectCalls).toBe(0)
   })
 })
+
+describe('toolExecution modelResultContent handling', () => {
+  test('uses modelResultContent for tool_result block while preserving result.data on message.toolUseResult', async () => {
+    const metadata = { filePath: '/tmp/test.png', size: '100x100', bytes: 1234 }
+    const modelContent = [
+      { type: 'text' as const, text: 'Custom metadata text' },
+      {
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: 'image/png' as const,
+          data: 'ZmFrZQ==',
+        },
+      },
+    ]
+
+    let mappedToolResultCalled = false
+    const tool = buildTool({
+      name: 'CustomModelResultTool',
+      inputSchema: z.strictObject({ value: z.string() }),
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+      description: async () => 'test',
+      prompt: async () => 'test',
+      validateInput: async () => ({ result: true as const }),
+      renderToolUseMessage: () => null,
+      maxResultSizeChars: 10_000,
+      mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
+        mappedToolResultCalled = true
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result' as const,
+          content: 'fallback',
+        }
+      },
+      call: async () => ({
+        data: metadata,
+        modelResultContent: modelContent,
+      }),
+    })
+
+    const updates = await drain(tool as any)
+    const userMsg = updates.find(u => u.message.type === 'user')?.message
+    expect(userMsg).toBeDefined()
+    if (userMsg?.type !== 'user') throw new Error('expected user message')
+
+    // 1. Content uses modelResultContent
+    const block = userMsg.message.content[0]
+    expect(block).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'toolu_1',
+      content: modelContent,
+    })
+
+    // 2. toolUseResult receives only result.data (no base64 image data)
+    expect(userMsg.toolUseResult).toEqual(metadata)
+
+    // 3. mapToolResultToToolResultBlockParam was NOT called because modelResultContent took precedence
+    expect(mappedToolResultCalled).toBe(false)
+  })
+
+  test('normal tool without modelResultContent calls mapToolResultToToolResultBlockParam', async () => {
+    const data = { count: 42 }
+    let mappedToolResultCalled = false
+
+    const tool = buildTool({
+      name: 'NormalTool',
+      inputSchema: z.strictObject({ value: z.string() }),
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+      description: async () => 'test',
+      prompt: async () => 'test',
+      validateInput: async () => ({ result: true as const }),
+      renderToolUseMessage: () => null,
+      maxResultSizeChars: 10_000,
+      mapToolResultToToolResultBlockParam(output: unknown, toolUseID: string) {
+        mappedToolResultCalled = true
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result' as const,
+          content: `normal content: ${(output as { count: number }).count}`,
+        }
+      },
+      call: async () => ({
+        data,
+      }),
+    })
+
+    const updates = await drain(tool as any)
+    const userMsg = updates.find(u => u.message.type === 'user')?.message
+    expect(userMsg).toBeDefined()
+    if (userMsg?.type !== 'user') throw new Error('expected user message')
+
+    // mapToolResultToToolResultBlockParam was called
+    expect(mappedToolResultCalled).toBe(true)
+
+    const block = userMsg.message.content[0]
+    expect(block).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'toolu_1',
+      content: 'normal content: 42',
+    })
+    expect(userMsg.toolUseResult).toEqual(data)
+  })
+})

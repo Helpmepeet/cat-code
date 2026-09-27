@@ -28,6 +28,7 @@ import {
 } from '../../services/api/codexCredentialLifecycle.js'
 import {
   _generateImageToolInternalsForTest,
+  formatGenerateImageResult,
   GenerateImageTool,
 } from './GenerateImageTool.js'
 
@@ -1397,5 +1398,156 @@ describe('GenerateImageTool', () => {
       `\x1b]1337;FilePart=${Buffer.from('generated image').toString('base64')}\x07`,
     )
     expect(preview.sequence).toEndWith('\x1b]1337;FileEnd\x07')
+  })
+
+  test('returns generated image directly in modelResultContent alongside metadata', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount('main-account')],
+    })
+
+    const outputPath = join(tempDir!, 'valid.png')
+    const png = new PNG({ width: 4, height: 4 })
+    for (let i = 0; i < png.data.length; i += 4) {
+      png.data[i] = 120
+      png.data[i + 1] = 200
+      png.data[i + 2] = 80
+      png.data[i + 3] = 255
+    }
+    const validPngBytes = PNG.sync.write(png)
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        [
+          `data: ${JSON.stringify({
+            type: 'response.created',
+            response: {
+              tools: [
+                {
+                  type: 'image_generation',
+                  model: 'gpt-image-2.5-flare',
+                },
+              ],
+            },
+          })}`,
+          `data: ${JSON.stringify({
+            type: 'image_generation_call',
+            result: `data:image/png;base64,${validPngBytes.toString('base64')}`,
+          })}`,
+          'data: [DONE]',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'a small green square',
+        output_path: outputPath,
+      },
+      imageToolContext({
+        abortController: new AbortController(),
+        agentId: 'subagent-1',
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      }),
+    )
+
+    // 1. Saved file on disk equals backend bytes exactly
+    expect(await readFile(outputPath)).toEqual(validPngBytes)
+
+    // 2. Metadata is correct and does NOT contain raw base64 or image data
+    expect(result.data.filePath).toBe(outputPath)
+    expect(result.data.model).toBe('gpt-image-2.5-flare')
+    expect(result.data.bytes).toBe(validPngBytes.length)
+    expect((result.data as Record<string, unknown>).base64).toBeUndefined()
+    expect((result.data as Record<string, unknown>).image).toBeUndefined()
+
+    // 3. modelResultContent contains text metadata and one image block
+    expect(result.modelResultContent).toBeDefined()
+    expect(result.modelResultContent).toHaveLength(2)
+    const [textBlock, imageBlock] = result.modelResultContent!
+    expect(textBlock).toEqual({
+      type: 'text',
+      text: formatGenerateImageResult(result.data),
+    })
+    expect(imageBlock.type).toBe('image')
+    if (imageBlock.type !== 'image') throw new Error('expected image block')
+    expect(imageBlock.source.type).toBe('base64')
+    expect(['image/png', 'image/jpeg', 'image/webp']).toContain(
+      imageBlock.source.media_type,
+    )
+    expect(imageBlock.source.data.length).toBeGreaterThan(0)
+
+    // 4. Image block token estimate fits model budget
+    const estimatedTokens = Math.ceil(imageBlock.source.data.length * 0.125)
+    expect(estimatedTokens).toBeLessThanOrEqual(50_000)
+  })
+
+  test('falls back to metadata-only result when model image preparation fails', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount('main-account')],
+    })
+
+    const outputPath = join(tempDir!, 'fallback.png')
+    // Raw bytes that are not a valid PNG image format — prepareImageBufferForModel will fail
+    const dummyBytes = Buffer.from('not-a-valid-png-image-stream')
+
+    globalThis.fetch = (async () => {
+      return new Response(
+        [
+          `data: ${JSON.stringify({
+            type: 'response.created',
+            response: {
+              tools: [
+                {
+                  type: 'image_generation',
+                  model: 'gpt-image-2.5-flare',
+                },
+              ],
+            },
+          })}`,
+          `data: ${JSON.stringify({
+            type: 'image_generation_call',
+            result: `data:image/png;base64,${dummyBytes.toString('base64')}`,
+          })}`,
+          'data: [DONE]',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    const result = await GenerateImageTool.call(
+      {
+        prompt: 'test fallback',
+        output_path: outputPath,
+      },
+      imageToolContext({
+        abortController: new AbortController(),
+        agentId: 'subagent-1',
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      }),
+    )
+
+    // Original file must still be written successfully
+    expect(await readFile(outputPath)).toEqual(dummyBytes)
+
+    // Tool call resolves successfully with correct metadata
+    expect(result.data.filePath).toBe(outputPath)
+    expect(result.data.bytes).toBe(dummyBytes.length)
+
+    // No modelResultContent returned
+    expect(result.modelResultContent).toBeUndefined()
+
+    // Normal text mapping remains available
+    const block = GenerateImageTool.mapToolResultToToolResultBlockParam(
+      result.data,
+      'tool-call-1',
+    )
+    expect(block).toEqual({
+      tool_use_id: 'tool-call-1',
+      type: 'tool_result',
+      content: formatGenerateImageResult(result.data),
+    })
   })
 })

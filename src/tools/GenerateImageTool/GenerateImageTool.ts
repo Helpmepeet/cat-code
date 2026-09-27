@@ -35,6 +35,8 @@ import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage, isENOENT } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import { formatFileSize } from '../../utils/format.js'
+import { prepareImageBufferForModel } from '../../utils/imageResizer.js'
+import { getDefaultFileReadingLimits } from '../FileReadTool/limits.js'
 
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
@@ -1175,33 +1177,54 @@ Prompt rewriting:
     await mkdir(dirname(filePath), { recursive: true })
     await writeFile(filePath, bytes)
 
-    return {
-      data: {
-        filePath,
-        model: generation.model,
-        size: readImageDimensions(bytes) ?? 'unknown',
-        outputFormat,
-        bytes: bytes.length,
-        ...(generation.revisedPrompt ? { revisedPrompt: generation.revisedPrompt } : {}),
-        ...(generation.usage ? { usage: generation.usage } : {}),
-      },
+    const data: Output = {
+      filePath,
+      model: generation.model,
+      size: readImageDimensions(bytes) ?? 'unknown',
+      outputFormat,
+      bytes: bytes.length,
+      ...(generation.revisedPrompt ? { revisedPrompt: generation.revisedPrompt } : {}),
+      ...(generation.usage ? { usage: generation.usage } : {}),
+    }
+
+    const maxTokens =
+      context.fileReadingLimits?.maxTokens ??
+      getDefaultFileReadingLimits().maxTokens
+
+    try {
+      const prepared = await prepareImageBufferForModel(bytes, maxTokens)
+      return {
+        data,
+        modelResultContent: [
+          {
+            type: 'text',
+            text: formatGenerateImageResult(data),
+          },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: prepared.mediaType,
+              data: prepared.base64,
+            },
+          },
+        ],
+      }
+    } catch (error) {
+      logForDebugging(
+        `Failed to prepare generated image for model context: ${errorMessage(error)}`,
+        { level: 'warn' },
+      )
+      return {
+        data,
+      }
     }
   },
   mapToolResultToToolResultBlockParam(output, toolUseID) {
-    const lines = [
-      `Generated image: ${output.filePath}`,
-      `Model: ${output.model}`,
-      `Size: ${output.size}`,
-      `Format: ${output.outputFormat}`,
-      `Bytes: ${output.bytes}`,
-    ]
-    if (output.revisedPrompt) {
-      lines.push(`Revised prompt: ${output.revisedPrompt}`)
-    }
     return {
       tool_use_id: toolUseID,
       type: 'tool_result',
-      content: lines.join('\n'),
+      content: formatGenerateImageResult(output),
     }
   },
   extractSearchText(output) {
@@ -1212,6 +1235,20 @@ Prompt rewriting:
   },
 } satisfies ToolDef<InputSchema, Output>)
 
+export function formatGenerateImageResult(output: Output): string {
+  const lines = [
+    `Generated image: ${output.filePath}`,
+    `Model: ${output.model}`,
+    `Size: ${output.size}`,
+    `Format: ${output.outputFormat}`,
+    `Bytes: ${output.bytes}`,
+  ]
+  if (output.revisedPrompt) {
+    lines.push(`Revised prompt: ${output.revisedPrompt}`)
+  }
+  return lines.join('\n')
+}
+
 export const _generateImageToolInternalsForTest = {
   buildTerminalImagePreview,
   buildIterm2InlineImage,
@@ -1219,4 +1256,5 @@ export const _generateImageToolInternalsForTest = {
   parseCodexImageGenerationResponse,
   readImageDimensions,
   extractCodexImageModel,
+  formatGenerateImageResult,
 }

@@ -392,6 +392,12 @@ export function filterToolProgressMessages(
 
 export type ToolResult<T> = {
   data: T
+  /**
+   * Optional model-facing tool-result content. When present, this becomes the
+   * content of the paired `tool_result`. It is not included in `data` or
+   * `toolUseResult` metadata.
+   */
+  modelResultContent?: NonNullable<ToolResultBlockParam['content']>
   newMessages?: (
     | UserMessage
     | AssistantMessage
