@@ -602,6 +602,24 @@ export function Sidebar({
     ),
     [groupRows, query],
   )
+  // Chats take the same "Show more" cap as a project group, so a long run of
+  // chats cannot push Projects off the rail. The active chat stays visible.
+  const [chatsExpanded, setChatsExpanded] = useState(false)
+  const {
+    visible: visibleManagedRows,
+    hiddenCount: hiddenManagedCount,
+    overLimit: managedOverLimit,
+  } = selectVisibleSidebarRows(
+    managedRows,
+    row => row.appSessionId != null && row.appSessionId === activeSessionId,
+    SIDEBAR_GROUP_ROW_LIMIT,
+    chatsExpanded,
+  )
+  useEffect(() => {
+    setChatsExpanded(value =>
+      normalizeSidebarGroupExpansion(value, managedOverLimit),
+    )
+  }, [managedOverLimit])
 
   // ➕ The operator's custom WORKSPACE order is applied HERE, on the sidebar side
   // of the shared selector — `groupByWorkspace` itself stays frozen-alphabetical
@@ -1064,7 +1082,7 @@ export function Sidebar({
                     </button>
                   ) : null}
                 </div>
-                {managedRows.map(row => (
+                {visibleManagedRows.map(row => (
                   <SidebarRowItem
                     key={row.sessionId}
                     row={row}
@@ -1076,6 +1094,20 @@ export function Sidebar({
                     {...rowProps}
                   />
                 ))}
+                {shouldShowSidebarGroupExpansionToggle(
+                  chatsExpanded,
+                  hiddenManagedCount,
+                  managedOverLimit,
+                ) ? (
+                  <button
+                    type="button"
+                    onClick={() => setChatsExpanded(value => !value)}
+                    aria-expanded={chatsExpanded}
+                    className="flex w-full items-center gap-1 rounded-md px-2 py-[3px] pl-[18px] text-[11px] font-medium text-text-faint transition-colors hover:bg-shell-hover hover:text-text-muted"
+                  >
+                    {chatsExpanded ? 'Show less' : `Show ${hiddenManagedCount} more`}
+                  </button>
+                ) : null}
               </section>
 
               {/* "Add project" lives on this header: pick a folder, a session is

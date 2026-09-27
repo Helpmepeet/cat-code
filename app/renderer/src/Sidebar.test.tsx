@@ -522,6 +522,27 @@ test('managed sessions appear in Chats before Projects and hide their storage pa
   expect(html).not.toContain('/managed/storage-id')
 })
 
+test('Chats take the project cap: six rows, the active chat kept, the rest behind Show more', () => {
+  const chats = Array.from({ length: 9 }, (_, i) =>
+    registryRow(`chat${i}`, {
+      cwd: `/managed/chat${i}`,
+      binding: { kind: 'managed', storageRootId: 'root', storageId: `chat${i}` },
+      title: `Chat ${i}`,
+      displayLabel: `Chat ${i}`,
+      lastMessageSentAt: 1_000 - i,
+    }),
+  )
+  const html = renderSidebar({
+    rows: chats,
+    activeSessionId: 'chat8' as SessionId,
+    menuActive: true,
+  })
+  for (const i of [0, 1, 2, 3, 4, 5, 8]) expect(html).toContain(`>Chat ${i}<`)
+  expect(html).not.toContain('>Chat 6<')
+  expect(html).not.toContain('>Chat 7<')
+  expect(html).toContain('>Show 2 more<')
+})
+
 test('P4-53 — the collapsed rail keeps the pin as its stable keyboard entry target', () => {
   const html = renderSidebar()
   expect(html).toContain('aria-label="Pin sidebar open"')
