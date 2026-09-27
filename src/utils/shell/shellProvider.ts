@@ -1,3 +1,5 @@
+import type { ExitAttributionPlan } from '../bash/exitAttribution.js'
+
 export const SHELL_TYPES = ['bash', 'powershell'] as const
 export type ShellType = (typeof SHELL_TYPES)[number]
 export const DEFAULT_HOOK_SHELL: ShellType = 'bash'
@@ -23,8 +25,17 @@ export type ShellProvider = {
        * re-introduces environment after the spawn-time filter has run.
        */
       workerScoped?: boolean
+      /**
+       * Command names with their own exit-code rules. When the command ends
+       * in one, the provider may instrument it to prove that command ran.
+       */
+      exitSemanticCommands?: ReadonlySet<string>
     },
-  ): Promise<{ commandString: string; cwdFilePath: string }>
+  ): Promise<{
+    commandString: string
+    cwdFilePath: string
+    exitAttributionPlan?: ExitAttributionPlan
+  }>
 
   /**
    * Shell args for spawn (e.g., ['-c', '-l', cmd] for bash).

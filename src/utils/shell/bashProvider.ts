@@ -1,9 +1,16 @@
 import { feature } from 'bun:bundle'
+import { randomBytes } from 'crypto'
+import { readFileSync } from 'fs'
 import { access } from 'fs/promises'
 import { tmpdir as osTmpdir } from 'os'
 import { join as nativeJoin } from 'path'
 import { join as posixJoin } from 'path/posix'
 import { rearrangePipeCommand } from '../bash/bashPipeCommand.js'
+import {
+  type ExitAttributionPlan,
+  planExitAttribution,
+  shellStateAllowsExitMarker,
+} from '../bash/exitAttribution.js'
 import { createAndSaveSnapshot } from '../bash/ShellSnapshot.js'
 import { formatShellPrefixCommand } from '../bash/shellPrefix.js'
 import { quote } from '../bash/shellQuote.js'
@@ -68,6 +75,20 @@ export async function createBashShellProvider(
       })
   // Track the last resolved snapshot path for use in getSpawnArgs
   let lastSnapshotFilePath: string | undefined
+  // The snapshot is immutable once written; read it once per path.
+  let snapshotTextCache: { path: string; text: string | undefined } | undefined
+  const readSnapshotText = (path: string): string | undefined => {
+    if (snapshotTextCache?.path !== path) {
+      let text: string | undefined
+      try {
+        text = readFileSync(path, 'utf8')
+      } catch {
+        text = undefined
+      }
+      snapshotTextCache = { path, text }
+    }
+    return snapshotTextCache.text
+  }
 
   return {
     type: 'bash',
@@ -81,8 +102,13 @@ export async function createBashShellProvider(
         sandboxTmpDir?: string
         useSandbox: boolean
         workerScoped?: boolean
+        exitSemanticCommands?: ReadonlySet<string>
       },
-    ): Promise<{ commandString: string; cwdFilePath: string }> {
+    ): Promise<{
+      commandString: string
+      cwdFilePath: string
+      exitAttributionPlan?: ExitAttributionPlan
+    }> {
       let snapshotFilePath = await snapshotPromise
       // This access() check is NOT pure TOCTOU — it's the fallback decision
       // point for getSpawnArgs. When the snapshot disappears mid-session
@@ -127,7 +153,48 @@ export async function createBashShellProvider(
       // See anthropics/claude-code#4928.
       const normalizedCommand = rewriteWindowsNullRedirect(command)
       const addStdinRedirect = shouldAddStdinRedirect(normalizedCommand)
-      let quotedCommand = quoteShellCommand(normalizedCommand, addStdinRedirect)
+
+      const sessionEnvScript = opts.workerScoped
+        ? null
+        : await getSessionEnvironmentScript()
+
+      // Instrument only where nothing before the command can observe the
+      // marker. No snapshot means a login shell runs the user's profile, and a
+      // shell prefix or BASH_ENV runs code this process never sees; any of
+      // those leaves the exit unattributed. Windows paths are not handled.
+      let exitAttributionPlan: ExitAttributionPlan | undefined
+      if (
+        opts.exitSemanticCommands &&
+        !isWindows &&
+        !process.env.CLAUDE_CODE_SHELL_PREFIX &&
+        !process.env.BASH_ENV &&
+        !getSessionEnvVars().has('BASH_ENV') &&
+        snapshotFilePath &&
+        shellStateAllowsExitMarker(
+          readSnapshotText(snapshotFilePath),
+          sessionEnvScript,
+        )
+      ) {
+        const evidenceFilePath = opts.useSandbox
+          ? posixJoin(
+              opts.sandboxTmpDir!,
+              `exit-${opts.id}-${randomBytes(6).toString('hex')}`,
+            )
+          : posixJoin(
+              shellTmpdir,
+              `claude-${opts.id}-exit-${randomBytes(6).toString('hex')}`,
+            )
+        exitAttributionPlan =
+          planExitAttribution(
+            normalizedCommand,
+            opts.exitSemanticCommands,
+            evidenceFilePath,
+          ) ?? undefined
+      }
+      const executedCommand =
+        exitAttributionPlan?.instrumentedCommand ?? normalizedCommand
+
+      let quotedCommand = quoteShellCommand(executedCommand, addStdinRedirect)
 
       // Debug logging for heredoc/multiline commands to trace trailer handling
       // Only log when commit attribution is enabled to avoid noise
@@ -151,7 +218,7 @@ export async function createBashShellProvider(
       // Applies to sandbox mode too: sandbox wraps the assembled commandString,
       // not the raw command (since PR #9189).
       if (normalizedCommand.includes('|') && addStdinRedirect) {
-        quotedCommand = rearrangePipeCommand(normalizedCommand)
+        quotedCommand = rearrangePipeCommand(executedCommand)
       }
 
       const commandParts: string[] = []
@@ -181,9 +248,6 @@ export async function createBashShellProvider(
       // exported secrets. The login-shell fallback in getSpawnArgs IS such a
       // path, and is not covered here: when no snapshot exists the shell starts
       // with -l and runs the operator's own profile.
-      const sessionEnvScript = opts.workerScoped
-        ? null
-        : await getSessionEnvironmentScript()
       if (sessionEnvScript) {
         commandParts.push(sessionEnvScript)
       }
@@ -210,7 +274,7 @@ export async function createBashShellProvider(
         )
       }
 
-      return { commandString, cwdFilePath }
+      return { commandString, cwdFilePath, exitAttributionPlan }
     },
 
     getSpawnArgs(commandString: string): string[] {

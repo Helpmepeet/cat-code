@@ -44,7 +44,7 @@ import { buildLargeToolResultMessage, ensureToolResultsDir, generatePreview, get
 import { userFacingName as fileEditUserFacingName } from '../FileEditTool/UI.js';
 import { trackGitOperations } from '../shared/gitOperationTracking.js';
 import { bashToolHasPermission, commandHasAnyCd, matchWildcardPattern, permissionRuleExtractPrefix } from './bashPermissions.js';
-import { interpretCommandResult } from './commandSemantics.js';
+import { interpretCommandResult, SEMANTIC_COMMAND_NAMES } from './commandSemantics.js';
 import { checkKillOwnership } from './killOwnership.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
@@ -699,7 +699,7 @@ export const BashTool = buildTool({
       stdoutAccumulator.append((result.stdout || '').trimEnd() + EOL);
 
       // Interpret the command result using semantic rules
-      interpretationResult = interpretCommandResult(input.command, result.code, result.stdout || '', '');
+      interpretationResult = interpretCommandResult(result.code, result.stdout || '', '', result.exitAttribution ?? null);
 
       // Check for git index.lock error (stderr is in stdout now)
       if (result.stdout && result.stdout.includes(".git/index.lock': File exists")) {
@@ -944,7 +944,8 @@ async function* runShellCommand({
     // Already carried this far to attribute background tasks to their agent.
     // exec needs the same fact to decide whether the child gets the worker
     // environment allowlist.
-    agentId
+    agentId,
+    exitSemanticCommands: SEMANTIC_COMMAND_NAMES
   });
 
   // Start the command execution

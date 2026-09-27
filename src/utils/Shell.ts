@@ -11,6 +11,7 @@ import {
   setCwdState,
 } from '../bootstrap/state.js'
 import { generateTaskId } from '../Task.js'
+import { readExitEvidence } from './bash/exitAttribution.js'
 import { pwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { errorMessage, isENOENT } from './errors.js'
@@ -182,6 +183,12 @@ export type ExecOptions = {
    * reads it lives in isWorkerScopedExec in src/utils/workerSubprocessEnv.ts.
    */
   agentId?: string
+  /**
+   * Command names with their own exit-code rules (BashTool's semantics). When
+   * set, the result carries `exitAttribution` so those rules apply only after
+   * the shell proved that command ran.
+   */
+  exitSemanticCommands?: ReadonlySet<string>
 }
 
 /**
@@ -202,6 +209,7 @@ export async function exec(
     shouldAutoBackground,
     onStdout,
     agentId,
+    exitSemanticCommands,
   } = options ?? {}
   const commandTimeout = timeout || DEFAULT_TIMEOUT
   const workerScoped = isWorkerScopedExec(agentId)
@@ -218,13 +226,17 @@ export async function exec(
     getClaudeTempDirName(),
   )
 
-  const { commandString: builtCommand, cwdFilePath } =
-    await provider.buildExecCommand(command, {
-      id,
-      sandboxTmpDir: shouldUseSandbox ? sandboxTmpDir : undefined,
-      useSandbox: shouldUseSandbox ?? false,
-      workerScoped,
-    })
+  const {
+    commandString: builtCommand,
+    cwdFilePath,
+    exitAttributionPlan,
+  } = await provider.buildExecCommand(command, {
+    id,
+    sandboxTmpDir: shouldUseSandbox ? sandboxTmpDir : undefined,
+    useSandbox: shouldUseSandbox ?? false,
+    workerScoped,
+    exitSemanticCommands,
+  })
 
   let commandString = builtCommand
 
@@ -408,6 +420,25 @@ export async function exec(
       // working tree in the same microtask.
       if (shouldUseSandbox) {
         SandboxManager.cleanupAfterCommand()
+      }
+      // Synchronous for the same reason as the cwd read below: a caller
+      // awaiting .result must see the attribution. Runs on every outcome,
+      // including interrupt, so the evidence file never outlives the command.
+      if (exitAttributionPlan && result) {
+        let evidence: string | undefined
+        try {
+          evidence = readFileSync(exitAttributionPlan.evidenceFilePath, {
+            encoding: 'utf8',
+          })
+        } catch {
+          evidence = undefined
+        }
+        try {
+          unlinkSync(exitAttributionPlan.evidenceFilePath)
+        } catch {
+          // Absent when the marker never ran
+        }
+        result.exitAttribution = readExitEvidence(evidence, exitAttributionPlan)
       }
       // Only foreground tasks update the cwd
       if (result && !preventCwdChanges && !result.backgroundTaskId) {
