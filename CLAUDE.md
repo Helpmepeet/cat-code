@@ -24,9 +24,10 @@ saved sessions, settings, credentials, and running work when changing formats.
 
 ## 2. Finding the owner
 
-Start with supplied files or a known owner. For unfamiliar areas,
-[the workspace map](docs/maps/WORKSPACE_MAP.md) routes to focused maps and source.
-Read references as relevant to the task, not as a required tour of the repository.
+For repository work, read [the workspace map](docs/maps/WORKSPACE_MAP.md)
+once at the start, even when files or an owner are supplied. Then start with
+those files or use the map to find the owner. Read only relevant focused maps
+and references, not the whole repository.
 
 - Prompt/instruction work: [prompt surfaces](docs/prompts/2026-04-30-prompt-surfaces.md).
 - Desktop runtime: [desktop map](docs/maps/web-app-runtime.md).

@@ -304,7 +304,7 @@ export function runMapRoutingNudge(
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       additionalContext:
-        'Routing nudge (fires once per session): this appears to be broad repository navigation and no docs/maps route has been consulted. If ownership is not already established, read docs/maps/WORKSPACE_MAP.md now, choose the relevant focused map, then continue into source. If an exact owner file or focused map was already supplied, proceed.',
+        'Routing nudge (fires once per session): this appears to be broad repository navigation and no docs/maps route has been consulted. Read docs/maps/WORKSPACE_MAP.md now, even if an owner file or focused map was supplied. Then continue with the relevant files or focused map.',
     },
     suppressOutput: true,
   })

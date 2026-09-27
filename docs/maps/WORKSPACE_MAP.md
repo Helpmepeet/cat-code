@@ -4,12 +4,12 @@ Last refreshed: 2026-09-18
 
 ## Purpose
 
-This is the main daily-refreshable routing map for Cat Code. When a task needs
-broad repository navigation and ownership is not established, start here,
-choose only the relevant focused map, then continue into source. If exact owner
-files or a focused map were supplied, start there and skip this router. It is
-not a full architecture guide and should not duplicate detailed domain notes;
-put those in the focused sub-maps linked below.
+This is the main daily-refreshable routing map for Cat Code. Read it once at
+the start of repository work, including when exact owner files or a focused
+map were supplied. Then start with those files or choose the relevant focused
+map before continuing into source. It is not a full architecture guide and
+should not duplicate detailed domain notes; put those in the focused sub-maps
+linked below.
 
 Maps route; source is authoritative. Verify behavior in source before editing.
 This repository is a forked snapshot, and older plans, feature flags, and

@@ -59,14 +59,14 @@ describe('built-in agent map routing guidance', () => {
     ).not.toContain(MAP_ROUTING_GUIDANCE)
   })
 
-  test('guidance is portable while preserving conditional map-first routing', () => {
+  test('guidance is portable while preserving map-first routing', () => {
     expect(MAP_ROUTING_GUIDANCE).not.toContain('docs/maps/WORKSPACE_MAP.md')
     expect(MAP_ROUTING_GUIDANCE).toContain("current project's own guidance")
     expect(MAP_ROUTING_GUIDANCE).toContain('establish a map-first workflow')
     expect(MAP_ROUTING_GUIDANCE).toContain(
       'exact owner files or a focused map',
     )
-    expect(MAP_ROUTING_GUIDANCE).toContain('skip any workspace router')
+    expect(MAP_ROUTING_GUIDANCE).toContain('even when exact owner files or a focused map were supplied')
     expect(MAP_ROUTING_GUIDANCE).toContain('source is authoritative')
   })
 })

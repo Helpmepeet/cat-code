@@ -469,4 +469,4 @@ These are not primary prompt owners, but they often matter when prompt changes a
 - If you want to change worker or subagent behavior, start at `src/coordinator/coordinatorMode.ts` and `src/tools/AgentTool/`.
 - If you want to change tool instructions, start in `src/tools/*/prompt.ts`.
 - If you want to change output styles, start at `src/constants/outputStyles.ts` and `.claude/output-styles/*.md`.
-- If you want to inspect everything prompt-related before editing, read this file first, then `docs/maps/WORKSPACE_MAP.md`.
+- For prompt-related repository work, read `docs/maps/WORKSPACE_MAP.md` first, then this file before editing.
