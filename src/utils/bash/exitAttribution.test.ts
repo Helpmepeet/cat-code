@@ -133,6 +133,16 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
     // The name would run user code, not the program whose rule applies.
     ['a function shadowing the final command', 'diff() { echo boom >&2; return 1; }; diff'],
     ['a function shadowing lsof', 'lsof() { return 1; }; lsof'],
+    // The shell can fail these before the command runs, with exit 1.
+    ['an output redirect to a file', 'grep x f > out.txt'],
+    ['an input redirect from a file', 'true && grep x f < in.txt'],
+    ['a trailing list redirect to a file', 'true && grep x f > out.txt 2>&1'],
+    ['an unquoted glob', 'grep x *.log'],
+    ['a bracket glob', 'grep x f[12]'],
+    ['a ~user path', 'grep x ~bob/f'],
+    ['${x?}', 'grep "${X?}" f'],
+    ['${x:?msg}', 'grep "${X:?missing}" f'],
+    ['arithmetic', 'grep x $((1/0))'],
   ])('%s', (_label, command) => {
     expect(plan(command)).toBeNull()
   })
@@ -151,6 +161,30 @@ describe('planExitAttribution: no marker, so the default rule applies', () => {
     expect(plan('true && [ -n x ]', state)).toBeNull()
     expect(plan('[ -n x ] && grep missing f', state)).toBeNull()
     expect(plan('[ -n x ]')).not.toBeNull()
+  })
+
+  test('forms that cannot fail before the command runs keep the marker', () => {
+    for (const command of [
+      'true && grep x f 2>/dev/null',
+      'grep x f >/dev/null 2>&1',
+      'grep x f &>/dev/null',
+      'grep x f < /dev/null',
+      'rg "a*" f',
+      "find . -name '*.ts'",
+      'grep x ~/f',
+      'printf a > out | grep x',
+      'A=*.x grep x f',
+      'grep "$(ls *.x)" f',
+    ]) {
+      expect([command, plan(command) !== null]).toEqual([command, true])
+    }
+  })
+
+  test('parameter expansion in the command is flagged for the set -u check', () => {
+    expect(plan('true && grep $X f')?.candidateExpandsParameters).toBe(true)
+    expect(plan('true && grep "${X}" f')?.candidateExpandsParameters).toBe(true)
+    expect(plan('true && grep x f')?.candidateExpandsParameters).toBe(false)
+    expect(plan('true && grep "$(echo $X)" f')?.candidateExpandsParameters).toBe(false)
   })
 
   test('$? after && is 0 with or without the marker, so it is allowed', () => {
@@ -192,9 +226,17 @@ describe('analyzeSnapshotForExitMarker', () => {
         'alias -- diff=false',
         "alias -- rg='rg $(pick-flags)'",
         "alias -- _='sudo '",
+        "alias -- egrep='egrep '",
       ].join('\n'),
     )
-    expect([...state!.userDefinedCommands].sort()).toEqual(['_', 'diff', 'foo', 'll', 'rg'])
+    expect([...state!.userDefinedCommands].sort()).toEqual([
+      '_',
+      'diff',
+      'egrep',
+      'foo',
+      'll',
+      'rg',
+    ])
   })
 
   test('names zsh prints quoted are read unquoted', () => {
@@ -304,7 +346,12 @@ describe.skipIf(!existsSync('/bin/bash'))('analyzeSnapshotForExitMarker on real 
 })
 
 describe('readExitEvidence', () => {
-  const p = { token: 'abc', semanticCommand: 'grep', pipelineHasMultipleCommands: true }
+  const p = {
+    token: 'abc',
+    semanticCommand: 'grep',
+    pipelineHasMultipleCommands: true,
+    candidateExpandsParameters: false,
+  }
   // The layout buildExitMarker writes: header, `set -o`, then the sections.
   const evidence = ({
     header = 'abc hB',
@@ -348,6 +395,13 @@ describe('readExitEvidence', () => {
     expect(readExitEvidence(evidence({ header: 'abc hvB' }), p)).toBeNull()
   })
 
+  test('set -u is untrusted only when the command expands parameters', () => {
+    const expands = { ...p, candidateExpandsParameters: true }
+    expect(readExitEvidence(evidence({ header: 'abc hBu' }), expands)).toBeNull()
+    expect(readExitEvidence(evidence({ header: 'abc hBu' }), p)).not.toBeNull()
+    expect(readExitEvidence(evidence(), expands)).not.toBeNull()
+  })
+
   test('missing or out-of-order sections are not trusted', () => {
     expect(readExitEvidence('abc hB\npipefail off\n', p)).toBeNull()
     expect(readExitEvidence(evidence().replace('abc end\n', ''), p)).toBeNull()
@@ -370,6 +424,7 @@ describe('readExitEvidence', () => {
       ['an alias to another command', 'alias\nfile', { alias: "alias grep='false'" }],
       ['a zsh alias to another command', 'grep: alias\ngrep: command', { alias: "grep='false'" }],
       ['an alias with no recorded definition', 'alias\nfile', {}],
+      ['a self-alias ending in a blank', 'alias\nfile', { alias: "alias grep='grep '" }],
       ['a keyword', 'keyword', {}],
       ['nothing at all', 'grep: none', {}],
       ['an empty lookup', '', {}],
@@ -519,6 +574,9 @@ for (const shell of SHELLS) {
       ['subshell falls back', () => 'true && (grep missing file.txt)', true],
       ['xtrace in the command falls back', () => 'set -x; true && grep missing file.txt', true],
       ['a diff function in the command is not diff', () => 'diff() { echo boom >&2; return 1; }; diff', true],
+      ['a redirect to a missing directory: grep never ran', () => 'grep missing file.txt > absent/output', true],
+      ['a redirect from a missing file: grep never ran', () => 'true && grep missing file.txt < absent/input', true],
+      ['a /dev/null redirect keeps the rule', () => 'true && grep missing file.txt 2>/dev/null', false],
       ['an lsof function in the command is not lsof', () => 'lsof() { return 1; }; lsof', true],
       ['false && lsof: lsof never ran', () => `false && ${lsofQuery()}`, true, HAS_LSOF],
       ['true && lsof: lsof ran, no listener', () => `true && ${lsofQuery()}`, false, HAS_LSOF],
@@ -538,6 +596,11 @@ for (const shell of SHELLS) {
       )
     }
     if (kind === 'zsh') {
+      rows.push(
+        ['a glob with no match: grep never ran', () => 'grep missing *.nomatch', true],
+        ['set -u with an unset parameter: grep never ran', () => 'set -u; true && grep "$UNSET_VAR" file.txt', true],
+        ['${x?} unset: grep never ran', () => 'true && grep "${UNSET_VAR?}" file.txt', true],
+      )
       rows.push(
         ['pipestatus read after && keeps its value', () => 'false | true && test "${pipestatus[1]}" -eq 1', false],
         ['$status read at a statement start keeps its value', () => 'false; test "$status" -eq 1', false],
@@ -622,6 +685,11 @@ for (const shell of ['/bin/bash', '/bin/zsh'].filter(existsSync)) {
       ['a diff function returning 1', 'diff() { echo boom >&2; return 1; }\n', 'diff'],
       ['an alias of diff to false', 'alias diff=false\n', 'diff'],
       ['an lsof function returning 1', 'lsof() { return 1; }\n', 'lsof'],
+      [
+        'a self-alias ending in a blank that expands the next word',
+        "alias grep='grep '\nalias arg='hello file.txt; false'\n",
+        'grep arg',
+      ],
       ...shadowsBracket,
     ])('%s is a failure, not the real program', (_label, rc, command) => {
       const r = inSnapshot(rc, command)

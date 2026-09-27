@@ -60,6 +60,8 @@ export type ExitAttributionPlan = {
   token: string
   semanticCommand: string
   pipelineHasMultipleCommands: boolean
+  /** The command expands parameters, which `set -u` can turn into an error. */
+  candidateExpandsParameters: boolean
 }
 
 type Located = {
@@ -73,7 +75,12 @@ type Located = {
   relation: 'direct' | 'and' | 'or'
 }
 
-type Candidate = { name: string; stages: number }
+type Candidate = {
+  name: string
+  stages: number
+  /** The last pipeline stage: the command whose status is the final one. */
+  stage: TsNode
+}
 
 // Builtins that can change what the shell traces or traps, or run text the
 // parser never saw. Their presence anywhere makes the marker's invisibility
@@ -157,6 +164,10 @@ export function planExitAttribution(
   ) {
     return null
   }
+  const redirects = [located.statement, located.operand, candidate.stage].flatMap(
+    fileRedirectsOf,
+  )
+  if (canFailBeforeRunning(candidate.stage, redirects)) return null
   // Only `&&` and a direct statement leave nothing between the marker and the
   // command. After `||` the left side runs after the marker and can end the
   // shell (`exit 1 || grep x f`), so evidence would claim a start that never
@@ -186,6 +197,7 @@ export function planExitAttribution(
     token,
     semanticCommand: candidate.name,
     pipelineHasMultipleCommands: candidate.stages > 1,
+    candidateExpandsParameters: [candidate.stage, ...redirects].some(expandsParameters),
   }
 }
 
@@ -199,7 +211,10 @@ export function readExitEvidence(
   contents: string | undefined,
   plan: Pick<
     ExitAttributionPlan,
-    'token' | 'semanticCommand' | 'pipelineHasMultipleCommands'
+    | 'token'
+    | 'semanticCommand'
+    | 'pipelineHasMultipleCommands'
+    | 'candidateExpandsParameters'
   >,
 ): CommandAttribution | null {
   const base = {
@@ -212,6 +227,9 @@ export function readExitEvidence(
   const [header = '', ...lines] = contents.split('\n')
   const [token, flags = ''] = header.split(' ')
   if (token !== plan.token || /[xv]/.test(flags)) return null
+  // Under `set -u` an unset parameter makes the shell fail the command before
+  // it runs, with exit 1 in zsh: the same code as a no-match.
+  if (flags.includes('u') && plan.candidateExpandsParameters) return null
   const sections = splitEvidenceSections(lines, plan.token)
   if (!sections) return null
   if (!resolvesToProgram(plan.semanticCommand, sections)) return null
@@ -431,8 +449,13 @@ function isLiteralArg(node: TsNode): boolean {
   return true
 }
 
-/** `alias grep='grep --color=auto'`: the same program with literal flags. */
+/**
+ * `alias grep='grep --color=auto'`: the same program with literal flags. A
+ * value ending in a blank also alias-expands the next word, so any argument
+ * could become more commands (`grep arg` with `arg='x f; false'`).
+ */
 function isTransparentAlias(name: string, value: string): boolean {
+  if (/\s$/.test(value)) return false
   const root = parse(value)
   const [only] = root?.children ?? []
   if (root?.children.length !== 1 || only?.type !== 'command') return false
@@ -591,10 +614,73 @@ function candidateOf(operand: TsNode): Candidate | null {
     const stages = body.children.filter(c => c.type !== '|' && c.type !== '|&')
     const last = stages[stages.length - 1]
     const name = last ? simpleCommandName(last) : null
-    return name ? { name, stages: stages.length } : null
+    return name && last ? { name, stages: stages.length, stage: last } : null
   }
   const name = simpleCommandName(body)
-  return name ? { name, stages: 1 } : null
+  return name ? { name, stages: 1, stage: operand } : null
+}
+
+function fileRedirectsOf(node: TsNode): TsNode[] {
+  return node.type === 'redirected_statement'
+    ? node.children.filter(c => c.type === 'file_redirect')
+    : []
+}
+
+/** Skips substitution bodies: a failure there stays in the subshell. */
+function* walkOutsideSubstitutions(node: TsNode): Generator<TsNode> {
+  yield node
+  if (
+    node.type === 'command_substitution' ||
+    node.type === 'process_substitution' ||
+    node.type === 'variable_assignment'
+  ) {
+    return
+  }
+  for (const child of node.children) yield* walkOutsideSubstitutions(child)
+}
+
+/**
+ * The marker proves the shell reached the command, not that the command ran:
+ * the shell can still fail it first, with exit 1, the same code a no-match
+ * uses. That happens when a redirect cannot open its file, when zsh finds no
+ * match for a glob or no such user for `~name`, when `${x?}` finds x unset,
+ * and on arithmetic errors. Only redirects to /dev/null and duplications of
+ * the standard descriptors are known not to fail.
+ */
+function canFailBeforeRunning(stage: TsNode, redirects: TsNode[]): boolean {
+  if (!redirects.every(isHarmlessRedirect)) return true
+  const body = withoutFileRedirects(stage)
+  if (!body) return true
+  for (const node of walkOutsideSubstitutions(body)) {
+    if (node.type === 'command_name') continue
+    if (node.type === 'arithmetic_expansion') return true
+    if (node.type === 'expansion' && node.children.some(c => c.type === '?' || c.type === ':?')) {
+      return true
+    }
+    if (node.type === 'word' && (/[*?[\]]/.test(node.text) || /^~[^/]/.test(node.text))) {
+      return true
+    }
+  }
+  return false
+}
+
+function isHarmlessRedirect(redirect: TsNode): boolean {
+  const target = redirect.children[redirect.children.length - 1]
+  const operator = redirect.children.find(c =>
+    ['>', '>>', '&>', '&>>', '>|', '<', '>&', '<&'].includes(c.type),
+  )
+  if (!operator || !target || target === operator) return false
+  if (operator.type === '>&' || operator.type === '<&') {
+    return /^[012]$/.test(target.text)
+  }
+  return target.type === 'word' && target.text === '/dev/null'
+}
+
+function expandsParameters(node: TsNode): boolean {
+  for (const inner of walkOutsideSubstitutions(node)) {
+    if (inner.type === 'simple_expansion' || inner.type === 'expansion') return true
+  }
+  return false
 }
 
 function simpleCommandName(node: TsNode): string | null {
