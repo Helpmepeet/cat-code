@@ -102,17 +102,16 @@ covers every terminal return of `queryLoop` (including the API-error
 `completed` path, `model_error`, `max_turns` and hook stops), thrown errors,
 and a consumer abandoning the generator.
 
-Each cua-driver call begins and finishes through the run (item 2). In the
-`finally`, the run refuses any further call, waits up to 10 s for calls still
-executing, waits for an idle stop already in flight, and then runs
-`cua-driver stop` if a call began since the last stop. Runs that never called
-cua-driver do nothing, so a forked side query cannot stop a daemon mid-turn.
-Subagents are covered by their own run's `finally`; no separate rule is needed.
+The guard (item 2) marks the run when it sees a cua-driver call. In the
+`finally`, the run is closed and, if marked, runs `cua-driver stop`. Runs that
+never called cua-driver do nothing, so a forked side query cannot stop a daemon
+mid-turn. Subagents are covered by their own run's `finally`; no separate rule
+is needed.
 
-The refusal after the `finally` matters because a run's tools can outlive it:
-streaming tools are independent promises, so closing the generator does not
-cancel a tool still waiting on permission, and that tool would otherwise reach
-the guard after the stop.
+A closed run refuses further cua-driver calls, because a run's tools can
+outlive it: streaming tools are independent promises, so closing the generator
+does not cancel a tool still waiting on permission, and that tool would
+otherwise run after the stop.
 
 ### 2. One guard check on the final tool input
 
@@ -120,20 +119,19 @@ In `src/services/tools/toolExecution.ts`, on the input handed to the tool,
 after PreToolUse hooks and the permission decision may have replaced it. A call
 counts as cua-driver use when it is an `mcp__cua-driver__*` tool, or a Bash
 command that runs `cua-driver` or launches `CuaDriver`. The guard refuses the
-call while the off switch exists (item 3) or after the run ended; otherwise it
-begins the call through the run, and the tool execution's `finally` finishes
-it.
+call while the off switch exists (item 3) or after the run closed; otherwise it
+marks the run for item 1.
 
-Bash detection reads the command text. The tree-sitter parser behind
-`parseForSecurity` is compiled out of the desktop sidecar, so it cannot be the
-detector where agents drive the GUI. The scan blanks heredoc bodies and masks
-separators inside quotes and after backslashes, then looks for `cua-driver` or
-`open … CuaDriver` in command position, including after shell keywords, env
-assignments, wrappers and quoted or path-qualified executables. Against 519
-real commands from past transcripts, it found two `for … do cua-driver` loops
-the first version missed and dropped 14 of its false positives, with no new
-ones. A command inside a heredoc fed to a shell or a quoted `bash -c` string is
-not seen.
+Bash detection reads the command text with a regular expression. The
+tree-sitter parser behind `parseForSecurity` is compiled out of the desktop
+sidecar, so it cannot be the detector where agents drive the GUI. The
+expression looks for `cua-driver` or `open … CuaDriver` in command position,
+including after shell keywords, env assignments and wrappers, and as a quoted
+or path-qualified executable. Against 519 real commands from past transcripts
+it catches the two `for … do cua-driver` loops an earlier version missed. It
+still counts some quoted examples and heredoc text as use (14 of the 519); each
+costs one extra stop, the same cost D1 accepts, or a refusal while the off
+switch is on. A command inside a quoted `bash -c` string is not seen.
 
 ### 3. Operator stop that sticks
 
@@ -160,11 +158,10 @@ agent could restart the daemon within seconds of a stop.
 
 ### 4. Idle stop (only if D2 is accepted)
 
-When the last call in flight finishes, the run arms a timer. If no cua-driver
-call begins for 3 minutes and the run has not ended, the timer runs
-`cua-driver stop`. A call that begins while that stop is still in flight waits
-for it, so the stop cannot land under the new call; the new call then starts
-fresh and loses only the element cache. The `finally` clears the timer.
+When the guard marks a run, it re-arms a per-run timer. If the run makes no
+cua-driver call for 3 minutes and has not ended, the timer runs
+`cua-driver stop`. A later call in the same run starts fresh, loses only the
+element cache, and re-arms the timer. The `finally` clears the timer.
 
 ### 5. Rule text
 
@@ -236,6 +233,12 @@ Each can come back if evidence shows the gap in practice.
 - Claude Code hooks for sessions that load the `cua-driver` skill.
 - Handing control back when the operator clicks in, and background versus
   full-screen control levels: need a native helper or a cua-driver change.
+- Tried after the third review and removed (commit `85ec4df2`, reverted by the
+  following commit): waiting at run end for cua-driver calls still executing,
+  holding a new call until an idle stop in flight finishes, and a quote and
+  heredoc scanner for detection. They cover a call still running after a close
+  without an abort (the in-app stop aborts), a window about 20 ms long once per
+  3 idle minutes, and false positives that cost one extra stop.
 
 Separately, report the re-fronting defect to the cua-driver project with the
 evidence above and version 0.1.9. This is outward-facing and needs the

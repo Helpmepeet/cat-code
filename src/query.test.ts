@@ -1249,11 +1249,10 @@ describe('cua-driver stop at run end', () => {
   test('a subagent run stops the daemon itself and leaves the parent run unmarked', async () => {
     let parentMarks = 0
     const parentRun: CuaDriverRun = {
-      beginCall: async () => {
+      markUsed: () => {
         parentMarks++
         return true
       },
-      endCall: () => {},
       end: async () => {},
     }
     await drain(
