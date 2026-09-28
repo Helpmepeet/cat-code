@@ -226,6 +226,10 @@ import {
   type QuotePosition,
 } from './transcriptViewModel.js'
 import {
+  askUserQuestionTranscriptPresentation,
+  type AskUserQuestionTranscriptPresentation,
+} from './askUserQuestionTranscript.js'
+import {
   INLINE_HEAD_LINES,
   revealMoreLines,
   selectInlineOutputWindow,
@@ -2816,7 +2820,8 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
  * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
-  const resolving = useContext(TranscriptMotionContext).results.active.has(row.id)
+  const motion = useContext(TranscriptMotionContext)
+  const resolving = motion.results.active.has(row.id)
   // The weakest of the three expansion inputs: a user's own click still wins
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
@@ -2861,6 +2866,20 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       >
         <ToolCancelledBody />
       </ToolCardShell>
+    )
+  }
+  const askQuestionPresentation = askUserQuestionTranscriptPresentation(
+    row.toolName,
+    row.input,
+    row.status,
+    row.result,
+  )
+  if (askQuestionPresentation !== null) {
+    return (
+      <AskUserQuestionAnswerRow
+        presentation={askQuestionPresentation}
+        turnLive={motion.turnLive}
+      />
     )
   }
   if (row.toolName === 'CreatePeer') {
@@ -2928,6 +2947,60 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
           <NestedRowList className="flex flex-col gap-2" rows={row.children} />
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function AskUserQuestionAnswerRow({
+  presentation,
+  turnLive,
+}: {
+  presentation: AskUserQuestionTranscriptPresentation
+  turnLive: boolean
+}) {
+  return (
+    <div className="flex w-full items-start gap-2.5 font-sans">
+      <span
+        className="w-4 shrink-0 text-center text-[13px] leading-[18px] text-accent"
+        aria-hidden
+      >
+        ?
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+        {presentation.items.map(item => (
+          <div className="min-w-0" key={item.question}>
+            <div className="text-[12.5px] leading-[18px] text-text-muted">
+              {item.question}
+            </div>
+            <div className="mt-0.5">
+              {presentation.state === 'answered' ? (
+                <>
+                  <div className="text-[13px] font-medium leading-[18px] text-text-primary">
+                    {item.answer}
+                  </div>
+                  {item.note ? (
+                    <div className="mt-0.5 text-xs leading-[17px] text-text-subtle">
+                      {item.note}
+                    </div>
+                  ) : null}
+                </>
+              ) : presentation.state === 'declined' ? (
+                <div className="text-[13px] leading-[18px] text-text-subtle">
+                  Declined
+                </div>
+              ) : (
+                <div className="flex h-[18px] items-center">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full bg-accent ${turnLive ? 'animate-pulse' : ''}`}
+                    role="img"
+                    aria-label="running"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

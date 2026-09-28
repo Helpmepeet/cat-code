@@ -3618,6 +3618,98 @@ test('an Agent tool_use_result carries the worker name onto the row, @-stripped'
   expect(row.result?.agentId).toBe('agent-1')
 })
 
+test('AskUserQuestion results project only validated answers and user notes', () => {
+  const question = {
+    question: 'Which layout should the settings page use?',
+    header: 'Layout',
+    options: [
+      { label: 'Tabs', description: 'Separate sections into tabs.' },
+      { label: 'Single scroll', description: 'Keep every section on one page.' },
+    ],
+    multiSelect: false,
+  }
+  const project = (toolUseResult: unknown) => {
+    let state = createTranscriptState()
+    state = projectServerFrame(state, ready('ask-question-projector'))
+    state = projectServerFrame(
+      state,
+      messageFrame('ask-question-projector', {
+        type: 'assistant',
+        message: {
+          id: 'msg_ask_question_projector',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_ask_question_projector',
+              name: 'AskUserQuestion',
+              input: { questions: [question] },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-0000000d0005',
+      }),
+    )
+    state = projectServerFrame(
+      state,
+      messageFrame('ask-question-projector', {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_ask_question_projector',
+              content: 'User has answered your questions.',
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        tool_use_result: toolUseResult,
+        uuid: '00000000-0000-4000-8000-0000000d0006',
+        isReplay: true,
+      }),
+    )
+    const row = selectTranscriptRows(state, 'ask-question-projector')[0]
+    if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+    return row.result?.askUserQuestion
+  }
+
+  expect(
+    project({
+      questions: [question],
+      answers: { [question.question]: 'Single scroll' },
+      annotations: {
+        [question.question]: {
+          preview: '<div>preview only</div>',
+          notes: 'Keep it easy to scan',
+        },
+      },
+    }),
+  ).toEqual({
+    answers: { [question.question]: 'Single scroll' },
+    notesByQuestion: { [question.question]: 'Keep it easy to scan' },
+  })
+
+  for (const malformed of [
+    { questions: 'not questions', answers: { [question.question]: 'Tabs' } },
+    {
+      questions: [{ ...question, options: [{ label: 'Tabs' }, question.options[1]] }],
+      answers: { [question.question]: 'Tabs' },
+    },
+    { questions: [question], answers: { [question.question]: 42 } },
+    {
+      questions: [question],
+      answers: { [question.question]: 'Tabs' },
+      annotations: { [question.question]: { notes: 42 } },
+    },
+  ]) {
+    expect(project(malformed)).toBeUndefined()
+  }
+})
+
 test('a CreatePeer tool_use_result retains only a valid immutable destination', () => {
   const project = (toolUseResult: unknown) => {
     let state = createTranscriptState()

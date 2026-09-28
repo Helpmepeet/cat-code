@@ -187,6 +187,13 @@ export type ToolResultProjection = {
   content: string
   images?: ToolResultImageProjection[]
   diff: ToolDiffProjection | null
+  /** Structured result for AskUserQuestion. Preview annotations are validated
+   * but intentionally omitted from the transcript projection; only user notes
+   * are eligible for display. */
+  askUserQuestion?: {
+    answers: Record<string, string>
+    notesByQuestion: Record<string, string>
+  }
   generatedImage?: {
     filePath: string
     model: string
@@ -2466,6 +2473,7 @@ function projectToolResultBlock(
   const contentProjection = projectToolResultContent(block.content)
   const generatedImageProjection =
     extractGeneratedImageProjection(toolUseResult)
+  const askUserQuestion = extractAskUserQuestionResult(toolUseResult)
   let generatedImage = generatedImageProjection.generatedImage
   let images = contentProjection.images
   if (generatedImage && block.is_error !== true) {
@@ -2493,6 +2501,7 @@ function projectToolResultBlock(
     content: contentProjection.content,
     ...(images !== undefined ? { images } : {}),
     diff: extractDiffProjection(toolUseResult),
+    ...(askUserQuestion === null ? {} : { askUserQuestion }),
     ...(generatedImage !== undefined ? { generatedImage } : {}),
     ...(agentName !== null ? { agentName } : {}),
     ...(agentId !== null ? { agentId } : {}),
@@ -2502,6 +2511,79 @@ function projectToolResultBlock(
     ...(taskOutput !== null ? { taskOutput } : {}),
     ...(createdPeer !== null ? { createdPeer } : {}),
   }
+}
+
+/**
+ * Accept only the structured AskUserQuestion result emitted by
+ * `AskUserQuestionTool.call()`. The model-facing `tool_result.content` is not
+ * a display contract and is deliberately never parsed here.
+ */
+function extractAskUserQuestionResult(
+  toolUseResult: unknown,
+): ToolResultProjection['askUserQuestion'] | null {
+  if (!isRecord(toolUseResult)) return null
+  const { questions, answers, annotations } = toolUseResult
+  if (
+    !Array.isArray(questions) ||
+    questions.length < 1 ||
+    questions.length > 4 ||
+    !questions.every(isAskUserQuestionShape) ||
+    !isStringRecord(answers)
+  ) {
+    return null
+  }
+
+  const noteEntries: [string, string][] = []
+  if (annotations !== undefined) {
+    if (!isRecord(annotations)) return null
+    for (const [question, annotation] of Object.entries(annotations)) {
+      if (!isRecord(annotation)) return null
+      if (
+        annotation.preview !== undefined &&
+        typeof annotation.preview !== 'string'
+      ) {
+        return null
+      }
+      if (annotation.notes !== undefined) {
+        if (typeof annotation.notes !== 'string') return null
+        noteEntries.push([question, annotation.notes])
+      }
+    }
+  }
+
+  return {
+    answers: Object.fromEntries(Object.entries(answers)),
+    notesByQuestion: Object.fromEntries(noteEntries),
+  }
+}
+
+function isAskUserQuestionShape(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (
+    typeof value.question !== 'string' ||
+    typeof value.header !== 'string' ||
+    (value.multiSelect !== undefined && typeof value.multiSelect !== 'boolean') ||
+    !Array.isArray(value.options) ||
+    value.options.length < 2 ||
+    value.options.length > 4
+  ) {
+    return false
+  }
+  return value.options.every(option => {
+    if (!isRecord(option)) return false
+    return (
+      typeof option.label === 'string' &&
+      typeof option.description === 'string' &&
+      (option.preview === undefined || typeof option.preview === 'string')
+    )
+  })
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(entry => typeof entry === 'string')
+  )
 }
 
 const APP_SESSION_ID_RE =

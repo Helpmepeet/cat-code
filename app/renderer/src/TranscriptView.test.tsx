@@ -468,6 +468,135 @@ function toolRow(fields: {
   }
 }
 
+const ASK_QUESTION_LAYOUT = {
+  question: 'Which layout should the settings page use?',
+  header: 'Layout',
+  options: [
+    { label: 'Tabs', description: 'Show one section at a time.' },
+    { label: 'Single scroll', description: 'Show every section on one page.' },
+  ],
+  multiSelect: false,
+}
+const ASK_QUESTION_SECTIONS = {
+  question: 'Which sections should ship first?',
+  header: 'Sections',
+  options: [
+    { label: 'Appearance', description: 'Appearance settings.' },
+    { label: 'Accounts', description: 'Account settings.' },
+    { label: 'Keyboard', description: 'Keyboard settings.' },
+  ],
+  multiSelect: true,
+}
+const ASK_QUESTION_TYPED = {
+  question: 'What should the action say?',
+  header: 'Label',
+  options: [
+    { label: 'Continue', description: 'Continue the task.' },
+    { label: 'Other', description: 'Provide a custom answer.' },
+  ],
+  multiSelect: false,
+}
+
+function projectedAskQuestionRow(fields: {
+  questions?: unknown[]
+  toolUseResult?: unknown
+  resultContent?: string
+  isError?: boolean
+  isReplay?: boolean
+  pending?: boolean
+}): NestedToolUseRow {
+  const sessionId = 'ask-question-transcript'
+  let state = createTranscriptState()
+  state = projectServerFrame(state, {
+    kind: 'ready',
+    protocolVersion: 2,
+    sessionId,
+    engineSessionId: `engine-${sessionId}`,
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  state = projectServerFrame(state, {
+    kind: 'event',
+    protocolVersion: 2,
+    sessionId,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: {
+          id: 'msg_ask_question_transcript',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_ask_question_transcript',
+              name: 'AskUserQuestion',
+              input: {
+                questions: fields.questions ?? [ASK_QUESTION_LAYOUT],
+              },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-0000000d0101',
+      } as SDKMessage,
+    },
+  })
+
+  if (!fields.pending) {
+    state = projectServerFrame(state, {
+      kind: 'event',
+      protocolVersion: 2,
+      sessionId,
+      event: {
+        type: 'message',
+        message: {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_ask_question_transcript',
+                content: fields.resultContent ?? '',
+                is_error: fields.isError ?? false,
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+          ...(fields.toolUseResult === undefined
+            ? {}
+            : { tool_use_result: fields.toolUseResult }),
+          uuid: '00000000-0000-4000-8000-0000000d0102',
+          ...(fields.isReplay ? { isReplay: true } : {}),
+        } as SDKMessage,
+      },
+    })
+  }
+
+  const row = selectNestedTranscriptRows(state, sessionId)[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected a projected tool-use row')
+  return row
+}
+
+function renderAskQuestionWithStyle(
+  row: NestedToolUseRow,
+  style: ToolCardStyle,
+): string {
+  return renderToStaticMarkup(
+    <ToolCardStyleContext.Provider value={{ style, setStyle: () => {} }}>
+      <TranscriptRowsView rows={[row]} />
+    </ToolCardStyleContext.Provider>,
+  )
+}
+
 test('P4-18b: a Read tool card renders a workspace-relative path', () => {
   const html = render(
     toolRow({
@@ -485,6 +614,109 @@ test('P4-18b: a Read tool card renders a workspace-relative path', () => {
   // The state word is dropped from the header pill (operator call, 2026-08-05):
   // a colour-coded dot carries it, labelled for a11y rather than printed.
   expect(html).toContain('aria-label="running"')
+})
+
+test('an answered AskUserQuestion row shows structured answers and notes in both card styles', () => {
+  const modelFacingResult =
+    'User has answered your questions: MODEL_ONLY_ASK_ANSWER_SENTINEL. You can now continue with the user answers in mind.'
+  const row = projectedAskQuestionRow({
+    questions: [ASK_QUESTION_TYPED, ASK_QUESTION_LAYOUT, ASK_QUESTION_SECTIONS],
+    toolUseResult: {
+      questions: [ASK_QUESTION_TYPED, ASK_QUESTION_LAYOUT, ASK_QUESTION_SECTIONS],
+      answers: {
+        [ASK_QUESTION_TYPED.question]: 'I will do it',
+        [ASK_QUESTION_LAYOUT.question]: 'Single scroll',
+        [ASK_QUESTION_SECTIONS.question]: 'Appearance, Keyboard',
+      },
+      annotations: {
+        [ASK_QUESTION_SECTIONS.question]: {
+          preview: 'PREVIEW_ONLY_ASK_QUESTION',
+          notes: 'Ship the visible settings first.',
+        },
+      },
+    },
+    resultContent: modelFacingResult,
+    isReplay: true,
+  })
+
+  for (const style of ['cards', 'lines'] as const) {
+    const html = renderAskQuestionWithStyle(row, style)
+    const text = visibleText(html)
+    expect(text).toContain(ASK_QUESTION_TYPED.question)
+    expect(text).toContain('I will do it')
+    expect(text).toContain(ASK_QUESTION_LAYOUT.question)
+    expect(text).toContain('Single scroll')
+    expect(text).toContain(ASK_QUESTION_SECTIONS.question)
+    expect(text).toContain('Appearance, Keyboard')
+    expect(text).toContain('Ship the visible settings first.')
+    expect(text).not.toContain('MODEL_ONLY_ASK_ANSWER_SENTINEL')
+    expect(text).not.toContain('PREVIEW_ONLY_ASK_QUESTION')
+    expect(text).not.toContain('Tool')
+    expect(html).toContain('text-accent')
+    expect(html).toContain('text-text-muted')
+    expect(html).toContain('font-medium')
+    expect(html).toContain('text-text-primary')
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('aria-label="done"')
+    expect(html).not.toContain('rounded-md border border-shell-seam')
+  }
+})
+
+test('a denied AskUserQuestion row says Declined without showing the rejection result', () => {
+  const rejection = 'User declined to answer questions'
+  const row = projectedAskQuestionRow({
+    toolUseResult: `Error: ${rejection}`,
+    resultContent: rejection,
+    isError: true,
+  })
+  const html = render(row)
+  const text = visibleText(html)
+
+  expect(text).toContain(ASK_QUESTION_LAYOUT.question)
+  expect(text).toContain('Declined')
+  expect(text).not.toContain(rejection)
+  expect(text).not.toContain('Error:')
+  expect(html).not.toContain('<button')
+})
+
+test('an AskUserQuestion result without structured answers keeps the generic card', () => {
+  const modelFacingResult =
+    'User has answered your questions: answers were not preserved. You can now continue with the user answers in mind.'
+  const row = projectedAskQuestionRow({
+    toolUseResult: {
+      questions: [ASK_QUESTION_LAYOUT],
+      annotations: {},
+    },
+    resultContent: modelFacingResult,
+    isReplay: true,
+  })
+  const html = renderToStaticMarkup(
+    <ToolsExpandedContext.Provider
+      value={{ expanded: true, setExpanded: () => {} }}
+    >
+      <TranscriptRowsView rows={[row]} />
+    </ToolsExpandedContext.Provider>,
+  )
+  const text = visibleText(html)
+
+  expect(text).toContain('Tool')
+  expect(text).toContain('AskUserQuestion')
+  expect(text).toContain(modelFacingResult)
+  expect(text).not.toContain('Declined')
+})
+
+test('a pending AskUserQuestion row pulses only while the turn is live', () => {
+  const row = projectedAskQuestionRow({ pending: true })
+  const resting = renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
+  const live = renderToStaticMarkup(
+    <TranscriptRowsView rows={[row]} turnLive />,
+  )
+
+  expect(visibleText(resting)).toContain(ASK_QUESTION_LAYOUT.question)
+  expect(visibleText(live)).toContain(ASK_QUESTION_LAYOUT.question)
+  expect(resting).not.toContain('animate-pulse')
+  expect(live).toContain('animate-pulse')
+  expect(resting).not.toContain('<button')
 })
 
 test('a successful tool-result image renders expanded with companion text', () => {
