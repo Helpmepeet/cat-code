@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Send motion</title>
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');
+}
+
+:root { --slow: 1; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+[hidden] { display: none !important; }
+
+/* ---------- chrome ---------- */
+body { background: #d6d6d9; color: #55555a; font-family: ui-monospace, Menlo, monospace; }
+.x-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px;
+  padding: 14px 24px; border-bottom: 1px solid #b9b9be;
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+}
+.x-group { display: flex; align-items: center; gap: 6px; }
+.x-key { color: #7a7a80; margin-right: 4px; }
+.x-btn {
+  font: inherit; letter-spacing: inherit; text-transform: inherit;
+  color: #55555a; background: transparent; border: 1px solid #a4a4aa;
+  padding: 4px 8px; cursor: pointer;
+}
+.x-btn[aria-pressed="true"] { color: #111113; border-color: #111113; }
+.x-btn:disabled { opacity: .45; cursor: default; }
+.x-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 28px; padding: 24px; }
+.x-cell { display: flex; flex-direction: column; gap: 8px; }
+.x-label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #55555a; }
+
+/* ---------- specimen: SessionPane main + TranscriptView + composer dock ---------- */
+.pane {
+  --motion-fast: 120ms;
+  --motion-arrive: 180ms;
+  --motion-panel: 200ms;
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --app-bg: #09090b;
+  --shell-seam: rgba(255, 255, 255, 0.06);
+  --text-primary: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #98989f;
+  --text-faint: #838389;
+  --text-ghost: #75757b;
+  --accent: #f472b6;
+  --accent-rgb: 244 114 182;
+  --accent-soft: #f9a8d4;
+  --tone-danger: #f87171;
+  color-scheme: dark;
+
+  position: relative;
+  width: 560px; height: 620px;
+  display: flex; flex-direction: column; gap: 16px;
+  overflow: hidden; padding: 0 32px 32px;
+  background: var(--app-bg); color: var(--text-primary);
+  font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.pane.light {
+  --app-bg: #fcfcfd;
+  --shell-seam: rgba(9, 9, 11, 0.1);
+  --text-primary: #18181b;
+  --text-muted: #52525b;
+  --text-subtle: #575761;
+  --text-faint: #6a6a74;
+  --text-ghost: #767680;
+  --accent: #bb3e84;
+  --accent-rgb: 187 62 132;
+  --accent-soft: #ad3078;
+  --tone-danger: #dc2626;
+  color-scheme: light;
+}
+.pane.is-wide {
+  width: min(1244px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 110px));
+  min-height: 560px;
+}
+
+.tx { position: relative; display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+.scroller { position: relative; flex: 1 1 0; min-height: 0; overflow: auto; scrollbar-width: none; }
+.col {
+  margin: 0 auto; display: flex; flex-direction: column; gap: 10px;
+  width: 100%; max-width: 900px; padding: 24px 32px 0;
+}
+
+.msg { display: flex; flex-direction: column; align-items: flex-end; }
+.bubble {
+  max-width: 82%; overflow-wrap: break-word;
+  border-radius: 16px 16px 4px 16px;
+  border: 1px solid rgb(var(--accent-rgb) / .2);
+  background: rgb(var(--accent-rgb) / .1);
+  padding: 10px 16px; font-size: 14px; line-height: 1.625;
+}
+.msg-actions { height: 25px; }
+
+.md-prose { overflow-wrap: break-word; font-size: 14px; line-height: 1.625; }
+.md-prose > * + * { margin-top: .85em; }
+.md-prose p { margin: 0; text-wrap: pretty; }
+.md-prose code { font-family: 'DM Mono', ui-monospace, monospace; font-size: .9em; color: var(--accent-soft); }
+.prose { font-weight: 500; }
+
+/* WelcomeScreen, session variant */
+.welcome-inner { margin: 0 auto; width: 100%; max-width: 1180px; padding: 40px 40px 32px; }
+.hero { margin-bottom: 48px; display: grid; grid-template-columns: 1fr; align-items: center; gap: 24px; }
+@media (min-width: 768px) { .hero { grid-template-columns: minmax(200px, 300px) 1fr; } }
+.hero-cat { display: flex; justify-content: center; }
+.hero-cat img { display: block; max-width: 100%; height: auto; }
+.hero-text { min-width: 0; }
+.wordmark { margin: 0 0 16px; font-size: clamp(56px, 10vw, 120px); font-weight: 700; line-height: .9; letter-spacing: -0.06em; }
+.wm-code { color: var(--accent); }
+.greet { margin-bottom: 32px; font-size: 26px; font-weight: 500; letter-spacing: -0.02em; }
+.meta { display: flex; align-items: stretch; border-top: 1px solid var(--shell-seam); padding-top: 20px; }
+.meta-col { display: flex; min-width: 0; flex: 1 1 0; flex-direction: column; gap: 8px; padding: 0 18px; }
+.meta-head { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.meta-icon { display: flex; color: var(--accent); }
+.meta-label { font-size: 13px; color: var(--text-muted); }
+.meta-value { min-width: 0; padding-left: 22px; font-size: 13px; }
+.meta-div { width: 1px; background: var(--shell-seam); }
+.mono-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'DM Mono', ui-monospace, monospace; font-size: 13px; color: var(--text-muted); }
+.plain-muted { font-size: 13px; color: var(--text-muted); }
+.branch { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; }
+.chevron { flex-shrink: 0; color: var(--text-subtle); }
+.codex { border-top: 1px solid var(--shell-seam); }
+.codex-head { display: flex; align-items: center; justify-content: space-between; padding: 20px 4px 14px; }
+.codex-title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; }
+.codex-empty { border-top: 1px solid var(--shell-seam); padding: 24px 4px; font-size: 12.5px; color: var(--text-subtle); }
+
+.dock { margin: 0 auto; display: flex; flex-direction: column; min-height: 0; width: 100%; max-width: 900px; }
+
+.activity { display: flex; align-items: center; gap: 10px; padding: 6px 4px; font-size: 12px; line-height: 16px; }
+.dots { display: flex; align-items: center; gap: 4px; }
+.dot {
+  width: 6px; height: 6px; border-radius: 9999px; background: var(--accent);
+  animation: pulse calc(2s * var(--slow)) cubic-bezier(.4, 0, .6, 1) infinite;
+}
+.dot:nth-child(2) { animation-delay: calc(150ms * var(--slow)); }
+.dot:nth-child(3) { animation-delay: calc(300ms * var(--slow)); }
+@keyframes pulse { 50% { opacity: .5; } }
+.verb { font-weight: 600; color: var(--accent); }
+.elapsed {
+  flex-shrink: 0; font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px;
+  font-variant-numeric: tabular-nums; color: var(--text-subtle);
+}
+
+.composer { display: flex; flex-direction: column; flex-shrink: 0; }
+.input-row { position: relative; display: flex; align-items: flex-end; gap: 14px; padding: 0 4px; }
+.field-wrap { position: relative; min-width: 0; flex: 1 1 0; }
+.placeholder {
+  pointer-events: none; position: absolute; left: 0; top: 6px;
+  font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--text-faint);
+}
+.field {
+  display: block; min-height: 24px; width: 100%;
+  white-space: pre-wrap; overflow-wrap: break-word;
+  padding: 6px 0; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--text-primary);
+}
+.send {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex-shrink: 0; align-self: flex-end;
+  border: 0; border-radius: 8px; background: transparent; padding: 0;
+  color: var(--accent); cursor: pointer;
+}
+.send.is-disabled { color: var(--text-ghost); cursor: default; }
+.send.is-stop { color: var(--tone-danger); }
+.send svg { display: block; }
+.send .stop { display: none; }
+.send.is-stop .arrow { display: none; }
+.send.is-stop .stop { display: block; }
+.rule { height: 2px; border-radius: 4px; background: linear-gradient(to right, var(--accent), rgb(var(--accent-rgb) / .12)); }
+.actions { margin-top: 12px; display: flex; align-items: center; gap: 16px; padding: 0 4px; }
+.attach { display: flex; width: 22px; height: 22px; align-items: center; justify-content: center; color: var(--text-ghost); }
+
+/* existing app motion */
+@keyframes arrive { from { opacity: 0; } to { opacity: 1; } }
+.animate-arrive { animation: arrive calc(var(--motion-arrive) * var(--slow)) var(--ease-enter); }
+.prose-arrive-smooth { animation: arrive calc(220ms * var(--slow)) linear both; }
+
+/* proposed motion */
+.is-held { opacity: 0; }
+.ghost { position: absolute; left: 0; top: 0; pointer-events: none; }
+.lift { animation: lift calc(var(--motion-fast) * var(--slow)) var(--ease-standard) forwards; }
+@keyframes lift { to { opacity: 0; transform: translateY(-8px); } }
+.glyph-out { animation: glyph-out calc(var(--motion-fast) * var(--slow)) var(--ease-standard) forwards; }
+@keyframes glyph-out { to { opacity: 0; transform: translateY(-5px); } }
+.col.is-pushing { transition: transform calc(var(--motion-panel) * var(--slow)) var(--ease-enter); }
+.welcome-exit { animation: welcome-out calc(var(--motion-panel) * var(--slow)) var(--ease-standard) forwards; }
+@keyframes welcome-out { to { opacity: 0; transform: translateY(-12px); } }
+.welcome.is-leaving { position: absolute; top: 0; left: 0; right: 0; pointer-events: none; }
+.bubble.is-landing { visibility: hidden; }
+.flight { position: absolute; z-index: 2; margin: 0; pointer-events: none; transform-origin: 0 0; }
+</style>
+</head>
+<body>
+
+<header class="x-bar">
+  <div class="x-group">
+    <span class="x-key">Scenario</span>
+    <button class="x-btn" data-scenario="chat" aria-pressed="true" type="button">In chat</button>
+    <button class="x-btn" data-scenario="welcome" aria-pressed="false" type="button">From welcome</button>
+  </div>
+  <div class="x-group" id="x-version" hidden>
+    <span class="x-key">Version</span>
+    <button class="x-btn" data-version="current" aria-pressed="true" type="button">Current</button>
+    <button class="x-btn" data-version="proposed" aria-pressed="false" type="button">Proposed</button>
+  </div>
+  <div class="x-group">
+    <button class="x-btn" id="x-send" type="button">Send ⏎</button>
+    <button class="x-btn" id="x-reset" type="button">Reset</button>
+  </div>
+  <div class="x-group">
+    <span class="x-key">Speed</span>
+    <button class="x-btn" data-slow="1" aria-pressed="true" type="button">1×</button>
+    <button class="x-btn" data-slow="2" aria-pressed="false" type="button">0.5×</button>
+    <button class="x-btn" data-slow="4" aria-pressed="false" type="button">0.25×</button>
+  </div>
+  <div class="x-group">
+    <span class="x-key">Appearance</span>
+    <button class="x-btn" data-appearance="dark" aria-pressed="true" type="button">Dark</button>
+    <button class="x-btn" data-appearance="light" aria-pressed="false" type="button">Light</button>
+  </div>
+</header>
+
+<main class="x-grid" id="x-chat">
+  <div class="x-cell">
+    <div class="x-label">Current</div>
+    <div class="pane" data-mode="chat" data-side="current"></div>
+  </div>
+  <div class="x-cell">
+    <div class="x-label">Proposed</div>
+    <div class="pane" data-mode="chat" data-side="proposed"></div>
+  </div>
+</main>
+
+<main class="x-grid" id="x-welcome" hidden>
+  <div class="x-cell">
+    <div class="x-label" id="x-welcome-label">Current</div>
+    <div class="pane is-wide" data-mode="welcome" data-side="current"></div>
+  </div>
+</main>
+
+<template id="pane-template">
+  <section class="tx">
+    <div class="scroller">
+      <div class="col"></div>
+    </div>
+  </section>
+  <div class="dock">
+    <div class="activity-slot"></div>
+    <form class="composer" onsubmit="return false">
+      <div class="input-row">
+        <div class="field-wrap">
+          <div class="placeholder">Ask Cat Code anything or describe a task…</div>
+          <div class="field"></div>
+        </div>
+        <button class="send" type="button" aria-label="Send prompt">
+          <svg class="arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+          <svg class="stop" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+      </div>
+      <div class="rule"></div>
+      <div class="actions">
+        <span class="attach"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
+      </div>
+    </form>
+  </div>
+</template>
+
+<template id="welcome-template">
+  <div class="welcome">
+    <div class="welcome-inner">
+      <div class="hero">
+        <div class="hero-cat"><img src="../../app/renderer/src/assets/welcome-cat-coding.png" alt="" width="248" height="211"></div>
+        <div class="hero-text">
+          <h1 class="wordmark"><span>cat </span><span class="wm-code">code</span></h1>
+          <div class="greet">Welcome back</div>
+          <div class="meta">
+            <div class="meta-col">
+              <div class="meta-head">
+                <span class="meta-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+                <span class="meta-label">Project</span>
+              </div>
+              <div class="meta-value"><span class="mono-muted">upload-service</span></div>
+            </div>
+            <div class="meta-div"></div>
+            <div class="meta-col">
+              <div class="meta-head">
+                <span class="meta-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+                <span class="meta-label">Start in</span>
+              </div>
+              <div class="meta-value"><span class="plain-muted">Locally</span></div>
+            </div>
+            <div class="meta-div"></div>
+            <div class="meta-col">
+              <div class="meta-head">
+                <span class="meta-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="6" cy="6" r="2.4" stroke="currentColor" stroke-width="1.7"/><circle cx="6" cy="18" r="2.4" stroke="currentColor" stroke-width="1.7"/><circle cx="18" cy="7" r="2.4" stroke="currentColor" stroke-width="1.7"/><path d="M6 8.4v7.2M18 9.4c0 4-3 4.6-6 5.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="meta-label">Branch</span>
+              </div>
+              <div class="meta-value">
+                <span class="branch"><span class="mono-muted">main</span><svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="codex">
+        <div class="codex-head">
+          <span class="codex-title">
+            <span class="meta-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+            <span>Codex</span>
+          </span>
+        </div>
+        <div class="codex-empty">No Codex account data for this view yet.</div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+const SEED = [
+  ['user', 'Why do large uploads sometimes fail twice in a row?'],
+  ['assistant', 'The second failure is a retry that fires before the server has released the first upload slot. The client waits the same short delay every time, so a busy server rejects the retry for the same reason it rejected the original.'],
+  ['user', 'Find where the retry delay is set for failed uploads.'],
+  ['assistant', 'It is set in <code>uploadClient.ts</code> as a fixed 500 ms delay with no backoff. Three call sites read it, and none of them override it.'],
+  ['user', 'Switch it to exponential backoff, capped at eight seconds.'],
+  ['assistant', 'Done. The delay now doubles on each attempt from 500 ms and stops growing at 8 s. I added a test for the cap.'],
+]
+const CHAT_TURNS = [
+  ['Run the upload tests again and show me any failures.',
+   'All 14 upload tests pass. The new cap test runs in under a second because the timer is faked.'],
+  ['Also log each retry attempt at debug level.',
+   'Each retry now logs its attempt number and delay at debug level. Nothing is logged on the first try.'],
+  ['Looks good. Summarize what changed in one paragraph.',
+   'Retries on failed uploads now back off exponentially from 500 ms up to an 8 s cap, each attempt is logged at debug level, and a new test covers the cap.'],
+]
+const WELCOME_TURNS = [
+  [SEED[0][1], SEED[1][1]],
+  [SEED[2][1], SEED[3][1]],
+  [SEED[4][1], SEED[5][1]],
+  ...CHAT_TURNS,
+]
+const ECHO_MS = 60
+const STREAM_START_MS = 700
+const BATCH_MS = 70
+const BATCH_WORDS = 3
+
+let slow = 1
+let scenario = 'chat'
+let turnIndex = 0
+let busy = false
+let timers = []
+const t = ms => ms * slow
+const later = (ms, fn) => { timers.push(setTimeout(fn, t(ms))) }
+
+function makePane(el) {
+  el.append(document.getElementById('pane-template').content.cloneNode(true))
+  return {
+    el,
+    mode: el.dataset.mode,
+    proposed: el.dataset.side === 'proposed',
+    scroller: el.querySelector('.scroller'),
+    col: el.querySelector('.col'),
+    slot: el.querySelector('.activity-slot'),
+    field: el.querySelector('.field'),
+    fieldWrap: el.querySelector('.field-wrap'),
+    placeholder: el.querySelector('.placeholder'),
+    send: el.querySelector('.send'),
+    welcome: null,
+    ghost: null,
+    verb: null,
+    elapsed: null,
+    stream: null,
+  }
+}
+const allPanes = [...document.querySelectorAll('.pane')].map(makePane)
+const chatPanes = allPanes.filter(s => s.mode === 'chat')
+const welcomePane = allPanes.find(s => s.mode === 'welcome')
+const activePanes = () => scenario === 'chat' ? chatPanes : [welcomePane]
+const turns = () => scenario === 'chat' ? CHAT_TURNS : WELCOME_TURNS
+
+function userRow(text) {
+  const row = document.createElement('div')
+  row.innerHTML = '<div class="msg"><div class="bubble"><div class="md-prose"><p></p></div></div><div class="msg-actions"></div></div>'
+  row.querySelector('p').textContent = text
+  return row
+}
+function assistantRow(html) {
+  const row = document.createElement('div')
+  row.innerHTML = '<div class="md-prose prose"><p></p></div>'
+  row.querySelector('p').innerHTML = html
+  return row
+}
+function activityRow() {
+  const row = document.createElement('div')
+  row.className = 'activity'
+  row.innerHTML = '<span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="verb">Working</span><span class="elapsed">0s</span>'
+  return row
+}
+const pin = s => { s.scroller.scrollTop = s.scroller.scrollHeight }
+
+function setDraft(s, text) {
+  s.field.textContent = text
+  s.placeholder.hidden = text.length > 0
+  s.placeholder.classList.remove('is-held', 'animate-arrive')
+  s.send.classList.toggle('is-disabled', text.length === 0)
+}
+
+function resetPane(s) {
+  s.welcome?.remove()
+  s.welcome = null
+  s.col.classList.remove('is-pushing')
+  s.col.style.transform = ''
+  if (s.mode === 'chat') {
+    s.col.replaceChildren(...SEED.map(([who, body]) => who === 'user' ? userRow(body) : assistantRow(body)))
+    s.col.hidden = false
+  } else {
+    s.col.replaceChildren()
+    s.col.hidden = true
+    s.welcome = document.getElementById('welcome-template').content.firstElementChild.cloneNode(true)
+    s.scroller.prepend(s.welcome)
+  }
+  s.slot.replaceChildren()
+  s.ghost = null
+  s.fieldWrap.querySelectorAll('.ghost').forEach(n => n.remove())
+  s.el.querySelectorAll('.flight').forEach(n => n.remove())
+  s.send.classList.remove('is-stop')
+  s.send.querySelector('.arrow').classList.remove('glyph-out')
+  s.send.querySelector('.stop').classList.remove('animate-arrive')
+  setDraft(s, (s.mode === 'chat' ? CHAT_TURNS : WELCOME_TURNS)[0][0])
+  pin(s)
+}
+
+function reset() {
+  timers.forEach(clearTimeout)
+  timers = []
+  busy = false
+  turnIndex = 0
+  document.getElementById('x-send').disabled = false
+  allPanes.forEach(resetPane)
+}
+
+// Enter: the composer clears. The engine has not echoed anything yet.
+const revealPlaceholder = s => {
+  s.placeholder.classList.remove('is-held')
+  s.placeholder.classList.add('animate-arrive')
+}
+
+function leaveComposer(s) {
+  if (s.proposed) {
+    const ghost = s.field.cloneNode(true)
+    const was = s.field.getBoundingClientRect()
+    ghost.classList.add('ghost')
+    ghost.style.width = was.width + 'px'
+    s.fieldWrap.append(ghost)
+    s.field.textContent = ''
+    // An emptied field is shorter and the row is bottom-aligned, so the wrap moves
+    // down; hold the copy where the text actually was.
+    ghost.style.top = `${was.top - s.fieldWrap.getBoundingClientRect().top}px`
+    s.placeholder.hidden = false
+    s.placeholder.classList.add('is-held')
+    s.send.querySelector('.arrow').classList.add('glyph-out')
+    // First message of an empty chat: the draft waits for the echo, then flies.
+    if (s.welcome) {
+      s.ghost = ghost
+      return
+    }
+    ghost.classList.add('lift')
+    ghost.addEventListener('animationend', () => ghost.remove(), { once: true })
+    later(120, () => revealPlaceholder(s))
+  } else {
+    s.field.textContent = ''
+    s.placeholder.hidden = false
+    s.send.classList.add('is-disabled')
+  }
+}
+
+function turnStarts(s) {
+  const activity = activityRow()
+  if (s.proposed) activity.classList.add('animate-arrive')
+  s.slot.replaceChildren(activity)
+  s.verb = activity.querySelector('.verb')
+  s.elapsed = activity.querySelector('.elapsed')
+  s.send.classList.remove('is-disabled')
+  s.send.classList.add('is-stop')
+  if (s.proposed) s.send.querySelector('.stop').classList.add('animate-arrive')
+}
+
+// Echo into an empty session: TranscriptView swaps WelcomeScreen for the rows.
+function echoFirst(s, text) {
+  turnStarts(s)
+  if (s.proposed) return flyFromComposer(s, text)
+  s.welcome.remove()
+  s.welcome = null
+  s.col.hidden = false
+  const row = userRow(text)
+  row.classList.add('animate-arrive')
+  row.addEventListener('animationend', () => row.classList.remove('animate-arrive'), { once: true })
+  s.col.append(row)
+  pin(s)
+}
+
+// The draft leaves the composer and travels to the first row's slot, gaining the
+// bubble's tint on the way. The Welcome clears out of the path at the same time.
+function flyFromComposer(s, text) {
+  const ghost = s.ghost
+  s.ghost = null
+  const from = ghost.getBoundingClientRect()
+
+  const welcome = s.welcome
+  s.welcome = null
+  welcome.classList.add('is-leaving', 'welcome-exit')
+  welcome.addEventListener('animationend', () => welcome.remove(), { once: true })
+
+  s.col.hidden = false
+  const row = userRow(text)
+  const bubble = row.querySelector('.bubble')
+  bubble.classList.add('is-landing')
+  s.col.append(row)
+
+  const to = bubble.getBoundingClientRect()
+  const pane = s.el.getBoundingClientRect()
+  const flight = bubble.cloneNode(true)
+  flight.classList.remove('is-landing')
+  flight.classList.add('flight')
+  flight.style.left = `${to.left - pane.left}px`
+  flight.style.top = `${to.top - pane.top}px`
+  flight.style.width = `${to.width}px`
+  s.el.append(flight)
+  ghost.remove()
+  later(120, () => revealPlaceholder(s))
+
+  // Bubble text sits 1px border + 16px/10px padding inside the bubble, at 14px;
+  // the draft is 15px at the field's 6px top padding. Scale so the words match.
+  const k = 15 / 14
+  const tx = from.left - k * 17 - to.left
+  const ty = from.top + 6 - k * 11 - to.top
+  const settled = getComputedStyle(bubble)
+  flight.animate([
+    { transform: `translate(${tx}px, ${ty}px) scale(${k})`, backgroundColor: 'transparent', borderColor: 'transparent' },
+    { transform: 'none', backgroundColor: settled.backgroundColor, borderColor: settled.borderTopColor },
+  ], { duration: 400 * slow, easing: 'cubic-bezier(0.2, 0, 0, 1)' }).finished.then(() => {
+    if (!flight.isConnected) return
+    flight.remove()
+    bubble.classList.remove('is-landing')
+  })
+}
+
+// Echo into a conversation: the user-text row arrives while the turn is live.
+function echo(s, text) {
+  if (s.welcome) return echoFirst(s, text)
+  const anchor = s.col.lastElementChild
+  const before = anchor.getBoundingClientRect().top
+
+  const row = userRow(text)
+  row.classList.add('animate-arrive')
+  row.addEventListener('animationend', () => row.classList.remove('animate-arrive'), { once: true })
+  s.col.append(row)
+  turnStarts(s)
+  pin(s)
+
+  if (s.proposed) {
+    const delta = before - anchor.getBoundingClientRect().top
+    if (delta > 0) {
+      s.col.classList.remove('is-pushing')
+      s.col.style.transform = `translateY(${delta}px)`
+      s.col.getBoundingClientRect()
+      s.col.classList.add('is-pushing')
+      s.col.style.transform = ''
+      s.col.addEventListener('transitionend', () => s.col.classList.remove('is-pushing'), { once: true })
+    }
+  }
+}
+
+function startStream(s) {
+  const row = assistantRow('')
+  s.col.append(row)
+  s.stream = row.querySelector('p')
+  s.verb.textContent = 'Responding'
+  pin(s)
+}
+function streamBatch(s, words) {
+  const span = document.createElement('span')
+  span.className = 'prose-arrive-smooth'
+  span.textContent = words
+  s.stream.append(span)
+  pin(s)
+}
+function endTurn(s, nextDraft) {
+  s.slot.replaceChildren()
+  s.send.classList.remove('is-stop')
+  s.send.querySelector('.arrow').classList.remove('glyph-out')
+  s.send.querySelector('.stop').classList.remove('animate-arrive')
+  setDraft(s, nextDraft)
+}
+
+function send() {
+  if (busy) return
+  busy = true
+  document.getElementById('x-send').disabled = true
+  const list = turns()
+  const panes = activePanes()
+  const [draft, reply] = list[turnIndex % list.length]
+  const nextDraft = list[(turnIndex + 1) % list.length][0]
+  turnIndex++
+
+  panes.forEach(leaveComposer)
+  later(ECHO_MS, () => panes.forEach(s => echo(s, draft)))
+
+  let seconds = 0
+  const tick = () => {
+    seconds++
+    panes.forEach(s => { if (s.elapsed) s.elapsed.textContent = seconds + 's' })
+    later(1000, tick)
+  }
+  later(ECHO_MS + 1000, tick)
+
+  later(STREAM_START_MS, () => panes.forEach(startStream))
+  const words = reply.replace(/<[^>]+>/g, '').split(' ')
+  let at = STREAM_START_MS
+  for (let i = 0; i < words.length; i += BATCH_WORDS) {
+    const batch = words.slice(i, i + BATCH_WORDS).join(' ') + (i + BATCH_WORDS < words.length ? ' ' : '')
+    at += BATCH_MS
+    later(at, () => panes.forEach(s => streamBatch(s, batch)))
+  }
+  later(at + 400, () => {
+    timers.forEach(clearTimeout)
+    timers = []
+    panes.forEach(s => endTurn(s, nextDraft))
+    busy = false
+    document.getElementById('x-send').disabled = false
+  })
+}
+
+function press(group, btn) {
+  document.querySelectorAll(`[${group}]`).forEach(b => b.setAttribute('aria-pressed', String(b === btn)))
+}
+
+document.getElementById('x-send').addEventListener('click', send)
+document.getElementById('x-reset').addEventListener('click', reset)
+allPanes.forEach(s => s.send.addEventListener('click', () => { if (!s.send.classList.contains('is-stop')) send() }))
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); send() }
+})
+document.querySelectorAll('[data-scenario]').forEach(btn => btn.addEventListener('click', () => {
+  scenario = btn.dataset.scenario
+  press('data-scenario', btn)
+  document.getElementById('x-chat').hidden = scenario !== 'chat'
+  document.getElementById('x-welcome').hidden = scenario !== 'welcome'
+  document.getElementById('x-version').hidden = scenario !== 'welcome'
+  reset()
+}))
+document.querySelectorAll('[data-version]').forEach(btn => btn.addEventListener('click', () => {
+  welcomePane.proposed = btn.dataset.version === 'proposed'
+  document.getElementById('x-welcome-label').textContent = btn.textContent
+  press('data-version', btn)
+  reset()
+}))
+document.querySelectorAll('[data-slow]').forEach(btn => btn.addEventListener('click', () => {
+  slow = Number(btn.dataset.slow)
+  document.documentElement.style.setProperty('--slow', String(slow))
+  press('data-slow', btn)
+}))
+document.querySelectorAll('[data-appearance]').forEach(btn => btn.addEventListener('click', () => {
+  const light = btn.dataset.appearance === 'light'
+  allPanes.forEach(s => s.el.classList.toggle('light', light))
+  press('data-appearance', btn)
+}))
+
+reset()
+</script>
+</body>
+</html>
