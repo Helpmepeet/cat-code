@@ -667,17 +667,35 @@ export function mergeMountedMarkdownLeaves(
   return units
 }
 
+const arrivalJsx = arrivalKeyedJsx(jsx)
+const arrivalJsxs = arrivalKeyedJsx(jsxs)
+
 /** Renders a hast tree through the caller's own component overrides. */
 export function renderMarkdownTree(tree: Root, components?: Components): ReactNode {
   return toJsxRuntime(tree, {
     Fragment,
     components,
     ignoreInvalidStyle: true,
-    jsx,
-    jsxs,
+    jsx: arrivalJsx,
+    jsxs: arrivalJsxs,
     passKeys: true,
     passNode: true,
   })
+}
+
+// HAST normally keys spans by sibling index. Removing a settled arrival span
+// would then transfer its animation to a different word. Consume the source
+// key here, before React reconciles, without adding an attribute to the DOM.
+function arrivalKeyedJsx(factory: typeof jsx): typeof jsx {
+  return (type, props, key) => {
+    if (typeof props !== 'object' || props === null || !('data-prose-arrival-key' in props)) {
+      return factory(type, props, key)
+    }
+    const arrivalKey = props['data-prose-arrival-key']
+    if (typeof arrivalKey !== 'string') return factory(type, props, key)
+    const { 'data-prose-arrival-key': _arrivalKey, ...rest } = props
+    return factory(type, rest, arrivalKey)
+  }
 }
 
 /* ── planning ──────────────────────────────────────────────────────────────── */

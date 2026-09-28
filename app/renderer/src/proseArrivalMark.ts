@@ -123,14 +123,21 @@ function markText(
   const out: ElementContent[] = []
   if (settled !== '') out.push({ type: 'text', value: settled })
 
+  let offset = cut
   for (const part of splitKeepingSeparators(arriving)) {
     if (isWhitespace(part)) {
       // Whitespace stays a bare text node: wrapping it would add a span per gap
       // for no visual gain, and an inline-block on a separator changes wrapping.
       out.push({ type: 'text', value: part })
+      offset += part.length
       continue
     }
-    out.push(wordSpan(part, options, counter))
+    // A batch can settle halfway through a word. Keep the surviving suffix on
+    // that word's original key so it retains its running fade.
+    let wordStart = offset
+    while (wordStart > 0 && !/\s/.test(node.value[wordStart - 1]!)) wordStart -= 1
+    out.push(wordSpan(part, start + wordStart, options, counter))
+    offset += part.length
   }
 
   return out
@@ -138,6 +145,7 @@ function markText(
 
 function wordSpan(
   word: string,
+  offset: number,
   options: ArrivalMarkOptions,
   counter: { index: number },
 ): Element {
@@ -150,6 +158,7 @@ function wordSpan(
     delay > 0
       ? { className: [options.className], style: `animation-delay:${delay}ms` }
       : { className: [options.className] }
+  properties['data-prose-arrival-key'] = `prose-${offset}`
   return {
     type: 'element',
     tagName: 'span',

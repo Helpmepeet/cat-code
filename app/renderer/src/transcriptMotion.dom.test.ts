@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act, createElement, memo, useContext } from 'react'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ServerFrame } from '../../shared/protocol.js'
@@ -287,6 +287,43 @@ test('streamed prose keeps the first batch fading during later commits and stays
   await tree.unmount()
   const remount = await harness.mount(viewProse('Existing text first second'))
   expect(remount.container.querySelectorAll('.prose-arrive-smooth')).toHaveLength(0)
+})
+
+test.each(['', '> ', '- '])('streamed %sprose preserves each fading word as batches arrive and settle', async prefix => {
+  let now = 10_000
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  const viewProse = (content: string) => createElement(TranscriptRowsView, {
+    rows: [{
+      kind: 'assistant-text', id: 'prose-expiry', sessionId, frameId: d,
+      messageId: d, blockIndex: 0, parentToolUseId: null, role: 'assistant',
+      content: prefix + content, isStreaming: true, children: [],
+    }], turnLive: true,
+  })
+  try {
+    const tree = await harness.mount(viewProse(''))
+    await tree.render(viewProse('first'))
+    const first = tree.container.querySelector('.prose-arrive-smooth')
+    expect(first?.textContent).toBe('first')
+    now += 100
+    await tree.render(viewProse('first second'))
+    expect(tree.container.contains(first!)).toBe(true)
+    expect(first?.textContent).toBe('first')
+    const second = [...tree.container.querySelectorAll('.prose-arrive-smooth')]
+      .find(span => span.textContent === 'second')
+    expect(second).toBeDefined()
+    now += 50
+    await tree.render(viewProse('first second third'))
+    expect(tree.container.contains(second!)).toBe(true)
+    expect(second?.textContent).toBe('second')
+    now += 100 // First has finished, but second is still fading.
+    await tree.render(viewProse('first second third fourth'))
+    expect(tree.container.contains(second!)).toBe(true)
+    expect(second?.textContent).toBe('second')
+    expect(second?.classList.contains('prose-arrive-smooth')).toBe(true)
+  } finally {
+    await harness.unmountAll()
+    clock.mockRestore()
+  }
 })
 
 test('a new streaming row fades its first batch in a live pane but not on remount', async () => {

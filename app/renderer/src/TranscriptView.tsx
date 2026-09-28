@@ -1392,6 +1392,8 @@ const REMARK_PLUGINS = [remarkGfm]
  */
 const TRAILING_CODE_FENCE_RE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*\n?\s*$/
 
+const AssistantSourceContext = createContext('')
+
 function AssistantProse({
   content,
   sourceId,
@@ -1429,23 +1431,18 @@ function AssistantProse({
   // sits in the same corner, so doubling up is confusing (user report 2026-08-23).
   const endsWithCodeFence = TRAILING_CODE_FENCE_RE.test(content)
   const copyable = !streaming && content.trim().length > 0 && !endsWithCodeFence
-  // The blockquote renderer closes over this message's raw source so its own
-  // copy control can dequote by source position rather than re-deriving text
-  // from the parsed tree. Keep its component type stable until that source
-  // changes: otherwise React remounts each quote and loses its copy feedback.
-  const pathComponents = useMemo(
+  // Component types must survive streamed source updates, or React remounts
+  // their text and restarts any arrival fades inside them.
+  const components = useMemo(
     () => ({
       ...MARKDOWN_COMPONENTS,
       a: createPathAwareAnchor(openFile, onContextMenu),
       p: createPathAwareParagraph(openFile, onContextMenu),
       li: createPathAwareListItem(openFile, onContextMenu),
       code: createPathAwareCode(openFile, onContextMenu),
+      blockquote: AssistantBlockquote,
     }),
     [openFile, onContextMenu],
-  )
-  const components = useMemo(
-    () => ({ ...pathComponents, blockquote: createBlockquoteComponent(content) }),
-    [content, pathComponents],
   )
   const { arrival } = useContext(ProseArrivalContext)
   const { freshProse } = useContext(TranscriptMotionContext)
@@ -1496,43 +1493,45 @@ function AssistantProse({
     // gutter (operator call, 2026-08-02): the prototype's chip overlays the
     // last line rather than narrowing the column (Messages.jsx:2064-2091), and
     // the app's own reserved-gutter version read as an unexplained gap.
-    <div className="group relative">
-      <BoundedMarkdown
-        sourceId={sourceId}
-        source={content}
-        rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
-        math
-        recognizeCallouts
-        renderLeaf={leaf =>
-          // A fence too long to mount whole arrives as one merged code leaf:
-          // the card and its copy action own the WHOLE fence, while only the
-          // windowed lines are mounted inside it.
-          leaf.kind === 'code' ? (
-            <MarkdownErrorBoundary fallback={leaf.codeSource}>
-              <CodeBlock
-                code={leaf.codeSource}
-                streaming={leaf.codeOpen}
-                highlighted={
-                  <MarkdownTree
-                    tree={markArrival(leaf.content)}
-                    components={components}
-                  />
-                }
-              />
-            </MarkdownErrorBoundary>
-          ) : (
-            <div className="md-prose font-sans font-medium text-sm leading-relaxed">
-              <MarkdownErrorBoundary fallback={content}>
-                <MarkdownTree tree={markArrival(leaf.tree)} components={components} />
+    <AssistantSourceContext.Provider value={content}>
+      <div className="group relative">
+        <BoundedMarkdown
+          sourceId={sourceId}
+          source={content}
+          rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
+          math
+          recognizeCallouts
+          renderLeaf={leaf =>
+            // A fence too long to mount whole arrives as one merged code leaf:
+            // the card and its copy action own the WHOLE fence, while only the
+            // windowed lines are mounted inside it.
+            leaf.kind === 'code' ? (
+              <MarkdownErrorBoundary fallback={leaf.codeSource}>
+                <CodeBlock
+                  code={leaf.codeSource}
+                  streaming={leaf.codeOpen}
+                  highlighted={
+                    <MarkdownTree
+                      tree={markArrival(leaf.content)}
+                      components={components}
+                    />
+                  }
+                />
               </MarkdownErrorBoundary>
-            </div>
-          )
-        }
-      />
-      {copyable ? (
-        <BubbleCopyChip content={content} subject="response" />
-      ) : null}
-    </div>
+            ) : (
+              <div className="md-prose font-sans font-medium text-sm leading-relaxed">
+                <MarkdownErrorBoundary fallback={content}>
+                  <MarkdownTree tree={markArrival(leaf.tree)} components={components} />
+                </MarkdownErrorBoundary>
+              </div>
+            )
+          }
+        />
+        {copyable ? (
+          <BubbleCopyChip content={content} subject="response" />
+        ) : null}
+      </div>
+    </AssistantSourceContext.Provider>
   )
 }
 
@@ -1638,11 +1637,12 @@ function linkifyFilePathChildren(
     )
   }
   if (!Array.isArray(children)) return children
-  return children.map((child, index) => (
-    <Fragment key={index}>
-      {linkifyFilePathChildren(child, openFile, onContextMenu)}
-    </Fragment>
-  ))
+  return children.map((child, index) => {
+    const linked = linkifyFilePathChildren(child, openFile, onContextMenu)
+    // Keep an element's own key and parent when a single arriving word becomes
+    // a list of siblings. Adding a Fragment here would restart its animation.
+    return isValidElement(child) ? linked : <Fragment key={index}>{linked}</Fragment>
+  })
 }
 
 function createPathAwareParagraph(
@@ -2034,27 +2034,25 @@ function QuoteCopyChip({ text }: { text: string }) {
 }
 
 /**
- * Blockquote renderer, built per distinct `AssistantProse` source closing over
- * that message's raw markdown `rawSource` — `node.position` offsets are into
- * that string. `.md-prose blockquote` (theme.css) still supplies the
+ * `node.position` offsets refer to the enclosing assistant's raw source.
+ * `.md-prose blockquote` (theme.css) still supplies the
  * border/color styling by tag-name selector regardless of this component's own
  * className. `ml-7` reserves the left margin `QuoteCopyChip` sits in.
  */
-function createBlockquoteComponent(rawSource: string) {
-  return function Blockquote({
-    node,
-    children,
-  }: ComponentPropsWithoutRef<'blockquote'> & {
-    node?: { position?: QuotePosition }
-  }) {
-    const text = dequote(rawSource, node?.position)
-    return (
-      <blockquote className="relative ml-7">
-        {children}
-        {text.length > 0 ? <QuoteCopyChip text={text} /> : null}
-      </blockquote>
-    )
-  }
+function AssistantBlockquote({
+  node,
+  children,
+}: ComponentPropsWithoutRef<'blockquote'> & {
+  node?: { position?: QuotePosition }
+}) {
+  const rawSource = useContext(AssistantSourceContext)
+  const text = dequote(rawSource, node?.position)
+  return (
+    <blockquote className="relative ml-7">
+      {children}
+      {text.length > 0 ? <QuoteCopyChip text={text} /> : null}
+    </blockquote>
+  )
 }
 
 /**
