@@ -139,6 +139,7 @@ import {
 import { captureInterruptedTurn } from './utils/interruptedTurn.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
+import { createCuaDriverRun, type CuaDriverRun } from './utils/cuaDriver/run.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -341,20 +342,33 @@ export async function* query(
   Terminal
 > {
   const consumedCommandUuids: string[] = []
-  const terminal = yield* queryLoop(params, consumedCommandUuids)
-  // Only reached if queryLoop returned normally. Skipped on throw (error
-  // propagates through yield*) and on .return() (Return completion closes
-  // both generators). This gives the same asymmetric started-without-completed
-  // signal as print.ts's drainCommandQueue when the turn fails.
-  for (const uuid of consumedCommandUuids) {
-    notifyCommandLifecycle(uuid, 'completed')
+  const cuaDriverRun = createCuaDriverRun()
+  try {
+    const terminal = yield* queryLoop(
+      params,
+      consumedCommandUuids,
+      cuaDriverRun,
+    )
+    // Only reached if queryLoop returned normally. Skipped on throw (error
+    // propagates through yield*) and on .return() (Return completion closes
+    // both generators). This gives the same asymmetric started-without-completed
+    // signal as print.ts's drainCommandQueue when the turn fails.
+    for (const uuid of consumedCommandUuids) {
+      notifyCommandLifecycle(uuid, 'completed')
+    }
+    return terminal
+  } finally {
+    // Every terminal return of queryLoop, a throw, and a consumer's .return()
+    // all pass here. Several returns (API error, max turns, hook stops) skip
+    // handleStopHooks, so the stop cannot live there.
+    await cuaDriverRun.end()
   }
-  return terminal
 }
 
 async function* queryLoop(
   params: QueryParams,
   consumedCommandUuids: string[],
+  cuaDriverRun: CuaDriverRun,
 ): AsyncGenerator<
   | StreamEvent
   | RequestStartEvent
@@ -501,6 +515,9 @@ async function* queryLoop(
     toolUseContext = {
       ...toolUseContext,
       queryTracking,
+      // Replaces any run inherited from a parent context, so a subagent's
+      // cua-driver use is stopped when the subagent's own run ends.
+      cuaDriverRun,
     }
 
     let messagesForQuery = [...getMessagesAfterCompactBoundary(messages)]

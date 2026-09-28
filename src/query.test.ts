@@ -1,4 +1,15 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import {
+  CUA_DRIVER_OFF_MESSAGE,
+  getCuaDriverOffPath,
+} from './utils/cuaDriver/guard.js'
+import {
+  _forTest as cuaDriverRunForTest,
+  type CuaDriverRun,
+} from './utils/cuaDriver/run.js'
 import * as analytics from './services/analytics/index.js'
 import type { ToolUseContext } from './Tool.js'
 import { query } from './query.js'
@@ -1038,5 +1049,266 @@ describe('between-iteration MCP runtime refresh', () => {
     expect(observed[1].commands).toEqual(['base-command'])
     expect(observed[1].clients).toEqual(['static-server'])
     expect(observed[1].resources).toEqual([])
+  })
+})
+
+describe('cua-driver stop at run end', () => {
+  let stops: number
+
+  beforeEach(() => {
+    stops = 0
+    cuaDriverRunForTest.setStopDaemon(async () => {
+      stops++
+    })
+  })
+
+  afterEach(() => {
+    cuaDriverRunForTest.setStopDaemon(null)
+  })
+
+  function recordingTool(name: string, calls: unknown[]) {
+    return buildTool({
+      name,
+      inputSchema: z.object({ command: z.string().optional() }),
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+      description: async () => 'test tool',
+      prompt: async () => 'test tool',
+      validateInput: async () => ({ result: true as const }),
+      renderToolUseMessage: () => null,
+      maxResultSizeChars: 10_000,
+      async call(input: unknown) {
+        calls.push(input)
+        return { data: 'ok' }
+      },
+      mapToolResultToToolResultBlockParam(data: unknown, toolUseID: string) {
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: toolUseID,
+          content: String(data),
+        }
+      },
+    })
+  }
+
+  function toolUseTurn(
+    name: string,
+    input: Record<string, unknown>,
+    id: string,
+  ): AssistantMessage {
+    const message = createAssistantMessage('calling', `assistant-${id}`)
+    message.message.content = [
+      { type: 'tool_use', id, name, input },
+    ] as AssistantMessage['message']['content']
+    return message
+  }
+
+  function apiErrorTurn(uuid: string): AssistantMessage {
+    const message = createAssistantMessage('API Error: 500 upstream', uuid)
+    message.isApiErrorMessage = true
+    return message
+  }
+
+  /** First model call returns `first`; later calls return `then`. */
+  function twoStepDeps(
+    first: AssistantMessage,
+    then: AssistantMessage,
+  ): QueryDeps {
+    let call = 0
+    return {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        yield call === 1 ? first : then
+      },
+    }
+  }
+
+  function startQuery(
+    deps: QueryDeps,
+    tools: unknown[],
+    options: {
+      updatedInput?: Record<string, unknown>
+      parentRun?: CuaDriverRun
+    } = {},
+  ) {
+    const messages: Message[] = [createUserMessage({ content: 'do the thing' })]
+    const toolUseContext = createToolUseContext(messages)
+    ;(toolUseContext.options as unknown as { tools: unknown[] }).tools = tools
+    if (options.parentRun) toolUseContext.cuaDriverRun = options.parentRun
+    return query({
+      messages,
+      systemPrompt: asSystemPrompt(['system prompt']),
+      userContext: {},
+      systemContext: {},
+      canUseTool: async () => ({
+        behavior: 'allow',
+        ...(options.updatedInput && { updatedInput: options.updatedInput }),
+        decisionReason: { type: 'other', reason: 'test allows all tools' },
+      }),
+      toolUseContext,
+      querySource: 'repl_main_thread',
+      deps,
+    })
+  }
+
+  async function drain(
+    generator: ReturnType<typeof startQuery>,
+  ): Promise<Message[]> {
+    const yielded: Message[] = []
+    for await (const message of generator) yielded.push(message as Message)
+    return yielded
+  }
+
+  test('an API error after a driver call still stops the daemon', async () => {
+    const calls: unknown[] = []
+    await drain(
+      startQuery(
+        twoStepDeps(
+          toolUseTurn('mcp__cua-driver__list_apps', {}, 'toolu_cua_1'),
+          apiErrorTurn('assistant-api-error'),
+        ),
+        [recordingTool('mcp__cua-driver__list_apps', calls)],
+      ),
+    )
+    expect(calls).toHaveLength(1)
+    expect(stops).toBe(1)
+  })
+
+  test('a natural end after a Bash driver command stops the daemon', async () => {
+    const calls: unknown[] = []
+    await drain(
+      startQuery(
+        twoStepDeps(
+          toolUseTurn(
+            'Bash',
+            { command: 'cua-driver call list_apps' },
+            'toolu_cua_2',
+          ),
+          createAssistantMessage('done', 'assistant-done'),
+        ),
+        [recordingTool('Bash', calls)],
+      ),
+    )
+    expect(calls).toHaveLength(1)
+    expect(stops).toBe(1)
+  })
+
+  test('a run that only mentions cua-driver leaves the daemon alone', async () => {
+    const calls: unknown[] = []
+    await drain(
+      startQuery(
+        twoStepDeps(
+          toolUseTurn('Bash', { command: 'rg -n cua-driver docs' }, 'toolu_rg'),
+          createAssistantMessage('done', 'assistant-done'),
+        ),
+        [recordingTool('Bash', calls)],
+      ),
+    )
+    expect(calls).toHaveLength(1)
+    expect(stops).toBe(0)
+  })
+
+  test('a caller abandoning the run mid-turn still stops the daemon', async () => {
+    const generator = startQuery(
+      twoStepDeps(
+        toolUseTurn('mcp__cua-driver__click', {}, 'toolu_cua_3'),
+        createAssistantMessage('done', 'assistant-done'),
+      ),
+      [recordingTool('mcp__cua-driver__click', [])],
+    )
+    for await (const message of generator) {
+      if ((message as Message).type === 'user') break
+    }
+    expect(stops).toBe(1)
+  })
+
+  test('the guard sees the command a permission decision substituted', async () => {
+    const calls: unknown[] = []
+    await drain(
+      startQuery(
+        twoStepDeps(
+          toolUseTurn('Bash', { command: 'echo hi' }, 'toolu_rewrite'),
+          createAssistantMessage('done', 'assistant-done'),
+        ),
+        [recordingTool('Bash', calls)],
+        { updatedInput: { command: 'cua-driver call list_apps' } },
+      ),
+    )
+    expect(calls).toEqual([{ command: 'cua-driver call list_apps' }])
+    expect(stops).toBe(1)
+  })
+
+  test('a subagent run stops the daemon itself and leaves the parent run unmarked', async () => {
+    let parentMarks = 0
+    const parentRun: CuaDriverRun = {
+      markUsed: () => {
+        parentMarks++
+      },
+      end: async () => {},
+    }
+    await drain(
+      startQuery(
+        twoStepDeps(
+          toolUseTurn('mcp__cua-driver__list_apps', {}, 'toolu_cua_4'),
+          createAssistantMessage('done', 'assistant-done'),
+        ),
+        [recordingTool('mcp__cua-driver__list_apps', [])],
+        { parentRun },
+      ),
+    )
+    expect(parentMarks).toBe(0)
+    expect(stops).toBe(1)
+  })
+
+  describe('with the operator off switch present', () => {
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    let configDir: string
+
+    beforeEach(() => {
+      configDir = mkdtempSync(join(tmpdir(), 'cua-query-'))
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      writeFileSync(getCuaDriverOffPath(), '')
+    })
+
+    afterEach(() => {
+      if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+      rmSync(configDir, { recursive: true, force: true })
+    })
+
+    test('the driver call is refused and never runs', async () => {
+      const calls: unknown[] = []
+      const yielded = await drain(
+        startQuery(
+          twoStepDeps(
+            toolUseTurn('Bash', { command: 'cua-driver serve' }, 'toolu_off'),
+            createAssistantMessage('done', 'assistant-done'),
+          ),
+          [recordingTool('Bash', calls)],
+        ),
+      )
+      expect(calls).toHaveLength(0)
+      const refusal = yielded.flatMap(message =>
+        message.type === 'user' && Array.isArray(message.message.content)
+          ? (
+              message.message.content as {
+                type: string
+                is_error?: boolean
+                content?: unknown
+              }[]
+            ).filter(block => block.type === 'tool_result')
+          : [],
+      )
+      expect(refusal).toEqual([
+        expect.objectContaining({
+          is_error: true,
+          content: CUA_DRIVER_OFF_MESSAGE,
+        }),
+      ])
+      expect(stops).toBe(0)
+    })
   })
 })

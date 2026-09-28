@@ -1,8 +1,10 @@
 # cua-driver safety net
 
 Date: 2026-09-28
-Status: plan, simplified after two source reviews; waiting on decisions D1
-and D2 and on live check (a); not implemented
+Status: items 1 to 5 implemented on 2026-09-28 with D1 accepted and D2 kept
+(idle stop included). Live check (a) and live checks (b) to (d) have not run.
+Hotkey scripts are in `~/.cat-code/raycast/`; binding them in Raycast is an
+operator step.
 Scope: Cat Code engine (`src/`), plus user-level config outside the repo
 
 ## Why
@@ -90,7 +92,7 @@ operator wants agents free to drive), and changes to cua-driver itself.
 
 ## Design
 
-A small engine module (proposed `src/utils/cuaDriver/`).
+A small engine module, `src/utils/cuaDriver/` (`run.ts` and `guard.ts`).
 
 ### 1. Stop at the end of any run that used it
 

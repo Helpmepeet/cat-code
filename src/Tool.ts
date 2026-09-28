@@ -86,6 +86,7 @@ import type {
 import type { AgentId } from './types/ids.js'
 import type { DeepImmutable } from './types/utils.js'
 import type { AttributionState } from './utils/commitAttribution.js'
+import type { CuaDriverRun } from './utils/cuaDriver/run.js'
 import type { FileHistoryState } from './utils/fileHistory.js'
 import type { Theme, ThemeName } from './utils/theme.js'
 import type { Attachment } from './utils/attachments.js'
@@ -336,6 +337,8 @@ export type ToolUseContext = {
     }
   >
   queryTracking?: QueryChainTracking
+  /** Set by `query()` for its own run; the tool guard marks it on cua-driver use. */
+  cuaDriverRun?: CuaDriverRun
   /** Callback factory for requesting interactive prompts from the user.
    * Returns a prompt callback bound to the given source name.
    * Only available in interactive (REPL) contexts. */

@@ -39,6 +39,7 @@ import {
 import type { BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { startSpeculativeClassifierCheck } from '../../tools/BashTool/bashPermissions.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
+import { checkCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
@@ -1287,6 +1288,35 @@ async function checkPermissionsAndCallTool(
   // (Don't overwrite if undefined - processedInput may have been modified by passthrough hooks)
   if (permissionDecision.updatedInput !== undefined) {
     processedInput = permissionDecision.updatedInput
+  }
+
+  // Checked here, on the input the tool will run with: a PreToolUse hook or the
+  // permission decision may have replaced the model's input above. The later
+  // backfill restore only touches `file_path`.
+  const cuaDriverRefusal = checkCuaDriverToolCall(
+    tool.name,
+    processedInput,
+    toolUseContext.cuaDriverRun,
+  )
+  if (cuaDriverRefusal !== null) {
+    const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)
+    endToolBlockedOnUserSpan('reject', decisionInfo?.source || 'unknown')
+    endToolSpan()
+    resultingMessages.push({
+      message: createUserMessage({
+        content: [
+          {
+            type: 'tool_result',
+            content: cuaDriverRefusal,
+            is_error: true,
+            tool_use_id: toolUseID,
+          },
+        ],
+        toolUseResult: `Error: ${cuaDriverRefusal}`,
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+      }),
+    })
+    return resultingMessages
   }
 
   // Prepare tool parameters for logging in tool_result event.
