@@ -438,8 +438,8 @@ export const PROGRESS = {
 
 /**
  * Clear iTerm2 progress bar sequence (OSC 9;4;0;BEL)
- * Uses BEL terminator since this is for cleanup (not runtime notification)
- * and we want to ensure it's always sent regardless of terminal type.
+ * Only emit on terminals that support progress reporting; older iTerm2
+ * treats OSC 9 as a notification and displays the remaining payload.
  */
 export const CLEAR_ITERM2_PROGRESS = `${OSC_PREFIX}${OSC.ITERM2};${ITERM2.PROGRESS};${PROGRESS.CLEAR};${BEL}`
 
