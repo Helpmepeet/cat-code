@@ -110,6 +110,14 @@ type WelcomeScreenProps =
     }
   | {
       variant: 'session'
+      /**
+       * Send-message motion (behavior 3): the first send in an empty chat is
+       * landing. Taken out of flow (`position: absolute`) so the row column
+       * beneath it lays out at its final place immediately instead of waiting
+       * for this screen to unmount, and fades/lifts via `animate-welcome-exit`
+       * instead of disappearing on the same frame the row commits.
+       */
+      exiting?: boolean
       managedChat?: boolean
       /** The session's actual cwd, shown read-only (null if the descriptor is absent). */
       cwd: string | null
@@ -143,8 +151,15 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
   // screen renders only while no project is open.
   const showFirstRunOrder =
     props.variant !== 'session' && shouldShowFirstRunOAuth(accounts, false)
+  const exiting = props.variant === 'session' && props.exiting === true
   return (
-    <div className="flex min-h-0 flex-1 overflow-y-auto">
+    <div
+      className={
+        exiting
+          ? 'absolute inset-x-0 top-0 pointer-events-none animate-welcome-exit'
+          : 'flex min-h-0 flex-1 overflow-y-auto'
+      }
+    >
       <div className="mx-auto w-full max-w-[1180px] px-10 pb-8 pt-10">
         {/* Hero: cat | wordmark + greeting + meta strip */}
         <div className="mb-12 grid grid-cols-1 items-center gap-6 md:grid-cols-[minmax(200px,300px)_1fr]">

@@ -184,6 +184,8 @@ describe('theme.css', () => {
         '.animate-compact-star',
         '.animate-compact-sweep-left',
         '.animate-compact-sweep-right',
+        '.animate-composer-glyph-out',
+        '.animate-composer-lift',
         '.animate-drawer-in',
         '.animate-face-pulse',
         '.animate-land',
@@ -197,6 +199,7 @@ describe('theme.css', () => {
         '.animate-tab-in',
         '.animate-toast-in',
         '.animate-token-warn-in',
+        '.animate-welcome-exit',
         // Arriving prose fades in; a reader who asked for less motion gets the
         // honest instant arrival instead (`proseArrival.ts`).
         '.prose-arrive-smooth',
@@ -219,6 +222,7 @@ describe('theme.css', () => {
       '.transition-all',
       '.transition-opacity',
       '.transition-transform',
+      '.transcript-col-slide.is-sliding',
       "[class*='transition-[']",
     ].sort())
     expect(mediaRules[1]?.[2].trim()).toBe('transition-duration: 0s !important;')

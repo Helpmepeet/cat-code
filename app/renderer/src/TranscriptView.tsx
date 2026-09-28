@@ -38,6 +38,7 @@ import {
   type ComponentPropsWithoutRef,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
 } from 'react'
 import Markdown from 'react-markdown'
 import { createPortal } from 'react-dom'
@@ -353,6 +354,8 @@ export const TranscriptView = memo(function TranscriptView({
   agentBackground = null,
   createdPeerNavigation,
   toolCardExpansionStore = null,
+  columnRef,
+  welcomeExiting = false,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
@@ -405,6 +408,14 @@ export const TranscriptView = memo(function TranscriptView({
   createdPeerNavigation?: CreatedPeerNavigation | null
   /** One shell-lifetime store, so a tab round-trip preserves explicit details. */
   toolCardExpansionStore?: ToolCardExpansionStore | null
+  /** Send-message motion (behavior 2): a ref onto the row column, so
+   * `SessionPane` can drive the in-chat slide without an extra wrapper div
+   * (`readTranscriptRowGeometry` reads the scroller's first element child AS
+   * the row list). Unused while `WelcomeScreen` renders instead. */
+  columnRef?: Ref<HTMLDivElement>
+  /** Send-message motion (behavior 3): keep `WelcomeScreen` mounted, exiting,
+   * for one more render after `state` already has this session's first row. */
+  welcomeExiting?: boolean
 }) {
   return (
     <TranscriptRowsView
@@ -431,6 +442,8 @@ export const TranscriptView = memo(function TranscriptView({
       agentBackground={agentBackground}
       createdPeerNavigation={createdPeerNavigation}
       toolCardExpansionStore={toolCardExpansionStore}
+      columnRef={columnRef}
+      welcomeExiting={welcomeExiting}
     />
   )
 })
@@ -458,6 +471,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   agentBackground = null,
   createdPeerNavigation = null,
   toolCardExpansionStore = null,
+  columnRef,
+  welcomeExiting = false,
 }: {
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
@@ -484,6 +499,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onMessageAction?: MessageActionHandler
   createdPeerNavigation?: CreatedPeerNavigation | null
   toolCardExpansionStore?: ToolCardExpansionStore | null
+  columnRef?: Ref<HTMLDivElement>
+  welcomeExiting?: boolean
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -617,7 +634,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // for legibility on this near-black background. It stays scoped to
       // assistant prose, NOT the whole column.
       <div
-        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6"
+        ref={columnRef}
+        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6 transcript-col-slide"
         data-card-style={cardStyle}
       >
         {items.map(item => {
@@ -659,6 +677,38 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         })}
         {compacting ? <CompactingSeam /> : null}
       </div>
+    )
+    // Send-message motion (behavior 3): the row above already committed —
+    // `content` is the rows column, in its final place — so `WelcomeScreen`
+    // renders AFTER it in DOM order (never before: `readTranscriptRowGeometry`
+    // reads the scroller's first element child as the row list) and exits on
+    // top via `animate-welcome-exit`, out of flow.
+    //
+    // ALWAYS a two-slot fragment, even when the second slot is null: switching
+    // between a bare element and a fragment on the render where `welcomeExiting`
+    // turns true would change the rows column's position in the tree (a single
+    // child becoming a fragment's first child), which React reconciles as an
+    // unmount + remount of that whole column — replaying every row's entrance
+    // and losing the imperative `invisible` the flight just set on the landed
+    // bubble. A stable two-slot shape keeps the column's identity untouched.
+    content = (
+      <>
+        {content}
+        {welcomeExiting ? (
+          <WelcomeScreen
+            variant="session"
+            exiting
+            cwd={cwd}
+            managedChat={managedChat}
+            branch={branch}
+            onListBranches={onListBranches}
+            onSwitchBranch={onSwitchBranch}
+            sandboxed={sandboxed}
+            accounts={accounts}
+            accountsUsagePending={accountsUsagePending}
+          />
+        ) : null}
+      </>
     )
   }
 
@@ -5389,7 +5439,10 @@ function UserBubble({
     [],
   )
   const bubble = (
-    <div className="max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
+    <div
+      data-user-bubble
+      className="max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary"
+    >
       <BoundedMarkdown
         sourceId={sourceId}
         source={content}

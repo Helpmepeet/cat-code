@@ -75,6 +75,17 @@ type ComposerInputProps = {
   /** A live session that cannot accept input right now (history, crashed). */
   readOnly: boolean
   ref?: React.Ref<ComposerInputHandle>
+  /**
+   * Send-message motion (behaviors 1 and 3): true while the composer lift's
+   * ghost, or the Welcome flight's held draft, is covering the field's exact
+   * spot, so the placeholder stays hidden even though `value` is already
+   * empty. `SessionPane` owns the timing (when to let go); the transition from
+   * `true` back to `false` is what makes the reveal fade in with the existing
+   * `animate-arrive`, instead of a plain re-appearance popping in under the
+   * ghost. Absent/always-false: the placeholder shows the instant the field is
+   * empty, as it always has.
+   */
+  placeholderHeld?: boolean
   /** The one typeahead whose listbox the focused editor currently controls. */
   typeahead?: ComposerTypeaheadA11y | null
   value: string
@@ -96,12 +107,22 @@ export function ComposerInput({
   placeholder,
   placeholderParts,
   pastes,
+  placeholderHeld = false,
   readOnly,
   ref,
   typeahead = null,
   value,
 }: ComposerInputProps) {
   const rootRef = useRef<HTMLDivElement>(null)
+  // Send-message motion (behaviors 1 and 3): the placeholder's own entrance is
+  // keyed off the true → false EDGE, read during render (`useEntranceOnChange`'s
+  // pattern) and committed in a layout effect so this survives a StrictMode
+  // double-render without replaying on an unrelated re-render.
+  const previousPlaceholderHeldRef = useRef(placeholderHeld)
+  const placeholderJustReleased = previousPlaceholderHeldRef.current && !placeholderHeld
+  useLayoutEffect(() => {
+    previousPlaceholderHeldRef.current = placeholderHeld
+  })
   const isComposingRef = useRef(false)
   // A pill's DOM listeners are attached once, when the field is rebuilt, and
   // ordinary typing deliberately does NOT rebuild it — that is the whole reason
@@ -337,10 +358,12 @@ export function ComposerInput({
        * `placeholder` of its own (Chat.jsx:1398). The field carries the same
        * text as `aria-placeholder`, which is what actually reaches assistive
        * tech; this copy is the visible one and is hidden from it. */}
-      {value.length === 0 ? (
+      {value.length === 0 && !placeholderHeld ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute left-0 top-1.5 text-[15px] font-medium leading-normal text-text-faint"
+          className={`pointer-events-none absolute left-0 top-1.5 text-[15px] font-medium leading-normal text-text-faint${
+            placeholderJustReleased ? ' animate-arrive' : ''
+          }`}
         >
           {placeholderParts == null ? (
             placeholder

@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
+import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { RunControlsSnapshot } from '../../shared/protocol.js'
+import type { ServerFrame } from '../../shared/protocol.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { MentionPicker } from './MentionPicker.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
@@ -12,14 +14,28 @@ import { ContextGauge } from './ContextGauge.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { PermissionQueueItem, PermissionRequest } from './permissionState.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
+import { createTranscriptState, projectServerFrame } from './transcriptProjector.js'
 
 let harness: DomTestHarness
 let scrollIntoView: typeof HTMLElement.prototype.scrollIntoView
+let elementAnimate: typeof HTMLElement.prototype.animate
 
 beforeAll(async () => {
   harness = await createDomTestHarness()
   scrollIntoView = HTMLElement.prototype.scrollIntoView
   HTMLElement.prototype.scrollIntoView = () => {}
+  // happy-dom has no Web Animations API; the Welcome flight (behavior 3)
+  // drives one directly (it bypasses CSS), so it needs a stand-in here. The
+  // promise resolves on a real timer, not immediately, so a test can observe
+  // the flight mid-air rather than always racing straight to its landing.
+  elementAnimate = HTMLElement.prototype.animate
+  HTMLElement.prototype.animate = function (): Animation {
+    return {
+      finished: new Promise(resolve => setTimeout(resolve, 30)),
+      cancel() {},
+      finish() {},
+    } as unknown as Animation
+  }
 })
 
 afterEach(async () => {
@@ -28,6 +44,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   HTMLElement.prototype.scrollIntoView = scrollIntoView
+  HTMLElement.prototype.animate = elementAnimate
   await harness.teardown()
 })
 
@@ -255,4 +272,196 @@ test('Latest settles when a run ends above the reader and jumps instantly', asyn
   const remountLatest = [...remounted.container.querySelectorAll<HTMLButtonElement>('button')]
     .find(button => button.textContent?.includes('Latest'))
   expect(remountLatest?.querySelector('span')?.classList.contains('animate-settle')).toBe(false)
+})
+
+// ── Send-message motion (docs/design-html/2026-09-28-send-message-motion.html) ──
+
+const SEND_SESSION_ID = 'session-1'
+const READY = { status: 'ready' as const, inputEnabled: true }
+const CONNECTING = { status: 'connecting' as const, inputEnabled: false }
+const readyFrame: ServerFrame = {
+  kind: 'ready', protocolVersion: 2, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
+  payload: {
+    type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+    abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
+  },
+}
+const messageFrame = (message: SDKMessage): ServerFrame => ({
+  kind: 'event', protocolVersion: 2, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
+})
+const userText = (uuid: string, text: string): SDKMessage => ({
+  type: 'user', uuid: uuid as never, parent_tool_use_id: null,
+  message: { role: 'user', content: [{ type: 'text', text }] },
+} as SDKMessage)
+const assistantText = (uuid: string, text: string): SDKMessage => ({
+  type: 'assistant', uuid: uuid as never, parent_tool_use_id: null, session_id: 'engine-send',
+  message: { id: uuid, role: 'assistant', content: [{ type: 'text', text }] },
+} as SDKMessage)
+/** One finished turn already in the transcript, so a fresh send exercises the
+ * ORDINARY composer lift and in-chat slide, not the empty-chat Welcome path. */
+function seededTranscript() {
+  let state = projectServerFrame(createTranscriptState(), readyFrame)
+  state = projectServerFrame(state, messageFrame(userText('seed-u', 'hi')))
+  state = projectServerFrame(state, messageFrame(assistantText('seed-a', 'hello')))
+  return state
+}
+function withUserRow(state: ReturnType<typeof seededTranscript>, uuid: string, text: string) {
+  return projectServerFrame(state, messageFrame(userText(uuid, text)))
+}
+function sendPane(overrides: Record<string, unknown> = {}) {
+  return pane({
+    activeSessionId: SEND_SESSION_ID,
+    prompt: 'a fresh message',
+    transcript: seededTranscript(),
+    ...overrides,
+  })
+}
+const sendGhost = (tree: { container: HTMLElement }) => tree.container.querySelector('.composer-ghost')
+const sendArrow = (tree: { container: HTMLElement }) =>
+  tree.container.querySelector<SVGElement>('button[aria-label="Send prompt"] svg')
+const stopGlyph = (tree: { container: HTMLElement }) =>
+  tree.container.querySelector<SVGElement>('button[aria-label="Stop the turn"] svg')
+const composerForm = (tree: { container: HTMLElement }) =>
+  tree.container.querySelector<HTMLFormElement>('form[aria-label="Composer"]')
+async function withReducedMotion(run: () => Promise<void>): Promise<void> {
+  const original = window.matchMedia
+  window.matchMedia = ((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })) as typeof window.matchMedia
+  try {
+    await run()
+  } finally {
+    window.matchMedia = original
+  }
+}
+
+test('the composer lift plays for an immediate send, fades the send arrow, and neither happens held or under reduced motion', async () => {
+  const tree = await harness.mount(sendPane({ activeConnection: READY }))
+  await act(async () => { composerForm(tree)?.requestSubmit() })
+  expect(sendGhost(tree)).not.toBeNull()
+  expect(sendGhost(tree)?.classList.contains('animate-composer-lift')).toBe(true)
+  expect(sendArrow(tree)?.classList.contains('animate-composer-glyph-out')).toBe(true)
+  await tree.unmount()
+
+  // No engine attached yet (CC-16 hold): behavior 1 is scoped to an
+  // immediate send, so an ordinary (non-empty-chat) held submit gets none of
+  // this — today's instant clear, unchanged.
+  const held = await harness.mount(sendPane({ activeConnection: CONNECTING }))
+  await act(async () => { composerForm(held)?.requestSubmit() })
+  expect(sendGhost(held)).toBeNull()
+  await held.unmount()
+
+  await withReducedMotion(async () => {
+    const reduced = await harness.mount(sendPane({ activeConnection: READY }))
+    await act(async () => { composerForm(reduced)?.requestSubmit() })
+    expect(sendGhost(reduced)).toBeNull()
+    expect(sendArrow(reduced)?.classList.contains('animate-composer-glyph-out')).toBe(false)
+    await reduced.unmount()
+  })
+})
+
+test('the Stop glyph arrives only once the turn from an eligible send actually goes live', async () => {
+  const tree = await harness.mount(sendPane({ activeConnection: READY }))
+  await act(async () => { composerForm(tree)?.requestSubmit() })
+  // Echo latency (CC-16): the turn has not gone live yet — no Stop button at
+  // all, so nothing to have arrived.
+  expect(stopGlyph(tree)).toBeNull()
+  await tree.render(sendPane({ activeConnection: { status: 'ready', inputEnabled: false } }))
+  expect(stopGlyph(tree)).not.toBeNull()
+  expect(stopGlyph(tree)?.classList.contains('animate-arrive')).toBe(true)
+  await tree.unmount()
+
+  // Mounting directly into a live turn (a tab switch to a session already
+  // generating) never went through an eligible send in THIS pane: no arrival.
+  const alreadyLive = await harness.mount(
+    sendPane({ activeConnection: { status: 'ready', inputEnabled: false } }),
+  )
+  expect(stopGlyph(alreadyLive)).not.toBeNull()
+  expect(stopGlyph(alreadyLive)?.classList.contains('animate-arrive')).toBe(false)
+})
+
+test('the in-turn activity row arrives for a fresh live send pinned to bottom, not scrolled up or during load-earlier', async () => {
+  const live = { status: 'ready' as const, inputEnabled: false }
+  // `ActivityIndicator`'s own root div, so its wrapper (behavior 2's own
+  // `animate-arrive`) is the one directly above it.
+  const activityWrap = (tree: { container: HTMLElement }) =>
+    [...tree.container.querySelectorAll('div')]
+      .find(node => node.className === 'flex items-center gap-2.5 bg-transparent px-1 py-1.5 text-xs')
+      ?.parentElement
+
+  const base = seededTranscript()
+  const tree = await harness.mount(sendPane({ activeConnection: live, transcript: base }))
+  await tree.render(sendPane({
+    activeConnection: live, transcript: withUserRow(base, 'live-1', 'second message'),
+  }))
+  expect(activityWrap(tree)?.classList.contains('animate-arrive')).toBe(true)
+  await tree.unmount()
+
+  // Never on first mount: the row is already there when the pane appears.
+  const mounted = await harness.mount(sendPane({
+    activeConnection: live, transcript: withUserRow(base, 'live-1', 'second message'),
+  }))
+  expect(activityWrap(mounted)?.classList.contains('animate-arrive')).toBe(false)
+  await mounted.unmount()
+
+  // Scrolled up: the reader is not following the end, so nothing pushes.
+  const scrolledUp = await harness.mount(sendPane({ activeConnection: live, transcript: base }))
+  const scroller = scrolledUp.container.querySelector<HTMLElement>('.overflow-auto')
+  if (!scroller) throw new Error('missing transcript scroller')
+  Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1_000 })
+  Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+  await act(async () => {
+    scroller.scrollTop = 600
+    scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+    scroller.scrollTop = 300
+    scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+  })
+  await scrolledUp.render(sendPane({
+    activeConnection: live, transcript: withUserRow(base, 'live-2', 'third message'),
+  }))
+  expect(activityWrap(scrolledUp)?.classList.contains('animate-arrive')).toBe(false)
+  await scrolledUp.unmount()
+
+  // A read further back landing must never read as a live send.
+  const loadingEarlier = await harness.mount(sendPane({
+    activeConnection: live, transcript: base, historyLoadEarlierPending: true,
+  }))
+  await loadingEarlier.render(sendPane({
+    activeConnection: live, transcript: withUserRow(base, 'live-3', 'fourth message'),
+    historyLoadEarlierPending: true,
+  }))
+  expect(activityWrap(loadingEarlier)?.classList.contains('animate-arrive')).toBe(false)
+})
+
+test('the Welcome flight lands on the echoed bubble and hides it until then; a held first send falls back to the plain lift and still exits Welcome', async () => {
+  const empty = createTranscriptState()
+  const tree = await harness.mount(sendPane({ activeConnection: READY, transcript: empty }))
+  expect(tree.container.textContent).toContain('Welcome back')
+  await act(async () => { composerForm(tree)?.requestSubmit() })
+  // The draft stays visible (the ghost, statically) rather than lifting away.
+  expect(sendGhost(tree)).not.toBeNull()
+  expect(sendGhost(tree)?.classList.contains('animate-composer-lift')).toBe(false)
+
+  let withRow = projectServerFrame(empty, readyFrame)
+  withRow = projectServerFrame(withRow, messageFrame(userText('first-u', 'a fresh message')))
+  await tree.render(sendPane({ activeConnection: READY, transcript: withRow }))
+  // Portaled to `document.body` (behavior 3's own spec: the transcript
+  // scroller's overflow would otherwise clip its trip up from the composer).
+  expect(harness.document.body.querySelector('.send-flight')).not.toBeNull()
+  expect(tree.container.querySelector('[data-user-bubble]')?.classList.contains('invisible')).toBe(true)
+  expect(tree.container.textContent).toContain('Welcome back')
+  await tree.unmount()
+
+  // Held (cold-spawn Queued path): never draws a flight — the plain lift
+  // instead, and Welcome still exits once the parked prompt's row lands.
+  const held = await harness.mount(sendPane({
+    activeConnection: CONNECTING, transcript: empty, pendingSubmit: null,
+  }))
+  await act(async () => { composerForm(held)?.requestSubmit() })
+  expect(harness.document.body.querySelector('.send-flight')).toBeNull()
+  expect(sendGhost(held)?.classList.contains('animate-composer-lift')).toBe(true)
+  let heldRow = projectServerFrame(empty, readyFrame)
+  heldRow = projectServerFrame(heldRow, messageFrame(userText('held-u', 'a fresh message')))
+  await held.render(sendPane({ activeConnection: READY, transcript: heldRow }))
+  expect(harness.document.body.querySelector('.send-flight')).toBeNull()
+  expect(held.container.querySelector('[data-user-bubble]')?.classList.contains('invisible'))
+    .not.toBe(true)
 })

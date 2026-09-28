@@ -24,10 +24,23 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { getBridge } from './bridge.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { useEntranceOnChange } from './entranceLatch.js'
 import { selectContextUsage } from './contextUsage.js'
+import {
+  afterNextScrollCorrection,
+  captureComposerGhost,
+  computeFlightTransform,
+  COMPOSER_LIFT_HOLD_MS,
+  playFlight,
+  playTranscriptColumnSlide,
+  prefersReducedMotion,
+  WELCOME_EXIT_FALLBACK_MS,
+  WELCOME_FLIGHT_ECHO_TIMEOUT_MS,
+  type ComposerGhostSnapshot,
+} from './composerSendMotion.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
 import { ComposerInput } from './ComposerInput.js'
@@ -743,6 +756,301 @@ export function SessionPane({
       ? 'connecting'
       : null
 
+  // ── Send-message motion (docs/design-html/2026-09-28-send-message-motion.html) ──
+  //
+  // Behavior 1 (composer lift, every immediate send): `composerGhost` is the
+  // pre-clear draft, held over the field (`fieldWrapRef`) until it fades — or,
+  // on an empty chat's first send, stays static until the flight or the
+  // fallback timeout takes it. `placeholderHeld` covers both cases the same
+  // way; `arrowFading`/`stopArriving` are the send-glyph half, tied to the
+  // turn actually going live rather than the optimistic clear (CC-16: the
+  // engine may take a moment to echo — see `WELCOME_FLIGHT_ECHO_TIMEOUT_MS`).
+  const fieldWrapRef = useRef<HTMLDivElement>(null)
+  const composerGhostRef = useRef<HTMLDivElement>(null)
+  const [composerGhost, setComposerGhost] = useState<ComposerGhostSnapshot | null>(null)
+  const [composerGhostLifting, setComposerGhostLifting] = useState(false)
+  const [placeholderHeld, setPlaceholderHeld] = useState(false)
+  const [arrowFading, setArrowFading] = useState(false)
+  const [stopArriving, setStopArriving] = useState(false)
+  /** Behavior 2's own half of "the turn going live": the docked activity row's
+   * `animate-arrive`, gated on the SAME fresh-live-send-pinned-bottom check as
+   * the column slide below, not on `generating` alone (unlike `stopArriving`,
+   * which behavior 1 wants for every immediate send). */
+  const [activityRowArriving, setActivityRowArriving] = useState(false)
+  const liftAwaitingTurnRef = useRef(false)
+  const wasGeneratingForLiftRef = useRef(generating)
+  const placeholderRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Behavior 3 (Welcome flight, first send in an empty chat): `welcomeSendRef`
+  // holds the ghost for the pending send between submit and either the echo or
+  // the fallback bound; `welcomePhase` drives `TranscriptView`'s
+  // `welcomeExiting` (Welcome stays mounted, exiting, for one more render once
+  // the row lands) and gates the ghost's static-vs-lifting look above.
+  const transcriptColumnRef = useRef<HTMLDivElement>(null)
+  const welcomeSendRef = useRef<{ ghost: ComposerGhostSnapshot; fellBack: boolean } | null>(null)
+  const welcomeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const welcomeExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [welcomePhase, setWelcomePhase] = useState<'idle' | 'pending' | 'exiting'>('idle')
+  const [flight, setFlight] = useState<{
+    html: string
+    toTopPx: number
+    toLeftPx: number
+    toWidthPx: number
+    transform: ReturnType<typeof computeFlightTransform>
+    background: string
+    borderColor: string
+  } | null>(null)
+  const flightElRef = useRef<HTMLDivElement>(null)
+  const flightLandingBubbleRef = useRef<HTMLElement | null>(null)
+  // Behavior 2 (in-chat slide): tracks the previous last row's identity, purely
+  // to detect a FRESH one landing; the slide itself measures the scroller, not
+  // this row (see `playTranscriptColumnSlide`'s header).
+  const lastRowTrackRef = useRef<{ id: string; kind: string } | undefined>(undefined)
+  const rowCountTrackRef = useRef<number | undefined>(undefined)
+
+  const clearWelcomeTimeout = (): void => {
+    if (welcomeTimeoutRef.current !== null) {
+      clearTimeout(welcomeTimeoutRef.current)
+      welcomeTimeoutRef.current = null
+    }
+  }
+  const clearPlaceholderRevealTimer = (): void => {
+    if (placeholderRevealTimerRef.current !== null) {
+      clearTimeout(placeholderRevealTimerRef.current)
+      placeholderRevealTimerRef.current = null
+    }
+  }
+  const revealPlaceholderAfterHold = (): void => {
+    clearPlaceholderRevealTimer()
+    placeholderRevealTimerRef.current = setTimeout(() => {
+      placeholderRevealTimerRef.current = null
+      setPlaceholderHeld(false)
+    }, COMPOSER_LIFT_HOLD_MS)
+  }
+  // The ordinary composer lift (behavior 1), and the empty-chat fallback
+  // (behavior 3's own spec: a held/cold-spawn send, or an echo that never
+  // showed up within the bound, "use the plain lift from (1) instead").
+  const beginComposerLift = (ghost: ComposerGhostSnapshot): void => {
+    setComposerGhost(ghost)
+    setComposerGhostLifting(true)
+    setPlaceholderHeld(true)
+    revealPlaceholderAfterHold()
+  }
+  const beginWelcomeFlight = (ghost: ComposerGhostSnapshot): void => {
+    const scroller = transcriptScrollRef.current
+    const bubble = scroller?.querySelector<HTMLElement>('[data-user-bubble]') ?? null
+    if (!bubble) {
+      // Never draw a bubble the engine has not echoed: fall back rather than
+      // guess at a destination.
+      beginComposerLift(ghost)
+      return
+    }
+    const fromRect = composerGhostRef.current?.getBoundingClientRect() ?? null
+    if (!fromRect) {
+      beginComposerLift(ghost)
+      return
+    }
+    const toRect = bubble.getBoundingClientRect()
+    const settled = getComputedStyle(bubble)
+    setComposerGhost(null)
+    setFlight({
+      // The flight clones the LANDED bubble, not the draft ghost: it is
+      // positioned at the bubble's own resting rect the whole time (matching
+      // `--send-flight-*` below), and the WAAPI transform below is what makes
+      // it APPEAR to originate from the draft's position and font size.
+      // Cloning the ghost's markup instead would show 15px field text where
+      // the transcript's own 14px bubble markdown belongs.
+      html: bubble.innerHTML,
+      toTopPx: toRect.top,
+      toLeftPx: toRect.left,
+      toWidthPx: toRect.width,
+      transform: computeFlightTransform(fromRect, toRect),
+      background: settled.backgroundColor,
+      borderColor: settled.borderTopColor,
+    })
+    bubble.classList.add('invisible')
+    flightLandingBubbleRef.current = bubble
+    setWelcomePhase('exiting')
+  }
+
+  // Behavior 1 + the Welcome-empty-chat carve-out (behavior 3's own fallback):
+  // captured on submit, before anything clears, because React's own state
+  // update for the clear has not painted yet either way — order here is just
+  // for readability, not correctness.
+  const beginSendMotion = (): void => {
+    if (prefersReducedMotion()) return
+    const ghost = captureComposerGhost(composerRef.current?.element ?? null, fieldWrapRef.current)
+    const emptyChat = nestedRows.length === 0
+    liftAwaitingTurnRef.current = true
+    setArrowFading(true)
+    if (!ghost) return
+    if (!emptyChat) {
+      beginComposerLift(ghost)
+      return
+    }
+    // Behavior 3: hold the draft in place and wait for the echo (or the
+    // fallback bound) instead of the ordinary 120ms lift.
+    welcomeSendRef.current = { ghost, fellBack: false }
+    setComposerGhost(ghost)
+    setComposerGhostLifting(false)
+    setPlaceholderHeld(true)
+    setWelcomePhase('pending')
+    clearWelcomeTimeout()
+    welcomeTimeoutRef.current = setTimeout(() => {
+      welcomeTimeoutRef.current = null
+      const pending = welcomeSendRef.current
+      if (!pending || pending.fellBack) return
+      pending.fellBack = true
+      beginComposerLift(pending.ghost)
+    }, WELCOME_FLIGHT_ECHO_TIMEOUT_MS)
+  }
+  /** The same carve-out for a HELD (cold-spawn "Queued") send: `planSessionSubmit`
+   * never clears the draft through the immediate path, but the Welcome screen
+   * still needs to exit once the parked prompt drains and its row eventually
+   * lands, so this still opens the 'pending' wait — just pre-fallen-back, since
+   * there is no engine yet to echo anything. */
+  const beginHeldSendMotion = (): void => {
+    if (prefersReducedMotion() || nestedRows.length > 0) return
+    const ghost = captureComposerGhost(composerRef.current?.element ?? null, fieldWrapRef.current)
+    if (!ghost) return
+    welcomeSendRef.current = { ghost, fellBack: true }
+    setWelcomePhase('pending')
+    beginComposerLift(ghost)
+  }
+
+  // Sync the ghost's captured geometry onto the DOM through a ref (no inline
+  // style): `--composer-ghost-top`/`--composer-ghost-width` in `theme.css`.
+  useLayoutEffect(() => {
+    const el = composerGhostRef.current
+    if (!el || !composerGhost) return
+    el.style.setProperty('--composer-ghost-top', `${composerGhost.topPx}px`)
+    el.style.setProperty('--composer-ghost-width', `${composerGhost.widthPx}px`)
+  }, [composerGhost])
+
+  // The Stop glyph's `animate-arrive` (behavior 1) fires once, on the turn
+  // actually going live after an eligible send — never merely because
+  // `generating` is true, or every mid-turn re-render would replay it. Reset
+  // on the matching turn END so a later, unrelated send starts clean.
+  useLayoutEffect(() => {
+    if (!wasGeneratingForLiftRef.current && generating && liftAwaitingTurnRef.current) {
+      liftAwaitingTurnRef.current = false
+      setStopArriving(true)
+    }
+    if (wasGeneratingForLiftRef.current && !generating) {
+      setArrowFading(false)
+      setStopArriving(false)
+      setActivityRowArriving(false)
+    }
+    wasGeneratingForLiftRef.current = generating
+  }, [generating])
+
+  // Safety net for the rare synchronous submit failure (`getBridge().submit`
+  // throwing before the draft retires): this predicts the send outcome from
+  // `composerGate` BEFORE calling `submit`, so a refusal that leaves the draft
+  // in place must not leave the send glyph faded forever. Any non-empty draft
+  // means no lift is in flight.
+  useLayoutEffect(() => {
+    if (prompt.length === 0) return
+    liftAwaitingTurnRef.current = false
+    setArrowFading(false)
+  }, [prompt])
+
+  // The row-landing detector for behaviors 2 and 3: fires at most once per
+  // fresh LAST row, so a re-render that changes nothing about the rows (a
+  // keystroke, another session's frame) never re-evaluates this.
+  useLayoutEffect(() => {
+    const previousCount = rowCountTrackRef.current
+    const previousLast = lastRowTrackRef.current
+    const currentLast = nestedRows.length > 0 ? nestedRows[nestedRows.length - 1] : undefined
+    rowCountTrackRef.current = nestedRows.length
+    lastRowTrackRef.current = currentLast ? { id: currentLast.id, kind: currentLast.kind } : undefined
+    // Never on first mount / a tab-pane remount: there is no PREVIOUS commit to
+    // compare against yet.
+    if (previousCount === undefined) return
+
+    if (previousCount === 0 && nestedRows.length > 0) {
+      const pending = welcomeSendRef.current
+      if (pending && currentLast?.kind === 'user-text') {
+        clearWelcomeTimeout()
+        welcomeSendRef.current = null
+        if (pending.fellBack) {
+          // No flight to outlast it: unmount `WelcomeScreen` once its own
+          // `animate-welcome-exit` (`--motion-panel`) has had time to finish.
+          setWelcomePhase('exiting')
+          welcomeExitTimerRef.current = setTimeout(() => {
+            welcomeExitTimerRef.current = null
+            setWelcomePhase('idle')
+          }, WELCOME_EXIT_FALLBACK_MS)
+        } else {
+          beginWelcomeFlight(pending.ghost)
+        }
+      }
+      return
+    }
+
+    if (
+      previousLast && currentLast && currentLast.id !== previousLast.id &&
+      currentLast.kind === 'user-text' &&
+      generating && atBottomRef.current &&
+      restorePhase === null && !historyLoadEarlierPending &&
+      !prefersReducedMotion()
+    ) {
+      const scroller = transcriptScrollRef.current
+      const column = transcriptColumnRef.current
+      if (!scroller || !column) return
+      setActivityRowArriving(true)
+      const scrollTopBefore = scroller.scrollTop
+      afterNextScrollCorrection(scroller, () => {
+        const delta = scroller.scrollTop - scrollTopBefore
+        if (delta > 0) playTranscriptColumnSlide(column, delta)
+      })
+    }
+  }, [nestedRows, generating, restorePhase, historyLoadEarlierPending])
+
+  // Plays the Welcome→bubble flight once its destination rect is committed to
+  // state (`beginWelcomeFlight`); the Web Animations API bypasses CSS, so
+  // reduced motion is re-checked here (already excluded above, but this path
+  // can also be entered — bounded — from the send moment, before that gate).
+  useLayoutEffect(() => {
+    if (!flight) return
+    const el = flightElRef.current
+    if (!el) return
+    el.style.setProperty('--send-flight-top', `${flight.toTopPx}px`)
+    el.style.setProperty('--send-flight-left', `${flight.toLeftPx}px`)
+    el.style.setProperty('--send-flight-width', `${flight.toWidthPx}px`)
+    const landOnBubble = (): void => {
+      flightLandingBubbleRef.current?.classList.remove('invisible')
+      flightLandingBubbleRef.current = null
+      setFlight(null)
+      setWelcomePhase('idle')
+    }
+    if (prefersReducedMotion()) {
+      landOnBubble()
+      return
+    }
+    let cancelled = false
+    const animation = playFlight(el, flight.transform, flight.background, flight.borderColor)
+    animation.finished.catch(() => {}).finally(() => {
+      if (!cancelled) landOnBubble()
+    })
+    return () => {
+      cancelled = true
+    }
+    // `flight` is an object literal rebuilt per send; comparing its identity is
+    // exactly the "a new flight started" signal this effect wants.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flight])
+
+  // Tear down any pending timer/flight if the pane unbinds mid-motion (a tab
+  // switch away, or the session itself closing).
+  useEffect(() => {
+    return () => {
+      clearWelcomeTimeout()
+      clearPlaceholderRevealTimer()
+      if (welcomeExitTimerRef.current !== null) clearTimeout(welcomeExitTimerRef.current)
+    }
+  }, [])
+
   // Elapsed clock: tick once per second from the turn start App recorded for
   // this session. The start is NOT stamped here — a pane is mounted only while
   // its session is on screen, so owning it here restamped it on every tab
@@ -1212,6 +1520,22 @@ export function SessionPane({
         connection={activeConnection}
         sessionId={activeSessionId}
       />
+      {/* Send-message motion (behavior 3): the Welcome→bubble flight, portaled
+       * to `document.body` so the transcript scroller's own overflow never
+       * clips it on its way up from the composer. `flight.html` is the SAME
+       * captured draft the ghost showed; the landed bubble's own classes are
+       * duplicated here (`.send-flight`, `UserBubble`'s bubble div) so the
+       * flight's resting look matches exactly what it hands off to. */}
+      {flight
+        ? createPortal(
+            <div
+              ref={flightElRef}
+              className="send-flight max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary"
+              dangerouslySetInnerHTML={{ __html: flight.html }}
+            />,
+            document.body,
+          )
+        : null}
       {isManagedChat && managedFolderState === 'missing' ? (
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-tone-warn/30 bg-tone-warn/[0.06] px-3 py-2 text-[12px] text-text-muted">
           <span className="min-w-0 flex-1">
@@ -1272,10 +1596,12 @@ export function SessionPane({
         <div
           ref={transcriptScrollRef}
           onScroll={onTranscriptScroll}
-          className="min-h-0 flex-1 overflow-auto"
+          className="relative min-h-0 flex-1 overflow-auto"
         >
           <TranscriptView
             turnLive={generating}
+            columnRef={transcriptColumnRef}
+            welcomeExiting={welcomePhase === 'exiting'}
             accounts={accountsSnapshot}
             accountsUsagePending={accountsUsagePending}
             activeSessionId={activeSessionId}
@@ -1583,16 +1909,21 @@ export function SessionPane({
        * hugs the composer. Scrolling it away from the input it belongs to would
        * be the opposite of what it is for. */}
       {generating && askQuestion === null ? (
-        <ActivityIndicator
-          verb={activity.verb}
-          target={activity.target}
-          elapsedMs={elapsedMs}
-          liveTokens={liveTokens}
-          paused={paused}
-          compacting={compacting}
-          stopError={stopError}
-          todoPlan={todoPlan}
-        />
+        <div
+          className={activityRowArriving ? 'animate-arrive' : undefined}
+          onAnimationEnd={() => setActivityRowArriving(false)}
+        >
+          <ActivityIndicator
+            verb={activity.verb}
+            target={activity.target}
+            elapsedMs={elapsedMs}
+            liveTokens={liveTokens}
+            paused={paused}
+            compacting={compacting}
+            stopError={stopError}
+            todoPlan={todoPlan}
+          />
+        </div>
       ) : null}
 
       {activeDescriptor?.forked && isManagedChat ? (
@@ -1630,6 +1961,21 @@ export function SessionPane({
             event.preventDefault()
             toast('Wait for the image to finish attaching.', { tone: 'info' })
             return
+          }
+          // Send-message motion — predicted from the SAME gate
+          // `planSessionSubmit` uses (`composerGate.engineInputEnabled ||
+          // composerGate.turnPending`), before the submit call rather than
+          // after: a refused submit never retires the draft (the `catch` in
+          // `App.submitSession`), so nothing here plays without a real clear
+          // behind it, except the rare SYNCHRONOUS bridge throw — caught by
+          // the `prompt`-non-empty safety net above rather than threading a
+          // result back through `submit`.
+          if (composerGate.engineInputEnabled || composerGate.turnPending) {
+            beginSendMotion()
+          } else if (composerGate.connectPending && pendingSubmit === null) {
+            // Behavior 3's own carve-out: a held cold-spawn send still needs
+            // the Welcome screen to exit once its row eventually lands.
+            beginHeldSendMotion()
           }
           // CC-16 — a submit is intent too. Focus/pointer-down normally fired
           // the spawn already (`claimLazyRestore` makes a repeat a no-op), but
@@ -1712,7 +2058,7 @@ export function SessionPane({
          * 2026-08-02 to close the idle composer's dead band. A parity sweep
          * should not restore it without asking. */}
         <div className="peer relative flex items-end gap-[14px] px-1">
-          <div className="relative min-w-0 flex-1">
+          <div ref={fieldWrapRef} className="relative min-w-0 flex-1">
             <SlashCommandPicker
               open={slashOpen}
               query={slashQuery ?? ''}
@@ -1727,6 +2073,26 @@ export function SessionPane({
               activeIndex={mentionIndex}
               onPick={pickMention}
             />
+            {/* Send-message motion (behaviors 1 + 3): the pre-clear draft,
+             * held at its exact former position while the field is already
+             * empty. `composerGhostLifting` plays the ordinary fade+rise;
+             * while false (the Welcome wait), it just sits there until the
+             * flight or the fallback takes it. */}
+            {composerGhost ? (
+              <div
+                ref={composerGhostRef}
+                aria-hidden
+                className={`composer-ghost whitespace-pre-wrap break-words py-1.5 text-[15px] font-medium leading-normal text-text-primary${
+                  composerGhostLifting ? ' animate-composer-lift' : ''
+                }`}
+                onAnimationEnd={() => {
+                  if (composerGhostLifting) setComposerGhost(null)
+                }}
+                // A static clone of the field's own DOM at capture time
+                // (`captureComposerGhost`), never externally-sourced HTML.
+                dangerouslySetInnerHTML={{ __html: composerGhost.html }}
+              />
+            ) : null}
             {/* Multi-line, auto-growing, BORDERLESS (Chat.jsx:1402-1409):
              * transparent, 16px light text, accent caret. Enter submits,
              * Shift/Alt/Meta+Enter insert a newline; grows to ~38vh then
@@ -1769,6 +2135,7 @@ export function SessionPane({
               pastes={pastes}
               placeholder={composerPlaceholder}
               placeholderParts={composerPlaceholderName}
+              placeholderHeld={placeholderHeld}
               typeahead={composerTypeahead}
               value={prompt}
             />
@@ -1789,7 +2156,14 @@ export function SessionPane({
               onClick={stopTurn}
               type="button"
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className={stopArriving ? 'animate-arrive' : undefined}
+                onAnimationEnd={() => setStopArriving(false)}
+              >
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             </button>
@@ -1819,6 +2193,7 @@ export function SessionPane({
                 strokeWidth="2.4"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                className={arrowFading ? 'animate-composer-glyph-out' : undefined}
               >
                 <line x1="12" y1="19" x2="12" y2="5" />
                 <polyline points="5 12 12 5 19 12" />
