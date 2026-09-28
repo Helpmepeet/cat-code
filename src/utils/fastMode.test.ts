@@ -12,6 +12,7 @@ import {
   getFastModeUnavailableReason,
   getFastModeModelDisplay,
   getFastModeModel,
+  getFastModeState,
   isFastModeSupportedByModel,
   prefetchFastModeStatus,
 } from './fastMode.js'
@@ -55,6 +56,23 @@ describe('fast mode', () => {
     setSessionProvider('openai')
 
     expect(getFastModeUnavailableReason()).toBeNull()
+  })
+
+  test('is available in non-interactive Codex/OpenAI sessions', () => {
+    setIsInteractive(false)
+    setSessionProvider('openai')
+
+    expect(getFastModeUnavailableReason()).toBeNull()
+    expect(getFastModeState('gpt-6-sol', true)).toBe('on')
+  })
+
+  test('still requires an explicit SDK opt-in for non-interactive Anthropic sessions', () => {
+    setIsInteractive(false)
+    setSessionProvider('firstParty')
+
+    expect(getFastModeUnavailableReason()).toBe(
+      'Fast mode is not available in the Agent SDK',
+    )
   })
 
   test('does not require Anthropic org prefetch for Codex/OpenAI provider sessions', async () => {

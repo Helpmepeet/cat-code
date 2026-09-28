@@ -92,10 +92,13 @@ export function getFastModeUnavailableReason(): string | null {
     return 'Fast mode requires the native binary · Install from: https://claude.com/product/claude-code'
   }
 
-  // Not available in the SDK unless explicitly opted in via --settings.
+  const provider = getAPIProvider()
+
+  // Anthropic Fast mode is not available in the SDK unless explicitly opted in via --settings.
   // Assistant daemon mode is exempt — it's first-party orchestration, and
   // kairosActive is set before this check runs (main.tsx:~1626 vs ~3249).
   if (
+    provider === 'firstParty' &&
     getIsNonInteractiveSession() &&
     preferThirdPartyAuthentication() &&
     !getKairosActive()
@@ -109,7 +112,6 @@ export function getFastModeUnavailableReason(): string | null {
   }
 
   // Only available for 1P Anthropic and Codex/OpenAI (not Bedrock/Vertex/Foundry)
-  const provider = getAPIProvider()
   if (provider !== 'firstParty' && provider !== 'openai') {
     const reason = 'Fast mode is not available on Bedrock, Vertex, or Foundry'
     if (!hasLoggedProviderUnavailable) {

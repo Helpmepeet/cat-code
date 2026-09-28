@@ -5,10 +5,12 @@ import {
 } from '../../src/utils/model/model.js'
 import { getSupportedEffortLevels } from '../../src/utils/effort.js'
 import {
+  getIsInteractive,
   getMainLoopModelOverride,
   getSdkBetas,
   getSessionProvider,
   isProviderSwitchLocked,
+  setIsInteractive,
   setMainLoopModelOverride,
   setProviderSwitchLocked,
   setSessionProvider,
@@ -520,6 +522,33 @@ test('LIVE: the desktop Fast control is not supported for Anthropic models', () 
     setSessionProvider(previousProvider)
     if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = previousApiKey
+  }
+})
+
+test('LIVE: a non-interactive Codex sidecar offers Fast and applies the composer toggle', () => {
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  const previousInteractive = getIsInteractive()
+  try {
+    setIsInteractive(false)
+    setSessionProvider('openai')
+    setMainLoopModelOverride('gpt-6-sol')
+    const store = makeStore({ mainLoopModel: 'gpt-6-sol' })
+    const domain = createSidecarRunControlsDomain(store)
+
+    expect(domain.getSnapshot().fast).toMatchObject({
+      active: false,
+      supportedByModel: true,
+      available: true,
+      unavailableReason: null,
+    })
+    expect(domain.setFast(true)).toMatchObject({ ok: true, changed: true })
+    expect(store.getState().fastMode).toBe(true)
+    expect(domain.getSnapshot().fast.active).toBe(true)
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+    setIsInteractive(previousInteractive)
   }
 })
 
