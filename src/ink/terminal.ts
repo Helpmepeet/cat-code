@@ -6,7 +6,7 @@ import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
 import { cursorMove, cursorTo, eraseLines } from './termio/csi.js'
 import { BSU, ESU, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js'
-import { link } from './termio/osc.js'
+import { CLEAR_ITERM2_PROGRESS, link } from './termio/osc.js'
 
 export type Progress = {
   state: 'running' | 'completed' | 'error' | 'indeterminate'
@@ -61,6 +61,10 @@ export function isProgressReportingAvailable(): boolean {
   }
 
   return false
+}
+
+export function progressClearSequence(): string | undefined {
+  return isProgressReportingAvailable() ? CLEAR_ITERM2_PROGRESS : undefined
 }
 
 /**

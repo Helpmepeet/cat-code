@@ -11,6 +11,7 @@ import {
   isSessionPersistenceDisabled,
 } from '../bootstrap/state.js'
 import instances from '../ink/instances.js'
+import { progressClearSequence } from '../ink/terminal.js'
 import {
   DISABLE_KITTY_KEYBOARD,
   DISABLE_MODIFY_OTHER_KEYS,
@@ -23,7 +24,6 @@ import {
   SHOW_CURSOR,
 } from '../ink/termio/dec.js'
 import {
-  CLEAR_ITERM2_PROGRESS,
   CLEAR_TAB_STATUS,
   CLEAR_TERMINAL_TITLE,
   supportsTabStatus,
@@ -114,9 +114,9 @@ function cleanupTerminalModes(): void {
     writeSync(1, DBP)
     // Show cursor
     writeSync(1, SHOW_CURSOR)
-    // Clear iTerm2 progress bar - prevents lingering progress indicator
-    // that can cause bell sounds when returning to the terminal tab
-    writeSync(1, CLEAR_ITERM2_PROGRESS)
+    // Older iTerm2 treats OSC 9;4 as an alert rather than progress control.
+    const progressClear = progressClearSequence()
+    if (progressClear) writeSync(1, progressClear)
     // Clear tab status (OSC 21337) so a stale dot doesn't linger
     if (supportsTabStatus()) writeSync(1, wrapForMultiplexer(CLEAR_TAB_STATUS))
     // Clear terminal title so the tab doesn't show stale session info.
