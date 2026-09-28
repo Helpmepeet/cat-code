@@ -772,11 +772,6 @@ export function SessionPane({
   const [placeholderHeld, setPlaceholderHeld] = useState(false)
   const [arrowFading, setArrowFading] = useState(false)
   const [stopArriving, setStopArriving] = useState(false)
-  /** Behavior 2's own half of "the turn going live": the docked activity row's
-   * `animate-arrive`, gated on the SAME fresh-live-send-pinned-bottom check as
-   * the column slide below, not on `generating` alone (unlike `stopArriving`,
-   * which behavior 1 wants for every immediate send). */
-  const [activityRowArriving, setActivityRowArriving] = useState(false)
   const liftAwaitingTurnRef = useRef(false)
   const wasGeneratingForLiftRef = useRef(generating)
   const placeholderRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -807,6 +802,19 @@ export function SessionPane({
   // this row (see `playTranscriptColumnSlide`'s header).
   const lastRowTrackRef = useRef<{ id: string; kind: string } | undefined>(undefined)
   const rowCountTrackRef = useRef<number | undefined>(undefined)
+  const pendingTurnSlideRef = useRef<{
+    scrollTopBefore: number
+    cancel?: () => void
+  } | null>(null)
+  // The activity row mounts when the turn goes live, before the engine echoes
+  // the user row. Its entrance must start on that mount, not on the echo.
+  const activityEntrance = useEntranceOnChange(
+    generating,
+    generating && liftAwaitingTurnRef.current && nestedRows.length > 0 &&
+      atBottomRef.current && restorePhase === null && !historyLoadEarlierPending &&
+      !prefersReducedMotion(),
+    'animate-arrive',
+  )
 
   const clearWelcomeTimeout = (): void => {
     if (welcomeTimeoutRef.current !== null) {
@@ -879,6 +887,12 @@ export function SessionPane({
   // for readability, not correctness.
   const beginSendMotion = (): void => {
     if (prefersReducedMotion()) return
+    if (nestedRows.length > 0 && atBottomRef.current && restorePhase === null &&
+      !historyLoadEarlierPending && transcriptScrollRef.current) {
+      pendingTurnSlideRef.current = {
+        scrollTopBefore: transcriptScrollRef.current.scrollTop,
+      }
+    }
     const ghost = captureComposerGhost(composerRef.current?.element ?? null, fieldWrapRef.current)
     const emptyChat = nestedRows.length === 0
     liftAwaitingTurnRef.current = true
@@ -936,10 +950,24 @@ export function SessionPane({
       liftAwaitingTurnRef.current = false
       setStopArriving(true)
     }
+    if (!wasGeneratingForLiftRef.current && generating && pendingTurnSlideRef.current) {
+      const pending = pendingTurnSlideRef.current
+      const scroller = transcriptScrollRef.current
+      const column = transcriptColumnRef.current
+      if (scroller && column) {
+        pending.cancel = afterNextScrollCorrection(scroller, () => {
+          if (pendingTurnSlideRef.current !== pending) return
+          pendingTurnSlideRef.current = null
+          const delta = scroller.scrollTop - pending.scrollTopBefore
+          if (delta > 0) playTranscriptColumnSlide(column, delta)
+        })
+      }
+    }
     if (wasGeneratingForLiftRef.current && !generating) {
       setArrowFading(false)
       setStopArriving(false)
-      setActivityRowArriving(false)
+      pendingTurnSlideRef.current?.cancel?.()
+      pendingTurnSlideRef.current = null
     }
     wasGeneratingForLiftRef.current = generating
   }, [generating])
@@ -953,6 +981,8 @@ export function SessionPane({
     if (prompt.length === 0) return
     liftAwaitingTurnRef.current = false
     setArrowFading(false)
+    pendingTurnSlideRef.current?.cancel?.()
+    pendingTurnSlideRef.current = null
   }, [prompt])
 
   // The row-landing detector for behaviors 2 and 3: fires at most once per
@@ -998,8 +1028,10 @@ export function SessionPane({
       const scroller = transcriptScrollRef.current
       const column = transcriptColumnRef.current
       if (!scroller || !column) return
-      setActivityRowArriving(true)
-      const scrollTopBefore = scroller.scrollTop
+      const pending = pendingTurnSlideRef.current
+      pending?.cancel?.()
+      pendingTurnSlideRef.current = null
+      const scrollTopBefore = pending?.scrollTopBefore ?? scroller.scrollTop
       afterNextScrollCorrection(scroller, () => {
         const delta = scroller.scrollTop - scrollTopBefore
         if (delta > 0) playTranscriptColumnSlide(column, delta)
@@ -1047,6 +1079,8 @@ export function SessionPane({
     return () => {
       clearWelcomeTimeout()
       clearPlaceholderRevealTimer()
+      pendingTurnSlideRef.current?.cancel?.()
+      pendingTurnSlideRef.current = null
       if (welcomeExitTimerRef.current !== null) clearTimeout(welcomeExitTimerRef.current)
     }
   }, [])
@@ -1910,8 +1944,9 @@ export function SessionPane({
        * be the opposite of what it is for. */}
       {generating && askQuestion === null ? (
         <div
-          className={activityRowArriving ? 'animate-arrive' : undefined}
-          onAnimationEnd={() => setActivityRowArriving(false)}
+          className={activityEntrance.active ? 'animate-arrive' : undefined}
+          ref={activityEntrance.ref}
+          onAnimationEnd={activityEntrance.onAnimationEnd}
         >
           <ActivityIndicator
             verb={activity.verb}

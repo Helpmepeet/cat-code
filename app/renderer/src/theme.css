@@ -1280,12 +1280,10 @@ html[data-glass='on'] [data-window-overlay] {
     pointer-events: none;
   }
 
-  /* Send-message motion (behavior 2) — the transcript row column. The offset
-   * defaults to 0, so this class costs nothing while no slide is in flight;
-   * `SessionPane` sets `--transcript-col-offset` through a ref and toggles
-   * `.is-sliding` for the transition (`playTranscriptColumnSlide` in
-   * `composerSendMotion.ts`). */
-  .transcript-col-slide {
+  /* Keep the column untransformed at rest. Prime at the measured offset
+   * without a transition, then animate back to zero. */
+  .transcript-col-slide.is-slide-primed,
+  .transcript-col-slide.is-sliding {
     transform: translateY(var(--transcript-col-offset, 0px));
   }
 

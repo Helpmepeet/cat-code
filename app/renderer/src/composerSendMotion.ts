@@ -34,10 +34,10 @@ export const WELCOME_EXIT_FALLBACK_MS = 260
  * message — the echo included — can arrive. The echo itself still waits on the
  * engine's own `processUserInput` (`src/QueryEngine.ts` submitMessage), a real
  * async step (attachment/command handling) with no fixed bound and no network
- * call for a plain-text prompt. 1500ms is generous headroom over that ordinary
- * case while still recovering quickly if the engine never echoes.
+ * call for a plain-text prompt. Keep the visual hold brief; a late echo uses
+ * the plain lift rather than leaving the draft motionless.
  */
-export const WELCOME_FLIGHT_ECHO_TIMEOUT_MS = 1500
+export const WELCOME_FLIGHT_ECHO_TIMEOUT_MS = 300
 
 /** Whether the OS/app motion preference is reduced. Web Animations API motion
  * bypasses CSS entirely, so this must be checked wherever this module drives
@@ -154,35 +154,47 @@ export function afterNextScrollCorrection(
 
 /**
  * Starts the in-chat column slide (behavior 2): the column is already at its
- * final (0) position, so it jumps to `-deltaPx` with no transition, then
+ * final (0) position, so it jumps to `+deltaPx` with no transition, then
  * transitions back to 0 over `--motion-panel`. `deltaPx` is
  * `scrollTopAfter - scrollTopBefore` — how far the scroller's own bottom-lock
  * pin just moved, which is exactly how far a reader's eye would otherwise see
  * the transcript jump.
  */
+const activeSlides = new WeakMap<HTMLElement, {
+  timeout: ReturnType<typeof setTimeout>
+  finish: (event: Event) => void
+}>()
+
 export function playTranscriptColumnSlide(column: HTMLElement, deltaPx: number): void {
-  column.classList.remove('is-sliding')
+  finishTranscriptColumnSlide(column)
+  column.classList.add('is-slide-primed')
   column.style.setProperty('--transcript-col-offset', `${deltaPx}px`)
   // Force layout so the jump above is committed before the transition below
   // starts, or the browser coalesces both writes and there is nothing to slide.
   void column.getBoundingClientRect()
+  column.classList.remove('is-slide-primed')
   column.classList.add('is-sliding')
   column.style.setProperty('--transcript-col-offset', '0px')
   const finish = (event: Event): void => {
     if (event.target !== column) return
     finishTranscriptColumnSlide(column)
   }
-  column.addEventListener('transitionend', finish, { once: true })
+  column.addEventListener('transitionend', finish)
   // Reduced motion (a live preference change mid-slide) leaves no
   // `transitionend` to fire; the fallback timeout below still lands it at 0.
-  setTimeout(() => {
-    column.removeEventListener('transitionend', finish)
-    finishTranscriptColumnSlide(column)
-  }, 260)
+  const timeout = setTimeout(() => finishTranscriptColumnSlide(column), 260)
+  activeSlides.set(column, { timeout, finish })
 }
 
 /** Clears a slide's transition class and offset once it settles. */
 export function finishTranscriptColumnSlide(column: HTMLElement): void {
+  const active = activeSlides.get(column)
+  if (active) {
+    clearTimeout(active.timeout)
+    column.removeEventListener('transitionend', active.finish)
+    activeSlides.delete(column)
+  }
+  column.classList.remove('is-slide-primed')
   column.classList.remove('is-sliding')
   column.style.removeProperty('--transcript-col-offset')
 }

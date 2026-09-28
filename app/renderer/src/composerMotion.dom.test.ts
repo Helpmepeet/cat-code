@@ -388,11 +388,18 @@ test('the in-turn activity row arrives for a fresh live send pinned to bottom, n
       ?.parentElement
 
   const base = seededTranscript()
-  const tree = await harness.mount(sendPane({ activeConnection: live, transcript: base }))
+  const tree = await harness.mount(sendPane({ activeConnection: READY, transcript: base }))
+  await act(async () => { composerForm(tree)?.requestSubmit() })
+  await tree.render(sendPane({ activeConnection: live, transcript: base }))
+  expect(activityWrap(tree)?.classList.contains('animate-arrive')).toBe(true)
+  await act(async () => {
+    activityWrap(tree)?.dispatchEvent(new Event('animationend', { bubbles: true }))
+  })
+  expect(activityWrap(tree)?.classList.contains('animate-arrive')).toBe(false)
   await tree.render(sendPane({
     activeConnection: live, transcript: withUserRow(base, 'live-1', 'second message'),
   }))
-  expect(activityWrap(tree)?.classList.contains('animate-arrive')).toBe(true)
+  expect(activityWrap(tree)?.classList.contains('animate-arrive')).toBe(false)
   await tree.unmount()
 
   // Never on first mount: the row is already there when the pane appears.
@@ -403,7 +410,7 @@ test('the in-turn activity row arrives for a fresh live send pinned to bottom, n
   await mounted.unmount()
 
   // Scrolled up: the reader is not following the end, so nothing pushes.
-  const scrolledUp = await harness.mount(sendPane({ activeConnection: live, transcript: base }))
+  const scrolledUp = await harness.mount(sendPane({ activeConnection: READY, transcript: base }))
   const scroller = scrolledUp.container.querySelector<HTMLElement>('.overflow-auto')
   if (!scroller) throw new Error('missing transcript scroller')
   Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1_000 })
@@ -414,6 +421,9 @@ test('the in-turn activity row arrives for a fresh live send pinned to bottom, n
     scroller.scrollTop = 300
     scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
   })
+  await act(async () => { composerForm(scrolledUp)?.requestSubmit() })
+  await scrolledUp.render(sendPane({ activeConnection: live, transcript: base }))
+  expect(activityWrap(scrolledUp)?.classList.contains('animate-arrive')).toBe(false)
   await scrolledUp.render(sendPane({
     activeConnection: live, transcript: withUserRow(base, 'live-2', 'third message'),
   }))
@@ -422,13 +432,36 @@ test('the in-turn activity row arrives for a fresh live send pinned to bottom, n
 
   // A read further back landing must never read as a live send.
   const loadingEarlier = await harness.mount(sendPane({
+    activeConnection: READY, transcript: base, historyLoadEarlierPending: true,
+  }))
+  await act(async () => { composerForm(loadingEarlier)?.requestSubmit() })
+  await loadingEarlier.render(sendPane({
     activeConnection: live, transcript: base, historyLoadEarlierPending: true,
   }))
+  expect(activityWrap(loadingEarlier)?.classList.contains('animate-arrive')).toBe(false)
   await loadingEarlier.render(sendPane({
     activeConnection: live, transcript: withUserRow(base, 'live-3', 'fourth message'),
     historyLoadEarlierPending: true,
   }))
   expect(activityWrap(loadingEarlier)?.classList.contains('animate-arrive')).toBe(false)
+})
+
+test('turn start slides the pinned transcript when the activity dock shrinks its viewport before the echo', async () => {
+  const tree = await harness.mount(sendPane({ activeConnection: READY }))
+  const scroller = tree.container.querySelector<HTMLElement>('.overflow-auto')
+  const column = tree.container.querySelector<HTMLElement>('.transcript-col-slide')
+  if (!scroller || !column) throw new Error('missing transcript geometry')
+  expect(column.classList.contains('is-sliding')).toBe(false)
+
+  await act(async () => { composerForm(tree)?.requestSubmit() })
+  await tree.render(sendPane({ activeConnection: { status: 'ready', inputEnabled: false } }))
+  scroller.scrollTop = 40
+  scroller.append(harness.document.createElement('span'))
+  await harness.nextFrame()
+  await harness.nextFrame()
+  expect(column.classList.contains('is-sliding')).toBe(true)
+  column.dispatchEvent(new Event('transitionend'))
+  expect(column.classList.contains('is-sliding')).toBe(false)
 })
 
 test('the Welcome flight lands on the echoed bubble and hides it until then; a held first send falls back to the plain lift and still exits Welcome', async () => {
@@ -463,5 +496,23 @@ test('the Welcome flight lands on the echoed bubble and hides it until then; a h
   await held.render(sendPane({ activeConnection: READY, transcript: heldRow }))
   expect(harness.document.body.querySelector('.send-flight')).toBeNull()
   expect(held.container.querySelector('[data-user-bubble]')?.classList.contains('invisible'))
+    .not.toBe(true)
+})
+
+test('a first send falls back to the lift after a brief echo wait', async () => {
+  const empty = createTranscriptState()
+  const tree = await harness.mount(sendPane({ activeConnection: READY, transcript: empty }))
+  await act(async () => { composerForm(tree)?.requestSubmit() })
+  expect(sendGhost(tree)?.classList.contains('animate-composer-lift')).toBe(false)
+  await act(async () => {
+    await new Promise(resolve => setTimeout(resolve, 330))
+  })
+  expect(sendGhost(tree)?.classList.contains('animate-composer-lift')).toBe(true)
+
+  let withRow = projectServerFrame(empty, readyFrame)
+  withRow = projectServerFrame(withRow, messageFrame(userText('late-u', 'a fresh message')))
+  await tree.render(sendPane({ activeConnection: READY, transcript: withRow }))
+  expect(harness.document.body.querySelector('.send-flight')).toBeNull()
+  expect(tree.container.querySelector('[data-user-bubble]')?.classList.contains('invisible'))
     .not.toBe(true)
 })

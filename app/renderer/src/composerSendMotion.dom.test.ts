@@ -1,7 +1,7 @@
 /**
  * Send-message motion helpers (`composerSendMotion.ts`), at the layer that can
  * actually be proven here: happy-dom has no layout engine, so geometry is
- * injected on the elements it reads (same technique `SessionPane.dom.test.ts`'s
+ * injected on the elements it reads (same technique `composerMotion.dom.test.ts`'s
  * "Latest settles" case uses for `scrollHeight`/`clientHeight`) rather than
  * relied on to be real. `composerMotion.dom.test.ts` covers the layer above —
  * whether `SessionPane` decides to call these at all.
@@ -107,6 +107,19 @@ test('the column slide also settles from its own fallback timeout, without a tra
   playTranscriptColumnSlide(column, 40)
   expect(column.classList.contains('is-sliding')).toBe(true)
   await new Promise(resolve => setTimeout(resolve, 280))
+  expect(column.classList.contains('is-sliding')).toBe(false)
+  column.remove()
+})
+
+test('an earlier slide timeout cannot end a newer slide', async () => {
+  const column = harness.document.createElement('div')
+  harness.document.body.append(column)
+  playTranscriptColumnSlide(column, 40)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  playTranscriptColumnSlide(column, 30)
+  await new Promise(resolve => setTimeout(resolve, 160))
+  expect(column.classList.contains('is-sliding')).toBe(true)
+  column.dispatchEvent(new Event('transitionend'))
   expect(column.classList.contains('is-sliding')).toBe(false)
   column.remove()
 })
