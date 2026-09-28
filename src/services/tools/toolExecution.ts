@@ -39,7 +39,7 @@ import {
 import type { BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { startSpeculativeClassifierCheck } from '../../tools/BashTool/bashPermissions.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
-import { checkCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
+import { beginCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
@@ -1292,13 +1292,14 @@ async function checkPermissionsAndCallTool(
 
   // Checked here, on the input the tool will run with: a PreToolUse hook or the
   // permission decision may have replaced the model's input above. The later
-  // backfill restore only touches `file_path`.
-  const cuaDriverRefusal = checkCuaDriverToolCall(
+  // backfill restore only touches `file_path`. An allowed call is finished in
+  // the `finally` after `tool.call`.
+  const cuaDriverCall = await beginCuaDriverToolCall(
     tool.name,
     processedInput,
     toolUseContext.cuaDriverRun,
   )
-  if (cuaDriverRefusal !== null) {
+  if (cuaDriverCall?.kind === 'refused') {
     const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)
     endToolBlockedOnUserSpan('reject', decisionInfo?.source || 'unknown')
     endToolSpan()
@@ -1307,12 +1308,12 @@ async function checkPermissionsAndCallTool(
         content: [
           {
             type: 'tool_result',
-            content: cuaDriverRefusal,
+            content: cuaDriverCall.message,
             is_error: true,
             tool_use_id: toolUseID,
           },
         ],
-        toolUseResult: `Error: ${cuaDriverRefusal}`,
+        toolUseResult: `Error: ${cuaDriverCall.message}`,
         sourceToolAssistantUUID: assistantMessage.uuid as UUID,
       }),
     })
@@ -2007,6 +2008,7 @@ async function checkPermissionsAndCallTool(
       ...hookMessages,
     ]
   } finally {
+    if (cuaDriverCall?.kind === 'allowed') cuaDriverCall.finish()
     stopSessionActivity('tool_exec')
     // Clean up decision info after logging
     if (decisionInfo) {

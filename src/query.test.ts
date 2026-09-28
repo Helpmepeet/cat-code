@@ -11,6 +11,7 @@ import {
   type CuaDriverRun,
 } from './utils/cuaDriver/run.js'
 import * as analytics from './services/analytics/index.js'
+import * as growthbook from './services/analytics/growthbook.js'
 import type { ToolUseContext } from './Tool.js'
 import { query } from './query.js'
 import type { QueryDeps } from './query/deps.js'
@@ -1132,6 +1133,7 @@ describe('cua-driver stop at run end', () => {
     options: {
       updatedInput?: Record<string, unknown>
       parentRun?: CuaDriverRun
+      permissionGate?: Promise<void>
     } = {},
   ) {
     const messages: Message[] = [createUserMessage({ content: 'do the thing' })]
@@ -1143,11 +1145,14 @@ describe('cua-driver stop at run end', () => {
       systemPrompt: asSystemPrompt(['system prompt']),
       userContext: {},
       systemContext: {},
-      canUseTool: async () => ({
-        behavior: 'allow',
-        ...(options.updatedInput && { updatedInput: options.updatedInput }),
-        decisionReason: { type: 'other', reason: 'test allows all tools' },
-      }),
+      canUseTool: async () => {
+        await options.permissionGate
+        return {
+          behavior: 'allow',
+          ...(options.updatedInput && { updatedInput: options.updatedInput }),
+          decisionReason: { type: 'other', reason: 'test allows all tools' },
+        }
+      },
       toolUseContext,
       querySource: 'repl_main_thread',
       deps,
@@ -1244,9 +1249,11 @@ describe('cua-driver stop at run end', () => {
   test('a subagent run stops the daemon itself and leaves the parent run unmarked', async () => {
     let parentMarks = 0
     const parentRun: CuaDriverRun = {
-      markUsed: () => {
+      beginCall: async () => {
         parentMarks++
+        return true
       },
+      endCall: () => {},
       end: async () => {},
     }
     await drain(
@@ -1261,6 +1268,50 @@ describe('cua-driver stop at run end', () => {
     )
     expect(parentMarks).toBe(0)
     expect(stops).toBe(1)
+  })
+
+  test('a streamed driver call whose permission resolves after the run closed never runs', async () => {
+    const gate = spyOn(
+      growthbook,
+      'checkStatsigFeatureGate_CACHED_MAY_BE_STALE',
+    ).mockImplementation(name => name === 'tengu_streaming_tool_execution2')
+    try {
+      let releasePermission!: () => void
+      const permissionGate = new Promise<void>(resolve => {
+        releasePermission = resolve
+      })
+      const calls: unknown[] = []
+      const deps: QueryDeps = {
+        uuid: () => 'test-query-chain-id',
+        microcompact: async messages => ({ messages }),
+        autocompact: async () => ({
+          wasCompacted: false,
+          consecutiveFailures: 0,
+        }),
+        // The loop yields each message before handing its tool_use to the
+        // streaming executor, so the stream must go on past the tool call for
+        // the tool to be started while the run is still open.
+        callModel: async function* () {
+          yield toolUseTurn('mcp__cua-driver__list_apps', {}, 'toolu_late')
+          yield createAssistantMessage('still streaming', 'assistant-after-tool')
+        },
+      }
+      const generator = startQuery(
+        deps,
+        [recordingTool('mcp__cua-driver__list_apps', calls)],
+        { permissionGate },
+      )
+      // Close the run while the streamed tool is still waiting on permission.
+      for await (const message of generator) {
+        if ((message as Message).uuid === 'assistant-after-tool') break
+      }
+      releasePermission()
+      await Bun.sleep(50)
+      expect(calls).toHaveLength(0)
+      expect(stops).toBe(0)
+    } finally {
+      gate.mockRestore()
+    }
   })
 
   describe('with the operator off switch present', () => {
