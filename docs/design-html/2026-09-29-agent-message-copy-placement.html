@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent message copy placement</title>
+<style>
+@font-face { font-family: 'DM Sans'; font-weight: 100 1000; src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2'); }
+@font-face { font-family: 'DM Mono'; font-weight: 400; src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2'); }
+
+:root {
+  --app-bg: #09090b;
+  --shell-seam: rgba(255, 255, 255, 0.06);
+  --text-primary: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #98989f;
+  --accent: #f472b6;
+  --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--app-bg); color: var(--text-primary); }
+
+/* ---------- chrome ---------- */
+.x-bar { position: sticky; top: 0; z-index: 10; background: var(--app-bg); border-bottom: 1px solid #222; padding: 10px 16px; display: flex; gap: 24px; align-items: center; font: 10px/1 ui-monospace, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: #777; }
+.x-group { display: flex; gap: 4px; align-items: center; }
+.x-group > span { margin-right: 6px; }
+.x-btn { font: inherit; letter-spacing: inherit; text-transform: inherit; color: #777; background: none; border: 1px solid #2a2a2a; padding: 5px 9px; cursor: pointer; }
+.x-btn[aria-pressed="true"] { color: #ddd; border-color: #666; }
+.x-label { max-width: 900px; margin: 40px auto 10px; padding: 0 32px; font: 10px/1 ui-monospace, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: #666; }
+.x-rule { max-width: 900px; margin: 0 auto; border: 0; border-top: 1px solid #1c1c1c; }
+.x-tool { height: 34px; border: 1px dashed #333; display: flex; align-items: center; padding: 0 12px; font: 9px/1 ui-monospace, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: #555; }
+
+/* ---------- specimen: transcript column ---------- */
+.col { margin: 0 auto; width: 100%; max-width: 900px; padding: 0 32px; display: flex; flex-direction: column; gap: 10px; }
+.row { position: relative; }
+.md-prose { font-family: var(--font-sans); font-weight: 500; font-size: 14px; line-height: 1.625; overflow-wrap: break-word; }
+.md-prose > * + * { margin-top: 0.85em; }
+.md-prose ul { padding-left: 1.5em; list-style-type: disc; }
+.md-prose li::marker { color: var(--text-muted); }
+.md-prose li + li { margin-top: 0.3em; }
+.md-prose code { font-family: var(--font-mono); font-size: 0.92em; }
+.md-prose blockquote { position: relative; border-left: 2px solid var(--shell-seam); padding-left: 0.9em; color: var(--text-muted); }
+
+/* whole-message chip (BubbleCopyChip) */
+.msg-copy { position: absolute; display: inline-flex; align-items: center; justify-content: center; padding: 4px; border: 0; border-radius: 6px; background: none; color: var(--text-subtle); opacity: 0; transition: opacity .15s, color .15s; cursor: pointer; }
+.msg-copy:hover { color: #d4d4d8; }
+.row:hover > .msg-copy, .force-hover .msg-copy { opacity: 1; }
+
+/* per-quote tab (QuoteCopyChip) */
+.quote-copy { position: absolute; left: -24px; top: 0; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 4px; border: 1px solid rgba(244, 114, 182, .3); color: rgba(244, 114, 182, .55); background: none; cursor: pointer; }
+.quote-copy:hover { border-color: var(--accent); color: var(--accent); }
+
+/* fenced code (CodeBlock) */
+.code { position: relative; margin: 12px 0; overflow: hidden; border-radius: 8px; border: 1px solid var(--shell-seam); background: var(--app-bg); }
+.code-copy { position: absolute; right: 8px; top: 4px; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: none; color: var(--text-subtle); cursor: pointer; }
+.code-copy:hover { background: rgba(255,255,255,.06); color: var(--text-primary); }
+.code pre { overflow-x: auto; padding: 14px; font: 12.5px/1.65 var(--font-mono); color: var(--text-primary); }
+
+/* ---------- CURRENT ---------- */
+.v-current .msg-copy { bottom: 6px; right: 8px; }
+.v-current .md-prose blockquote { margin-left: 28px; }
+.v-current .only-proposed { display: none; }
+
+/* ---------- PROPOSED ---------- */
+.v-proposed .msg-copy { left: calc(100% + 6px); bottom: 1px; }
+.v-proposed .only-current { display: none; }
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <div class="x-group"><span>Version</span>
+    <button class="x-btn" data-v="current" aria-pressed="true">Current</button>
+    <button class="x-btn" data-v="proposed" aria-pressed="false">Proposed</button>
+  </div>
+  <div class="x-group"><span>Pointer</span>
+    <button class="x-btn" data-h="rest" aria-pressed="false">Rest</button>
+    <button class="x-btn" data-h="hover" aria-pressed="true">Hover</button>
+  </div>
+</div>
+
+<main id="stage" class="v-current force-hover">
+
+<!-- 1 -->
+<div class="x-label">Final reply</div>
+<div class="col">
+  <div class="row">
+    <div class="md-prose">
+      <p>The change is in place and the checks pass. Two things worth knowing before you merge:</p>
+      <ul>
+        <li>The old handler is still referenced by one test fixture, so I left it exported.</li>
+        <li>The setting now defaults to off for existing sessions.</li>
+      </ul>
+      <p>Nothing else in the tree depends on the removed option.</p>
+    </div>
+    <button class="msg-copy" title="Copy response"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+</div>
+
+<hr class="x-rule" style="margin-top:40px">
+
+<!-- 2 -->
+<div class="x-label">Narration between tools</div>
+<div class="col">
+  <div class="row">
+    <div class="md-prose"><p>Checking where the option is read first.</p></div>
+    <button class="msg-copy only-current" title="Copy response"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+  <div class="x-tool">tool row</div>
+  <div class="row">
+    <div class="md-prose"><p>Two readers. Updating both and running the focused tests.</p></div>
+    <button class="msg-copy only-current" title="Copy response"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+  <div class="x-tool">tool row</div>
+  <div class="x-tool">tool row</div>
+  <div class="row">
+    <div class="md-prose"><p>Both readers now use the new option and the focused tests pass.</p></div>
+    <button class="msg-copy" title="Copy response"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+</div>
+
+<hr class="x-rule" style="margin-top:40px">
+
+<!-- 3 -->
+<div class="x-label">Reply with quotes</div>
+<div class="col">
+  <div class="row">
+    <div class="md-prose">
+      <p>Three places describe the behavior differently:</p>
+      <blockquote><p>The option is read once at startup.</p><button class="quote-copy only-current" title="Copy quote"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></blockquote>
+      <blockquote><p>Changes apply to new sessions only.</p><button class="quote-copy only-current" title="Copy quote"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></blockquote>
+      <blockquote><p>Restart the app after changing this value.</p><button class="quote-copy only-current" title="Copy quote"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></blockquote>
+      <p>Only the second one matches what the code does.</p>
+    </div>
+    <button class="msg-copy" title="Copy response"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+</div>
+
+<hr class="x-rule" style="margin-top:40px">
+
+<!-- 4 -->
+<div class="x-label">Reply ending in code</div>
+<div class="col" style="margin-bottom:80px">
+  <div class="row">
+    <div class="md-prose"><p>Run this from the repository root:</p></div>
+    <div class="code">
+      <button class="code-copy" title="Copy code"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <pre><code>bun test app/renderer/src/example.test.tsx</code></pre>
+    </div>
+    <button class="msg-copy only-proposed" title="Copy response"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+  </div>
+</div>
+
+</main>
+
+<script>
+const stage = document.getElementById('stage');
+document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-v]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+  stage.classList.toggle('v-current', b.dataset.v === 'current');
+  stage.classList.toggle('v-proposed', b.dataset.v === 'proposed');
+}));
+document.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-h]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+  stage.classList.toggle('force-hover', b.dataset.h === 'hover');
+}));
+</script>
+</body>
+</html>

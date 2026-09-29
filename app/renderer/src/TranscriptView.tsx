@@ -218,12 +218,11 @@ import {
   type GrepDigest,
 } from './grepResult.js'
 import {
-  dequote,
   findNestedToolUseRow,
   logLineClass,
+  narrationRowIds,
   resolveToolCardExpanded,
   selectPeekLines,
-  type QuotePosition,
 } from './transcriptViewModel.js'
 import {
   askUserQuestionTranscriptPresentation,
@@ -608,6 +607,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     const items: readonly TranscriptLayoutItem[] = groupToolRuns(
       groupDisplayItems(groupAgentDelegates(rows), reasoningMode),
     )
+    const narration = narrationRowIds(items)
     // Intentional: cached/restoring transcripts render without a divider or pulse.
     // The operator rejected the startup pink hairline + dot (2026-07-29).
     content = (
@@ -673,6 +673,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
               ) : (
                 <DisplayItemView
                   item={item}
+                  narration={narration.has(key)}
                   onMessageAction={onMessageAction}
                 />
               )}
@@ -901,9 +902,12 @@ function isContainerlessToolItem(item: TranscriptLayoutItem): boolean {
 
 function DisplayItemView({
   item,
+  narration,
   onMessageAction,
 }: {
   item: TranscriptLayoutItem
+  /** An assistant text row with more assistant text after it in its turn. */
+  narration: boolean
   onMessageAction?: MessageActionHandler
 }) {
   switch (item.kind) {
@@ -917,6 +921,7 @@ function DisplayItemView({
       return (
         <TranscriptRowView
           row={item.row}
+          narration={narration}
           onMessageAction={
             item.row.kind === 'user-text' && item.row.isHidden !== true
               ? onMessageAction
@@ -1138,13 +1143,21 @@ function NestedRowList({
   const { mode } = useContext(ReasoningLayoutContext)
   const items = groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode))
   const keys = useMemo(() => items.map(displayItemKey), [items])
+  const narration = useMemo(() => narrationRowIds(items), [items])
   return (
-    <BoundedChildList
-      className={className}
-      estimatedChildHeight={NESTED_ROW_ESTIMATED_HEIGHT}
-      keys={keys}
-      renderChild={index => <DisplayItemView item={items[index]} />}
-    />
+    <ReplyCopyInsetContext.Provider value>
+      <BoundedChildList
+        className={className}
+        estimatedChildHeight={NESTED_ROW_ESTIMATED_HEIGHT}
+        keys={keys}
+        renderChild={index => (
+          <DisplayItemView
+            item={items[index]}
+            narration={narration.has(keys[index])}
+          />
+        )}
+      />
+    </ReplyCopyInsetContext.Provider>
   )
 }
 
@@ -1215,9 +1228,11 @@ const STEPS_NOT_LOADED_LABEL = "This agent's steps aren't loaded."
 // the rows that actually changed re-render (markdown re-parses once per body).
 const TranscriptRowView = memo(function TranscriptRowView({
   row,
+  narration,
   onMessageAction,
 }: {
   row: NestedTranscriptRow
+  narration: boolean
   onMessageAction?: MessageActionHandler
 }) {
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
@@ -1232,6 +1247,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
           sourceId={row.id}
           sessionId={row.sessionId}
           streaming={row.isStreaming}
+          narration={narration}
         />
       )
 
@@ -1389,25 +1405,23 @@ const TranscriptRowView = memo(function TranscriptRowView({
 const REMARK_PLUGINS = [remarkGfm]
 
 /**
- * Matches content whose last non-blank line is a closing code fence (three or
- * more backticks or tildes, optionally indented). When the message ends with a
- * fenced code block the block's own copy button is already in the bottom-right
- * corner, so the message-level `BubbleCopyChip` would double up.
+ * True under a nested row list. Nested prose sits inside a card that clips its
+ * overflow, so the reply copy chip cannot use the transcript's right gutter.
  */
-const TRAILING_CODE_FENCE_RE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*\n?\s*$/
-
-const AssistantSourceContext = createContext('')
+const ReplyCopyInsetContext = createContext(false)
 
 function AssistantProse({
   content,
   sourceId,
   sessionId,
   streaming,
+  narration,
 }: {
   content: string
   sourceId: string
   sessionId: SessionId
   streaming?: true
+  narration: boolean
 }) {
   const toast = useToast()
   const filePathContext = useContext(FilePathMenuContext)
@@ -1429,12 +1443,11 @@ function AssistantProse({
     [filePathContext, sessionId],
   )
   // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
-  // is still arriving (there is no settled answer to take yet, and the caret owns
-  // that corner), and none on an empty turn. Also suppressed when the message
-  // ends with a fenced code block: the block's own per-block copy button already
-  // sits in the same corner, so doubling up is confusing (user report 2026-08-23).
-  const endsWithCodeFence = TRAILING_CODE_FENCE_RE.test(content)
-  const copyable = !streaming && content.trim().length > 0 && !endsWithCodeFence
+  // is still arriving (there is no settled answer to take yet), and none on an
+  // empty turn. Narration between tool calls gets none either (operator,
+  // 2026-09-29): only the turn's closing text is a reply worth copying whole.
+  const copyable = !streaming && !narration && content.trim().length > 0
+  const inset = useContext(ReplyCopyInsetContext)
   // Component types must survive streamed source updates, or React remounts
   // their text and restarts any arrival fades inside them.
   const components = useMemo(
@@ -1444,7 +1457,6 @@ function AssistantProse({
       p: createPathAwareParagraph(openFile, onContextMenu),
       li: createPathAwareListItem(openFile, onContextMenu),
       code: createPathAwareCode(openFile, onContextMenu),
-      blockquote: AssistantBlockquote,
     }),
     [openFile, onContextMenu],
   )
@@ -1493,49 +1505,46 @@ function AssistantProse({
   )
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
-    // the hover/focus group the absolute chip anchors to. No reserved right
-    // gutter (operator call, 2026-08-02): the prototype's chip overlays the
-    // last line rather than narrowing the column (Messages.jsx:2064-2091), and
-    // the app's own reserved-gutter version read as an unexplained gap.
-    <AssistantSourceContext.Provider value={content}>
-      <div className="group relative">
-        <BoundedMarkdown
-          sourceId={sourceId}
-          source={content}
-          rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
-          math
-          recognizeCallouts
-          renderLeaf={leaf =>
-            // A fence too long to mount whole arrives as one merged code leaf:
-            // the card and its copy action own the WHOLE fence, while only the
-            // windowed lines are mounted inside it.
-            leaf.kind === 'code' ? (
-              <MarkdownErrorBoundary fallback={leaf.codeSource}>
-                <CodeBlock
-                  code={leaf.codeSource}
-                  streaming={leaf.codeOpen}
-                  highlighted={
-                    <MarkdownTree
-                      tree={markArrival(leaf.content)}
-                      components={components}
-                    />
-                  }
-                />
+    // the hover/focus group the absolute chip anchors to. Nothing is reserved
+    // for the chip inside the column (operator call, 2026-08-02): a reserved
+    // gutter read as an unexplained gap.
+    <div className="group relative">
+      <BoundedMarkdown
+        sourceId={sourceId}
+        source={content}
+        rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
+        math
+        recognizeCallouts
+        renderLeaf={leaf =>
+          // A fence too long to mount whole arrives as one merged code leaf:
+          // the card and its copy action own the WHOLE fence, while only the
+          // windowed lines are mounted inside it.
+          leaf.kind === 'code' ? (
+            <MarkdownErrorBoundary fallback={leaf.codeSource}>
+              <CodeBlock
+                code={leaf.codeSource}
+                streaming={leaf.codeOpen}
+                highlighted={
+                  <MarkdownTree
+                    tree={markArrival(leaf.content)}
+                    components={components}
+                  />
+                }
+              />
+            </MarkdownErrorBoundary>
+          ) : (
+            <div className="md-prose font-sans font-medium text-sm leading-relaxed">
+              <MarkdownErrorBoundary fallback={content}>
+                <MarkdownTree tree={markArrival(leaf.tree)} components={components} />
               </MarkdownErrorBoundary>
-            ) : (
-              <div className="md-prose font-sans font-medium text-sm leading-relaxed">
-                <MarkdownErrorBoundary fallback={content}>
-                  <MarkdownTree tree={markArrival(leaf.tree)} components={components} />
-                </MarkdownErrorBoundary>
-              </div>
-            )
-          }
-        />
-        {copyable ? (
-          <BubbleCopyChip content={content} subject="response" />
-        ) : null}
-      </div>
-    </AssistantSourceContext.Provider>
+            </div>
+          )
+        }
+      />
+      {copyable ? (
+        <BubbleCopyChip content={content} subject="response" inset={inset} />
+      ) : null}
+    </div>
   )
 }
 
@@ -1960,103 +1969,6 @@ function calloutLabel(kind: CalloutKind): string {
       return exhaustive
     }
   }
-}
-
-/**
- * Per-quote copy control: a tab in the message's own left margin, outside the
- * quote's text column entirely, so it can never land on top of the quoted
- * prose the way a corner-anchored control did (operator-reviewed against a
- * standalone options page after two corner placements both read poorly:
- * anchored to the border's own bottom-right it collided with
- * `BubbleCopyChip`'s bottom-right anchor on the whole message, and anchored
- * top-right-inside it drew over the first line's own words). Always visible,
- * not hover-gated — nothing to reveal it over, since it never overlaps
- * content by construction.
- *
- * Tinted with the app's own accent token, the same one `.md-prose a` already
- * uses for links, dim at rest and full strength on hover/copied, rather than a
- * neutral gray.
- */
-function QuoteCopyChip({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = (): void => {
-    const clipboard =
-      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-    if (!clipboard) return
-    void clipboard
-      .writeText(text)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 600)
-      })
-      .catch(() => {})
-  }
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      aria-label={copied ? 'Quote copied' : 'Copy quote'}
-      title="Copy quote"
-      className={`absolute -left-6 top-0 flex h-5 w-5 items-center justify-center rounded border transition-colors ${
-        copied
-          ? 'border-[light-dark(#15803d,#86efac)] text-[light-dark(#15803d,#86efac)]'
-          : 'border-accent/30 text-accent/55 hover:border-accent hover:text-accent'
-      }`}
-    >
-      {copied ? (
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-      ) : (
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <rect x="9" y="9" width="13" height="13" rx="2" />
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </svg>
-      )}
-    </button>
-  )
-}
-
-/**
- * `node.position` offsets refer to the enclosing assistant's raw source.
- * `.md-prose blockquote` (theme.css) still supplies the
- * border/color styling by tag-name selector regardless of this component's own
- * className. `ml-7` reserves the left margin `QuoteCopyChip` sits in.
- */
-function AssistantBlockquote({
-  node,
-  children,
-}: ComponentPropsWithoutRef<'blockquote'> & {
-  node?: { position?: QuotePosition }
-}) {
-  const rawSource = useContext(AssistantSourceContext)
-  const text = dequote(rawSource, node?.position)
-  return (
-    <blockquote className="relative ml-7">
-      {children}
-      {text.length > 0 ? <QuoteCopyChip text={text} /> : null}
-    </blockquote>
-  )
 }
 
 /**
@@ -5397,13 +5309,17 @@ const COPY_CHIP_TEXT = {
 /**
  * The hover-reveal copy chip mounted on the assistant body (Messages.jsx:2077).
  * Quiet until the host is hovered or something inside it takes focus, then a
- * small clipboard glyph in the bottom-right corner; the tick pins itself visible
+ * small clipboard glyph level with the last line; the tick pins itself visible
  * for a beat so the confirmation survives the pointer leaving.
  *
  * HOST CONTRACT: the chip is `absolute`, so its host must be the positioned
  * hover group — `group relative`. Mounted under a host that is neither, it
- * anchors to a distant ancestor and never reveals. It overlays the corner
- * rather than reserving space for it, matching the prototype.
+ * anchors to a distant ancestor and never reveals.
+ *
+ * PLACEMENT (operator, 2026-09-29): in the transcript's right gutter, outside
+ * the text column, so it never covers the last line and never collides with a
+ * trailing code block's own copy button. `inset` is for hosts with no gutter
+ * to spill into (nested rows inside a clipping card): the bottom-right corner.
  *
  * `group-focus-within` is a real-added a11y fix: the prototype reveals on hover
  * ONLY, which leaves the control unreachable by keyboard. Icons are drawn inline
@@ -5412,9 +5328,11 @@ const COPY_CHIP_TEXT = {
 function BubbleCopyChip({
   content,
   subject,
+  inset,
 }: {
   content: string
   subject: keyof typeof COPY_CHIP_TEXT
+  inset: boolean
 }) {
   const [copied, setCopied] = useState(false)
   const text = COPY_CHIP_TEXT[subject]
@@ -5440,7 +5358,7 @@ function BubbleCopyChip({
       onClick={copy}
       aria-label={copied ? text.done : text.idle}
       title={text.idle}
-      className={`absolute bottom-1.5 right-2 inline-flex items-center justify-center rounded-md p-1 opacity-0 transition-[color,opacity] duration-150 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+      className={`absolute ${inset ? 'bottom-1.5 right-2' : 'bottom-px left-[calc(100%+6px)]'} inline-flex items-center justify-center rounded-md p-1 opacity-0 transition-[color,opacity] duration-150 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
         copied
           ? 'text-[light-dark(#15803d,#86efac)] opacity-100'
           : 'text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]'

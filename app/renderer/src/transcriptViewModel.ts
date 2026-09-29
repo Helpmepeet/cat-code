@@ -1,3 +1,4 @@
+import type { TranscriptLayoutItem } from './toolRunLayout.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
@@ -170,30 +171,40 @@ export function groupGrepLines(lines: string[]): GrepSegment[] {
   return segments
 }
 
-export type QuotePosition = { start: { offset?: number }; end: { offset?: number } }
+/**
+ * Kinds that sit INSIDE an agent turn. Anything else (a user message, a result,
+ * an injected or notification turn, a compaction or history boundary) ends one.
+ */
+const MID_TURN_ROW_KINDS: ReadonlySet<NestedTranscriptRow['kind']> = new Set([
+  'tool-use',
+  'thinking',
+  'redacted-thinking',
+  'system-notice',
+  'orphaned-agent',
+])
 
 /**
- * Recover the plain text a rendered blockquote wraps by stripping `>` from
- * the RAW markdown source at the node's position, rather than flattening the
- * already-parsed tree — paragraph and list line breaks survive intact this
- * way, where reconstructing them from `<p>`/`<li>` elements would run every
- * line together. Lives here rather than in `TranscriptView.tsx` because it is
- * a plain helper, which that module may not export under the Fast Refresh
- * boundary rule, and the line-splitting is worth asserting directly.
+ * Assistant text rows that are narration: another assistant text row follows
+ * in the same turn. Only a turn's last text is the reply worth copying whole.
+ * Grouped items (agent groups, reasoning and tool runs) are all mid-turn.
  */
-export function dequote(
-  rawSource: string,
-  position: QuotePosition | undefined,
-): string {
-  const start = position?.start.offset
-  const end = position?.end.offset
-  if (typeof start !== 'number' || typeof end !== 'number') return ''
-  return rawSource
-    .slice(start, end)
-    .split('\n')
-    .map(line => line.replace(/^>\s?/, ''))
-    .join('\n')
-    .trim()
+export function narrationRowIds(
+  items: readonly TranscriptLayoutItem[],
+): ReadonlySet<string> {
+  const narration = new Set<string>()
+  let replyBelow = false
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index]!
+    if (item.kind !== 'single' || item.row.isHidden === true) continue
+    const row = item.row
+    if (row.kind === 'assistant-text') {
+      if (replyBelow) narration.add(row.id)
+      replyBelow = true
+    } else if (!MID_TURN_ROW_KINDS.has(row.kind)) {
+      replyBelow = false
+    }
+  }
+  return narration
 }
 
 export function logLineClass(line: string): string {

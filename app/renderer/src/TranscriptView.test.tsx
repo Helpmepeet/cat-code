@@ -7,9 +7,9 @@ import {
   TranscriptView,
 } from './TranscriptView.js'
 import {
-  dequote,
   findNestedToolUseRow,
   logLineClass,
+  narrationRowIds,
   resolveToolCardExpanded,
   groupGrepLines,
   selectPeekLines,
@@ -338,7 +338,7 @@ test('CC-59: a reference link resolves even though its definition never renders'
   expect(html).not.toContain('[ref]:')
 })
 
-test('a blockquote gets its own per-quote copy control', () => {
+test('a blockquote renders flush with the prose, with no copy control of its own', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:quote',
@@ -347,9 +347,9 @@ test('a blockquote gets its own per-quote copy control', () => {
     content: 'Here is the message I would send:\n\n> Ship the fix today.\n',
   })
 
-  expect(html).toContain('<blockquote')
+  expect(html).toContain('<blockquote>')
   expect(html).toContain('Ship the fix today.')
-  expect(html).toContain('aria-label="Copy quote"') // per-quote copy control
+  expect(html).not.toContain('Copy quote')
   expect(html).not.toContain('md-callout')
 })
 
@@ -382,7 +382,6 @@ test('a recognized alert renders as rich Markdown with its fenced code card inta
   expect(html).toContain('py-3.5')
   expect(html).not.toContain('&lt;/&gt;')
   expect(html).toContain('aria-label="Copy code"')
-  expect(html).not.toContain('aria-label="Copy quote"')
 })
 
 test.each([
@@ -404,22 +403,7 @@ test('an unknown alert marker stays visible in an ordinary blockquote', () => {
   expect(html).toContain('<blockquote')
   expect(html).toContain('[!TEXT]')
   expect(html).toContain('Keep this literal.')
-  expect(html).toContain('aria-label="Copy quote"')
   expect(html).not.toContain('md-callout')
-})
-
-test('prose with no blockquote gets no per-quote copy control', () => {
-  const html = render({
-    ...blockSource,
-    id: 's:m:0:no-quote',
-    kind: 'assistant-text',
-    role: 'assistant',
-    content: 'Just a plain answer, no quoted message inside it.',
-  })
-
-  expect(html).not.toContain('<blockquote')
-  expect(html).not.toContain('aria-label="Copy quote"')
-  expect(html).not.toContain('copy')
 })
 
 test('P4-18c: a streaming assistant row marks the text that just arrived', () => {
@@ -3995,42 +3979,6 @@ test('P4-REVIEW B3: resolveToolCardExpanded lets a user override win over either
   expect(resolveToolCardExpanded(false, true)).toBe(false)
 })
 
-// Per-quote copy control: `dequote` recovers the plain, paste-ready message a
-// blockquote wraps from the RAW markdown source at the node's position, not
-// from the parsed <p>/<li> tree — the case that motivated it is a suggested
-// message with a bulleted list embedded in the quote, where flattening
-// already-rendered elements would run every line together.
-
-test('dequote strips the leading marker off a single-paragraph quote', () => {
-  const source = 'Here:\n\n> Ship the fix today.\n'
-  const start = source.indexOf('>')
-  const end = source.indexOf('\n', start)
-  expect(dequote(source, { start: { offset: start }, end: { offset: end } })).toBe(
-    'Ship the fix today.',
-  )
-})
-
-test('dequote preserves paragraph breaks and list bullets, not just the quote markers', () => {
-  const source = [
-    '> First paragraph.',
-    '>',
-    '> Please record:',
-    '>',
-    '> - one item',
-    '> - two item',
-  ].join('\n')
-  expect(dequote(source, { start: { offset: 0 }, end: { offset: source.length } })).toBe(
-    ['First paragraph.', '', 'Please record:', '', '- one item', '- two item'].join(
-      '\n',
-    ),
-  )
-})
-
-test('dequote returns empty text when the node carries no position', () => {
-  expect(dequote('> quoted', undefined)).toBe('')
-  expect(dequote('> quoted', { start: {}, end: {} })).toBe('')
-})
-
 // ── Output-line tint: the prototype's `logLineColor`, and the two drifts off it
 // that made tool output read as colorless. The hues are the prototype's 300-level
 // pastels (`Messages.jsx:212-218`), NOT the `--tone-*` 400s this returned before:
@@ -5092,11 +5040,13 @@ test('P4-38 — a settled assistant reply carries a copy control, worded for a r
 
 test('P4-38 — the assistant body is the positioned hover group the chip needs', () => {
   // The chip is `absolute` + `opacity-0`; without `group relative` on the host it
-  // anchors to a distant ancestor and never reveals. No reserved right gutter:
-  // the revealed glyph overlays the last line, matching the prototype.
+  // anchors to a distant ancestor and never reveals. Nothing is reserved inside
+  // the column: the revealed glyph sits in the transcript's right gutter.
   const html = render(assistantRow('Here is the answer.'))
   expect(html).toContain('group relative')
   expect(html).not.toContain('pr-8')
+  expect(html).toContain('left-[calc(100%+6px)]')
+  expect(html).not.toContain('bottom-1.5 right-2')
   expect(html).toContain('opacity-0')
   expect(html).toContain('group-hover:opacity-100')
   // Real-added keyboard reach; the prototype reveals on hover only.
@@ -5113,18 +5063,66 @@ test('P4-38 — an empty assistant turn gets no copy chip', () => {
   expect(render(assistantRow('   \n  '))).not.toContain('Copy response')
 })
 
-test('P4-38 — no copy chip when the message ends with a fenced code block', () => {
+test('P4-38 — a reply ending in a fenced code block keeps both copy controls', () => {
+  // The chip sits in the gutter, outside the code card, so it no longer lands
+  // on the block's own copy button.
   const content = 'Here is an example:\n\n```text\nsome code\n```'
   const html = render(assistantRow(content))
-  // The code block's own per-block copy button is already in the bottom-right
-  // corner; the message-level copy chip would double up.
-  expect(html).not.toContain('Copy response')
+  expect(html).toContain('aria-label="Copy code"')
+  expect(html).toContain('aria-label="Copy response"')
 })
 
-test('P4-38 — copy chip still shows when a code block is NOT the last block', () => {
-  const content = '```js\ncode\n```\n\nAnd here is some trailing prose.'
-  const html = render(assistantRow(content))
-  expect(html).toContain('Copy response')
+function textRow(id: string, content: string): NestedTranscriptRow {
+  return { ...assistantRow(content), id }
+}
+
+test('narration between tool calls gets no copy chip; the turn\'s closing text does', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        userRow('Fix it'),
+        textRow('a1', 'Checking where the option is read first.'),
+        toolRow({ toolName: 'Grep', toolFamily: 'grep', id: 'g1' }),
+        textRow('a2', 'Two readers. Updating both.'),
+        toolRow({ toolName: 'Edit', toolFamily: 'edit', id: 'e1' }),
+        textRow('a3', 'Both readers now use the new option.'),
+      ]}
+    />,
+  )
+  expect(html.match(/aria-label="Copy response"/g)).toHaveLength(1)
+  expect(html.indexOf('aria-label="Copy response"')).toBeGreaterThan(
+    html.indexOf('Both readers now use the new option.'),
+  )
+})
+
+test('a nested reply keeps its chip in the corner rather than the gutter', () => {
+  // Nested lists can sit inside a card that clips its overflow, where the
+  // gutter placement would be cut off.
+  const parent = toolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    status: 'success',
+    children: [textRow('child-reply', 'The agent found two readers.')],
+  })
+  const html = render(parent)
+  expect(html).toContain('The agent found two readers.')
+  expect(html).toContain('aria-label="Copy response"')
+  expect(html).toContain('bottom-1.5 right-2')
+  expect(html).not.toContain('left-[calc(100%+6px)]')
+})
+
+test('narrationRowIds marks every assistant text but the last of each turn', () => {
+  const single = (row: NestedTranscriptRow) => ({ kind: 'single' as const, row })
+  const ids = narrationRowIds([
+    single(userRow('first', 'f1')),
+    single(textRow('a1', 'narration')),
+    single(toolRow({ toolName: 'Read', toolFamily: 'read', id: 'r1' })),
+    single(textRow('a2', 'reply one')),
+    single(userRow('second', 'f2')),
+    single(textRow('b1', 'reply two')),
+    single(toolRow({ toolName: 'Read', toolFamily: 'read', id: 'r2' })),
+  ])
+  expect([...ids]).toEqual(['a1'])
 })
 
 /* --------------------------------------------------------------------------- *
