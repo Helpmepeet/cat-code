@@ -73,7 +73,7 @@ printf 'node_modules\napp/node_modules\n' >> "$checkout/.git/info/exclude"
 (cd "$checkout" && bun run --cwd app package)
 built_app="$checkout/app/dist-app/Cat Code.app"
 verify_bundle "$built_app" "$commit" || fail 'Built bundle verification failed.'
-(cd "$checkout" && bun run --cwd app smoke:packaged)
+(cd "$checkout" && bun run --cwd app smoke:packaged:headless)
 
 check_closed
 tag="$(date +%Y%m%d%H%M%S)-$(uuidgen)"
