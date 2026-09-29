@@ -1,6 +1,6 @@
 # Proactive And Assistant Services Map
 
-Last refreshed: 2026-09-21
+Last refreshed: 2026-09-29
 
 ## Purpose
 
@@ -13,7 +13,7 @@ Verify behavior in source before editing. This checkout has several
 feature-gated Kairos/proactive references whose implementation files are absent
 or stubbed; treat those as validation targets, not confirmed runtime behavior.
 
-## Top-Level Exposure
+## First Files To Inspect
 
 | Surface | Start here | Then inspect | Gate / note |
 |---|---|---|---|
@@ -153,7 +153,7 @@ work, mutate project files, or replace prompt suggestions.
 Routing decision: agent summaries are progress labels, not task results. Keep
 them short, current, and derived from the agent transcript.
 
-## Gates Checklist
+## Traps And Stale Assumptions
 
 Check these before changing always-on behavior:
 

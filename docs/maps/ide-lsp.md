@@ -1,6 +1,6 @@
 # IDE and LSP Map
 
-Last refreshed: 2026-05-12
+Last refreshed: 2026-09-29
 
 ## Purpose
 
@@ -188,7 +188,7 @@ rather than blocking the main REPL.
 - For docs-only refreshes, run `git diff --check` and verify referenced paths
   still exist.
 
-## Maintenance Rules
+## Traps And Stale Assumptions
 
 - Keep this map route-oriented. Do not add long call-chain walkthroughs,
   historical plans, or issue narratives.

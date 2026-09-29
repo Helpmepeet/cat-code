@@ -1,6 +1,6 @@
 # Native Client Integrations Map
 
-Last refreshed: 2026-09-21 against the current source tree.
+Last refreshed: 2026-09-29 against the current source tree.
 
 ## Purpose
 
@@ -53,6 +53,12 @@ feature-gated, platform-gated, or package-backed.
 | Native installer public surface | [`../../src/utils/nativeInstaller/index.ts`](../../src/utils/nativeInstaller/index.ts) | [`../../src/utils/nativeInstaller/installer.ts`](../../src/utils/nativeInstaller/installer.ts) | External callers should come through the barrel. It re-exports the installer operations that the rest of the app is allowed to use. |
 | Native installer core | [`../../src/utils/nativeInstaller/installer.ts`](../../src/utils/nativeInstaller/installer.ts) | [`../../src/utils/nativeInstaller/download.ts`](../../src/utils/nativeInstaller/download.ts), [`../../src/utils/nativeInstaller/pidLock.ts`](../../src/utils/nativeInstaller/pidLock.ts), [`../../src/utils/nativeInstaller/packageManagers.ts`](../../src/utils/nativeInstaller/packageManagers.ts) | Owns version directories, binary activation, lock handling, cleanup, PATH/alias checks, and install/update sequencing. |
 | Native TypeScript shims | [`../../src/native-ts/`](../../src/native-ts/) | Caller listed below | Pure TypeScript replacements for native modules. Preserve caller-facing APIs before changing internals. |
+
+For URI launch behavior, inspect `src/utils/deepLink/protocolHandler.ts`,
+`src/utils/deepLink/parseDeepLink.ts`, and `src/utils/deepLink/terminalLauncher.ts`.
+These own URI parsing and dispatch to a terminal session; `src/main.tsx` owns
+CLI registration and the prefilled-prompt banner. Do not infer desktop IPC
+ownership from the URI scheme name.
 
 ## Startup And Runtime Flow
 
@@ -109,7 +115,7 @@ Routing note: `src/commands.ts` conditionally registers `/voice` behind
 | Desktop handoff UI | [`../../src/components/DesktopHandoff.tsx`](../../src/components/DesktopHandoff.tsx) | [`../../src/utils/desktopDeepLink.ts`](../../src/utils/desktopDeepLink.ts) |
 | Voice state in prompt UI | [`../../src/context/voice.tsx`](../../src/context/voice.tsx) | [`../../src/screens/REPL.tsx`](../../src/screens/REPL.tsx), prompt input components |
 
-## Key Routing Decisions
+## Traps And Stale Assumptions
 
 - Reserved MCP server names are `claude-in-chrome` and `computer-use`; route
   server-name conflicts or wrapper bugs through their `common.ts`/`setup.ts`

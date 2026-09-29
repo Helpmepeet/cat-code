@@ -1,6 +1,6 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-09-27 against `CLAUDE.md`,
+Last refreshed: 2026-09-29 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
@@ -11,6 +11,17 @@ Use this as the daily-refreshable routing layer for build, development,
 compile, release-note, updater, migration, validation, lint, and test-routing
 work. It is not the source of truth for exact behavior; use it to choose owner
 files, then verify current source before changing code.
+
+## First Files To Inspect
+
+| Need | Inspect first |
+|---|---|
+| Package commands and verification boundaries | `package.json`, `CLAUDE.md` |
+| Engine build and feature selection | `scripts/build.ts` |
+| Desktop build, checks, and packaging | `app/package.json`, `app/scripts/` |
+| Persisted-state migrations | `src/migrations/runEngineMigrations.ts` |
+| Workspace map refresh and commit lifecycle | `scripts/workspaceMapRefreshState.ts` |
+| Map references, index, and section validation | `scripts/workspaceMapLint.ts` |
 
 ## Refresh Checklist
 
@@ -39,8 +50,8 @@ files, then verify current source before changing code.
 | Development build | `scripts/build.ts` | `package.json` | `bun run build:dev` emits `./cli-dev`, sets development macros, experimental-build env, dev semver suffix, and git-log changelog macro. |
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
-| Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | This is a temporary Tailwind v4 build harness for design-token handoff, not the final renderer scaffold. Run `bun run build` from `renderer-theme/`. |
-| Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | This portable type-only fixture currently uses cited snapshots because direct aliases pull in the engine runtime graph. Re-sync snapshots from their canonical source types before renderer adoption, then run the documented isolated `tsc` command. |
+| Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | Legacy design-token harness retained for reference; current desktop renderer work belongs under `app/renderer/`. Do not extend this harness. |
+| Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | Legacy type-only harness retained for reference. Use the current desktop and sidecar typecheck boundaries for active work; do not extend this harness. |
 | Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/main/mainDecisions.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process; `SIDECAR_RUNTIME_ARGS` enables the classifier and reactive-compaction runtime features. |
 | Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the hardening route also protects the fixed native file-selection boundary. The root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar/` and `app/shared/` diagnostics while tolerating known upstream engine diagnostics. |
 | Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/main/mainDecisions.ts`, `app/sidecar/packagedEntry.ts`, `app/sidecar/packagedEnvironment.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS arm64 `.app` into its generated output directory, wiping that directory first. It compiles the sidecar and its engine graph into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development. It also verifies and copies the pinned arm64 ripgrep companion into `Contents/Resources/bin`, appends that directory after the user's paths in the packaged sidecar's `PATH`, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID`, sets `com.catcode.desktop`, and ad-hoc signs both nested executables before the bundle. No package-manager packaging dependency is involved. |
@@ -50,6 +61,24 @@ files, then verify current source before changing code.
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
 | Codex account status subcommand | `src/main.tsx`, `src/cli/handlers/codexStatus.ts` | `src/services/api/codexStatus.ts`, `src/services/api/codexStatus.test.ts` | `cat-code codex status --json` emits a read-only advisory JSON observation. It is a CLI/status surface, not a build gate or account reservation mechanism. |
+
+## Workspace Map Maintenance
+
+`scripts/workspaceMapRefreshState.ts` owns `start`, `check`, `finish`, `block`,
+and `recover`; run its `help` command for arguments. It captures committed source,
+validates map references against the Git tree, commits explicit map paths, and
+then advances a structured cursor. `memory.md` is a human-readable projection;
+legacy manifest, snapshot, and recovery-patch files are no longer inputs.
+
+The model owns semantic route review, including newly introduced subsystems and
+removed owners. A clean validator does not establish semantic coverage. Normal
+runs require clean maps; explicit adoption is for reviewed leftover map work.
+Do not adopt another session's edits. A live review holds a six-hour lease;
+`recover` can finish an existing map commit without creating another one.
+Use `block` to record incomplete work without invoking the validator.
+
+Check this boundary with
+`bun test scripts/workspaceMapRefreshState.test.ts scripts/workspaceMapLint.test.ts`.
 
 ## Build Script Details
 

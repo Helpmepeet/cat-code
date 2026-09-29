@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-09-26
+Last refreshed: 2026-09-29
 
 ## Purpose
 
@@ -91,7 +91,7 @@ active local features.
 |---|---|---|
 | `/cost` exposure | `src/commands/cost/index.ts` | Hidden for Claude AI subscribers except ants; supports non-interactive command use. |
 | `/cost` display | `src/commands/cost/cost.ts` | Subscriber message or `formatTotalCost()`, with ant-only breakdown for subscribers. |
-| Cost accumulation | `src/cost-tracker.ts` | Normalizes usage, calculates USD, aggregates per-model tokens/cost, tracks unknown model cost, lines changed, web search requests, and durations. |
+| Cost accumulation and rates | `src/cost-tracker.ts`, `src/utils/{modelCost,modelCostRates}.ts` | Live cost tracking aggregates usage through the shared rate table. Retained-history analytics uses configured model identities and leaves unknown models unpriced; rate changes used by retained history require its pricing-version bump. |
 | Cost persistence | `src/cost-tracker.ts:saveCurrentSessionCosts` | Writes last-session cost and model usage into project config; REPL calls it during session switching and exit summary. |
 | Cost threshold UI | `src/screens/REPL.tsx`, `src/components/CostThresholdDialog.tsx` | REPL owns focus gating and acknowledgement persistence. |
 | `/status` command | `src/commands/status/` | Opens Settings with `defaultTab="Status"`. |
@@ -99,10 +99,10 @@ active local features.
 | Status property builders | `src/utils/status.tsx` | Account, provider, proxy/mTLS, IDE, MCP summary, sandbox, memory, installation, settings sources, model label. |
 | `cat-code codex status --json` | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | Emits a single advisory JSON observation and exits. Valid observations exit 0 even for no-account or all-blocked pools; nonzero is reserved for internal command failure. |
 | `/stats` command | `src/commands/stats/stats.tsx` | Lazy-renders `Stats` dialog. |
-| Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files and aggregates sessions/messages/model usage/activity/streaks/speculation time by event date, crediting usage increases once across streaming splits. The paired 7d/30d API shares discovery, modification-time checks and JSONL reads with independent range accumulators; a session's opening date does not exclude later activity. The accounts worker reaches it through `tryGetUsageStatsSnapshots` in `app/sidecar/statsDomain.ts`, which preserves last-good data when a read fails. The `all` range retains its existing durable cache. |
+| Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files and aggregates sessions/messages/model usage/activity/streaks/speculation time by event date, crediting usage increases once across streaming splits. The paired 7d/30d API shares discovery, modification-time checks and JSONL reads with independent range accumulators; a session's opening date does not exclude later activity. This terminal aggregation is separate from the desktop dashboard entry point `aggregateUsageDashboard()`; route dashboard persistence through `src/utils/statsUsageIndex.ts` and metric semantics through `src/utils/statsUsage.ts`. |
 | Stats UI | `src/components/Stats.tsx` | Overview/models tabs, date-range switching, heatmap/charts, screenshot copy, async cache for range loads. |
 | In-session metrics | `src/context/stats.tsx` | `StatsProvider` exposes counters/gauges/timers/sets and persists `lastSessionMetrics` on process exit. |
-| Desktop usage statistics | `app/sidecar/statsDomain.ts` | The sidecar reads `aggregateClaudeCodeStatsForRange()` and sends redacted totals, daily model/activity data, cache metrics, and model names to the Accounts surface; no transcript text or credentials cross the boundary. |
+| Desktop retained-history analytics | `app/main/usageStatsRunner.ts`, `app/sidecar/usageStatsWorker.ts` | The independent worker calls `collectUsageDashboard()` in `app/sidecar/statsDomain.ts`. `src/utils/statsUsageIndex.ts` owns the derived index and saved snapshot; `src/utils/statsUsage.ts` owns metric semantics and timezone-based day buckets. The runner retains the last good renderer result on collection failure. Account quota polling remains in the accounts worker. |
 | Auto-mode diagnostic accounting | `src/utils/permissions/autoModeObservation.ts` | The initial automatic permission occurrence emits a closed metadata-only start/stage/end record. `src/utils/autoModeUsage.ts` validates and reduces retained records, preserves unavailable or partial coverage, and never treats malformed or unmatched records as a completed decision. `app/shared/usageAutoMode.ts` is the renderer-safe aggregate contract. |
 
 ## Tests And Validation
@@ -115,7 +115,7 @@ active local features.
 | Edit-time settings validation | `src/utils/settings/validateEditTool.ts` | File edit/write tool validation call sites |
 | Environment bounded ints | `src/utils/envValidation.ts` | `src/screens/Doctor.tsx` for `BASH_MAX_OUTPUT_LENGTH`, `TASK_MAX_OUTPUT_LENGTH`, and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` |
 | Doctor context warnings | `src/utils/doctorContextWarnings.ts` | `src/utils/analyzeContext.ts`, `src/utils/statusNoticeHelpers.ts`, permission shadow detection |
-| Desktop usage stats | `bun test app/sidecar/statsDomain.test.ts app/renderer/src/statsState.test.ts app/renderer/src/AccountsPage.test.tsx app/sidecar/sidecarServer.test.ts` | `app/sidecar/statsDomain.ts`, `app/renderer/src/statsState.ts` |
+| Desktop retained-history analytics | `bun test app/main/usageStatsRunner.test.ts app/sidecar/usageSummary.test.ts src/utils/statsUsage.test.ts src/utils/statsUsageIndex.test.ts` | `app/sidecar/statsDomain.ts`, `app/renderer/src/UsagePage.tsx`, `app/shared/usageDashboard.ts` |
 | Auto-mode observation and usage reduction | `bun test src/utils/permissions/autoModeObservation.test.ts src/utils/autoModeUsage.test.ts app/renderer/src/usageAutoModeState.test.ts app/renderer/src/usageAutoModeFlowState.test.ts` | `src/utils/permissions/autoModeObservation.ts`, `src/utils/autoModeUsage.ts`, `app/shared/usageAutoMode.ts` |
 
 ## Traps And Stale Assumptions

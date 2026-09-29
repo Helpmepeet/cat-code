@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-09-21
+Last refreshed: 2026-09-29
 
 ## Purpose
 
@@ -12,6 +12,14 @@ validation.
 
 Verify behavior in source before editing. Plugin and skill routing is heavily
 memoized and several surfaces load lazily or only under feature flags.
+
+## First Files To Inspect
+
+- `src/commands.ts` for command aggregation and exposure.
+- `src/skills/loadSkillsDir.ts` for filesystem skill discovery and caches.
+- `src/utils/plugins/pluginLoader.ts` for installed plugin components.
+- `src/utils/plugins/loadPluginCommands.ts` for plugin commands and skills.
+- `src/utils/plugins/marketplaceManager.ts` for marketplace state.
 
 ## Slash Command Exposure
 
@@ -253,7 +261,7 @@ imports and may be generated, omitted, or present only in other builds. Treat
 workflow behavior as feature/build dependent and verify the actual artifact
 before changing workflow command/tool behavior.
 
-## Cache and Refresh Checklist
+## Traps And Stale Assumptions
 
 When changing routing or component loaders, check the corresponding cache clear:
 
