@@ -475,27 +475,31 @@ function markBracketDisplayMath(tree: MdastRoot, source: string): void {
 export function planPlainTextLeaves(
   sourceId: string,
   source: string,
+  classNames?: string[],
 ): MarkdownRenderLeaf[] {
   const state: PlanState = { sourceId, leaves: [] }
-  planPlainText(source, 'text', state)
+  planPlainText(source, 'text', state, classNames)
   return state.leaves
 }
 
-function planPlainText(value: string, path: string, state: PlanState): void {
+function planPlainText(
+  value: string,
+  path: string,
+  state: PlanState,
+  classNames: string[] = [
+    'whitespace-pre-wrap',
+    'break-words',
+    'font-mono',
+    'text-xs',
+    'text-text-muted',
+  ],
+): void {
   const wrapper: MarkdownLeafWrapper = {
     id: `${path}#text`,
     element: {
       type: 'element',
       tagName: 'div',
-      properties: {
-        className: [
-          'whitespace-pre-wrap',
-          'break-words',
-          'font-mono',
-          'text-xs',
-          'text-text-muted',
-        ],
-      },
+      properties: { className: classNames },
       children: [],
     },
     prefix: [],

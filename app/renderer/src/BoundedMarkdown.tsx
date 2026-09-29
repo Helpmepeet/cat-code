@@ -31,6 +31,8 @@ export function BoundedMarkdown({
   rehypePlugins,
   math = false,
   recognizeCallouts = false,
+  plainText = false,
+  plainTextClasses,
   renderLeaf,
 }: {
   sourceId: string
@@ -38,11 +40,14 @@ export function BoundedMarkdown({
   rehypePlugins?: PluggableList
   math?: boolean
   recognizeCallouts?: boolean
+  plainText?: boolean
+  plainTextClasses?: string[]
   renderLeaf: (leaf: MountedMarkdownLeaf) => ReactNode
 }): ReactNode {
   const cacheRef = useRef(createMarkdownPlanCache())
   const leaves = useMemo(() => {
     try {
+      if (plainText) return planPlainTextLeaves(sourceId, source, plainTextClasses)
       return planMarkdownLeaves(sourceId, source, {
         rehypePlugins,
         math,
@@ -54,7 +59,7 @@ export function BoundedMarkdown({
       // author's text rather than taking the transcript down with it.
       return planPlainTextLeaves(sourceId, source)
     }
-  }, [sourceId, source, rehypePlugins, math, recognizeCallouts])
+  }, [sourceId, source, rehypePlugins, math, recognizeCallouts, plainText, plainTextClasses])
 
   const [unitHeights, setUnitHeights] = useState<ReadonlyMap<string, number>>(new Map())
   const measurement = useMemo(

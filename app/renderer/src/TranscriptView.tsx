@@ -1900,6 +1900,14 @@ const USER_BUBBLE_MARKDOWN_COMPONENTS = {
   },
 }
 
+const USER_BUBBLE_LITERAL_CLASSES = [
+  'whitespace-pre-wrap',
+  'break-words',
+  'font-sans',
+  'text-sm',
+  'text-text-primary',
+]
+
 function MarkdownCode({
   className,
   children,
@@ -5398,6 +5406,29 @@ function BubbleCopyChip({
   )
 }
 
+function hasUnfencedIndentation(content: string): boolean {
+  let fence: { marker: string; length: number } | null = null
+  for (const line of content.split(/\r\n|\r|\n/)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)
+    if (marker) {
+      if (fence === null) {
+        fence = { marker: marker[1][0], length: marker[1].length }
+        continue
+      }
+      if (
+        marker[1][0] === fence.marker &&
+        marker[1].length >= fence.length &&
+        line.slice(marker[0].length).trim() === ''
+      ) {
+        fence = null
+        continue
+      }
+    }
+    if (fence === null && /^[ \t]+(?=\S)/.test(line)) return true
+  }
+  return false
+}
+
 /**
  * "User side" grammar (Messages.jsx UserBubble): right-aligned, accent-tinted,
  * bottom-right-notched bubble. Shared shape with the command echo + image rows
@@ -5416,6 +5447,7 @@ function UserBubble({
   onEdit?: () => void
   onBranch?: () => void
 }) {
+  const literal = hasUnfencedIndentation(content)
   const toast = useToast()
   const [copied, setCopied] = useState(false)
   const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -5435,6 +5467,8 @@ function UserBubble({
       <BoundedMarkdown
         sourceId={sourceId}
         source={content}
+        plainText={literal}
+        plainTextClasses={USER_BUBBLE_LITERAL_CLASSES}
         rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
         math
         recognizeCallouts

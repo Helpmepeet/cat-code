@@ -3225,6 +3225,57 @@ test('renders rich user Markdown with the shared bounded prose grammar', () => {
   )
 })
 
+test('renders indented user text exactly as submitted instead of normalizing it as Markdown', () => {
+  const content = 'def findFirstOccurrence(nums, target):\n    l = 0\n\twhile l < r:\n        return m  '
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-indented',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('whitespace-pre-wrap break-words font-sans text-sm text-text-primary')
+  expect(html).toContain('def findFirstOccurrence(nums, target):\n    l = 0\n\twhile l &lt; r:\n        return m  ')
+})
+
+test('keeps fenced, indented code in the existing Markdown renderer', () => {
+  const content = '```python\n    print("hello")\n```'
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-fenced',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('aria-label="Copy code"')
+  expect(html).not.toContain('```python')
+})
+
+test('indented user text remains literal and bounded even when it contains Markdown', () => {
+  const content = [
+    'Read this exactly:',
+    '  **not bold** <script>literal</script>',
+    ...Array.from({ length: 1_000 }, (_, index) => `  line ${index + 1}`),
+  ].join('\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-indented-long',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('  **not bold** &lt;script&gt;literal&lt;/script&gt;')
+  expect(html).not.toContain('<strong>')
+  expect(html).not.toContain('line 1000')
+  expect(html).toContain('aria-hidden="true"')
+})
+
 test('bounds a giant user message before mounting every paragraph', () => {
   const content = Array.from(
     { length: 1_000 },
