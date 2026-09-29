@@ -950,6 +950,21 @@ describe('CC-16 submit planning — only the submit waits for the engine', () =>
     )
   })
 
+  test('collapsed paste keeps leading indentation and trailing whitespace on send and hold', () => {
+    const body = '    first line\n\tsecond line\n  third line  \n'
+    const { state, token } = reducePasteAdded(createPasteState(), S1, body)
+    const pasteEntries = selectSessionPasteState(state, S1).entries
+    for (const gate of [{}, spawning]) {
+      const action = planSessionSubmit(
+        submitInput({ draft: token, pasteEntries, ...gate }),
+      )
+      expect(action.type).toBe(gate === spawning ? 'hold' : 'send')
+      if (action.type === 'send' || action.type === 'hold') {
+        expect(action.text).toBe(body)
+      }
+    }
+  })
+
   test('a second submit while one is already parked leaves the draft alone', () => {
     // 'ignore' means submitSession returns before retiring the draft, so the
     // second prompt stays visible in the composer rather than vanishing.
@@ -974,7 +989,7 @@ describe('CC-16 submit planning — only the submit waits for the engine', () =>
     )
     expect(action).toEqual({
       type: 'hold',
-      text: `see ${body}`.trim(),
+      text: `see ${body}`,
       showQueuedRow: true,
     })
   })

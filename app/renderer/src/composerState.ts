@@ -855,8 +855,8 @@ export function planSessionSubmit(input: {
   logInputEnabled: boolean
   alreadyParked: boolean
 }): ComposerSubmitAction {
-  const text = expandPasteRefs(input.draft, input.pasteEntries).trim()
-  if (text.length === 0 && input.hasImages !== true) return { type: 'ignore' }
+  const text = expandPasteRefs(input.draft, input.pasteEntries)
+  if (text.trim().length === 0 && input.hasImages !== true) return { type: 'ignore' }
   const gate = selectComposerGate({
     hasSession: true,
     preview: input.preview,

@@ -304,7 +304,7 @@ test('an HTML-only paste is canceled without changing the controlled draft', asy
 test('a large paste still becomes one inline paste pill', async () => {
   const observed = observation()
   const initial = 'start END'
-  const content = 'line one\nline two\nline three\nline four'
+  const content = '    line one\n\tline two\n  line three\nline four  \n'
   const richHtml = `<pre class="transcript-code">${content}</pre>`
   const tree = await harness.mount(
     createElement(ControlledPane, {
@@ -319,7 +319,7 @@ test('a large paste still becomes one inline paste pill', async () => {
   await dispatchPaste(composer, event)
   await harness.nextFrame()
 
-  const token = formatPasteRef(1, 3)
+  const token = formatPasteRef(1, 4)
   expect(event.defaultPrevented).toBe(true)
   expect(observed.collapsed).toEqual([
     { content, start: 'start '.length, end: initial.length },
