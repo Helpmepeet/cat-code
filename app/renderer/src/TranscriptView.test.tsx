@@ -662,21 +662,85 @@ test('an answered AskUserQuestion row shows structured answers and notes in both
   }
 })
 
-test('a denied AskUserQuestion row says Declined without showing the rejection result', () => {
-  const rejection = 'User declined to answer questions'
+test('an AskUserQuestion row says Declined only for engine rejection results', () => {
+  const rejectionPrefix =
+    "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)."
+  const rejectionResults = [
+    `${rejectionPrefix} STOP what you are doing and wait for the user to tell you how to proceed.`,
+    `${rejectionPrefix} To tell you how to proceed, the user said:\nAsk me one question at a time.`,
+  ]
+
+  for (const rejection of rejectionResults) {
+    const row = projectedAskQuestionRow({
+      toolUseResult: `Error: ${rejection}`,
+      resultContent: rejection,
+      isError: true,
+    })
+    const html = render(row)
+    const text = visibleText(html)
+
+    expect(text).toContain(ASK_QUESTION_LAYOUT.question)
+    expect(text).toContain('Declined')
+    expect(text).not.toContain(rejection)
+    expect(text).not.toContain('Ask me one question at a time.')
+    expect(html).not.toContain('<button')
+  }
+})
+
+test('a non-rejection AskUserQuestion error keeps the generic card and error text', () => {
+  const error =
+    '<tool_use_error>InputValidationError: Question texts must be unique</tool_use_error>'
   const row = projectedAskQuestionRow({
-    toolUseResult: `Error: ${rejection}`,
-    resultContent: rejection,
+    toolUseResult: 'InputValidationError: Question texts must be unique',
+    resultContent: error,
     isError: true,
   })
   const html = render(row)
   const text = visibleText(html)
 
-  expect(text).toContain(ASK_QUESTION_LAYOUT.question)
-  expect(text).toContain('Declined')
-  expect(text).not.toContain(rejection)
-  expect(text).not.toContain('Error:')
-  expect(html).not.toContain('<button')
+  expect(text).toContain('Tool')
+  expect(text).toContain('AskUserQuestion')
+  expect(text).toContain('InputValidationError')
+  expect(text).toContain('Question texts must be unique')
+  expect(text).not.toContain('Declined')
+})
+
+test('duplicate AskUserQuestion texts keep the generic card in every state', () => {
+  const duplicateQuestions = [
+    ASK_QUESTION_LAYOUT,
+    { ...ASK_QUESTION_LAYOUT, header: 'Repeated' },
+  ]
+  const rejection =
+    "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+  const states = [
+    projectedAskQuestionRow({ questions: duplicateQuestions, pending: true }),
+    projectedAskQuestionRow({
+      questions: duplicateQuestions,
+      toolUseResult: `Error: ${rejection}`,
+      resultContent: rejection,
+      isError: true,
+    }),
+    projectedAskQuestionRow({
+      questions: duplicateQuestions,
+      toolUseResult: {
+        questions: duplicateQuestions,
+        answers: { [ASK_QUESTION_LAYOUT.question]: 'Single scroll' },
+        annotations: {},
+      },
+      resultContent: 'User has answered the question.',
+    }),
+  ]
+
+  for (const row of states) {
+    const html = render(row)
+    const text = visibleText(html)
+
+    expect(text).toContain('Tool')
+    expect(text).toContain('AskUserQuestion')
+    expect(html).toContain('<button')
+    expect(html).not.toContain('>?</span>')
+    expect(text).not.toContain('Declined')
+  }
 })
 
 test('an AskUserQuestion result without structured answers keeps the generic card', () => {
