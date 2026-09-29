@@ -147,8 +147,10 @@ export function validateWorkspaceMaps(
   const workspacePath = join(mapsDir, 'WORKSPACE_MAP.md')
   const sourceRoot = options.sourceRoot ? resolve(options.sourceRoot) : repoRoot
   const inventory = options.sourceCommit ? gitInventory(repoRoot, options.sourceCommit) : null
+  // Hidden config locations in prose describe runtime storage, not source owners.
+  // Match the working-tree discovery rule; explicit Markdown links still validate.
   const roots = [...new Set([...PATH_ROOTS, ...(inventory
-    ? [...inventory].filter(path => path.includes('/')).map(path => path.split('/')[0]! + '/')
+    ? [...inventory].filter(path => path.includes('/') && !path.startsWith('.')).map(path => path.split('/')[0]! + '/')
     : readdirSync(sourceRoot, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name !== 'node_modules' && !entry.name.startsWith('.')).map(entry => entry.name + '/'))])]
   function referenceExists(path: string): boolean {
     const normalized = relative(canonicalRepoRoot, resolve(canonicalRepoRoot, path)).replace(/\\/g, '/').replace(/\/$/, '')

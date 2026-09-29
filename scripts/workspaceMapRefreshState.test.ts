@@ -101,6 +101,19 @@ describe('Git-backed workspace map refresh', () => {
     expect(blockRefresh({ ...options, runId: run.runId, blocker: 'source is not committed' }).run?.blockers).toContain('source is not committed')
   })
 
+  test('runtime config examples remain distinct from source citations in committed-tree checks', () => {
+    const options = fixture()
+    mkdirSync(join(options.repoRoot, '.cat-code/commands'), { recursive: true })
+    writeFileSync(join(options.repoRoot, '.cat-code/commands/review.md'), 'project command\n')
+    git(options.repoRoot, 'add', '--', '.cat-code/commands/review.md')
+    git(options.repoRoot, 'commit', '-q', '-m', 'project command')
+    const run = startRefresh(options).run!
+    append(options.repoRoot, map, '\nRuntime config: `.cat-code/settings.json`. Source owner: `src/owner.ts`.\n')
+    expect(checkRefresh({ ...options, runId: run.runId }).validation.errors).toEqual([])
+    append(options.repoRoot, map, '\nBroken source route: `src/missing.ts`.\n')
+    expect(() => checkRefresh({ ...options, runId: run.runId })).toThrow('src/missing.ts')
+  })
+
   test('rejects map drift after review and HEAD movement without advancing the cursor', () => {
     const options = fixture()
     const run = startRefresh(options).run!
