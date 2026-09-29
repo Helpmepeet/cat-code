@@ -101,3 +101,15 @@ describe('workspace map lint', () => {
     expect(result.errors).toContain('docs/maps/domain.md: cited path does not exist: AGENTS.md')
   })
 })
+
+ test.each(['`bun test src/{owner,missing}.ts`', '```sh\nbun test src/{owner,missing}.ts\n```'])('checks documented command paths without running them: %s', command => {
+ const root = fixture();
+ writeFileSync(join(root,'docs/maps/domain.md'), '# Domain\n\nLast refreshed: 2026-07-14\n\n' + command + '\n');
+ expect(validateWorkspaceMaps(root).errors).toContain('docs/maps/domain.md: cited path does not exist: src/missing.ts');
+ });
+
+ test('checks unmatched globs and permits explicitly historical paths', () => {
+ const root = fixture();
+ writeFileSync(join(root,'docs/maps/domain.md'), '# Domain\n\nLast refreshed: 2026-07-14\n\n`bun test src/*.test.ts`\nThe deleted `src/retired.ts` is historical.\n`src/owner.*`\n');
+ expect(validateWorkspaceMaps(root).errors).toEqual(['docs/maps/domain.md: cited path does not exist: src/*.test.ts']);
+ });

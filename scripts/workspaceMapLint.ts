@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 export type MapLintResult = {
   errors: string[]
@@ -15,6 +16,8 @@ export type WorkspaceMapValidationOptions = {
    * can be checked against a committed source snapshot without hiding it.
    */
   sourceRoot?: string
+  /** Resolve source references in Git without archiving the repository. */
+  sourceCommit?: string
 }
 
 const REQUIRED_FOCUSED_SECTIONS = [
@@ -62,35 +65,58 @@ function citationIsExplicitlyAbsent(
   const before = line.slice(0, start)
   const after = line.slice(end)
   return (
-    /(?:\bmissing|\bremoved)\s*$/i.test(before) ||
-    /^\s*(?:\([^)]*\)\s*)?(?:is\s+)?(?:missing|removed|does not exist|no longer exists)\b/i.test(
+    /(?:\bmissing|\bremoved|\bdeleted)\s*$/i.test(before) ||
+    /^\s*(?:\([^)]*\)\s*)?(?:(?:is|was)\s+)?(?:missing|removed|deleted|does not exist|no longer exists)\b/i.test(
       after,
     )
   )
 }
 
-function citedRepoPaths(markdown: string): string[] {
+function expandBraces(token: string): string[] {
+  const match = token.match(/\{([^{}]+)\}/)
+  if (!match) return [token]
+  return match[1]!.split(',').flatMap(part => expandBraces(token.slice(0, match.index) + part + token.slice(match.index! + match[0].length)))
+}
+
+function citedRepoPaths(markdown: string, roots: string[]): string[] {
   const paths = new Set<string>()
+  const escapedRoots = roots.map(root => root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  // Parse path-shaped arguments only. Never evaluate shell text or substitutions.
+  const pattern = new RegExp('(?:^|[\\s(\"\'=,])((?:\\.\\./)*(?:' + escapedRoots + ')[^\\s`\"\'<>;|)]+)', 'g')
+  let fenced = false
   for (const line of markdown.split('\n')) {
-    for (const match of line.matchAll(/`([^`\n]+)`/g)) {
-      const start = match.index ?? 0
-      if (citationIsExplicitlyAbsent(line, start, start + match[0].length)) continue
-      let token = match[1]!.trim().replace(/[.,;]+$/, '')
-      if (
-        !token ||
-        /[\s*?{}<>|]/.test(token) ||
-        token.includes('...') ||
-        token.includes('…')
-      ) {
-        continue
-      }
-      token = token.replace(/(\.[A-Za-z0-9]+):.*$/, '$1')
-      if (ROOT_FILES.has(token) || PATH_ROOTS.some(root => token.startsWith(root))) {
-        paths.add(token)
+    if (/^\s*```/.test(line)) { fenced = !fenced; continue }
+    const spans = fenced
+      ? [{ text: line, start: 0, end: line.length }]
+      : [...line.matchAll(/`([^`\n]+)`/g)].map(match => ({ text: match[1]!, start: match.index!, end: match.index! + match[0].length }))
+    for (const span of spans) {
+      if (citationIsExplicitlyAbsent(line, span.start, span.end)) continue
+      const text = span.text.trim()
+      if (ROOT_FILES.has(text)) { paths.add(text); continue }
+      for (const match of text.matchAll(pattern)) {
+        let token = match[1]!.replace(/[.,;:]+$/, '')
+        if (token.includes('...') || token.includes('…') || token.includes('$')) continue
+        token = token.replace(/(\.[A-Za-z0-9]+):.*$/, '$1')
+        for (const expanded of expandBraces(token)) {
+          paths.add(expanded.startsWith('../') ? relative('.', join('docs/maps', expanded)) : expanded)
+        }
       }
     }
   }
   return [...paths]
+}
+
+function gitInventory(repoRoot: string, commit: string): Set<string> {
+  const output = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '-z', commit], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  const paths = new Set<string>()
+  for (const entry of output.split('\0').filter(Boolean)) {
+    const [metadata, path] = entry.split('\t')
+    if (!path || metadata!.startsWith('120000 ')) continue
+    paths.add(path)
+    let parent = dirname(path)
+    while (parent !== '.') { paths.add(parent); parent = dirname(parent) }
+  }
+  return paths
 }
 
 function pathExistsWithinRoot(root: string, relativePath: string): boolean {
@@ -120,6 +146,22 @@ export function validateWorkspaceMaps(
   const mapsDir = join(canonicalRepoRoot, 'docs', 'maps')
   const workspacePath = join(mapsDir, 'WORKSPACE_MAP.md')
   const sourceRoot = options.sourceRoot ? resolve(options.sourceRoot) : repoRoot
+  const inventory = options.sourceCommit ? gitInventory(repoRoot, options.sourceCommit) : null
+  const roots = [...new Set([...PATH_ROOTS, ...(inventory
+    ? [...inventory].filter(path => path.includes('/')).map(path => path.split('/')[0]! + '/')
+    : readdirSync(sourceRoot, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name !== 'node_modules' && !entry.name.startsWith('.')).map(entry => entry.name + '/'))])]
+  function referenceExists(path: string): boolean {
+    const normalized = relative(canonicalRepoRoot, resolve(canonicalRepoRoot, path)).replace(/\\/g, '/').replace(/\/$/, '')
+    if (normalized === '..' || normalized.startsWith('../') || isAbsolute(normalized)) return false
+    const mapLocal = normalized.startsWith('docs/maps/') || normalized === 'docs/maps'
+    const root = mapLocal ? repoRoot : sourceRoot
+    if (/[*?[]/.test(normalized)) {
+      const glob = new Bun.Glob(normalized)
+      if (inventory && !mapLocal) return [...inventory].some(candidate => glob.match(candidate))
+      return [...glob.scanSync({ cwd: root, onlyFiles: false, dot: true, followSymlinks: false })].some(candidate => pathExistsWithinRoot(root, candidate))
+    }
+    return inventory && !mapLocal ? inventory.has(normalized) : pathExistsWithinRoot(root, normalized)
+  }
 
   if (!existsSync(workspacePath)) {
     return { errors: ['missing docs/maps/WORKSPACE_MAP.md'], mapCount: 0, warnings }
@@ -162,14 +204,13 @@ export function validateWorkspaceMaps(
 
     for (const link of localMarkdownLinks(markdown)) {
       const target = resolve(dirname(absolutePath), link)
-      if (!pathExistsWithinRoot(canonicalRepoRoot, relative(canonicalRepoRoot, target))) {
+      if (!referenceExists(relative(canonicalRepoRoot, target))) {
         errors.push(`${repoPath}: broken link target ${link}`)
       }
     }
 
-    for (const citedPath of citedRepoPaths(markdown)) {
-      const citationRoot = citedPath.startsWith('docs/maps/') ? repoRoot : sourceRoot
-      if (!pathExistsWithinRoot(citationRoot, citedPath)) {
+    for (const citedPath of citedRepoPaths(markdown, roots)) {
+      if (!referenceExists(citedPath)) {
         errors.push(`${repoPath}: cited path does not exist: ${citedPath}`)
       }
     }
