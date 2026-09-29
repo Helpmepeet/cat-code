@@ -1244,14 +1244,12 @@ describe('GenerateImageTool', () => {
     expect(prompt).toContain(
       'Cat Code does not expose a size control. Describe the framing you want in the prompt instead.',
     )
-    expect(prompt).toContain('gpt-image-prompting-guide.md')
-    expect(prompt).toContain('structuring GPT Image prompts')
+    expect(prompt).toContain('self-contained visual brief')
+    expect(prompt).toContain('Quote any exact text to render')
+    expect(prompt).toContain('For edits, say what changes and what stays the same')
+    expect(prompt).not.toContain('gpt-image-prompting-guide.md')
+    expect(prompt).not.toContain('Read this file')
     expect(prompt).toContain('You MUST omit background entirely')
-
-    const guidePath = prompt.match(/(\/\S+gpt-image-prompting-guide\.md)/)?.[1]
-    expect(guidePath).toBeDefined()
-    const guideContent = await readFile(guidePath!, 'utf8')
-    expect(guideContent).toStartWith('# GPT Image Prompting Guide')
   })
 
   test('prompt instructs callers not to rewrite image prompts by default', async () => {

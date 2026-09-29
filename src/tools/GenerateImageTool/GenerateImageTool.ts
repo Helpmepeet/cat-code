@@ -24,8 +24,6 @@ import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { PNG } from 'pngjs'
-import promptingGuideText from './PROMPTING_GUIDE.md' with { type: 'text' }
-import { getXDGDataHome } from '../../utils/xdg.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
 import { checkWritePermissionForTool } from '../../utils/permissions/filesystem.js'
@@ -179,29 +177,6 @@ const terminalPreviewCache = new Map<string, Promise<TerminalImagePreview | null
 
 function normalizeOutputPath(outputPath: string): string {
   return expandPath(outputPath)
-}
-
-// Materializes the GPT Image prompting guide to a stable on-disk path so
-// the model can opt in via Read only when the user asks for a prompt rewrite.
-// Embedding the guide directly in the tool prompt would inject it into the
-// model's context every turn — defeating the gating goal.
-let promptingGuidePromise: Promise<string> | null = null
-async function ensurePromptingGuideOnDisk(): Promise<string> {
-  if (promptingGuidePromise) return promptingGuidePromise
-  promptingGuidePromise = (async () => {
-    const dir = join(getXDGDataHome(), 'cat-code')
-    const path = join(dir, 'gpt-image-prompting-guide.md')
-    try {
-      const existing = await readFile(path, 'utf8')
-      if (existing === promptingGuideText) return path
-    } catch (e) {
-      if (!isENOENT(e)) throw e
-    }
-    await mkdir(dir, { recursive: true })
-    await writeFile(path, promptingGuideText, 'utf8')
-    return path
-  })()
-  return promptingGuidePromise
 }
 
 function slugifyImagePrompt(prompt: string): string {
@@ -949,8 +924,7 @@ export const GenerateImageTool = buildTool({
       ? `Generating image at ${getDisplayOutputPath(input.output_path)}`
       : 'Generating image'
   },
-  async prompt() {
-    const guidePath = await ensurePromptingGuideOnDisk()
+  prompt() {
     return `Generate an image and save it to a local file.
 
 Use this when the user asks to create or generate an image.
@@ -972,9 +946,9 @@ Transparent backgrounds:
 - You MUST omit background entirely for those requests. Passing background=opaque suppresses the alpha channel and returns a solid image.
 
 Prompt rewriting:
-- When you write the prompt yourself, or the user asks you to rewrite, improve, expand, or polish theirs, first Read this file for guidance on structuring GPT Image prompts: ${guidePath}
-- Treat the guide as a guideline, not a strict template — adapt to the user's request.
-- Do NOT Read the guide for normal pass-through generations.`
+- When writing or rewriting a prompt, preserve the user's details and describe the visible result as a self-contained visual brief. Include the goal, scene, subject, composition, one coherent style, lighting and colors, and constraints where relevant. Be concrete, not flowery; skip irrelevant sections.
+- Quote any exact text to render, with placement and appearance, and say it appears once with no other text. For edits, say what changes and what stays the same, including subject, pose, background, lighting, and camera angle where relevant. Spell out unusual brand names.
+- For normal pass-through generations, use the user's description unchanged.`
   },
   get inputSchema(): InputSchema {
     return inputSchema()
