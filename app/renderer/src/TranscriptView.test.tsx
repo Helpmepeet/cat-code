@@ -668,6 +668,7 @@ test('an AskUserQuestion row says Declined only for engine rejection results', (
   const rejectionResults = [
     `${rejectionPrefix} STOP what you are doing and wait for the user to tell you how to proceed.`,
     `${rejectionPrefix} To tell you how to proceed, the user said:\nAsk me one question at a time.`,
+    'User declined to answer questions',
   ]
 
   for (const rejection of rejectionResults) {

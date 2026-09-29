@@ -19,6 +19,9 @@ export type AskUserQuestionTranscriptPresentation = {
 // so it is not safe to pull into the renderer bundle.
 const USER_REJECTION_PREFIX =
   "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file)."
+// AskQuestionFlow's decline passes this fixed message through buildDenyResponse
+// (app/renderer/src/App.tsx); the permission result preserves it verbatim.
+const ASK_QUESTION_DECLINE_MESSAGE = 'User declined to answer questions'
 
 /**
  * Builds the dedicated transcript presentation only when its source data is
@@ -104,7 +107,9 @@ function readQuestionTexts(value: unknown): string[] | null {
 
 function isUserRejectionResult(result: ToolResultProjection | null): boolean {
   return (
-    result?.isError === true && result.content.startsWith(USER_REJECTION_PREFIX)
+    result?.isError === true &&
+    (result.content.startsWith(USER_REJECTION_PREFIX) ||
+      result.content === ASK_QUESTION_DECLINE_MESSAGE)
   )
 }
 
