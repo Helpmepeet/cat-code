@@ -926,29 +926,10 @@ export const GenerateImageTool = buildTool({
   },
   prompt() {
     return `Generate an image and save it to a local file.
-
-Use this when the user asks to create or generate an image.
-
-Rules:
-- When the user writes the image description, pass it exactly as prompt; do not rewrite, expand, stylize, or add details unless they ask. When they only ask for an image of something discussed, write a long, detailed, self-contained prompt yourself that captures everything discussed and imagined: the image model cannot see the conversation.
-- Omit output_path unless the user asks for a specific save location; Cat Code will save to ~/.cat-code/generated-images by default.
-- If the user references an existing image, pass its local path as reference_image_path. This uploads the image to the image-generation backend.
-- Use .png unless the user asks for another supported format.
-- Do not overwrite existing files unless the user explicitly asks to replace them.
-- Do not include markdown images ![...](path) in your text response; the interface automatically displays the generated image to the user, so you do not need to show or embed it.
-
-Image model limits:
-- Images are generated through the ChatGPT/Codex backend. The backend chooses the image model; do not specify one in tool arguments.
-- Cat Code does not expose a size control. Describe the framing you want in the prompt instead.
-
-Transparent backgrounds:
-- When the user wants a transparent image, say so in the prompt text, for example "on a fully transparent background, no backdrop", and use .png or .webp.
-- You MUST omit background entirely for those requests. Passing background=opaque suppresses the alpha channel and returns a solid image.
-
-Prompt rewriting:
-- When writing or rewriting a prompt, preserve the user's details and describe the visible result as a self-contained visual brief. Include the goal, scene, subject, composition, one coherent style, lighting and colors, and constraints where relevant. Be concrete, not flowery; skip irrelevant sections.
-- Quote any exact text to render, with placement and appearance, and say it appears once with no other text. For edits, say what changes and what stays the same, including subject, pose, background, lighting, and camera angle where relevant. Spell out unusual brand names.
-- For normal pass-through generations, use the user's description unchanged.`
+Use the generate-image skill before this tool when Skill is available. It covers prompt writing and output behavior.
+Pass the user's image description unchanged unless asked to rewrite it. Otherwise make the prompt self-contained: the image backend cannot see the conversation.
+reference_image_path uploads the supplied image to the backend. Omit output_path by default and never overwrite without an explicit request.
+For transparency, omit background and choose PNG or WebP. The interface displays the result; do not embed a Markdown image link.`
   },
   get inputSchema(): InputSchema {
     return inputSchema()

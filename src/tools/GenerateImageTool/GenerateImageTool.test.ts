@@ -1231,25 +1231,17 @@ describe('GenerateImageTool', () => {
     }
   })
 
-  test('prompt describes backend-selected image model and supported controls', async () => {
+  test('prompt routes image generation to the skill without embedding its guide', async () => {
     const prompt = await GenerateImageTool.prompt({
       getToolPermissionContext: async () => ({} as never),
       tools: [],
       agents: [],
     })
 
-    expect(prompt).toContain(
-      'Images are generated through the ChatGPT/Codex backend. The backend chooses the image model; do not specify one in tool arguments.',
-    )
-    expect(prompt).toContain(
-      'Cat Code does not expose a size control. Describe the framing you want in the prompt instead.',
-    )
-    expect(prompt).toContain('self-contained visual brief')
-    expect(prompt).toContain('Quote any exact text to render')
-    expect(prompt).toContain('For edits, say what changes and what stays the same')
+    expect(prompt).toContain('Use the generate-image skill before this tool')
+    expect(prompt).not.toContain('Prompt rewriting:')
     expect(prompt).not.toContain('gpt-image-prompting-guide.md')
-    expect(prompt).not.toContain('Read this file')
-    expect(prompt).toContain('You MUST omit background entirely')
+    expect(prompt.split(/\s+/).length).toBeLessThan(110)
   })
 
   test('prompt instructs callers not to rewrite image prompts by default', async () => {
@@ -1259,16 +1251,12 @@ describe('GenerateImageTool', () => {
       agents: [],
     })
 
-    expect(prompt).toContain(
-      'write a long, detailed, self-contained prompt yourself that captures everything discussed and imagined: the image model cannot see the conversation',
-    )
-    expect(prompt).toContain('do not rewrite, expand, stylize, or add details')
-    expect(prompt).toContain(
-      'This uploads the image to the image-generation backend',
-    )
-    expect(prompt).toContain(
-      'Do not include markdown images ![...](path) in your text response; the interface automatically displays the generated image to the user, so you do not need to show or embed it.',
-    )
+    expect(prompt).toContain("Pass the user's image description unchanged")
+    expect(prompt).toContain('the image backend cannot see the conversation')
+    expect(prompt).toContain('reference_image_path uploads the supplied image')
+    expect(prompt).toContain('never overwrite without an explicit request')
+    expect(prompt).toContain('For transparency, omit background')
+    expect(prompt).toContain('do not embed a Markdown image link')
   })
 
   test('parses Codex Responses image-generation SSE output', () => {
