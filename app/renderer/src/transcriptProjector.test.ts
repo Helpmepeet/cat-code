@@ -3036,72 +3036,123 @@ test('a GenerateImage result and preview merge into one completed image row', ()
   })
 })
 
+test('a same-transcript reattach keeps an earlier generated image', () => {
+  const sessionId = 'session-image-reattach'
+  const toolUseId = 'toolu_image_reattach'
+  const use = messageFrame(sessionId, {
+    type: 'assistant',
+    message: {
+      id: 'msg_image_reattach',
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: toolUseId, name: 'GenerateImage', input: { prompt: 'cat' } }],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000c0031',
+  })
+  const result = messageFrame(sessionId, {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'Generated image' }],
+    },
+    parent_tool_use_id: null,
+    isSynthetic: true,
+    tool_use_result: {
+      filePath: '/tmp/reattach.png',
+      model: 'gpt-image-2-codex',
+      size: '1024x1024',
+      outputFormat: 'png',
+      bytes: 4,
+    },
+    uuid: '00000000-0000-4000-8000-0000000c0032',
+  })
+  const preview = {
+    kind: 'generated-image-preview' as const,
+    protocolVersion: 2 as const,
+    sessionId,
+    toolUseId,
+    mediaType: 'image/png' as const,
+    data: 'AAAA',
+  }
+  let state = projectServerFrames(createTranscriptState(), [
+    ready(sessionId), use, result, preview,
+  ])
+
+  state = projectServerFrames(state, [ready(sessionId), use, result])
+  const row = selectTranscriptRows(state, sessionId)[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected image tool row')
+  expect(row.result?.generatedImage?.preview).toEqual({ mediaType: 'image/png', data: 'AAAA' })
+
+  state = projectServerFrames(state, [
+    { ...ready(sessionId), engineSessionId: 'different-engine' }, use, result,
+  ])
+  const replaced = selectTranscriptRows(state, sessionId)[0]
+  if (replaced?.kind !== 'tool-use') throw new Error('expected image tool row')
+  expect(replaced.result?.generatedImage?.preview).toBeUndefined()
+})
+
 test('GenerateImage inline image becomes immediate preview and is later replaced by dedicated preview without duplicate generic images', () => {
   const toolUseId = 'toolu_inline_img_1'
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
-  state = projectServerFrame(
-    state,
-    messageFrame('session-1', {
-      type: 'assistant',
-      message: {
-        id: 'msg_gen_1',
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_use',
-            id: toolUseId,
-            name: 'GenerateImage',
-            input: { prompt: 'A landscape' },
-          },
-        ],
-      },
-      parent_tool_use_id: null,
-      uuid: '00000000-0000-4000-8000-0000000c0001',
-    }),
-  )
+  const use = messageFrame('session-1', {
+    type: 'assistant',
+    message: {
+      id: 'msg_gen_1',
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'GenerateImage',
+          input: { prompt: 'A landscape' },
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000c0001',
+  })
+  state = projectServerFrame(state, use)
 
   const inlineBase64 = Buffer.from('inline preview data').toString('base64')
   const dedicatedBase64 = Buffer.from('dedicated preview data').toString('base64')
 
   // 1. Tool result arrives with inline image from modelResultContent
-  state = projectServerFrame(
-    state,
-    messageFrame('session-1', {
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: toolUseId,
-            content: [
-              { type: 'text', text: 'Generated image: /tmp/landscape.png' },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: inlineBase64,
-                },
+  const result = messageFrame('session-1', {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: [
+            { type: 'text', text: 'Generated image: /tmp/landscape.png' },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: inlineBase64,
               },
-            ],
-            is_error: false,
-          },
-        ],
-      },
-      parent_tool_use_id: null,
-      isSynthetic: true,
-      tool_use_result: {
-        filePath: '/tmp/landscape.png',
-        model: 'gpt-image-2.5-flare',
-        size: '1024x1024',
-        outputFormat: 'png',
-        bytes: 1024,
-      },
-      uuid: '00000000-0000-4000-8000-0000000c0002',
-    }),
-  )
+            },
+          ],
+          is_error: false,
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    isSynthetic: true,
+    tool_use_result: {
+      filePath: '/tmp/landscape.png',
+      model: 'gpt-image-2.5-flare',
+      size: '1024x1024',
+      outputFormat: 'png',
+      bytes: 1024,
+    },
+    uuid: '00000000-0000-4000-8000-0000000c0002',
+  })
+  state = projectServerFrame(state, result)
 
   let row = selectTranscriptRows(state, 'session-1')[0]
   if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
@@ -3113,6 +3164,14 @@ test('GenerateImage inline image becomes immediate preview and is later replaced
   })
   // Generic result.images is omitted to prevent duplicate rendering
   expect(row.result?.images).toBeUndefined()
+
+  state = projectServerFrames(state, [ready('session-1'), use, result])
+  row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.result?.generatedImage?.preview).toEqual({
+    mediaType: 'image/png',
+    data: inlineBase64,
+  })
 
   // 2. Dedicated generated-image-preview frame arrives later
   state = projectServerFrame(state, {

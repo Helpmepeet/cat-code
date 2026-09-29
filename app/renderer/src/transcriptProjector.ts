@@ -501,6 +501,7 @@ type StreamingThinkingBlock = {
 }
 
 type TranscriptSessionState = {
+  engineSessionId: string | null
   rows: TranscriptRow[]
   currentStreamMessageId: string | null
   currentStreamBlockIndex: number | null
@@ -603,6 +604,7 @@ export type TranscriptState = {
 
 function createTranscriptSessionState(): TranscriptSessionState {
   return {
+    engineSessionId: null,
     rows: [],
     currentStreamMessageId: null,
     currentStreamBlockIndex: null,
@@ -1378,7 +1380,11 @@ export function projectServerFrames(
     if (isAppReadyFrame(frame)) {
       // Ready starts an attach sequence whose history replay replaces retained
       // newer rows after the sidecar's non-transcript snapshots.
-      drafts.set(frame.sessionId, createReadyDraft(frame.sessionId))
+      const previous = drafts.get(frame.sessionId)?.session ?? state.sessions[frame.sessionId]
+      drafts.set(
+        frame.sessionId,
+        createReadyDraft(frame.sessionId, frame.engineSessionId, previous),
+      )
       continue
     }
     if (frame.kind === 'transcript.reset') {
@@ -1502,8 +1508,25 @@ function createSessionDraft(
   }
 }
 
-function createReadyDraft(sessionId: SessionId): SessionDraft {
-  const draft = createSessionDraft(sessionId, createTranscriptSessionState())
+function createReadyDraft(
+  sessionId: SessionId,
+  engineSessionId: string | null,
+  previous?: TranscriptSessionState,
+): SessionDraft {
+  const session = createTranscriptSessionState()
+  session.engineSessionId = engineSessionId
+  if (engineSessionId !== null && previous?.engineSessionId === engineSessionId) {
+    const previews = {
+      ...previous.generatedImagePreviewsByUseId,
+    }
+    for (const [toolUseId, result] of Object.entries(previous.toolResultsByUseId)) {
+      if (!previews[toolUseId] && result.generatedImage?.preview) {
+        previews[toolUseId] = result.generatedImage.preview
+      }
+    }
+    session.generatedImagePreviewsByUseId = previews
+  }
+  const draft = createSessionDraft(sessionId, session)
   draft.changed = true
   draft.rowsOwned = true
   draft.seenFrameIdsOwned = true
