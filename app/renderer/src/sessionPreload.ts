@@ -9,9 +9,9 @@ import {
 /**
  * Independent startup guards. Twelve reads bound main-thread cache validation;
  * 64 MiB bounds the projected renderer objects (not cache-file bytes). The
- * per-cache disk cap follows the replay ring (16 MiB), while projected strings
- * and row objects expand
- * in memory, so the RAM limit intentionally admits fewer worst-case caches.
+ * per-cache disk cap covers the replay ring plus image previews (about 48 MiB).
+ * Projected strings and row objects expand in memory, so the RAM limit
+ * intentionally admits fewer worst-case caches.
  */
 export const STARTUP_PRELOAD_MAX_SESSIONS = 12
 export const STARTUP_PRELOAD_MAX_PROJECTED_BYTES = 64 * 1024 * 1024

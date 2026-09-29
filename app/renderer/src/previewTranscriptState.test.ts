@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
   PROTOCOL_VERSION,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   type ReadyFrame,
   type ServerFrame,
   type TranscriptCache,
@@ -352,6 +353,7 @@ function handover(cached?: TranscriptCache) {
     },
     rows: () => selectTranscriptRows(live, SID),
     rowKinds: () => selectNestedTranscriptRows(live, SID).map(row => row.kind),
+    imageNotice: () => live.sessions[SID]?.imagePreviewNotice ?? null,
     cached: () => selectPreviewTranscript(preview, SID),
   }
 }
@@ -407,6 +409,21 @@ test('restored history keeps a generated image from the closed preview', () => {
   const row = h.rows()[0]
   if (row?.kind !== 'tool-use') throw new Error('expected image tool row')
   expect(row.result?.generatedImage?.preview).toEqual({ mediaType: 'image/png', data: 'AAAA' })
+})
+
+test('an evicted-image notice stays visible through cached preview handover', () => {
+  const notice: ServerFrame = {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    requestId: PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
+    code: 'internal_error',
+    message: 'Some earlier generated image previews are no longer available.',
+    retryable: false,
+  }
+  const h = handover(cache([messageFrame(0), notice]))
+  h.previewing.add(SID)
+  expect(h.cached()?.sessions[SID]?.imagePreviewNotice).toBe(notice.message)
+  h.deliver([ready(), messageFrame(0)])
+  expect(h.imageNotice()).toBe(notice.message)
 })
 
 /**

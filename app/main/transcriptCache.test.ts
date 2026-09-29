@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import {
   PROTOCOL_VERSION,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
@@ -44,6 +45,7 @@ import {
   readCachedHeader,
   readCachedRunFacts,
   retainCachedImagePreviews,
+  transcriptCacheDir,
   resolveCacheRunFacts,
   resolvePreview,
   writeCache,
@@ -97,6 +99,24 @@ function eventFrame(i: number, id: SessionId = SID): ServerFrame {
       message: {
         type: 'user',
         message: { role: 'user', content: `msg ${i}` },
+      },
+    } as never,
+  }
+}
+
+function imageToolFrame(toolUseId = 'toolu_image'): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: toolUseId, name: 'GenerateImage', input: {} }],
+        },
       },
     } as never,
   }
@@ -251,6 +271,22 @@ test('a generated image preview survives close-cache persistence', () => {
   expect(readCache(dir, SID)?.frames).toEqual([eventFrame(0), preview])
 })
 
+test('the unavailable-image notice survives cache distillation', () => {
+  const notice: ServerFrame = {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    requestId: PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
+    code: 'internal_error',
+    message: 'Some earlier generated image previews are no longer available.',
+    retryable: false,
+  }
+  expect(distill([readyFrame(), notice]).frames).toEqual([notice])
+  const firstClose = distill([readyFrame(), imageToolFrame(), notice])
+  const refresh = distill([readyFrame(), imageToolFrame()])
+  expect(retainCachedImagePreviews(refresh, firstClose).frames).toEqual([
+    imageToolFrame(), notice,
+  ])
+})
+
 test('closing a restored chat again retains its earlier generated image', () => {
   const preview: ServerFrame = {
     kind: 'generated-image-preview',
@@ -260,16 +296,44 @@ test('closing a restored chat again retains its earlier generated image', () => 
     mediaType: 'image/png',
     data: 'AAAA',
   }
-  const firstClose = distill([readyFrame(), eventFrame(0), preview])
-  const secondClose = distill([readyFrame(), eventFrame(0), eventFrame(1)])
+  const firstClose = distill([readyFrame(), eventFrame(0), imageToolFrame(), preview])
+  const secondClose = distill([readyFrame(), eventFrame(0), imageToolFrame(), eventFrame(1)])
 
   expect(retainCachedImagePreviews(secondClose, firstClose).frames).toEqual([
-    eventFrame(0), eventFrame(1), preview,
+    eventFrame(0), imageToolFrame(), eventFrame(1), preview,
   ])
   expect(retainCachedImagePreviews(
     distill([readyFrame(SID, 'engine-new'), eventFrame(0)]),
     firstClose,
   ).frames).toEqual([eventFrame(0)])
+})
+
+test('an edit discards an image from the previous cached conversation tail', () => {
+  const preview: ServerFrame = {
+    kind: 'generated-image-preview', protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID, toolUseId: 'toolu_image', mediaType: 'image/png', data: 'AAAA',
+  }
+  const beforeEdit = distill([readyFrame(), imageToolFrame(), preview])
+  const afterEdit = distill([readyFrame(), eventFrame(0)])
+  expect(retainCachedImagePreviews(afterEdit, beforeEdit).frames).toEqual([eventFrame(0)])
+})
+
+test('v2 image caches leave an older installation cache readable', () => {
+  const registryDir = tempDir()
+  const oldDir = join(registryDir, 'transcript-cache')
+  const newDir = transcriptCacheDir(registryDir)
+  const legacy = distill([readyFrame(), eventFrame(0)])
+  writeCache(oldDir, legacy)
+  expect(listCachedSessionIds(newDir)).toEqual([])
+  expect(listCachedSessionIds(newDir, true)).toEqual([SID])
+  expect(readCache(newDir, SID)?.frames).toEqual([eventFrame(0)])
+  writeCache(newDir, distill([readyFrame(), eventFrame(0), {
+    kind: 'generated-image-preview', protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID, toolUseId: 'toolu_image', mediaType: 'image/png', data: 'AAAA',
+  }]))
+  expect(readCache(oldDir, SID)?.frames).toEqual([eventFrame(0)])
+  deleteCache(newDir, SID)
+  expect(readCache(oldDir, SID)).toBeNull()
 })
 
 /* ------------------------------------------------------------------------- *

@@ -6,12 +6,13 @@ import { fileURLToPath } from 'node:url'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
-import { PROTOCOL_VERSION } from '../shared/protocol.js'
+import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import type { TranscriptBackfillSessionResult } from '../shared/transcriptBackfill.js'
 import {
   TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
   cacheHasCurrentRunFacts,
   readCache,
+  transcriptCacheDir,
   writeCache,
 } from './transcriptCache.js'
 import {
@@ -124,8 +125,50 @@ test('fresh restorable row writes once and round-trips through readCache', () =>
   ).toBe('already_cached')
 })
 
+test('a complete legacy cache migrates once to the image-safe directory', () => {
+  const registryDir = cacheDir()
+  const oldDir = join(registryDir, 'transcript-cache')
+  const newDir = transcriptCacheDir(registryDir)
+  const oldCache = {
+    header: {
+      appSessionId: APP_ID, engineSessionId: ENGINE_ID,
+      protocolVersion: PROTOCOL_VERSION, appVersion: '0.0.0',
+      guardVersion: 1, writtenAt: Date.now(),
+      runFacts: SOME_RUN_FACTS,
+      runFactsVersion: TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
+    },
+    frames: result().frames,
+  }
+  writeCache(oldDir, oldCache)
+  const options = {
+    cacheDir: newDir,
+    getCurrentSession: () => descriptor(true),
+    transcriptExists: () => true,
+  }
+  expect(persistTranscriptBackfillResult(options, result())).toBe('written')
+  expect(readCache(newDir, APP_ID)?.frames).toEqual(oldCache.frames)
+  expect(persistTranscriptBackfillResult(options, result())).toBe('already_cached')
+})
+
 test('run-facts refresh keeps image previews from the same engine session', () => {
   const dir = cacheDir()
+  const imageEvent: ServerFrame = {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: APP_ID,
+    replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_image', name: 'GenerateImage', input: {} }],
+        },
+      },
+    } as never,
+  }
+  const imageResult = { ...result(), frames: [...result().frames, imageEvent] }
   const preview = {
     kind: 'generated-image-preview' as const,
     protocolVersion: PROTOCOL_VERSION,
@@ -143,15 +186,15 @@ test('run-facts refresh keeps image previews from the same engine session', () =
       guardVersion: 1,
       writtenAt: 1,
     },
-    frames: [...result().frames, preview],
+    frames: [...imageResult.frames, preview],
   })
 
   expect(persistTranscriptBackfillResult({
     cacheDir: dir,
     getCurrentSession: () => descriptor(true),
     transcriptExists: () => true,
-  }, result())).toBe('written')
-  expect(readCache(dir, APP_ID)?.frames).toEqual([...result().frames, preview])
+  }, imageResult)).toBe('written')
+  expect(readCache(dir, APP_ID)?.frames).toEqual([...imageResult.frames, preview])
 })
 
 /**

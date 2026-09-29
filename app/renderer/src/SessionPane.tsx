@@ -413,8 +413,11 @@ export function SessionPane({
   useEffect(() => {
     setDismissedLogError(null)
   }, [activeSessionId])
-  const showLogError =
-    activeLog.error !== null && activeLog.error !== dismissedLogError
+  const imagePreviewNotice = activeSessionId
+    ? transcript.sessions[activeSessionId]?.imagePreviewNotice ?? null
+    : null
+  const logNotice = activeLog.error ?? imagePreviewNotice
+  const showLogError = logNotice !== null && logNotice !== dismissedLogError
   // The picker renders rich rows (name + arg-hint + description, prototype
   // parity) from the `slash-catalog.snapshot` read seam (the `slashCatalog`
   // prop). It falls back to the names-only `slash_commands` catalog (from the
@@ -1903,10 +1906,10 @@ export function SessionPane({
 
       {showLogError ? (
         <div className="flex items-center gap-3 text-sm text-tone-danger">
-          <span className="min-w-0 flex-1">{activeLog.error}</span>
+          <span className="min-w-0 flex-1">{logNotice}</span>
           <button
             type="button"
-            onClick={() => setDismissedLogError(activeLog.error)}
+            onClick={() => setDismissedLogError(logNotice)}
             title="Dismiss"
             aria-label="Dismiss message log notice"
             className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"

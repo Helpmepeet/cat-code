@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { ServerFrame } from '../../shared/protocol.js'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
 } from '../../shared/protocol.js'
 import {
@@ -168,7 +169,7 @@ test('transcript reset replaces the raw log so replay cannot dedupe discarded ro
   expect(log.error).toBeNull()
 })
 
-test('retention notices never reach the live error line', () => {
+test('transcript retention boundaries do not reach the live error line', () => {
   // They ride `kind:'error'` to reuse the channel, but retention is working as
   // designed and there is nothing to act on. The history-replay boundary remains
   // available to the preview/restore surface through the transcript cache.
@@ -224,6 +225,28 @@ test('retention notices never reach the live error line', () => {
     retryable: false,
   })
   expect(selectRawMessageLog(state, 'session-1').error).toBe('turn failed')
+})
+
+test('an evicted image preview shows its unavailable notice', () => {
+  let state = reduceServerFrame(createRawMessageLogState(), {
+    kind: 'ready', protocolVersion: 2, sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
+    payload: {
+      type: 'app.ready', protocolVersion: 1, inputEnabled: true,
+      activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  state = reduceServerFrame(state, {
+    kind: 'error', protocolVersion: 2, sessionId: 'session-1',
+    requestId: PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
+    code: 'internal_error',
+    message: 'Some earlier generated image previews are no longer available.',
+    retryable: false,
+  })
+  expect(selectRawMessageLog(state, 'session-1').error).toBe(
+    'Some earlier generated image previews are no longer available.',
+  )
 })
 
 test('keys logs by ready session and rejects frames for an unattached session', () => {

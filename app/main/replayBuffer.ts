@@ -48,6 +48,7 @@
 
 import {
   PROTOCOL_VERSION,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
@@ -116,9 +117,6 @@ export const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024
 export const DEFAULT_MAX_BUFFERED_PREVIEW_BYTES = MAX_OUTBOUND_FRAME_BYTES
 /** Max retained generated-image preview frames per live session. */
 export const DEFAULT_MAX_BUFFERED_PREVIEWS = 32
-
-const PREVIEW_REPLAY_TRUNCATION_REQUEST_ID =
-  'catcode.preview-replay-truncated'
 
 type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
 

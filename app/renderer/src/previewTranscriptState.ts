@@ -1,5 +1,6 @@
 import {
   PROTOCOL_VERSION,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   type ReadyFrame,
   type ServerFrame,
   type SessionId,
@@ -130,7 +131,7 @@ export function projectPreviewTranscriptCache(
     createTranscriptState(),
     previewReadyFrame(cache),
   )
-  // Both retention boundaries are kept by `transcriptCache.ts`, so this pass
+  // Retention boundaries are kept by `transcriptCache.ts`, so this pass
   // gives an incomplete cache the same boundary row every other path draws. A
   // preview-only banner used to say it instead, and withdrew itself at the
   // exact moment the pane went live and the fact became actionable.
@@ -326,7 +327,7 @@ export function hasPreviewTranscript(
   return state.bySession[sessionId] !== undefined
 }
 
-/** Carry cached image bytes across the preview-to-live history handover. */
+/** Carry cached image bytes and their loss notice across the live handover. */
 export function previewGeneratedImageFrames(
   state: PreviewTranscriptState,
   sessionId: SessionId,
@@ -339,7 +340,7 @@ export function previewGeneratedImageFrames(
       previews.set(toolUseId, result.generatedImage.preview)
     }
   }
-  return Array.from(previews, ([toolUseId, preview]) => ({
+  const frames: ServerFrame[] = Array.from(previews, ([toolUseId, preview]) => ({
     kind: 'generated-image-preview',
     protocolVersion: PROTOCOL_VERSION,
     sessionId,
@@ -347,6 +348,18 @@ export function previewGeneratedImageFrames(
     mediaType: preview.mediaType,
     data: preview.data,
   }))
+  if (session.imagePreviewNotice !== null) {
+    frames.unshift({
+      kind: 'error',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId,
+      requestId: PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
+      code: 'internal_error',
+      message: session.imagePreviewNotice,
+      retryable: false,
+    })
+  }
+  return frames
 }
 
 /** The actual click-path decision: a store hit opens without invoking fallback. */

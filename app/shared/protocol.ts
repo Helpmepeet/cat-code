@@ -1105,6 +1105,8 @@ export const HISTORY_REPLAY_TRUNCATION_REQUEST_ID = 'catcode.history-truncated'
  * be two private copies of the same literal, one per side.
  */
 export const REPLAY_BUFFER_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
+export const PREVIEW_REPLAY_TRUNCATION_REQUEST_ID =
+  'catcode.preview-replay-truncated'
 
 /**
  * A `pong` in reply to `app.ping` (liveness only, no side effects —

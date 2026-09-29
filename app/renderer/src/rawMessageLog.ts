@@ -1,6 +1,7 @@
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
@@ -118,15 +119,16 @@ export function reduceServerFrameWithLimits(
   }
 
   if (frame.kind === 'error') {
-    // Both retention notices ride `kind:'error'` to reuse the channel, but
-    // neither is an error: retention is working as designed. Nothing ever
-    // clears `error`, so routing them here pinned an undismissable red line
-    // above the composer for the rest of the session. They are dropped at THIS
-    // display only — the frames are still minted, still kept by the transcript
-    // cache (`app/main/transcriptCache.ts`), and the transcript itself now
-    // draws the boundary as a quiet seam at the top of the pane
-    // (`transcriptProjector.ts` `HistoryBoundaryRow`), which is where an
-    // incomplete history belongs.
+    // Transcript truncation has a boundary row in the pane. The separate image
+    // preview budget does not, so show its unavailable notice in the existing
+    // dismissible message line instead of silently losing earlier images.
+    if (frame.requestId === PREVIEW_REPLAY_TRUNCATION_REQUEST_ID) {
+      const session = state.sessions[frame.sessionId] ?? EMPTY_SESSION_LOG
+      return updateSession(state, frame.sessionId, {
+        ...session,
+        error: frame.message,
+      })
+    }
     if (
       frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
       frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID

@@ -23,6 +23,7 @@ import {
   TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
   createTranscriptCache,
   readCache,
+  readCachedHeader,
   hasAnyRunFact,
   retainCachedImagePreviews,
   writeCache,
@@ -108,6 +109,13 @@ export function persistTranscriptBackfillResult(
     (existing.header.runFactsVersion ?? 0) >= TRANSCRIPT_CACHE_RUN_FACTS_VERSION &&
     !(options.isCacheStale?.(current, existing.header.writtenAt) ?? false)
   ) {
+    // A legacy transcript-only cache is readable through the fallback, but
+    // discovery intentionally scans v2 only. Copy it once so later launches
+    // do not re-run the backfill worker for the same complete cache.
+    if (readCachedHeader(options.cacheDir, result.appSessionId) === null) {
+      writeCache(options.cacheDir, existing)
+      return 'written'
+    }
     return 'already_cached'
   }
   // A WEAKER gate than the close path's, and deliberately so.

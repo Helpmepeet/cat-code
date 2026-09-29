@@ -50,7 +50,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import type { TranscriptRunFactsRead } from '../shared/transcriptRunFacts.js'
@@ -68,6 +68,7 @@ import {
   DEFAULT_MAX_BUFFERED_BYTES,
   DEFAULT_MAX_BUFFERED_PREVIEW_BYTES,
   FrameReplayBuffer,
+  isPreviewReplayTruncationFrame,
   isReplayTruncationFrame,
 } from './replayBuffer.js'
 import { parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
@@ -108,8 +109,11 @@ const TRANSCRIPT_CACHE_APP_VERSION = '0.0.0'
 export const MAX_TRANSCRIPT_CACHE_BYTES =
   DEFAULT_MAX_BUFFERED_BYTES + DEFAULT_MAX_BUFFERED_PREVIEW_BYTES + 256 * 1024
 
-/** Cache files live beside the registry: `<registryDir>/transcript-cache`. */
-export const TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache'
+/** Cache files live beside the registry in a versioned directory. */
+// The previous cache reader rejects unknown frame kinds and deletes the file.
+// Keep image-bearing caches away from installations that still run that reader.
+export const TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache-v2'
+const LEGACY_TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache'
 
 const CACHE_FILE_SUFFIX = '.json'
 
@@ -147,13 +151,14 @@ function isTranscriptCacheFrame(frame: ServerFrame): boolean {
     const message = event.message
     return isRecord(message) && typeof message.type === 'string'
   }
-  // The two visible-lossiness boundary idioms (both error frames): main's own
-  // replay-buffer truncation and the sidecar's history-replay truncation. Keeping
-  // them preserves the "this transcript is incomplete" marker; every OTHER error
+  // Visible loss boundaries: transcript ring, generated-image preview tier,
+  // and the sidecar's history replay. Keeping them preserves the incomplete
+  // history or unavailable-image notice; every OTHER error
   // frame (session_not_found, bad_request, …) is dropped.
   if (frame.kind === 'error') {
     return (
       isReplayTruncationFrame(frame) ||
+      isPreviewReplayTruncationFrame(frame) ||
       frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
     )
   }
@@ -230,20 +235,57 @@ export function retainCachedImagePreviews(
     previous.header.appSessionId !== current.header.appSessionId
   ) return current
 
+  // A transcript reset (edit from an earlier turn) can discard an image while
+  // keeping the same engine id. Only carry bytes for a GenerateImage call that
+  // is still represented in the replacement transcript. A preview already in
+  // `current` is authoritative even when its tool event fell out of the ring.
+  const currentImageToolIds = new Set<string>()
+  for (const frame of current.frames) {
+    if (frame.kind !== 'event' || frame.event.type !== 'message') continue
+    const message: unknown = frame.event.message
+    if (!isRecord(message) || message.type !== 'assistant') continue
+    const body = message.message
+    if (!isRecord(body) || !Array.isArray(body.content)) continue
+    for (const block of body.content) {
+      if (
+        isRecord(block) && block.type === 'tool_use' &&
+        block.name === 'GenerateImage' &&
+        typeof block.id === 'string'
+      ) currentImageToolIds.add(block.id)
+    }
+  }
+  const currentPreviews = new Set(
+    current.frames.flatMap(frame =>
+      frame.kind === 'generated-image-preview' ? [frame.toolUseId] : [],
+    ),
+  )
   const previews = new FrameReplayBuffer()
   for (const frame of [...previous.frames, ...current.frames]) {
     if (
       frame.kind === 'generated-image-preview' &&
-      frame.sessionId === current.header.appSessionId
+      frame.sessionId === current.header.appSessionId &&
+      (currentImageToolIds.has(frame.toolUseId) ||
+        currentPreviews.has(frame.toolUseId))
     ) {
       previews.record(current.header.appSessionId, frame)
     }
   }
+  const previewSnapshot = previews.snapshotSession(current.header.appSessionId)
+  const previousNotice = previous.frames.find(isPreviewReplayTruncationFrame)
+  const mergeNotice = previewSnapshot.find(isPreviewReplayTruncationFrame)
+  const hasCurrentNotice = current.frames.some(isPreviewReplayTruncationFrame)
+  const needsNotice = !hasCurrentNotice && (
+    mergeNotice !== undefined ||
+    (previousNotice !== undefined &&
+      (currentImageToolIds.size > 0 || currentPreviews.size > 0))
+  )
+  const noticeToKeep = needsNotice ? previousNotice ?? mergeNotice : undefined
   return {
     ...current,
     frames: [
       ...current.frames.filter(frame => frame.kind !== 'generated-image-preview'),
-      ...previews.snapshotSession(current.header.appSessionId).filter(
+      ...(noticeToKeep ? [noticeToKeep] : []),
+      ...previewSnapshot.filter(
         frame => frame.kind === 'generated-image-preview',
       ),
     ],
@@ -600,7 +642,7 @@ function readHeaderPrefix(dir: string, id: SessionId): Buffer | null {
  * headers run ~330 bytes, so the whole object is always inside it. */
 const HEADER_PROBE_BYTES = 4096
 
-/** `<registryDir>/transcript-cache` — main passes its real registry dir. */
+/** `<registryDir>/transcript-cache-v2` — main passes its real registry dir. */
 export function transcriptCacheDir(registryDir: string): string {
   return join(registryDir, TRANSCRIPT_CACHE_SUBDIR)
 }
@@ -661,7 +703,13 @@ export function writeCache(dir: string, cache: TranscriptCache): void {
 export function readCache(dir: string, id: SessionId): TranscriptCache | null {
   const filePath = cacheFilePath(dir, id)
   if (!filePath) return null
-  if (!existsSync(filePath)) return null
+  if (!existsSync(filePath)) {
+    // Existing installations wrote transcript-only caches in the original
+    // directory. They remain readable until this build refreshes them in v2.
+    return basename(dir) === TRANSCRIPT_CACHE_SUBDIR
+      ? readCache(join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR), id)
+      : null
+  }
 
   try {
     if (statSync(filePath).size > MAX_TRANSCRIPT_CACHE_BYTES) {
@@ -700,21 +748,33 @@ export function deleteCache(dir: string, id: SessionId): void {
   } catch {
     // Already gone / never written — nothing to do.
   }
+  if (basename(dir) === TRANSCRIPT_CACHE_SUBDIR) {
+    deleteCache(join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR), id)
+  }
 }
 
 /** The appSessionIds with a cache file on disk (startup GC enumeration). */
-export function listCachedSessionIds(dir: string): SessionId[] {
+export function listCachedSessionIds(
+  dir: string,
+  includeLegacy = false,
+): SessionId[] {
   let entries: string[]
   try {
     entries = readdirSync(dir)
   } catch {
-    return []
+    entries = []
   }
   const ids: SessionId[] = []
   for (const name of entries) {
     if (!name.endsWith(CACHE_FILE_SUFFIX)) continue
     const id = name.slice(0, -CACHE_FILE_SUFFIX.length)
     if (isUuid(id)) ids.push(id)
+  }
+  if (includeLegacy && basename(dir) === TRANSCRIPT_CACHE_SUBDIR) {
+    const legacy = listCachedSessionIds(
+      join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR),
+    )
+    return [...new Set([...ids, ...legacy])]
   }
   return ids
 }

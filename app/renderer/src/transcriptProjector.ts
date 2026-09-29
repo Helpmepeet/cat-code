@@ -41,6 +41,7 @@ import type { SDKMessage } from '@cat-code/engine/session-events'
 import { isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
@@ -562,6 +563,7 @@ type TranscriptSessionState = {
    * the same way the orphaned-agent placeholder is synthesized.
    */
   historyTruncated: boolean
+  imagePreviewNotice: string | null
   /**
    * Head-insertion cursor for the recovery batch currently arriving, or `null`
    * when nothing is being recovered — which is every ordinary frame's case and
@@ -618,6 +620,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     slashCommands: [],
     hiddenFrameIds: {},
     historyTruncated: false,
+    imagePreviewNotice: null,
     recoveryInsertAt: null,
     compacting: false,
   }
@@ -1408,6 +1411,13 @@ export function projectServerFrames(
       // receiving more frames; only a reset (the preview-to-live handover)
       // clears it, and the replay that follows re-states it if it is still true.
       if (
+        frame.requestId === PREVIEW_REPLAY_TRUNCATION_REQUEST_ID &&
+        draft.session.imagePreviewNotice === null
+      ) {
+        draft.session.imagePreviewNotice = frame.message
+        draft.changed = true
+      }
+      if (
         (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
           frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID) &&
         !draft.session.historyTruncated
@@ -1525,6 +1535,7 @@ function createReadyDraft(
       }
     }
     session.generatedImagePreviewsByUseId = previews
+    session.imagePreviewNotice = previous.imagePreviewNotice
   }
   const draft = createSessionDraft(sessionId, session)
   draft.changed = true

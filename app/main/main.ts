@@ -698,7 +698,7 @@ function cancelAllReplayFlushes(): void {
 
 /**
  * IS-A — where the at-rest transcript caches live: beside the durable registry
- * (`<config-home>/desktop/transcript-cache`), same trust domain as the registry
+ * (`<config-home>/desktop/transcript-cache-v2`), same trust domain as the registry
  * file and the engine transcript JSONL. Fixed at startup (env is stable per run),
  * matching the registry's own `defaultRegistryDir()` timing.
  */
@@ -883,7 +883,7 @@ function persistTranscriptCache(appSessionId: SessionId): void {
  */
 function gcTranscriptCache(): void {
   try {
-    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR)) {
+    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR, true)) {
       if (!host || !host.canPreview(id)) deleteCache(TRANSCRIPT_CACHE_DIR, id)
     }
   } catch (error) {
