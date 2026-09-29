@@ -11,9 +11,9 @@
  *
  * Security posture (approved 2026-07-14; SECURITY-MINIMUM trust-domain parity
  * with the transcript JSONL already at rest engine-side):
- *   - Content is an ALLOWLIST: only message `event` frames + the truncation-
- *     boundary error frame survive `distill`. `ready`, permission frames, and
- *     every operational snapshot (accounts/settings/tasks/goals/agent-config/
+ *   - Content is an ALLOWLIST: message `event` frames, generated-image
+ *     previews, and truncation-boundary error frames survive `distill`.
+ *     `ready`, permission frames, and every operational snapshot (accounts/settings/tasks/goals/agent-config/
  *     extensions/diagnostics) are dropped, so cache hydration can mark nothing
  *     connected/input-enabled and resurrect no stale actionable prompt
  *     (`app/renderer/src/serverFrameBatch.ts` fan-out rationale).
@@ -64,7 +64,12 @@ import {
   type TranscriptRunFacts,
 } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import { DEFAULT_MAX_BUFFERED_BYTES, isReplayTruncationFrame } from './replayBuffer.js'
+import {
+  DEFAULT_MAX_BUFFERED_BYTES,
+  DEFAULT_MAX_BUFFERED_PREVIEW_BYTES,
+  FrameReplayBuffer,
+  isReplayTruncationFrame,
+} from './replayBuffer.js'
 import { parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
 
 /**
@@ -96,11 +101,12 @@ export const TRANSCRIPT_CACHE_RUN_FACTS_VERSION = 1
 const TRANSCRIPT_CACHE_APP_VERSION = '0.0.0'
 
 /**
- * Read size cap: the distilled cache is a SUBSET of one session's replay buffer
- * (≤ `DEFAULT_MAX_BUFFERED_BYTES`), plus the JSON envelope + header. Reject any
- * file larger than this BEFORE parsing (parse-DoS defense).
+ * Read size cap: the distilled cache is a SUBSET of one session's transcript
+ * ring and generated-image preview budget, plus the JSON envelope + header.
+ * Reject any file larger than this BEFORE parsing (parse-DoS defense).
  */
-export const MAX_TRANSCRIPT_CACHE_BYTES = DEFAULT_MAX_BUFFERED_BYTES + 256 * 1024
+export const MAX_TRANSCRIPT_CACHE_BYTES =
+  DEFAULT_MAX_BUFFERED_BYTES + DEFAULT_MAX_BUFFERED_PREVIEW_BYTES + 256 * 1024
 
 /** Cache files live beside the registry: `<registryDir>/transcript-cache`. */
 export const TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache'
@@ -121,6 +127,20 @@ function isUuid(value: unknown): value is string {
  * DROPPED so a replayed cache can touch nothing but transcript rows.
  */
 function isTranscriptCacheFrame(frame: ServerFrame): boolean {
+  if (frame.kind === 'generated-image-preview') {
+    return (
+      typeof frame.toolUseId === 'string' &&
+      frame.toolUseId.length > 0 &&
+      (frame.mediaType === 'image/png' ||
+        frame.mediaType === 'image/jpeg' ||
+        frame.mediaType === 'image/webp') &&
+      typeof frame.data === 'string' &&
+      frame.data.length > 0 &&
+      frame.data.length <= DEFAULT_MAX_BUFFERED_PREVIEW_BYTES &&
+      frame.data.length % 4 === 0 &&
+      /^[A-Za-z0-9+/]*={0,2}$/.test(frame.data)
+    )
+  }
   if (frame.kind === 'event') {
     const event: unknown = frame.event
     if (!isRecord(event) || event.type !== 'message') return false
@@ -195,6 +215,38 @@ export function createTranscriptCache(
         : {}),
     },
     frames,
+  }
+}
+
+/** Keep image previews across a same-transcript cache refresh or second close. */
+export function retainCachedImagePreviews(
+  current: TranscriptCache,
+  previous: TranscriptCache | null,
+): TranscriptCache {
+  if (
+    previous === null ||
+    current.header.engineSessionId === null ||
+    previous.header.engineSessionId !== current.header.engineSessionId ||
+    previous.header.appSessionId !== current.header.appSessionId
+  ) return current
+
+  const previews = new FrameReplayBuffer()
+  for (const frame of [...previous.frames, ...current.frames]) {
+    if (
+      frame.kind === 'generated-image-preview' &&
+      frame.sessionId === current.header.appSessionId
+    ) {
+      previews.record(current.header.appSessionId, frame)
+    }
+  }
+  return {
+    ...current,
+    frames: [
+      ...current.frames.filter(frame => frame.kind !== 'generated-image-preview'),
+      ...previews.snapshotSession(current.header.appSessionId).filter(
+        frame => frame.kind === 'generated-image-preview',
+      ),
+    ],
   }
 }
 
@@ -322,7 +374,9 @@ export function buildClosedSessionCache(
   // first turn. Distilling drops all of those, and a cache with no transcript
   // frames is worse than no cache: the renderer treats a readable cache as a
   // preview and shows a loading placeholder for a transcript that never arrives.
-  if (base.frames.length === 0) return null
+  if (!base.frames.some(frame => frame.kind === 'event' || frame.kind === 'error')) {
+    return null
+  }
 
   const path = deps.transcriptPath(base.header.engineSessionId)
   const read =
@@ -620,7 +674,10 @@ export function readCache(dir: string, id: SessionId): TranscriptCache | null {
     if (
       cache.header.appSessionId !== id ||
       cache.header.protocolVersion !== PROTOCOL_VERSION ||
-      cache.header.guardVersion !== TRANSCRIPT_CACHE_GUARD_VERSION
+      cache.header.guardVersion !== TRANSCRIPT_CACHE_GUARD_VERSION ||
+      cache.frames.some(frame =>
+        frame.kind === 'generated-image-preview' && frame.sessionId !== id,
+      )
     ) {
       return discard(filePath)
     }

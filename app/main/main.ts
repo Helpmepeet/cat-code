@@ -205,6 +205,7 @@ import {
   listCachedSessionIds,
   readCache,
   readCachedRunFacts,
+  retainCachedImagePreviews,
   resolvePreview,
   transcriptCacheDir,
   writeCache,
@@ -859,7 +860,13 @@ function persistTranscriptCache(appSessionId: SessionId): void {
       frames,
     )
     if (cache === null) return
-    writeCache(TRANSCRIPT_CACHE_DIR, cache)
+    writeCache(
+      TRANSCRIPT_CACHE_DIR,
+      retainCachedImagePreviews(
+        cache,
+        readCache(TRANSCRIPT_CACHE_DIR, appSessionId),
+      ),
+    )
   } catch (error) {
     process.stderr.write(
       `[main] transcript-cache persist failed for ${appSessionId}: ${errText(error)}\n`,

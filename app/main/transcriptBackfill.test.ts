@@ -124,6 +124,36 @@ test('fresh restorable row writes once and round-trips through readCache', () =>
   ).toBe('already_cached')
 })
 
+test('run-facts refresh keeps image previews from the same engine session', () => {
+  const dir = cacheDir()
+  const preview = {
+    kind: 'generated-image-preview' as const,
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: APP_ID,
+    toolUseId: 'toolu_image',
+    mediaType: 'image/png' as const,
+    data: 'AAAA',
+  }
+  writeCache(dir, {
+    header: {
+      appSessionId: APP_ID,
+      engineSessionId: ENGINE_ID,
+      protocolVersion: PROTOCOL_VERSION,
+      appVersion: '0.0.0',
+      guardVersion: 1,
+      writtenAt: 1,
+    },
+    frames: [...result().frames, preview],
+  })
+
+  expect(persistTranscriptBackfillResult({
+    cacheDir: dir,
+    getCurrentSession: () => descriptor(true),
+    transcriptExists: () => true,
+  }, result())).toBe('written')
+  expect(readCache(dir, APP_ID)?.frames).toEqual([...result().frames, preview])
+})
+
 /**
  * The bug this closes, measured on the real registry: 30 of 44 caches carried
  * run facts with `contextWindow: null`, because this gate asked whether a

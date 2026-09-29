@@ -24,6 +24,7 @@ import {
   createTranscriptCache,
   readCache,
   hasAnyRunFact,
+  retainCachedImagePreviews,
   writeCache,
 } from './transcriptCache.js'
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
@@ -131,11 +132,14 @@ export function persistTranscriptBackfillResult(
   const runFacts = hasAnyRunFact(result.runFacts) ? result.runFacts : undefined
   writeCache(
     options.cacheDir,
-    createTranscriptCache(
-      result.appSessionId,
-      result.engineSessionId,
-      result.frames,
-      runFacts,
+    retainCachedImagePreviews(
+      createTranscriptCache(
+        result.appSessionId,
+        result.engineSessionId,
+        result.frames,
+        runFacts,
+      ),
+      existing,
     ),
   )
   return readCache(options.cacheDir, result.appSessionId) === null

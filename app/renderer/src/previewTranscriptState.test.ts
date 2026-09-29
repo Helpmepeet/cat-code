@@ -23,6 +23,7 @@ import {
   claimPreviewSwaps,
   projectPreviewTranscriptCache,
   previewClosePlan,
+  previewGeneratedImageFrames,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
   selectPaneTranscript,
@@ -326,6 +327,12 @@ function handover(cached?: TranscriptCache) {
         applyFrames: () => {
           live = reduceLiveTranscriptState(live, batch(frames))
         },
+        carryPreviewImages: sessionId => {
+          live = reduceLiveTranscriptState(
+            live,
+            batch(previewGeneratedImageFrames(preview, sessionId)),
+          )
+        },
         resetPreview: sessionId => {
           preview = reducePreviewTranscriptState(preview, {
             type: 'preview-reset',
@@ -348,6 +355,59 @@ function handover(cached?: TranscriptCache) {
     cached: () => selectPreviewTranscript(preview, SID),
   }
 }
+
+test('restored history keeps a generated image from the closed preview', () => {
+  const toolUseId = 'toolu_restored_image'
+  const use: ServerFrame = {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: toolUseId, name: 'GenerateImage', input: { prompt: 'cat' } }],
+        },
+        uuid: '00000000-0000-4000-8000-000000000201',
+      } as unknown as SDKMessage,
+    },
+  }
+  const result: ServerFrame = {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'Generated image' }] },
+        tool_use_result: { filePath: '/tmp/cat.png', model: 'gpt-image-2-codex', size: '1024x1024', outputFormat: 'png', bytes: 4 },
+        uuid: '00000000-0000-4000-8000-000000000202',
+        isSynthetic: true,
+      } as unknown as SDKMessage,
+    },
+  }
+  const preview: ServerFrame = {
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    toolUseId,
+    mediaType: 'image/png',
+    data: 'AAAA',
+  }
+  const h = handover(cache([use, result, preview]))
+  h.previewing.add(SID)
+
+  h.deliver([ready(), use, result])
+
+  const row = h.rows()[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected image tool row')
+  expect(row.result?.generatedImage?.preview).toEqual({ mediaType: 'image/png', data: 'AAAA' })
+})
 
 /**
  * The batches main ACTUALLY delivers, from the real gate: coalescing is armed

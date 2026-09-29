@@ -55,7 +55,7 @@ import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
 import { CommandPalette } from './CommandPalette.js'
 import { buildPaletteItems, type PaletteItem } from './commandPaletteModel.js'
-import { applyServerFrameBatch, withBatch } from './serverFrameBatch.js'
+import { applyServerFrameBatch, batch, withBatch } from './serverFrameBatch.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
@@ -73,6 +73,7 @@ import {
   hasPreviewTranscript,
   openPreloadedPreview,
   previewClosePlan,
+  previewGeneratedImageFrames,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
   selectPaneTranscript,
@@ -1083,6 +1084,13 @@ export function App() {
               dispatchVerbAckResult,
               dispatchTranscript: dispatchSessionEvent,
             }),
+          carryPreviewImages: sessionId => {
+            const previews = previewGeneratedImageFrames(
+              previewTranscriptRef.current,
+              sessionId,
+            )
+            if (previews.length > 0) dispatchSessionEvent(batch(previews))
+          },
           resetPreview: sessionId =>
             dispatchPreviewTranscript({ type: 'preview-reset', sessionId }),
         },

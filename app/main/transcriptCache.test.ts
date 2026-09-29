@@ -43,6 +43,7 @@ import {
   readCache,
   readCachedHeader,
   readCachedRunFacts,
+  retainCachedImagePreviews,
   resolveCacheRunFacts,
   resolvePreview,
   writeCache,
@@ -231,6 +232,46 @@ test('distill reads the two-id header from the ready head, then drops it', () =>
   expect(cache.frames.map(f => f.kind)).toEqual(['event'])
 })
 
+test('a generated image preview survives close-cache persistence', () => {
+  const dir = tempDir()
+  const preview: ServerFrame = {
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    toolUseId: 'toolu_image',
+    mediaType: 'image/png',
+    data: 'AAAA',
+  }
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, eventFrame(0))
+  buffer.record(SID, preview)
+
+  writeCache(dir, distill(buffer.snapshotSession(SID)))
+  expect(readCache(dir, SID)?.frames).toEqual([eventFrame(0), preview])
+})
+
+test('closing a restored chat again retains its earlier generated image', () => {
+  const preview: ServerFrame = {
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    toolUseId: 'toolu_image',
+    mediaType: 'image/png',
+    data: 'AAAA',
+  }
+  const firstClose = distill([readyFrame(), eventFrame(0), preview])
+  const secondClose = distill([readyFrame(), eventFrame(0), eventFrame(1)])
+
+  expect(retainCachedImagePreviews(secondClose, firstClose).frames).toEqual([
+    eventFrame(0), eventFrame(1), preview,
+  ])
+  expect(retainCachedImagePreviews(
+    distill([readyFrame(SID, 'engine-new'), eventFrame(0)]),
+    firstClose,
+  ).frames).toEqual([eventFrame(0)])
+})
+
 /* ------------------------------------------------------------------------- *
  * write → read round-trip + perms
  * ------------------------------------------------------------------------- */
@@ -331,6 +372,23 @@ test('a schema-drift cache (a non-allowlisted frame kind) is discarded and delet
   writeFileSync(path, JSON.stringify(bad))
   expect(readCache(dir, SID)).toBeNull()
   expect(fileExists(path)).toBe(false)
+})
+
+test('a malformed generated image preview cannot be loaded from cache', () => {
+  const dir = tempDir()
+  writeFileSync(cachePath(dir), JSON.stringify({
+    header: header(),
+    frames: [{
+      kind: 'generated-image-preview',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SID,
+      toolUseId: 'toolu_image',
+      mediaType: 'image/png',
+      data: 'not base64!',
+    }],
+  }))
+  expect(readCache(dir, SID)).toBeNull()
+  expect(fileExists(cachePath(dir))).toBe(false)
 })
 
 /**
@@ -529,6 +587,14 @@ test('buildClosedSessionCache skips a session with no transcript frames or no en
   // Ready + snapshots only: a session closed before its first turn. A readable
   // cache here would leave the preview holding a loading placeholder forever.
   expect(buildClosedSessionCache(deps, [readyFrame(), permissionFrame()])).toBeNull()
+  expect(buildClosedSessionCache(deps, [readyFrame(), {
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    toolUseId: 'toolu_orphan',
+    mediaType: 'image/png',
+    data: 'AAAA',
+  }])).toBeNull()
   // Never ready ⇒ never restorable ⇒ the cache would never be served.
   expect(buildClosedSessionCache(deps, [eventFrame(0)])).toBeNull()
 })

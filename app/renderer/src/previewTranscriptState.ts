@@ -326,6 +326,29 @@ export function hasPreviewTranscript(
   return state.bySession[sessionId] !== undefined
 }
 
+/** Carry cached image bytes across the preview-to-live history handover. */
+export function previewGeneratedImageFrames(
+  state: PreviewTranscriptState,
+  sessionId: SessionId,
+): ServerFrame[] {
+  const session = state.bySession[sessionId]?.transcript.sessions[sessionId]
+  if (!session) return []
+  const previews = new Map(Object.entries(session.generatedImagePreviewsByUseId))
+  for (const [toolUseId, result] of Object.entries(session.toolResultsByUseId)) {
+    if (!previews.has(toolUseId) && result.generatedImage?.preview) {
+      previews.set(toolUseId, result.generatedImage.preview)
+    }
+  }
+  return Array.from(previews, ([toolUseId, preview]) => ({
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    toolUseId,
+    mediaType: preview.mediaType,
+    data: preview.data,
+  }))
+}
+
 /** The actual click-path decision: a store hit opens without invoking fallback. */
 export function openPreloadedPreview(
   state: PreviewTranscriptState,
@@ -390,6 +413,8 @@ export type PreviewHandoverPorts = {
   resetLiveSession: (sessionId: SessionId) => void
   /** Project the batch into every store — always runs, swap or not. */
   applyFrames: () => void
+  /** Seed image previews that restored history cannot read from the filesystem. */
+  carryPreviewImages: (sessionId: SessionId) => void
   /** Drop the now-superseded cache (`preview-reset`). */
   resetPreview: (sessionId: SessionId) => void
 }
@@ -433,6 +458,7 @@ export function applyPreviewHandover(
     if (connectionStarts.has(sessionId)) ports.resetLiveSession(sessionId)
   }
   ports.applyFrames()
+  for (const sessionId of swapped) ports.carryPreviewImages(sessionId)
   for (const sessionId of swapped) ports.resetPreview(sessionId)
   return swapped
 }
