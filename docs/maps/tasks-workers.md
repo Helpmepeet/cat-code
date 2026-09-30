@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-09-21.
+Last refreshed: 2026-10-01.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -50,7 +50,7 @@ Start with `src/tools/AgentTool/AgentTool.tsx` for launch decisions:
 
 Then inspect:
 
-- `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, and partial-result extraction.
+- `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, partial-result extraction, and `prepareBackgroundAgentHandoff()`. That handoff records a recoverable parent outcome before awaiting worker completion or optional safety classification; Auto mode writes a provisional classifier-unavailable warning and replaces it when review settles.
 - `src/tools/AgentTool/agentLifecycleOwnership.ts` for the in-process run ownership held until detached terminal recording, notification work, and cleanup finish; resume cannot replace a task while this ownership remains active.
 - `src/tools/AgentTool/runAgent.ts` for sidechain transcript writes, agent-specific MCP/hook/skill setup, subagent context isolation, and cleanup of agent-scoped shell/monitor tasks when an agent exits.
 - `src/tools/AgentTool/resumeAgent.ts` for resuming a retained/completed local agent in the background from its transcript and metadata.
@@ -147,6 +147,7 @@ Start with `src/state/selectors.ts`.
 - New task state should be built from `createTaskStateBase()` and registered with `registerTask()` so SDK `task_started` events emit once.
 - Running task output should flow through `DiskTaskOutput`, task output symlinks, or `appendTaskOutput()` depending on task type.
 - Task completion notifications are task-specific. `generateTaskAttachments()` intentionally does not notify completed tasks because that races per-task notifications.
+- `prepareBackgroundAgentHandoff()` persists detached-agent completion text in the `subagent-terminal` record before post-completion awaits; the optional `notification` field is owned by `src/types/logs.ts`. Preserve this ordering so interruption during review or cleanup cannot erase the parent's recoverable outcome.
 - Terminal tasks are evictable only after `notified=true`; retained local agents, panel grace periods, pending task notifications, and unresolved local-worker instruction records delay eviction. A delivery record stops blocking only after its explicit failure or uncertainty report has transferred to the appropriate model-facing queue.
 - Queue model-facing task notifications through `enqueuePendingNotification()` with `formatTaskNotificationText()` and `toTaskNotificationOrigin()`.
 - For SDK consumers, check direct `emitTaskTerminatedSdk()` / `enqueueSdkEvent()` paths; not every UI/model notification creates an SDK event automatically.
