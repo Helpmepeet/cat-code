@@ -297,52 +297,27 @@ describe('LocalAgentTask foreground cleanup', () => {
     ).toBe(registration.abortController)
   })
 
-  test('completeAgentTask records blocked handoff metadata from the result', () => {
+  test.each([
+    ['plain', 'status: blocked', 'Open questions / blockers:', 'Should I update the public API too?'],
+    ['prompt Markdown', '**status:** blocked', '**Open questions / blockers:** *(omit if none)*', 'Should I update the public API too?'],
+    ['prompt plain with omit note', 'status: blocked', 'Open questions / blockers: (omit if none)', 'Should I update the public API too?'],
+    ['no blocker section', 'status: blocked', '', 'I need a decision before editing.'],
+  ])('completeAgentTask extracts the exact blocker: %s', (_name, status, heading, expected) => {
     registerAgentForeground({
-      agentId: 'sync-agent-5',
-      description: 'Sync foreground agent',
-      prompt: 'test prompt',
-      selectedAgent: {
-        name: 'implementor',
-        agentType: 'implementor',
-        prompt: 'test prompt',
-      },
-      agentName: 'Curie',
-      setAppState,
+      agentId: 'blocker-fixture', description: 'Fixture', prompt: 'fixture',
+      selectedAgent: { agentType: 'implementor', prompt: 'fixture' }, setAppState,
     })
-
-    completeAgentTask(
-      {
-        agentId: 'sync-agent-5',
-        agentType: 'implementor',
-        agentName: 'Curie',
-        model: 'gpt-5.6-luna',
-        content: [
-          {
-            type: 'text',
-            text:
-              'I need a decision before editing.\n\n' +
-              'status: blocked\n\n' +
-              'Changed files:\n' +
-              '- none\n\n' +
-              'Checks run:\n' +
-              '- none\n\n' +
-              'Open questions / blockers:\n' +
-              '- Should I update the public API too?',
-          },
-        ],
-        totalToolUseCount: 0,
-        totalDurationMs: 100,
-        totalTokens: 10,
-      },
-      setAppState,
-    )
-
-    expect(appState.tasks['sync-agent-5']).toMatchObject({
-      type: 'local_agent',
-      status: 'completed',
-      handoffStatus: 'blocked',
-      blockReason: 'Should I update the public API too?',
+    completeAgentTask({
+      agentId: 'blocker-fixture', agentType: 'implementor', model: 'gpt-5.6-luna',
+      content: [{ type: 'text', text: [
+        'I need a decision before editing.', '', status, '',
+        'Changed files:', '- none', '', 'Checks run:', '- none', '',
+        ...(heading ? [heading, '- Should I update the public API too?'] : []),
+      ].join('\n') }],
+      totalToolUseCount: 0, totalDurationMs: 100, totalTokens: 10,
+    }, setAppState)
+    expect(appState.tasks['blocker-fixture']).toMatchObject({
+      handoffStatus: 'blocked', blockReason: expected,
     })
   })
 

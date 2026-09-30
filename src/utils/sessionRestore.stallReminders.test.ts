@@ -102,3 +102,84 @@ test('a result delivered without any terminal record also stays silent', async (
 
   expect(await buildStallReminders(path)).toHaveLength(0)
 })
+
+import { AgentTool } from '../tools/AgentTool/AgentTool.js'
+import { ResumeAgentTool } from '../tools/ResumeAgentTool/ResumeAgentTool.js'
+import { formatTaskNotificationText, toTaskNotificationOrigin } from './taskNotification.js'
+
+function scheduled(kind: 'Agent' | 'ResumeAgent', id: string) {
+  return {
+    type: 'user', message: { role: 'user', content: [kind === 'Agent'
+      ? AgentTool.mapToolResultToToolResultBlockParam({
+          status: 'async_launched', isAsync: true, agentId: 'worker', description: 'fixture',
+          prompt: 'fixture', outputFile: '/tmp/unused', canCheckProgress: false,
+        } as never, id)
+      : ResumeAgentTool.mapToolResultToToolResultBlockParam({
+          success: true, message: 'Resumed "worker" in the background.',
+        }, id)] },
+  }
+}
+
+for (const kind of ['Agent', 'ResumeAgent'] as const) {
+  test(`${kind} scheduling acknowledgement does not settle interrupted work`, async () => {
+    const path = await writeTranscript([spawned('new-run', 'worker'), scheduled(kind, 'new-run')])
+    const recovered = await buildStallReminders(path)
+    expect(recovered).toHaveLength(1)
+    expect(JSON.stringify(recovered)).toContain('interrupted')
+    expect(JSON.stringify(recovered)).not.toContain('still running')
+  })
+}
+
+const outcome = {
+  taskId: 'worker', toolUseId: 'new-run', status: 'completed' as const,
+  summary: 'Worker completed', result: 'changed file.ts; local checks passed.',
+}
+function queuedOutcome() {
+  return { type: 'queue-operation', operation: 'enqueue', mode: 'task-notification', content: formatTaskNotificationText(outcome) }
+}
+function acceptedOutcome(toolUseId = 'new-run', attachment = false) {
+  const details = { ...outcome, toolUseId }
+  return attachment
+    ? { type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: formatTaskNotificationText(details), origin: toTaskNotificationOrigin(details) } }
+    : { type: 'user', origin: toTaskNotificationOrigin(details), message: { role: 'user', content: formatTaskNotificationText(details) } }
+}
+
+test('completed queued outcome recovers verbatim with worker provenance and no repeat instruction', async () => {
+  const path = await writeTranscript([
+    spawned('new-run', 'worker'), scheduled('Agent', 'new-run'),
+    { type: 'subagent-terminal', agentId: 'worker', toolUseId: 'new-run', status: 'completed', durationMs: 10, endedAt: new Date().toISOString() },
+    queuedOutcome(),
+    // Queue removal is not durable acceptance by the parent.
+    { type: 'queue-operation', operation: 'dequeue' },
+  ])
+  const recovered = await buildStallReminders(path)
+  expect(recovered).toHaveLength(1)
+  expect(recovered[0]).toMatchObject({ type: 'user', origin: toTaskNotificationOrigin(outcome), message: { content: formatTaskNotificationText(outcome) } })
+})
+
+test.each([false, true])('durably accepted outcome is not recovered again (attachment=%s)', async attachment => {
+  const path = await writeTranscript([spawned('new-run', 'worker'), scheduled('Agent', 'new-run'), queuedOutcome(), acceptedOutcome('new-run', attachment)])
+  expect(await buildStallReminders(path)).toEqual([])
+})
+
+test('older run delivery cannot settle a newer run of the same worker', async () => {
+  const path = await writeTranscript([
+    spawned('old-run', 'worker'), scheduled('Agent', 'old-run'), acceptedOutcome('old-run'),
+    spawned('new-run', 'worker'), scheduled('ResumeAgent', 'new-run'),
+  ])
+  const recovered = await buildStallReminders(path)
+  expect(recovered).toHaveLength(1)
+  expect(JSON.stringify(recovered)).toContain('new-run')
+})
+
+test('completion interrupted before a finalized notification is persisted stays explicit and does not repeat work', async () => {
+  const path = await writeTranscript([
+    spawned('new-run', 'worker'), scheduled('Agent', 'new-run'),
+    { type: 'subagent-terminal', agentId: 'worker', toolUseId: 'new-run', status: 'completed', durationMs: 10, endedAt: new Date().toISOString() },
+  ])
+  const recovered = await buildStallReminders(path)
+  expect(recovered).toHaveLength(1)
+  expect(JSON.stringify(recovered)).toContain('status: completed')
+  expect(JSON.stringify(recovered)).toContain('/tmp/worker.jsonl')
+  expect(JSON.stringify(recovered)).toContain('do not automatically repeat completed work')
+})

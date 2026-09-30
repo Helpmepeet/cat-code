@@ -361,6 +361,7 @@ async function resumeAgentBackgroundLocked(
     transcriptPath: agentTranscriptPath,
     toolUseId: toolUseContext.toolUseId,
     spawnedAt,
+    isAsync: true,
   })
   registerActiveSubagent(agentId, {
     startedAt: startTime,

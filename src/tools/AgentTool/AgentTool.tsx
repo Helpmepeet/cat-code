@@ -43,7 +43,7 @@ import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { filterDeniedAgents, getDenyRuleForAgent } from '../../utils/permissions/permissions.js';
 import { enqueueSdkEvent } from '../../utils/sdkEventQueue.js';
-import { appendSubagentSpawned, appendSubagentTerminal, getAgentTranscriptPath, getTranscriptPath, listAgentMetadataForSession, writeAgentMetadata } from '../../utils/sessionStorage.js';
+import { appendSubagentSpawned, appendSubagentTerminal, getAgentTranscriptPath, getTranscriptPath, listAgentMetadataForSession } from '../../utils/sessionStorage.js';
 import { sleep } from '../../utils/sleep.js';
 import { buildEffectiveSystemPrompt } from '../../utils/systemPrompt.js';
 import { asSystemPrompt } from '../../utils/systemPromptType.js';
@@ -1304,14 +1304,9 @@ export const AgentTool = buildTool({
         const changed = await hasWorktreeChanges(worktreePath, headCommit);
         if (!changed) {
           await removeAgentWorktree(worktreePath, worktreeBranch, gitRoot);
-          // Clear worktreePath from metadata so resume doesn't try to use
-          // a deleted directory. Fire-and-forget to match runAgent's
-          // writeAgentMetadata handling.
-          void writeAgentMetadata(asAgentId(earlyAgentId), {
-            agentType: selectedAgent.agentType,
-            agentName,
-            description
-          }).catch(_err => logForDebugging(`Failed to clear worktree metadata: ${_err}`));
+          // Keep the recorded isolation path even after clean-worktree removal.
+          // resumeAgentBackground must refuse a missing workspace, rather than
+          // silently running this worker in the shared checkout.
           return {};
         }
       }
@@ -1336,6 +1331,7 @@ export const AgentTool = buildTool({
       transcriptPath: agentTranscriptPath,
       toolUseId: toolUseContext.toolUseId,
       spawnedAt,
+      isAsync: shouldRunAsync,
     });
     registerActiveSubagent(earlyAgentId, {
       startedAt: Date.now(),

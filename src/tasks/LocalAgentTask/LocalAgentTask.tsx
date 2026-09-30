@@ -1096,7 +1096,7 @@ function extractHandoffStatus(text: string): 'done' | 'blocked' | undefined {
 }
 
 function extractBlockReason(text: string): string | undefined {
-  const blockerMatch = text.match(/open questions \/ blockers:\s*\n\s*(?:[-*]\s*)?([^\n]+)/i);
+  const blockerMatch = text.match(/^\s*(?:\*\*)?open questions \/ blockers:(?:\*\*)?[^\n]*\n\s*(?:[-*]\s*)?([^\n]+)/im);
   const blocker = blockerMatch?.[1]?.trim();
   if (blocker) return blocker;
   return text.split('\n').map(line => line.trim()).find(line => line.length > 0);

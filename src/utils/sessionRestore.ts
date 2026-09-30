@@ -53,7 +53,8 @@ import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import type { FileHistorySnapshot } from './fileHistory.js'
 import { fileHistoryRestoreStateFromLog } from './fileHistory.js'
-import { createSystemMessage } from './messages.js'
+import { createSystemMessage, createUserMessage } from './messages.js'
+import { parseTaskNotificationDetails, queuedCommandOrigin, toTaskNotificationOrigin } from './taskNotification.js'
 import { parseUserSpecifiedModel } from './model/model.js'
 import { hasProviderBoundHistory } from './model/providers.js'
 import { getPlansDirectory } from './plans.js'
@@ -572,9 +573,9 @@ export function exitRestoredWorktree(): void {
 }
 
 /**
- * Read the parent transcript and compute stalled subagent entries (spawned but
- * no corresponding terminal entry). Returns in-memory system-reminder messages
- * that are prepended to the resumed conversation.
+ * Recover unresolved subagent runs from the parent transcript. Scheduling is
+ * not outcome delivery: finalized queued notifications are restored with their
+ * provenance, while interrupted runs receive a reminder. No work is restarted.
  *
  * Never throws — a read failure just returns an empty array.
  */
@@ -591,15 +592,17 @@ export async function buildStallReminders(
 
   const spawned = new Map<string, SubagentSpawnedMessage>()
   const terminal = new Map<string, SubagentTerminalMessage>() // keyed by toolUseId
-  // The gate is the tool_result, NOT the terminal record. A terminal record
-  // says the subagent stopped; only a tool_result says the conversation ever
-  // learned what it did. Gating on the terminal record silenced this reminder
-  // in exactly the case it exists for: the stall sweep
-  // (`cleanupRegistry.flushStallDetectedEntries`) writes a terminal record for
-  // a subagent killed with its parent, so the tombstone that documents the loss
-  // used to suppress the warning about it, and the resumed model then told the
-  // user it had never spawned the subagent (2026-08-29).
+  // Match delivery by invocation, never by worker ID: a worker can run again.
   const resolved = new Set<string>()
+  const results = new Map<string, unknown>()
+  const notifications = new Map<string, string>()
+  const rememberAcceptance = (origin: unknown) => {
+    if (typeof origin !== 'object' || origin === null) return
+    const value = origin as { kind?: unknown; toolUseId?: unknown }
+    if (value.kind === 'task-notification' && typeof value.toolUseId === 'string') {
+      resolved.add(value.toolUseId)
+    }
+  }
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -615,17 +618,59 @@ export async function buildStallReminders(
     } else if (entry.type === 'subagent-terminal') {
       const msg = entry as unknown as SubagentTerminalMessage
       terminal.set(msg.toolUseId, msg)
+    } else if (entry.type === 'queue-operation') {
+      // Dequeue is a reservation, not durable parent acceptance. Recover only
+      // the finalized notification, which already passed handoff safety gates.
+      if (
+        entry.operation === 'enqueue' &&
+        entry.mode === 'task-notification' &&
+        entry.agentId === undefined &&
+        typeof entry.content === 'string'
+      ) {
+        const details = parseTaskNotificationDetails(entry.content)
+        if (details?.toolUseId) notifications.set(details.toolUseId, entry.content)
+      }
+    } else if (entry.type === 'attachment') {
+      const attachment = entry.attachment as { type?: unknown } | undefined
+      if (attachment?.type === 'queued_command') {
+        rememberAcceptance(queuedCommandOrigin(attachment))
+      }
     } else if (entry.type === 'user') {
-      const content = (entry.message as { content?: unknown } | undefined)
-        ?.content
+      rememberAcceptance(entry.origin)
+      const content = (entry.message as { content?: unknown } | undefined)?.content
+      // Compatibility for notifications persisted before structural origins.
+      if (typeof content === 'string') {
+        const details = parseTaskNotificationDetails(content)
+        if (details?.toolUseId) resolved.add(details.toolUseId)
+      }
       if (!Array.isArray(content)) continue
       for (const block of content) {
-        const { type, tool_use_id: id } = block as {
-          type?: unknown
-          tool_use_id?: unknown
+        if (typeof block !== 'object' || block === null) continue
+        const { type, tool_use_id: id, content: result } = block as {
+          type?: unknown; tool_use_id?: unknown; content?: unknown
         }
-        if (type === 'tool_result' && typeof id === 'string') resolved.add(id)
+        if (type === 'tool_result' && typeof id === 'string') results.set(id, result)
       }
+    }
+  }
+
+  for (const [id, result] of results) {
+    const text = typeof result === 'string' ? result : Array.isArray(result)
+      ? result.map(block => block?.type === 'text' && typeof block.text === 'string' ? block.text : '').join('\n') : ''
+    // Older transcripts lack isAsync. Recognize the real scheduling results,
+    // including ResumeAgent's JSON envelope, rather than treating them as final.
+    let resumeScheduled = false
+    try {
+      const parsed = JSON.parse(text)
+      resumeScheduled = parsed?.success === true && typeof parsed.message === 'string' &&
+        parsed.message.startsWith('Resumed ') && parsed.message.includes('in the background.')
+    } catch { /* Agent's result is plain text. */ }
+    if (
+      !spawned.get(id)?.isAsync &&
+      !text.startsWith('Async agent launched successfully.') &&
+      !resumeScheduled
+    ) {
+      resolved.add(id)
     }
   }
 
@@ -634,6 +679,16 @@ export async function buildStallReminders(
 
   for (const [toolUseId, info] of spawned) {
     if (resolved.has(toolUseId)) continue
+
+    const notification = notifications.get(toolUseId)
+    if (notification) {
+      const details = parseTaskNotificationDetails(notification)!
+      reminders.push({
+        ...createUserMessage({ content: notification }),
+        origin: toTaskNotificationOrigin(details),
+      })
+      continue
+    }
 
     const ended = terminal.get(toolUseId)
     const spawnedMs = new Date(info.spawnedAt).getTime()
@@ -654,11 +709,11 @@ A subagent spawned earlier in this session ended without delivering its result, 
   transcript: ${info.transcriptPath}
   toolUseId: ${info.toolUseId}
 
-It ran for real and its work may already be partly applied. Before responding to the user's next message, tell them this subagent ran and was lost, and ask which action to take: (1) Read the subagent transcript to recover what it finished, (2) re-dispatch a fresh Agent call for the remainder, or (3) abandon it. Do NOT tell the user the subagent was never spawned, and do NOT re-dispatch the same task without asking.
+It ran for real and its work may already be partly applied. If completed, recover its transcript and check the handoff safety requirements before consuming the outcome; do not automatically repeat completed work. Before responding to the user's next message, tell them this subagent ran and was lost, and ask which action to take: (1) Read the subagent transcript to recover what it finished, (2) re-dispatch a fresh Agent call for the remainder, or (3) abandon it. Do NOT tell the user the subagent was never spawned, and do NOT re-dispatch the same task without asking.
 </system-reminder>`
         : isRecent
           ? `<system-reminder>
-A subagent spawned earlier in this session has no terminal entry. It may have stalled, been killed, or is still running in the background.
+A subagent spawned earlier in this session has no terminal entry. Its work was interrupted when the parent process stopped; it is not running in this restored session.
 
   agentId: ${info.agentId}
   agentType: ${info.agentType}

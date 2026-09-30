@@ -369,6 +369,8 @@ export type SubagentSpawnedMessage = {
   transcriptPath: string
   toolUseId: string
   spawnedAt: string
+  /** Scheduling acknowledgement is not delivery of this run's outcome. */
+  isAsync?: boolean
 }
 
 export type SubagentTerminalMessage = {
