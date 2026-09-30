@@ -1,3 +1,4 @@
+import { candidateOmissions, sampleHunkCoordinates } from './evidence.js'
 import type { PlannerFailure } from './planner.js'
 import {
   boundFilePatchDiagnosticMetadata,
@@ -74,9 +75,13 @@ export function renderPlannerFailure(
 ): RenderedPlannerFailure {
   const failure = input.failure
   const limits = { ...DEFAULT_FILE_PATCH_DIAGNOSTIC_LIMITS, ...input.limits }
-  const candidateCoordinates = (failure.candidateCoordinates ?? [])
-    .slice(0, limits.maxCandidateCoordinates)
-    .map(coordinate => ({ start: coordinate.start, end: coordinate.end }))
+  const coordinates = failure.candidateCoordinates ?? []
+  const candidateCoordinates = sampleHunkCoordinates(coordinates, limits.maxCandidateCoordinates)
+    .map(coordinate => ({ start: coordinate.start, end: coordinate.end,
+      ...(coordinate.hunkIndex === undefined ? {} : { hunk: coordinate.hunkIndex + 1 }),
+    }))
+  const omitted = candidateOmissions(failure.candidateCoordinatesOmitted,
+    failure.diagnosticsTruncated === true, coordinates.length - candidateCoordinates.length)
   let metadata: FilePatchDiagnosticMetadata = {
     code: failure.code,
     kind: failure.kind,
@@ -84,8 +89,9 @@ export function renderPlannerFailure(
     ...(failure.hunkIndex === undefined ? {} : { hunkIndex: failure.hunkIndex + 1 }),
     hunkCount: failure.hunkCount,
     candidateCoordinates,
+    ...(omitted === undefined ? {} : { candidateCoordinatesOmitted: omitted }),
     nearMatches: [],
-    diagnosticsTruncated: failure.diagnosticsTruncated === true,
+    diagnosticsTruncated: failure.diagnosticsTruncated === true || coordinates.length > candidateCoordinates.length,
   }
 
   const state: DiagnosticState = { comparisons: 0, truncated: metadata.diagnosticsTruncated }
@@ -325,7 +331,9 @@ function renderMessage(
   const parts = [failure.message]
   if (metadata.candidateCoordinates.length > 0) {
     const ranges = metadata.candidateCoordinates
-      .map(coordinate => `${coordinate.start + 1}-${coordinate.end}`)
+      .map(coordinate => coordinate.start === coordinate.end
+        ? `insertion after source line ${coordinate.start}`
+        : `${coordinate.start + 1}-${coordinate.end}`)
       .join(', ')
     parts.push(`Candidate source ranges: ${ranges}.`)
   }

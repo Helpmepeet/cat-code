@@ -43,13 +43,15 @@ import { checkCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
-import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import { projectFilePatchErrorForModel } from '../../tools/FilePatchTool/modelError.js'
+import { FILE_PATCH_TOOL_NAME, isFilePatchToolName } from '../../tools/FilePatchTool/constants.js'
 import {
   FilePatchError,
   MAX_FILE_PATCH_ERROR_REPAIR_LENGTH,
   MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
   MAX_FILE_PATCH_FAILURE_DETAILS,
   serializeFilePatchError,
+  normalizeFilePatchDiagnosticMetadata,
   type FilePatchFailureDetail,
   type FilePatchModelError,
   type FilePatchOperationType,
@@ -204,7 +206,7 @@ function buildToolErrorResult(
   if (error instanceof FilePatchError) {
     const structured = serializeFilePatchError(error)
     return {
-      modelContent: `<tool_use_error>${jsonStringify(structured)}</tool_use_error>`,
+      modelContent: `<tool_use_error>${jsonStringify(projectFilePatchErrorForModel(structured))}</tool_use_error>`,
       persistedResult: structured,
     }
   }
@@ -221,7 +223,7 @@ function buildFilePatchValidationError(
   if (typeof meta?.code !== 'string') return null
 
   const details = Array.isArray(meta.details)
-    ? meta.details.slice(0, MAX_FILE_PATCH_FAILURE_DETAILS).flatMap(detail => {
+    ? meta.details.flatMap(detail => {
         if (typeof detail !== 'object' || detail === null) return []
         const candidate = detail as Record<string, unknown>
         if (
@@ -232,7 +234,9 @@ function buildFilePatchValidationError(
         ) {
           return []
         }
+        const diagnostics = normalizeFilePatchDiagnosticMetadata(candidate.diagnostics)
         const normalized: FilePatchFailureDetail = {
+          ...(diagnostics === undefined ? {} : { diagnostics }),
           code: candidate.code,
           operation: candidate.operation,
           path: candidate.path,
@@ -240,6 +244,7 @@ function buildFilePatchValidationError(
             candidate.message,
             MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
           ),
+          ...(isPatchSourceSpan(candidate.patchSourceSpan) ? { patchSourceSpan: candidate.patchSourceSpan } : {}),
           ...(typeof candidate.moveTo === 'string'
             ? { moveTo: candidate.moveTo }
             : {}),
@@ -253,8 +258,10 @@ function buildFilePatchValidationError(
         return [normalized]
       })
     : []
+  const diagnostics = normalizeFilePatchDiagnosticMetadata(meta.diagnostics)
   return {
     type: 'file_patch_error',
+    ...(diagnostics === undefined ? {} : { diagnostics }),
     code: meta.code,
     ...(isFilePatchOperationType(meta.operation)
       ? { operation: meta.operation }
@@ -267,10 +274,26 @@ function buildFilePatchValidationError(
     ...(typeof meta.hunkCount === 'number'
       ? { hunkCount: meta.hunkCount }
       : {}),
-    details,
+    details: details.slice(0, MAX_FILE_PATCH_FAILURE_DETAILS),
+    ...(meta.code === 'PATCH_PREFLIGHT_FAILED' && meta.omittedFailureCount === undefined ? {} : {
+      omittedFailureCount: (typeof meta.omittedFailureCount === 'number' ? meta.omittedFailureCount : 0) + Math.max(0, details.length - MAX_FILE_PATCH_FAILURE_DETAILS),
+    }),
+    ...(isPatchSourceSpan(meta.patchSourceSpan) ? { patchSourceSpan: meta.patchSourceSpan } : {}),
     mutationOutcome: 'no-mutation',
     repair: boundFilePatchErrorText(message, MAX_FILE_PATCH_ERROR_REPAIR_LENGTH),
   }
+}
+
+function isPatchSourceSpan(
+  value: unknown,
+): value is { startLine: number; endLine: number } {
+  if (typeof value !== 'object' || value === null) return false
+  const span = value as Record<string, unknown>
+  return (
+    Number.isSafeInteger(span.startLine) && Number.isSafeInteger(span.endLine) &&
+    (span.startLine as number) > 0 &&
+    (span.endLine as number) >= (span.startLine as number)
+  )
 }
 
 function isFilePatchOperationType(
@@ -829,20 +852,21 @@ async function checkPermissionsAndCallTool(
       }),
       ...mcpToolDetailsForAnalytics(tool.name, mcpServerType, mcpServerBaseUrl),
     })
-    const structuredPatchValidation = buildFilePatchValidationError(
-      isValidCall.message,
-      isValidCall.meta,
-    )
+    const structuredPatchValidation = isFilePatchToolName(tool.name)
+      ? buildFilePatchValidationError(isValidCall.message, isValidCall.meta)
+      : null
     const validationContent =
       structuredPatchValidation === null
         ? isValidCall.message
-        : jsonStringify(structuredPatchValidation)
+        : jsonStringify(projectFilePatchErrorForModel(structuredPatchValidation))
+    const persistedValidationContent = structuredPatchValidation === null
+      ? isValidCall.message : jsonStringify(structuredPatchValidation)
     const validationToolUseResult =
       isValidCall.meta === undefined
         ? `Error: ${isValidCall.message}`
         : {
             type: 'validation_error',
-            content: `Error: ${validationContent}`,
+            content: `Error: ${persistedValidationContent}`,
             message: isValidCall.message,
             errorCode: isValidCall.errorCode,
             meta: structuredPatchValidation ?? isValidCall.meta,

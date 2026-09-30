@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-09-29 against the captured committed source tree.
+Last refreshed: 2026-09-30 against the captured committed source tree.
 
 ## Purpose
 
@@ -223,7 +223,7 @@ authority-checked boundary. Start with `src/utils/teammateMailbox.ts`.
 | Resource tools | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/` | Separate from normal MCP call tools; still part of the tool pool and can be deferred. |
 | Agent orchestration tools | `src/tools/{AgentTool,ResumeAgentTool,SendMessageTool,TaskStopTool,AskParentSessionTool}/`, `src/services/tools/toolOrchestration.ts` | These shape subagent behavior and can change the global tool pool seen by workers. |
 | Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. In Bash, lookup-altering assignments (`PATH`, `BASH_ENV`, `LD_*`, `DYLD_*`, including declaration and loop forms) bypass sandbox auto-allow: only an exact existing rule may allow them; otherwise they require approval. |
-| File mutation and persisted result bounds | `src/tools/{FileEditTool,FileWriteTool,FilePatchTool,NotebookEditTool}/` | `src/tools/FilePatchTool/parser.ts`, `src/tools/FilePatchTool/planner.ts`, `src/tools/FilePatchTool/applier.ts`, `src/tools/FilePatchTool/prompt.ts`, `src/utils/{diff,analyzeContext}.ts`, tool-specific tests, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation. FilePatch parses its complete envelope, plans all independent operations against current snapshots, and writes none if preflight fails; it never fuzzy-applies an ambiguous hunk. The tool result must retain bounded, useful diff/line context rather than whole edited files or notebooks; rollback and result enumeration remain part of the safety contract. |
+| File mutation and persisted result bounds | `src/tools/{FileEditTool,FileWriteTool,FilePatchTool,NotebookEditTool}/` | `src/tools/FilePatchTool/parser.ts`, `src/tools/FilePatchTool/planner.ts`, `src/tools/FilePatchTool/applier.ts`, `src/tools/FilePatchTool/modelError.ts`, `src/tools/FilePatchTool/prompt.ts`, `src/utils/{diff,analyzeContext}.ts`, tool-specific tests, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation. FilePatch parses its complete envelope, plans all independent operations against current snapshots, and writes none if preflight fails; it never fuzzy-applies an ambiguous hunk. `modelError.ts` owns the bounded model error projection and recovery guidance; `src/services/tools/toolExecution.ts` selects it for execution and validation while preserving structured transcript results. Candidate evidence is raw, hunk-labelled source coordinates with cumulative omission accounting. The tool result must retain bounded, useful diff/line context rather than whole edited files or notebooks; rollback and result enumeration remain part of the safety contract. |
 
 ## Tool Search And Deferred Loading
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import z from 'zod/v4'
-import { buildTool, type ToolUseContext } from '../../Tool.js'
+import { buildTool, type ToolUseContext, type ValidationResult } from '../../Tool.js'
 import type {
   AssistantMessage,
   AttachmentMessage,
@@ -15,7 +15,7 @@ import {
 import { runTools } from './toolOrchestration.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
-import { FilePatchError } from '../../tools/FilePatchTool/types.js'
+import { FilePatchError, serializeFilePatchError } from '../../tools/FilePatchTool/types.js'
 import { asAgentId } from '../../types/ids.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
@@ -149,7 +149,7 @@ function makeTool(
     async prompt() {
       return name
     },
-    async validateInput() {
+    async validateInput(): Promise<ValidationResult> {
       return { result: true as const }
     },
     renderToolUseMessage: () => null,
@@ -352,6 +352,10 @@ describe('runToolUse PreToolUse additionalContext', () => {
     expect(resultBlock.is_error).toBe(true)
     expect(resultBlock.content).toContain('PATCH_ANCHOR_AMBIGUOUS')
     expect(resultBlock.content).toContain('file_patch_error')
+    const model = JSON.parse(resultBlock.content!.replace('<tool_use_error>', '').replace('</tool_use_error>', ''))
+    expect(model.failures).toHaveLength(1)
+    expect(model.failures[0]).toMatchObject({ code: 'PATCH_ANCHOR_AMBIGUOUS', hunk: 2 })
+    expect(model).not.toHaveProperty('details')
     expect(message.toolUseResult).toMatchObject({
       type: 'file_patch_error',
       code: 'PATCH_ANCHOR_AMBIGUOUS',
@@ -365,6 +369,57 @@ describe('runToolUse PreToolUse additionalContext', () => {
       'FilePatchError:PATCH_ANCHOR_AMBIGUOUS',
     )
     expect(classifyToolError(error)).not.toContain(path)
+  })
+})
+
+describe('patch error path parity', () => {
+  test('keeps non-patch validation errors on their existing path even with a code', async () => {
+    const tool = makeTool('OtherTool', async () => { throw new Error('must not execute') })
+    tool.validateInput = async () => ({ result: false, message: 'Other validation failed.', errorCode: 1, meta: { code: 'OTHER_CODE' } })
+    const updates = await drain(tool)
+    const result = updates.find(update => toolResultIndices([update]).length > 0)!.message as {
+      message: { content: { content: string }[] }; toolUseResult: unknown
+    }
+    expect(result.message.content[0]!.content).toBe('<tool_use_error>Other validation failed.</tool_use_error>')
+    expect(result.toolUseResult).toMatchObject({
+      type: 'validation_error', content: 'Error: Other validation failed.', meta: { code: 'OTHER_CODE' },
+    })
+  })
+
+  test('execution and validation share the projection while retaining their storage envelopes', async () => {
+    const error = new FilePatchError('Diagnostic detail repeated. '.repeat(50), {
+      code: 'PATCH_ANCHOR_AMBIGUOUS', operation: 'update', path: '/tmp/parity',
+      hunkCount: 2, patchSourceSpan: { startLine: 3, endLine: 5 }, omittedFailureCount: 2,
+      diagnostics: {
+        code: 'PATCH_ANCHOR_AMBIGUOUS', kind: 'ambiguity', path: '/tmp/parity',
+        hunkCount: 2, nearMatches: [], diagnosticsTruncated: true, candidateCoordinatesOmitted: 4,
+        candidateCoordinates: Array.from({ length: 10 }, (_, index) => ({
+          start: index, end: index + 1, hunk: index < 9 ? 1 : 2,
+        })),
+      },
+    })
+    const persisted = serializeFilePatchError(error)
+    const execution = makeTool('Apply_patch', async () => { throw error })
+    const validation = makeTool('Apply_patch', async () => { throw new Error('must not execute') })
+    validation.validateInput = async () => ({ result: false, message: error.message, errorCode: 1, meta: { ...persisted } })
+    const results = []
+    for (const tool of [execution, validation]) {
+      const updates = await drain(tool)
+      const result = updates.find(update => toolResultIndices([update]).length > 0)!.message as {
+        message: { content: { content: string }[] }; toolUseResult: unknown
+      }
+      results.push(result)
+    }
+    expect(results[0]!.message.content[0]!.content).toBe(results[1]!.message.content[0]!.content)
+    expect(results[0]!.toolUseResult).toEqual(persisted)
+    expect(results[1]!.toolUseResult).toMatchObject({
+      type: 'validation_error', meta: persisted,
+    })
+    expect(JSON.parse((results[1]!.toolUseResult as { content: string }).content.slice('Error: '.length))).toEqual(persisted)
+    const model = JSON.parse(results[1]!.message.content[0]!.content.replace('<tool_use_error>', '').replace('</tool_use_error>', ''))
+    expect(model.failures[0].evidence.omittedCandidateCount).toBe(8)
+    expect(model.omittedFailureCount).toBe(2)
+    expect(model.failures[0].patchSourceSpan.kind).toBe('patch-envelope-lines')
   })
 })
 

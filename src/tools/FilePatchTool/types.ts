@@ -1,3 +1,4 @@
+import { candidateOmissions, sampleHunkCoordinates } from './evidence.js'
 import type { StructuredPatchHunk } from 'diff'
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -134,7 +135,9 @@ export type FilePatchDiagnosticMetadata = {
   path: string
   hunkIndex?: number
   hunkCount: number
-  candidateCoordinates: Array<{ start: number; end: number }>
+  /** Source coordinates remain zero-based/end-exclusive; hunk is a one-based ordinal. */
+  candidateCoordinates: Array<{ start: number; end: number; hunk?: number }>
+  candidateCoordinatesOmitted?: number
   nearMatches: FilePatchNearMatch[]
   diagnosticsTruncated: boolean
 }
@@ -149,6 +152,7 @@ export type FilePatchFailureDetail = {
   hunkIndex?: number
   hunkCount?: number
   message: string
+  patchSourceSpan?: PatchSourceSpan
   diagnostics?: FilePatchDiagnosticMetadata
 }
 
@@ -173,6 +177,7 @@ export class FilePatchError extends Error {
   readonly moveTo?: string
   readonly hunkIndex?: number
   readonly hunkCount?: number
+  readonly omittedFailureCount?: number
   readonly details?: FilePatchFailureDetail[]
   readonly diagnostics?: FilePatchDiagnosticMetadata
   readonly patchSourceSpan?: PatchSourceSpan
@@ -187,6 +192,7 @@ export class FilePatchError extends Error {
       moveTo?: string
       hunkIndex?: number
       hunkCount?: number
+      omittedFailureCount?: number
       details?: readonly FilePatchFailureDetail[]
       diagnostics?: FilePatchDiagnosticMetadata
       patchSourceSpan?: PatchSourceSpan
@@ -210,6 +216,9 @@ export class FilePatchError extends Error {
     )
     this.hunkIndex = options?.hunkIndex
     this.hunkCount = options?.hunkCount
+    this.omittedFailureCount =
+      (options?.omittedFailureCount ?? 0) +
+      Math.max(0, (options?.details?.length ?? 0) - MAX_FILE_PATCH_FAILURE_DETAILS)
     this.details =
       options?.details === undefined
         ? undefined
@@ -264,6 +273,7 @@ export type FilePatchModelError = {
   hunkIndex?: number
   hunkCount?: number
   patchSourceSpan?: PatchSourceSpan
+  omittedFailureCount?: number
   details: FilePatchFailureDetail[]
   diagnostics?: FilePatchDiagnosticMetadata
   mutationOutcome: FilePatchMutationOutcome
@@ -285,6 +295,7 @@ export function serializeFilePatchError(
       ? { patchSourceSpan: error.patchSourceSpan }
       : {}),
     details: error.details ?? [],
+    ...(error.omittedFailureCount === undefined ? {} : { omittedFailureCount: error.omittedFailureCount }),
     ...(error.diagnostics !== undefined
       ? { diagnostics: error.diagnostics }
       : {}),
@@ -328,9 +339,14 @@ export function boundFilePatchDiagnosticMetadata(
     boundedCode !== metadata.code ||
     boundedKind !== metadata.kind ||
     boundedPath !== metadata.path
-  const candidateCoordinates = metadata.candidateCoordinates.slice(
-    0,
+  const candidateCoordinates = sampleHunkCoordinates(
+    metadata.candidateCoordinates.map(coordinate => ({ ...coordinate, hunkIndex: coordinate.hunk })),
     MAX_FILE_PATCH_DIAGNOSTIC_COORDINATES,
+  ).map(({ hunkIndex, ...coordinate }) => coordinate)
+  const omitted = candidateOmissions(
+    metadata.candidateCoordinatesOmitted,
+    metadata.diagnosticsTruncated,
+    metadata.candidateCoordinates.length - candidateCoordinates.length,
   )
   const nearMatches = metadata.nearMatches
     .slice(0, MAX_FILE_PATCH_NEAR_MATCHES)
@@ -359,9 +375,47 @@ export function boundFilePatchDiagnosticMetadata(
     kind: boundedKind,
     path: boundedPath,
     candidateCoordinates,
+    ...(omitted === undefined ? {} : { candidateCoordinatesOmitted: omitted }),
     nearMatches,
     diagnosticsTruncated: truncated,
   }
+}
+
+const diagnosticMetadataSchema = lazySchema(() =>
+  z.object({
+    code: z.string(),
+    kind: z.string(),
+    path: z.string(),
+    hunkIndex: z.number().int().positive().optional(),
+    hunkCount: z.number().int().nonnegative(),
+    candidateCoordinates: z.array(z.object({
+      start: z.number().int().nonnegative(),
+      end: z.number().int().nonnegative(),
+      hunk: z.number().int().positive().optional(),
+    }).refine(coordinate => coordinate.end >= coordinate.start)),
+    candidateCoordinatesOmitted: z.number().int().nonnegative().optional(),
+    diagnosticsTruncated: z.boolean(),
+    nearMatches: z.array(z.object({
+      sourceStart: z.number().int().nonnegative(),
+      sourceEnd: z.number().int().nonnegative(),
+      score: z.number(),
+      expected: z.string(),
+      actualLength: z.number().int().nonnegative(),
+      divergence: z.object({
+        expectedLine: z.number().int().nonnegative(),
+        sourceLine: z.number().int().nonnegative(),
+        column: z.number().int().nonnegative(),
+      }),
+    })),
+  }),
+)
+
+/** Validation metadata is an unknown boundary; retain only recognized evidence. */
+export function normalizeFilePatchDiagnosticMetadata(
+  value: unknown,
+): FilePatchDiagnosticMetadata | undefined {
+  const parsed = diagnosticMetadataSchema().safeParse(value)
+  return parsed.success ? boundFilePatchDiagnosticMetadata(parsed.data) : undefined
 }
 
 const hunkLineSchema = lazySchema(() =>

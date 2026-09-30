@@ -340,6 +340,8 @@ export const FilePatchTool = buildTool({
           errorCode: 1,
           meta: {
             code: error.code,
+            patchSourceSpan: error.patchSourceSpan,
+            omittedFailureCount: error.omittedFailureCount,
             ...(error.operation !== undefined
               ? { operation: error.operation }
               : {}),
@@ -1082,6 +1084,7 @@ function addMutationContext(
           hunkCount: operation.hunks.length,
         }
       : {}),
+    ...(error instanceof FilePatchError ? { omittedFailureCount: error.omittedFailureCount, patchSourceSpan: error.patchSourceSpan } : {}),
     ...(error instanceof FilePatchError && error.details !== undefined
       ? { details: error.details }
       : {}),
@@ -1170,6 +1173,8 @@ function errorWithMutationOutcome(
       hunkIndex: error.hunkIndex,
       hunkCount: error.hunkCount,
       details: error.details,
+      omittedFailureCount: error.omittedFailureCount,
+      patchSourceSpan: error.patchSourceSpan,
       diagnostics: error.diagnostics,
       mutationOutcome,
     })

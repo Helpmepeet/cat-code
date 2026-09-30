@@ -1083,6 +1083,7 @@ describe('applyPatchToBuffers', () => {
     expect(patchError.code).toBe('PATCH_PREFLIGHT_FAILED')
     expect(patchError.details).toHaveLength(8)
     expect(patchError.message).toContain('2 additional failures omitted')
+    expect(patchError.omittedFailureCount).toBe(2)
     expect(patchError.details?.[0]).toMatchObject({
       code: 'PATCH_ANCHOR_NOT_FOUND',
       operation: 'update',

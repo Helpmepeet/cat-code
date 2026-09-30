@@ -1,3 +1,5 @@
+import { sampleHunkCoordinates, type HunkCoordinate } from './evidence.js'
+
 /**
  * Pure source-coordinate placement for one update operation.
  *
@@ -113,7 +115,8 @@ export type PlannerFailure = {
   hunkIndex?: number
   hunkCount: number
   /** Bounded exact candidate coordinates, in original source coordinates. */
-  candidateCoordinates?: Array<{ start: number; end: number }>
+  candidateCoordinates?: HunkCoordinate[]
+  candidateCoordinatesOmitted?: number
   message: string
   diagnostics?: PlannerDiagnostic[]
   diagnosticsTruncated?: boolean
@@ -183,7 +186,8 @@ type EffectiveHunk = {
 
 type CandidateSet = {
   candidates: HunkCandidate[]
-  exactCoordinates: Array<{ start: number; end: number }>
+  exactCoordinates: HunkCoordinate[]
+  exactCoordinatesOmitted?: number
   effectiveHintCount: number
   fingerprint: readonly string[]
   fingerprintLength: number
@@ -435,7 +439,7 @@ function discoverCandidates(
       }
       return {
         candidates: candidate ? [candidate] : [],
-        exactCoordinates: [{ start: sourceLines.length, end: sourceLines.length }],
+        exactCoordinates: [{ hunkIndex, start: sourceLines.length, end: sourceLines.length }],
         effectiveHintCount: hints.length,
         fingerprint: fp,
         fingerprintLength: 0,
@@ -474,7 +478,7 @@ function discoverCandidates(
     }
     return {
       candidates: candidate ? [candidate] : [],
-      exactCoordinates: [{ start: 0, end: 0 }],
+      exactCoordinates: [{ hunkIndex, start: 0, end: 0 }],
       effectiveHintCount: hints.length,
       fingerprint: fp,
       fingerprintLength: 0,
@@ -503,7 +507,8 @@ function discoverCandidates(
   // EOF is a hard constraint, but scan the other exact positions as evidence
   // so a misplaced interior match can be reported as a hard-EOF conflict
   // rather than silently looking like an ordinary missing anchor.
-  const exactCoordinates: Array<{ start: number; end: number }> = []
+  const exactCoordinates: HunkCoordinate[] = []
+  let exactCoordinatesOmitted = 0
   const candidates: HunkCandidate[] = []
   let boundaryExactMatch = false
 
@@ -522,7 +527,9 @@ function discoverCandidates(
     if (!matches) continue
 
     if (exactCoordinates.length < 40) {
-      exactCoordinates.push({ start, end: start + fp.length })
+      exactCoordinates.push({ hunkIndex, start, end: start + fp.length })
+    } else {
+      exactCoordinatesOmitted += 1
     }
     if (hunk.isEndOfFile && start === maxStart) boundaryExactMatch = true
     if (hunk.isEndOfFile && start !== maxStart) continue
@@ -548,6 +555,7 @@ function discoverCandidates(
   return {
     candidates,
     exactCoordinates,
+    exactCoordinatesOmitted,
     effectiveHintCount: hints.length,
     fingerprint: fp,
     fingerprintLength: fp.length,
@@ -603,7 +611,11 @@ function failureFromCandidateSet(
           hunkIndex,
           hunkCount,
           counters,
-          { candidateCoordinates: set.exactCoordinates.slice(0, 40) },
+          {
+            candidateCoordinates: set.exactCoordinates,
+            candidateCoordinatesOmitted: set.exactCoordinatesOmitted ?? 0,
+            diagnosticsTruncated: (set.exactCoordinatesOmitted ?? 0) > 0,
+          },
         ),
         path,
       )
@@ -618,7 +630,11 @@ function failureFromCandidateSet(
         hunkIndex,
         hunkCount,
         counters,
-        { candidateCoordinates: set.exactCoordinates.slice(0, 40) },
+        {
+            candidateCoordinates: set.exactCoordinates,
+            candidateCoordinatesOmitted: set.exactCoordinatesOmitted ?? 0,
+            diagnosticsTruncated: (set.exactCoordinatesOmitted ?? 0) > 0,
+          },
       ),
       path,
     )
@@ -1187,6 +1203,21 @@ function validateNewlines(
   }
 }
 
+function candidateEvidence(sets: CandidateSet[]): Partial<PlannerFailure> {
+  const coordinates = sets.flatMap(set => set.candidates.map(candidate => ({
+    hunkIndex: candidate.hunkIndex,
+    start: candidate.sourceStart,
+    end: candidate.sourceEnd,
+  })))
+  const retained = sampleHunkCoordinates(coordinates, 40)
+  const omitted = coordinates.length - retained.length
+  return {
+    candidateCoordinates: retained,
+    candidateCoordinatesOmitted: omitted,
+    diagnosticsTruncated: omitted > 0,
+  }
+}
+
 function addDiagnostics(
   failure: PlannerFailure,
   sourceLines: readonly string[],
@@ -1315,11 +1346,7 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
           undefined,
           hunks.length,
           counters,
-          {
-            candidateCoordinates: candidateSets
-              .flatMap(set => set.candidates.map(candidate => ({ start: candidate.sourceStart, end: candidate.sourceEnd })))
-              .slice(0, 40),
-          },
+          candidateEvidence(candidateSets),
         ),
         input.path,
       )
@@ -1337,17 +1364,14 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
           undefined,
           hunks.length,
           counters,
-          {
-            candidateCoordinates: candidateSets
-              .flatMap(set => set.candidates.map(candidate => ({ start: candidate.sourceStart, end: candidate.sourceEnd })))
-              .slice(0, 40),
-          },
+          candidateEvidence(candidateSets),
         ),
         input.path,
       )
       return {
         ok: false,
-        failure: input.diagnostics ? addDiagnostics(failure, source.lines, hunks, counters) : failure,
+        // Exact ambiguity already has candidate evidence; approximate scans add no authority.
+        failure,
       }
     }
 

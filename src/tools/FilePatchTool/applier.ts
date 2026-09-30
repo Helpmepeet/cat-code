@@ -66,6 +66,8 @@ function applyPatchToBuffersWith(
           hunkIndex: error.hunkIndex,
           hunkCount: error.hunkCount,
           details: error.details,
+          omittedFailureCount: error.omittedFailureCount,
+          patchSourceSpan: error.patchSourceSpan,
           diagnostics: error.diagnostics,
           mutationOutcome: 'no-mutation',
         },
@@ -119,6 +121,8 @@ function applyOperations(
         hunkIndex: first.hunkIndex,
         hunkCount: first.hunkCount,
         details: displayedFailures,
+        omittedFailureCount,
+        patchSourceSpan: first.patchSourceSpan,
         diagnostics: first.diagnostics,
       },
     )
@@ -289,6 +293,7 @@ function toFailureDetail(
       ? { hunkCount: patchError.hunkCount }
       : {}),
     message: boundFailureMessage(patchError.message),
+    ...(patchError.patchSourceSpan === undefined ? {} : { patchSourceSpan: patchError.patchSourceSpan }),
     ...(patchError.diagnostics !== undefined
       ? { diagnostics: patchError.diagnostics }
       : {}),
@@ -369,8 +374,7 @@ export function applyUpdateHunks(
 }
 
 /**
- * Candidate contract implementation used by replay until the release gates
- * authorize replacing the production matcher above.
+ * Production update applier using the exact, complete-envelope placement planner.
  */
 export function applyUpdateHunksPlanned(
   buffer: FilePatchBuffer,

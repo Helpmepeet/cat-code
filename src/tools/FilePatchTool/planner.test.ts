@@ -69,6 +69,15 @@ describe('immutable source-coordinate placement', () => {
     expect(error.kind).toBe('ambiguity')
   })
 
+  test('exact ambiguity skips trimmed diagnostics even when whitespace near matches exist', () => {
+    const error = failure(plan('x\n x \nx\n', [hunk([context('x'), added('changed')])], {
+      diagnostics: true,
+    }))
+    expect(error.code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+    expect(error.diagnostics).toBeUndefined()
+    expect(error.usage.approximateComparisons).toBe(0)
+  })
+
   test('rejects candidates that are only before the previous hunk', () => {
     const error = failure(
       plan('first\nsecond\n', [
@@ -445,6 +454,16 @@ describe('bounded planning and diagnostics', () => {
     expect(
       failure(plan('target\n', [hunk([context('target')])], { limits: { maxPredecessors: 0 } })).code,
     ).toBe('PATCH_PLANNER_LIMIT')
+  })
+
+  test('accounts for discovery coordinates discarded by hint and EOF failure caps', () => {
+    for (const overrides of [{ hints: ['missing'] }, { isEndOfFile: true }]) {
+      const error = failure(plan(`${'x\n'.repeat(55)}tail\n`, [hunk([context('x')], overrides)]))
+      expect(error.candidateCoordinates).toHaveLength(40)
+      expect(error.candidateCoordinates![0]).toEqual({ hunkIndex: 0, start: 0, end: 1 })
+      expect(error.candidateCoordinatesOmitted).toBe(15)
+      expect(error.diagnosticsTruncated).toBe(true)
+    }
   })
 
   test('diagnostic budget exhaustion preserves the primary failure', () => {

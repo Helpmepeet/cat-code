@@ -166,6 +166,8 @@ describe('bounded planner failure diagnostics', () => {
     })
 
     expect(rendered.metadata.candidateCoordinates).toHaveLength(2)
+    expect(rendered.metadata.candidateCoordinatesOmitted).toBe(8)
+    expect(rendered.metadata.diagnosticsTruncated).toBe(true)
     expect(rendered.metadata.nearMatches).toHaveLength(0)
     expect(rendered.error.message.length).toBeLessThanOrEqual(500)
     expect(rendered.error.diagnostics).toEqual(rendered.metadata)
