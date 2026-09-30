@@ -28,6 +28,7 @@ import type {
 import { toolMatchesName } from '../../Tool.js'
 import {
   completeAgentTask as completeAsyncAgent,
+  buildAgentNotificationDetails,
   createActivityDescriptionResolver,
   createProgressTracker,
   enqueueAgentNotification,
@@ -63,6 +64,7 @@ import { emitTaskProgress as emitTaskProgressEvent } from '../../utils/task/sdkP
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
 import { isFilePatchToolName } from '../FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
+import { formatTaskNotificationText } from '../../utils/taskNotification.js'
 import { appendSubagentTerminal } from '../../utils/sessionStorage.js'
 import { unregisterActiveSubagent } from '../../utils/cleanupRegistry.js'
 import { getTokenCountFromUsage } from '../../utils/tokens.js'
@@ -831,6 +833,8 @@ export function emitTaskProgress(
   })
 }
 
+const HANDOFF_CLASSIFIER_UNAVAILABLE_WARNING = 'Note: The safety classifier was unavailable when reviewing this sub-agent\'s work. Please carefully verify the sub-agent\'s actions and output before acting on them.'
+
 export async function classifyHandoffIfNeeded({
   agentMessages,
   tools,
@@ -911,7 +915,7 @@ export async function classifyHandoffIfNeeded({
           'Handoff classifier unavailable, allowing sub-agent output with warning',
           { level: 'warn' },
         )
-        return `Note: The safety classifier was unavailable when reviewing this sub-agent's work. Please carefully verify the sub-agent's actions and output before acting on them.`
+        return HANDOFF_CLASSIFIER_UNAVAILABLE_WARNING
       }
 
       logForDebugging(
@@ -923,6 +927,77 @@ export async function classifyHandoffIfNeeded({
   }
 
   return null
+}
+
+/**
+ * Make completed work recoverable before review or cleanup can suspend.
+ * An interrupted review uses the existing classifier-unavailable warning policy;
+ * a finished review replaces that provisional report with its actual verdict.
+ */
+export async function prepareBackgroundAgentHandoff({
+  taskId, runId, agentType, agentResult, agentMessages, finalMessage, description,
+  toolUseContext, abortSignal, parentTranscriptPath, parentSessionId,
+  sessionStateTracking,
+}: {
+  taskId: string
+  runId?: string
+  agentType: string
+  agentResult: AgentToolResult
+  agentMessages: MessageType[]
+  finalMessage: string
+  description: string
+  toolUseContext: ToolUseContext
+  abortSignal: AbortSignal
+  parentTranscriptPath: string
+  parentSessionId: string
+  sessionStateTracking?: { mode: string; statePath?: string }
+}): Promise<string> {
+  const state = toolUseContext.getAppState()
+  const task = state.tasks[taskId]
+  const terminal = {
+    sessionId: parentSessionId,
+    agentId: asAgentId(taskId),
+    toolUseId: toolUseContext.toolUseId!,
+    status: 'completed' as const,
+    durationMs: agentResult.totalDurationMs,
+    endedAt: new Date().toISOString(),
+  }
+  const recordOutcome = (message: string) => {
+    const notification = isLocalAgentTask(task) && (runId === undefined || task.runId === runId)
+      ? formatTaskNotificationText(buildAgentNotificationDetails(task, {
+          taskId, description, status: 'completed', finalMessage: message,
+          toolUseId: toolUseContext.toolUseId,
+          usage: { totalTokens: agentResult.totalTokens, toolUses: agentResult.totalToolUseCount, durationMs: agentResult.totalDurationMs },
+        }))
+      : undefined
+    appendSubagentTerminal(parentTranscriptPath, { ...terminal, notification })
+  }
+  const reviewEnabled = feature('TRANSCRIPT_CLASSIFIER') ? true : false
+  const reviewRequired = reviewEnabled && state.toolPermissionContext.mode === 'auto'
+  recordOutcome(reviewRequired
+    ? `${HANDOFF_CLASSIFIER_UNAVAILABLE_WARNING}\n\n${finalMessage}`
+    : finalMessage)
+  await recordWorkerSessionTerminal({
+    sessionId: parentSessionId, agentId: taskId, status: 'completed',
+    createStateIfMissing: sessionStateTracking,
+  }).catch(error => logForDebugging(`Failed to record worker completion: ${error}`))
+  unregisterActiveSubagent(taskId)
+  if (reviewEnabled) {
+    const toolPermissionContext = toolUseContext.getAppState().toolPermissionContext
+    const currentReviewRequired = toolPermissionContext.mode === 'auto'
+    if (currentReviewRequired && !reviewRequired) {
+      recordOutcome(`${HANDOFF_CLASSIFIER_UNAVAILABLE_WARNING}\n\n${finalMessage}`)
+    }
+    const warning = await classifyHandoffIfNeeded({
+      agentMessages, tools: toolUseContext.options.tools,
+      toolPermissionContext, abortSignal,
+      subagentType: agentType,
+      totalToolUseCount: agentResult.totalToolUseCount,
+    })
+    if (warning) finalMessage = `${warning}\n\n${finalMessage}`
+    if (reviewRequired || currentReviewRequired) recordOutcome(finalMessage)
+  }
+  return finalMessage
 }
 
 /**
@@ -1160,43 +1235,15 @@ export async function runAsyncAgentLifecycle({
 
     completeAsyncAgent(agentResult, rootSetAppState, runId)
 
-    appendSubagentTerminal(parentTranscriptPath, {
-      sessionId: parentSessionId,
-      agentId: asAgentId(taskId),
-      toolUseId: toolUseContext.toolUseId,
-      status: 'completed',
-      durationMs: Date.now() - metadata.startTime,
-      endedAt: new Date().toISOString(),
-    })
-    await recordWorkerSessionTerminal({
-      sessionId: parentSessionId,
-      agentId: taskId,
-      status: 'completed',
-      createStateIfMissing: sessionStateTracking,
-    }).catch(_err =>
-      logForDebugging(`Failed to record worker completion: ${_err}`),
-    )
-    unregisterActiveSubagent(taskId)
-
     let finalMessage = extractTextContent(agentResult.content, '\n')
     if (formatFinalMessage && finalMessage.trim()) {
       finalMessage = formatFinalMessage(finalMessage)
     }
-
-    if (feature('TRANSCRIPT_CLASSIFIER')) {
-      const handoffWarning = await classifyHandoffIfNeeded({
-        agentMessages,
-        tools: toolUseContext.options.tools,
-        toolPermissionContext:
-          toolUseContext.getAppState().toolPermissionContext,
-        abortSignal: abortController.signal,
-        subagentType: metadata.agentType,
-        totalToolUseCount: agentResult.totalToolUseCount,
-      })
-      if (handoffWarning) {
-        finalMessage = `${handoffWarning}\n\n${finalMessage}`
-      }
-    }
+    finalMessage = await prepareBackgroundAgentHandoff({
+      taskId, runId, agentType: metadata.agentType, agentResult, agentMessages, finalMessage, description,
+      toolUseContext, abortSignal: abortController.signal,
+      parentTranscriptPath, parentSessionId, sessionStateTracking,
+    })
 
     const worktreeResult = await getWorktreeResult()
 

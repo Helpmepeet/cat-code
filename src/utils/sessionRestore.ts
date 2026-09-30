@@ -680,7 +680,15 @@ export async function buildStallReminders(
   for (const [toolUseId, info] of spawned) {
     if (resolved.has(toolUseId)) continue
 
-    const notification = notifications.get(toolUseId)
+    const ended = terminal.get(toolUseId)
+    // Queue delivery is the newest prepared report; the synchronous terminal
+    // snapshot covers a crash before that queue record reaches disk.
+    const terminalDetails = typeof ended?.notification === 'string'
+      ? parseTaskNotificationDetails(ended.notification) : null
+    const terminalNotification = terminalDetails?.toolUseId === toolUseId &&
+      terminalDetails.taskId === info.agentId && terminalDetails.status === ended?.status
+      ? ended?.notification : undefined
+    const notification = notifications.get(toolUseId) ?? terminalNotification
     if (notification) {
       const details = parseTaskNotificationDetails(notification)!
       reminders.push({
@@ -690,7 +698,6 @@ export async function buildStallReminders(
       continue
     }
 
-    const ended = terminal.get(toolUseId)
     const spawnedMs = new Date(info.spawnedAt).getTime()
     const ageHours = (now - spawnedMs) / (1000 * 60 * 60)
     const isRecent = ageHours < 24

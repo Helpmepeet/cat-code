@@ -63,7 +63,7 @@ import { recipientNameKey } from '../../utils/recipientIdentity.js';
 import { allocateTeamRecipient, RecipientConflictError, tombstoneFailedRecipient, transitionTeamRecipient } from '../../utils/swarm/teamHelpers.js';
 import { setAgentColor } from './agentColorManager.js';
 import { runWithAgentLifecycleOwnership } from './agentLifecycleOwnership.js';
-import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, filterToolsForAgent, finalizeAgentTool, formatForkWorkerResultForNotification, getAgentContinuationCapabilities, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle, type AgentContinuationMetadata } from './agentToolUtils.js';
+import { agentToolResultSchema, prepareBackgroundAgentHandoff, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, filterToolsForAgent, finalizeAgentTool, formatForkWorkerResultForNotification, getAgentContinuationCapabilities, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle, type AgentContinuationMetadata } from './agentToolUtils.js';
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEnabled, isInForkChild } from './forkSubagent.js';
@@ -1765,40 +1765,15 @@ export const AgentTool = buildTool({
                     if (isForkPath && finalMessage.trim()) {
                       finalMessage = formatForkWorkerResultForNotification(finalMessage, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
                     }
-                    if (feature('TRANSCRIPT_CLASSIFIER')) {
-                      const backgroundedAppState = toolUseContext.getAppState();
-                      const handoffWarning = await classifyHandoffIfNeeded({
-                        agentMessages,
-                        tools: toolUseContext.options.tools,
-                        toolPermissionContext: backgroundedAppState.toolPermissionContext,
-                        abortSignal: task.abortController!.signal,
-                        subagentType: selectedAgent.agentType,
-                        totalToolUseCount: agentResult.totalToolUseCount
-                      });
-                      if (handoffWarning) {
-                        finalMessage = `${handoffWarning}\n\n${finalMessage}`;
-                      }
-                    }
-
-                    // Clean up worktree before notification so we can include it
-                    const worktreeResult = await cleanupWorktreeIfNeeded();
-                    appendSubagentTerminal(parentTranscriptPath, {
-                      sessionId: parentSessionId,
-                      agentId: asAgentId(backgroundedTaskId),
-                      toolUseId: toolUseContext.toolUseId,
-                      status: 'completed',
-                      durationMs: agentResult.totalDurationMs,
-                      endedAt: new Date().toISOString(),
+                    finalMessage = await prepareBackgroundAgentHandoff({
+                      taskId: backgroundedTaskId, runId: backgroundedRunId, agentType: selectedAgent.agentType,
+                      agentResult, agentMessages, finalMessage, description,
+                      toolUseContext, abortSignal: task.abortController!.signal,
+                      parentTranscriptPath, parentSessionId,
+                      sessionStateTracking: runAgentParams.sessionStateTracking,
                     });
-                    await recordWorkerSessionTerminal({
-                      sessionId: parentSessionId,
-                      agentId: backgroundedTaskId,
-                      status: 'completed',
-                      createStateIfMissing: runAgentParams.sessionStateTracking,
-                    }).catch(_err =>
-                    logForDebugging(`Failed to record worker completion: ${_err}`),
-                    );
-                    unregisterActiveSubagent(backgroundedTaskId);
+
+                    const worktreeResult = await cleanupWorktreeIfNeeded();
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
                       runId: backgroundedRunId,

@@ -781,6 +781,46 @@ export function enqueueAgentMessageDeliveryReportsToOrigins({
   }
 }
 
+/** Build the same parent report for durable terminal recording and live delivery. */
+export function buildAgentNotificationDetails(
+  taskSnapshot: LocalAgentTaskState,
+  { taskId, description, status, error, finalMessage, usage, toolUseId, worktreePath, worktreeBranch }:
+    Omit<Parameters<typeof enqueueAgentNotification>[0], 'setAppState' | 'runId'>,
+) {
+  const mainDeliveryRecords = getUnresolvedAgentMessageDeliveries(taskSnapshot)
+    .filter(message => !message.originAgentId)
+  const agentLabel = taskSnapshot.agentName
+    ? `@${taskSnapshot.agentName}`
+    : `"${description}"`;
+  const summary = status === 'completed' ? `Agent ${agentLabel} completed` : status === 'failed' ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}` : `Agent ${agentLabel} was stopped`;
+  const outputPath = getTaskOutputPath(taskId);
+  const baseDetails = {
+    taskId,
+    outputFile: outputPath,
+    toolUseId,
+    status,
+    summary,
+    usage: usage
+      ? {
+          totalTokens: usage.totalTokens,
+          toolUses: usage.toolUses,
+          durationMs: usage.durationMs,
+        }
+      : undefined,
+    worktreePath,
+    worktreeBranch,
+  } as const;
+
+  const deliveryReport = formatAgentMessageDeliveryRecords(mainDeliveryRecords)
+  const resultWithDeliveryReport = [finalMessage, deliveryReport]
+    .filter((value): value is string => Boolean(value))
+    .join('\n\n');
+  return {
+    ...baseDetails,
+    result: resultWithDeliveryReport || undefined,
+  } as const;
+}
+
 export function enqueueAgentNotification({
   taskId,
   description,
@@ -844,39 +884,10 @@ export function enqueueAgentNotification({
     },
     { enqueueNotification },
   )
-  const agentLabel = taskSnapshot.agentName
-    ? `@${taskSnapshot.agentName}`
-    : `"${description}"`;
-  const summary = status === 'completed' ? `Agent ${agentLabel} completed` : status === 'failed' ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}` : `Agent ${agentLabel} was stopped`;
-  const outputPath = getTaskOutputPath(taskId);
-  const baseDetails = {
-    taskId,
-    outputFile: outputPath,
-    toolUseId,
-    status,
-    summary,
-    usage: usage
-      ? {
-          totalTokens: usage.totalTokens,
-          toolUses: usage.toolUses,
-          durationMs: usage.durationMs,
-        }
-      : undefined,
-    worktreePath,
-    worktreeBranch,
-  } as const;
-
-  if (taskSnapshot.notified) {
-    return;
-  }
-  const deliveryReport = formatAgentMessageDeliveryRecords(mainDeliveryRecords)
-  const resultWithDeliveryReport = [finalMessage, deliveryReport]
-    .filter((value): value is string => Boolean(value))
-    .join('\n\n');
-  const details = {
-    ...baseDetails,
-    result: resultWithDeliveryReport || undefined,
-  } as const;
+  if (taskSnapshot.notified) return;
+  const details = buildAgentNotificationDetails(taskSnapshot, {
+    taskId, description, status, error, finalMessage, usage, toolUseId, worktreePath, worktreeBranch,
+  });
   try {
     enqueueNotification({
       value: formatTaskNotificationText(details),

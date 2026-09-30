@@ -383,6 +383,9 @@ export type SubagentTerminalMessage = {
   durationMs: number
   endedAt: string
   lastActivityAt?: string
+  /** Prepared parent outcome, including any required handoff safety warning.
+   * Recorded synchronously before post-completion awaits. */
+  notification?: string
 }
 
 export type DeferredContinuationResultEntryV1 = {
