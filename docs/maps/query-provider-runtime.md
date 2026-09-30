@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-09-23
+Last refreshed: 2026-09-30
 
 ## Purpose
 
@@ -69,7 +69,7 @@ src/services/api/client.ts
 | Change context assembly | `src/context.ts` | `src/utils/queryContext.ts`, `src/utils/claudemd.ts`, `src/services/api/instructionAssembly.ts` | `getUserContext()` and `getSystemContext()` are memoized. `fetchSystemPromptParts()` decides when to skip default prompt/system context for custom prompts. |
 | Change effective system prompt precedence | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, [`prompt-system.md`](prompt-system.md) | Branch order is override, coordinator, main-thread agent, custom, default; `appendSystemPrompt` appends except under override. |
 | Change provider instruction placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`prompt-system.md`](prompt-system.md) | OpenAI receives stable instructions and optional developer context. Claude-style providers receive system-context-appended prompts and user-context-prepended messages. |
-| Change model selection defaults, aliases, or catalog options | `src/utils/model/model.ts` | `src/utils/model/modelStrings.ts`, `src/utils/model/aliases.ts`, `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts`, `src/utils/context.ts`, `src/utils/effort.ts` | Defaults depend on subscription/provider. `parseUserSpecifiedModel()` resolves aliases and `[1m]`; `normalizeModelStringForAPI()` strips context suffixes at API time. New model launches need config keys, picker entries, display/canonical names, context-window budgeting, and default effort checked together. |
+| Change model selection defaults, aliases, or catalog options | `src/utils/model/model.ts` | `src/utils/model/modelStrings.ts`, `src/utils/model/aliases.ts`, `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts`, `src/utils/context.ts`, `src/utils/effort.ts`, [`../guides/model-updates.md`](../guides/model-updates.md) | Defaults depend on subscription/provider. `parseUserSpecifiedModel()` resolves aliases and `[1m]`; `normalizeModelStringForAPI()` strips context suffixes at API time. New model launches need config keys, picker entries, display/canonical names, context-window budgeting, and default effort checked together. |
 | Change provider selection | `src/utils/model/providers.ts` | `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/client.ts`, `app/sidecar/runControlsDomain.ts` | `getAPIProvider()` reads session provider, env, and startup preference. `resolveModelSelectionProvider()` handles interactive cross-provider selection; `resolveRequestProvider()` performs request-time GPT routing. |
 | Change runtime model adjustment | `src/utils/model/model.ts` | `src/query.ts`, `src/screens/REPL.tsx`, `src/utils/context.ts` | `getRuntimeMainLoopModel()` adjusts plan-mode behavior before each API iteration and before REPL builds normal or background prompt sections. The request provider is resolved again after this runtime model is chosen. |
 | Change API request shaping | `src/services/api/claude.ts` | `src/utils/api.ts`, `src/utils/messages.ts`, `src/services/api/instructionAssembly.ts` | Despite the filename, this is the shared Anthropic-SDK-shaped request path for all providers, including providers reached through adapters. |
