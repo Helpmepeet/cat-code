@@ -365,7 +365,7 @@ test('a row resolves its selection to a model id before reading its effort level
 
   // A canonical id needs no resolution and pins the engine's own table, which is
   // keyed on this exact string (`getSupportedEffortLevels`, src/utils/effort.ts).
-  expect(effortOptionsForSelection('gpt-6-sol')).toEqual([
+  expect(effortOptionsForSelection('gpt-6.1-sol')).toEqual([
     'low',
     'medium',
     'high',
@@ -532,8 +532,8 @@ test('LIVE: a non-interactive Codex sidecar offers Fast and applies the composer
   try {
     setIsInteractive(false)
     setSessionProvider('openai')
-    setMainLoopModelOverride('gpt-6-sol')
-    const store = makeStore({ mainLoopModel: 'gpt-6-sol' })
+    setMainLoopModelOverride('gpt-6.1-sol')
+    const store = makeStore({ mainLoopModel: 'gpt-6.1-sol' })
     const domain = createSidecarRunControlsDomain(store)
 
     expect(domain.getSnapshot().fast).toMatchObject({

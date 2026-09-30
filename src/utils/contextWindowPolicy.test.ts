@@ -259,7 +259,7 @@ describe('long-context entitlement clamp', () => {
   test('an Anthropic entitlement refusal never narrows GPT-6 models', () => {
     noteLongContextEntitlementRefused()
 
-    for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
+    for (const model of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna']) {
       expect(getContextWindowForModel(model)).toBe(1_050_000)
       expect(getEffectiveContextWindowSize(model)).toBe(1_030_000)
       expect(

@@ -24,10 +24,10 @@ describe('fast mode', () => {
   })
 
   test('supports Codex GPT models', () => {
-    expect(isFastModeSupportedByModel('gpt-6-sol')).toBe(true)
+    expect(isFastModeSupportedByModel('gpt-6.1-sol')).toBe(true)
     expect(isFastModeSupportedByModel('gpt-5.6-terra')).toBe(true)
     expect(isFastModeSupportedByModel('gpt-6-luna')).toBe(true)
-    expect(isFastModeSupportedByModel('gpt-5.6-sol')).toBe(false)
+    expect(isFastModeSupportedByModel('gpt-5.6-sol')).toBe(true)
     expect(isFastModeSupportedByModel('gpt-5.6-luna')).toBe(false)
     expect(isFastModeSupportedByModel('gpt-5.2')).toBe(false)
   })
@@ -35,19 +35,19 @@ describe('fast mode', () => {
   test('uses a Codex fast model for Codex/OpenAI provider sessions', () => {
     setSessionProvider('openai')
 
-    expect(getFastModeModel()).toBe('gpt-6-sol')
+    expect(getFastModeModel()).toBe('gpt-6.1-sol')
     expect(getFastModeModelDisplay()).toBe('supported GPT models')
   })
 
   // Config.tsx's fast toggle assigns this straight to `mainLoopModel` with no
-  // support check, so anything below the Codex default (`gpt-6-sol`,
+  // support check, so anything below the Codex default (`gpt-6.1-sol`,
   // `model.ts` `getDefaultMainLoopModelSetting`) is a silent downgrade for a
   // session already running that default. Asserted as the literal rather than
   // against the getter, which reaches real subscription state.
   test('never lands fast mode below the Codex default model', () => {
     setSessionProvider('openai')
 
-    expect(getFastModeModel()).toBe('gpt-6-sol')
+    expect(getFastModeModel()).toBe('gpt-6.1-sol')
     expect(isFastModeSupportedByModel(getFastModeModel())).toBe(true)
   })
 
@@ -63,7 +63,7 @@ describe('fast mode', () => {
     setSessionProvider('openai')
 
     expect(getFastModeUnavailableReason()).toBeNull()
-    expect(getFastModeState('gpt-6-sol', true)).toBe('on')
+    expect(getFastModeState('gpt-6.1-sol', true)).toBe('on')
   })
 
   test('still requires an explicit SDK opt-in for non-interactive Anthropic sessions', () => {

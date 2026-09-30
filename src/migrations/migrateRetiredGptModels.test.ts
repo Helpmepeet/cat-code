@@ -8,7 +8,8 @@ import type { SettingsJson } from '../utils/settings/types.js'
  * TEST EVIDENCE
  * - Claim: every user-owned retired GPT setting and runtime override migrates
  *   without clobbering current/colliding values, and a second run is a no-op.
- * - Exact pre-fix failure: an early return left all legacy model surfaces stale.
+ * - Exact pre-fix failure: GPT-6 Sol and GPT-5.6 Sol remained in persisted
+ *   selection, allowlist, override, or main-loop values.
  * - Production entry point: `migrateRetiredGptModels`;
  *   `runEngineMigrations` is covered by the source-string tripwire below.
  * - Test path: `src/migrations/migrateRetiredGptModels.test.ts`.
@@ -114,6 +115,7 @@ describe('migrateRetiredGptModels', () => {
         'custom-model',
       ],
       modelOverrides: {
+        'gpt-6-sol': 'legacy-current-sol-override',
         'gpt-5.6-sol': 'legacy-sol-override',
         'gpt-5.4': 'legacy-luna-override',
         'gpt-5.5': 'legacy-terra-override',
@@ -126,10 +128,10 @@ describe('migrateRetiredGptModels', () => {
 
     expect(updateCalls).toEqual([
       {
-        model: 'gpt-6-sol',
-        availableModels: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
+        model: 'gpt-6.1-sol',
+        availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
         modelOverrides: {
-          'gpt-6-sol': 'legacy-sol-override',
+          'gpt-6.1-sol': 'legacy-current-sol-override',
           'gpt-6-luna': 'legacy-luna-override',
           'gpt-5.6-terra': 'existing-terra-override',
           'custom-model': 'custom-override',
@@ -137,10 +139,10 @@ describe('migrateRetiredGptModels', () => {
       },
     ])
     expect(userSettings).toEqual({
-      model: 'gpt-6-sol',
-      availableModels: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
+      model: 'gpt-6.1-sol',
+      availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
       modelOverrides: {
-        'gpt-6-sol': 'legacy-sol-override',
+        'gpt-6.1-sol': 'legacy-current-sol-override',
         'gpt-6-luna': 'legacy-luna-override',
         'gpt-5.6-terra': 'existing-terra-override',
         'custom-model': 'custom-override',
@@ -151,9 +153,10 @@ describe('migrateRetiredGptModels', () => {
   test('preserves current successor overrides when colliding with retired model overrides', () => {
     userSettings = {
       model: 'gpt-5.6-luna',
-      availableModels: ['gpt-6-sol', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna'],
+      availableModels: ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna'],
       modelOverrides: {
         'gpt-6-sol': 'keep-current-sol',
+        'gpt-6.1-sol': 'keep-current-sol-successor',
         'gpt-5.6-sol': 'retired-sol',
         'gpt-6-luna': 'keep-current-luna',
         'gpt-5.6-luna': 'retired-luna',
@@ -166,9 +169,9 @@ describe('migrateRetiredGptModels', () => {
     expect(updateCalls).toEqual([
       {
         model: 'gpt-6-luna',
-        availableModels: ['gpt-6-sol', 'gpt-6-luna'],
+        availableModels: ['gpt-6.1-sol', 'gpt-6-luna'],
         modelOverrides: {
-          'gpt-6-sol': 'keep-current-sol',
+          'gpt-6.1-sol': 'keep-current-sol-successor',
           'gpt-6-luna': 'keep-current-luna',
           'custom-model': 'keep-custom',
         },
@@ -176,9 +179,9 @@ describe('migrateRetiredGptModels', () => {
     ])
     expect(userSettings).toEqual({
       model: 'gpt-6-luna',
-      availableModels: ['gpt-6-sol', 'gpt-6-luna'],
+      availableModels: ['gpt-6.1-sol', 'gpt-6-luna'],
       modelOverrides: {
-        'gpt-6-sol': 'keep-current-sol',
+        'gpt-6.1-sol': 'keep-current-sol-successor',
         'gpt-6-luna': 'keep-current-luna',
         'custom-model': 'keep-custom',
       },
@@ -205,8 +208,8 @@ describe('migrateRetiredGptModels', () => {
         },
       },
     ])
-    expect(mainLoopOverrideWrites).toEqual(['gpt-6-sol'])
-    expect(mainLoopOverride).toBe('gpt-6-sol')
+    expect(mainLoopOverrideWrites).toEqual(['gpt-6.1-sol'])
+    expect(mainLoopOverride).toBe('gpt-6.1-sol')
   })
 })
 

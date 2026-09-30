@@ -634,7 +634,7 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 Astra' },
-  { id: 'gpt-6-sol', label: 'GPT-6 Sol', description: 'Frontier model for complex professional work' },
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', description: 'Frontier model for complex professional work' },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'Balanced agentic coding model (preview)' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
@@ -668,7 +668,7 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   const remapped = remapRetiredGptModel(claudeModel)
   if (isCodexModel(remapped)) return remapped
   const lower = remapped.toLowerCase()
-  if (lower.includes('opus')) return 'gpt-6-sol'
+  if (lower.includes('opus')) return 'gpt-6.1-sol'
   if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-6-luna'
   return DEFAULT_CODEX_MODEL
 }
@@ -1504,13 +1504,11 @@ export function mapEffortToCodex(
   if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
   if (e === 'minimal') {
     const model = codexModel.toLowerCase()
-    if (model === 'gpt-6-astra') return 'low'
-    // Cat Code's `minimal` means disabled thinking. GPT-5.6 / GPT-6 models expose
-    // `none`, which preserves the former low-latency path.
+    if (model === 'gpt-6-astra' || model === 'gpt-6.1-sol') return 'low'
+    // GPT-6 Astra and GPT-6.1 Sol express minimal as low; other listed models
+    // preserve their disabled-thinking path with `none`.
     if (
-      model === 'gpt-6-sol' ||
       model === 'gpt-6-luna' ||
-      model === 'gpt-5.6-sol' ||
       model === 'gpt-5.6-terra' ||
       model === 'gpt-5.6-luna'
     ) return 'none'
@@ -1519,9 +1517,8 @@ export function mapEffortToCodex(
   if (e === 'max') {
     const model = codexModel.toLowerCase()
     return (
-      model === 'gpt-6-sol' ||
+      model === 'gpt-6.1-sol' ||
       model === 'gpt-6-luna' ||
-      model === 'gpt-5.6-sol' ||
       model === 'gpt-5.6-terra' ||
       model === 'gpt-5.6-luna' ||
       model === 'gpt-6-astra'

@@ -122,8 +122,8 @@ describe('autoCompact thresholds', () => {
     expect(getAutoCompactThreshold('gpt-6-astra')).toBe(977_000)
   })
 
-  test('derives GPT-6 Sol and Luna thresholds from their 1.05M context window with no special ceiling', () => {
-    for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+  test('derives GPT-6.1 Sol and Luna thresholds from their 1.05M context window with no special ceiling', () => {
+    for (const model of ['gpt-6.1-sol', 'gpt-6-luna']) {
       expect(getContextWindowForModel(model)).toBe(1_050_000)
       expect(getEffectiveContextWindowSize(model)).toBe(1_030_000)
       expect(getAutoCompactThreshold(model)).toBe(977_000)

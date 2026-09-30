@@ -1,4 +1,5 @@
 import type { APIProvider } from '../model/providers.js'
+import { remapRetiredGptModel } from '../model/model.js'
 
 export type AutoModeClassifierAttempt = {
   provider: APIProvider
@@ -6,7 +7,7 @@ export type AutoModeClassifierAttempt = {
 }
 
 const GPT_CLASSIFIER_FALLBACKS = [
-  'gpt-6-sol',
+  'gpt-6.1-sol',
   'gpt-5.6-terra',
   'gpt-6-luna',
 ] as const
@@ -16,12 +17,13 @@ export function getAutoModeClassifierAttempts(
   _maxRetries: number,
   anthropicProvider: Exclude<APIProvider, 'openai'>,
 ): AutoModeClassifierAttempt[] {
+  const selectedModel = remapRetiredGptModel(configuredModel)
   const configuredGptIndex = GPT_CLASSIFIER_FALLBACKS.indexOf(
-    configuredModel as (typeof GPT_CLASSIFIER_FALLBACKS)[number],
+    selectedModel as (typeof GPT_CLASSIFIER_FALLBACKS)[number],
   )
-  const attempts: AutoModeClassifierAttempt[] = configuredModel.startsWith('gpt-')
+  const attempts: AutoModeClassifierAttempt[] = selectedModel.startsWith('gpt-')
     ? [
-        { provider: 'openai', model: configuredModel },
+        { provider: 'openai', model: selectedModel },
         ...GPT_CLASSIFIER_FALLBACKS.slice(
           configuredGptIndex === -1 ? 0 : configuredGptIndex + 1,
         ).map(model => ({
@@ -31,7 +33,7 @@ export function getAutoModeClassifierAttempts(
         { provider: anthropicProvider, model: 'sonnet' },
       ]
     : [
-        { provider: anthropicProvider, model: configuredModel },
+        { provider: anthropicProvider, model: selectedModel },
         ...GPT_CLASSIFIER_FALLBACKS.map(model => ({
           provider: 'openai' as const,
           model,

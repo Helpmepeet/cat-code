@@ -28,7 +28,7 @@ describe('getAgentModel explicit override', () => {
       getCanonicalName(
         getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-luna', 'default'),
       ),
-    ).toBe('gpt-5.6-luna')
+    ).toBe('gpt-6-luna')
   })
 
   test('honors a Terra subagent request as an upgrade from Luna', () => {
@@ -39,12 +39,12 @@ describe('getAgentModel explicit override', () => {
     ).toBe('gpt-5.6-terra')
   })
 
-  test('honors a Sol subagent request as an upgrade from Terra', () => {
+  test('remaps a retired Sol subagent request to 6.1 as an upgrade from Terra', () => {
     expect(
       getCanonicalName(
         getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-sol', 'default'),
       ),
-    ).toBe('gpt-5.6-sol')
+    ).toBe('gpt-6.1-sol')
   })
 
   test('honors an explicit Astra selection', () => {
@@ -79,14 +79,14 @@ describe('getAgentModel explicit override', () => {
 
   test('agent-file model pins are unaffected (Explore keeps its Luna pin)', () => {
     expect(getAgentModel('gpt-5.6-luna', 'gpt-5.6-terra', undefined, 'default')).toBe(
-      'gpt-5.6-luna',
+      'gpt-6-luna',
     )
   })
 
   test('tool-specified model takes precedence over an agent-file pin', () => {
     expect(
       getAgentModel('gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'default'),
-    ).toBe('gpt-5.6-luna')
+    ).toBe('gpt-6-luna')
   })
 })
 

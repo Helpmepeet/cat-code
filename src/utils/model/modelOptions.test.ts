@@ -215,14 +215,27 @@ describe('1M-context rows and Sonnet 4.6', () => {
     const { getModelOptions } = await import('./modelOptions.js')
     tier = 'codex'
 
-    const labels = getModelOptions(false).map(option => option.label)
+    const options = getModelOptions(false)
+    const labels = options.map(option => option.label)
 
     expect(labels).toContain('Sonnet 5')
     expect(labels).toContain('Opus 5')
     expect(labels).toContain('Fable 5')
-    expect(labels).toContain('GPT-5.6 Sol')
+    expect(labels).toContain('GPT-6.1 Sol')
     expect(labels).toContain('GPT-6 Astra')
-    expect(labels.indexOf('GPT-5.6 Sol')).toBe(
+    expect(labels).not.toContain('GPT-6 Sol')
+    expect(options.some(option => option.value === 'gpt-6.1-sol')).toBe(true)
+    for (const retiredModel of [
+      'gpt-6-sol',
+      'gpt-5.6-sol',
+      'gpt-5.6-luna',
+      'gpt-5.4',
+      'gpt-5.3-codex',
+      'gpt-5.5',
+    ]) {
+      expect(options.some(option => option.value === retiredModel)).toBe(false)
+    }
+    expect(labels.indexOf('GPT-6.1 Sol')).toBe(
       labels.indexOf('GPT-6 Astra') + 1,
     )
   })

@@ -89,9 +89,8 @@ export function modelSupportsMaxEffort(model: string): boolean {
     return true
   }
   if (
-    m === 'gpt-6-sol' ||
+    m === 'gpt-6.1-sol' ||
     m === 'gpt-6-luna' ||
-    m === 'gpt-5.6-sol' ||
     m === 'gpt-5.6-terra' ||
     m === 'gpt-5.6-luna' ||
     m === 'gpt-6-astra'
@@ -106,10 +105,10 @@ export function modelSupportsMaxEffort(model: string): boolean {
 
 export function getSupportedEffortLevels(model: string): readonly EffortLevel[] {
   const m = model.toLowerCase()
-  if (m === 'gpt-6-astra' || m === 'gpt-6-sol' || m === 'gpt-6-luna') {
+  if (m === 'gpt-6-astra' || m === 'gpt-6.1-sol' || m === 'gpt-6-luna') {
     return ['low', 'medium', 'high', 'xhigh', 'max']
   }
-  if (m === 'gpt-5.6-sol' || m === 'gpt-5.6-terra') {
+  if (m === 'gpt-5.6-terra') {
     return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
   }
   if (m === 'gpt-5.6-luna') {
@@ -414,8 +413,7 @@ export function getDefaultEffortForModel(
   // fast/cost-sensitive slot's low-latency intent.
   const lowerModel = model.toLowerCase()
   if (
-    lowerModel === 'gpt-6-sol' ||
-    lowerModel === 'gpt-5.6-sol' ||
+    lowerModel === 'gpt-6.1-sol' ||
     lowerModel === 'gpt-5.6-terra'
   ) {
     return 'medium'

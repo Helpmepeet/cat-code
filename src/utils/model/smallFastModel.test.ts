@@ -61,10 +61,10 @@ describe('getSmallFastModelForProvider', () => {
     expect(skillImprovementSource).not.toContain('getSmallFastModel()')
   })
 
-  test('uses GPT-6 Sol as the Codex main-loop default', async () => {
+  test('uses GPT-6.1 Sol as the Codex main-loop default', async () => {
     codexSubscriber = true
     const { getDefaultMainLoopModelSetting } = await import('./model.js')
-    expect(getDefaultMainLoopModelSetting()).toBe('gpt-6-sol')
+    expect(getDefaultMainLoopModelSetting()).toBe('gpt-6.1-sol')
   })
 
   test('leaves the non-Codex main-loop default alone', async () => {

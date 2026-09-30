@@ -256,12 +256,12 @@ function getGpt6AstraOption(): ModelOption {
   }
 }
 
-function getGpt6SolOption(): ModelOption {
+function getGpt61SolOption(): ModelOption {
   return {
-    value: 'gpt-6-sol',
-    label: 'GPT-6 Sol',
-    description: 'GPT-6 Sol · Complex coding and agentic workflows',
-    descriptionForModel: 'GPT-6 Sol - complex coding and agentic workflows',
+    value: 'gpt-6.1-sol',
+    label: 'GPT-6.1 Sol',
+    description: 'GPT-6.1 Sol · Complex coding and agentic workflows',
+    descriptionForModel: 'GPT-6.1 Sol - complex coding and agentic workflows',
   }
 }
 
@@ -361,7 +361,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     const codexOptions: ModelOption[] = [
       getDefaultOptionForUser(),
       getGpt6AstraOption(),
-      getGpt6SolOption(),
+      getGpt61SolOption(),
       getGpt56TerraOption(),
       getGpt6LunaOption(),
     ]
@@ -614,7 +614,7 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   ) {
     const gptModels = [
       getGpt6AstraOption(),
-      getGpt6SolOption(),
+      getGpt61SolOption(),
       getGpt56TerraOption(),
       getGpt6LunaOption(),
     ]

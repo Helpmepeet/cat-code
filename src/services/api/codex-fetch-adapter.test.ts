@@ -1036,9 +1036,9 @@ describe('codex-fetch-adapter', () => {
   })
 
 
-  test('translateToCodexBody maps disabled thinking to none for GPT-5.6 Sol', () => {
+  test('translateToCodexBody maps disabled thinking to low for GPT-6.1 Sol', () => {
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       thinking: { type: 'disabled' },
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
@@ -1046,26 +1046,26 @@ describe('codex-fetch-adapter', () => {
       },
     })
 
-    expect(codexBody.reasoning).toEqual({ effort: 'none' })
+    expect(codexBody.reasoning).toEqual({ effort: 'low' })
   })
 
-  test('mapEffortToCodex maps explicit minimal to none for GPT-6 Sol/Luna and GPT-5.6 Terra', () => {
-    expect(mapEffortToCodex('minimal', 'gpt-6-sol')).toBe('none')
+  test('mapEffortToCodex maps explicit minimal to none for Luna and GPT-5.6 models', () => {
     expect(mapEffortToCodex('minimal', 'gpt-6-luna')).toBe('none')
     expect(mapEffortToCodex('minimal', 'gpt-5.6-terra')).toBe('none')
     expect(mapEffortToCodex('minimal', 'gpt-5.6-luna')).toBe('none')
   })
 
-  test('mapEffortToCodex maps minimal to low for Astra', () => {
+  test('mapEffortToCodex maps minimal to low for Astra and 6.1 Sol', () => {
     expect(mapEffortToCodex('minimal', 'gpt-6-astra')).toBe('low')
+    expect(mapEffortToCodex('minimal', 'gpt-6.1-sol')).toBe('low')
     expect(mapEffortToCodex('max', 'gpt-6-astra')).toBe('max')
     expect(mapEffortToCodex('ultra', 'gpt-6-astra')).toBeUndefined()
   })
 
   test('mapEffortToCodex preserves supported reasoning levels', () => {
-    expect(mapEffortToCodex('xhigh', 'gpt-6-sol')).toBe('xhigh')
-    expect(mapEffortToCodex('max', 'gpt-6-sol')).toBe('max')
-    expect(mapEffortToCodex('ultra', 'gpt-6-sol')).toBeUndefined()
+    expect(mapEffortToCodex('xhigh', 'gpt-6.1-sol')).toBe('xhigh')
+    expect(mapEffortToCodex('max', 'gpt-6.1-sol')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-6.1-sol')).toBeUndefined()
     expect(mapEffortToCodex('ultra', 'gpt-5.6-terra')).toBe('ultra')
     expect(mapEffortToCodex('max', 'gpt-6-luna')).toBe('max')
     expect(mapEffortToCodex('ultra', 'gpt-6-luna')).toBeUndefined()
@@ -4635,9 +4635,9 @@ describe('mapClaudeModelToCodex', () => {
     // The regression this locks: `opus` used to land on Terra, the MIDDLE rung,
     // so naming the most capable model got you less than naming nothing (which
     // inherits the session default, Sol).
-    expect(mapClaudeModelToCodex('opus')).toBe('gpt-6-sol')
-    expect(mapClaudeModelToCodex('claude-opus-5')).toBe('gpt-6-sol')
-    expect(mapClaudeModelToCodex('claude-opus-4-6[1m]')).toBe('gpt-6-sol')
+    expect(mapClaudeModelToCodex('opus')).toBe('gpt-6.1-sol')
+    expect(mapClaudeModelToCodex('claude-opus-5')).toBe('gpt-6.1-sol')
+    expect(mapClaudeModelToCodex('claude-opus-4-6[1m]')).toBe('gpt-6.1-sol')
   })
 
   test('maps the cheaper Claude tiers to Luna', () => {
@@ -4658,7 +4658,7 @@ describe('mapClaudeModelToCodex', () => {
   test('passes a recognized Codex model through untouched', () => {
     for (const model of [
       'gpt-6-astra',
-      'gpt-6-sol',
+      'gpt-6.1-sol',
       'gpt-5.6-terra',
       'gpt-6-luna',
     ]) {
@@ -4667,7 +4667,8 @@ describe('mapClaudeModelToCodex', () => {
   })
 
   test('remaps retired GPT models before checking recognized Codex models', () => {
-    expect(mapClaudeModelToCodex('gpt-5.6-sol')).toBe('gpt-6-sol')
+    expect(mapClaudeModelToCodex('gpt-6-sol')).toBe('gpt-6.1-sol')
+    expect(mapClaudeModelToCodex('gpt-5.6-sol')).toBe('gpt-6.1-sol')
     expect(mapClaudeModelToCodex('gpt-5.6-luna')).toBe('gpt-6-luna')
     expect(mapClaudeModelToCodex('gpt-5.4')).toBe('gpt-6-luna')
     expect(mapClaudeModelToCodex('gpt-5.3-codex')).toBe('gpt-6-luna')
