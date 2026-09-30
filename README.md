@@ -61,6 +61,17 @@ The app also exposes other permission modes, including asking for approval,
 automatically accepting edits, and planning before making changes. Auto mode’s
 availability depends on the selected model and configuration.
 
+## Analytics
+
+The Analytics view summarizes recorded activity across 7 days, 30 days, or all
+history. It shows token usage over time, prompt cache reads, model usage,
+session counts, and tool requests. The charts and daily details make it easier
+to see how usage changes across sessions.
+
+![Cat Code Analytics view showing token usage, prompt cache read rate, model usage, sessions, and tool requests over 30 days](assets/readme/analytics.png)
+
+*The 30-day Analytics view, with token trends and usage breakdowns.*
+
 ## Run from source
 
 Run Cat Code from a trusted checkout. With Git and
