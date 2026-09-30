@@ -24,7 +24,15 @@ function errorWithEvidence(diagnostics = metadata()): FilePatchModelError {
 
 describe('compact patch model errors', () => {
   test('samples across hunks, accumulates bounds once, and never mutates persisted evidence', () => {
-    const bounded = boundFilePatchDiagnosticMetadata(metadata(50))
+    const input = metadata(50)
+    input.completePlanWitnesses = Array.from({ length: 3 }, () => ({
+      placements: Array.from({ length: 30 }, (_, index) => ({ start: index, end: index + 1, hunk: index + 1 })),
+      placementsOmitted: 2,
+    }))
+    const bounded = boundFilePatchDiagnosticMetadata(input)
+    expect(bounded.completePlanWitnesses).toHaveLength(2)
+    expect(bounded.completePlanWitnessesOmitted).toBe(1)
+    expect(bounded.completePlanWitnesses![0]!.placementsOmitted).toBe(12)
     expect(bounded.candidateCoordinates).toHaveLength(40)
     expect(bounded.candidateCoordinatesOmitted).toBe(15)
     expect(boundFilePatchDiagnosticMetadata(bounded)).toEqual(bounded)
@@ -38,6 +46,8 @@ describe('compact patch model errors', () => {
       { hunk: 2, kind: 'lines', startLine: 148, endLine: 148 },
     ])
     expect(evidence.omittedCandidateCount).toBe(49)
+    expect(view.failures[0]!.omittedWitnessCount).toBe(1)
+    expect(view.failures[0]!.witnesses![0]!.omittedPlacementCount).toBe(26)
     expect(evidence.diagnosticsTruncated).toBe(true)
     expect(view.failures[0]!.repair).toContain('Read the intended regions')
     expect(view.failures[0]!.message).not.toContain('Repeated diagnostic prose')
@@ -100,6 +110,30 @@ describe('compact patch model errors', () => {
     expect(view.failures[0]!.evidence!.candidates.some(candidate => candidate.hunk === 2)).toBe(true)
   })
 
+  test('labels bounded placements as excerpts from complete witnesses and accumulates their omissions', () => {
+    const remaining = Array.from({ length: 29 }, (_, index) => `line-${index}`)
+    const planned = planUpdateHunks({
+      path: '/tmp/witnesses', source: `x\nx\n${remaining.join('\n')}\n`, diagnostics: true,
+      hunks: ['x', ...remaining].map(text => ({ lines: [{ kind: 'context' as const, text }] })),
+    })
+    if (!('failure' in planned)) throw new Error('expected ambiguity')
+    expect(planned.failure.completePlanWitnesses).toHaveLength(2)
+    expect(planned.failure.completePlanWitnesses![0]!.placementsOmitted).toBe(10)
+    const error = renderPlannerFailure({ failure: planned.failure }).error
+    const persisted = serializeFilePatchError(error)
+    const before = JSON.stringify(persisted)
+    const view = projectFilePatchErrorForModel(persisted)
+    expect(view.failures[0]!.witnesses).toHaveLength(2)
+    for (const witness of view.failures[0]!.witnesses!) {
+      expect(witness.kind).toBe('complete-plan-witness-excerpt')
+      expect(witness.placements).toHaveLength(6)
+      expect(witness.omittedPlacementCount).toBe(24)
+      expect(witness.placements[0]!.hunk).toBe(1)
+    }
+    expect(JSON.stringify(persisted)).toBe(before)
+    expect(boundFilePatchDiagnosticMetadata(persisted.diagnostics!)).toEqual(persisted.diagnostics)
+  })
+
   test('preserves independent failure omissions through repeated construction and serialization', () => {
     const details = Array.from({ length: 12 }, (_, index) => ({
       code: 'UNKNOWN', operation: 'update' as const, path: `/tmp/${index}`, message: 'Failed.',
@@ -117,7 +151,11 @@ describe('compact patch model errors', () => {
     const persisted = errorWithEvidence(metadata(40))
     persisted.details = Array.from({ length: 20 }, () => ({
       code: 'UNKNOWN', operation: 'update', path: '\u0000'.repeat(10_000),
-      moveTo: '\u0001'.repeat(10_000), message: '\u0002'.repeat(10_000), diagnostics: metadata(40),
+      moveTo: '\u0001'.repeat(10_000), message: '\u0002'.repeat(10_000), diagnostics: {
+        ...metadata(40), completePlanWitnesses: Array.from({ length: 2 }, () => ({
+          placements: [{ start: 0, end: 1, hunk: 1 }], placementsOmitted: 0,
+        })),
+      },
     }))
     persisted.omittedFailureCount = 3
     const view = projectFilePatchErrorForModel(persisted)
@@ -127,6 +165,9 @@ describe('compact patch model errors', () => {
     expect(view.omittedFailureCount).toBe(23 - view.failures.length)
     expect(view.failures[0]!.evidence!.candidates).toEqual([])
     expect(view.failures[0]!.evidence!.omittedCandidateCount).toBe(45)
+    expect(view.failures[0]!.witnesses![0]).toMatchObject({
+      kind: 'complete-plan-witness-excerpt', placements: [], omittedPlacementCount: 1,
+    })
   })
 
   for (const mutationOutcome of ['no-mutation', 'complete-rollback', 'incomplete-recovery'] as const) {

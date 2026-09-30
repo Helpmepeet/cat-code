@@ -1,4 +1,9 @@
-import { sampleHunkCoordinates, type HunkCoordinate } from './evidence.js'
+import {
+  MAX_FILE_PATCH_COMPLETE_WITNESSES,
+  MAX_FILE_PATCH_WITNESS_PLACEMENTS,
+  sampleHunkCoordinates,
+  type HunkCoordinate,
+} from './evidence.js'
 
 /**
  * Pure source-coordinate placement for one update operation.
@@ -117,6 +122,8 @@ export type PlannerFailure = {
   /** Bounded exact candidate coordinates, in original source coordinates. */
   candidateCoordinates?: HunkCoordinate[]
   candidateCoordinatesOmitted?: number
+  completePlanWitnesses?: Array<{ placements: Array<HunkCoordinate & { hunkIndex: number }>; placementsOmitted: number }>
+  witnessReconstructionTruncated?: boolean
   message: string
   diagnostics?: PlannerDiagnostic[]
   diagnosticsTruncated?: boolean
@@ -145,6 +152,9 @@ export type PlannerLimits = {
   maxDpTransitions: number
   maxPredecessors: number
   maxDiagnosticComparisons: number
+  /** Independent reconstruction budgets; exhaustion preserves ambiguity. */
+  maxWitnessTransitions: number
+  maxWitnessNodes: number
 }
 
 export type PlannerUsage = {
@@ -161,7 +171,7 @@ export type PlanUpdateInput = {
   source: PlannerSourceInput
   hunks: readonly PlannerHunk[]
   limits?: Partial<PlannerLimits>
-  /** Approximate comparisons are opt-in and diagnostic-only. */
+  /** Diagnostic evidence is opt-in and never changes the placement decision. */
   diagnostics?: boolean
 }
 
@@ -173,6 +183,8 @@ export const DEFAULT_PLANNER_LIMITS: PlannerLimits = {
   maxDpTransitions: 100_000,
   maxPredecessors: 100_000,
   maxDiagnosticComparisons: 20_000,
+  maxWitnessTransitions: 20_000,
+  maxWitnessNodes: 4_000,
 }
 
 type EffectiveHunk = {
@@ -1203,6 +1215,75 @@ function validateNewlines(
   }
 }
 
+/** A second, bounded diagnostic frontier retains paths without changing countPlans. */
+function reconstructAmbiguityWitnesses(
+  sets: readonly CandidateSet[],
+  source: PlannerSource,
+  hunks: readonly EffectiveHunk[],
+  limits: PlannerLimits,
+): Pick<PlannerFailure, 'completePlanWitnesses' | 'witnessReconstructionTruncated'> {
+  const counters = newCounters({
+    ...limits,
+    maxDpTransitions: limits.maxWitnessTransitions,
+    maxPredecessors: limits.maxWitnessNodes,
+  })
+  type WitnessState = NewlineFrontier & { nodes: Array<PlanNode | undefined> }
+  let frontier: WitnessState[] = [{ previousEnd: -1, markerState: 'none', count: 1, nodes: [undefined] }]
+  const witnesses: NonNullable<PlannerFailure['completePlanWitnesses']> = []
+  try {
+    for (const set of sets) {
+      const next = new Map<string, WitnessState>()
+      // Hint witnesses for the same coordinates are one placement choice.
+      const placements = new Map(set.candidates.map(candidate => [
+        `${candidate.sourceStart}:${candidate.sourceEnd}`, candidate,
+      ]))
+      for (const state of frontier) {
+        for (const candidate of placements.values()) {
+          charge(counters, 'dpTransitions')
+          if (candidate.sourceStart < state.previousEnd) continue
+          const newline = advanceNewlineFrontier(source, hunks, state, candidate, counters)
+          if (newline.markerState === 'invalid' || newline.failure !== undefined) continue
+          const key = `${candidate.sourceEnd}:${newline.markerState}`
+          const target = next.get(key) ?? {
+            previousEnd: candidate.sourceEnd, ...newline, count: 1 as const, nodes: [],
+          }
+          for (const previous of state.nodes) {
+            if (target.nodes.length >= MAX_FILE_PATCH_COMPLETE_WITNESSES) break
+            charge(counters, 'predecessorsStored')
+            target.nodes.push({ candidate, ...(previous === undefined ? {} : { previous }) })
+          }
+          next.set(key, target)
+        }
+      }
+      frontier = [...next.values()]
+    }
+    const distinct = new Set<string>()
+    for (const state of frontier) {
+      if (state.markerState === 'active' && state.previousEnd < source.lines.length) continue
+      for (const node of state.nodes) {
+        // Charge path traversal as well as the shared accepted-plan newline checks.
+        charge(counters, 'dpTransitions', hunks.length)
+        const path = reconstructPlan(node)
+        if (path.length !== hunks.length) continue
+        const key = path.map(candidate => `${candidate.sourceStart}:${candidate.sourceEnd}`).join(',')
+        if (distinct.has(key)) continue
+        if ('code' in validateNewlines(source, hunks, path, counters)) continue
+        distinct.add(key)
+        const coordinates = path.map(candidate => ({
+          hunkIndex: candidate.hunkIndex, start: candidate.sourceStart, end: candidate.sourceEnd,
+        }))
+        const retained = sampleHunkCoordinates(coordinates, MAX_FILE_PATCH_WITNESS_PLACEMENTS)
+        witnesses.push({ placements: retained, placementsOmitted: coordinates.length - retained.length })
+        if (witnesses.length === MAX_FILE_PATCH_COMPLETE_WITNESSES) return { completePlanWitnesses: witnesses }
+      }
+    }
+    return { completePlanWitnesses: witnesses }
+  } catch (error) {
+    if (!(error instanceof PlannerLimitError)) throw error
+    return { completePlanWitnesses: witnesses, witnessReconstructionTruncated: true }
+  }
+}
+
 function candidateEvidence(sets: CandidateSet[]): Partial<PlannerFailure> {
   const coordinates = sets.flatMap(set => set.candidates.map(candidate => ({
     hunkIndex: candidate.hunkIndex,
@@ -1368,10 +1449,18 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
         ),
         input.path,
       )
+      const witnessEvidence = input.diagnostics
+        ? reconstructAmbiguityWitnesses(candidateSets, source, hunks, limits)
+        : {}
       return {
         ok: false,
         // Exact ambiguity already has candidate evidence; approximate scans add no authority.
-        failure,
+        failure: {
+          ...failure, ...witnessEvidence,
+          ...(witnessEvidence.witnessReconstructionTruncated ||
+            witnessEvidence.completePlanWitnesses?.some(witness => witness.placementsOmitted > 0)
+            ? { diagnosticsTruncated: true } : {}),
+        },
       }
     }
 

@@ -1,3 +1,6 @@
+export const MAX_FILE_PATCH_COMPLETE_WITNESSES = 2
+export const MAX_FILE_PATCH_WITNESS_PLACEMENTS = 20
+
 /** Internal coordinates are zero-based and end-exclusive; hunkIndex is zero-based. */
 export type HunkCoordinate = { start: number; end: number; hunkIndex?: number }
 

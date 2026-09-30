@@ -1,4 +1,9 @@
-import { candidateOmissions, sampleHunkCoordinates } from './evidence.js'
+import {
+  MAX_FILE_PATCH_COMPLETE_WITNESSES,
+  MAX_FILE_PATCH_WITNESS_PLACEMENTS,
+  candidateOmissions,
+  sampleHunkCoordinates,
+} from './evidence.js'
 import type { StructuredPatchHunk } from 'diff'
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -128,6 +133,12 @@ export type FilePatchNearMatch = {
   actualLength: number
 }
 
+export type FilePatchCompletePlanWitness = {
+  /** May be an excerpt; all retained placements came from one valid complete plan. */
+  placements: Array<{ start: number; end: number; hunk: number }>
+  placementsOmitted: number
+}
+
 /** Bounded evidence attached to a planner failure; never placement authority. */
 export type FilePatchDiagnosticMetadata = {
   code: string
@@ -138,6 +149,9 @@ export type FilePatchDiagnosticMetadata = {
   /** Source coordinates remain zero-based/end-exclusive; hunk is a one-based ordinal. */
   candidateCoordinates: Array<{ start: number; end: number; hunk?: number }>
   candidateCoordinatesOmitted?: number
+  completePlanWitnesses?: FilePatchCompletePlanWitness[]
+  completePlanWitnessesOmitted?: number
+  witnessReconstructionTruncated?: boolean
   nearMatches: FilePatchNearMatch[]
   diagnosticsTruncated: boolean
 }
@@ -348,6 +362,16 @@ export function boundFilePatchDiagnosticMetadata(
     metadata.diagnosticsTruncated,
     metadata.candidateCoordinates.length - candidateCoordinates.length,
   )
+  const completePlanWitnesses = metadata.completePlanWitnesses?.slice(0, MAX_FILE_PATCH_COMPLETE_WITNESSES).map(witness => {
+    const placements = sampleHunkCoordinates(witness.placements.map(placement => ({
+      ...placement, hunkIndex: placement.hunk,
+    })), MAX_FILE_PATCH_WITNESS_PLACEMENTS).map(({ hunkIndex, ...placement }) => placement)
+    truncated ||= placements.length !== witness.placements.length
+    return { placements, placementsOmitted: witness.placementsOmitted + witness.placements.length - placements.length }
+  })
+  if (completePlanWitnesses !== undefined) {
+    truncated ||= completePlanWitnesses.length !== metadata.completePlanWitnesses!.length
+  }
   const nearMatches = metadata.nearMatches
     .slice(0, MAX_FILE_PATCH_NEAR_MATCHES)
     .map(match => {
@@ -375,6 +399,11 @@ export function boundFilePatchDiagnosticMetadata(
     kind: boundedKind,
     path: boundedPath,
     candidateCoordinates,
+    ...(completePlanWitnesses === undefined ? {} : {
+      completePlanWitnesses,
+      completePlanWitnessesOmitted: (metadata.completePlanWitnessesOmitted ?? 0) +
+        metadata.completePlanWitnesses!.length - completePlanWitnesses.length,
+    }),
     ...(omitted === undefined ? {} : { candidateCoordinatesOmitted: omitted }),
     nearMatches,
     diagnosticsTruncated: truncated,
@@ -394,6 +423,13 @@ const diagnosticMetadataSchema = lazySchema(() =>
       hunk: z.number().int().positive().optional(),
     }).refine(coordinate => coordinate.end >= coordinate.start)),
     candidateCoordinatesOmitted: z.number().int().nonnegative().optional(),
+    completePlanWitnesses: z.array(z.object({
+      placements: z.array(z.object({ start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(), hunk: z.number().int().positive() })),
+      placementsOmitted: z.number().int().nonnegative(),
+    })).max(MAX_FILE_PATCH_COMPLETE_WITNESSES).optional(),
+    completePlanWitnessesOmitted: z.number().int().nonnegative().optional(),
+    witnessReconstructionTruncated: z.boolean().optional(),
     diagnosticsTruncated: z.boolean(),
     nearMatches: z.array(z.object({
       sourceStart: z.number().int().nonnegative(),

@@ -1,4 +1,8 @@
-import { candidateOmissions, sampleHunkCoordinates } from './evidence.js'
+import {
+  MAX_FILE_PATCH_COMPLETE_WITNESSES,
+  candidateOmissions,
+  sampleHunkCoordinates,
+} from './evidence.js'
 import {
   boundFilePatchErrorText,
   type FilePatchDiagnosticMetadata,
@@ -29,6 +33,14 @@ type ModelFailure = {
   patchSourceSpan?: PatchSourceSpan & { kind: 'patch-envelope-lines' }
   message: string
   repair: string
+  witnesses?: Array<{
+    kind: 'complete-plan-witness' | 'complete-plan-witness-excerpt'
+    lineConvention: 'one-based-inclusive'
+    placements: CandidateLocation[]
+    omittedPlacementCount: number
+  }>
+  omittedWitnessCount?: number
+  witnessReconstructionTruncated?: boolean
   evidence?: {
     kind: 'raw-hunk-candidates'
     lineConvention: 'one-based-inclusive'
@@ -85,6 +97,40 @@ const plannerGuidance: Record<string, readonly [string, string]> = {
   ],
 }
 
+function sourceLocation(coordinate: { start: number; end: number; hunk?: number }): CandidateLocation {
+  return {
+    ...(coordinate.hunk === undefined ? {} : { hunk: coordinate.hunk }),
+    ...(coordinate.start === coordinate.end
+      ? { kind: 'insertion', afterLine: coordinate.start }
+      : { kind: 'lines', startLine: coordinate.start + 1, endLine: coordinate.end }),
+  }
+}
+
+function projectWitnesses(metadata: FilePatchDiagnosticMetadata): Pick<ModelFailure,
+  'witnesses' | 'omittedWitnessCount' | 'witnessReconstructionTruncated'> {
+  const witnesses = metadata.completePlanWitnesses?.slice(0, MAX_FILE_PATCH_COMPLETE_WITNESSES).map(witness => {
+    const retained = sampleHunkCoordinates(witness.placements.map(placement => ({
+      ...placement, hunkIndex: placement.hunk,
+    })), MAX_MODEL_PATCH_CANDIDATES)
+    const omitted = witness.placementsOmitted + witness.placements.length - retained.length
+    return {
+      kind: omitted > 0 ? 'complete-plan-witness-excerpt' as const : 'complete-plan-witness' as const,
+      lineConvention: 'one-based-inclusive' as const,
+      placements: retained.map(sourceLocation), omittedPlacementCount: omitted,
+    }
+  })
+  return {
+    ...(witnesses === undefined ? {} : {
+      witnesses,
+      omittedWitnessCount: (metadata.completePlanWitnessesOmitted ?? 0) +
+        metadata.completePlanWitnesses!.length - witnesses.length,
+    }),
+    ...(metadata.witnessReconstructionTruncated === undefined ? {} : {
+      witnessReconstructionTruncated: metadata.witnessReconstructionTruncated,
+    }),
+  }
+}
+
 function projectEvidence(metadata: FilePatchDiagnosticMetadata): ModelFailure['evidence'] {
   const retained = sampleHunkCoordinates(
     metadata.candidateCoordinates.map(coordinate => ({ ...coordinate, hunkIndex: coordinate.hunk })),
@@ -95,12 +141,7 @@ function projectEvidence(metadata: FilePatchDiagnosticMetadata): ModelFailure['e
   return {
     kind: 'raw-hunk-candidates',
     lineConvention: 'one-based-inclusive',
-    candidates: retained.map(coordinate => ({
-      ...(coordinate.hunk === undefined ? {} : { hunk: coordinate.hunk }),
-      ...(coordinate.start === coordinate.end
-        ? { kind: 'insertion' as const, afterLine: coordinate.start }
-        : { kind: 'lines' as const, startLine: coordinate.start + 1, endLine: coordinate.end }),
-    })),
+    candidates: retained.map(sourceLocation),
     ...(omitted === undefined ? {} : { omittedCandidateCount: omitted }),
     ...(metadata.diagnosticsTruncated || retained.length < metadata.candidateCoordinates.length
       ? { diagnosticsTruncated: true } : {}),
@@ -133,7 +174,9 @@ export function projectFilePatchErrorForModel(error: FilePatchModelError): FileP
       }),
       message: known?.[0] ?? boundFilePatchErrorText(detail.message ?? error.repair ?? 'Patch failed.', 400),
       repair,
-      ...(detail.diagnostics === undefined ? {} : { evidence: projectEvidence(detail.diagnostics) }),
+      ...(detail.diagnostics === undefined ? {} : {
+        evidence: projectEvidence(detail.diagnostics), ...projectWitnesses(detail.diagnostics),
+      }),
     } satisfies ModelFailure
   })
   const view: FilePatchModelErrorView = {
@@ -149,7 +192,15 @@ export function projectFilePatchErrorForModel(error: FilePatchModelError): FileP
   const size = () => JSON.stringify(view).length
   // Preserve the count even when the optional candidate locations cannot fit.
   for (let index = failures.length - 1; size() > MAX_MODEL_PATCH_ERROR_LENGTH && index >= 0; index--) {
-    const evidence = failures[index]!.evidence
+    const failure = failures[index]!
+    for (const witness of failure.witnesses ?? []) {
+      if (size() <= MAX_MODEL_PATCH_ERROR_LENGTH) break
+      witness.omittedPlacementCount += witness.placements.length
+      witness.placements = []
+      witness.kind = 'complete-plan-witness-excerpt'
+    }
+    if (size() <= MAX_MODEL_PATCH_ERROR_LENGTH) break
+    const evidence = failure.evidence
     if (!evidence || evidence.candidates.length === 0) continue
     if (evidence.omittedCandidateCount !== undefined) {
       evidence.omittedCandidateCount += evidence.candidates.length

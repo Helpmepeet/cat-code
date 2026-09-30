@@ -370,6 +370,59 @@ describe('newline constraints', () => {
   })
 })
 
+describe('bounded complete-plan ambiguity witnesses', () => {
+  test('retains two distinct valid ordered plans, excluding candidates after every continuation', () => {
+    const source = 'x\ny\nx\ny\nx\n'
+    const hunks = [hunk([context('x')]), hunk([context('y')])]
+    const error = failure(plan(source, hunks, { diagnostics: true }))
+    const witnesses = error.completePlanWitnesses!
+    expect(witnesses).toHaveLength(2)
+    expect(new Set(witnesses.map(witness => JSON.stringify(witness.placements))).size).toBe(2)
+    for (const witness of witnesses) {
+      expect(witness.placementsOmitted).toBe(0)
+      expect(witness.placements).toHaveLength(2)
+      const [first, second] = witness.placements
+      expect(first!.hunkIndex).toBe(0)
+      expect(second!.hunkIndex).toBe(1)
+      expect(first!.end).toBeLessThanOrEqual(second!.start)
+      expect(source.split('\n')[first!.start]).toBe('x')
+      expect(source.split('\n')[second!.start]).toBe('y')
+      expect(first!.start).not.toBe(4)
+    }
+  })
+
+  test('keeps both witnesses valid under old and new newline constraints at EOF', () => {
+    const error = failure(plan('x\nx\nend', [
+      hunk([context('x'), added('changed')]),
+      hunk([context('end')], { newlineMarkers: [{ afterHunkLine: 0, appliesTo: 'both' }] }),
+    ], { diagnostics: true }))
+    expect(error.code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+    expect(error.completePlanWitnesses!.map(witness => witness.placements)).toEqual([
+      [{ hunkIndex: 0, start: 0, end: 1 }, { hunkIndex: 1, start: 2, end: 3 }],
+      [{ hunkIndex: 0, start: 1, end: 2 }, { hunkIndex: 1, start: 2, end: 3 }],
+    ])
+  })
+
+  test('does not count different hint witnesses as different placement sequences', () => {
+    const error = failure(plan('scope\nscope\nx\nx\n', [
+      hunk([context('x')], { hints: ['scope'] }),
+    ], { diagnostics: true }))
+    expect(error.completePlanWitnesses!.map(witness => witness.placements[0]!.start)).toEqual([2, 3])
+    success(plan('scope\nscope\nx\n', [hunk([context('x')], { hints: ['scope'] })], { diagnostics: true }))
+  })
+
+  test('diagnostic reconstruction exhaustion preserves exact ambiguity and planning usage', () => {
+    const base = failure(plan('x\nx\n', [hunk([context('x')])]))
+    for (const limits of [{ maxWitnessTransitions: 0 }, { maxWitnessNodes: 0 }]) {
+      const bounded = failure(plan('x\nx\n', [hunk([context('x')])], { diagnostics: true, limits }))
+      expect(bounded.code).toBe(base.code)
+      expect(bounded.usage).toEqual(base.usage)
+      expect(bounded.completePlanWitnesses).toEqual([])
+      expect(bounded.witnessReconstructionTruncated).toBe(true)
+    }
+  })
+})
+
 describe('bounded planning and diagnostics', () => {
   test('distinguishes present but nonconsecutive old-side lines', () => {
     const error = failure(

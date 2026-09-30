@@ -393,6 +393,10 @@ describe('patch error path parity', () => {
       diagnostics: {
         code: 'PATCH_ANCHOR_AMBIGUOUS', kind: 'ambiguity', path: '/tmp/parity',
         hunkCount: 2, nearMatches: [], diagnosticsTruncated: true, candidateCoordinatesOmitted: 4,
+        completePlanWitnesses: [
+          { placements: [{ hunk: 1, start: 0, end: 1 }, { hunk: 2, start: 9, end: 10 }], placementsOmitted: 0 },
+          { placements: [{ hunk: 1, start: 1, end: 2 }, { hunk: 2, start: 9, end: 10 }], placementsOmitted: 0 },
+        ],
         candidateCoordinates: Array.from({ length: 10 }, (_, index) => ({
           start: index, end: index + 1, hunk: index < 9 ? 1 : 2,
         })),
@@ -419,6 +423,8 @@ describe('patch error path parity', () => {
     const model = JSON.parse(results[1]!.message.content[0]!.content.replace('<tool_use_error>', '').replace('</tool_use_error>', ''))
     expect(model.failures[0].evidence.omittedCandidateCount).toBe(8)
     expect(model.omittedFailureCount).toBe(2)
+    expect(model.failures[0].witnesses).toHaveLength(2)
+    expect(model.failures[0].witnesses[0].kind).toBe('complete-plan-witness')
     expect(model.failures[0].patchSourceSpan.kind).toBe('patch-envelope-lines')
   })
 })

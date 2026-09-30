@@ -90,6 +90,17 @@ export function renderPlannerFailure(
     hunkCount: failure.hunkCount,
     candidateCoordinates,
     ...(omitted === undefined ? {} : { candidateCoordinatesOmitted: omitted }),
+    ...(failure.completePlanWitnesses === undefined ? {} : {
+      completePlanWitnesses: failure.completePlanWitnesses.map(witness => ({
+        placements: witness.placements.map(placement => ({
+          start: placement.start, end: placement.end, hunk: placement.hunkIndex + 1,
+        })),
+        placementsOmitted: witness.placementsOmitted,
+      })),
+    }),
+    ...(failure.witnessReconstructionTruncated === undefined ? {} : {
+      witnessReconstructionTruncated: failure.witnessReconstructionTruncated,
+    }),
     nearMatches: [],
     diagnosticsTruncated: failure.diagnosticsTruncated === true || coordinates.length > candidateCoordinates.length,
   }
