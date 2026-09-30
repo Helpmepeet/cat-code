@@ -185,6 +185,7 @@ const EMPTY_QUEUED_PROMPTS: readonly QueuedPromptItem[] = []
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 /** Stable identity so a session with no worker snapshot never re-renders. */
 const EMPTY_WORKERS: readonly LiveWorkerItem[] = []
+const LATEST_PILL_MIN_GAP = 80
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it.
@@ -654,6 +655,7 @@ export function SessionPane({
   // AskQuestionFlow is already the complete visible waiting state for questions.
   const transcriptScrollRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
+  const [showLatest, setShowLatest] = useState(false)
   // Mirrored into a ref because the pane coordinator asks for this answer from
   // an animation frame, where React state is a render old. The scroll handler
   // writes the ref during the event itself, so a reader who has just scrolled up
@@ -663,6 +665,11 @@ export function SessionPane({
   const applyAtBottom = (next: boolean): void => {
     atBottomRef.current = next
     setAtBottom(next)
+    const el = transcriptScrollRef.current
+    // Follow stops on any upward scroll; the pill only warrants attention once
+    // enough content is below the viewport.
+    setShowLatest(!next && el !== null &&
+      el.scrollHeight - el.scrollTop - el.clientHeight > LATEST_PILL_MIN_GAP)
   }
   // One pump for the pane's lifetime, built on first use so a render that never
   // scrolls (every server render among them) builds nothing.
@@ -672,7 +679,7 @@ export function SessionPane({
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
   const latestEntrance = useEntranceOnChange(
-    generating, !generating && !atBottom, 'animate-settle',
+    generating, !generating && showLatest, 'animate-settle',
   )
   const questionEntrance = useEntranceOnChange(
     askQuestion?.request.requestId ?? null, askQuestion !== null, 'animate-toast-in',
@@ -1210,10 +1217,11 @@ export function SessionPane({
       viewportHeight = nextViewportHeight
       // A shrink can reach the end without a scroll event. Only geometry changes
       // may reacquire here, so a one-pixel upward scroll still releases follow.
-      if (!atBottomRef.current && contentHeight - el.scrollTop - viewportHeight <= 1) {
+      const reachedBottom = contentHeight - el.scrollTop - viewportHeight <= 1
+      if (!atBottomRef.current && reachedBottom) {
         previousScrollTopRef.current = el.scrollTop
-        applyAtBottom(true)
       }
+      applyAtBottom(atBottomRef.current || reachedBottom)
     })
     return () => {
       releaseGeometry()
@@ -1807,7 +1815,7 @@ export function SessionPane({
             </div>
           ) : null}
         </div>
-        {!atBottom ? (
+        {showLatest ? (
           <button
             type="button"
             onClick={jumpToBottom}

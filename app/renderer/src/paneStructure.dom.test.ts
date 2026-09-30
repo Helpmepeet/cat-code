@@ -247,6 +247,16 @@ test.each([
     })
     expect(latest()).toBeDefined()
 
+    // Keep small offsets quiet, including when returning towards the bottom.
+    for (const [scrollTop, visible] of [[590, false], [520, false], [519, true], [300, true]] as const) {
+      await act(async () => {
+        scroller.scrollTop = scrollTop
+        scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+      })
+      expect(Boolean(latest())).toBe(visible)
+      expect(scroller.scrollTop).toBe(scrollTop)
+    }
+
     // A resize that still leaves content below must not resume following.
     Object.assign(geometry, partial)
     await act(async () => {
@@ -273,10 +283,17 @@ test.each([
     expect(scroller.scrollTop).toBe(500)
     expect(latest()).toBeUndefined()
 
-    // The shared scroll frame must not undo an intentional one-pixel release.
+    // A one-pixel release stays quiet, but still stops following later growth.
     await act(async () => {
       scroller.scrollTop = 499
       scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+      await harness.nextFrame()
+    })
+    expect(Boolean(latest())).toBe(false)
+    expect(scroller.scrollTop).toBe(499)
+    geometry.scrollHeight += 200
+    await act(async () => {
+      notifyResize?.()
       await harness.nextFrame()
     })
     expect(latest()).toBeDefined()
