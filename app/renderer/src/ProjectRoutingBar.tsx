@@ -8,15 +8,13 @@ export function ProjectRoutingBar({
   route: ProjectRouteSnapshot
   onChoice?: (choice: ProjectRouteChoice) => void
 }) {
+  if (route.phase === 'checking' || (route.phase === 'recovery' && route.projectName === null)) return null
+
   const projectName = route.projectName ?? 'project'
   const warning = route.phase === 'uncertain' || route.phase === 'failed' || route.phase === 'unsent'
   const choices: { label: string; choice: ProjectRouteChoice; primary?: boolean }[] = []
   let text
   switch (route.phase) {
-    case 'checking':
-      text = <>Finding project…</>
-      choices.push({ label: 'Cancel', choice: 'cancel' })
-      break
     case 'ask':
       text = <>Work in <b>{projectName}</b>?</>
       choices.push({ label: 'Stay in chat', choice: 'stay' }, { label: 'Move', choice: 'move', primary: true })

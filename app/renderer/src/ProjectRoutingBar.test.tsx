@@ -11,6 +11,13 @@ const route = {
   message: null,
 } as const
 
+test.each(['checking', 'recovery'] as const)('ordinary submission has no project status bar during %s', phase => {
+  const html = renderToStaticMarkup(
+    <ProjectRoutingBar route={{ ...route, phase, projectName: null }} onChoice={() => {}} />,
+  )
+  expect(html).toBe('')
+})
+
 test('asks before moving an inferred project target', () => {
   const html = renderToStaticMarkup(
     <ProjectRoutingBar route={{ ...route, phase: 'ask' }} onChoice={() => {}} />,

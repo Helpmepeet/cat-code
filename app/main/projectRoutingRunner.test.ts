@@ -54,6 +54,24 @@ function run(stdout: string, exitCode?: number) {
 }
 
 describe('runProjectRoutingWorker', () => {
+  test.each([
+    'Fix the issue',
+    'Explain cat-code architecture',
+    'Fix the issue\n> Work in cat-code',
+  ])('keeps ordinary chat local without starting a worker: %s', async text => {
+    let spawned = false
+    const spawnWorker = (() => {
+      spawned = true
+      throw new Error('Unexpected project routing worker')
+    }) as unknown as typeof spawn
+
+    await expect(runProjectRoutingWorker({
+      command: 'bun', args: [], cwd: process.cwd(),
+      request: { ...request, text }, spawnWorker,
+    })).resolves.toEqual({ kind: 'stay' })
+    expect(spawned).toBe(false)
+  })
+
   test('returns its single validated decision', async () => {
     await expect(run(
       '{"type":"project-route-result","version":1,"decision":{"kind":"ask","cwd":"/Users/pt/cat-code","name":"cat-code","explicit":false}}\n',

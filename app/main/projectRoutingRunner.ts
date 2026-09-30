@@ -1,5 +1,6 @@
 import type { spawn } from 'node:child_process'
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
+import { decideProjectRoute } from '../shared/projectRoutingPolicy.js'
 import {
   MAX_PROJECT_ROUTE_RECORD_BYTES,
   parseProjectRouteWorkerRequest,
@@ -24,6 +25,11 @@ export async function runProjectRoutingWorker(options: {
   if (!request) throw new Error('Invalid project routing request')
   const input = `${JSON.stringify(request)}\n`
   if (Buffer.byteLength(input) > MAX_PROJECT_ROUTE_RECORD_BYTES) throw new Error('Project routing request is too large')
+  // Ordinary chat needs no engine bootstrap. A potential move still goes
+  // through the worker's engine-owned project trust check.
+  if (decideProjectRoute(request.text, request.knownProjectRoots, request.suppressedRoots).kind === 'stay') {
+    return { kind: 'stay' }
+  }
   let decision: ProjectRouteDecision | null = null
   let invalid = false
   const terminal = await runNdjsonWorker({
