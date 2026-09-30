@@ -47,6 +47,25 @@ test('retains the four group legend when one group has no events', () => {
     expect(html).toContain('Error</span><b>8</b>');
 });
 
+test('decision dates include both endpoints with at most six labels', () => {
+    const many = structuredClone(summary);
+    const first = many.buckets[0]!;
+    many.buckets = Array.from({ length: 30 }, (_, index) => {
+        const date = new Date(Date.UTC(2026, 8, 1 + index)).toISOString().slice(0, 10);
+        if (index === 0) return { ...structuredClone(first), date };
+        const bucket = structuredClone(first);
+        bucket.date = date;
+        for (const key of Object.keys(bucket.allTools.outcomes) as (keyof typeof bucket.allTools.outcomes)[]) bucket.allTools.outcomes[key] = 0;
+        for (const key of Object.keys(bucket.commands.outcomes) as (keyof typeof bucket.commands.outcomes)[]) bucket.commands.outcomes[key] = 0;
+        return bucket;
+    });
+    const html = renderToStaticMarkup(<UsageAutoModeBars summary={many}/>);
+    const chart = html.match(/<svg[^>]*class="usage-auto-decision-chart"[\s\S]*?<\/svg>/)?.[0] ?? '';
+    expect(chart.match(/<text class="usage-axis"[^>]*y="211"/g)).toHaveLength(6);
+    expect(chart).toContain('Sep 1');
+    expect(chart).toContain('Sep 30');
+});
+
 test('reports unavailable history and a verified no-policy-block state without inventing values', () => {
     const unavailable = structuredClone(summary);
     unavailable.allTools.coverage.state = 'unavailable';

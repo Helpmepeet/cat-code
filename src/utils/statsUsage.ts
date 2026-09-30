@@ -86,7 +86,6 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     coverage.sourcesDiscovered = files.length;
     const mainMinutes = new Map<number, Set<string>>();
     const currentEffort = new Map<string, UsageEffortLevel | null>();
-    const requestEffort = new Map<string, UsageEffortLevel | null>();
     const autoModeRecords: RetainedAutoModeRecord[] = [];
     const autoModeSources = new Map<string, AutoModeUsageSource>();
     // Historical records cannot recover the initial route/outcome reliably.
@@ -257,6 +256,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     type UsageValue = {
         tokens: UsageTokens;
         model: string;
+        effort: UsageEffortLevel | null;
     };
     type ToolValue = {
         name: string | null;
@@ -883,9 +883,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         if (!prior)
             reserveIdentity(key);
-        usage.set(key, { tokens: maximum, model: cat.id });
-        if (!prior) requestEffort.set(key, currentEffort.get(file) ?? null);
-        const effort = requestEffort.get(key) ?? null;
+        const effort = prior ? prior.effort : currentEffort.get(file) ?? null;
+        usage.set(key, { tokens: maximum, model: cat.id, effort });
         if (!prior) for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             if (effort) day.effort.requests[effort] = plus(day.effort.requests[effort], 1);
@@ -1200,11 +1199,16 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 effort.tokens[level] = plus(effort.tokens[level], day.effort.tokens[level]);
             }
             effort.unattributedRequests = plus(effort.unattributedRequests, day.effort.unattributedRequests);
-            const known = Object.values(day.effort.requests).reduce((sum, value) => sum + value, 0);
+            const known = Object.values(day.effort.requests).reduce((sum, value) => sum + value, 0) + Object.values(day.effort.tokens).reduce((sum, value) => sum + value, 0);
             day.effort.state = known === 0 ? 'unavailable' : day.effort.unattributedRequests ? 'partial' : 'available';
+            if (coverage.state === 'complete' && day.parallel.state === 'unavailable') {
+                day.parallel.state = 'available';
+                if (state.summary.range !== 'all') day.parallel.tenMinutePeaks = [];
+            }
         }
-        const known = Object.values(effort.requests).reduce((sum, value) => sum + value, 0);
+        const known = Object.values(effort.requests).reduce((sum, value) => sum + value, 0) + Object.values(effort.tokens).reduce((sum, value) => sum + value, 0);
         effort.state = known === 0 ? 'unavailable' : effort.unattributedRequests ? 'partial' : 'available';
+        if (coverage.state === 'complete' && parallel.state === 'unavailable') parallel.state = 'available';
         state.summary.parallel = parallel;
         state.summary.effort = effort;
         if (state.summary.range !== 'all') state.summary.startDate = state.summary.days[0]?.date ?? state.summary.startDate;
@@ -1212,5 +1216,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 16, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 17, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

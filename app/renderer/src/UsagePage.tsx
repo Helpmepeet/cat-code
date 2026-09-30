@@ -101,7 +101,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
                     {selected && <section className="usage-day-detail" aria-label={`Analytics for ${usageBucketLabel(summary, selected.date)}`}>
                         <header className="usage-detail-header"><h3 ref={detailHeading} tabIndex={-1}>{usageBucketDays(summary) === 1 ? usageDayText(selected.date, true) : usageBucketLabel(summary, selected.date)}</h3><button type="button" onClick={() => setSelectedDate('')}>Clear</button></header>
                         <div className="usage-day-readout usage-day-figures" aria-live="polite"><div><strong>{usageCompact(usageTotal(selected.tokens))}</strong> tokens</div><div><strong>{usageNumber(selected.sessions)}</strong> sessions</div><div><strong>{usageNumber(selected.requests)}</strong> tool requests</div><div><strong>{usageNumber(selected.errors)}</strong> errors</div></div>
-                        <UsageSessionsRunning day={selected}/>
+                        <UsageSessionsRunning day={selected} timezone={snapshot.timezone}/>
                         {range === 'all' ? <p className="usage-note">Session lists cover the last 30 days. <button type="button" onClick={() => setRange('30d')}>Show in 30 days</button></p> : <UsageSessionContributors key={selected.date} contributors={selected.contributors ?? { state: 'unavailable', omitted: 0, items: [] }} rows={sessionRows} onOpenRow={onOpenSession}/>}
                     </section>}
                 </UsagePanel>

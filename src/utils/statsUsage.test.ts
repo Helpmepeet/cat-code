@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm, utimes, copyFile, mkdir } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collectRetainedUsage, UsageResourceError } from './statsUsage.js';
+import { collectIndexedUsage } from './statsUsageIndex.js';
 import { usageProjectId } from '../../app/shared/usageDashboard.js';
 const roots: string[] = [];
 afterEach(async () => { for (const path of roots.splice(0))
@@ -28,6 +29,26 @@ test('parallel minutes count distinct main sessions once and effort follows reco
     expect(summary.effort.tokens).toMatchObject({ low: 29, high: 19 });
     expect(summary.effort.state).toBe('available');
     expect(summary.days.find(day => day.date === '2026-09-12')?.parallel.tenMinutePeaks).toEqual([[60, 2]]);
+});
+test('cumulative effort tokens remain recorded across local midnight in direct and indexed collection', async () => {
+    const path = await file([
+        { type: 'system', subtype: 'run_facts', sessionId: 's', uuid: 'facts', timestamp: '2026-09-12T23:58:00.000Z', effort: 'high' },
+        msg('2026-09-12T23:59:00.000Z', 'cross-day', 10),
+        msg('2026-09-13T00:00:00.000Z', 'cross-day', 12),
+    ]);
+    const snapshots = [
+        await collectRetainedUsage([path], asOf, { timezone: 'UTC' }),
+        await collectIndexedUsage([path], asOf, { path: join(roots[0]!, 'index.sqlite'), timezone: 'UTC', deadline: Date.now() + 60000 }),
+    ];
+    for (const snapshot of snapshots) {
+        const days = snapshot.ranges['7d'].days;
+        const later = days.find(day => day.date === '2026-09-13')!;
+        expect(later.effort.requests.high).toBe(0);
+        expect(later.effort.tokens.high).toBe(2);
+        expect(later.effort.state).toBe('available');
+        const quiet = days.find(day => day.date === '2026-09-11')!;
+        expect(quiet.parallel).toEqual({ state: 'available', minutes: [0, 0, 0], peak: 0, tenMinutePeaks: [] });
+    }
 });
 test('T2/T4/I3: seed before window, exclude future before identity and cumulative credit', async () => {
     const path = await file([msg('2026-09-06T23:59:59.000Z', 'a', 10), msg('2026-09-07T00:00:00.000Z', 'a', 20), msg('2026-09-13T13:00:00.000Z', 'b', 900, 'future'), msg(asOf, 'b', 5, 'future'), msg('invalid', 'c', 1000)]);

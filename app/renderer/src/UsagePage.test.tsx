@@ -49,6 +49,8 @@ test('populated page presents five metrics and the agreed panels without duplica
 test('new panels distinguish unavailable history from recorded aggregates', () => {
     const summary = structuredClone(snapshot.ranges['7d']);
     const props = { summary, selected: '', onSelect: () => {} };
+    expect(renderToStaticMarkup(<UsageParallelSessions {...props}/>)).toContain('0.0h');
+    summary.parallel.state = 'unavailable';
     expect(renderToStaticMarkup(<UsageParallelSessions {...props}/>)).toContain('Not recorded in this period.');
     expect(renderToStaticMarkup(<UsageReasoningEffort {...props}/>)).toContain('Not recorded in this period.');
     summary.parallel = { state: 'available', minutes: [30, 10, 0], peak: 2 };

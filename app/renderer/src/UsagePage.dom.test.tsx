@@ -59,6 +59,26 @@ test('day focus does not select until activated; selection opens the session det
     expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
 });
 
+test('selected-day concurrency shows local time and exact zero-valued slots', async () => {
+    const snapshot = await recordedSnapshot();
+    const day = snapshot.ranges['7d'].days[0]!;
+    day.sessions = 2;
+    day.parallel = { state: 'available', minutes: [1, 1, 0], peak: 2, tenMinutePeaks: [[6, 2]] };
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    await act(async () => tree.container.querySelector<SVGGElement>('.usage-flow-hit')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    const running = tree.container.querySelector<SVGSVGElement>('.usage-running svg')!;
+    expect(running.textContent).toContain('00:00');
+    expect(running.textContent).toContain('24:00');
+    expect(running.textContent).toContain('2');
+    const disclosure = tree.container.querySelector<HTMLDetailsElement>('.usage-values')!;
+    await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+    const table = [...disclosure.querySelectorAll('table')].find(item => item.caption?.textContent === `Sessions running by elapsed ten-minute slot for ${day.date}`)!;
+    const rows = table.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(144);
+    expect(rows[0]?.textContent).toBe('000:000');
+    expect(rows[6]?.textContent).toBe('601:002');
+});
+
 test('daily heatmap exposes recorded values and selects only days in the current range', async () => {
     const snapshot = await recordedSnapshot();
     const recorded = snapshot.ranges['7d'].days[0]!.date;

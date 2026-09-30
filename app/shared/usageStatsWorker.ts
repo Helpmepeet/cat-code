@@ -22,12 +22,12 @@ function effort(v: unknown): v is UsageEffort {
     if (!obj(v) || !ownKeys(v, ['state', 'requests', 'tokens', 'unattributedRequests']) || !obj(v.requests) || !obj(v.tokens) || !ownKeys(v.requests, EFFORT_LEVELS) || !ownKeys(v.tokens, EFFORT_LEVELS) || !EFFORT_LEVELS.every(level => safe((v.requests as Record<string, unknown>)[level]) && safe((v.tokens as Record<string, unknown>)[level])) || !safe(v.unattributedRequests)) return false;
     const known = EFFORT_LEVELS.reduce((sum, level) => sum + (v.requests as Record<string, number>)[level]!, 0);
     const tokenCount = EFFORT_LEVELS.reduce((sum, level) => sum + (v.tokens as Record<string, number>)[level]!, 0);
-    return safe(known) && safe(tokenCount) && (v.state === (known === 0 ? 'unavailable' : v.unattributedRequests ? 'partial' : 'available'));
+    return safe(known) && safe(tokenCount) && (v.state === (known + tokenCount === 0 ? 'unavailable' : v.unattributedRequests ? 'partial' : 'available'));
 }
 function parallel(v: unknown, day = false): v is UsageParallel {
     if (!obj(v) || !ownKeys(v, ['state', 'minutes', 'peak', ...(v.tenMinutePeaks === undefined ? [] : ['tenMinutePeaks'])]) || !Array.isArray(v.minutes) || v.minutes.length !== 3 || !v.minutes.every(safe) || !safe(v.peak) || !safe(v.minutes.reduce((a: number, b: number) => a + b, 0))) return false;
     const total = v.minutes.reduce((a: number, b: number) => a + b, 0);
-    if (v.state !== (total ? 'available' : 'unavailable') || v.peak < (v.minutes[2] ? 3 : v.minutes[1] ? 2 : v.minutes[0] ? 1 : 0) || (total === 0 && v.peak !== 0)) return false;
+    if ((v.state !== 'available' && v.state !== 'unavailable') || (v.state === 'unavailable' && total !== 0) || v.peak < (v.minutes[2] ? 3 : v.minutes[1] ? 2 : v.minutes[0] ? 1 : 0) || (total === 0 && v.peak !== 0)) return false;
     if (v.tenMinutePeaks === undefined) return true;
     if (!day || !Array.isArray(v.tenMinutePeaks) || v.tenMinutePeaks.length > 156) return false;
     let last = -1;
@@ -349,6 +349,10 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
         if (all && (d.date < startDate || d.date >= endDate || i > 0 && d.date <= (v.days[i - 1] as UsageDay).date || (Date.parse(`${d.date}T00:00:00.000Z`) - Date.parse(`${startDate}T00:00:00.000Z`)) / 86400000 % bucketDays !== 0 || d.contributors.state !== 'unavailable')) return false;
         const bucketStart = localMidnightAt(d.date, timezone);
         const bucketEnd = localMidnightAt(addDays(d.date, bucketDays), timezone);
+        const parallelMinutes = d.parallel.minutes.reduce((sum, value) => sum + value, 0);
+        const attributedTokens = EFFORT_LEVELS.reduce((sum, level) => sum + d.effort.tokens[level], 0);
+        const maxSlots = Math.ceil((bucketEnd - bucketStart) / 600000);
+        if (!safe(parallelMinutes) || parallelMinutes > Math.floor((bucketEnd - bucketStart) / 60000) || d.parallel.peak > d.sessions || !safe(attributedTokens) || attributedTokens > tokenSum(d.tokens) || d.parallel.tenMinutePeaks?.some(([slot]) => slot >= maxSlots)) return false;
         if (d.tools.some(tool => !rangeToolIds.has(tool.id) || tool.builds?.items.some(build => Date.parse(build.firstObservedAt) < bucketStart || Date.parse(build.firstObservedAt) >= bucketEnd || Date.parse(build.firstObservedAt) > Date.parse(asOf)))) return false;
         if (d.contributors.items.some(contributor => contributor.timeline.items.some(item => dateAt(Date.parse(item.startedAt), timezone) !== d.date || Date.parse(item.startedAt) > Date.parse(asOf)))) return false;
         if (d.hours && !validHours(d, timezone, v.range === '7d', asOf)) return false;
@@ -403,7 +407,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 16 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 17 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];

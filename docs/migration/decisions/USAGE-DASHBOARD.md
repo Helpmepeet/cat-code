@@ -399,10 +399,17 @@ level and Partial when known and unattributed requests coexist. Permission mode
 is not projected. The index retains only the closed effort level or null from
 those diagnostic records, never their other fields.
 
-Counting version 16 invalidates older snapshots. `index-v10.sqlite` rebuilds
+Counting version 17 invalidates older snapshots. `index-v10.sqlite` rebuilds
 the changed projection from transcripts while preserving `index-v9.sqlite` as
 recoverable derived state. The existing 256 KiB worker limit and strict
 snapshot validation still apply. The selected-day detail remains directly
 under Tokens, consistent with the September 24 review; the two new panels sit
 after Daily activity in Usage. The operator omitted the mockup's permission
 mode bars.
+
+The version 17 correction keeps effort attribution with the disk-backed usage
+identity during collection, so large indexed histories do not accumulate a
+second request-key map in memory. A day with attributed token deltas but no new
+request remains recorded in Tokens mode. A fully read day with no main-session
+record has zero parallel activity; partial coverage without a recorded minute
+remains unavailable. The index's retained transcript projection is unchanged.

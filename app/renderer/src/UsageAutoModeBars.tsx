@@ -26,7 +26,8 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
     const allAttempts = autoModeAttempts(summary);
     const maximum = usageAxisCeiling(Math.max(0, ...totals));
     const barWidth = Math.max(2, Math.min(38, innerWidth / Math.max(1, buckets.length) * .68));
-    const labelEvery = Math.max(1, Math.ceil(buckets.length / (chart.width < 450 ? 4 : 6)));
+    const labelCount = Math.min(buckets.length, chart.width < 450 ? 4 : 6);
+    const labelIndexes = new Set(Array.from({ length: labelCount }, (_, index) => Math.round(index * (buckets.length - 1) / Math.max(1, labelCount - 1))));
     const first = Date.parse(`${buckets[0]?.date ?? '1970-01-01'}T00:00:00.000Z`);
     const last = Date.parse(`${buckets.at(-1)?.date ?? '1970-01-01'}T00:00:00.000Z`);
     const x = (index: number) => last === first ? left + innerWidth / 2 : left + innerWidth * (Date.parse(`${buckets[index]!.date}T00:00:00.000Z`) - first) / (last - first);
@@ -67,7 +68,7 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
                                         </rect>;
                                     })}
                                     {total === 0 && bucket.allTools.coverage.state === 'complete' && <line className="usage-auto-zero-bar" x1={x(index) - barWidth / 2} x2={x(index) + barWidth / 2} y1={y(0)} y2={y(0)}/>}
-                                    {(index % labelEvery === 0 || index === buckets.length - 1) && <text className="usage-axis" x={x(index)} y={height - 9} textAnchor={index === 0 ? 'start' : index === buckets.length - 1 ? 'end' : 'middle'}>{usageChartDate(bucket.date)}</text>}
+                                    {labelIndexes.has(index) && <text className="usage-axis" x={x(index)} y={height - 9} textAnchor={index === 0 ? 'start' : index === buckets.length - 1 ? 'end' : 'middle'}>{usageChartDate(bucket.date)}</text>}
                                 </g>;
                             })}
                             {linkedHover.date && buckets.some(bucket => bucket.date === linkedHover.date) && <line x1={x(buckets.findIndex(bucket => bucket.date === linkedHover.date))} x2={x(buckets.findIndex(bucket => bucket.date === linkedHover.date))} y1={top} y2={height - bottom} className="usage-linked-crosshair" aria-hidden="true"/>}
