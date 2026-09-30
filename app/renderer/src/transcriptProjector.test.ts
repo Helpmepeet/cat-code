@@ -1306,6 +1306,56 @@ test('a task-notification with no summary yields a row the view declines to draw
   expect(JSON.stringify(rows[0])).not.toContain('deadbeef')
 })
 
+test.each([
+  'completed (exit code 0)',
+  'failed with exit code 1',
+  'was killed',
+  'appears to be waiting for interactive input',
+])('background command notification stays out of live and replayed views: %s', outcome => {
+  const summary = `Background command "Check sidecar and shared types" ${outcome}`
+  for (const replay of [false, true]) {
+    for (const legacy of [false, true]) {
+      const message = {
+        type: 'user',
+        uuid: '00000000-0000-4000-8000-000000000302',
+        parent_tool_use_id: null,
+        message: {
+          role: 'user',
+          content: [{
+            type: 'text',
+            text: legacy
+              ? `<task-notification><status>completed</status><summary>${summary}</summary></task-notification>`
+              : `Task notification\nSummary: ${summary}`,
+          }],
+        },
+        ...(legacy ? {} : { origin: { kind: 'task-notification', summary } }),
+      }
+      const frame = {
+        ...messageFrame('session-1', message as SDKMessage),
+        ...(replay ? { replay: true as const } : {}),
+      }
+      const state = projectServerFrame(
+        projectServerFrame(createTranscriptState(), ready('session-1')),
+        frame,
+      )
+      // Retain the event and ordering facts; suppress only the display row.
+      expect(state.sessions['session-1']?.rows).toHaveLength(1)
+      expect(state.sessions['session-1']?.seenFrameIds[message.uuid]).toBe(true)
+      for (const revealHidden of [false, true]) {
+        expect(selectTranscriptRows(state, 'session-1', revealHidden)).toEqual([])
+        expect(selectNestedTranscriptRows(state, 'session-1', revealHidden)).toEqual([])
+      }
+    }
+  }
+})
+
+test('human text quoting a background command summary remains visible', () => {
+  const summary = 'Background command "Check sidecar and shared types" completed (exit code 0)'
+  expect(rowsForUserOrigin(undefined, [{ type: 'text', text: summary }])).toMatchObject([
+    { kind: 'user-text', content: summary },
+  ])
+})
+
 /**
  * The kinds that had NO desktop handling at all: `coordinator`, `channel`,
  * `teammate`, `deferred-continuation` (`MessageOrigin`, src/types/message.ts:10),

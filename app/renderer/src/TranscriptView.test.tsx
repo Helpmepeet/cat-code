@@ -1717,6 +1717,33 @@ test('a summary-less completion draws nothing at all', () => {
   expect(html).not.toContain('completed')
 })
 
+test('background command notices render no banner or row between human messages', () => {
+  const sessionId = 'background-command-notices'
+  let state = projectServerFrame(createTranscriptState(), inspectorReady(sessionId))
+  const summary = 'Background command "Check sidecar and shared types" completed (exit code 0)'
+  const notificationId = '00000000-0000-4000-8000-000000000402'
+  for (const [uuid, text, origin] of [
+    ['00000000-0000-4000-8000-000000000401', 'before the command', undefined],
+    [notificationId, `Task notification\nSummary: ${summary}`, { kind: 'task-notification', summary }],
+    ['00000000-0000-4000-8000-000000000403', 'after the command', undefined],
+  ] as const) {
+    state = projectServerFrame(state, inspectorMessage(sessionId, {
+      type: 'user',
+      uuid,
+      parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'text', text }] },
+      ...(origin ? { origin } : {}),
+    } as SDKMessage))
+  }
+  const rows = selectNestedTranscriptRows(state, sessionId)
+  expect(rows).toHaveLength(2)
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={rows} />)
+  expect(html).toContain('before the command')
+  expect(html).toContain('after the command')
+  expect(html).not.toContain(summary)
+  expect(html).not.toContain(`${sessionId}:${notificationId}`)
+})
+
 test('D2/C4: an owning Agent card nests its subagent COLLAPSED by default with a child-count affordance', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate the seam' }, 'pending', [

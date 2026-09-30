@@ -399,8 +399,8 @@ export type TaskNotificationRow = RowSource & {
   summary: string | null
   /**
    * The related `tool_use` id, when the engine sent one. Ordinary background
-   * launches keep this row visible in arrival order. A ResumeAgent completion
-   * uses the id to populate that resumed run's independent card.
+   * agent launches keep this row visible in arrival order. A ResumeAgent
+   * completion uses the id to populate that resumed run's independent card.
    */
   toolUseId: string | null
   timestamp?: string
@@ -712,9 +712,13 @@ export function selectTranscriptRows(
   }
   const projected = visible.flatMap((row): TranscriptRow[] => {
     if (row.kind === 'task-notification') {
+      // LocalShellTask's BACKGROUND_BASH_SUMMARY_PREFIX identifies internal
+      // command notices. Keep them in stored state, never in a display view,
+      // including revealed and replayed history.
+      if (row.summary?.startsWith('Background command ')) return []
       // A resumed run owns an independent card, including its result. Ordinary
-      // background launches remain immutable launch records and their finish
-      // stays here in arrival order.
+      // background agent launches remain immutable launch records and their
+      // finish stays here in arrival order.
       const merged = row.toolUseId !== null && resumedToolUseIds.has(row.toolUseId)
       return merged ? [] : [row]
     }
