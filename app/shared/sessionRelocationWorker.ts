@@ -1,6 +1,6 @@
 import { isSessionBinding } from './sessionBinding.js'
 import { isRelocationControls } from '../../src/utils/sessionRelocationState.js'
-import type { RelocationRequest } from '../../src/utils/sessionRelocation.js'
+import type { RelocationRequest } from '../../src/utils/sessionRelocationState.js'
 
 export const MAX_RELOCATION_RECORD_BYTES = 16_384
 export type SessionRelocationRequest = RelocationRequest & { type: 'session-relocation'; version: 1 }

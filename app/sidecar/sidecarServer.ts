@@ -1,3 +1,7 @@
+import { readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
+import { getCwd } from '../../src/utils/cwd.js'
+import { isPathTrusted } from '../../src/utils/config.js'
 /**
  * The headless Bun engine sidecar's socket server.
  *
@@ -36,6 +40,7 @@ import type {
 import type {
   SDKMessage,
   SDKUserMessage,
+  SDKResultHandoff,
 } from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
 import type { Message, MessageOrigin } from '../../src/types/message.js'
@@ -122,6 +127,7 @@ import {
   type HostRequestErrorCode,
   type HostRequestValues,
   type HostRequestVerb,
+  type WorkspaceHandoffMessage,
   type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type QueuedPromptItem,
@@ -594,6 +600,7 @@ export class SidecarServer {
   private turnLastEventAtMs = 0
   private turnEventCount = 0
   private turnResultSeen = false
+  private turnResultSucceeded = false
   private turnResultFailed = false
   private turnStallReported = false
   private turnStallTimer: ReturnType<typeof setTimeout> | null = null
@@ -614,6 +621,12 @@ export class SidecarServer {
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
   private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
+  private handoffResult: { operationId: string; tipUuid: string; toolUseId: string } | null = null
+  private handoffReadySent = false
+  private handoffCancellationSent = false
+  private unacceptedHandoffOperation: string | null = null
+  private unacceptedHandoffSettlement = false
+
   /** Queue listeners are synchronous; drain only from a later microtask. */
   private taskNotificationDrainScheduled = false
   /** Set before unsubscription so an already-scheduled queue microtask is inert. */
@@ -847,6 +860,18 @@ export class SidecarServer {
           event.message.parent_tool_use_id == null)
       ) {
         this.invalidateContextBreakdown()
+      }
+      if (event.type === 'message' && event.message.type === 'result' && event.message.subtype === 'handoff') {
+        const handoff = event.message as SDKResultHandoff
+        this.handoffResult = { operationId: handoff.operation_id,
+          tipUuid: handoff.transcript_boundary.tip_uuid, toolUseId: handoff.transcript_boundary.tool_use_id }
+      }
+      if (event.type === 'turn.status') {
+        if (event.activeTurn) {
+          this.handoffResult = null
+          this.handoffReadySent = false
+          this.handoffCancellationSent = false
+        } else queueMicrotask(() => this.publishHandoffReady())
       }
       this.observeTurnEvent(event)
       this.broadcastEvent(event)
@@ -1215,6 +1240,7 @@ export class SidecarServer {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
     })
+    queueMicrotask(() => this.publishHandoffReady())
     return connection
   }
 
@@ -1473,6 +1499,7 @@ export class SidecarServer {
       // `host.result` settles one request this sidecar minted an id for;
       // `peer.deliver` is a message another session sent, routed by main. Both
       // are inbound at the trust boundary and are treated as such.
+      [['workspace.handoff'], (server, connection, message) => { void server.handleWorkspaceHandoff(connection, message) }],
       [
         ['host.result'],
         (server, _connection, message) => server.handleHostResult(message),
@@ -1698,6 +1725,8 @@ export class SidecarServer {
           )
           return
         }
+        const operationId = this.controller.getHandoffReservation()
+        if (operationId) this.requestHandoffCancellation(operationId)
         this.controller.abort(message.reason)
         return
 
@@ -1779,7 +1808,122 @@ export class SidecarServer {
    * Returns true when a turn was started, so the caller knows not to also start
    * a task-notification turn on the same boundary.
    */
+  reserveWorkspaceHandoff(operationId: string): boolean {
+    if (!canPersistHandoffTranscript() || !this.controller.isTurnActive() || this.parking || this.conversationMutationInFlight ||
+        this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification() ||
+        this.controller.getPendingPermissionRequests().length > 0 || this.tasks?.hasLiveWork() ||
+        this.inFlightDurableWrites > 0 || this.accounts?.isOAuthLoginInFlight()) return false
+    try { this.controller.reserveHandoff(operationId); return true } catch { return false }
+  }
+
+  /** Only an authenticated, exact-operation cancellation receipt may authorize
+   * settlement without a host jump ledger. A timeout alone leaves the hold. */
+  cancelUnacceptedWorkspaceHandoff(operationId: string): void {
+    if (this.controller.getHandoffReservation() !== operationId) return
+    this.unacceptedHandoffOperation = operationId
+    queueMicrotask(() => this.publishHandoffReady())
+  }
+
+  private requestHandoffCancellation(operationId: string): void {
+    void this.requestHost('workspace.cancel', { operationId }).then(result => {
+      if (result.ok && result.value.operationId === operationId && result.value.status === 'not_accepted') this.cancelUnacceptedWorkspaceHandoff(operationId)
+      if (!result.ok) this.handoffCancellationSent = false
+    })
+  }
+
+  private publishUserHandoffAdmission(): void {
+    let state
+    try { state = readWorkspaceJump(this.sessionId) } catch { return }
+    if (!state?.requiresUserReconciliation) return
+    this.broadcastToConnections(connection => this.send(connection, { kind: 'workspace.user-admitted', protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId, operationId: state.operationId }))
+  }
+
+  private publishHandoffReady(): void {
+    if (this.closed) return
+    if (this.unacceptedHandoffOperation) {
+      if (this.activeTurn || this.controller.isTurnActive() || this.unacceptedHandoffSettlement) return
+      const operationId = this.unacceptedHandoffOperation
+      if (this.controller.getHandoffReservation() !== operationId) { this.unacceptedHandoffOperation = null; return }
+      this.unacceptedHandoffSettlement = true
+      this.inFlightDurableWrites++
+      void this.controller.settleHandoff(operationId, 'cancelled').then(() => {
+        this.unacceptedHandoffOperation = null
+      }, () => this.log('[sidecar] workspace cancellation outcome could not be saved')).finally(() => {
+        this.inFlightDurableWrites--
+        this.unacceptedHandoffSettlement = false
+      })
+      return
+    }
+    const boundary = this.handoffResult
+    if (!boundary && !this.activeTurn && !this.controller.isTurnActive()) {
+      const operationId = this.controller.getHandoffReservation()
+      if (operationId && !this.handoffCancellationSent) {
+        this.handoffCancellationSent = true
+        this.requestHandoffCancellation(operationId)
+      }
+      return
+    }
+    if (!boundary || this.handoffReadySent || this.activeTurn || this.controller.isTurnActive() ||
+        this.controller.getHandoffReservation() !== boundary.operationId) return
+    this.handoffReadySent = true
+    void this.requestHost('workspace.ready', { operationId: boundary.operationId,
+      tipUuid: boundary.tipUuid, toolUseId: boundary.toolUseId }).then(result => {
+      if (!result.ok) this.requestHandoffCancellation(boundary.operationId)
+    })
+  }
+
+  private async handleWorkspaceHandoff(connection: Connection, raw: unknown): Promise<void> {
+    const parsed = workspaceHandoffSchema.safeParse(raw)
+    if (!parsed.success) { this.log('[sidecar] rejected workspace handoff control'); return }
+    const message: WorkspaceHandoffMessage = parsed.data
+    let ok = false
+    try {
+      const state = readWorkspaceJump(this.sessionId)
+      if (!state || state.engineSessionId !== this.engineSessionId || state.operationId !== message.operationId) throw new Error('Obsolete handoff')
+      if (message.action === 'verify') {
+        const observed = this.handoffResult
+        if (!this.isParkGateOpen() || !observed || observed.operationId !== message.operationId ||
+            observed.tipUuid !== message.tipUuid || observed.toolUseId !== message.toolUseId ||
+            this.controller.getHandoffReservation() !== message.operationId) throw new Error('Handoff boundary changed')
+        await verifyActiveTranscriptTipDurably(message.tipUuid)
+        if (!this.isParkGateOpen()) throw new Error('Handoff is active')
+      } else if (message.action === 'continue') {
+        if (!this.isParkGateOpen() || state.continuation.state !== 'admitted' || state.cancelled ||
+            state.location !== 'destination' || getCwd() !== state.target.cwd || !isPathTrusted(getCwd()) ||
+            this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') throw new Error('Continuation unavailable')
+        if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
+        this.activeTurn = true
+        this.beginTurnObservation()
+        try { await this.controller.continueHandoff(message.operationId, { uuid: state.continuation.id }) }
+        finally { this.activeTurn = false; this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok') }
+        if (!this.turnResultSucceeded || this.turnResultFailed || this.handoffResult) throw new Error('Continuation did not settle successfully')
+      } else if (message.action === 'settle_failed' || message.action === 'settle_cancelled' || message.action === 'settle_uncertain') {
+        // Cancellation may arrive while the source tool exchange is settling.
+        // Wait without releasing its reservation or starting another turn.
+        const deadline = Date.now() + 15_000
+        while (this.activeTurn || this.controller.isTurnActive()) {
+          if (Date.now() >= deadline || this.closed) throw new Error('Source is not idle')
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
+        await this.controller.settleHandoff(message.operationId, message.action === 'settle_uncertain' ? 'uncertain' : message.action === 'settle_failed' ? 'failed' : 'cancelled')
+      } else if (message.action === 'release') {
+        if (state.continuation.state !== 'settled' || state.requiresUserReconciliation) throw new Error('Outcome is not settled')
+        this.controller.releaseHandoffReservation(message.operationId)
+        this.scheduleBoundaryDrain()
+      } else {
+        if (state.requiresUserReconciliation) throw new Error('User admission is not reconciled')
+        this.controller.releaseHandoffReservation(message.operationId)
+      }
+      ok = true
+    } catch { this.log('[sidecar] workspace handoff control refused') }
+    this.send(connection, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId, ok })
+  }
+
   private drainOneQueuedPrompt(): boolean {
+    if (!this.controller.canStartAutomaticTurn()) return false
     if (this.closed || this.parking || this.activeTurn) return false
     if (
       this.workspaceTrust &&
@@ -1854,6 +1998,7 @@ export class SidecarServer {
   }
 
   private drainOneTaskNotification(): void {
+    if (!this.controller.canStartAutomaticTurn()) return
     if (
       this.closed ||
       this.parking ||
@@ -1981,7 +2126,7 @@ export class SidecarServer {
     onRejected?: (error: Error) => void
     onSettled?: (error?: Error) => void
   }): boolean {
-    if (this.parking || this.activeTurn || this.conversationMutationInFlight) {
+    if (this.parking || this.activeTurn || this.conversationMutationInFlight || this.controller.getHandoffReservation() || (isMeta && this.controller.requiresHandoffReconciliation())) {
       return false
     }
     this.runControls?.lockProviderSwitches()
@@ -2001,6 +2146,7 @@ export class SidecarServer {
         ...(origin !== undefined ? { origin } : {}),
         onInputPersisted: () => {
           onInputPersisted?.()
+          if (isMeta !== true && origin === undefined) this.publishUserHandoffAdmission()
           if (titlePrompt) {
             void this.titleGenerator.maybeGenerate(titlePrompt, title =>
               this.broadcastSessionTitle(title),
@@ -2039,6 +2185,7 @@ export class SidecarServer {
         // past this pins a full prompt each, images included, for a message the
         // user took back.
         this.recalledPrompts.clear()
+        this.publishHandoffReady()
         this.scheduleBoundaryDrain()
       })
     return true
@@ -2056,6 +2203,7 @@ export class SidecarServer {
     this.turnLastEventAtMs = startedAt
     this.turnEventCount = 0
     this.turnResultSeen = false
+    this.turnResultSucceeded = false
     this.turnResultFailed = false
     this.turnStallReported = false
     this.onTurnLifecycle?.({ kind: 'started' })
@@ -2081,6 +2229,7 @@ export class SidecarServer {
     this.turnLastEventAtMs = Date.now()
     if (event.message.type === 'result') {
       this.turnResultSeen = true
+      this.turnResultSucceeded = event.message.subtype === 'success' && event.message.is_error === false
       this.turnResultFailed = event.message.is_error === true
     }
   }
@@ -2651,6 +2800,10 @@ export class SidecarServer {
     // `session_disconnected` is an existing ErrorFrame code the renderer already
     // folds to disconnected/inputEnabled:false — no new error code, no renderer
     // change. Retryable: the user unparks (restore-on-click) and re-sends.
+    if (this.controller.getHandoffReservation()) {
+      refuseSubmit('session_not_ready', 'Workspace change is awaiting settlement.', true)
+      return
+    }
     if (this.parking) {
       refuseSubmit('session_disconnected', 'session parking', true)
       return
@@ -2884,7 +3037,12 @@ export class SidecarServer {
    *      reports its own liveness instead.
    */
   private isParkGateOpen(): boolean {
-    if (this.activeTurn) return false
+    if (this.activeTurn || this.controller.isTurnActive()) return false
+    const handoff = this.controller.getHandoffReservation()
+    if (handoff) {
+      try { if (readWorkspaceJump(this.sessionId)?.operationId !== handoff) return false }
+      catch { return false }
+    }
     if (this.hasQueuedParentTaskNotification()) return false
     // Same rule for a prompt the user sent mid-turn that no tool round drained:
     // parking over it would strand a message the user has already watched leave
@@ -3481,7 +3639,7 @@ export class SidecarServer {
       })
     }
 
-    if (this.parking || this.conversationMutationInFlight) {
+    if (this.parking || this.conversationMutationInFlight || this.controller.getHandoffReservation()) {
       refuse('Another conversation update is already in progress.')
       return
     }
@@ -5161,8 +5319,8 @@ export class SidecarServer {
     // for a delivery that arrives one moment later, after the exit. Silence is
     // the refusal — `peer.deliver` carries no requestId to answer, and main's
     // hold is released by the ack alone.
-    if (this.parking) {
-      this.log('[sidecar] peer message refused: session parking')
+    if (this.parking || this.controller.getHandoffReservation() || this.controller.requiresHandoffReconciliation()) {
+      this.log('[sidecar] peer message refused: session parking or workspace settlement')
       return
     }
     const parsed = peerDeliverMessageSchema.safeParse(message)
@@ -5519,6 +5677,7 @@ export class SidecarServer {
  */
 const MAIN_ORIGINATED_MESSAGE_TYPES = new Set([
   'host.result',
+  'workspace.handoff',
   'peer.deliver',
   'app.park',
   'account.profileSignedOut',
@@ -6010,6 +6169,7 @@ function checkStrictKeys(message: unknown): string | null {
     // main-derived hop chain, all of which the sidecar treats as DATA: it is
     // never read as authority, and the chain is never authored on this side.
     ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
+    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'action', 'tipUuid', 'toolUseId'])],
     [
       'peer.deliver',
       new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
@@ -6152,6 +6312,12 @@ const historyLoadEarlierMessageSchema = z.object({
  * be a string or null here rather than trusted from a frame; nothing downstream
  * has to re-derive that.
  */
+const workspaceHandoffBase = { type: z.literal('workspace.handoff'), requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS), operationId: z.string().uuid() }
+const workspaceHandoffSchema = z.union([
+  z.object({ ...workspaceHandoffBase, action: z.literal('verify'), tipUuid: z.string().uuid(), toolUseId: z.string().min(1).max(256) }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.enum(['continue', 'settle_failed', 'settle_cancelled', 'settle_uncertain', 'release', 'reconcile']) }).strict(),
+])
+
 const hostResultEnvelopeSchema = z.object({
   type: z.literal('host.result'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
@@ -6212,6 +6378,10 @@ const HOST_RESULT_VALUE_SCHEMAS = {
     .object({ messageId: peerIdSchema, outcome: peerDeliverOutcomeSchema })
     .strict(),
   'peer.ack': z.object({ messageId: peerIdSchema }).strict(),
+  'workspaces.list': z.object({ eligible: z.boolean(), workspaces: z.array(z.object({ handle: z.string().uuid(), name: z.string().min(1).max(256), path: z.string().min(1).max(4096) }).strict()).max(128) }).strict(),
+  'workspace.jump': z.object({ operationId: z.string().uuid(), status: z.literal('accepted') }).strict(),
+  'workspace.ready': z.object({ operationId: z.string().uuid(), status: z.enum(['ready', 'cancelled', 'settled']) }).strict(),
+  'workspace.cancel': z.object({ operationId: z.string().uuid(), status: z.enum(['cancelled', 'not_accepted']) }).strict(),
 } as const satisfies Record<HostRequestVerb, z.ZodType>
 
 /**

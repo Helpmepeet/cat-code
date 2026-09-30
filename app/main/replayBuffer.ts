@@ -148,6 +148,10 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   ready: 'head',
   'history.replay.complete': 'none',
+  // Main consumes these operation acknowledgements before renderer forwarding.
+  // Replaying them must never admit work or reconcile a saved operation.
+  'workspace.handoff.result': 'none',
+  'workspace.user-admitted': 'none',
 
   'permission.context': 'sticky',
   'settings.snapshot': 'sticky',

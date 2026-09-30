@@ -196,6 +196,8 @@ export type McpRuntimeInputs = {
 }
 
 export type ToolUseContext = {
+  /** Engine-owned, main-turn-only transfer fence; workers cannot accept it. */
+  turnHandoff?: import('./app-runtime/handoff.js').TurnHandoff
   options: {
     commands: Command[]
     debug: boolean

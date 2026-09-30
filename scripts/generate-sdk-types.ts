@@ -12,8 +12,45 @@ const effortSnapshotPaths = [
 ]
 
 const schemas = readFileSync(schemasPath, 'utf-8')
-const generated = readFileSync(generatedPath, 'utf-8')
 
+// The repository's SDK generator preserves the historical hand-maintained
+// declarations. Synchronize this additive result from its owning schema.
+if (!/export const SDKResultHandoffSchema/.test(schemas)) throw new Error('Missing handoff result schema')
+const handoffType = `export type SDKResultHandoff = SDKBaseMessage & {
+  type: 'result'
+  subtype: 'handoff'
+  operation_id: string
+  transcript_boundary: { tip_uuid: string; tool_use_id: string }
+  duration_ms: number
+  duration_api_ms: number
+  is_error: false
+  num_turns: number
+  stop_reason: string | null
+  total_cost_usd: number
+  usage: unknown
+  modelUsage: Record<string, ModelUsage>
+  permission_denials: Array<{ tool_name: string; tool_use_id: string; tool_input: Record<string, unknown> }>
+  fast_mode_state?: unknown
+  uuid: string
+  session_id: string
+}
+
+`
+for (const path of effortSnapshotPaths) {
+  let contents = readFileSync(path, 'utf-8')
+  if (!contents.includes("subtype?: 'success' | 'interrupted' | 'handoff'")) {
+    contents = contents.replace("subtype?: 'success' | 'interrupted'", "subtype?: 'success' | 'interrupted' | 'handoff'")
+  }
+  if (contents.includes('export type SDKResultHandoff =')) {
+    contents = contents.replace(/export type SDKResultHandoff =[\s\S]*?\n\n(?=export type SDKStatusMessage =)/, handoffType)
+  } else {
+    contents = contents.replace('export type SDKStatusMessage =', `${handoffType}export type SDKStatusMessage =`)
+    contents = contents.replace('  | SDKResultSuccess\n', '  | SDKResultSuccess\n  | SDKResultHandoff\n')
+  }
+  writeFileSync(path, contents, 'utf-8')
+}
+
+const generated = readFileSync(generatedPath, 'utf-8')
 const diagnosticSchemaMatch = schemas.match(
   /export const SDKAccountDiagnosticCodeSchema = lazySchema\(\(\) =>\s+z\.enum\(\[([\s\S]*?)\]\),\s*\)/,
 )

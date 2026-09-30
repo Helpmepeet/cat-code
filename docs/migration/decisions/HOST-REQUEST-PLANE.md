@@ -134,6 +134,46 @@ takes a filesystem path, any verb that returns file contents.
 
 ## 3. Trust rules (the price of the inversion)
 
+### Workspace-jump authority amendment, 2026-09-30
+
+The authorized [agent-directed workspace jump](../../plans/2026-09-30-agent-workspace-jump.md)
+adds separately validated workspace-listing and one-shot jump coordination verbs
+to this transport. The implementation is reviewed; isolated validation and
+remaining verification boundaries are recorded in the linked plan. They are not peer operations:
+managed Chats may use these verbs without receiving peer privileges. Existing
+HR3 peer scope and managed-peer refusals remain intact.
+
+Host-issued opaque destination handles resolve through host-owned canonical
+project mappings. Model input never supplies a filesystem execution destination.
+Bounded host-authored project metadata may be returned for discovery,
+disambiguation, and the engine's ordinary tool-permission evaluation; candidate
+instructions, file contents, executable configuration, and credentials do not
+cross this plane. This is the explicit exception to HR6's earlier metadata/path
+restriction, not permission to accept model-authored spawn paths.
+
+Connection identity authorizes only the requesting conversation, with an
+additional engine caller check refusing worker/fork relocation. Listing does
+not authorize movement: current canonical identity, eligibility, and engine-owned
+trust are checked again. Peer restrictions, shared size/rate limits, closed
+per-verb schemas, secret ownership, and protocol versioning remain intact.
+
+Stable operation IDs and source process generation are separate from transport
+correlations. Acceptance reserves a handoff but does not authorize immediate
+filesystem movement; only verified durable source readiness does. Pending
+coordination leaves results and cancellation reachable. Movement outcome and
+continuation admission/settlement are persisted separately and reconciled against
+the engine relocation owner. Unresolved/unreadable operation state is retained
+before registry reaping, and a timeout cannot independently authorize a late
+move or an automatic replay of uncertain work.
+
+`workspace.cancel` distinguishes accepted cancellation from `not_accepted`.
+The latter is bound to the authenticated conversation and current generation;
+bounded cancellation tombstones forbid a late acceptance in that generation.
+Main restart destroys destination handles and source generations, so this reply
+does not grant reusable movement authority. The source engine saves its own
+terminal note before releasing the local hold. An unreadable durable operation
+cannot be reported as never accepted.
+
 Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4.
 
 - **HR1 — main validates fail-closed.** `host.request` is decoded by the

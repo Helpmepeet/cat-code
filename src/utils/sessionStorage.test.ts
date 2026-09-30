@@ -13,7 +13,7 @@ import { createAttachmentMessage, getQueuedCommandAttachments } from './attachme
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
 import { activateTranscriptLease, releaseActiveTranscriptLease } from './transcriptLease.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, verifyHandoffTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
 
 function createRewindContinuationFixture(
   sessionId: string,
@@ -1815,6 +1815,40 @@ describe('session storage', () => {
         process.env.CLAUDE_CONFIG_DIR = originalConfigDir
       }
     }
+  })
+
+  test('handoff durability verifies complete tool pairing on the active chain and rejects a rewound exchange', async () => {
+    const priorConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'isolated-handoff-config')
+    try {
+    const user = createUserMessage({ content: 'jump to the workspace' })
+    const assistant = {
+      type: 'assistant', uuid: randomUUID(), timestamp: new Date().toISOString(),
+      message: { id: randomUUID(), role: 'assistant', model: 'test',
+        content: [
+          { type: 'tool_use', name: 'Jump', id: 'jump-durable', input: {} },
+          { type: 'tool_use', name: 'Edit', id: 'edit-skipped', input: {} },
+        ], usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'tool_use', stop_sequence: null },
+    } as AssistantMessage
+    const jump = createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'jump-durable', content: 'accepted' }] })
+    const skipped = createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'edit-skipped', content: 'not executed', is_error: true }] })
+    await recordTranscript([user, assistant, jump])
+    await expect(verifyHandoffTranscriptDurably({ tip_uuid: jump.uuid, tool_use_id: 'jump-durable', exchange_uuids: [assistant.uuid, jump.uuid] })).rejects.toThrow('incomplete')
+    await recordTranscript([user, assistant, jump, skipped])
+    const expected = { tip_uuid: skipped.uuid, tool_use_id: 'jump-durable', exchange_uuids: [assistant.uuid, jump.uuid, skipped.uuid] }
+    await expect(verifyHandoffTranscriptDurably(expected)).resolves.toEqual({ tip_uuid: skipped.uuid, tool_use_id: 'jump-durable' })
+    await markActiveConversationTip(user.uuid as UUID)
+    await expect(verifyHandoffTranscriptDurably(expected)).rejects.toThrow('no longer active')
+    } finally {
+      if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = priorConfigDir
+    }
+  })
+
+  test('handoff durability refuses missing transcript ownership', async () => {
+    delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    await recordTranscript([createUserMessage({ content: 'not persisted' })])
+    await expect(verifyHandoffTranscriptDurably({ tip_uuid: randomUUID(), tool_use_id: 'jump', exchange_uuids: [randomUUID()] })).rejects.toThrow('persisted conversation ownership')
   })
 
   test('durable transcript barrier requires the accepted UUID to be readable', async () => {

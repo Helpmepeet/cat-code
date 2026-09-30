@@ -1,5 +1,11 @@
 # Chat-first project attachment
 
+> The active agent-directed refactor is now specified in
+> [Agent-directed workspace jump](2026-09-30-agent-workspace-jump.md).
+> It replaces this document's pre-delivery intent-matching direction with normal
+> conversational-agent judgment and a one-use jump capability. The historical
+> implementation checkpoints below describe the architecture being retired.
+
 > Manual saved or empty Chat → project → Move back → another project behavior is implemented
 > and recorded in [CHAT-RELOCATION](../migration/decisions/CHAT-RELOCATION.md).
 > The design-only authorization language and unverified list below are historical.

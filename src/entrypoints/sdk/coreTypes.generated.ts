@@ -131,7 +131,7 @@ export type SDKPartialAssistantMessage = SDKBaseMessage & {
 
 export type SDKResultMessage = SDKBaseMessage & {
   type: 'result'
-  subtype?: 'success' | 'interrupted' | 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries' | 'error_auth_required'
+  subtype?: 'success' | 'interrupted' | 'handoff' | 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries' | 'error_auth_required'
   is_error?: boolean
   result?: string
   errors?: string[]
@@ -168,6 +168,25 @@ export type SDKResultSuccess = SDKBaseMessage & {
     tool_input: Record<string, unknown>
   }>
   structured_output?: unknown
+  fast_mode_state?: unknown
+  uuid: string
+  session_id: string
+}
+
+export type SDKResultHandoff = SDKBaseMessage & {
+  type: 'result'
+  subtype: 'handoff'
+  operation_id: string
+  transcript_boundary: { tip_uuid: string; tool_use_id: string }
+  duration_ms: number
+  duration_api_ms: number
+  is_error: false
+  num_turns: number
+  stop_reason: string | null
+  total_cost_usd: number
+  usage: unknown
+  modelUsage: Record<string, ModelUsage>
+  permission_denials: Array<{ tool_name: string; tool_use_id: string; tool_input: Record<string, unknown> }>
   fast_mode_state?: unknown
   uuid: string
   session_id: string
@@ -810,6 +829,7 @@ export type SDKMessage =
   | SDKPermissionDenial
   | SDKResultMessage
   | SDKResultSuccess
+  | SDKResultHandoff
   | SDKStatusMessage
   | SDKAccountDiagnosticMessage
   | SDKSystemMessage

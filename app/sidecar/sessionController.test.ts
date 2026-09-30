@@ -2,17 +2,21 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { z } from '../../node_modules/zod/v4'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { buildEffectiveSystemPrompt } from '../../src/utils/systemPrompt.js'
 import type { ToolUseContext } from '../../src/Tool.js'
 import {
   getMainLoopModelOverride,
+  getSessionId,
   getSessionProvider,
   setMainLoopModelOverride,
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
+import { writeWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
 import { clearCommandMemoizationCaches, isHeadlessSafeCommand } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { hasProviderBoundHistory } from '../../src/utils/model/providers.js'
@@ -278,7 +282,7 @@ test('normal startup appends the desktop interface and file-reference instructio
     DESKTOP_SYSTEM_PROMPT_ADDENDUM,
   )
   expect(queryEngineConfig.appendSystemPrompt).toContain('Interface: Cat Code desktop app, in a session tab.')
-  expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
+  expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('the href is the absolute file path')
 })
 
 test('recreated managed folder notice reaches the model system prompt without changing history', async () => {
@@ -317,7 +321,7 @@ test('recreated managed folder notice reaches the model system prompt without ch
     expect(queryEngineConfig.initialMessages).toEqual(messages)
     const normal = buildDesktopSystemPrompt(undefined, cwd)
     expect(normal).not.toContain('Earlier file references in the conversation may no longer exist.')
-    expect(normal).toContain('Move to project…')
+    expect(normal).toContain('use JumpWorkspace before continuing the request')
     expect(normal).toContain('Changing directories in Bash does not move the conversation.')
     expect(buildDesktopSystemPrompt(undefined, undefined, false, true)).not.toContain(
       'Earlier file references in the conversation may no longer exist.',
@@ -730,6 +734,40 @@ test('PEER-SESSIONS §4 — a desktop session carries the peer tools the termina
   // The same array the session-actions export and the context breakdown read,
   // so those describe one session rather than two.
   expect(tools.map(tool => tool.name)).toEqual(names)
+})
+
+test('workspace tool schemas survive the jump and managed return while consumed guidance persists', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-consumed-jump-'))
+  const previousConfig = process.env.CLAUDE_CONFIG_DIR
+  const source = join(root, 'chat'), target = join(root, 'project')
+  const appSessionId = randomUUID()
+  const binding = { kind: 'managed' as const, storageId: randomUUID(), storageRootId: randomUUID() }
+  mkdirSync(source); mkdirSync(target)
+  try {
+    process.env.CLAUDE_CONFIG_DIR = root
+    resetSettingsCache()
+    const before = await createNormalSidecarQueryEngineConfig(source, [], { appSessionId, binding })
+    writeWorkspaceJump({ version: 1, appSessionId, engineSessionId: getSessionId(), operationId: randomUUID(), sourceGeneration: 'source',
+      source: { cwd: source, binding }, target: { cwd: target, binding: { kind: 'project' } }, acceptedAt: 1,
+      phase: 'settled', location: 'destination', consumed: true, cancelled: false, outcome: 'completed',
+      sourceOutcomePersisted: true, requiresUserReconciliation: false, continuation: { id: randomUUID(), state: 'settled' } })
+    const destination = await createNormalSidecarQueryEngineConfig(target, [], { appSessionId })
+    const returned = await createNormalSidecarQueryEngineConfig(source, [], { appSessionId, binding })
+    const workspaceSchemas = (config: typeof before) => config.queryEngineConfig.tools
+      .filter(tool => tool.name === 'ListWorkspaces' || tool.name === 'JumpWorkspace')
+      .map(tool => ({ name: tool.name, schema: z.toJSONSchema(tool.inputSchema) }))
+    expect(workspaceSchemas(before)).toHaveLength(2)
+    expect(workspaceSchemas(destination)).toEqual(workspaceSchemas(before))
+    expect(workspaceSchemas(returned)).toEqual(workspaceSchemas(before))
+    expect(before.queryEngineConfig.appendSystemPrompt).toContain('use JumpWorkspace before continuing')
+    expect(returned.queryEngineConfig.appendSystemPrompt).toContain('Behave as though JumpWorkspace is gone')
+    expect(returned.queryEngineConfig.appendSystemPrompt).not.toContain('use JumpWorkspace before continuing')
+  } finally {
+    if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    resetSettingsCache()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('the spawn run defaults treat an empty env value as absent, never as a value', () => {

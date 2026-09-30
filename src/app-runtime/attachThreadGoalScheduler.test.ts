@@ -9,6 +9,7 @@ import {
   attachThreadGoalScheduler,
   diffCumulativeTurnUsage,
 } from './attachThreadGoalScheduler.js'
+import { AppSessionController } from './AppSessionController.js'
 import type { AppSessionEvent } from './sessionEvents.js'
 
 const NOW = 9_000_000
@@ -358,4 +359,68 @@ describe('the app runtime drives the same loop', () => {
 
     expect(h.submitted).toHaveLength(1)
   })
+})
+
+
+test('handoff suspension retains source usage and holds the goal until continuation ownership is released', async () => {
+  let goal: ThreadGoal | null = { ...activeGoal(), maxContinuationTurns: 1 }
+  let turns = 0
+  let controller!: AppSessionController
+  controller = new AppSessionController({
+    async *runTurn() {
+      turns++
+      if (turns === 1) controller.reserveHandoff('goal-handoff')
+      yield { type: 'result', subtype: turns === 1 ? 'handoff' : 'success', operation_id: 'goal-handoff',
+        transcript_boundary: { tip_uuid: 'durable-tip', tool_use_id: 'jump-call' },
+        is_error: false, usage: { input_tokens: 500 + (turns - 1) * 100, output_tokens: 50 },
+        modelUsage: {}, permission_denials: [], uuid: 'result', session_id: 'session',
+        duration_ms: 1, duration_api_ms: 1, num_turns: 1, stop_reason: 'tool_use', total_cost_usd: 0 }
+    },
+  })
+  const attachment = attachThreadGoalScheduler({ controller, ownerId: 'handoff-goal-owner',
+    getGoal: () => goal, saveGoal: next => { goal = next }, now: () => NOW })
+  try {
+    await controller.submit('select the goal workspace')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(goal!.tokensUsed).toBe(550)
+    expect(goal!.status).toBe('active')
+    expect(goal!.continuationTurns).toBe(0)
+    expect(controller.canStartAutomaticTurn()).toBe(false)
+    expect(controller.getHandoffReservation()).toBe('goal-handoff')
+    await controller.continueHandoff('goal-handoff')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(turns).toBe(2)
+    expect(goal!.tokensUsed).toBe(650)
+    controller.releaseHandoffReservation('goal-handoff')
+    for (let i = 0; i < 20 && goal!.status === 'active'; i++) await new Promise(resolve => setTimeout(resolve, 0))
+    expect(turns).toBe(3)
+    expect(goal!.continuationTurns).toBe(1)
+    expect(goal!.tokensUsed).toBe(750)
+  } finally { attachment.detach() }
+})
+
+test('settled failed handoff remains blocked by user reconciliation after reservation release', async () => {
+  let goal: ThreadGoal | null = activeGoal()
+  let turns = 0
+  let controller!: AppSessionController
+  controller = new AppSessionController({
+    async *runTurn() {
+      turns++
+      controller.reserveHandoff('failed-goal-handoff')
+      yield { type: 'result', subtype: 'handoff', is_error: false, usage: { input_tokens: 500, output_tokens: 50 } } as never
+    },
+    persistHandoffOutcome: async () => [],
+  })
+  const attachment = attachThreadGoalScheduler({ controller, ownerId: 'failed-handoff-goal-owner',
+    getGoal: () => goal, saveGoal: next => { goal = next }, now: () => NOW })
+  try {
+    await controller.submit('select the goal workspace')
+    await controller.settleHandoff('failed-goal-handoff', 'failed')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(controller.getHandoffReservation()).toBeNull()
+    expect(controller.requiresHandoffReconciliation()).toBe(true)
+    expect(turns).toBe(1)
+    expect(goal!.tokensUsed).toBe(550)
+    expect(goal!.continuationTurns).toBe(0)
+  } finally { attachment.detach() }
 })

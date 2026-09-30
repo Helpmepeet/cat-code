@@ -29,6 +29,8 @@ export function formatHeadlessTextResult(
       return `Error: Failed to provide valid structured output after maximum retries`
     case 'interrupted':
       return `Interrupted\n`
+    case 'handoff':
+      return `Conversation changing workspace\n`
     case 'error_auth_required':
       return `Error: Authentication required\n`
     default: {

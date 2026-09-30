@@ -8,6 +8,15 @@ import { randomUUID } from 'node:crypto'
 import { isSessionBinding, type SessionBinding } from '../../app/shared/sessionBinding.js'
 
 export type SessionLocation = { cwd: string; binding: SessionBinding }
+export type RelocationRequest = {
+  engineSessionId: string
+  appSessionId: string
+  source: SessionLocation
+  target: SessionLocation
+  controls: RelocationControls
+  /** Host compensation after destination resume failed before the move committed. */
+  rollback?: true
+}
 export type RelocationControls = {
   mode: 'default' | 'acceptEdits' | 'plan' | 'dontAsk' | 'auto'
   model?: string | null

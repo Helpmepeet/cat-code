@@ -88,6 +88,13 @@ export type PeerRegistryRow = {
 type NamedRow = PeerRegistryRow & { name: string }
 
 export type PeerRequestPlaneDeps = {
+  /** Agent-directed jump verbs have separate authority from peer operations. */
+  workspaceRequests?: {
+    handleRequest: (appSessionId: string, request: WorkspaceHostRequest) => Promise<
+      { ok: true; value: HostRequestValues[WorkspaceHostRequest['verb']] } | { ok: false; error: HostRequestError }>
+    afterResponse?: (appSessionId: string, request: WorkspaceHostRequest, answered: boolean) => void
+    isReserved: (appSessionId: string) => boolean
+  }
   /** Every current registry row, live and dead alike. Read-only. */
   rows: () => readonly PeerRegistryRow[]
   /** Does a sidecar record still EXIST for this row, live or in between? */
@@ -213,6 +220,10 @@ const VERB_ARG_KEYS: Record<
   // delivery and can never widen one (F17, ruling 11; see `handlePeerDeliver`).
   'peer.deliver': { required: ['to', 'text'], optional: ['expectCreatorId'] },
   'peer.ack': { required: ['messageId'], optional: [] },
+  'workspaces.list': { required: [], optional: [] },
+  'workspace.jump': { required: ['operationId', 'destinationHandle'], optional: [] },
+  'workspace.ready': { required: ['operationId', 'tipUuid', 'toolUseId'], optional: [] },
+  'workspace.cancel': { required: ['operationId'], optional: [] },
 }
 
 const FRAME_KEYS = new Set([
@@ -273,6 +284,12 @@ export type ValidatedHostRequest =
       expectCreatorId?: string
     }
   | { verb: 'peer.ack'; messageId: string }
+  | { verb: 'workspaces.list' }
+  | { verb: 'workspace.jump'; operationId: string; destinationHandle: string }
+  | { verb: 'workspace.ready'; operationId: string; tipUuid: string; toolUseId: string }
+  | { verb: 'workspace.cancel'; operationId: string }
+
+export type WorkspaceHostRequest = Extract<ValidatedHostRequest, { verb: 'workspaces.list' | 'workspace.jump' | 'workspace.ready' | 'workspace.cancel' }>
 
 export type HostRequestValidation =
   | { ok: true; requestId: string; request: ValidatedHostRequest }
@@ -404,6 +421,14 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
         requestId,
         request: { verb, messageId: strings.messageId as string },
       }
+    case 'workspaces.list':
+      return { ok: true, requestId, request: { verb } }
+    case 'workspace.jump':
+      return { ok: true, requestId, request: { verb, operationId: strings.operationId!, destinationHandle: strings.destinationHandle! } }
+    case 'workspace.ready':
+      return { ok: true, requestId, request: { verb, operationId: strings.operationId!, tipUuid: strings.tipUuid!, toolUseId: strings.toolUseId! } }
+    case 'workspace.cancel':
+      return { ok: true, requestId, request: { verb, operationId: strings.operationId! } }
     default:
       return { ok: false, requestId, error: fail('unknown_verb', `unknown verb ${verb}`) }
   }
@@ -678,14 +703,15 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     result:
       | { ok: true; value: HostRequestValues[HostRequestVerb] }
       | { ok: false; error: HostRequestError },
-  ): void {
-    deps.forward(sessionId, {
+  ): boolean {
+    const failure = deps.forward(sessionId, {
       type: 'host.result',
       requestId,
       ...(result.ok
         ? { ok: true, value: result.value }
         : { ok: false, error: result.error }),
     })
+    return failure === null || failure === undefined
   }
 
   function charge(
@@ -1391,6 +1417,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     // lets senders exhaust a session's budget on its behalf.
     if (
       validated.request.verb !== 'peer.ack' &&
+      validated.request.verb !== 'workspace.ready' &&
+      validated.request.verb !== 'workspace.cancel' &&
       !charge(verbWindow, sessionId, MAX_HOST_REQUESTS_PER_WINDOW)
     ) {
       answer(sessionId, validated.requestId, {
@@ -1410,6 +1438,23 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       })
       return
     }
+    const request = validated.request
+    if (request.verb === 'workspaces.list' || request.verb === 'workspace.jump' ||
+        request.verb === 'workspace.ready' || request.verb === 'workspace.cancel') {
+      const handler = deps.workspaceRequests
+      if (!handler) {
+        answer(sessionId, validated.requestId, { ok: false, error: fail('unavailable', 'Workspace selection is unavailable') })
+        return
+      }
+      try {
+        const result = await handler.handleRequest(sessionId, request)
+        const answered = answer(sessionId, validated.requestId, result)
+        if (result.ok) handler.afterResponse?.(sessionId, request, answered)
+      } catch {
+        answer(sessionId, validated.requestId, { ok: false, error: fail('internal_error', 'The workspace request could not be completed') })
+      }
+      return
+    }
     if (requesterRow.binding?.kind === 'managed') {
       answer(sessionId, validated.requestId, {
         ok: false,
@@ -1417,7 +1462,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       })
       return
     }
-    if (isMoving(sessionId)) {
+    if (isMoving(sessionId) || deps.workspaceRequests?.isReserved(sessionId)) {
       answer(sessionId, validated.requestId, {
         ok: false,
         error: fail('session_not_found', 'this session is changing workspace'),
@@ -1425,7 +1470,6 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       return
     }
 
-    const request = validated.request
     try {
       switch (request.verb) {
         case 'peers.list':

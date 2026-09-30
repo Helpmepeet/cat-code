@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import type { OpenWorkspaceFileTarget } from '../shared/protocol.js'
@@ -38,6 +39,12 @@ export async function openWorkspaceFile(
   if (!session) return false
 
   try {
+    // Without a message-origin identity, a historical relative link can name
+    // an unrelated destination file. Relocated chats must use absolute links
+    // until the opening boundary can validate the link's original workspace.
+    if (!isAbsolute(rawPath) && session.engineSessionId && readSessionRelocation(session.engineSessionId)) {
+      return false
+    }
     const workspace = await realpath(session.cwd)
     // A trailing :line[:column] is ambiguous on POSIX. Prefer a real literal
     // file first; only fall back to source-location parsing when that literal

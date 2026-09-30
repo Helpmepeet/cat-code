@@ -431,6 +431,22 @@ test('context-breakdown.snapshot is non-retained and never replays', () => {
   expect(sessionFrames.some(f => f.kind === 'context-breakdown.snapshot')).toBe(false)
 })
 
+test('workspace control receipts never survive renderer replay', () => {
+  const buffer = new FrameReplayBuffer()
+  const ready = readyFrame()
+  buffer.record(SID, ready)
+  buffer.record(SID, {
+    kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID, requestId: 'handoff-check', operationId: 'jump-1', ok: true,
+  })
+  buffer.record(SID, {
+    kind: 'workspace.user-admitted', protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID, operationId: 'jump-1',
+  })
+  expect(buffer.snapshotSession(SID)).toEqual([ready])
+  expect(buffer.snapshot()).toEqual([ready])
+})
+
 test('non-ready frames ring-buffer at the cap; ready is never evicted', () => {
   const cap = 4
   const buffer = new FrameReplayBuffer(cap)

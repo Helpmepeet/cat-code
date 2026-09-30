@@ -201,6 +201,12 @@ export type SystemInformationalMessage = SystemMessage & {
   subtype: 'informational'
 }
 
+export type SystemWorkspaceHandoffOutcomeMessage = SystemMessage & {
+  subtype: 'workspace_handoff_outcome'
+  content: string
+  data: { operationId: string; outcome: import('../app-runtime/handoff.js').HandoffTerminalOutcome }
+}
+
 export type SystemLocalCommandMessage = SystemMessage & {
   subtype: 'local_command'
   content: string

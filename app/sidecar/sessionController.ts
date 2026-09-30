@@ -1,3 +1,5 @@
+import { createWorkspaceJumpTools } from './workspaceJumpTools.js'
+import { hasVerifiedSourceCompensation, readWorkspaceJump, workspaceJumpRequiresRetention } from '../../src/utils/workspaceJumpState.js'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtime/createQueryEngineAppSessionConfigFromSetup.js'
 import { createQueryEngineSessionController } from '../../src/app-runtime/createQueryEngineSessionController.js'
@@ -397,6 +399,9 @@ export async function createNormalSidecarQueryEngineConfig(
     process.env.CATCODE_SIDECAR_PREFER_SPAWN_MODEL === '1',
   )
   const relocation = readSessionRelocation(getSessionId())
+  const workspaceJump = appSessionId ? readWorkspaceJump(appSessionId) : null
+  const workspaceJumpUnavailable = workspaceJump?.consumed === true || (relocation !== null &&
+    !(appSessionId && hasVerifiedSourceCompensation(workspaceJump, relocation, appSessionId, getSessionId(), cwd)))
   const relocatedHere = relocation?.phase === 'complete' && relocation.target.cwd === cwd &&
     relocation.target.binding.kind === binding.kind
   const recentWorkspaces = relocatedHere
@@ -415,7 +420,7 @@ export async function createNormalSidecarQueryEngineConfig(
           ? 'This is now a plain Chat with no project attached.'
           : 'This conversation is now attached to the project at the current working directory.',
         'Follow the instructions loaded for the current context. Former-project CLAUDE.md, AGENTS.md, rules, and skill instructions appearing in conversation history or summaries are historical context and do not govern the current workspace. Preserve applicable global instructions and the user\'s requests. If a task involves files in a former project, consult that project\'s applicable instructions for that work.',
-        `Current relative paths resolve under ${JSON.stringify(cwd)}. Earlier relative file references may refer to their former working directory; inspect the referenced location explicitly before using them. Earlier working directories include ${previousWorkspaces.map(path => JSON.stringify(path)).join(', ')}. Files created in the original Chat folder remain there; the move did not copy them or grant access to those paths.`,
+        `Current relative paths resolve under ${JSON.stringify(cwd)}. Earlier relative file references may refer to their former working directory; inspect the referenced location explicitly before using them. Earlier working directories include ${previousWorkspaces.map(path => JSON.stringify(path)).join(', ')}. Use absolute paths for file links in this relocated conversation. Files created in the original Chat folder remain there; the move did not copy them or grant access to those paths.`,
       ].join(' ')
     : ''
   const toolPermissionContext = await loadSidecarToolPermissionContext()
@@ -448,6 +453,7 @@ export async function createNormalSidecarQueryEngineConfig(
   // every other tool does.
   const tools = [
     ...getTools(appStateStore.getState().toolPermissionContext),
+    ...createWorkspaceJumpTools(),
     ...(binding.kind === 'managed'
       ? []
       : [
@@ -566,6 +572,7 @@ export async function createNormalSidecarQueryEngineConfig(
           binding.kind === 'managed' ? cwd : undefined,
           getManagedSessionPolicy()?.sharedFilesNotice === true,
           binding.kind === 'managed' && recreatedFolderNotice,
+          workspaceJumpUnavailable,
         ) + relocationPrompt,
         ...(appSessionId && binding.kind !== 'managed'
           ? {
@@ -822,7 +829,17 @@ export async function createSidecarSessionController({
     providerSwitchLocked: providerBoundHistory,
   })
 
-  const controller = createRuntimeBackedAppSession({ queryEngineConfig })
+  const controller = createRuntimeBackedAppSession({
+    queryEngineConfig,
+    initializeController: controller => {
+      if (!appSessionId) return
+      const handoff = readWorkspaceJump(appSessionId)
+      if (!handoff) return
+      if (handoff.engineSessionId !== getSessionId()) throw new Error('Workspace change belongs to another conversation')
+      if (workspaceJumpRequiresRetention(handoff) && !handoff.sourceOutcomePersisted) controller.restoreHandoffReservation(handoff.operationId)
+      if (handoff.requiresUserReconciliation) controller.restoreHandoffReconciliation()
+    },
+  })
   return {
     controller,
     permissions: createSidecarPermissionDomain(appStateStore),

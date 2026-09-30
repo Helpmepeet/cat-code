@@ -64,6 +64,20 @@ export type StopHookResult = {
   preventContinuation: boolean
 }
 
+/** Suspension runs resource cleanup, without completion hooks or background models. */
+export async function cleanupHandoffTurn(toolUseContext: ToolUseContext): Promise<void> {
+  if (feature('CHICAGO_MCP') && !toolUseContext.agentId) {
+    try {
+      const { cleanupComputerUseAfterTurn } = await import('../utils/computerUse/cleanup.js')
+      await cleanupComputerUseAfterTurn(toolUseContext)
+    } catch {
+      // Failed cleanup forbids movement while preserving the paired exchange
+      // and the source turn's usage in a typed failure result.
+      toolUseContext.turnHandoff?.invalidate()
+    }
+  }
+}
+
 export async function* handleStopHooks(
   messagesForQuery: Message[],
   assistantMessages: AssistantMessage[],

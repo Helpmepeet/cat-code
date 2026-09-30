@@ -1,5 +1,6 @@
 import { isRelocationControls, readSessionRelocation, writeSessionRelocation, type RelocationControls, type SessionLocation } from '../../src/utils/sessionRelocationState.js'
-import type { RelocationRequest } from '../../src/utils/sessionRelocation.js'
+import type { RelocationRequest } from '../../src/utils/sessionRelocationState.js'
+import { hasVerifiedSourceCompensation, readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
 /**
  * The host composition layer (D1 — `decisions/REGISTRY.md` §6/§6.1; trust zone —
@@ -79,6 +80,13 @@ function autoRestoreRefusal(code: number | null): AutoRestoreUnavailableError | 
  * ------------------------------------------------------------------------- */
 
 export type CwdValidation = { ok: true; realpath: string } | { ok: false }
+
+export type WorkspaceJumpMoveOutcome = {
+  result: HostResult<SessionDescriptor>
+  location: 'source' | 'destination' | 'unknown'
+  /** A completed record proves location even when replacement startup failed. */
+  relocation: ReturnType<typeof readSessionRelocation>
+}
 
 /**
  * Peer-session inputs for a spawn (PEER-SESSIONS §2/§4, HOST-REQUEST-PLANE HR4).
@@ -187,6 +195,7 @@ export class Host implements HostApi {
   private readonly prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
   private readonly cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
   private readonly moving = new Set<SessionId>()
+  private readonly workspaceJumpReservations = new Map<SessionId, { operationId: string; generation: string }>()
   private readonly runControls = new Map<SessionId, RunControlsSnapshot>()
   private readonly permissionModes = new Map<SessionId, string>()
   private readonly prePlanModes = new Map<SessionId, string>()
@@ -1188,6 +1197,7 @@ export class Host implements HostApi {
 
   async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
     await this.launched
+    if (this.workspaceJumpReservations.has(appSessionId)) return hostError('session_unreachable', 'Stop the pending workspace change before closing this Chat')
     if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
@@ -1285,6 +1295,58 @@ export class Host implements HostApi {
    * --------------------------------------------------------------------- */
 
   isMoving(appSessionId: SessionId): boolean { return this.moving.has(appSessionId) }
+  isWorkspaceJumpReserved(appSessionId: SessionId): boolean { return this.workspaceJumpReservations.has(appSessionId) }
+  getSessionGeneration(appSessionId: SessionId): string | undefined { return this.supervisor.getSessionGeneration(appSessionId) }
+
+  /** Reservation is separate from moving: acknowledgement and Stop stay routable. */
+  async reserveWorkspaceJump(appSessionId: SessionId, operationId: string, generation: string): Promise<HostResult<void>> {
+    await this.launched
+    if (!isUuid(appSessionId) || !isUuid(operationId)) return hostError('session_not_found', 'Invalid workspace change identity')
+    const row = this.registry.findSession(appSessionId)
+    if (!row?.engineSessionId || row.binding.kind !== 'managed' || row.createdBy ||
+        this.branchSwitching || this.moving.has(appSessionId) || this.restoring.has(appSessionId) ||
+        this.closing.has(appSessionId) || this.workspaceJumpReservations.has(appSessionId) ||
+        this.supervisor.getSessionGeneration(appSessionId) !== generation ||
+        !this.supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')) {
+      return hostError('session_unreachable', 'This Chat cannot change workspace now')
+    }
+    try {
+      const record = readSessionRelocation(row.engineSessionId)
+      if (record && !hasVerifiedSourceCompensation(readWorkspaceJump(appSessionId), record, appSessionId, row.engineSessionId, row.cwd)) {
+        return hostError('session_unreachable', 'This Chat has already selected a workspace')
+      }
+    } catch { return hostError('session_unreachable', 'This Chat has an unreadable move record') }
+    this.workspaceJumpReservations.set(appSessionId, { operationId, generation })
+    return { ok: true, value: undefined }
+  }
+
+  releaseWorkspaceJump(appSessionId: SessionId, operationId: string): void {
+    if (this.workspaceJumpReservations.get(appSessionId)?.operationId === operationId) this.workspaceJumpReservations.delete(appSessionId)
+  }
+
+  async moveWorkspaceJump(appSessionId: SessionId, operationId: string, cwd: string,
+    beforeMutation: () => boolean): Promise<WorkspaceJumpMoveOutcome> {
+    const row = this.registry.findSession(appSessionId)
+    const source = row?.cwd
+    const destination = this.validateCwd(cwd)
+    const canonicalDestination = destination.ok ? destination.realpath : null
+    const reservation = this.workspaceJumpReservations.get(appSessionId)
+    const result = !reservation || reservation.operationId !== operationId ||
+      this.supervisor.getSessionGeneration(appSessionId) !== reservation.generation
+      ? hostError('session_unreachable', 'The workspace change is no longer current')
+      : await this.moveSessionInternal(appSessionId, cwd, { operationId, beforeMutation })
+    let relocation: ReturnType<typeof readSessionRelocation> = null
+    let location: WorkspaceJumpMoveOutcome['location'] = 'unknown'
+    try {
+      relocation = row?.engineSessionId ? readSessionRelocation(row.engineSessionId) : null
+      if (!relocation) location = this.registry.findSession(appSessionId)?.cwd === source ? 'source' : 'unknown'
+      else if (relocation.appSessionId === appSessionId && relocation.phase === 'complete') {
+        if (relocation.target.cwd === canonicalDestination) location = 'destination'
+        else if (relocation.target.cwd === source) location = 'source'
+      }
+    } catch { /* An unreadable or moving record must never authorize continuation. */ }
+    return { result, location, relocation }
+  }
   isHiddenMoveWarmup(appSessionId: SessionId): boolean { return this.hiddenMoveWarmups.has(appSessionId) }
 
   private updateRelocationControls(appSessionId: SessionId, update: Partial<RelocationControls>, replaceSelection = false): void {
@@ -1445,7 +1507,15 @@ export class Host implements HostApi {
 
   /** Main supplies a picker-resolved cwd; null returns to the original owned Chat. */
   async moveSession(appSessionId: SessionId, cwd: string | null): Promise<HostResult<SessionDescriptor>> {
+    return this.moveSessionInternal(appSessionId, cwd)
+  }
+
+  private async moveSessionInternal(appSessionId: SessionId, cwd: string | null,
+    jump?: { operationId: string; beforeMutation: () => boolean }): Promise<HostResult<SessionDescriptor>> {
     await this.launched
+    const jumpReservation = this.workspaceJumpReservations.get(appSessionId)
+    if (jumpReservation && jumpReservation.operationId !== jump?.operationId) return hostError('session_unreachable', 'This Chat has a pending workspace change')
+    if (jump && (!jumpReservation || jumpReservation.generation !== this.supervisor.getSessionGeneration(appSessionId))) return hostError('session_unreachable', 'The workspace change is no longer current')
     const row = isUuid(appSessionId) ? this.registry.findSession(appSessionId) : undefined
     if (row?.engineSessionId) {
       try {
@@ -1615,6 +1685,7 @@ export class Host implements HostApi {
       await this.parkForMove(appSessionId)
       sourceParked = true
       if (hasPeerWork()) throw new Error('Finish active peer work and deliveries before moving this Chat')
+      if (jump && !jump.beforeMutation()) throw new Error('The workspace change was cancelled')
       await this.relocate({ appSessionId, engineSessionId: movingRow.engineSessionId, source, target, controls })
       const destinationEmpty = readSessionRelocation(movingRow.engineSessionId)?.empty === true
       moveCommitted = true
@@ -1740,6 +1811,7 @@ export class Host implements HostApi {
 
   async restartSession(appSessionId: SessionId): Promise<HostResult<void>> {
     await this.launched
+    if (this.workspaceJumpReservations.has(appSessionId)) return hostError('session_unreachable', 'This Chat has a pending workspace change')
     if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
@@ -1916,7 +1988,7 @@ export class Host implements HostApi {
 
   /** Hold all new spawns while a checkout moves the files under live sessions. */
   beginBranchSwitch(): boolean {
-    if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0) return false
+    if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) return false
     this.branchSwitching = true
     return true
   }

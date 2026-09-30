@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { randomUUID } from 'node:crypto'
 import {
   mkdirSync,
   mkdtempSync,
@@ -13,6 +14,7 @@ import { tmpdir } from 'node:os'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import { openWorkspaceFile } from './openWorkspaceFile.js'
+import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
 function session(cwd: string): SessionDescriptor {
   return sessionDescriptorFixture({
@@ -169,6 +171,52 @@ test('preserves literal hash characters in workspace paths', async () => {
     ).toBe(true)
     expect(opened).toEqual([realpathSync(sourceFile), realpathSync(sourceFile)])
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('relocated conversations refuse ambiguous relative links while retaining current-workspace absolute links', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-open-relocated-file-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  try {
+    process.env.CLAUDE_CONFIG_DIR = join(root, 'config')
+    const source = join(root, 'chat')
+    const destination = join(root, 'project')
+    mkdirSync(source)
+    mkdirSync(destination)
+    const oldReport = join(source, 'report.md')
+    const newReport = join(destination, 'report.md')
+    writeFileSync(oldReport, 'Original chat report')
+    writeFileSync(newReport, 'Different project report')
+    const appSessionId = randomUUID()
+    const engineSessionId = randomUUID()
+    const original = { cwd: source, binding: {
+      kind: 'managed' as const, storageRootId: randomUUID(), storageId: randomUUID(),
+    } }
+    writeSessionRelocation({
+      version: 1, appSessionId, engineSessionId, phase: 'complete',
+      original, source: original,
+      target: { cwd: destination, binding: { kind: 'project' } },
+      controls: { mode: 'default' }, backup: join(root, 'backup'), movedAt: 1,
+    })
+    const relocated = sessionDescriptorFixture({
+      appSessionId, engineSessionId, cwd: destination, binding: { kind: 'project' },
+    })
+    const opened: string[] = []
+    const openPath = async (path: string) => {
+      opened.push(path)
+      return true
+    }
+
+    for (const path of ['report.md', 'report.md:12:3', oldReport]) {
+      expect(await openWorkspaceFile({ appSessionId, path }, [relocated], openPath)).toBe(false)
+    }
+    expect(opened).toEqual([])
+    expect(await openWorkspaceFile({ appSessionId, path: newReport }, [relocated], openPath)).toBe(true)
+    expect(opened).toEqual([realpathSync(newReport)])
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
     rmSync(root, { recursive: true, force: true })
   }
 })

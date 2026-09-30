@@ -97,6 +97,15 @@ class TestSessionController {
   isTurnActive() {
     return false
   }
+  canStartAutomaticTurn() {
+    return true
+  }
+  getHandoffReservation() {
+    return null
+  }
+  requiresHandoffReconciliation() {
+    return false
+  }
   waitUntilIdle() {
     return Promise.resolve()
   }

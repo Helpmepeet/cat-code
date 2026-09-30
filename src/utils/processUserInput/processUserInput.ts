@@ -100,6 +100,7 @@ export async function processUserInput({
   bridgeOrigin,
   isMeta,
   skipAttachments,
+  trustedInternalContinuation,
 }: {
   input: string | Array<ContentBlockParam>
   /**
@@ -137,6 +138,8 @@ export async function processUserInput({
    */
   isMeta?: boolean
   skipAttachments?: boolean
+  /** Engine-owned continuation, never set from user/app protocol input. */
+  trustedInternalContinuation?: boolean
 }): Promise<ProcessUserInputBaseResult> {
   const inputString = typeof input === 'string' ? input : null
   // Immediately show the user input prompt while we are still processing the input.
@@ -174,6 +177,8 @@ export async function processUserInput({
   if (!result.shouldQuery) {
     return result
   }
+
+  if (trustedInternalContinuation) return result
 
   // Execute UserPromptSubmit hooks and handle blocking
   queryCheckpoint('query_hooks_start')

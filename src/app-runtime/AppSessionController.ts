@@ -6,6 +6,7 @@ import type { UserMessage } from '../types/message.js'
 import type { ConversationRewindResult } from '../QueryEngine.js'
 import type { ConversationForkResult } from '../commands/branch/branch.js'
 import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
+import { handoffContinuationPrompt, type HandoffTerminalOutcome } from './handoff.js'
 import {
   createAbortStatusEvent,
   createGoalSnapshotEvent,
@@ -28,7 +29,7 @@ export type AppSessionSubmitOptions = {
   goalSnapshot?: AppGoalSnapshot
   /** Engine-owned provenance for autonomous turns (never renderer input). */
   origin?: MessageOrigin
-  /** Sidecar-only acknowledgement after the input is durably persisted. */
+  /** Input persistence acknowledgement; reconciliation includes a durable barrier. */
   onInputPersisted?: () => void
 }
 
@@ -42,12 +43,16 @@ export type AppSessionControllerAdapter = {
       isMeta?: boolean
       origin?: MessageOrigin
       onInputPersisted?: () => void
+      handoffContinuation?: { operationId: string }
+      /** Controller-owned admission barrier; never accepted from app.submit. */
+      handoffReconciliationAdmission?: true
     }
     signal: AbortSignal
     onPermissionRequest: (
       request: AppPermissionRequest,
     ) => Promise<AppPermissionResponse>
   }): AsyncIterable<SDKMessage>
+  persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
   abort?: (intent?: AppSessionAbortIntent) => void
   selectUserMessage?: (targetUuid: string) => UserMessage
   rewindBeforeUserMessage?: (
@@ -77,6 +82,10 @@ export class AppSessionController {
   private goalSnapshot: AppGoalSnapshot = null
   private abortController: AbortController | null = null
   private activeTurn = false
+  private handoffReservation: string | null = null
+  private handoffContinuationAdmitted = false
+  private requiresUserReconciliation = false
+  private readonly handoffListeners = new Set<() => void>()
   private readonly idleWaiters = new Set<() => void>()
   private readonly fallbackDiagnosticSessionId = randomUUID()
 
@@ -103,6 +112,67 @@ export class AppSessionController {
 
   isTurnActive(): boolean {
     return this.activeTurn
+  }
+
+  getHandoffReservation(): string | null { return this.handoffReservation }
+  requiresHandoffReconciliation(): boolean { return this.requiresUserReconciliation }
+  canStartAutomaticTurn(): boolean { return !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation }
+  subscribeHandoffStatus(listener: () => void): () => void {
+    this.handoffListeners.add(listener)
+    return () => { this.handoffListeners.delete(listener) }
+  }
+
+  reserveHandoff(operationId: string): void {
+    if (!operationId || !this.activeTurn || this.handoffReservation || this.requiresUserReconciliation || this.pendingPermissionRequests.size) {
+      throw new Error('Session cannot reserve a workspace handoff')
+    }
+    this.handoffReservation = operationId
+    this.handoffContinuationAdmitted = false
+    this.announceHandoffState()
+  }
+
+  restoreHandoffReservation(operationId: string): void {
+    if (!operationId || this.activeTurn || (this.handoffReservation && this.handoffReservation !== operationId)) {
+      throw new Error('Session cannot restore a workspace handoff reservation')
+    }
+    if (this.handoffReservation !== operationId) this.handoffContinuationAdmitted = false
+    this.handoffReservation = operationId
+    this.announceHandoffState()
+  }
+
+  releaseHandoffReservation(operationId: string): void {
+    if (this.handoffReservation !== operationId) throw new Error('Workspace handoff ownership changed')
+    this.handoffReservation = null
+    this.handoffContinuationAdmitted = false
+    this.announceHandoffState()
+  }
+
+  async continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void }): Promise<void> {
+    if (this.handoffReservation !== operationId || this.requiresUserReconciliation || this.handoffContinuationAdmitted) throw new Error('Workspace continuation is not reserved')
+    this.handoffContinuationAdmitted = true
+    await this.runSubmit(handoffContinuationPrompt(), {
+      isMeta: true, uuid: options?.uuid, onInputPersisted: options?.onInputPersisted,
+    }, operationId)
+    // The host releases ownership only after recording continuation settlement.
+  }
+
+  async settleHandoff(operationId: string, outcome: HandoffTerminalOutcome): Promise<void> {
+    if (this.activeTurn || this.handoffReservation !== operationId || !this.adapter.persistHandoffOutcome) throw new Error('Workspace outcome cannot be settled')
+    const messages = await this.adapter.persistHandoffOutcome(operationId, outcome)
+    for (const message of messages) this.emitMessage(message)
+    this.requiresUserReconciliation = true
+    this.releaseHandoffReservation(operationId)
+  }
+
+  restoreHandoffReconciliation(): void {
+    if (this.activeTurn) throw new Error('Cannot reconcile an active turn')
+    this.requiresUserReconciliation = true
+    this.announceHandoffState()
+  }
+
+  private announceHandoffState(): void { for (const listener of this.handoffListeners) listener() }
+  private assertMutable(): void {
+    if (this.handoffReservation) throw new Error('Conversation is reserved for a workspace handoff')
   }
 
   waitUntilIdle(): Promise<void> {
@@ -167,6 +237,7 @@ export class AppSessionController {
   rewindBeforeUserMessage(
     targetUuid: string,
   ): Promise<ConversationRewindResult> {
+    this.assertMutable()
     if (!this.adapter.rewindBeforeUserMessage) {
       throw new Error('Conversation rewind is unavailable')
     }
@@ -184,6 +255,7 @@ export class AppSessionController {
     targetUuid: string,
     customTitle?: string,
   ): Promise<ConversationForkResult> {
+    this.assertMutable()
     if (!this.adapter.forkBeforeUserMessage) {
       throw new Error('Conversation fork is unavailable')
     }
@@ -194,9 +266,21 @@ export class AppSessionController {
     prompt: AppSessionPrompt,
     options?: AppSessionSubmitOptions,
   ): Promise<void> {
+    if (this.handoffReservation) throw new Error('Conversation is reserved for a workspace handoff')
+    if (this.requiresUserReconciliation && (options?.isMeta || options?.origin)) throw new Error('Workspace handoff requires user reconciliation')
+    await this.runSubmit(prompt, options)
+  }
+
+  private async runSubmit(
+    prompt: AppSessionPrompt,
+    options?: AppSessionSubmitOptions,
+    continuationOperationId?: string,
+  ): Promise<void> {
     if (this.activeTurn) {
       throw new Error('Session turn already running')
     }
+    const reconcileInput = this.requiresUserReconciliation && !continuationOperationId &&
+      !options?.isMeta && !options?.origin
 
     this.setActiveTurn(true)
     this.abortController = new AbortController()
@@ -224,7 +308,15 @@ export class AppSessionController {
               uuid: options?.uuid,
               isMeta: options?.isMeta,
               origin: options?.origin,
-              onInputPersisted: options?.onInputPersisted,
+              ...(continuationOperationId ? { handoffContinuation: { operationId: continuationOperationId } } : {}),
+              ...(reconcileInput ? { handoffReconciliationAdmission: true as const } : {}),
+              onInputPersisted: () => {
+                if (reconcileInput && this.requiresUserReconciliation) {
+                  this.requiresUserReconciliation = false
+                  this.announceHandoffState()
+                }
+                options?.onInputPersisted?.()
+              },
             },
             signal: this.abortController.signal,
             onPermissionRequest: request => this.waitForPermissionResponse(request),

@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-09-30 against the captured committed source tree.
+Last refreshed: 2026-10-01.
 
 ## Purpose
 
@@ -54,6 +54,7 @@ The live tool system is assembled in layers:
 | Built-in tool registration | `src/tools.ts` | `src/tools/`, `src/Tool.ts`, `src/constants/tools.ts`, `src/commands.ts` | `getAllBaseTools()` is the source of truth for built-ins that exist in the current runtime. Many tools are feature-gated or env-gated at import time. Base tool-name constants and shared allowlists live in `src/constants/tools.ts`. |
 | Tool contract and defaults | `src/Tool.ts` | tool implementation file, `src/utils/api.ts` | Start here when changing what every tool can declare: schemas, concurrency, permission hooks, prompt text, deferred loading, result rendering, or MCP metadata. |
 | Tool pool visible to the model | `src/tools.ts` | `src/services/mcp/client.ts`, `src/utils/toolSearch.ts` | `getTools()`, `assembleToolPool()`, and `getMergedTools()` are the main assembly points. Blanket deny rules can remove tools before prompt exposure. |
+| Desktop workspace discovery and jump | `app/sidecar/workspaceJumpTools.ts` | `app/sidecar/{sessionController,sidecarServer,workspaceJumpStartup}.ts`, `app/main/workspaceJumpCoordinator.ts`, `src/app-runtime/handoff.ts` | `ListWorkspaces` and `JumpWorkspace` stay in the desktop tool pool after the one-use capability is consumed. Main-only caller checks and receiving-boundary state enforce eligibility. The Auto projection includes cached host-issued destination paths under ordinary permission policy; the model selects an opaque handle. Jump acceptance fences execution and waits for durable readiness before movement. |
 | Interactive permission prompts | `src/hooks/useCanUseTool.tsx` | `src/hooks/toolPermission/`, `src/components/permissions/PermissionRequest.tsx` | This is the main UI-side approval path. It handles config allows, config denies, coordinator waits, swarm-worker behavior, classifier shortcuts, and interactive prompt display. |
 | Bridge-mediated approvals | `src/hooks/useCanUseTool.tsx` | `src/bridge/mergeBridgePermissionCallbacks.ts`, `src/hooks/usePtcloveBridge.ts`, `src/hooks/useReplBridge.tsx` | Approval prompts can be mirrored to both REPL bridge and ptclove bridge callbacks before the local dialog resolves. |
 | Rule-based permission engine | `src/utils/permissions/permissions.ts` | `src/utils/permissions/PermissionRule.ts`, `src/utils/permissions/PermissionResult.ts`, `src/utils/permissions/permissionRuleParser.ts` | Use this when changing rule precedence, bypass behavior, ask/deny matching, or auto-mode classifier routing. |

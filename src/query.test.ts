@@ -14,6 +14,7 @@ import * as analytics from './services/analytics/index.js'
 import * as growthbook from './services/analytics/growthbook.js'
 import type { ToolUseContext } from './Tool.js'
 import { query } from './query.js'
+import { TurnHandoff } from './app-runtime/handoff.js'
 import type { QueryDeps } from './query/deps.js'
 import { _forTest as postTurnStallForTest } from './query/postTurnStall.js'
 import * as toolUseSummaryGenerator from './services/toolUseSummary/toolUseSummaryGenerator.js'
@@ -1360,5 +1361,203 @@ describe('cua-driver stop at run end', () => {
       ])
       expect(stops).toBe(0)
     })
+  })
+})
+
+
+describe('workspace handoff execution', () => {
+  test('nonstream jump timeout settles paired results before stopping all source continuation', async () => {
+    const gate = spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockReturnValue(false)
+    const previousSummaryFlag = process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES
+    process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES = '1'
+    let summaryCalls = 0
+    const summary = spyOn(toolUseSummaryGenerator, 'generateToolUseSummary').mockImplementation(async () => { summaryCalls++; return null })
+    try {
+      const messages = [createUserMessage({ content: 'work in the selected project' })]
+      const context = createToolUseContext(messages)
+      context.turnHandoff = new TurnHandoff()
+      const effects: string[] = []
+      context.options.tools = ['Jump', 'Edit'].map(name => buildTool({
+        name, inputSchema: z.object({}), description: async () => name,
+        prompt: async () => name, isConcurrencySafe: () => false,
+        maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+        async call(_input, ctx) {
+          effects.push(name)
+          ctx.turnHandoff!.reserve(ctx, { operationId: 'timed-out-operation', toolUseId: ctx.toolUseId! })
+          ctx.turnHandoff!.invalidate()
+          return { data: 'Host acknowledgement was lost; wait for reconciliation.' }
+        },
+        mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: String(data) }),
+      }))
+      const assistant = createAssistantMessage('change workspace', 'timeout-handoff')
+      assistant.message.content = [
+        { type: 'tool_use', name: 'Jump', id: 'timeout-jump', input: {} },
+        { type: 'tool_use', name: 'Edit', id: 'timeout-edit', input: {} },
+      ] as AssistantMessage['message']['content']
+      let modelCalls = 0
+      const deps: QueryDeps = {
+        uuid: () => 'timeout-query', microcompact: async messages => ({ messages }),
+        autocompact: async () => ({ wasCompacted: false }),
+        callModel: async function* () {
+          modelCalls++
+          yield modelCalls === 1 ? assistant : createAssistantMessage('source continued incorrectly', 'timeout-retry')
+        },
+      }
+      const iterator = query({ messages, systemPrompt: asSystemPrompt(['test']), userContext: {}, systemContext: {}, canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }), querySource: 'sdk', toolUseContext: context, deps })
+      const results: { tool_use_id: string; is_error?: boolean }[] = []
+      let terminal: unknown
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) { terminal = next.value; break }
+        const row = next.value as Message
+        if (row.type === 'user' && Array.isArray(row.message.content)) results.push(...row.message.content.filter(b => b.type === 'tool_result') as typeof results)
+      }
+      expect(effects).toEqual(['Jump'])
+      expect(results).toEqual([
+        expect.objectContaining({ tool_use_id: 'timeout-jump' }),
+        expect.objectContaining({ tool_use_id: 'timeout-edit', is_error: true }),
+      ])
+      expect(summaryCalls).toBe(0)
+      expect(modelCalls).toBe(1)
+      expect(terminal).toEqual({ reason: 'handoff_failed' })
+    } finally {
+      gate.mockRestore(); summary.mockRestore()
+      if (previousSummaryFlag === undefined) delete process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES
+      else process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES = previousSummaryFlag
+    }
+  })
+
+  for (const streaming of [false, true]) {
+    test(`accepted handoff fences the rest of a mixed batch (streaming=${streaming})`, async () => {
+      const gate = spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockImplementation(name => streaming && name === 'tengu_streaming_tool_execution2')
+      const calls: string[] = []
+      try {
+        const messages = [createUserMessage({ content: 'work in the selected project' })]
+        const context = createToolUseContext(messages)
+        context.turnHandoff = new TurnHandoff()
+        const tool = (name: string) => buildTool({
+          name, inputSchema: z.object({}), description: async () => name,
+          prompt: async () => name, isConcurrencySafe: () => false,
+          maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+          async call(_input, ctx) {
+            calls.push(name)
+            if (name === 'Jump') {
+              const request = { operationId: 'operation-1', toolUseId: ctx.toolUseId! }
+              ctx.turnHandoff!.reserve(ctx, request)
+              ctx.turnHandoff!.accept(ctx, request)
+            }
+            return { data: 'accepted' }
+          },
+          mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: String(data) }),
+        })
+        context.options.tools = [tool('Jump'), tool('Edit')]
+        const assistant = createAssistantMessage('change workspace', 'assistant-handoff')
+        assistant.message.content = [
+          { type: 'tool_use', name: 'Jump', id: 'jump-1', input: {} },
+          { type: 'tool_use', name: 'Edit', id: 'edit-1', input: {} },
+        ] as AssistantMessage['message']['content']
+        let modelCalls = 0
+        const deps: QueryDeps = {
+          uuid: () => 'handoff-query', microcompact: async messages => ({ messages }),
+          autocompact: async () => ({ wasCompacted: false }),
+          callModel: async function* () { modelCalls++; yield assistant },
+        }
+        const iterator = query({ messages, systemPrompt: asSystemPrompt(['test']), userContext: {}, systemContext: {}, canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }), querySource: 'sdk', toolUseContext: context, deps })
+        const results: { tool_use_id: string; is_error?: boolean }[] = []
+        let terminal: unknown
+        while (true) {
+          const next = await iterator.next()
+          if (next.done) { terminal = next.value; break }
+          const row = next.value as Message
+          if (row.type === 'user' && Array.isArray(row.message.content)) results.push(...row.message.content.filter(b => b.type === 'tool_result') as typeof results)
+        }
+        expect(calls).toEqual(['Jump'])
+        expect(modelCalls).toBe(1)
+        expect(results).toEqual([
+          expect.objectContaining({ tool_use_id: 'jump-1' }),
+          expect.objectContaining({ tool_use_id: 'edit-1', is_error: true }),
+        ])
+        expect(terminal).toEqual({ reason: 'handoff' })
+      } finally { gate.mockRestore() }
+    })
+  }
+
+  test('stream fallback while jump acceptance is pending invalidates it and skips later effects', async () => {
+    const gate = spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockImplementation(name => name === 'tengu_streaming_tool_execution2')
+    try {
+      const messages = [createUserMessage({ content: 'jump' })]
+      const context = createToolUseContext(messages); context.turnHandoff = new TurnHandoff()
+      let reserved!: () => void; let hostAck!: () => void
+      const reservedGate = new Promise<void>(resolve => { reserved = resolve })
+      const hostAckGate = new Promise<void>(resolve => { hostAck = resolve })
+      const effects: string[] = []
+      context.options.tools = [buildTool({
+        name: 'Jump', inputSchema: z.object({}), description: async () => 'jump', prompt: async () => 'jump',
+        maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+        async call(_input, ctx) {
+          const request = { operationId: 'pending-operation', toolUseId: ctx.toolUseId! }
+          ctx.turnHandoff!.reserve(ctx, request); reserved(); await hostAckGate
+          ctx.turnHandoff!.accept(ctx, request)
+          return { data: 'accepted' }
+        },
+        mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'accepted' }),
+      }), buildTool({
+        name: 'Edit', inputSchema: z.object({}), description: async () => 'edit', prompt: async () => 'edit',
+        maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+        async call() { effects.push('edit'); return { data: 'edited' } },
+        mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'edited' }),
+      })]
+      const assistant = createAssistantMessage('jump', 'pending-handoff')
+      assistant.message.content = [
+        { type: 'tool_use', name: 'Jump', id: 'pending-jump', input: {} },
+        { type: 'tool_use', name: 'Edit', id: 'pending-edit', input: {} },
+      ] as AssistantMessage['message']['content']
+      const deps: QueryDeps = {
+        uuid: () => 'pending-query', microcompact: async messages => ({ messages }), autocompact: async () => ({ wasCompacted: false }),
+        callModel: async function* ({ options }) { yield assistant; await reservedGate; try { options.onStreamingFallback?.() } finally { hostAck() } },
+      }
+      const iterator = query({ messages, systemPrompt: asSystemPrompt(['test']), userContext: {}, systemContext: {}, canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }), querySource: 'sdk', toolUseContext: context, deps })
+      const rows: unknown[] = []; let terminal: unknown
+      while (true) { const next = await iterator.next(); if (next.done) { terminal = next.value; break }; rows.push(next.value) }
+      expect(effects).toEqual([])
+      expect(rows.filter(row => (row as Message).type === 'user')).toHaveLength(2)
+      expect(terminal).toEqual({ reason: 'handoff_failed' })
+      expect(context.turnHandoff.accepted).toBeNull()
+    } finally { gate.mockRestore() }
+  })
+
+  test('stream fallback after acceptance preserves paired results and never retries the source', async () => {
+    const gate = spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockImplementation(name => name === 'tengu_streaming_tool_execution2')
+    try {
+      const messages = [createUserMessage({ content: 'jump' })]
+      const context = createToolUseContext(messages)
+      context.turnHandoff = new TurnHandoff()
+      let accepted!: () => void
+      const acceptedGate = new Promise<void>(resolve => { accepted = resolve })
+      context.options.tools = [buildTool({
+        name: 'Jump', inputSchema: z.object({}), description: async () => 'jump', prompt: async () => 'jump',
+        maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+        async call(_input, ctx) {
+          const request = { operationId: 'operation-fallback', toolUseId: ctx.toolUseId! }
+          ctx.turnHandoff!.reserve(ctx, request); ctx.turnHandoff!.accept(ctx, request); accepted()
+          return { data: 'accepted' }
+        },
+        mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'accepted' }),
+      })]
+      const assistant = createAssistantMessage('jump', 'fallback-handoff')
+      assistant.message.content = [{ type: 'tool_use', name: 'Jump', id: 'fallback-jump', input: {} }] as AssistantMessage['message']['content']
+      let calls = 0
+      const deps: QueryDeps = {
+        uuid: () => 'fallback-query', microcompact: async messages => ({ messages }), autocompact: async () => ({ wasCompacted: false }),
+        callModel: async function* ({ options }) { calls++; yield assistant; await acceptedGate; options.onStreamingFallback?.(); yield createAssistantMessage('must not run', 'fallback-retry') },
+      }
+      const iterator = query({ messages, systemPrompt: asSystemPrompt(['test']), userContext: {}, systemContext: {}, canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }), querySource: 'sdk', toolUseContext: context, deps })
+      const rows: unknown[] = []; let terminal: unknown
+      while (true) { const next = await iterator.next(); if (next.done) { terminal = next.value; break }; rows.push(next.value) }
+      expect(calls).toBe(1)
+      expect(rows.some(row => (row as Message).type === 'tombstone')).toBe(false)
+      expect(rows.filter(row => (row as Message).type === 'user')).toHaveLength(1)
+      expect(terminal).toEqual({ reason: 'handoff_failed' })
+    } finally { gate.mockRestore() }
   })
 })

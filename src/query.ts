@@ -36,6 +36,7 @@ import {
 import { ImageSizeError } from './utils/imageValidation.js'
 import { ImageResizeError } from './utils/imageResizer.js'
 import { findToolByName, type ToolUseContext } from './Tool.js'
+import { getAcceptedHandoff, isHandoffExecutionFenced } from './app-runtime/handoff.js'
 import type { SystemPrompt } from './utils/systemPromptType.js'
 import type {
   AssistantMessage,
@@ -124,7 +125,7 @@ import { queryCheckpoint } from './utils/queryProfiler.js'
 import { runTools } from './services/tools/toolOrchestration.js'
 import { applyToolResultBudget } from './utils/toolResultStorage.js'
 import { recordContentReplacement } from './utils/sessionStorage.js'
-import { handleStopHooks, type StopHookResult } from './query/stopHooks.js'
+import { cleanupHandoffTurn, handleStopHooks, type StopHookResult } from './query/stopHooks.js'
 import { buildQueryConfig } from './query/config.js'
 import { productionDeps, type QueryDeps } from './query/deps.js'
 import { watchPostTurnStall } from './query/postTurnStall.js'
@@ -361,6 +362,9 @@ export async function* query(
     // Every terminal return of queryLoop, a throw, and a consumer's .return()
     // all pass here. Several returns (API error, max turns, hook stops) skip
     // handleStopHooks, so the stop cannot live there.
+    if (!params.toolUseContext.agentId && params.toolUseContext.turnHandoff?.requested) {
+      await cleanupHandoffTurn(params.toolUseContext)
+    }
     await cuaDriverRun.end()
   }
 }
@@ -903,6 +907,10 @@ async function* queryLoop(
                 toolUseContext.options.isNonInteractiveSession,
               fallbackModel,
               onStreamingFallback: () => {
+                if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
+                  toolUseContext.turnHandoff.invalidate()
+                  throw new Error('Response stream failed during workspace handoff')
+                }
                 streamingFallbackOccured = true
               },
               querySource,
@@ -1153,6 +1161,10 @@ async function* queryLoop(
             }
           }
         } catch (innerError) {
+          if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
+            toolUseContext.turnHandoff.invalidate()
+            throw innerError
+          }
           if (innerError instanceof FallbackTriggeredError && fallbackModel) {
             // Fallback was triggered - switch model and retry
             currentModel = fallbackModel
@@ -1219,6 +1231,15 @@ async function* queryLoop(
         }
       }
     } catch (error) {
+      if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
+        toolUseContext.turnHandoff.invalidate()
+        if (streamingToolExecutor) {
+          for await (const update of streamingToolExecutor.getRemainingResults()) {
+            if (update.message) yield update.message
+          }
+        }
+        return { reason: 'handoff_failed' }
+      }
       if (toolUseContext.agentId) {
         settleAgentMessagesForRun(
           toolUseContext.agentId,
@@ -1287,6 +1308,22 @@ async function* queryLoop(
     }
 
     // We need to handle a streaming abort before anything else.
+    // Settle an accepted streamed exchange before any recovery/auxiliary call.
+    if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
+      if (streamingToolExecutor) {
+        for await (const update of streamingToolExecutor.getRemainingResults()) {
+          if (update.message) {
+            yield update.message
+            toolResults.push(...normalizeMessagesForAPI([update.message], toolUseContext.options.tools).filter(m => m.type === 'user'))
+          }
+        }
+      }
+      if (getAcceptedHandoff(toolUseContext) || !toolUseContext.turnHandoff.isValid) {
+        if (assistantMessages.some(m => m.isApiErrorMessage)) toolUseContext.turnHandoff.invalidate()
+        return { reason: toolUseContext.turnHandoff.isValid ? 'handoff' : 'handoff_failed' }
+      }
+    }
+
     // When using streamingToolExecutor, we must consume getRemainingResults() so the
     // executor can generate synthetic tool_result blocks for queued/in-progress tools.
     // Without this, tool_use blocks would lack matching tool_result blocks.
@@ -2013,6 +2050,10 @@ async function* queryLoop(
       }
     }
     queryCheckpoint('query_tool_execution_end')
+
+    if (isHandoffExecutionFenced(updatedToolUseContext)) {
+      return { reason: updatedToolUseContext.turnHandoff!.isValid ? 'handoff' : 'handoff_failed' }
+    }
 
     // Generate tool use summary after tool batch completes — passed to next recursive call
     let nextPendingToolUseSummary:

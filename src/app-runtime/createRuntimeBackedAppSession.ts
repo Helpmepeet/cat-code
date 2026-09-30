@@ -9,6 +9,7 @@ import {
 import { createQueryEngineSessionController } from './createQueryEngineSessionController.js'
 import { attachThreadGoalScheduler } from './attachThreadGoalScheduler.js'
 import { saveThreadGoal } from '../utils/sessionStorage.js'
+import { isSelectableUserMessage } from '../utils/conversationRecovery.js'
 
 export type RuntimeBackedAppSessionOptions = {
   queryEngineConfig: QueryEngineAppSessionConfig
@@ -17,11 +18,14 @@ export type RuntimeBackedAppSessionOptions = {
    * native goal loop then yields instead of creating a second scheduler.
    */
   hasExternalScheduler?: () => boolean
+  /** Restore trusted handoff ownership before automatic turn owners attach. */
+  initializeController?: (controller: AppSessionController) => void
 }
 
 export function createRuntimeBackedAppSession({
   queryEngineConfig,
   hasExternalScheduler,
+  initializeController,
 }: RuntimeBackedAppSessionOptions) {
   // `setSDKStatus` is a push callback, not a yielded message, so it needs the
   // controller that does not exist yet when the session is built. Captured by
@@ -50,6 +54,20 @@ export function createRuntimeBackedAppSession({
     },
   })
   controller = createQueryEngineSessionController(session)
+  let requiresReconciliation = false
+  for (const message of queryEngineConfig.initialMessages ?? []) {
+    if (message.type === 'system' && message.subtype === 'workspace_handoff_outcome') {
+      requiresReconciliation = true
+    } else if (requiresReconciliation && isSelectableUserMessage(message) &&
+      !message.isVirtual && !message.sourceToolAssistantUUID && message.toolUseResult === undefined &&
+      !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result'))) {
+      requiresReconciliation = false
+    }
+  }
+  // A cancelled request may never have created an accepted host operation.
+  // Its saved terminal note still owns the hold across process replacement.
+  if (requiresReconciliation) controller.restoreHandoffReconciliation()
+  initializeController?.(controller)
 
   // The goal loop attaches HERE because this factory is the one seam the
   // desktop sidecar uses. Before this, submitted turns returned idle: `/goal`

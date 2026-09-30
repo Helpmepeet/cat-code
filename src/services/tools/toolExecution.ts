@@ -1,4 +1,6 @@
 import { feature } from 'bun:bundle'
+import { isHandoffExecutionFenced } from '../../app-runtime/handoff.js'
+import { createHandoffSkippedResult } from './handoffExecution.js'
 import type { UUID } from 'crypto'
 import type {
   ContentBlockParam,
@@ -477,6 +479,10 @@ export async function* runToolUse(
   canUseTool: CanUseToolFn,
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
+  if (isHandoffExecutionFenced(toolUseContext)) {
+    yield { message: createHandoffSkippedResult(toolUse.id, assistantMessage) }
+    return
+  }
   const toolName = toolUse.name
   // Resolve canonical names and aliases only inside the pool granted to this
   // execution. Looking an alias up in the global registry would reintroduce a
@@ -1392,6 +1398,12 @@ async function checkPermissionsAndCallTool(
 
   const startTime = Date.now()
 
+  // Permission and pre-tool hooks can await while a sibling accepts transfer.
+  // This is the last gate before effects, shared by batch and stream execution.
+  if (isHandoffExecutionFenced(toolUseContext)) {
+    return [{ message: createHandoffSkippedResult(toolUseID, assistantMessage) }]
+  }
+
   startSessionActivity('tool_exec')
   toolUseContext.onToolExecutionStart?.()
   // If processedInput still points at the backfill clone, no hook/permission
@@ -1753,7 +1765,7 @@ async function checkPermissionsAndCallTool(
 
     const postToolHookInfos: StopHookInfo[] = []
     const postToolHookStart = Date.now()
-    for await (const hookResult of runPostToolUseHooks(
+    for await (const hookResult of (isHandoffExecutionFenced(toolUseContext) ? [] : runPostToolUseHooks(
       toolUseContext,
       tool,
       toolUseID,
@@ -1763,7 +1775,7 @@ async function checkPermissionsAndCallTool(
       requestId,
       mcpServerType,
       mcpServerBaseUrl,
-    )) {
+    ))) {
       if ('updatedMCPToolOutput' in hookResult) {
         if (isMcpTool(tool)) {
           toolOutput = hookResult.updatedMCPToolOutput

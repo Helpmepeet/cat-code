@@ -1,4 +1,5 @@
 import type { ToolUseBlock } from '@anthropic-ai/sdk/resources/index.mjs'
+import { getAcceptedHandoff } from '../../app-runtime/handoff.js'
 import {
   createUserMessage,
   REJECT_MESSAGE,
@@ -77,6 +78,10 @@ export class StreamingToolExecutor {
    * Queued tools won't start, and in-progress tools will receive synthetic errors.
    */
   discard(): void {
+    if (getAcceptedHandoff(this.toolUseContext)) {
+      this.toolUseContext.turnHandoff!.invalidate()
+      return
+    }
     this.discarded = true
     this.ptcloveToolStatus.clear()
   }

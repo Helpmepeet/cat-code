@@ -53,10 +53,10 @@ function convertStreamEvent(msg: SDKPartialAssistantMessage): StreamEvent {
  * Convert an SDKResultMessage to a SystemMessage
  */
 function convertResultMessage(msg: SDKResultMessage): SystemMessage {
-  const isError = msg.subtype !== 'success'
+  const isError = msg.subtype !== 'success' && msg.subtype !== 'handoff'
   const content = isError
     ? msg.errors?.join(', ') || 'Unknown error'
-    : 'Session completed successfully'
+    : msg.subtype === 'handoff' ? 'Conversation changing workspace' : 'Session completed successfully'
 
   return {
     type: 'system',

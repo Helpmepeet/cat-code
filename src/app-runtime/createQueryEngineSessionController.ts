@@ -3,6 +3,7 @@ import type { ConversationRewindResult } from '../QueryEngine.js'
 import type { ConversationForkResult } from '../commands/branch/branch.js'
 import type { MessageOrigin } from '../types/message.js'
 import type { UserMessage } from '../types/message.js'
+import type { HandoffTerminalOutcome } from './handoff.js'
 import {
   AppSessionController,
   type AppSessionAbortIntent,
@@ -19,6 +20,9 @@ export type QueryEngineSessionOptions = {
   isMeta?: boolean
   origin?: MessageOrigin
   onInputPersisted?: () => void
+  handoffContinuation?: { operationId: string }
+  /** Internal controller admission requirement, never renderer input. */
+  handoffReconciliationAdmission?: true
   onPermissionRequest?: (
     request: AppPermissionRequest,
   ) => Promise<AppPermissionResponse>
@@ -31,6 +35,8 @@ export type QueryEngineSessionLike = {
   ): AsyncIterable<SDKMessage>
   interrupt?: (intent?: AppSessionAbortIntent) => void
   refreshAbortController?: () => AbortController
+  continueHandoff?: (operationId: string, options?: { uuid?: string; onInputPersisted?: () => void }) => AsyncIterable<SDKMessage>
+  persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
   selectUserMessage?: (targetUuid: string) => UserMessage
   rewindBeforeUserMessage?: (
     targetUuid: string,
@@ -51,6 +57,9 @@ export function createQueryEngineSessionAdapter(
         onPermissionRequest,
       })
     },
+    persistHandoffOutcome: session.persistHandoffOutcome
+      ? (operationId, outcome) => session.persistHandoffOutcome!(operationId, outcome)
+      : undefined,
     abort(intent) {
       if (intent === undefined) {
         session.interrupt?.()

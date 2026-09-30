@@ -92,6 +92,7 @@ function harness(
     restoreResult?: PeerRequestPlaneDeps['restoreSession']
     forwardFails?: Set<string>
     moving?: Set<string>
+    workspaceRequests?: PeerRequestPlaneDeps['workspaceRequests']
   } = {},
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
@@ -110,6 +111,7 @@ function harness(
     isReady: id => (ready ?? live).has(id),
     canResume: id => options.unresumable?.has(id) !== true,
     isMoving: id => options.moving?.has(id) === true,
+    workspaceRequests: options.workspaceRequests,
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),
@@ -192,6 +194,58 @@ function request(
     args,
   }
 }
+
+test('managed workspace verbs retain connection authority and do not grant peer privileges', async () => {
+  const handled: string[] = []
+  let answeredBeforeMovement = false
+  const h = harness({ rows: [row(ALEX, 'Alex', { binding: { kind: 'managed', storageRootId: ALEX, storageId: BEAR } })],
+    workspaceRequests: {
+      isReserved: () => false,
+      handleRequest: async id => { handled.push(id); return { ok: true, value: { operationId: 'op-1', status: 'ready' } } },
+      afterResponse: () => { answeredBeforeMovement = h.lastResult()?.ok === true },
+    },
+  })
+  await h.plane.handleRequest(ALEX, { ...request('workspace.ready', { operationId: 'op-1', tipUuid: 'tip-1', toolUseId: 'tool-1' }), sessionId: BEAR })
+  expect(handled).toEqual([ALEX])
+  expect(answeredBeforeMovement).toBe(true)
+  await h.plane.handleRequest(ALEX, request('peers.list'))
+  expect(h.lastResult()?.ok).toBe(false)
+  expect(handled).toEqual([ALEX])
+})
+
+test.each([
+  ['workspaces.list', { cwd: '/authored/path' }],
+  ['workspace.jump', { operationId: 'op', destinationHandle: 'handle', path: '/authored/path' }],
+  ['workspace.jump', { operationId: 'op' }],
+  ['workspace.ready', { operationId: 'op', tipUuid: 'tip', toolUseId: 123 }],
+  ['workspace.cancel', { operationId: 'op', from: BEAR }],
+] as const)('workspace verb %s rejects malformed or authority-widening args', async (verb, args) => {
+  let dispatched = false
+  const h = harness({ workspaceRequests: {
+    isReserved: () => false,
+    handleRequest: async () => { dispatched = true; return { ok: true, value: { eligible: false, workspaces: [] } } },
+  } })
+  await h.plane.handleRequest(ALEX, request(verb, args))
+  expect(h.lastResult()?.error?.code).toBe('bad_request')
+  expect(dispatched).toBe(false)
+})
+
+test('handoff control remains reachable after model verb allowance is exhausted', async () => {
+  let controls = 0
+  const h = harness({ workspaceRequests: {
+    isReserved: () => true,
+    handleRequest: async (_id, request) => {
+      if (request.verb === 'workspace.cancel') { controls++; return { ok: true, value: { operationId: request.operationId, status: 'cancelled' } } }
+      return { ok: true, value: { eligible: false, workspaces: [] } }
+    },
+  } })
+  for (let i = 0; i < MAX_HOST_REQUESTS_PER_WINDOW; i++) await h.plane.handleRequest(ALEX, request('workspaces.list'))
+  await h.plane.handleRequest(ALEX, request('workspace.cancel', { operationId: 'op' }))
+  expect(h.lastResult()?.ok).toBe(true)
+  expect(controls).toBe(1)
+  await h.plane.handleRequest(ALEX, request('peer.create', { prompt: 'create' }))
+  expect(h.lastResult()?.error?.code).toBe('rate_limited')
+})
 
 /* ------------------------------------------------------------------------- *
  * HR1 — fail closed

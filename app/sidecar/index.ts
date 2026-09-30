@@ -1,3 +1,5 @@
+import { validateWorkspaceJumpStartup } from './workspaceJumpStartup.js'
+import { setWorkspaceJumpAdmission } from './workspaceJumpTools.js'
 /**
  * Headless Bun engine sidecar — entrypoint (net-new, small).
  *
@@ -313,6 +315,7 @@ async function main(): Promise<void> {
   })
   activeSidecarCleanup = sidecarCleanup
   if (!args.probeOnAttach) {
+    await validateWorkspaceJumpStartup(args.sessionId, args.cwd, args.resumeEngineSessionId ?? args.freshEngineSessionId, args.binding)
     await initializeSidecarRuntime()
   }
   if (args.freshEngineSessionId) {
@@ -652,6 +655,11 @@ async function main(): Promise<void> {
   // tools were built with the session controller above, before this server
   // existed, so they resolve a requester per call rather than holding one; this
   // is where the one that exists is published.
+  setWorkspaceJumpAdmission({
+    reserve: operationId => server.reserveWorkspaceHandoff(operationId),
+    release: operationId => { if (controller.getHandoffReservation() === operationId) controller.releaseHandoffReservation(operationId) },
+    cancelNotAccepted: operationId => server.cancelUnacceptedWorkspaceHandoff(operationId),
+  })
   setPeerHostRequester((verb, args, options) =>
     server.requestHost(verb, args, options),
   )

@@ -30,25 +30,11 @@ export type PendingRoute = {
 export type ProjectRoutingControllerOptions = {
   store?: ProjectRoutingStore
   prepareForward?(sessionId: string): Promise<void>
-  eligible(sessionId: string): boolean
   currentCwd(sessionId: string): string | null
-  classify(
-    sessionId: string,
-    text: string,
-    previousUserMessages: string[],
-    suppressedRoots: string[],
-  ): Promise<ProjectRouteDecision>
-  move(sessionId: string, cwd: string): Promise<{ ok: true } | { ok: false; error: { message: string } }>
   forward(sessionId: string, message: SidecarClientMessage): ErrorFrame['code'] | null
   answerRefused(sessionId: string, submitId: string, code: ErrorFrame['code']): void
   publish(sessionId: string, snapshot: ProjectRouteSnapshot | null): void
   log(message: string): void
-}
-
-function submitId(message: RoutedSubmit): string | null {
-  return typeof message.options?.submitId === 'string' && message.options.submitId.length > 0
-    ? message.options.submitId
-    : null
 }
 
 function errorMessage(error: unknown): string {
@@ -57,8 +43,6 @@ function errorMessage(error: unknown): string {
 
 export class ProjectRoutingController {
   private readonly pending = new Map<string, PendingRoute>()
-  private readonly previousUserMessages = new Map<string, string[]>()
-  private readonly suppressedRoots = new Map<string, Set<string>>()
 
   private readonly accepted = new Map<string, RouteRecord>()
   private storageFailure = false
@@ -84,77 +68,11 @@ export class ProjectRoutingController {
     this.options.store?.save([...this.accepted.values(), ...this.pending.values()])
   }
 
-  async submit(
-    sessionId: string,
-    message: SidecarClientMessage | RoutedSubmit,
-    routingText: string,
-  ): Promise<void> {
-    if (message.type !== 'app.submit') {
-      this.forwardDirect(sessionId, message)
-      return
-    }
-    const held = message as RoutedSubmit
-    const id = submitId(held)
-    const existing = this.pending.get(sessionId)
-    if (existing !== undefined) {
-      if (existing.submitId !== id && id !== null) this.options.answerRefused(sessionId, id, 'bad_request')
-      return
-    }
-    if (id !== null && this.accepted.get(sessionId)?.submitId === id) return
-    if (this.storageFailure) {
-      if (id !== null) this.options.answerRefused(sessionId, id, 'bad_request')
-      return
-    }
-    if (id === null || !this.options.eligible(sessionId)) {
-      this.forwardDirect(sessionId, message)
-      return
-    }
-
-    const sourceCwd = this.options.currentCwd(sessionId)
-    if (sourceCwd === null) {
-      this.forwardDirect(sessionId, held)
-      return
-    }
-
-    const route: PendingRoute = {
-      sessionId,
-      submitId: id,
-      message: held,
-      routingText,
-      sourceCwd,
-      phase: 'checking',
-      decision: null,
-      messageText: null,
-      outcome: 'unsent',
-    }
-    this.pending.set(sessionId, route)
-    try { this.persist() } catch (error) {
-      this.pending.delete(sessionId)
-      this.options.log(`[project-routing] could not hold message: ${errorMessage(error)}`)
-      this.options.answerRefused(sessionId, id, 'bad_request')
-      return
-    }
-    this.publish(route)
-
-    await this.classifyHeld(route)
-  }
-
-  private async classifyHeld(route: PendingRoute): Promise<void> {
-    try {
-      const decision = await this.options.classify(
-        route.sessionId,
-        route.routingText,
-        [...(this.previousUserMessages.get(route.sessionId) ?? [])],
-        [...(this.suppressedRoots.get(route.sessionId) ?? [])],
-      )
-      if (this.pending.get(route.sessionId) !== route) return
-      await this.applyDecision(route, decision)
-    } catch (error) {
-      if (this.pending.get(route.sessionId) !== route) return
-      this.options.log(`[project-routing] classifier failed: ${errorMessage(error)}`)
-      if (!this.verifySource(route)) return
-      await this.forwardHeld(route)
-    }
+  /** New submissions bypass the retired classifier. The legacy journal still
+   * owns duplicate receipts and refusal while a saved payload needs recovery. */
+  acceptsNewSubmit(sessionId: string, id: string | undefined): boolean {
+    if (this.storageFailure || this.pending.has(sessionId)) return false
+    return id === undefined || this.accepted.get(sessionId)?.submitId !== id
   }
 
   async resolve(command: ProjectRouteCommand): Promise<void> {
@@ -165,35 +83,10 @@ export class ProjectRoutingController {
       this.cancel(command.appSessionId)
       return
     }
-    if (command.choice === 'resend' && ['unsent', 'uncertain'].includes(route.phase)) {
-      const shouldRoute = route.outcome === 'unsent' &&
-        this.options.currentCwd(route.sessionId) === route.sourceCwd && this.options.eligible(route.sessionId)
+    if (['resend', 'stay'].includes(command.choice) &&
+        ['unsent', 'uncertain', 'ask', 'failed'].includes(route.phase)) {
       route.outcome = 'unsent'
-      if (shouldRoute) {
-        route.phase = 'checking'
-        this.publish(route)
-        await this.classifyHeld(route)
-      } else await this.forwardHeld(route)
-      return
-    }
-    if (!['ask', 'failed'].includes(route.phase)) return
-
-    if (command.choice === 'stay') {
-      if (!this.verifySource(route)) return
-      if (route.decision !== null && !route.decision.explicit) {
-        let roots = this.suppressedRoots.get(route.sessionId)
-        if (roots === undefined) {
-          roots = new Set()
-          this.suppressedRoots.set(route.sessionId, roots)
-        }
-        roots.add(route.decision.cwd)
-      }
       await this.forwardHeld(route)
-      return
-    }
-
-    if (command.choice === 'move' && route.decision !== null) {
-      await this.moveThenForward(route)
     }
   }
 
@@ -205,8 +98,6 @@ export class ProjectRoutingController {
     if (accepted) {
       this.accepted.set(sessionId, { ...route, routingText: '',
         message: { type: 'app.submit', requestId: route.message.requestId, prompt: '', options: { submitId } } })
-      const previous = this.previousUserMessages.get(sessionId) ?? []
-      this.previousUserMessages.set(sessionId, [...previous, route.routingText.slice(0, 2000)].slice(-3))
     }
     if (accepted) this.clear(route)
     else {
@@ -229,7 +120,7 @@ export class ProjectRoutingController {
   }
 
   hasPending(sessionId: string): boolean {
-    return this.pending.has(sessionId)
+    return this.storageFailure || this.pending.has(sessionId)
   }
 
   cancel(sessionId: string): void {
@@ -240,54 +131,6 @@ export class ProjectRoutingController {
     ) return
     if (route.outcome === 'unsent') this.options.answerRefused(sessionId, route.submitId, 'bad_request')
     this.clear(route)
-  }
-
-  private async applyDecision(route: PendingRoute, decision: ProjectRouteDecision): Promise<void> {
-    if (decision.kind === 'stay') {
-      if (!this.verifySource(route)) return
-      await this.forwardHeld(route)
-      return
-    }
-
-    route.decision = decision
-    if (!this.verifySource(route)) return
-    if (decision.kind === 'ask') {
-      route.phase = 'ask'
-      this.publish(route)
-      return
-    }
-    await this.moveThenForward(route)
-  }
-
-  private async moveThenForward(route: PendingRoute): Promise<void> {
-    const decision = route.decision
-    if (decision === null || !this.verifySource(route)) return
-
-    route.phase = 'moving'
-    try {
-      // Movement may commit independently of the held delivery. Record its
-      // destination first so restart can safely identify the new binding.
-      this.persist()
-      this.options.publish(route.sessionId, this.snapshot(route))
-      const result = await this.options.move(route.sessionId, decision.cwd)
-      if (this.pending.get(route.sessionId) !== route) return
-      if (!result.ok) {
-        this.fail(route, result.error.message)
-        return
-      }
-      await this.forwardHeld(route)
-    } catch (error) {
-      if (this.pending.get(route.sessionId) !== route) return
-      this.options.log(`[project-routing] move failed: ${errorMessage(error)}`)
-      this.fail(route, errorMessage(error))
-    }
-  }
-
-  private forwardDirect(sessionId: string, message: SidecarClientMessage | RoutedSubmit): void {
-    const failure = this.options.forward(sessionId, message)
-    if (failure === null || message.type !== 'app.submit') return
-    const id = submitId(message as RoutedSubmit)
-    if (id !== null) this.options.answerRefused(sessionId, id, failure)
   }
 
   private async forwardHeld(route: PendingRoute): Promise<void> {
@@ -325,12 +168,6 @@ export class ProjectRoutingController {
       this.options.log(`[project-routing] delivery failed: ${errorMessage(error)}`)
       this.publish(route)
     }
-  }
-
-  private verifySource(route: PendingRoute): boolean {
-    if (this.options.currentCwd(route.sessionId) === route.sourceCwd) return true
-    this.fail(route, 'Project folder changed before routing completed.')
-    return false
   }
 
   private fail(route: PendingRoute, message: string): void {

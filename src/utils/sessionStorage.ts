@@ -594,6 +594,15 @@ function getOwnedTranscriptPath(): string | null {
   return project?.sessionFile ?? null
 }
 
+/** Read-only preflight inside the jump tool; durability is verified after pairing. */
+export function canPersistHandoffTranscript(): boolean {
+  if (!getOwnedTranscriptPath() || isSessionPersistenceDisabled() ||
+    getSettings_DEPRECATED()?.cleanupPeriodDays === 0 ||
+    isEnvTruthy(process.env.CLAUDE_CODE_SKIP_PROMPT_HISTORY) ||
+    (getNodeEnv() === 'test' && !isEnvTruthy(process.env.TEST_ENABLE_SESSION_PERSISTENCE))) return false
+  try { assertActiveTranscriptLease(getSessionId()); return true } catch { return false }
+}
+
 /**
  * Shared body of the diagnostic appenders below: resolve the owning transcript,
  * stamp the standard `system` envelope, append, and swallow any failure.
@@ -2578,6 +2587,88 @@ export async function flushCurrentTranscriptDurably(
   } finally {
     await parent.close()
   }
+}
+
+/** Verify the live chain, not UUIDs left behind by rewind or tombstones. */
+export async function verifyHandoffTranscriptDurably(
+  expected: { tip_uuid: string; tool_use_id: string; exchange_uuids: string[] },
+): Promise<import('../app-runtime/handoff.js').HandoffBoundary> {
+  await flushCurrentTranscriptDurably()
+  const transcriptPath = getOwnedTranscriptPath()
+  if (!transcriptPath) throw new Error('Workspace handoff requires persisted conversation ownership')
+  const loaded = await loadTranscriptFile(transcriptPath, { keepAllLeaves: true })
+  if (loaded.sourceTruncated) throw new Error('Workspace handoff transcript is incomplete')
+  const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  if (active.tip?.uuid !== expected.tip_uuid || active.sessionId !== getSessionId()) {
+    throw new Error('Workspace handoff transcript boundary is no longer active')
+  }
+  const activeUuids = new Set(active.messages.map(m => m.uuid))
+  if (!expected.exchange_uuids.length || expected.exchange_uuids.some(uuid => !activeUuids.has(uuid))) {
+    throw new Error('Workspace handoff exchange is not in the active conversation')
+  }
+  const uses = new Set<string>()
+  const results = new Set<string>()
+  let sawHandoff = false
+  for (const message of active.messages) {
+    if (!expected.exchange_uuids.includes(message.uuid) || !('message' in message) || !Array.isArray(message.message.content)) continue
+    for (const block of message.message.content) {
+      if (block.type === 'tool_use') {
+        if (uses.has(block.id)) throw new Error('Duplicate handoff tool call')
+        uses.add(block.id)
+      } else if (block.type === 'tool_result') {
+        if (!uses.has(block.tool_use_id) || results.has(block.tool_use_id)) throw new Error('Invalid handoff tool result')
+        results.add(block.tool_use_id)
+        if (block.tool_use_id === expected.tool_use_id && block.is_error !== true) sawHandoff = true
+      }
+    }
+  }
+  if (!sawHandoff || uses.size !== results.size) throw new Error('Workspace handoff exchange is incomplete')
+  return { tip_uuid: expected.tip_uuid, tool_use_id: expected.tool_use_id }
+}
+
+/** Used for trusted outcomes and genuine-user reconciliation admission. */
+export async function verifyActiveTranscriptTipDurably(tipUuid: string, requiredUserInputUuid?: string): Promise<void> {
+  await flushCurrentTranscriptDurably()
+  const transcriptPath = getOwnedTranscriptPath()
+  if (!transcriptPath) throw new Error('Persisted conversation ownership is required')
+  const loaded = await loadTranscriptFile(transcriptPath, { keepAllLeaves: true })
+  const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  if (loaded.sourceTruncated || active.tip?.uuid !== tipUuid || active.sessionId !== getSessionId()) {
+    throw new Error('Trusted outcome is not the durable active transcript tip')
+  }
+  if (requiredUserInputUuid) {
+    const input = active.messages.find(message => message.uuid === requiredUserInputUuid)
+    if (input?.type !== 'user' || input.isMeta || input.origin || input.isVirtual ||
+      input.sourceToolAssistantUUID || input.toolUseResult !== undefined ||
+      (Array.isArray(input.message.content) && input.message.content.some(block => block.type === 'tool_result'))) {
+      throw new Error('Workspace reconciliation input is not in the durable active conversation')
+    }
+  }
+}
+
+export async function findHandoffOutcomeInActiveTranscript(operationId: string): Promise<{
+  outcome: import('../app-runtime/handoff.js').HandoffTerminalOutcome
+  messages: Message[]
+} | null> {
+  const transcriptPath = getOwnedTranscriptPath()
+  if (!transcriptPath) return null
+  await flushCurrentTranscriptDurably()
+  const loaded = await loadTranscriptFile(transcriptPath, { keepAllLeaves: true })
+  if (loaded.sourceTruncated) throw new Error('Handoff outcome history is incomplete')
+  const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  const { readHandoffOutcomeData, handoffTerminalPrompt } = await import('../app-runtime/handoff.js')
+  for (let index = active.messages.length - 1; index >= 0; index--) {
+    const display = active.messages[index]!
+    if (display.type !== 'system' || display.subtype !== 'workspace_handoff_outcome') continue
+    const data = readHandoffOutcomeData(display.data)
+    if (data?.operationId !== operationId) continue
+    const context = active.messages[index + 1]
+    if (context?.type !== 'user' || !context.isMeta || context.message.content !== handoffTerminalPrompt(data.outcome)) {
+      throw new Error('Handoff outcome exchange is incomplete')
+    }
+    return { outcome: data.outcome, messages: [display, context] }
+  }
+  return null
 }
 
 export async function hydrateRemoteSession(

@@ -1588,8 +1588,17 @@ export const SDKResultErrorSchema = lazySchema(() =>
   }),
 )
 
+export const SDKResultHandoffSchema = lazySchema(() =>
+  SDKResultSuccessSchema().omit({ subtype: true, result: true, structured_output: true }).extend({
+    subtype: z.literal('handoff'),
+    is_error: z.literal(false),
+    operation_id: z.string().min(1),
+    transcript_boundary: z.object({ tip_uuid: UUIDPlaceholder(), tool_use_id: z.string().min(1) }),
+  }),
+)
+
 export const SDKResultMessageSchema = lazySchema(() =>
-  z.union([SDKResultSuccessSchema(), SDKResultErrorSchema()]),
+  z.union([SDKResultSuccessSchema(), SDKResultErrorSchema(), SDKResultHandoffSchema()]),
 )
 
 export const SDKSystemMessageSchema = lazySchema(() =>

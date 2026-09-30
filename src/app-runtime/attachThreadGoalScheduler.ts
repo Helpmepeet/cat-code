@@ -91,7 +91,7 @@ export function diffCumulativeTurnUsage(
 }
 
 export type AttachThreadGoalSchedulerOptions = {
-  controller: Pick<AppSessionController, 'subscribe' | 'submit'>
+  controller: Pick<AppSessionController, 'subscribe' | 'submit'> & Partial<Pick<AppSessionController, 'canStartAutomaticTurn' | 'subscribeHandoffStatus'>>
   /** Stable per-session id written into the attempt lease. */
   ownerId: string
   getGoal(): ThreadGoal | null
@@ -130,6 +130,7 @@ export function attachThreadGoalScheduler({
   const turnToolUses = new Map<string, { toolName: string; input: unknown }>()
   const turnToolResults = new Map<string, unknown>()
   let turnFailed = false
+  let turnSuspended = false
   let turnUsageLimited = false
   let turnUsage: ThreadGoalUsageDelta = EMPTY_THREAD_GOAL_USAGE_DELTA
   let cumulativeUsage: TurnUsageTotals = EMPTY_TOTALS
@@ -143,7 +144,7 @@ export function attachThreadGoalScheduler({
     // running" is the whole gate here. There is no queued-input or dialog
     // concept on this path: a client submit simply wins the race by starting
     // the turn first, which this then observes.
-    canStartAutomaticTurn: () => !activeTurn,
+    canStartAutomaticTurn: () => !activeTurn && (controller.canStartAutomaticTurn?.() ?? true),
     getUnresolvedDependencies: () => dependencies.read(),
     scheduleWake: (delayMs, run) => {
       const handle = setTimeout(run, delayMs)
@@ -176,6 +177,7 @@ export function attachThreadGoalScheduler({
     turnToolUses.clear()
     turnToolResults.clear()
     turnFailed = false
+    turnSuspended = false
     turnUsageLimited = false
     turnUsage = EMPTY_THREAD_GOAL_USAGE_DELTA
   }
@@ -221,6 +223,7 @@ export function attachThreadGoalScheduler({
           // A turn that only reproduced calls it had already made, with the
           // same results, advanced nothing even though it used tools.
           madeNoProgress:
+            !turnSuspended &&
             attempt !== null &&
             (turnToolUseCount === 0 || repetition.repeatedEverything),
           callHistory: repetition.nextHistory,
@@ -279,6 +282,7 @@ export function attachThreadGoalScheduler({
     }
 
     if (sdk.type === 'result') {
+      if (sdk.subtype === 'handoff') turnSuspended = true
       if (sdk.is_error === true) turnFailed = true
       const current = readCumulativeUsage(sdk.usage)
       if (current) {
@@ -305,10 +309,21 @@ export function attachThreadGoalScheduler({
     endTurn()
   })
 
+  const unsubscribeHandoff = controller.subscribeHandoffStatus?.(() => {
+    if (activeTurn || !(controller.canStartAutomaticTurn?.() ?? true)) return
+    // Destination turn completion occurs before the host durably releases its
+    // reservation. Retry the idle wake when that ownership barrier clears.
+    const sequence = ++idleSequence
+    void dependencies.refresh().then(() =>
+      scheduler.wake({ trigger: 'idle', sourceId: `handoff:${sequence}` }),
+    )
+  })
+
   return {
     scheduler,
     detach() {
       unsubscribe()
+      unsubscribeHandoff?.()
     },
   }
 }

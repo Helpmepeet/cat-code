@@ -49,15 +49,23 @@ export function createQueryEngineAppSession(
       engine.refreshAbortController?.()
       currentPermissionHandler = options?.onPermissionRequest
       try {
-        yield* engine.submitMessage(prompt, {
+        if (options?.handoffContinuation) {
+          if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
+          yield* engine.continueHandoff(options.handoffContinuation.operationId, { uuid: options.uuid, onInputPersisted: options.onInputPersisted })
+        } else yield* engine.submitMessage(prompt, {
           uuid: options?.uuid,
           isMeta: options?.isMeta,
           origin: options?.origin,
           onInputPersisted: options?.onInputPersisted,
+          handoffReconciliationAdmission: options?.handoffReconciliationAdmission,
         })
       } finally {
         currentPermissionHandler = undefined
       }
+    },
+    persistHandoffOutcome(operationId, outcome) {
+      if (!engine.persistHandoffOutcome) throw new Error('Workspace outcome persistence is unavailable')
+      return engine.persistHandoffOutcome(operationId, outcome)
     },
     interrupt(intent?: AppSessionAbortIntent) {
       if (intent === undefined) {

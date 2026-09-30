@@ -16,6 +16,7 @@ import { ManagedStorage } from './managedStorage.js'
 import { SessionRegistry, defaultTranscriptPath } from './registry.js'
 import { SidecarSupervisor, type SupervisorEvent } from '../supervisor/supervisor.js'
 import { PARKED_EXIT_CODE } from '../shared/limits.js'
+import { SPAWN_RATE_WINDOW_MS } from '../shared/hostApi.js'
 import type { ReadyFrame, ServerFrame } from '../shared/protocol.js'
 import { runSessionRelocationWorker } from '../main/sessionRelocationRunner.js'
 import { SIDECAR_RUNTIME_ARGS } from '../main/mainDecisions.js'
@@ -33,6 +34,13 @@ const relocationWorker = join(here, '..', 'sidecar', 'sessionRelocationWorker.ts
 const roots: string[] = []
 const supervisors: SidecarSupervisor[] = []
 const priorConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+// Successive lifecycle scenarios use separate admission windows. Host rate-cap
+// tests cover bursts; this process probe must not depend on startup taking 10 s.
+function lifecycleAdmissionClock(): () => number {
+  let clock = 0
+  return () => { clock += SPAWN_RATE_WINDOW_MS; return clock }
+}
 
 afterEach(() => {
   for (const supervisor of supervisors.splice(0)) supervisor.shutdown()
@@ -137,6 +145,7 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   supervisors.push(supervisor)
   const host = new Host({
     supervisor, registry, managedStorage,
+    now: lifecycleAdmissionClock(),
     validateCwd: cwd => {
       try { return { ok: true, realpath: realpathSync(cwd) } }
       catch { return { ok: false } }
@@ -337,6 +346,7 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   })
   const reopenedHost = new Host({
     supervisor: reopenedSupervisor, registry: reopenedRegistry, managedStorage,
+    now: lifecycleAdmissionClock(),
     validateCwd: cwd => {
       try { return { ok: true, realpath: realpathSync(cwd) } }
       catch { return { ok: false } }
@@ -552,6 +562,7 @@ test('empty Chat moves live, parked and closed without losing its identity or st
   supervisors.push(supervisor)
   const host = new Host({
     supervisor, registry, managedStorage,
+    now: lifecycleAdmissionClock(),
     validateCwd: cwd => { try { return { ok: true, realpath: realpathSync(cwd) } } catch { return { ok: false } } },
     relocate: request => runSessionRelocationWorker({
       command: 'bun', args: [`--preload=${networkBlocker}`, 'run', relocationWorker], cwd: request.source.cwd,

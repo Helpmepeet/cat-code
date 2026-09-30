@@ -649,6 +649,10 @@ export const HOST_REQUEST_VERBS = [
   'peer.create',
   'peer.deliver',
   'peer.ack',
+  'workspaces.list',
+  'workspace.jump',
+  'workspace.ready',
+  'workspace.cancel',
 ] as const
 
 export type HostRequestVerb = (typeof HOST_REQUEST_VERBS)[number]
@@ -828,6 +832,11 @@ export type PeerDeliverOutcome =
  * row that name already produced. See the field's own comment below.
  */
 export type HostRequestArgs = {
+  'workspaces.list': Record<string, never>
+  'workspace.jump': { operationId: string; destinationHandle: string }
+  /** Engine-authored readiness; the connection supplies process identity. */
+  'workspace.ready': { operationId: string; tipUuid: string; toolUseId: string }
+  'workspace.cancel': { operationId: string }
   'peers.list': Record<string, never>
   'peer.create': { prompt: string; model?: string; effort?: string }
   'peer.deliver': {
@@ -851,6 +860,10 @@ export type HostRequestArgs = {
 
 /** Per-verb `value` on a successful `host.result`. */
 export type HostRequestValues = {
+  'workspaces.list': { workspaces: Array<{ handle: string; name: string; path: string }>; eligible: boolean }
+  'workspace.jump': { operationId: string; status: 'accepted' }
+  'workspace.ready': { operationId: string; status: 'ready' }
+  'workspace.cancel': { operationId: string; status: 'cancelled' | 'not_accepted' }
   'peers.list': { peers: PeerDescriptor[] }
   'peer.create': {
     name: string
@@ -931,6 +944,33 @@ export type PeerDeliverMessage = {
   untagged?: boolean
 }
 
+/** Host-only handoff lifecycle. Paths and user prompts are absent; the engine
+ * reads its durable operation by its own conversation identity.
+ */
+export type WorkspaceHandoffMessage = {
+  type: 'workspace.handoff'
+  requestId: string
+  operationId: string
+} & (
+  | { action: 'verify'; tipUuid: string; toolUseId: string }
+  | { action: 'continue' | 'settle_failed' | 'settle_cancelled' | 'settle_uncertain' | 'release' | 'reconcile' }
+)
+export type WorkspaceHandoffResultFrame = {
+  kind: 'workspace.handoff.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  operationId: string
+  ok: boolean
+}
+/** Engine receipt for genuine user input, emitted after its durable admission. */
+export type WorkspaceUserAdmittedFrame = {
+  kind: 'workspace.user-admitted'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  operationId: string
+}
+
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
  * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, main's
@@ -959,6 +999,7 @@ export type SidecarClientMessage =
   | HistoryLoadEarlierMessage
   | HostResultMessage
   | PeerDeliverMessage
+  | WorkspaceHandoffMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -3810,6 +3851,8 @@ export type ServerFramePayload =
   | SubmitResultFrame
   | HistoryLoadEarlierResultFrame
   | HostRequestFrame
+  | WorkspaceHandoffResultFrame
+  | WorkspaceUserAdmittedFrame
   | ActivityFrame
 
 /**
@@ -3872,6 +3915,8 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'submit.result': true,
   'history.loadEarlier.result': true,
   'host.request': true,
+  'workspace.handoff.result': true,
+  'workspace.user-admitted': true,
   activity: true,
 }
 

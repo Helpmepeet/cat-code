@@ -1,4 +1,5 @@
 import type { APIError } from '@anthropic-ai/sdk'
+import { handoffOutcomeText, readHandoffOutcomeData } from '../../app-runtime/handoff.js'
 import type { BetaContentBlock } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { randomUUID, type UUID } from 'crypto'
 import { getSessionId } from 'src/bootstrap/state.js'
@@ -300,6 +301,12 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
           },
         ]
       case 'system':
+        if (message.subtype === 'workspace_handoff_outcome') {
+          const data = readHandoffOutcomeData(message.data)
+          if (!data) return []
+          return [{ type: 'system', subtype: 'local_command_output',
+            content: handoffOutcomeText(data.outcome), session_id: getSessionId(), uuid: message.uuid }]
+        }
         if (message.subtype === 'compact_boundary' && message.compactMetadata) {
           return [
             {

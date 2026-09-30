@@ -8,8 +8,10 @@
  * TYPE union `SDKMessage` (src/entrypoints/sdk/coreTypes.generated.ts:760):
  * exactly 19 members over 15 top-level `type` discriminants — `system` covers
  * 3 members (SDKSystemMessage, SDKCompactBoundaryMessage,
- * SDKAccountDiagnosticMessage), `result` covers 2 (SDKResultMessage,
+ * SDKAccountDiagnosticMessage), `result` originally covered 2 (SDKResultMessage,
  * SDKResultSuccess), `user` covers 2 (SDKUserMessage, SDKUserMessageReplay).
+ * The 2026-09-30 workspace handoff adds SDKResultHandoff, with a paired sample
+ * below. It preserves turn accounting without declaring task completion.
  * The renderer's snapshot alias (shared/sdk-types.snapshot.d.ts, commit
  * 234da9e) was re-diffed against the live file 2026-07-04: byte-identical
  * union — no drift.
@@ -1451,7 +1453,7 @@ export const SDK_MESSAGE_FIXTURE: {
     },
   ],
 
-  /* ── result — SDKResultMessage + SDKResultSuccess ────────────────────────
+  /* ── result — SDKResultMessage + SDKResultSuccess + SDKResultHandoff ─────
    * The ONLY turn-end marker (S1 §3). Turn totals live here. */
   result: [
     {
@@ -1487,6 +1489,33 @@ export const SDK_MESSAGE_FIXTURE: {
         fast_mode_state: 'off',
         session_id: SESSION,
         uuid: '00000000-0000-4000-8000-00000000r001',
+      },
+    },
+    {
+      name: 'result: workspace handoff preserves source turn accounting',
+      anchor: 'src/QueryEngine.ts: submitMessage durable handoff yield',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'result',
+        subtype: 'handoff',
+        operation_id: '00000000-0000-4000-8000-000000000101',
+        transcript_boundary: {
+          tip_uuid: '00000000-0000-4000-8000-000000000102',
+          tool_use_id: 'toolu_workspace_jump',
+        },
+        duration_ms: 700,
+        duration_api_ms: 500,
+        is_error: false,
+        num_turns: 1,
+        stop_reason: 'tool_use',
+        total_cost_usd: 0.005,
+        usage: { input_tokens: 400, output_tokens: 30 },
+        modelUsage: {},
+        permission_denials: [],
+        fast_mode_state: 'off',
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-000000000103',
       },
     },
     {

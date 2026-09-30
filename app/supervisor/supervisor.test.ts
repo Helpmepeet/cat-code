@@ -256,6 +256,8 @@ test('remote FIN transitions ready to disconnected and the session can restart',
     if (event.type === 'status') statuses.push(event.status)
   })
   const sessionId = supervisor.spawnSession('remote-fin-session')
+  const firstGeneration = supervisor.getSessionGeneration(sessionId)
+  expect(firstGeneration).toBeDefined()
   await waitFor(() => statuses.includes('disconnected'), 'remote FIN stayed ready')
   expect(statuses).toContain('ready')
   expect(supervisor.listSessions()).toContainEqual({
@@ -265,6 +267,7 @@ test('remote FIN transitions ready to disconnected and the session can restart',
 
   const readyCount = statuses.filter(status => status === 'ready').length
   supervisor.restartSession(sessionId)
+  expect(supervisor.getSessionGeneration(sessionId)).not.toBe(firstGeneration)
   await waitFor(
     () => statuses.filter(status => status === 'ready').length > readyCount,
     'restarted session did not reconnect',

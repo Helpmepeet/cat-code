@@ -1,6 +1,73 @@
 # Chat relocation
 
-Status: manual relocation is implemented for saved and empty managed Chats moving to a trusted project, back to Chat, and then to another trusted project. Managed Chats also use bounded pre-delivery routing for existing trusted project roots. This record supersedes the design-only stopping point in `docs/plans/2026-09-29-chat-first-project-attachment.md` for those slices. Full-payload held-message recovery is implemented. Model intent classification and direct project-to-project moves remain deferred.
+Status: manual relocation is implemented for saved and empty managed Chats moving to a trusted project, back to Chat, and then to another trusted project. The implemented and reviewed 2026-09-30 agent-directed amendment below replaces bounded pre-delivery routing. Full-payload held-message recovery remains required. Direct automatic project-to-project moves are outside this slice. Isolated validation and remaining verification boundaries are recorded in the linked plan.
+
+## Agent-directed amendment, 2026-09-30
+
+The user authorized the refactor specified in
+[Agent-directed workspace jump](../../plans/2026-09-30-agent-workspace-jump.md).
+Every user prompt reaches the normal conversational agent. That agent uses its
+full context to choose an initial workspace and invokes the jump capability;
+there is no fixed intent policy and no separate pre-send model classifier.
+Clear project mentions can select the project even for questions or incidental
+mentions. Multiple mentions require clarification only when the destination is
+ambiguous; a clear work target takes precedence over reference projects.
+
+An unused managed conversation has one successful agent-directed jump to an
+existing trusted project, under existing relocation mode restrictions. Retain
+the jump tool's definition for cache stability after consumption, but make it
+unavailable through agent guidance and receiving-boundary enforcement across
+restarts, history reopen, and manual returns. Later project requests use ordinary
+agent/file-access behavior without automatic context loading, another jump, or
+a required new Chat. Existing manual relocation remains separately owned.
+Fully settled operations permit later manual relocation by validating the latest
+completed relocation record, both conversation identities, and original managed
+binding before current canonical-path and saved-trust checks. Consumption remains
+unchanged; unresolved operations still enforce their reserved endpoints.
+
+The jump reserves the executing source turn, fences later effects independently
+of provider retries, durably completes its paired tool exchange on the active
+transcript chain, performs required cleanup, and suspends before parking.
+An engine-owned handoff result distinguishes suspension from ordinary success
+and retains source usage. Reservations guard turn admission and conflicting
+conversation/location mutations; acknowledgements and cancellation remain
+reachable. The existing lease, backup, interrupted-relocation refusal, identities,
+process replacement, and destination context owners remain authoritative.
+
+Destination trust/canonical identity are checked in the replacement process
+before executable workspace configuration or hooks. A separately recorded
+internal continuation uses the real controller and does not rerun the original
+UserPromptSubmit hook or resubmit the user prompt. Admission and settlement are
+durable; uncertain admitted work is not automatically replayed. Accepted failures
+write a trusted terminal outcome through the engine, require user reconciliation,
+and do not trigger a fresh automatic source attempt. Unresolved operations pin
+registry rows before launch reaping. Cancellation before mutation prevents the
+move; after mutation begins it suppresses continuation while filesystem
+settlement finishes. Final durable location determines jump consumption.
+
+An authenticated cancellation receipt proving the operation was never accepted
+allows source-only terminal settlement after idle, with generation-bound host
+tombstones preventing late acceptance. A timeout alone cannot release the hold.
+The engine restores an unresolved terminal note's user-reconciliation gate from
+active persisted history before goal scheduling, even without a jump ledger.
+Interrupted destination results remain uncertain even when their error flag is
+false. Terminal-note retries preserve the first selected outcome, and genuine
+user reconciliation requires a durable verified input chain before its receipt.
+
+Retire classification for new submissions and legacy resend. Preserve legacy
+payloads, receipts, row retention, unreadable state, and explicit resend decisions
+for unknown delivery. Certainly-unsent recovery delivers in the valid current
+context. A completed legacy relocation is reconciled independently.
+
+Because file-opening requests currently carry no message-origin identity,
+relocated conversations temporarily refuse relative links. Absolute links in
+the current workspace retain ordinary containment checks; no historical-file
+authority is granted. The agent should emit absolute links after relocation.
+
+The pre-delivery section below records the architecture being retired; its intent
+rules, suggestion policy, and source reclassification are superseded by this
+amendment. Its delivery-recovery invariants remain required. Source and the
+validation record determine which amended paths have landed.
 
 ## Contract
 
@@ -9,6 +76,8 @@ The session menu offers **Move to project…** for a saved managed Chat. Main re
 An idle Chat may move while ready, parked, or closed. The host internally starts a parked or closed source through its normal restore owner, waits for its control snapshots, parks it, relocates it, verifies the destination engine, and parks the destination again. A closed Chat remains closed; these internal starts do not publish a tab-opening event or change focus. If no engine ID has been allocated, the normal sidecar startup allocates one before relocation. The host uses `app.park` and accepts only its dedicated parked exit. Active turns, pending permissions, queued prompts, workers, in-flight writes, sign-in, a concurrent branch switch, another move or restore, and a persisted worktree or deferred continuation block it. Peer sessions themselves cannot move. Retained child peer rows remain in their original project with their history; a child with active work, or a pending unconsumed peer delivery, blocks its parent's move. Closed children do not. Main's peer plane rechecks both live project associations before forwarding or redelivering, so old-project messages cannot enter the new context. Bypass-mode relocation remains outside this decision; classifier-backed Auto is supported.
 
 ## Pre-delivery routing
+
+Historical implementation, superseded by the agent-directed amendment above.
 
 Before a managed Chat submit reaches its sidecar, main durably holds the complete prompt and options in a private `desktop/project-routing.json` journal. A disposable, observation-only worker considers existing canonical project roots and filters them through engine-owned saved trust. It makes no model or account request and never loads candidate instructions. Main validates that a returned destination is one of its candidates. The renderer returns only a closed choice with app and submit IDs; it cannot supply a destination path.
 

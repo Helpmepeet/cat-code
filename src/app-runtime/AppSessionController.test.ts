@@ -378,3 +378,59 @@ describe('AppSessionController', () => {
     await expect(controller.waitUntilIdle()).resolves.toBeUndefined()
   })
 })
+
+
+test('handoff reservation blocks idle races, mutations, and duplicate continuation admissions', async () => {
+  let sourceStarted!: () => void
+  const started = new Promise<void>(resolve => { sourceStarted = resolve })
+  let finishSource!: () => void
+  const sourceGate = new Promise<void>(resolve => { finishSource = resolve })
+  let admissions = 0
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      admissions++
+      if (!options?.handoffContinuation) { sourceStarted(); await sourceGate }
+      yield createResultMessage('done')
+    },
+    rewindBeforeUserMessage: async () => { throw new Error('must not mutate') },
+    forkBeforeUserMessage: async () => { throw new Error('must not mutate') },
+  })
+  const source = controller.submit('select workspace')
+  await started
+  controller.reserveHandoff('operation-1')
+  expect(() => controller.rewindBeforeUserMessage('old-input')).toThrow('reserved')
+  expect(() => controller.forkBeforeUserMessage('old-input')).toThrow('reserved')
+  let automaticAdmission: Promise<void> | undefined
+  controller.subscribe(event => {
+    if (event.type === 'turn.status' && !event.activeTurn) automaticAdmission = controller.submit('goal wake', { isMeta: true })
+  })
+  finishSource(); await source
+  await expect(automaticAdmission).rejects.toThrow('reserved')
+  expect(controller.canStartAutomaticTurn()).toBe(false)
+  await controller.continueHandoff('operation-1')
+  await expect(automaticAdmission).rejects.toThrow('reserved')
+  expect(controller.getHandoffReservation()).toBe('operation-1')
+  await expect(controller.continueHandoff('operation-1')).rejects.toThrow('not reserved')
+  expect(admissions).toBe(2)
+  controller.releaseHandoffReservation('operation-1')
+  expect(controller.canStartAutomaticTurn()).toBe(true)
+})
+
+test('failed handoff retains reservation until outcome persistence and then requires genuine user admission', async () => {
+  let persisted!: () => void
+  const persistence = new Promise<void>(resolve => { persisted = resolve })
+  const controller = new AppSessionController({
+    async *runTurn({ options }) { options?.onInputPersisted?.(); yield createResultMessage('done') },
+    async persistHandoffOutcome() { await persistence; return [] },
+  })
+  controller.restoreHandoffReservation('failed-operation')
+  const settling = controller.settleHandoff('failed-operation', 'failed')
+  expect(controller.getHandoffReservation()).toBe('failed-operation')
+  expect(controller.canStartAutomaticTurn()).toBe(false)
+  persisted(); await settling
+  expect(controller.getHandoffReservation()).toBeNull()
+  expect(controller.requiresHandoffReconciliation()).toBe(true)
+  await expect(controller.submit('automatic recovery', { isMeta: true })).rejects.toThrow('reconciliation')
+  await controller.submit('try a different request')
+  expect(controller.requiresHandoffReconciliation()).toBe(false)
+})

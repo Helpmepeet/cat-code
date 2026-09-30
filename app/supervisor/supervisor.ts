@@ -113,6 +113,8 @@ export type SidecarStatus =
 /** One managed sidecar. The registry maps sessionId → this. */
 type SidecarRecord = {
   sessionId: SessionId
+  /** Process-instance authority; never derived from reusable operating-system ids. */
+  generation: string
   child: ChildProcess
   socketPath: string
   socket: Socket | null
@@ -436,6 +438,7 @@ export class SidecarSupervisor {
 
     const record: SidecarRecord = {
       sessionId,
+      generation: globalThis.crypto.randomUUID(),
       child,
       socketPath,
       socket: null,
@@ -617,6 +620,11 @@ export class SidecarSupervisor {
   /** Advisory process id for crash/liveness probes; not a routing identity. */
   getSessionProcessId(sessionId: SessionId): number | undefined {
     return this.registry.get(sessionId)?.child.pid
+  }
+
+  /** The current socket's process instance, replaced on every spawn/restart. */
+  getSessionGeneration(sessionId: SessionId): string | undefined {
+    return this.registry.get(sessionId)?.generation
   }
 
   /**

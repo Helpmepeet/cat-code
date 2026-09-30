@@ -7,17 +7,8 @@ import { isPathTrusted } from './config.js'
 import { buildDisplayConversationChain, getProjectDir, loadTranscriptFile, selectActiveConversation } from './sessionStorage.js'
 import { withUnownedTranscriptLease } from './transcriptLease.js'
 import { readPendingDeferredContinuation } from '../services/deferredContinuation.js'
-import { assertSessionNotMoving, readSessionRelocation, relocationDirectory, writeSessionRelocation, type RelocationControls, type SessionLocation, type SessionRelocation } from './sessionRelocationState.js'
-
-export type RelocationRequest = {
-  engineSessionId: string
-  appSessionId: string
-  source: SessionLocation
-  target: SessionLocation
-  controls: RelocationControls
-  /** Host compensation after destination resume failed before the move committed. */
-  rollback?: true
-}
+import { assertSessionNotMoving, readSessionRelocation, relocationDirectory, writeSessionRelocation, type RelocationRequest, type SessionLocation, type SessionRelocation } from './sessionRelocationState.js'
+export type { RelocationRequest } from './sessionRelocationState.js'
 async function stat(path: string) {
   try { return await lstat(path) }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }

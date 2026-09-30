@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-09-30
+Last refreshed: 2026-10-01
 
 ## Purpose
 
@@ -66,6 +66,7 @@ src/services/api/client.ts
 |---|---|---|---|
 | Change one-turn SDK/headless execution | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/query.ts`, `src/app-runtime/AppSessionController.ts` | `QueryEngine.submitMessage()` owns the outer turn lifecycle and is where prompt/context are initially built and refreshed after slash-command model changes. Runtime-backed app sessions pass engine-originated submit-interrupt intent through their controller; ordinary aborts must not spoof that adapter intent. |
 | Change the provider-neutral query loop | `src/query.ts` | `src/query/deps.ts`, `src/services/tools/toolOrchestration.ts`, `src/query/stopHooks.ts` | `queryLoop()` is the state machine. Tests can inject `QueryDeps` for `callModel`, `microcompact`, `autocompact`, and UUID generation. |
+| Suspend a conversational turn for workspace handoff | `src/app-runtime/handoff.ts`, `src/app-runtime/AppSessionController.ts` | `src/query.ts`, `src/services/tools/toolExecution.ts`, `src/QueryEngine.ts`, `src/utils/sessionStorage.ts` | The turn-scoped fence survives provider attempts, prevents later tool effects and source retries, and pairs skipped calls. `QueryEngine` emits an accounting-preserving handoff result only after active-chain durability verification and mandatory cleanup. Controller reservations gate automatic turn owners; destination continuation uses an explicit trusted entry rather than resubmitting the user prompt. |
 | Change context assembly | `src/context.ts` | `src/utils/queryContext.ts`, `src/utils/claudemd.ts`, `src/services/api/instructionAssembly.ts` | `getUserContext()` and `getSystemContext()` are memoized. `fetchSystemPromptParts()` decides when to skip default prompt/system context for custom prompts. |
 | Change effective system prompt precedence | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, [`prompt-system.md`](prompt-system.md) | Branch order is override, coordinator, main-thread agent, custom, default; `appendSystemPrompt` appends except under override. |
 | Change provider instruction placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`prompt-system.md`](prompt-system.md) | OpenAI receives stable instructions and optional developer context. Claude-style providers receive system-context-appended prompts and user-context-prepended messages. |
@@ -153,6 +154,7 @@ Recovery decisions:
 | Codex partial-stream continuation | `src/query.ts` with the typed marker from `src/services/api/codex-fetch-adapter.ts` and `src/services/api/errorUtils.ts` | On a Codex transport interruption that arrived after visible output. The request is never replayed. When the adapter certifies a transient transport failure with no client tool call and no hosted web search, the loop drops the synthetic error, keeps the sealed partial assistant text, appends a meta continuation instruction, and repeats the request. A websocket cause has already marked the conversation for sticky HTTP fallback, so the continuation switches transport; an HTTP-cause continuation simply re-dials HTTP. Bounded by `CODEX_PARTIAL_STREAM_CONTINUATION_LIMIT` (2) for the whole top-level `query()` call: no per-round reset. A name-only marker blocks replay but never authorizes a continuation. |
 | Autocompact circuit breaker | `src/services/compact/autoCompact.ts` | Stops automatic retries after repeated non-transient compaction failures and persists failure count by scope. |
 | Unknown-tool loop breaker | `src/query.ts` | Aborts when repeated follow-up turns only produce unknown-tool errors for the same tool. |
+| Workspace handoff | `src/app-runtime/handoff.ts`, `src/query.ts`, `src/QueryEngine.ts` | A requested handoff blocks streaming fallback from erasing its exchange. Acceptance fences remaining execution and stops source model continuation. Invalid or incomplete exchange suspends without authorizing relocation; the desktop operation owner reconciles it. |
 
 ## API Client Routing
 

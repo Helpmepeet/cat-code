@@ -10,7 +10,7 @@ import type {
   PermissionMode,
   SDKCompactBoundaryMessage,
   SDKMessage,
-  SDKPermissionDenial,
+  SDKResultHandoff,
   SDKStatus,
   SDKUserMessageReplay,
 } from 'src/entrypoints/agentSdkTypes.js'
@@ -72,6 +72,7 @@ import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.j
 import { getInMemoryErrors } from './utils/log.js'
 import {
   countToolCalls,
+  createUserMessage,
   INTERRUPT_MESSAGE,
   INTERRUPT_MESSAGE_FOR_TOOL_USE,
   isSyntheticMessage,
@@ -94,7 +95,12 @@ import {
   flushSessionStorage,
   markActiveConversationTip,
   recordTranscript,
+  verifyHandoffTranscriptDurably,
+  verifyActiveTranscriptTipDurably,
+  findHandoffOutcomeInActiveTranscript,
 } from './utils/sessionStorage.js'
+import { createHandoffSkippedResult } from './services/tools/handoffExecution.js'
+import { TurnHandoff, handoffContinuationPrompt, handoffTerminalPrompt, handoffOutcomeText, readHandoffOutcomeData, type HandoffTerminalOutcome } from './app-runtime/handoff.js'
 import { buildEffectiveSystemPrompt } from './utils/systemPrompt.js'
 import { resolveThemeSetting } from './utils/systemTheme.js'
 import {
@@ -113,6 +119,7 @@ import {
   toSDKCompactMetadata,
   toSDKMessageOriginProp,
   toSDKRetryError,
+  toSDKMessages,
 } from './utils/messages/mappers.js'
 import { queuedCommandOrigin } from './utils/taskNotification.js'
 import {
@@ -295,7 +302,7 @@ export class QueryEngine {
   private config: QueryEngineConfig
   private mutableMessages: Message[]
   private abortController: AbortController
-  private permissionDenials: SDKPermissionDenial[]
+  private permissionDenials: SDKResultHandoff['permission_denials']
   private totalUsage: NonNullableUsage
   private hasHandledOrphanedPermission = false
   private readFileState: FileStateCache
@@ -323,8 +330,16 @@ export class QueryEngine {
       isMeta?: boolean
       origin?: MessageOrigin
       onInputPersisted?: () => void
+      /** Only used by continueHandoff; never populated from app.submit. */
+      handoffContinuation?: { operationId: string }
+      /** Only the controller can request durable genuine-user reconciliation. */
+      handoffReconciliationAdmission?: true
     },
   ): AsyncGenerator<SDKMessage, void, unknown> {
+    if (options?.handoffReconciliationAdmission &&
+      (options.isMeta || options.origin || options.handoffContinuation)) {
+      throw new Error('Workspace reconciliation requires genuine user input')
+    }
     const {
       cwd,
       getMcpRuntimeSnapshot,
@@ -373,6 +388,8 @@ export class QueryEngine {
     setCwd(cwd)
     const persistSession = !isSessionPersistenceDisabled()
     const startTime = Date.now()
+    const turnHandoff = new TurnHandoff()
+    let transcriptWriteFailure: unknown = null
 
     // Wrap canUseTool to track permission denials
     const wrappedCanUseTool: CanUseToolFn = async (
@@ -461,6 +478,7 @@ export class QueryEngine {
     ].filter(Boolean).join('\n\n') || undefined
 
     let processUserInputContext: ProcessUserInputContext = {
+      turnHandoff,
       messages: this.mutableMessages,
       // Slash commands that mutate the message array (e.g. /force-snip)
       // call setMessages(fn).  In interactive mode this writes back to
@@ -570,6 +588,8 @@ export class QueryEngine {
       messages: this.mutableMessages,
       uuid: options?.uuid,
       isMeta: options?.isMeta,
+      trustedInternalContinuation: Boolean(options?.handoffContinuation),
+      skipSlashCommands: Boolean(options?.handoffContinuation),
       querySource: 'sdk',
     })
 
@@ -613,12 +633,13 @@ export class QueryEngine {
     // — the single largest controllable critical-path cost after module eval.
     // Transcript is still written (for post-hoc debugging); just not blocking.
     let inputPersisted = false
+    let inputTranscriptTip: UUID | null = null
     if (persistSession && messagesFromUserInput.length > 0) {
       const transcriptPromise = recordTranscriptFn(messages)
-      if (isBareMode()) {
-        void transcriptPromise
+      if (isBareMode() && !options?.handoffReconciliationAdmission) {
+        void transcriptPromise.catch(error => { transcriptWriteFailure ??= error })
       } else {
-        await transcriptPromise
+        inputTranscriptTip = await transcriptPromise
         inputPersisted = true
         if (
           isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
@@ -627,6 +648,29 @@ export class QueryEngine {
           await flushSessionStorage()
         }
       }
+    }
+    if (options?.handoffContinuation) {
+      const input = messagesFromUserInput.find(m => m.type === 'user')
+      if (!persistSession || !input) throw new Error('Workspace continuation requires persisted input')
+      await recordTranscriptFn(messages)
+      await markActiveConversationTip(input.uuid as UUID)
+      await verifyActiveTranscriptTipDurably(input.uuid)
+      inputPersisted = true
+    }
+    if (options?.handoffReconciliationAdmission) {
+      const input = messagesFromUserInput.find(message => message.type === 'user' &&
+        !message.isMeta && !message.origin && !message.isVirtual &&
+        !message.sourceToolAssistantUUID && message.toolUseResult === undefined &&
+        messageSelector().selectableUserMessagesFilter(message) &&
+        !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result')))
+      if (!persistSession || !input) throw new Error('Workspace reconciliation requires persisted user input')
+      // recordTranscript queues writes. Preserve its complete input/attachment
+      // chain and verify the real fsynced tip before clearing the controller hold.
+      const tip = inputTranscriptTip
+      if (!tip) throw new Error('Workspace reconciliation has no persisted transcript tip')
+      await markActiveConversationTip(tip)
+      await verifyActiveTranscriptTipDurably(tip, input.uuid)
+      inputPersisted = true
     }
     if (inputPersisted) options?.onInputPersisted?.()
 
@@ -701,6 +745,7 @@ export class QueryEngine {
     // Recreate after processing the prompt to pick up updated messages and
     // model (from slash commands).
     processUserInputContext = {
+      turnHandoff,
       messages,
       setMessages: () => {},
       onChangeAPIKey: () => {},
@@ -869,6 +914,7 @@ export class QueryEngine {
 
     // Track current message usage (reset on each message_start)
     let currentMessageUsage: NonNullableUsage = EMPTY_USAGE
+    let hasUnsettledMessageUsage = false
     let turnCount = 1
     let hasAcknowledgedInitialMessages = false
     const preservedReplayUuids = new Set<string>()
@@ -886,7 +932,7 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
-    for await (const message of query({
+    const queryIterator = query({
       messages,
       systemPrompt,
       userContext,
@@ -897,7 +943,11 @@ export class QueryEngine {
       querySource: 'sdk',
       maxTurns,
       taskBudget,
-    })) {
+    })
+    let queryTerminal: { reason: string } | undefined
+    async function* observeQuery() { queryTerminal = yield* queryIterator }
+    try {
+    for await (const message of observeQuery()) {
       if (
         message.type === 'system' &&
         message.subtype === 'compact_boundary'
@@ -952,7 +1002,7 @@ export class QueryEngine {
           // useLogMessages.ts fire-and-forgets. enqueueWrite is
           // order-preserving so fire-and-forget here is safe.
           if (message.type === 'assistant') {
-            void recordTranscriptFn(messages)
+            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
           } else {
             await recordTranscriptFn(messages)
           }
@@ -1007,7 +1057,7 @@ export class QueryEngine {
           // forking the chain and orphaning the conversation on resume.
           if (persistSession) {
             messages.push(message)
-            void recordTranscriptFn(messages)
+            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
           }
           yield* normalizeMessage(message)
           break
@@ -1017,6 +1067,7 @@ export class QueryEngine {
           break
         case 'stream_event':
           if (message.event.type === 'message_start') {
+            hasUnsettledMessageUsage = true
             // Reset current message usage for new message
             currentMessageUsage = EMPTY_USAGE
             currentMessageUsage = updateUsage(
@@ -1043,6 +1094,7 @@ export class QueryEngine {
               this.totalUsage,
               currentMessageUsage,
             )
+            hasUnsettledMessageUsage = false
           }
 
           if (includePartialMessages) {
@@ -1061,7 +1113,7 @@ export class QueryEngine {
           // Record inline (same reason as progress above).
           if (persistSession) {
             messages.push(message)
-            void recordTranscriptFn(messages)
+            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
           }
 
           // Extract structured output from StructuredOutput tool calls
@@ -1303,6 +1355,60 @@ export class QueryEngine {
       }
     }
 
+    } catch (error) {
+      if (!turnHandoff.requested) throw error
+      turnHandoff.invalidate()
+      queryTerminal = { reason: 'handoff_failed' }
+      // A failed writer must not lose the observed exchange in memory. The
+      // trusted terminal-outcome path can persist it once storage is writable.
+      const resultIds = new Set(messages.flatMap(m => m.type === 'user' && Array.isArray(m.message.content)
+        ? m.message.content.filter(b => b.type === 'tool_result').map(b => b.tool_use_id) : []))
+      for (const assistant of messages.filter(m => m.type === 'assistant')) {
+        for (const block of assistant.message.content) {
+          if (block.type === 'tool_use' && !resultIds.has(block.id)) {
+            messages.push(createHandoffSkippedResult(block.id, assistant))
+            resultIds.add(block.id)
+          }
+        }
+      }
+      this.mutableMessages = [...messages]
+    }
+
+    if (turnHandoff.accepted || queryTerminal?.reason === 'handoff_failed') {
+      if (hasUnsettledMessageUsage) this.totalUsage = accumulateUsage(this.totalUsage, currentMessageUsage)
+      let boundary: import('./app-runtime/handoff.js').HandoffBoundary | undefined
+      try {
+        if (!turnHandoff.accepted || !turnHandoff.isValid || queryTerminal?.reason !== 'handoff' || !persistSession || transcriptWriteFailure || this.abortController.signal.aborted) {
+          throw new Error('Workspace handoff could not establish a safe boundary')
+        }
+        const accepted = turnHandoff.accepted
+        const exchangeStart = messages.findIndex(m => m.type === 'assistant' && m.message.content.some(b => b.type === 'tool_use' && b.id === accepted.toolUseId))
+        const exchange = messages.slice(exchangeStart).filter(m => m.type === 'assistant' || m.type === 'user')
+        const tip = exchange.at(-1)
+        if (exchangeStart < 0 || !tip) throw new Error('Missing workspace handoff exchange')
+        await recordTranscriptFn(messages)
+        await markActiveConversationTip(tip.uuid as UUID)
+        boundary = await verifyHandoffTranscriptDurably({ tip_uuid: tip.uuid, tool_use_id: accepted.toolUseId, exchange_uuids: exchange.map(m => m.uuid) })
+      } catch {
+        turnHandoff.invalidate()
+      }
+      const accounting = {
+        duration_ms: Date.now() - startTime, duration_api_ms: getTotalAPIDuration(),
+        num_turns: turnCount, stop_reason: lastStopReason, session_id: getSessionId(),
+        total_cost_usd: getTotalCost(), usage: this.totalUsage, modelUsage: getModelUsage(),
+        permission_denials: this.permissionDenials, uuid: randomUUID(),
+        fast_mode_state: getFastModeState(mainLoopModel, initialAppState.fastMode),
+      }
+      if (boundary && turnHandoff.accepted) {
+        yield { type: 'result', subtype: 'handoff', is_error: false,
+          operation_id: turnHandoff.accepted.operationId, transcript_boundary: boundary, ...accounting }
+      } else {
+        yield { type: 'result', subtype: 'error_during_execution', is_error: true,
+          errors: ['Workspace change was suspended before a durable handoff could be established. Work did not continue.'], ...accounting }
+      }
+      return
+    }
+
     // Stop hooks yield progress/attachment messages AFTER the assistant
     // response (via yield* handleStopHooks in query.ts). Since #23537 pushes
     // those to `messages` inline, last(messages) can be a progress/attachment
@@ -1456,6 +1562,39 @@ export class QueryEngine {
 
   interrupt(reason?: string): void {
     this.abortController.abort(reason)
+  }
+
+  continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void }): AsyncGenerator<SDKMessage, void, unknown> {
+    if (!operationId) throw new Error('Missing handoff operation identity')
+    return this.submitMessage(handoffContinuationPrompt(), {
+      isMeta: true, uuid: options?.uuid, handoffContinuation: { operationId }, onInputPersisted: options?.onInputPersisted,
+    })
+  }
+
+  async persistHandoffOutcome(operationId: string, outcome: HandoffTerminalOutcome): Promise<SDKMessage[]> {
+    if (!operationId || operationId.length > 128 || (outcome !== 'failed' && outcome !== 'cancelled' && outcome !== 'uncertain')) throw new Error('Invalid handoff outcome')
+    const persisted = await findHandoffOutcomeInActiveTranscript(operationId)
+    if (persisted) {
+      if (persisted.outcome !== outcome) throw new Error('Handoff terminal outcome conflicts with saved history')
+      return toSDKMessages(persisted.messages)
+    }
+    const localIndex = this.mutableMessages.findLastIndex(m => m.type === 'system' && m.subtype === 'workspace_handoff_outcome' && readHandoffOutcomeData(m.data)?.operationId === operationId)
+    const localDisplay = localIndex < 0 ? undefined : this.mutableMessages[localIndex]
+    const localContext = localIndex < 0 ? undefined : this.mutableMessages[localIndex + 1]
+    if (localDisplay && (localDisplay.type !== 'system' || readHandoffOutcomeData(localDisplay.data)?.outcome !== outcome || localContext?.type !== 'user' || !localContext.isMeta || localContext.message.content !== handoffTerminalPrompt(outcome))) {
+      throw new Error('Handoff terminal outcome conflicts with pending history')
+    }
+    const message = localContext?.type === 'user' ? localContext : createUserMessage({ content: handoffTerminalPrompt(outcome), isMeta: true })
+    const display = localDisplay ?? {
+      type: 'system', subtype: 'workspace_handoff_outcome', uuid: randomUUID(),
+      timestamp: new Date().toISOString(), level: 'warning', content: handoffOutcomeText(outcome),
+      data: { operationId, outcome },
+    } satisfies import('./types/message.js').SystemWorkspaceHandoffOutcomeMessage
+    if (!localDisplay) this.mutableMessages.push(display, message)
+    await (this.config.recordTranscript ?? recordTranscript)(this.mutableMessages)
+    await markActiveConversationTip(message.uuid as UUID)
+    await verifyActiveTranscriptTipDurably(message.uuid)
+    return toSDKMessages([display, message])
   }
 
   refreshAbortController(): AbortController {

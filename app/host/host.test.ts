@@ -46,6 +46,7 @@ import {
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
 import { createShellState, reduceShellState } from '../renderer/src/shellState.js'
+import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
 /* ------------------------------------------------------------------------- *
  * Fake supervisor — the exact public surface the host calls.
@@ -53,6 +54,7 @@ import { createShellState, reduceShellState } from '../renderer/src/shellState.j
 
 type FakeRecord = {
   sessionId: SessionId
+  generation: string
   status: SidecarStatus
   pid: number
   socketPath: string
@@ -112,6 +114,7 @@ class FakeSupervisor {
     this.spawnedIds.push(sessionId)
     this.records.set(sessionId, {
       sessionId,
+      generation: randomUUID(),
       status: 'spawning',
       pid: ++this.pidSeq,
       socketPath: `/tmp/fake/s${this.sockSeq++}.sock`,
@@ -148,6 +151,7 @@ class FakeSupervisor {
     if (!record) throw new Error('no such session')
     // Fresh child = new pid + socketPath (what SF5 must re-record).
     record.pid = ++this.pidSeq
+    record.generation = randomUUID()
     record.socketPath = `/tmp/fake/s${this.sockSeq++}.sock`
     record.status = 'spawning'
     record.cwd = config?.cwd ?? record.cwd
@@ -185,6 +189,10 @@ class FakeSupervisor {
 
   getSessionProcessId(sessionId: SessionId): number | undefined {
     return this.records.get(sessionId)?.pid
+  }
+
+  getSessionGeneration(sessionId: SessionId): string | undefined {
+    return this.records.get(sessionId)?.generation
   }
 
   getSessionSocketPath(sessionId: SessionId): string | undefined {
@@ -441,6 +449,71 @@ function emitMoveReadyContext(supervisor: FakeSupervisor, appSessionId: SessionI
     context: { mode: 'default', permissionClassifierEnabled: false },
   } as never })
 }
+
+test('workspace reservation rejects stale process authority and serializes manual move, restart, close and checkout', async () => {
+  const storageRoot = tempDir()
+  const managedStorage = new ManagedStorage({ appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership') })
+  const h = makeHost({ managedStorage, validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false } })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  const engine = randomUUID()
+  h.supervisor.emitReady(id, engine)
+  await settle(() => h.registry.findSession(id)?.engineSessionId === engine)
+  const operation = randomUUID()
+  expect((await h.host.reserveWorkspaceJump(id, operation, randomUUID())).ok).toBe(false)
+  expect((await h.host.reserveWorkspaceJump(id, operation, h.host.getSessionGeneration(id)!)).ok).toBe(true)
+  expect((await h.host.moveSession(id, h.cwd)).ok).toBe(false)
+  expect((await h.host.restartSession(id)).ok).toBe(false)
+  expect((await h.host.closeSession(id)).ok).toBe(false)
+  expect(h.host.beginBranchSwitch()).toBe(false)
+  expect(h.supervisor.records.has(id)).toBe(true)
+  h.host.releaseWorkspaceJump(id, randomUUID())
+  expect(h.host.isWorkspaceJumpReserved(id)).toBe(true)
+  h.host.releaseWorkspaceJump(id, operation)
+  expect(h.host.beginBranchSwitch()).toBe(true)
+  h.host.endBranchSwitch()
+  expect((await h.host.closeSession(id)).ok).toBe(true)
+})
+
+test('agent move reports durable destination when relocation commits but its result pipe fails', async () => {
+  const storageRoot = tempDir()
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  try {
+    const managedStorage = new ManagedStorage({ appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership') })
+    const h = makeHost({ managedStorage,
+      validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+      relocate: async request => {
+        writeSessionRelocation({ version: 1, ...request, original: request.source,
+          phase: 'complete', backup: join(storageRoot, 'private-backup'), movedAt: Date.now() })
+        throw new Error('result pipe failed after atomic publication')
+      },
+    })
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error(created.error.message)
+    const id = created.value.appSessionId
+    const engine = randomUUID()
+    writeTranscript(h.storageDir, engine)
+    h.supervisor.emitReady(id, engine)
+    emitMoveReadyContext(h.supervisor, id)
+    await settle(() => h.registry.findSession(id)?.engineSessionId === engine)
+    const operation = randomUUID()
+    expect((await h.host.reserveWorkspaceJump(id, operation, h.host.getSessionGeneration(id)!)).ok).toBe(true)
+    h.supervisor.onSend = (sessionId, message) => {
+      if ((message as { type?: string }).type === 'app.park') h.supervisor.emitPark(sessionId)
+    }
+    const moved = await h.host.moveWorkspaceJump(id, operation, h.cwd, () => true)
+    expect(moved.result.ok).toBe(false)
+    expect(moved.location).toBe('destination')
+    expect(moved.relocation?.phase).toBe('complete')
+    expect(h.registry.findSession(id)?.cwd).toBe(realpathSync(h.cwd))
+    expect(h.supervisor.spawnedIds).toHaveLength(1)
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
 
 test.each(['pending delivery', 'in-flight reservation'] as const)(
   'peer work arriving during park aborts relocation and recovery holds ready until history completes (%s)',
@@ -1229,6 +1302,7 @@ test('restarting a terminal tombstone cannot exceed the live-process cap', async
   for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
     h.supervisor.records.set(`live-restart-${i}`, {
       sessionId: `live-restart-${i}`,
+      generation: randomUUID(),
       status: 'ready',
       cwd: h.cwd,
       pid: i + 1,
@@ -1256,6 +1330,7 @@ test('createSession enforces the live-process bound (HC4 → session_limit)', as
   for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
     h.supervisor.records.set(`live-${i}`, {
       sessionId: `live-${i}`,
+      generation: randomUUID(),
       status: 'ready',
       pid: 1000 + i,
       socketPath: `/tmp/s${i}`,
@@ -1273,6 +1348,7 @@ test('HC4 admits only one concurrent create into the final live slot', async () 
   for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
     h.supervisor.records.set(`live-${i}`, {
       sessionId: `live-${i}`,
+      generation: randomUUID(),
       status: 'ready',
       cwd: h.cwd,
       pid: i + 1,
@@ -1301,6 +1377,7 @@ test('HC4: terminal tombstones do not consume the live-session cap', async () =>
   for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
     createHarness.supervisor.records.set(`live-${i}`, {
       sessionId: `live-${i}`,
+      generation: randomUUID(),
       status: 'ready',
       pid: 1000 + i,
       socketPath: `/tmp/s${i}`,
@@ -1309,6 +1386,7 @@ test('HC4: terminal tombstones do not consume the live-session cap', async () =>
   }
   createHarness.supervisor.records.set('dead-tombstone', {
     sessionId: 'dead-tombstone',
+    generation: randomUUID(),
     status: 'failed',
     pid: 2000,
     socketPath: '/tmp/dead.sock',
@@ -1322,6 +1400,7 @@ test('HC4: terminal tombstones do not consume the live-session cap', async () =>
   for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
     restoreHarness.supervisor.records.set(`live-${i}`, {
       sessionId: `live-${i}`,
+      generation: randomUUID(),
       status: 'ready',
       pid: 3000 + i,
       socketPath: `/tmp/restore-${i}`,
@@ -1338,6 +1417,7 @@ test('HC4: terminal tombstones do not consume the live-session cap', async () =>
   await restoreHarness.registry.markParked(appSessionId)
   restoreHarness.supervisor.records.set(appSessionId, {
     sessionId: appSessionId,
+    generation: randomUUID(),
     status: 'exited',
     pid: 4000,
     socketPath: '/tmp/parked.sock',
@@ -1365,6 +1445,7 @@ test('HC4: the live-process cap is independent of the registry row bound', async
   for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
     h.supervisor.records.set(`live-${i}`, {
       sessionId: `live-${i}`,
+      generation: randomUUID(),
       status: 'ready',
       pid: 1000 + i,
       socketPath: `/tmp/s${i}`,
@@ -1836,6 +1917,7 @@ test('a terminal tombstone whose registry row was reaped is not listed (no empty
   const h = makeHost()
   h.supervisor.records.set('tombstone-no-row', {
     sessionId: 'tombstone-no-row',
+    generation: randomUUID(),
     status: 'exited',
     pid: 999,
     socketPath: '/tmp/fake/tomb.sock',
