@@ -24,20 +24,24 @@ test('grouping preserves exact daily/model/tool totals and distinguishes reserve
     expect(usageCategory('x'.repeat(200) + 'a').id).not.toBe(usageCategory('x'.repeat(200) + 'b').id);
 });
 
-test('bounded model summaries retain current and historical Sol and Luna separately', async () => {
+test('bounded model summaries keep current models ahead of retired and older models', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
-    const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna'];
+    const current = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra'];
+    const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', ...current];
     summary.models = names.map((name, index) => ({ ...usageCategory(name), tokens: { ...emptyTokens(), fresh: index < 10 ? 1000 : 10 } }));
-    summary.tokens.fresh = 10_040;
-    summary.days[0]!.tokens.fresh = 10_040;
+    summary.tokens.fresh = 10_070;
+    summary.days[0]!.tokens.fresh = 10_070;
     summary.days[0]!.models = summary.models.map(model => ({ id: model.id, total: model.tokens.fresh }));
     const grouped = groupUsageSummary(summary);
-    for (const name of ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna']) {
+    for (const name of [...current, 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol']) {
         expect(grouped.models.find(model => model.label === name)?.tokens.fresh).toBe(10);
     }
-    expect(grouped.models.reduce((total, model) => total + model.tokens.fresh, 0)).toBe(10_040);
-    expect(grouped.days[0]!.models.reduce((total, model) => total + model.total, 0)).toBe(10_040);
+    expect(grouped.models.reduce((total, model) => total + model.tokens.fresh, 0)).toBe(10_070);
+    expect(grouped.days[0]!.models.reduce((total, model) => total + model.total, 0)).toBe(10_070);
+    const tight = groupUsageSummary(summary, 4, 0);
+    expect(tight.models.filter(model => model.kind === 'named').map(model => model.label).sort()).toEqual([...current].sort());
+    expect(tight.models.find(model => model.kind === 'other')?.tokens.fresh).toBe(10_030);
 });
 
 test('contributors are ranked and truncated with explicit omitted counts', () => {

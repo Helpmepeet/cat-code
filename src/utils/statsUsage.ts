@@ -1216,5 +1216,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 17, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 18, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

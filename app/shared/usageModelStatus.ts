@@ -7,3 +7,7 @@ export function isRetiredUsageModel(model: UsageCategory): boolean {
 export function isCurrentSolLunaUsageModel(model: UsageCategory): boolean {
     return model.kind === 'named' && /^gpt-6-(?:sol|luna)(?:-|$)/i.test(model.label);
 }
+
+export function isCurrentUsageModel(model: UsageCategory): boolean {
+    return model.kind === 'named' && /^gpt-(?:6-astra|6\.1-sol|6-luna|5\.6-terra)(?:-|$)/i.test(model.label);
+}

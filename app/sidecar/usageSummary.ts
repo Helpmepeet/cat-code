@@ -1,6 +1,6 @@
 import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
-import { isCurrentSolLunaUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
+import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
 export { usageCategory } from '../../src/utils/usageCategory.js';
 export const tokenTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const emptyTokens = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
@@ -40,9 +40,10 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     const models = [...summary.models].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id));
     const tools = [...summary.tools].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id));
     const namedModels = models.filter(m => m.kind === 'named');
-    const priorityModels = namedModels.filter(isCurrentSolLunaUsageModel);
+    const priorityModels = namedModels.filter(isCurrentUsageModel);
+    const legacySolLunaModels = namedModels.filter(isCurrentSolLunaUsageModel);
     const historicalModels = modelLimit >= 4 ? namedModels.filter(isRetiredUsageModel) : [];
-    const selectedModels = new Set([...new Map([...priorityModels, ...historicalModels, ...namedModels].map(model => [model.id, model])).values()].slice(0, modelLimit).map(model => model.id));
+    const selectedModels = new Set([...new Map([...priorityModels, ...legacySolLunaModels, ...historicalModels, ...namedModels].map(model => [model.id, model])).values()].slice(0, modelLimit).map(model => model.id));
     const selectedTools = new Set(tools.filter(t => t.kind === 'named').slice(0, toolLimit).map(t => t.id));
     const keepModel = (m: UsageCategory) => m.kind === 'unknown' || selectedModels.has(m.id);
     const keepTool = (t: UsageCategory) => t.kind === 'unknown' || selectedTools.has(t.id);
@@ -143,7 +144,14 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         { models: 8, tools: 10, contributors: 10, builds: 4, timeline: 3 },
         { models: 8, tools: 10, contributors: 5, builds: 2, timeline: 1 },
         { models: 8, tools: 10, contributors: 0, builds: 0, timeline: 0 },
+        { models: 8, tools: 4, contributors: 0, builds: 0, timeline: 0 },
+        { models: 8, tools: 2, contributors: 0, builds: 0, timeline: 0 },
+        { models: 8, tools: 1, contributors: 0, builds: 0, timeline: 0 },
+        { models: 8, tools: 0, contributors: 0, builds: 0, timeline: 0 },
         { models: 4, tools: 4, contributors: 0, builds: 0, timeline: 0 },
+        { models: 4, tools: 2, contributors: 0, builds: 0, timeline: 0 },
+        { models: 4, tools: 1, contributors: 0, builds: 0, timeline: 0 },
+        { models: 4, tools: 0, contributors: 0, builds: 0, timeline: 0 },
         { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 },
     ] as const;
     for (const tier of tiers) {

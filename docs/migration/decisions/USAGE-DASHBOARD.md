@@ -413,3 +413,13 @@ second request-key map in memory. A day with attributed token deltas but no new
 request remains recorded in Tokens mode. A fully read day with no main-session
 record has zero parallel activity; partial coverage without a recorded minute
 remains unavailable. The index's retained transcript projection is unchanged.
+
+### Model breakdown envelope correction, 2026-09-30
+
+Counting version 18 invalidates saved grouped snapshots from version 17 so the
+existing `index-v10.sqlite` can rebuild them from its redacted records. The
+index projection, aggregate definitions, and 256 KiB worker cap are unchanged.
+When detail exceeds that cap, grouping now reduces tool names before dropping
+named models. The four current models, GPT-6 Astra, GPT-6.1 Sol, GPT-6 Luna,
+and GPT-5.6 Terra, receive priority in the bounded model list. Other retains
+exact omitted totals when even the tighter model list cannot fit.

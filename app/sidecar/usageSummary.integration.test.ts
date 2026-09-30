@@ -68,6 +68,32 @@ test('multi-year history fits the snapshot limit through truthful detail fallbac
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('multi-year model usage stays named when tool detail exceeds the record budget', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-model-budget-'));
+    try {
+        const path = join(dir, 'history.jsonl');
+        const names = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'];
+        const rows = [];
+        for (let day = 0; day < 1100; day++) for (let model = 0; model < names.length; model++) {
+            const id = `${day}-${model}`;
+            rows.push({ type: 'assistant', sessionId: 's', uuid: id, timestamp: new Date(Date.UTC(2023, 8, 10 + day, 10)).toISOString(), message: { id, model: names[model], usage: { input_tokens: 16_000, output_tokens: 4_000 }, content: [{ type: 'tool_use', id, name: `Tool-${model}` }] } });
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
+        fitUsageDashboardSnapshot(snapshot);
+        const result = { type: 'usage' as const, version: 1 as const, snapshot };
+        expect(parseUsageCollectionResult(result)).toEqual(result);
+        expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        for (const range of ['7d', '30d', 'all'] as const) {
+            expect(snapshot.ranges[range].models.filter(model => model.kind === 'named').map(model => model.label).sort()).toEqual([...names].sort());
+            expect(snapshot.ranges[range].models.some(model => model.kind === 'other')).toBe(false);
+        }
+        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named')).toHaveLength(1);
+        expect(snapshot.ranges.all.tools.find(tool => tool.kind === 'other')?.label).toBe('Other');
+        expect(snapshot.ranges.all.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(snapshot.ranges.all.requests);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('multi-metric contributor leaders fit through the existing detail fallback tiers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-contributors-'));
     try {
@@ -162,9 +188,9 @@ test('many daily build markers fall back to exact omitted totals within the enve
         expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
         expect(snapshot.ranges.all.requests).toBe(18_000);
         for (const day of snapshot.ranges.all.days) {
-            expect(day.tools).toHaveLength(1);
-            expect(day.tools[0]!.builds!.items).toEqual([]);
-            expect(day.tools[0]!.builds!.omitted).toMatchObject({ count: 10, requests: 100 });
+            expect(day.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(100);
+            expect(day.tools.every(tool => tool.builds?.items.length === 0)).toBe(true);
+            expect(day.tools.reduce((sum, tool) => sum + (tool.builds?.omitted?.requests ?? 0), 0)).toBe(100);
         }
     } finally { await rm(dir, { recursive: true, force: true }); }
 });

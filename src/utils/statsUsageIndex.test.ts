@@ -126,7 +126,7 @@ test('v14 comparison snapshots rebuild from indexed records without rereading so
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(17);
+    expect(rebuilt.countingVersion).toBe(18);
     expect(rebuilt.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
@@ -363,12 +363,12 @@ test('legacy two-window cache rebuilds All from indexed records without reading 
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
 
-test('v8 grouped snapshots rebuild named categories from indexed records without rereading sources', async () => {
+test('v17 grouped snapshots rebuild named categories from indexed records without rereading sources', async () => {
     const { path, file } = await fixture();
     await writeFile(file, JSON.stringify(row('a', cutoff, 18)));
     const original = await collectIndexedUsage([file], cutoff, opts(path));
     const legacy = structuredClone(original) as any;
-    legacy.countingVersion = 8;
+    legacy.countingVersion = 17;
     legacy.ranges = {
         '7d': groupUsageSummary(legacy.ranges['7d'], 0, 0, 0),
         '30d': groupUsageSummary(legacy.ranges['30d'], 0, 0, 0),
@@ -383,7 +383,7 @@ test('v8 grouped snapshots rebuild named categories from indexed records without
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(17);
+    expect(rebuilt.countingVersion).toBe(18);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);
