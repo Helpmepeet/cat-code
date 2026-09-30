@@ -5,6 +5,7 @@ import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { initialUsageDashboardState, reduceUsageDashboard } from './usageDashboardState.js';
 import { usageGraphColors } from './usageGraphState.js';
 import { UsageCacheSummary, UsageModelDonut } from './UsageOverviewDetails.js';
+import { UsageParallelSessions, UsageReasoningEffort } from './UsageWorkPatterns.js';
 
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 function populated() {
@@ -40,9 +41,20 @@ test('auto-mode attempts count as activity even without token records', () => {
 
 test('populated page presents five metrics and the agreed panels without duplicate disclosures', () => {
     const html = renderToStaticMarkup(<UsagePage state={{ snapshot: populated(), status: 'ready' }}/>);
-    for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Daily activity', 'Auto mode', 'View as table']) expect(html).toContain(label);
+    for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Daily activity', 'Parallel sessions', 'Reasoning effort', 'Auto mode', 'View as table']) expect(html).toContain(label);
     expect(html.match(/class="usage-values"/g)).toHaveLength(1);
     for (const removed of ['Execution timing', 'Tool activity', 'Partial history', 'Token volume by hour', 'Activity by hour']) expect(html).not.toContain(removed);
+});
+
+test('new panels distinguish unavailable history from recorded aggregates', () => {
+    const summary = structuredClone(snapshot.ranges['7d']);
+    const props = { summary, selected: '', onSelect: () => {} };
+    expect(renderToStaticMarkup(<UsageParallelSessions {...props}/>)).toContain('Not recorded in this period.');
+    expect(renderToStaticMarkup(<UsageReasoningEffort {...props}/>)).toContain('Not recorded in this period.');
+    summary.parallel = { state: 'available', minutes: [30, 10, 0], peak: 2 };
+    summary.effort = { state: 'available', requests: { low: 0, medium: 0, high: 3, xhigh: 0, max: 0 }, tokens: { low: 0, medium: 0, high: 120, xhigh: 0, max: 0 }, unattributedRequests: 0 };
+    expect(renderToStaticMarkup(<UsageParallelSessions {...props}/>)).toContain('25%');
+    expect(renderToStaticMarkup(<UsageReasoningEffort {...props}/>)).toContain('High');
 });
 
 test('partial coverage retains visible counts and qualifies the recorded cache rate', () => {

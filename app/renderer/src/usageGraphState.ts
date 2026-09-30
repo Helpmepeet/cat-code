@@ -17,7 +17,7 @@ export function usageHourLabel(slot: UsageHour): string {
 export function usageChartTicks(start: string, endExclusive: string, width: number): string[] {
     // Date keys are local calendar days. UTC is used only for stable civil-day arithmetic.
     const first = Date.parse(`${start}T00:00:00.000Z`), days = Math.max(1, Math.round((Date.parse(`${endExclusive}T00:00:00.000Z`) - first) / 86400000));
-    const count = Math.max(2, Math.floor(width / (days > 365 ? 90 : 64)));
+    const count = Math.min(6, Math.max(2, Math.floor(width / (days > 365 ? 90 : 64))));
     const interval = Math.max(1, Math.ceil(days / count));
     const dates: string[] = [];
     for (let day = 0; day < days; day += interval) dates.push(new Date(first + day * 86400000).toISOString().slice(0, 10));

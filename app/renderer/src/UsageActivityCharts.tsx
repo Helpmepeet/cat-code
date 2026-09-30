@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import type { UsageDay } from '../../shared/usageDashboard.js';
 import { usageChartDate } from './usageGraphState.js';
 import { useUsageChartWidth, usageNumber, usageTotal } from './usageDashboardState.js';
 import type { UsageDailyActivity } from './usageTrendState.js';
+import { UsageChartHoverContext } from './usageChartHover.js';
 
 const DAY_MS = 86400000, BOX = 28, MAX_BOX = 44, GAP = 4;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -22,6 +23,7 @@ export function UsageHeatmap({ activity, range, onSelect, selected = '', selecte
 }) {
     const [active, setActive] = useState(activity.lastDate);
     const [hovered, setHovered] = useState<string | null>(null);
+    const linkedHover = useContext(UsageChartHoverContext);
     const chart = useUsageChartWidth();
     const width = chart.width;
     // Columns are Monday-first weeks ending with the latest day. Short history shows only its own
@@ -66,13 +68,13 @@ export function UsageHeatmap({ activity, range, onSelect, selected = '', selecte
     };
     return <>
         <div className="usage-chart-toolbar"><span>{period}</span><div className="usage-heat-key" aria-label="Intensity from fewer to more tokens"><span>Less</span>{[0, 1, 2, 3, 4, 5].map(level => <i key={level} className={`usage-heat-${level}`}/>)}<span>More</span></div></div>
-        <svg ref={chart.ref} className="usage-heatmap usage-heatmap-week" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Tokens by local day" onMouseLeave={() => setHovered(null)}>
+        <svg ref={chart.ref} className="usage-heatmap usage-heatmap-week" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Tokens by local day" onMouseLeave={() => { setHovered(null); linkedHover.setDate(''); }}>
             {cells.map(cell => {
                 const count = tokens(cell);
                 const level = count === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(count / max * 5)));
                 const enabled = selectable(cell.date);
                 return <g key={cell.date} data-date={cell.date} className="usage-heat-cell" role="button" tabIndex={tabbable === cell.date ? 0 : -1} aria-pressed={isSelectedDay(cell.date)} aria-disabled={!enabled || undefined} aria-label={`${cell.date}: ${usageNumber(count)} tokens`}
-                    onMouseEnter={() => setHovered(cell.date)} onFocus={() => { setActive(cell.date); setHovered(cell.date); }} onBlur={() => setHovered(null)}
+                    onMouseEnter={() => { setHovered(cell.date); linkedHover.setDate(cell.date); }} onFocus={() => { setActive(cell.date); setHovered(cell.date); linkedHover.setDate(cell.date); }} onBlur={() => { setHovered(null); linkedHover.setDate(''); }}
                     onClick={() => { if (enabled) onSelect(cell.date); }} onKeyDown={event => {
                         const step = { ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1 }[event.key];
                         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (enabled) onSelect(cell.date); }

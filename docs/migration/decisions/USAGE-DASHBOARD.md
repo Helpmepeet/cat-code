@@ -376,3 +376,33 @@ error, cancellation, incomplete attempt, or review request cannot dilute the
 decision comparison. Other Auto mode views retain their existing outcome data.
 If the selected period has attempts but none with these two outcomes, the flow
 states that there are no allowed or blocked decisions.
+
+## Parallel sessions and reasoning effort amendment, 2026-09-30
+
+Analytics adds two bounded, redacted aggregates. Parallel sessions classifies
+each elapsed minute containing a main-session user or assistant record by the
+number of distinct main sessions with a record in that minute: one, two, or
+three or more. A minute counts once even when records or sessions overlap.
+Subagent files and sidechains are excluded. Active hours divide the count of
+those distinct minutes by 60; they are calendar activity bins, not measured
+execution time or a sum of session durations. Each recent local day also keeps
+sparse ten-minute maximum-concurrency slots for the selected-day strip. No
+session identifiers, paths, or record text enter these fields.
+
+Reasoning effort counts distinct recorded assistant API responses with valid
+usage, attributed to the latest preceding `run_facts` or `codex_send_path`
+effort marker in that transcript file. Replayed cumulative usage contributes
+only the new token delta. The only accepted levels are low, medium, high, xhigh,
+and max. Unknown/default or absent levels are excluded from the shares and
+counted as unattributed requests. The panel is Unavailable without any known
+level and Partial when known and unattributed requests coexist. Permission mode
+is not projected. The index retains only the closed effort level or null from
+those diagnostic records, never their other fields.
+
+Counting version 16 invalidates older snapshots. `index-v10.sqlite` rebuilds
+the changed projection from transcripts while preserving `index-v9.sqlite` as
+recoverable derived state. The existing 256 KiB worker limit and strict
+snapshot validation still apply. The selected-day detail remains directly
+under Tokens, consistent with the September 24 review; the two new panels sit
+after Daily activity in Usage. The operator omitted the mockup's permission
+mode bars.

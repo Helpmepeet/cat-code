@@ -19,8 +19,7 @@ test('B1-B3/V1: populated three-range grouping retains exact totals and fits the
         await writeFile(path, rows.map(r => JSON.stringify(r)).join('\n'));
         const snapshot = await collectRetainedUsage([path], '2026-09-13T10:30:00.000Z');
         const raw = structuredClone(snapshot.ranges);
-        for (const range of ['7d', '30d', 'all'] as const)
-            snapshot.ranges[range] = groupUsageSummary(raw[range]);
+        fitUsageDashboardSnapshot(snapshot);
         const result = { type: 'usage' as const, version: 1 as const, snapshot };
         expect(parseUsageCollectionResult(result)).toEqual(result);
         const line = JSON.stringify(result), size = Buffer.byteLength(line);

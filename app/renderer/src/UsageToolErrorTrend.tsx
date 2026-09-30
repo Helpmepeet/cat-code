@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import type { UsageRangeSummary, UsageToolBuildObservation } from '../../shared/usageDashboard.js';
 import { usageAxisCeiling, usageChartDate, usageChartTicks, usageGraphColors } from './usageGraphState.js';
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js';
 import { usageBucketLabel, usageDatePosition } from './usageTrendState.js';
 import { defaultUsageToolSelection, usageToolErrorSegments, usageToolErrorSeries, type UsageToolErrorPoint } from './usageToolErrorTrendState.js';
 import './usageToolErrorTrend.css';
+import { UsageChartHoverContext } from './usageChartHover.js';
 
 type BuildMarker = { date: string; sha: string; dirty: boolean; firstObservedAt: string; requests: number; results: number; errors: number; tools: { id: string; label: string; build: UsageToolBuildObservation }[] };
 type Active = { kind: 'point'; toolId: string; point: UsageToolErrorPoint } | { kind: 'build'; marker: BuildMarker } | null;
@@ -41,6 +42,7 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
     const colors = usageGraphColors(summary.tools.map(tool => tool.id));
     const chart = useUsageChartWidth();
     const [active, setActive] = useState<Active>(null);
+    const linkedHover = useContext(UsageChartHoverContext);
     const [pinned, setPinned] = useState<Active>(null);
     const [showBuilds, setShowBuilds] = useState(true);
     const [focusedMarker, setFocusedMarker] = useState(0);
@@ -73,10 +75,11 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
             {series.map(item => <g key={item.id} className="usage-tool-error-series">
                 {usageToolErrorSegments(item.points).map((segment, index) => <path key={index} d={segment.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.date)},${y(point.rate!)}`).join(' ')} className="usage-tool-error-line" stroke={colors[item.id]}/>)}
                 {item.points.filter(point => point.rate !== null).map(point => <g key={point.date} role="button" tabIndex={0} aria-pressed={pinned?.kind === 'point' && pinned.toolId === item.id && pinned.point.date === point.date} aria-label={`${item.label}: ${usagePercent(point.rate!)} on ${usageBucketLabel(summary, point.date)}. ${countLabel(point.errors, 'error')} / ${countLabel(point.results, 'matched result')}.`}
-                    onMouseEnter={() => setActive({ kind: 'point', toolId: item.id, point })} onMouseLeave={() => setActive(null)} onFocus={() => setActive({ kind: 'point', toolId: item.id, point })} onBlur={() => setActive(null)} onClick={() => pin({ kind: 'point', toolId: item.id, point })} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pin({ kind: 'point', toolId: item.id, point }); } else if (event.key === 'Escape') { setActive(null); setPinned(null); } }}>
+                    onMouseEnter={() => { setActive({ kind: 'point', toolId: item.id, point }); linkedHover.setDate(point.date); }} onMouseLeave={() => { setActive(null); linkedHover.setDate(''); }} onFocus={() => { setActive({ kind: 'point', toolId: item.id, point }); linkedHover.setDate(point.date); }} onBlur={() => { setActive(null); linkedHover.setDate(''); }} onClick={() => pin({ kind: 'point', toolId: item.id, point })} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pin({ kind: 'point', toolId: item.id, point }); } else if (event.key === 'Escape') { setActive(null); setPinned(null); } }}>
                     <title>{`${item.label}: ${usagePercent(point.rate!)} on ${usageBucketLabel(summary, point.date)}`}</title><circle cx={x(point.date)} cy={y(point.rate!)} r={active?.kind === 'point' && active.toolId === item.id && active.point.date === point.date ? 4.5 : 3} stroke={colors[item.id]}/>
                 </g>)}
             </g>)}
+            {linkedHover.date && summary.days.some(day => day.date === linkedHover.date) && <line x1={x(linkedHover.date)} x2={x(linkedHover.date)} y1={top} y2={bottom} className="usage-linked-crosshair" aria-hidden="true"/>}
             {showBuilds && buildMarkers.map((marker, index) => { const lane = buildMarkerLanes.get(marker)!; const toolSummary = marker.tools.map(tool => `${tool.label}: ${countLabel(tool.build.errors, 'error')} / ${countLabel(tool.build.results, 'matched result')}`).join(', '); return <g key={`${marker.date}:${marker.sha}:${marker.dirty}`} className="usage-tool-build-marker" tabIndex={index === markerFocus ? 0 : -1} aria-label={`Observed Cat Code build ${marker.sha.slice(0, 8)}${marker.dirty ? ' dirty' : ''}, first selected tool request recorded ${observedTime(marker.firstObservedAt)}, ${toolSummary}`}
                 role="button" aria-pressed={pinned?.kind === 'build' && markerKey(pinned.marker) === markerKey(marker)} transform={`translate(${x(marker.date) + Math.floor(lane / 4) * 5},${top + 4 + lane % 4 * 6})`} onMouseEnter={() => setActive({ kind: 'build', marker })} onMouseLeave={() => setActive(null)} onFocus={() => { setFocusedMarker(index); setActive({ kind: 'build', marker }); }} onBlur={() => setActive(null)} onClick={() => pin({ kind: 'build', marker })} onKeyDown={event => {
                     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const next = Math.max(0, Math.min(buildMarkers.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))); setFocusedMarker(next); event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('.usage-tool-build-marker')[next]?.focus(); }

@@ -10,6 +10,25 @@ afterEach(async () => { for (const path of roots.splice(0))
 const asOf = '2026-09-13T12:00:00.000Z';
 const msg = (timestamp: string, id: string, input: number, tool = 't1', sessionId = 's') => ({ type: 'assistant', sessionId, uuid: id + timestamp, timestamp, message: { id, model: 'model', usage: { input_tokens: input, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, content: [{ type: 'tool_use', id: tool, name: 'Bash' }] } });
 async function file(rows: unknown[]) { const dir = await mkdtemp(join(tmpdir(), 'usage-count-')); roots.push(dir); const path = join(dir, 's.jsonl'); await writeFile(path, rows.map(r => JSON.stringify(r)).join('\n')); return path; }
+test('parallel minutes count distinct main sessions once and effort follows recorded request settings', async () => {
+    const a = await file([
+        { type: 'system', subtype: 'run_facts', sessionId: 'a', uuid: 'facts-a', timestamp: '2026-09-12T09:59:59.000Z', effort: 'high' },
+        msg('2026-09-12T10:00:20.000Z', 'request-a', 10, 'tool-a', 'a'),
+        msg('2026-09-12T10:00:50.000Z', 'request-a', 10, 'tool-a', 'a'),
+        { type: 'user', sessionId: 'a', uuid: 'user-a', timestamp: '2026-09-12T10:01:10.000Z' },
+    ]);
+    const b = join(roots[0]!, 'b.jsonl');
+    await writeFile(b, [
+        { type: 'system', subtype: 'run_facts', sessionId: 'b', uuid: 'facts-b', timestamp: '2026-09-12T09:59:59.000Z', effort: 'low' },
+        msg('2026-09-12T10:00:40.000Z', 'request-b', 20, 'tool-b', 'b'),
+    ].map(row => JSON.stringify(row)).join('\n'));
+    const summary = (await collectRetainedUsage([a, b], asOf)).ranges['7d'];
+    expect(summary.parallel).toEqual({ state: 'available', minutes: [1, 1, 0], peak: 2 });
+    expect(summary.effort.requests).toMatchObject({ low: 1, high: 1 });
+    expect(summary.effort.tokens).toMatchObject({ low: 29, high: 19 });
+    expect(summary.effort.state).toBe('available');
+    expect(summary.days.find(day => day.date === '2026-09-12')?.parallel.tenMinutePeaks).toEqual([[60, 2]]);
+});
 test('T2/T4/I3: seed before window, exclude future before identity and cumulative credit', async () => {
     const path = await file([msg('2026-09-06T23:59:59.000Z', 'a', 10), msg('2026-09-07T00:00:00.000Z', 'a', 20), msg('2026-09-13T13:00:00.000Z', 'b', 900, 'future'), msg(asOf, 'b', 5, 'future'), msg('invalid', 'c', 1000)]);
     const s = await collectRetainedUsage([path], asOf);

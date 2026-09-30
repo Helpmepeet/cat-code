@@ -157,6 +157,23 @@ export type UsageHour = {
     /** Exclusive token totals supplied only for the seven-day window. */
     tokens?: number;
 };
+export const USAGE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type UsageEffortLevel = typeof USAGE_EFFORT_LEVELS[number];
+export type UsageEffortCounts = Record<UsageEffortLevel, number>;
+export type UsageEffort = {
+    state: 'available' | 'partial' | 'unavailable';
+    requests: UsageEffortCounts;
+    tokens: UsageEffortCounts;
+    unattributedRequests: number;
+};
+export type UsageParallel = {
+    state: 'available' | 'unavailable';
+    /** Distinct elapsed minutes with 1, 2, or at least 3 main sessions. */
+    minutes: [number, number, number];
+    peak: number;
+    /** Sparse ten-minute slot and maximum concurrent main sessions. */
+    tenMinutePeaks?: [number, number][];
+};
 export type UsageDay = {
     /** Actual elapsed local-hour intervals for this day (23, 24, or 25 during DST). */
     hours?: UsageHour[];
@@ -176,6 +193,8 @@ export type UsageDay = {
     records: number;
     requests: number;
     contributors: UsageDayContributors;
+    parallel: UsageParallel;
+    effort: UsageEffort;
 };
 /** Bounded accounting for the equal local calendar interval immediately before a recent range. */
 export type UsagePreviousPeriod = {
@@ -215,6 +234,8 @@ export type UsageRangeSummary = {
     timing: UsageTimingSummary;
     /** Prospective auto-mode observations; unavailable never means zero attempts. */
     autoMode: import('./usageAutoMode.js').AutoModeUsageSummary;
+    parallel: UsageParallel;
+    effort: UsageEffort;
     detail: {
         state: 'full' | 'grouped' | 'summary-only';
         omittedModels: number;
@@ -239,7 +260,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 2;
     metricVersion: 1;
-    countingVersion: 15;
+    countingVersion: 16;
     pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';

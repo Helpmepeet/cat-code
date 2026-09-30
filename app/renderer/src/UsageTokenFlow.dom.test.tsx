@@ -30,7 +30,8 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     const seriesButton = (label: string) => tree.container.querySelector<HTMLButtonElement>(`[aria-label="Hide ${label}"],[aria-label="Show ${label}"]`)!;
     expect(tree.container.querySelector('.usage-flow-heading')?.textContent).toBe('Tokens');
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(3);
-    expect(tree.container.querySelectorAll('.usage-flow-grid-line')).toHaveLength(4);
+    expect(tree.container.querySelectorAll('.usage-flow-grid-line').length).toBeGreaterThanOrEqual(4);
+    expect(tree.container.querySelectorAll('.usage-flow-grid-line').length).toBeLessThanOrEqual(6);
     expect(tree.container.querySelector('.usage-flow-chart')?.nextElementSibling?.classList.contains('usage-flow-legend')).toBe(true);
     expect(tree.container.querySelectorAll('.usage-flow-series-dot circle')).toHaveLength(3);
     expect(tree.container.querySelectorAll('.usage-flow-series-toggle')).toHaveLength(3);

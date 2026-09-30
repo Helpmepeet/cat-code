@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AutoModeUsageOutcome, AutoModeUsagePopulation } from '../../shared/usageAutoMode.js';
-import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
+import { USAGE_EFFORT_LEVELS, type UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { autoModeCommandRatePoints } from './usageAutoModeState.js';
 import { usageCacheReadRate, usageCacheWrites, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
 import { usageBucketLabel, type UsageDailyActivity } from './usageTrendState.js';
@@ -27,12 +27,13 @@ function outcomeCells(population: AutoModeUsagePopulation) {
     return outcomes.map(({ key }) => <Cell key={key} value={population.outcomes[key]} available={population.coverage.state !== 'unavailable'}/>);
 }
 
-export function UsageValuesTable({ summary, activity, timezone, partial }: { summary: UsageRangeSummary; activity: UsageDailyActivity; timezone: string; partial: boolean }) {
+export function UsageValuesTable({ summary, activity, timezone, partial, selectedDate = '' }: { summary: UsageRangeSummary; activity: UsageDailyActivity; timezone: string; partial: boolean; selectedDate?: string }) {
     const [open, setOpen] = useState(false);
     const toolDays = summary.days.flatMap(day => day.tools.map(tool => ({ date: day.date, tool })));
     const builds = summary.days.flatMap(day => day.tools.flatMap(tool => (tool.builds?.items ?? []).map(build => ({ date: day.date, tool, build }))));
     const commandRates = autoModeCommandRatePoints(summary.autoMode);
     const recordedDays = [...activity.days.values()].filter(day => usageTotal(day.tokens) > 0 || day.requests > 0).sort((a, b) => a.date.localeCompare(b.date));
+    const selected = summary.days.find(day => day.date === selectedDate);
     return <details className="usage-values" onToggle={event => setOpen(event.currentTarget.open)}>
         <summary>View as table</summary>
         {open && <div className="usage-values-sections">
@@ -59,6 +60,14 @@ export function UsageValuesTable({ summary, activity, timezone, partial }: { sum
                 <caption>Recorded activity by local day</caption><thead><tr><th scope="col">Day</th><th scope="col">Tokens</th><th scope="col">Tool requests</th></tr></thead>
                 <tbody>{recordedDays.map(day => <tr key={day.date}><th scope="row">{day.date}</th><Cell value={usageTotal(day.tokens)}/><Cell value={day.requests}/></tr>)}</tbody>
             </table></div></section>}
+            <section><h2>Parallel sessions</h2><div className="usage-table-scroll"><table>
+                <caption>Distinct active minutes by local period and main sessions running</caption><thead><tr><th scope="col">Period</th><th scope="col">1 session</th><th scope="col">2 sessions</th><th scope="col">3+ sessions</th><th scope="col">Peak sessions</th></tr></thead>
+                <tbody>{summary.days.map(day => <tr key={day.date}><th scope="row">{usageBucketLabel(summary, day.date)}</th>{day.parallel.minutes.map((value, index) => <Cell key={index} value={value} available={day.parallel.state === 'available'}/>) }<Cell value={day.parallel.peak} available={day.parallel.state === 'available'}/></tr>)}</tbody>
+            </table></div>{selected?.parallel.tenMinutePeaks && <div className="usage-table-scroll"><table><caption>Sessions running by elapsed ten-minute slot for {selected.date}</caption><thead><tr><th scope="col">Slot</th><th scope="col">Peak sessions</th></tr></thead><tbody>{selected.parallel.tenMinutePeaks.map(([slot, peak]) => <tr key={slot}><th scope="row">{slot}</th><Cell value={peak}/></tr>)}</tbody></table></div>}</section>
+            <section><h2>Reasoning effort</h2><div className="usage-table-scroll"><table>
+                <caption>Recorded requests and tokens by effort and local period</caption><thead><tr><th scope="col">Period</th>{USAGE_EFFORT_LEVELS.map(level => <th scope="col" key={`${level}-requests`}>{level} requests</th>)}{USAGE_EFFORT_LEVELS.map(level => <th scope="col" key={`${level}-tokens`}>{level} tokens</th>)}<th scope="col">Unattributed requests</th></tr></thead>
+                <tbody>{summary.days.map(day => <tr key={day.date}><th scope="row">{usageBucketLabel(summary, day.date)}</th>{USAGE_EFFORT_LEVELS.map(level => <Cell key={`${level}-requests`} value={day.effort.requests[level]} available={day.effort.state !== 'unavailable'}/>)}{USAGE_EFFORT_LEVELS.map(level => <Cell key={`${level}-tokens`} value={day.effort.tokens[level]} available={day.effort.state !== 'unavailable'}/>)}<Cell value={day.effort.unattributedRequests}/></tr>)}</tbody>
+            </table></div></section>
             <section><h2>Auto mode</h2><div className="usage-table-scroll"><table>
                 <caption>Raw decision outcomes by local period</caption><thead><tr><th scope="col">Period</th><th scope="col">Coverage</th>{outcomes.map(outcome => <th scope="col" key={outcome.key}>{outcome.label}</th>)}</tr></thead>
                 <tbody>{summary.autoMode.buckets.map(bucket => <tr key={bucket.date}><th scope="row">{usageBucketLabel(summary, bucket.date)}</th><td>{bucket.allTools.coverage.state}</td>{outcomeCells(bucket.allTools)}</tr>)}</tbody>

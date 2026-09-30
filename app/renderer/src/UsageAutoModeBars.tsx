@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import type { AutoModeUsageSummary } from '../../shared/usageAutoMode.js';
-import { usageAxisCeiling } from './usageGraphState.js';
-import { usageNumber, usagePercent } from './usageDashboardState.js';
+import { usageAxisCeiling, usageChartDate } from './usageGraphState.js';
+import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js';
 import { autoModeAttempts, autoModeDisplaySeries, sortedAutoModeCategories } from './usageAutoModeState.js';
 import './usageAutoModeBars.css';
+import { UsageChartHoverContext } from './usageChartHover.js';
 
 function outcomeSeries(summary: AutoModeUsageSummary) {
     return autoModeDisplaySeries(summary);
@@ -15,14 +16,17 @@ function percent(count: number, total: number): string {
 
 function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
     const [activePoint, setActivePoint] = useState<string | null>(null);
+    const linkedHover = useContext(UsageChartHoverContext);
+    const chart = useUsageChartWidth();
     const series = outcomeSeries(summary);
     const buckets = [...summary.buckets].sort((left, right) => left.date.localeCompare(right.date));
-    const plotWidth = Math.max(640, buckets.length * 64), height = 220, left = 42, right = 12, top = 18, bottom = 32;
+    const plotWidth = chart.width, height = 220, left = 42, right = 12, top = 18, bottom = 32;
     const innerWidth = plotWidth - left - right, innerHeight = height - top - bottom;
     const totals = buckets.map(bucket => series.reduce((total, item) => total + item.points.find(point => point.date === bucket.date)!.count, 0));
     const allAttempts = autoModeAttempts(summary);
     const maximum = usageAxisCeiling(Math.max(0, ...totals));
-    const barWidth = Math.max(10, Math.min(38, innerWidth / Math.max(1, buckets.length) * .68));
+    const barWidth = Math.max(2, Math.min(38, innerWidth / Math.max(1, buckets.length) * .68));
+    const labelEvery = Math.max(1, Math.ceil(buckets.length / (chart.width < 450 ? 4 : 6)));
     const first = Date.parse(`${buckets[0]?.date ?? '1970-01-01'}T00:00:00.000Z`);
     const last = Date.parse(`${buckets.at(-1)?.date ?? '1970-01-01'}T00:00:00.000Z`);
     const x = (index: number) => last === first ? left + innerWidth / 2 : left + innerWidth * (Date.parse(`${buckets[index]!.date}T00:00:00.000Z`) - first) / (last - first);
@@ -37,7 +41,7 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
             autoModeAttempts(summary) === 0 ? <p className="usage-auto-bars-empty">No decisions</p> :
                 <>
                     <div className="usage-auto-bars-scroll">
-                        <svg className="usage-auto-decision-chart" viewBox={`0 0 ${plotWidth} ${height}`} role="img" aria-label="Automatic permission decisions by period">
+                        <svg ref={chart.ref} className="usage-auto-decision-chart" viewBox={`0 0 ${plotWidth} ${height}`} role="img" aria-label="Automatic permission decisions by period" onMouseLeave={() => linkedHover.setDate('')}>
                             {[0, .5, 1].map(fraction => {
                                 const value = maximum * fraction;
                                 return <g key={fraction}>
@@ -55,7 +59,7 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
                                         cumulative += count;
                                         const pointLabel = `${bucket.date}: ${item.label}, ${usageNumber(count)}, ${allAttempts ? usagePercent(count / allAttempts * 100) : '0%'} of ${usageNumber(allAttempts)} attempts`;
                                         const pointId = `${bucket.date}:${item.group}`;
-                                        return count > 0 && <rect key={item.group} className={`usage-auto-outcome-${item.group}`} x={x(index) - barWidth / 2} y={y(start + count)} width={barWidth} height={count / maximum * innerHeight} tabIndex={0} role="button" aria-label={pointLabel} onFocus={() => setActivePoint(pointId)} onClick={() => setActivePoint(current => current === pointId ? null : pointId)} onKeyDown={event => {
+                                        return count > 0 && <rect key={item.group} className={`usage-auto-outcome-${item.group}`} x={x(index) - barWidth / 2} y={y(start + count)} width={barWidth} height={count / maximum * innerHeight} tabIndex={0} role="button" aria-label={pointLabel} onMouseEnter={() => linkedHover.setDate(bucket.date)} onFocus={() => { setActivePoint(pointId); linkedHover.setDate(bucket.date); }} onBlur={() => linkedHover.setDate('')} onClick={() => setActivePoint(current => current === pointId ? null : pointId)} onKeyDown={event => {
                                             if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setActivePoint(pointId); }
                                             else if (event.key === 'Escape') setActivePoint(null);
                                         }}>
@@ -63,9 +67,10 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
                                         </rect>;
                                     })}
                                     {total === 0 && bucket.allTools.coverage.state === 'complete' && <line className="usage-auto-zero-bar" x1={x(index) - barWidth / 2} x2={x(index) + barWidth / 2} y1={y(0)} y2={y(0)}/>}
-                                    <text className="usage-axis" x={x(index)} y={height - 9} textAnchor="middle">{bucket.date}</text>
+                                    {(index % labelEvery === 0 || index === buckets.length - 1) && <text className="usage-axis" x={x(index)} y={height - 9} textAnchor={index === 0 ? 'start' : index === buckets.length - 1 ? 'end' : 'middle'}>{usageChartDate(bucket.date)}</text>}
                                 </g>;
                             })}
+                            {linkedHover.date && buckets.some(bucket => bucket.date === linkedHover.date) && <line x1={x(buckets.findIndex(bucket => bucket.date === linkedHover.date))} x2={x(buckets.findIndex(bucket => bucket.date === linkedHover.date))} y1={top} y2={height - bottom} className="usage-linked-crosshair" aria-hidden="true"/>}
                         </svg>
                     </div>
                     {activePoint && (() => {

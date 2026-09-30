@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import type { AutoModeUsagePopulation, AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
 import { usageAxisCeiling, usageChartDate, usageChartTicks } from './usageGraphState.js'
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js'
@@ -9,6 +9,7 @@ import {
   type AutoModeRatePoint,
 } from './usageAutoModeState.js'
 import './usageAutoModeBlockRate.css'
+import { UsageChartHoverContext } from './usageChartHover.js'
 
 type UsageAutoModeBlockRateProps = {
   summary: AutoModeUsageSummary
@@ -58,6 +59,7 @@ export function UsageAutoModeBlockRate({
   bucketDays = 1,
 }: UsageAutoModeBlockRateProps) {
   const chart = useUsageChartWidth()
+  const linkedHover = useContext(UsageChartHoverContext)
   const points = autoModeCommandRatePoints(summary)
   const confirmedSegments = confirmedRateSegments(points, bucketDays)
   const numericPoints = points.filter((point): point is AutoModeRatePoint & { rate: number } => point.rate !== null)
@@ -106,7 +108,7 @@ export function UsageAutoModeBlockRate({
           viewBox={`0 0 ${chart.width} ${height}`}
           role="group"
           aria-label={`Command block rate, 0 to ${ceiling}%`}
-          onMouseLeave={() => setActiveDate(null)}
+          onMouseLeave={() => { setActiveDate(null); linkedHover.setDate('') }}
         >
           {[0, 1 / 3, 2 / 3, 1].map(fraction => {
             const value = ceiling * fraction
@@ -120,6 +122,7 @@ export function UsageAutoModeBlockRate({
             d={segment.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(point.date)},${y(point.rate!)}`).join(' ')}
             className="usage-auto-mode-block-rate-line"
           />)}
+          {linkedHover.date && points.some(point => point.date === linkedHover.date) && <line x1={x(linkedHover.date)} x2={x(linkedHover.date)} y1={top} y2={bottom} className="usage-linked-crosshair" aria-hidden="true"/>}
           {numericPoints.map((point, index) => {
             const population = summary.buckets.find(bucket => bucket.date === point.date)?.commands ?? summary.commands
             const label = `${bucketLabel(point.date, bucketDays, endDateExclusive)}: ${pointDetails(point, population)}. ${pointStateLabel(point)}.`
@@ -129,9 +132,9 @@ export function UsageAutoModeBlockRate({
               role="button"
               tabIndex={activeDate === point.date || activeDate === null && index === 0 ? 0 : -1}
               aria-label={label}
-              onMouseEnter={() => setActiveDate(point.date)}
-              onFocus={() => setActiveDate(point.date)}
-              onBlur={() => setActiveDate(null)}
+              onMouseEnter={() => { setActiveDate(point.date); linkedHover.setDate(point.date) }}
+              onFocus={() => { setActiveDate(point.date); linkedHover.setDate(point.date) }}
+              onBlur={() => { setActiveDate(null); linkedHover.setDate('') }}
               onClick={() => setActiveDate(point.date)}
               onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') {

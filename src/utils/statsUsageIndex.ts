@@ -11,7 +11,7 @@ import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js'
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v9.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v10.sqlite');
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
@@ -58,6 +58,13 @@ function projectRecord(v: unknown): unknown {
             tool_execution_start: ['schema_version', 'tool_use_id'],
             tool_execution_end: ['schema_version', 'tool_use_id', 'outcome', 'duration_ms'],
         };
+        if (v.subtype === 'run_facts' || v.subtype === 'codex_send_path') {
+            row.subtype = v.subtype;
+            // Closed aggregate dimension only. No diagnostic payload, prompt,
+            // account prefix, path, or permission rule enters the index.
+            row.effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(v.effort as string) ? v.effort : null;
+            return row;
+        }
         const allowed = fields[v.subtype];
         if (allowed) {
             row.subtype = v.subtype;

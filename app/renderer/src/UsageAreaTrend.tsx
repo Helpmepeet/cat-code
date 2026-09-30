@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { usageBucketLabel, usageDatePosition, usageTrendPoints } from './usageTrendState.js';
 import { usageAxisCeiling, usageChartDate, usageChartTicks } from './usageGraphState.js';
-import { useUsageChartWidth, usageCompact, usageNumber, usagePercent } from './usageDashboardState.js';
+import { useUsageChartWidth, usageCacheReadRate, usageCompact, usageNumber, usagePercent } from './usageDashboardState.js';
+import { UsageChartHoverContext } from './usageChartHover.js';
 
 export function UsageAreaTrend({ summary, metric, partial, selected = '', onSelect = () => {} }: {
     summary: UsageRangeSummary;
@@ -12,11 +13,15 @@ export function UsageAreaTrend({ summary, metric, partial, selected = '', onSele
     onSelect?: (date: string) => void;
 }) {
     const [hovered, setHovered] = useState<string | null>(null);
+    const linkedHover = useContext(UsageChartHoverContext);
     const chart = useUsageChartWidth();
     const cache = metric === 'cache';
     const percent = cache || metric === 'errors';
     const points = usageTrendPoints(summary, metric);
     const valid = points.filter(point => point.value !== null);
+    const cacheAverage = cache ? usageCacheReadRate(summary.tokens) : null;
+    const cacheLow = cache && valid.length ? valid.reduce((lowest, point) => point.value! < lowest.value! ? point : lowest) : null;
+    const markedDip = cacheLow && cacheAverage !== null && cacheAverage - cacheLow.value! > 5 ? cacheLow : null;
     const peak = Math.max(1, ...valid.map(point => point.value!));
     const min = 0;
     const max = cache ? 100 : usageAxisCeiling(peak * 1.15);
@@ -35,11 +40,12 @@ export function UsageAreaTrend({ summary, metric, partial, selected = '', onSele
     if (segment.length) segments.push(segment);
     const shown = hovered ?? selected;
     const detail = points.find(point => point.date === shown && point.value !== null);
+    const markerDate = linkedHover.date && points.some(point => point.date === linkedHover.date) ? linkedHover.date : detail?.date;
     const exactValue = (value: number) => cache ? `${usagePercent(value)} cache read rate${partial ? ', partial history' : ''}` : metric === 'errors' ? `${usagePercent(value)} errors / matched results` : `${usageNumber(value)} tool requests`;
     const label = cache ? 'Cache read rate' : metric === 'errors' ? 'Tool error rate' : 'Tool requests';
     return <div className={`usage-area-trend usage-area-${metric}`}>
-        <svg ref={chart.ref} className="usage-chart usage-trend-chart" viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${label}, ${min} to ${max}${percent ? ' percent' : ''}${cache && partial ? ', partial history' : ''}`} onMouseLeave={() => setHovered(null)}>
-            {detail && <line x1={x(detail.date)} x2={x(detail.date)} y1={top} y2={bottom} className="usage-trend-marker"/>}
+        <svg ref={chart.ref} className="usage-chart usage-trend-chart" viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${label}, ${min} to ${max}${percent ? ' percent' : ''}${cache && partial ? ', partial history' : ''}`} onMouseLeave={() => { setHovered(null); linkedHover.setDate(''); }}>
+            {markerDate && <line x1={x(markerDate)} x2={x(markerDate)} y1={top} y2={bottom} className="usage-linked-crosshair"/>}
             {(cache ? [0, 0.5, 1] : [0, 1 / 3, 2 / 3, 1]).map(fraction => {
                 const value = min + (max - min) * fraction;
                 return <g key={fraction}><text x={left - 7} y={y(value) + 4} textAnchor="end" className="usage-axis">{percent ? `${Number(value.toFixed(1))}%` : usageCompact(value)}</text><line x1={left} x2={right} y1={y(value)} y2={y(value)} className="usage-trend-grid"/></g>;
@@ -48,8 +54,9 @@ export function UsageAreaTrend({ summary, metric, partial, selected = '', onSele
                 const path = items.map((point, index) => `${index ? 'L' : 'M'}${x(point.date)},${y(point.value!)}`).join(' ');
                 return <g key={i}>{metric !== 'errors' && <path d={`${path} L${x(items.at(-1)!.date)},${bottom} L${x(items[0]!.date)},${bottom} Z`} className="usage-area-fill"/>}<path d={path} className="usage-area-line"/></g>;
             })}
+            {markedDip && <g className="usage-cache-dip" aria-hidden="true"><circle cx={x(markedDip.date)} cy={y(markedDip.value!)} r="4.5"/><text x={x(markedDip.date) + 9} y={y(markedDip.value!) + 4} className="usage-chart-annotation">{usageChartDate(markedDip.date)} · {usagePercent(markedDip.value!)}</text></g>}
             {valid.map((point, i) => <g key={point.date} tabIndex={shown === point.date || !valid.some(p => p.date === shown) && i === 0 ? 0 : -1} role="button" aria-pressed={selected === point.date} aria-label={`${usageBucketLabel(summary, point.date)}: ${exactValue(point.value!)}`}
-                onMouseEnter={() => setHovered(point.date)} onFocus={() => setHovered(point.date)} onBlur={() => setHovered(null)}
+                onMouseEnter={() => { setHovered(point.date); linkedHover.setDate(point.date); }} onFocus={() => { setHovered(point.date); linkedHover.setDate(point.date); }} onBlur={() => { setHovered(null); linkedHover.setDate(''); }}
                 onClick={() => { onSelect(point.date); }} onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(point.date); }
                     else if (event.key === 'Escape') setHovered(null);
