@@ -44,6 +44,7 @@ import Markdown from 'react-markdown'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
+import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import {
@@ -359,6 +360,9 @@ export const TranscriptView = memo(function TranscriptView({
   toolCardExpansionStore = null,
   columnRef,
   welcomeExiting = false,
+  contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
+  onMoveBack,
+  moveBackDisabled = false,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
@@ -419,12 +423,15 @@ export const TranscriptView = memo(function TranscriptView({
   /** Send-message motion (behavior 3): keep `WelcomeScreen` mounted, exiting,
    * for one more render after `state` already has this session's first row. */
   welcomeExiting?: boolean
+  contextTransitions?: SessionDescriptor['contextTransitions']
+  onMoveBack?: () => void
+  moveBackDisabled?: boolean
 }) {
+  const projectedRows = selectNestedTranscriptRows(state, activeSessionId, revealHidden)
   return (
     <TranscriptRowsView
-      rows={withoutTodoRows(
-        selectNestedTranscriptRows(state, activeSessionId, revealHidden),
-      )}
+      rows={withoutTodoRows(projectedRows)}
+      boundaryRows={projectedRows}
       compacting={compacting ?? false}
       turnLive={turnLive}
       accounts={accounts ?? null}
@@ -447,12 +454,57 @@ export const TranscriptView = memo(function TranscriptView({
       toolCardExpansionStore={toolCardExpansionStore}
       columnRef={columnRef}
       welcomeExiting={welcomeExiting}
+      contextTransitions={contextTransitions}
+      onMoveBack={onMoveBack}
+      moveBackDisabled={moveBackDisabled}
     />
   )
 })
 
+function ContextTransitionRow({
+  transition,
+  onMoveBack,
+  moveBackDisabled,
+}: {
+  transition: ContextTransition
+  onMoveBack?: () => void
+  moveBackDisabled: boolean
+}) {
+  const project = transition.binding.kind === 'project'
+  return (
+    <div
+      className="chat-project-divider"
+      data-context-transition={transition.id}
+      data-row-key={`context-transition:${transition.id}`}
+    >
+      <span className="chat-project-divider-rule" />
+      <span className="chat-project-divider-center">
+        {project ? (
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9" />
+            <path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4" />
+          </svg>
+        ) : null}
+        <span className="chat-project-divider-label">{project ? basename(transition.cwd) : 'Chat'}</span>
+        {onMoveBack ? (
+          <button
+            type="button"
+            className="chat-project-divider-back"
+            aria-label="Move back"
+            title="Move back"
+            disabled={moveBackDisabled}
+            onClick={onMoveBack}
+          ><ActionRewindIcon /></button>
+        ) : null}
+      </span>
+      <span className="chat-project-divider-rule" />
+    </div>
+  )
+}
+
 export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
+  boundaryRows = rows,
   compacting = false,
   turnLive = false,
   leases = null,
@@ -476,8 +528,13 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   toolCardExpansionStore = null,
   columnRef,
   welcomeExiting = false,
+  contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
+  onMoveBack,
+  moveBackDisabled = false,
 }: {
   rows: NestedTranscriptRow[]
+  /** Pre-display row order, including tool rows hidden by the Todo panel. */
+  boundaryRows?: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
   compacting?: boolean
   turnLive?: boolean
@@ -504,6 +561,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   toolCardExpansionStore?: ToolCardExpansionStore | null
   columnRef?: Ref<HTMLDivElement>
   welcomeExiting?: boolean
+  contextTransitions?: SessionDescriptor['contextTransitions']
+  onMoveBack?: () => void
+  moveBackDisabled?: boolean
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -565,6 +625,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
+  const { entries, narration } = useMemo(
+    () => layoutWithContextTransitions(rows, boundaryRows, reasoningMode, contextTransitions ?? []),
+    [rows, boundaryRows, reasoningMode, contextTransitions],
+  )
 
   let content: ReactNode
   if (rows.length === 0) {
@@ -604,10 +668,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // The tool-run fold runs LAST and outside the reasoning-mode switch: a run of
     // reads or searches is a tool-card concern, not a reasoning-display
     // preference, so it must survive `blocks` mode too.
-    const items: readonly TranscriptLayoutItem[] = groupToolRuns(
-      groupDisplayItems(groupAgentDelegates(rows), reasoningMode),
-    )
-    const narration = narrationRowIds(items)
     // Intentional: cached/restoring transcripts render without a divider or pulse.
     // The operator rejected the startup pink hairline + dot (2026-07-29).
     content = (
@@ -642,7 +702,19 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6 transcript-col-slide"
         data-card-style={cardStyle}
       >
-        {items.map(item => {
+        {entries.map(entry => {
+          if (entry.kind === 'transition') {
+            const transition = entry.transition
+            const isCurrentProject = transition.id === contextTransitions.at(-1)?.id &&
+              transition.binding.kind === 'project' && transition.cwd === cwd
+            return <ContextTransitionRow
+              key={`context-transition:${transition.id}`}
+              transition={transition}
+              onMoveBack={isCurrentProject ? onMoveBack : undefined}
+              moveBackDisabled={moveBackDisabled}
+            />
+          }
+          const item = entry.item
           // The wrapper publishes the row's identity to the pane's scroll memory
           // (`transcriptScrollMemory.ts`): the reading position is remembered as
           // a row rather than a place in the list, so recovering earlier
@@ -861,6 +933,68 @@ function displayItemFirstRowId(item: TranscriptLayoutItem): string {
     case 'tool-run': return item.members[0].id
     case 'reasoning-run': return item.id.slice('reasoning-run:'.length)
   }
+}
+
+type ContextTransition = NonNullable<SessionDescriptor['contextTransitions']>[number]
+const EMPTY_CONTEXT_TRANSITIONS: ContextTransition[] = []
+type TranscriptLaneEntry =
+  | { kind: 'item'; item: TranscriptLayoutItem }
+  | { kind: 'transition'; transition: ContextTransition }
+
+/** A move belongs between producer frames, before display-only row grouping. */
+function layoutWithContextTransitions(
+  rows: readonly NestedTranscriptRow[],
+  boundaryRows: readonly NestedTranscriptRow[],
+  mode: ReasoningLayoutMode,
+  transitions: readonly ContextTransition[],
+): { entries: TranscriptLaneEntry[]; narration: Set<string> } {
+  if (transitions.length === 0) {
+    const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(rows), mode))
+    return {
+      entries: items.map(item => ({ kind: 'item', item })),
+      narration: new Set(narrationRowIds(items)),
+    }
+  }
+  const visibleIndexById = new Map(rows.map((row, index) => [row.id, index]))
+  const lastRowByFrame = new Map<string, number>()
+  let precedingVisibleRow = -1
+  for (const row of boundaryRows) {
+    precedingVisibleRow = visibleIndexById.get(row.id) ?? precedingVisibleRow
+    lastRowByFrame.set(row.frameId, precedingVisibleRow)
+  }
+  const atRow = new Map<number, ContextTransition[]>()
+  for (const transition of transitions) {
+    const index = transition.afterFrameId === null
+      ? -1
+      : lastRowByFrame.get(transition.afterFrameId)
+    // A bounded replay may omit the anchor. Showing its divider at the tail
+    // would falsely place old project work after the new messages.
+    if (index === undefined) continue
+    const existing = atRow.get(index)
+    if (existing) existing.push(transition)
+    else atRow.set(index, [transition])
+  }
+
+  const entries: TranscriptLaneEntry[] = []
+  const narration = new Set<string>()
+  let chunk: NestedTranscriptRow[] = []
+  const flush = () => {
+    if (chunk.length === 0) return
+    const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(chunk), mode))
+    for (const id of narrationRowIds(items)) narration.add(id)
+    for (const item of items) entries.push({ kind: 'item', item })
+    chunk = []
+  }
+  const mark = (index: number) => {
+    const matching = atRow.get(index)
+    if (!matching) return
+    flush()
+    for (const transition of matching) entries.push({ kind: 'transition', transition })
+  }
+  mark(-1)
+  rows.forEach((row, index) => { chunk.push(row); mark(index) })
+  flush()
+  return { entries, narration }
 }
 
 /**
@@ -5408,6 +5542,8 @@ function BubbleCopyChip({
 
 function hasUnfencedIndentation(content: string): boolean {
   let fence: { marker: string; length: number } | null = null
+  let hasIndentation = false
+  let hasMarkdownStructure = false
   for (const line of content.split(/\r\n|\r|\n/)) {
     const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)
     if (marker) {
@@ -5424,9 +5560,24 @@ function hasUnfencedIndentation(content: string): boolean {
         continue
       }
     }
-    if (fence === null && /^[ \t]+(?=\S)/.test(line)) return true
+    if (fence !== null) continue
+    const indentation = /^[ \t]*/.exec(line)?.[0] ?? ''
+    const structuralPrefix = /^ {0,3}(?:[-+*]\s|\d+[.)]\s|>|#{1,6}\s)/.test(line)
+    const proseLine = indentation.length === 0
+    const linkLine = indentation.length <= 3 && !indentation.includes('\t') &&
+      /\[[^\]]+\]\([^)]+\)/.test(line) &&
+      !/^\s*(?:const|let|var)?\s*[\w$]+\s*=/.test(line)
+    const formattedProse = proseLine && /(?:\*\*|__|`[^`]+`|~~|^\s*\|.*\|\s*$)/.test(line)
+    if (structuralPrefix || linkLine || formattedProse || /^\s*\|?\s*:?-{3,}:?\s*\|/.test(line)) {
+      hasMarkdownStructure = true
+    }
+    if (/^[ \t]+(?=\S)/.test(line)) {
+      hasIndentation = true
+    }
   }
-  return false
+  // Preserve wholly indented prose/code literally, while allowing the Markdown
+  // parser to lay out messages that use indentation for nested lists or links.
+  return hasIndentation && !hasMarkdownStructure
 }
 
 /**

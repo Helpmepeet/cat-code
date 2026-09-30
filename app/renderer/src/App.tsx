@@ -10,6 +10,7 @@ import {
   type FormEvent,
 } from 'react'
 import { getBridge } from './bridge.js'
+import { requestSessionMove } from './sessionMoveAction.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import {
@@ -3527,6 +3528,7 @@ export function App() {
                 preview={panelTranscript.preview}
                 onMessageAction={
                   !panelTranscript.preview &&
+                  descriptor?.moving !== true &&
                   connectionHasEngine(sessionConnection.status)
                     ? handleMessageAction
                     : undefined
@@ -4203,6 +4205,15 @@ export function App() {
                           targetId,
                           targetRow.peerWakeBlocked !== true,
                         )
+                      else if (kind === 'move-to-project' || kind === 'move-back') {
+                        void (async () => {
+                          try {
+                            const result = await requestSessionMove(getBridge(), targetId, kind)
+                            if (result === null) return
+                            if (!result.ok) toast(result.error.message, { tone: 'warn' })
+                          } catch { toast('Could not move this Chat.', { tone: 'warn' }) }
+                        })()
+                      }
                       else if (kind === 'open-chat-folder') {
                         void getBridge().openSessionFolder(targetId).then(result => {
                           if (!result.ok) toast(hostErrorMessage(result.error), { tone: 'warn' })

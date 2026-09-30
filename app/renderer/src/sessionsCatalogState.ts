@@ -139,6 +139,8 @@ export type MergedSessionRow = {
    * answer as false, and only a registry-backed row can carry it at all, so the
    * menu reads it as `=== true`.
    */
+  canMoveBack?: boolean
+  moving?: boolean
   peerWakeBlocked?: boolean
   /** A live registry row with a running process. */
   live: boolean
@@ -251,6 +253,8 @@ export function selectMergedSessionRows(
       displayLabel: resolveSessionLabel(title, descriptor.cwd, descriptor.binding),
       name: descriptor.name ?? null,
       peerWakeBlocked: descriptor.peerWakeBlocked === true,
+      canMoveBack: descriptor.canMoveBack === true,
+      moving: descriptor.moving === true,
       live: !descriptor.restorable && descriptor.status !== 'exited',
       restorable: descriptor.restorable,
       status: descriptor.status,

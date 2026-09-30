@@ -144,6 +144,26 @@ test('non-live row: Rename and Export render disabled with the live-engine reaso
   expect(html).toContain('live engine')
 })
 
+test('Move renders as an action for closed and empty Chats; busy moves show a reason without SOON', () => {
+  const binding = {
+    kind: 'managed' as const,
+    storageRootId: '00000000-0000-4000-8000-000000000001',
+    storageId: '00000000-0000-4000-8000-000000000002',
+  }
+  for (const state of [
+    { live: false, restorable: true, status: 'exited' as const },
+    { live: false, restorable: true, parked: true, status: 'disconnected' as const },
+    { live: true, sessionId: 'app-1', status: 'ready' as const },
+  ]) {
+    const html = render(false, row({ binding, ...state }))
+    expect(html).toMatch(/<button[^>]*>[^<]*<span[^>]*>.*Move to project…/s)
+    expect(html).not.toContain('>soon<')
+  }
+  const busy = render(false, row({ binding, moving: true }))
+  expect(busy).toContain('This Chat is moving.')
+  expect(busy).not.toContain('>soon<')
+})
+
 test('inactive row: Copy + Inspect are disabled with the open-first reason', () => {
   const html = render(false)
   expect(html).toContain('Open this session first')

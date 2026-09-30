@@ -252,6 +252,12 @@ async function runProductionHardeningSmoke(
       // Control plane (P3-3 — HC3 fixed per-method senders).
       'closeSession',
       'createSession',
+      'createManagedChat',
+      'moveSession',
+      'getSessionFolderState',
+      'recreateManagedChatFolder',
+      'openSessionFolder',
+      'copySessionFolderPath',
       'createSessionInWorkspace',
       'listWorkspaceBranches',
       'switchWorkspaceBranch',

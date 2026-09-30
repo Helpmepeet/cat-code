@@ -149,6 +149,8 @@ export type SpawnConfig = {
    * sidecar's ready frame then echoes this id as `engineSessionId`.
    */
   resumeEngineSessionId?: string
+  /** Reuse a zero-turn engine id without invoking conversation resume. */
+  freshEngineSessionId?: string
   /**
    * PEER-SESSIONS §2 / HOST-REQUEST-PLANE §5 — the peer identity and run
    * defaults for this session, carried as five additive env keys beside the cwd.
@@ -176,8 +178,16 @@ export type SpawnConfig = {
   /** The creating session's name — a LABEL for prompt text, not an address. */
   createdByName?: string
   /** Model and reasoning effort the created session starts on (PEER-SESSIONS R7). */
-  model?: string
+  model?: string | null
   effort?: string
+  /** Host-restored session mode; empty when no mode is supplied. */
+  permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'dontAsk' | 'auto'
+  /** Mode to return to when a relocated Plan session exits Plan. */
+  prePlanMode?: 'default' | 'acceptEdits' | 'dontAsk' | 'auto'
+  /** Selected Fast state from the session's live run controls. */
+  fastMode?: boolean
+  /** An explicit relocation selection outranks the older transcript model. */
+  preferSpawnModel?: boolean
   /** Host-validated session association, available before engine bootstrap. */
   binding?: SessionBinding
   /** Trusted main-owned conversation branch provenance. */
@@ -396,6 +406,7 @@ export class SidecarSupervisor {
         ...(config?.resumeEngineSessionId !== undefined
           ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
           : { CATCODE_SIDECAR_RESUME_SESSION_ID: '' }),
+        CATCODE_SIDECAR_FRESH_SESSION_ID: config?.freshEngineSessionId ?? '',
         // PEER-SESSIONS §2/§5 — same host-owned trust class as the cwd above.
         // Each key is written UNCONDITIONALLY, empty when the host had no value,
         // exactly as the resume id above is. The env spread at the top of this
@@ -410,6 +421,10 @@ export class SidecarSupervisor {
         CATCODE_SIDECAR_CREATED_BY_NAME: config?.createdByName ?? '',
         CATCODE_SIDECAR_MODEL: config?.model ?? '',
         CATCODE_SIDECAR_EFFORT: config?.effort ?? '',
+        CATCODE_SIDECAR_PERMISSION_MODE: config?.permissionMode ?? '',
+        CATCODE_SIDECAR_PRE_PLAN_MODE: config?.prePlanMode ?? '',
+        CATCODE_SIDECAR_FAST_MODE: config?.fastMode === undefined ? '' : config.fastMode ? '1' : '0',
+        CATCODE_SIDECAR_PREFER_SPAWN_MODEL: config?.preferSpawnModel === true ? '1' : '',
         CATCODE_SESSION_BINDING_JSON: JSON.stringify(config?.binding ?? { kind: 'project' }),
         CATCODE_SESSION_FORKED: config?.forked === true ? 'true' : 'false',
         CATCODE_SESSION_RECREATED_FOLDER: config?.recreatedFolderNotice === true ? 'true' : 'false',

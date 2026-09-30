@@ -91,6 +91,7 @@ function harness(
     createResult?: PeerRequestPlaneDeps['createSessionInWorkspace']
     restoreResult?: PeerRequestPlaneDeps['restoreSession']
     forwardFails?: Set<string>
+    moving?: Set<string>
   } = {},
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
@@ -108,6 +109,7 @@ function harness(
     isLive: id => live.has(id),
     isReady: id => (ready ?? live).has(id),
     canResume: id => options.unresumable?.has(id) !== true,
+    isMoving: id => options.moving?.has(id) === true,
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),
@@ -1245,8 +1247,13 @@ describe('peer.create', () => {
   })
 
   test('the creation prompt is delivered UNTAGGED after the new row readies', async () => {
+    const rows = [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
     const h = harness({
-      createResult: async () => ({ ok: true, value: { appSessionId: CORAL, name: 'Coral' } }),
+      rows,
+      createResult: async () => {
+        rows.push(row(CORAL, 'Coral', { createdBy: ALEX }))
+        return { ok: true, value: { appSessionId: CORAL, name: 'Coral' } }
+      },
     })
     const pending = h.plane.handleRequest(ALEX, request('peer.create', { prompt: 'do the thing' }))
     await Promise.resolve()
@@ -1852,6 +1859,68 @@ describe('M1 — existence and readiness are different questions', () => {
 })
 
 describe('redelivery, naming and reap', () => {
+  test('holds an unacked message while its sender moves and retries it when that move settles', async () => {
+    const moving = new Set<string>()
+    const h = harness({ moving })
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'keep me' }))
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+
+    moving.add(ALEX)
+    h.plane.onReady(BEAR)
+    expect(h.deliveries()).toHaveLength(1)
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+
+    moving.delete(ALEX)
+    h.plane.onMoveSettled(ALEX)
+    expect(h.deliveries()).toHaveLength(2)
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+  })
+
+  test('counts a recipient slot while its wake request is still in flight', async () => {
+    let finishRestore!: (value: { ok: true }) => void
+    const restore = new Promise<{ ok: true }>(resolve => { finishRestore = resolve })
+    const h = harness({
+      live: new Set([ALEX]),
+      ready: new Set([ALEX]),
+      restoreResult: () => restore,
+    })
+    const delivery = h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'wake reservation' }))
+    await settle()
+    expect(h.plane.pendingFor(BEAR)).toEqual([])
+    expect(h.plane.reservationsFor(BEAR)).toBe(1)
+
+    finishRestore({ ok: true })
+    h.live.add(BEAR)
+    h.plane.onReady(BEAR)
+    await delivery
+    expect(h.plane.reservationsFor(BEAR)).toBe(0)
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+  })
+
+  test('a wake begun in one project cannot deliver after the recipient moves', async () => {
+    const h = harness({ live: new Set([ALEX]), ready: new Set([ALEX]) })
+    const sending = h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'old project' }))
+    await settle()
+    h.rows[1]!.cwd = '/w/two'
+    h.live.add(BEAR)
+    h.plane.onReady(BEAR)
+    await sending
+    expect(h.deliveries()).toHaveLength(0)
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:delivery_failed' })
+  })
+
+  test('unconsumed delivery is not replayed into a moved recipient', async () => {
+    const h = harness()
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'old project' }))
+    expect(h.deliveries()).toHaveLength(1)
+    expect(h.plane.pendingFor(BEAR)).toHaveLength(1)
+    h.rows[1]!.cwd = '/w/two'
+    h.plane.onReady(BEAR)
+    expect(h.deliveries()).toHaveLength(1)
+    expect(h.plane.pendingFor(BEAR)).toHaveLength(0)
+    expect(h.logged.at(-1)?.outcome).toBe('refused:delivery_failed')
+  })
+
   test('only a hand-off that succeeded is charged to the delivery budget', async () => {
     const forwardFails = new Set<string>()
     const h = harness({ forwardFails })

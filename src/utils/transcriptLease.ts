@@ -1,3 +1,4 @@
+import { assertSessionNotMoving } from './sessionRelocationState.js'
 import { chmod, lstat, mkdir, open, unlink } from 'fs/promises'
 import { join } from 'path'
 import { registerCleanup } from './cleanupRegistry.js'
@@ -146,6 +147,7 @@ function registerLeaseCleanup(): void {
 
 export async function activateTranscriptLease(sessionId: string): Promise<void> {
   const operation = transition.then(async () => {
+    assertSessionNotMoving(sessionId)
     if (activeLease?.sessionId === sessionId) {
       try {
         activeLease.assertHealthy()
@@ -156,6 +158,7 @@ export async function activateTranscriptLease(sessionId: string): Promise<void> 
       }
     }
     const next = await acquireLease(sessionId)
+    try { assertSessionNotMoving(sessionId) } catch (error) { await releaseLease(next); throw error }
     const previous = activeLease
     // Pin the newly acquired guard before touching the old one. Session state
     // switches immediately after activation returns, so from this point forward
@@ -197,6 +200,7 @@ export async function withUnownedTranscriptLease<T>(
   }
   try {
     guard.assertHealthy()
+    assertSessionNotMoving(sessionId)
     const value = await operation()
     guard.assertHealthy()
     return { acquired: true, value }

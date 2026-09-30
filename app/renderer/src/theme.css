@@ -1974,3 +1974,57 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="monokai"] .hljs-link {
   color: light-dark(#4f7d0e, #a6e22e);
 }
+
+/* Manual Chat move. No estimated percentage: park, relocate and reconnect vary. */
+.chat-move-progress {
+  max-width: var(--transcript-width);
+  margin: 12px auto;
+  padding: 11px 18px;
+  border: 1px solid color-mix(in srgb, var(--tone-info) 35%, transparent);
+  border-radius: 12px;
+  color: var(--tone-info);
+  background: color-mix(in srgb, var(--tone-info) 10%, transparent);
+}
+.chat-project-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  margin: 12px 0;
+  color: var(--tone-info);
+  font-size: 12px;
+  font-weight: 600;
+}
+.chat-project-divider-rule {
+  height: 1px;
+  flex: 1;
+  background: color-mix(in srgb, var(--tone-info) 35%, transparent);
+}
+.chat-project-divider-center {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+.chat-project-divider-center > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.chat-project-divider-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-project-divider-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.chat-project-divider-back:hover, .chat-project-divider-back:focus-visible {
+  color: var(--text-primary);
+  background: var(--shell-hover);
+}
+.chat-project-divider-back:focus-visible { outline: 2px solid var(--tone-info); outline-offset: 2px; }
+.chat-project-divider-back:disabled { opacity: .45; cursor: default; }

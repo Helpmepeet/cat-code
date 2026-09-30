@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import { init } from '../../src/entrypoints/init.js'
 import { switchSession } from '../../src/bootstrap/state.js'
 import { asAgentId, asSessionId } from '../../src/types/ids.js'
@@ -37,16 +38,21 @@ import {
   writeAgentMetadata,
 } from '../../src/utils/sessionStorage.js'
 import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
+import { buildLargeToolResultMessage, persistToolResult } from '../../src/utils/toolResultStorage.js'
+import { createAttachmentMessage } from '../../src/utils/attachments.js'
 
 async function main(): Promise<void> {
   const sessionId = process.argv[2]
   const marker = process.argv[3] ?? 'p3-1-fixture-marker'
   const realisticTail = process.argv.includes('--realistic-tail')
   const compacted = process.argv.includes('--compacted')
+  const recentCompacted = process.argv.includes('--recent-compacted')
   const unresolvedToolTail = process.argv.includes('--unresolved-tool-tail')
   const subagentBranch = process.argv.includes('--subagent-branch')
   const interruptedQueued = process.argv.includes('--interrupted-queued')
   const recalledQueued = process.argv.includes('--recalled-queued')
+  const savedOutput = process.argv.includes('--saved-output')
+  const relocationSkills = process.argv.includes('--relocation-skills')
   if (!sessionId) {
     throw new Error('usage: mintTranscript.fixture.ts <sessionId> [marker]')
   }
@@ -86,29 +92,49 @@ async function main(): Promise<void> {
     }),
   ]
 
-  const user = createUserMessage({ content: `remember this nonce: ${marker}` })
+  let outputReference = ''
+  if (savedOutput) {
+    const result = await persistToolResult(`${marker}\n${'x'.repeat(60_000)}`, `output-${sessionId}`)
+    if ('error' in result) throw new Error(result.error)
+    outputReference = buildLargeToolResultMessage(result)
+    process.stdout.write(`MINTED_OUTPUT_PATH=${result.filepath}\n`)
+  }
+  const user = createUserMessage({
+    content: savedOutput
+      ? `remember this nonce: ${marker}\n${outputReference}`
+      : `remember this nonce: ${marker}`,
+  })
   const assistant = createAssistantMessage({
     content: `acknowledged the nonce ${marker}`,
   })
+  const skillAttachments = relocationSkills ? [
+    createAttachmentMessage({ type: 'invoked_skills', skills: [
+      { name: 'chat-skill', path: join(process.cwd(), '.cat-code', 'skills', 'chat-skill', 'SKILL.md'), content: 'CHAT_SKILL_MARKER' },
+      { name: 'global-skill', path: join(process.env.CLAUDE_CONFIG_DIR ?? '', 'skills', 'global-skill', 'SKILL.md'), content: 'GLOBAL_SKILL_MARKER' },
+    ] }),
+    createAttachmentMessage({ type: 'skill_listing', content: 'CHAT_SKILL_LISTING_MARKER', skillCount: 1, isInitial: true }),
+  ] : []
   if (compacted) {
-    user.timestamp = '2026-07-31T17:59:00.000Z'
-    assistant.timestamp = '2026-07-31T17:59:01.000Z'
+    const compactTime = recentCompacted ? Date.now() + 60_000 : Date.parse('2026-07-31T17:59:00.000Z')
+    user.timestamp = new Date(compactTime).toISOString()
+    assistant.timestamp = new Date(compactTime + 1_000).toISOString()
     const boundary = createCompactBoundaryMessage('manual', 316_672)
-    boundary.timestamp = '2026-07-31T18:00:16.000Z'
+    boundary.timestamp = new Date(compactTime + 76_000).toISOString()
     const summary = createUserMessage({
       content: 'compacted model seed summary',
       isCompactSummary: true,
     })
-    summary.timestamp = '2026-07-31T18:00:17.000Z'
+    summary.timestamp = new Date(compactTime + 77_000).toISOString()
     const command = createUserMessage({
       content: '<command-name>/compact</command-name>',
     })
-    command.timestamp = '2026-07-31T18:00:18.000Z'
+    command.timestamp = new Date(compactTime + 78_000).toISOString()
     const compactedMessages = [
       user,
       assistant,
       boundary,
       summary,
+      ...skillAttachments,
       command,
     ]
     if (unresolvedToolTail) {
@@ -132,7 +158,7 @@ async function main(): Promise<void> {
     // anchor onward with the seed itself (`mergeDisplayHistoryWithSeed`), so a
     // branch recorded after the anchor is dropped before restore ever sees it.
     await recordTranscript(
-      [...subagentBranchMessages, user, assistant],
+      [...subagentBranchMessages, user, ...skillAttachments, assistant],
     )
   }
   if (subagentBranch) {

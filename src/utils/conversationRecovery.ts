@@ -1,6 +1,7 @@
+import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
-import { relative } from 'path'
+import { basename, isAbsolute, relative } from 'path'
 import { getCwd } from 'src/utils/cwd.js'
 import { addInvokedSkill } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'
@@ -624,6 +625,9 @@ export async function loadConversationForResume(
   fullPath?: string
 } | null> {
   try {
+    const requestedId = sourceJsonlFile ? basename(sourceJsonlFile, '.jsonl')
+      : typeof source === 'string' ? source : source ? getSessionIdFromLog(source) : undefined
+    if (requestedId) assertSessionNotMoving(requestedId)
     let log: LogOption | null = null
     let messages: Message[] | null = null
     let sessionId: UUID | undefined
@@ -686,6 +690,7 @@ export async function loadConversationForResume(
       if (!sessionId) {
         sessionId = getSessionIdFromLog(log) as UUID
       }
+      if (sessionId) assertSessionNotMoving(sessionId)
       // Pass the original session ID to ensure the plan slug is associated with
       // the session we're resuming, not the temporary session ID before resume
       if (sessionId) {
@@ -702,6 +707,39 @@ export async function loadConversationForResume(
 
     // Restore skill state from invoked_skills attachments before deserialization.
     // This ensures skills survive multiple compaction cycles after resume.
+    if (sessionId) {
+      assertSessionNotMoving(sessionId)
+      const relocation = readSessionRelocation(sessionId)
+      if (relocation) {
+        if (getCwd() !== relocation.target.cwd) throw new Error('Open this conversation from its current folder')
+        const wasInside = (root: string, path: string): boolean => {
+          if (!isAbsolute(path)) return false
+          const rel = relative(root, path)
+          return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'))
+        }
+        const formerRoots = new Set([
+          relocation.original.cwd,
+          relocation.source.cwd,
+          ...(relocation.transitions ?? []).flatMap(transition => [transition.source.cwd, transition.target.cwd]),
+        ])
+        formerRoots.delete(relocation.target.cwd)
+        const belongsToFormerProject = (path: string): boolean => {
+          if (wasInside(relocation.target.cwd, path)) return false
+          return [...formerRoots].some(root => wasInside(root, path))
+        }
+        // Historical discussion stays; automatic skill reinjection must follow
+        // the destination. This also prevents old listing suppression after compaction.
+        messages = messages!.flatMap<Message>(message => {
+          if (message.type !== 'attachment') return [message]
+          const attachment = message.attachment as { type?: string; skills?: Array<{ name: string; path: string; content: string }> }
+          if (attachment.type === 'skill_listing') return []
+          if (attachment.type !== 'invoked_skills' || !Array.isArray(attachment.skills)) return [message]
+          return [{ ...message, attachment: { ...attachment,
+            skills: attachment.skills.filter(skill => !belongsToFormerProject(skill.path)),
+          } } as Message]
+        })
+      }
+    }
     restoreSkillStateFromMessages(messages!)
 
     const interruptedTurnPolicy = options?.interruptedTurn ?? 'consume'

@@ -27,6 +27,7 @@ const MODES = {
   'accounts-pool': () => import('./accountsPoolWorker.js'),
   'settings-inventory': () => import('./settingsInventoryWorker.js'),
   'settings-write': () => import('./settingsWriteWorker.js'),
+  relocation: () => import('./sessionRelocationWorker.js'),
   'usage-stats': () => import('./usageStatsWorker.js'),
   'debug-cleanup': () => import('./debugCleanupWorker.js'),
 } as const

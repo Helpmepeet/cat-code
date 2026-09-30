@@ -1,3 +1,4 @@
+import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 /**
  * The desktop session registry (D1 — `decisions/REGISTRY.md`).
  *
@@ -206,6 +207,8 @@ export type RegistrySession = {
    * pre-existing rows.
    */
   lastMessageSentAt: number | null
+  /** [D] First accepted user input; an interrupted first turn is not an empty Chat. */
+  hasAcceptedInput?: boolean
   /** [D] "clean" | "crashed" | "parked" (IDLE-PARK, in-memory only) | null (=live). */
   shutdown: ShutdownState
   /** [A] for the crash sweep only. */
@@ -532,6 +535,16 @@ export class SessionRegistry {
     // (1) read + validate — corrupt/unknown-version → move aside, start empty.
     this.doc = this.readOrRecover()
     this.persistedDoc = cloneDocument(this.doc)
+    for (const row of this.doc.sessions) {
+      if (!row.engineSessionId) continue
+      try {
+        const move = readSessionRelocation(row.engineSessionId)
+        if (move?.phase === 'complete' && move.appSessionId === row.appSessionId) {
+          row.cwd = move.target.cwd
+          row.binding = move.target.binding
+        }
+      } catch { /* Keep the row; resume reports an unreadable move record. */ }
+    }
     // (2) liveness sweep for rows with shutdown == null.
     this.sweepOrphans()
     // (3) reap over-bound + missing-transcript + null-engineSessionId-clean rows.
@@ -698,6 +711,14 @@ export class SessionRegistry {
 
   private transcriptMissing(row: RegistrySession): boolean {
     if (row.engineSessionId === null) return false
+    try {
+      const move = readSessionRelocation(row.engineSessionId)
+      if (move?.phase === 'moving' || (move?.phase === 'complete' && move.empty === true && row.hasAcceptedInput !== true && move.appSessionId === row.appSessionId)) return false
+    }
+    catch { return false }
+    // An engine may have allocated its id before the first message created a
+    // transcript. The managed ownership ledger keeps that empty Chat addressable.
+    if (row.binding.kind === 'managed' && row.hasAcceptedInput === false) return false
     const path = this.transcriptPathFor(row.cwd, row.engineSessionId)
     return !existsSync(path)
   }
@@ -921,6 +942,7 @@ export class SessionRegistry {
         // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
         // recency. Bumped only by `markMessageSent` on a real turn.
         lastMessageSentAt: null,
+        hasAcceptedInput: false,
         shutdown: null,
         enginePid: input.enginePid,
         socketPath: input.socketPath,
@@ -931,6 +953,15 @@ export class SessionRegistry {
     }
     await this.persist()
     return reaped
+  }
+
+  async updateLocation(appSessionId: string, cwd: string, binding: SessionBinding): Promise<void> {
+    const row = this.find(appSessionId)
+    if (!row) throw new Error('Conversation disappeared during move')
+    row.cwd = cwd
+    row.binding = binding
+    if (binding.kind === 'managed') { delete row.name; delete row.createdBy; delete row.createdByName }
+    await this.persist()
   }
 
   async updateCwd(appSessionId: string, cwd: string): Promise<void> {
@@ -1112,6 +1143,13 @@ export class SessionRegistry {
   async markMessageSent(appSessionId: string): Promise<void> {
     await this.mutate('markMessageSent', appSessionId, row => {
       row.lastMessageSentAt = Date.now()
+    })
+  }
+
+  async markInputAccepted(appSessionId: string): Promise<void> {
+    await this.mutate('markInputAccepted', appSessionId, row => {
+      if (row.hasAcceptedInput === true) return false
+      row.hasAcceptedInput = true
     })
   }
 
@@ -1456,6 +1494,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.createdAt === right.createdAt &&
     left.lastAttachedAt === right.lastAttachedAt &&
     left.lastMessageSentAt === right.lastMessageSentAt &&
+    left.hasAcceptedInput === right.hasAcceptedInput &&
     left.shutdown === right.shutdown &&
     left.enginePid === right.enginePid &&
     left.socketPath === right.socketPath &&
@@ -1522,6 +1561,11 @@ function mergeRegistryRow(
       latest.lastMessageSentAt,
       local.lastMessageSentAt,
     ),
+    ...(latest.hasAcceptedInput === true || local.hasAcceptedInput === true
+      ? { hasAcceptedInput: true }
+      : latest.hasAcceptedInput === false || local.hasAcceptedInput === false
+        ? { hasAcceptedInput: false }
+        : {}),
     shutdown: runtime.shutdown,
     ...(runtime.enginePid !== undefined ? { enginePid: runtime.enginePid } : {}),
     ...(runtime.socketPath !== undefined
@@ -1590,6 +1634,7 @@ function validateRow(candidate: unknown): RegistrySession | null {
     // CC-2: null default for pre-existing rows written before the field existed.
     lastMessageSentAt:
       typeof candidate.lastMessageSentAt === 'number' ? candidate.lastMessageSentAt : null,
+    ...(typeof candidate.hasAcceptedInput === 'boolean' ? { hasAcceptedInput: candidate.hasAcceptedInput } : {}),
     shutdown,
   }
   if (typeof candidate.title === 'string') row.title = candidate.title

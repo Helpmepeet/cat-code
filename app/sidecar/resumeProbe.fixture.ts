@@ -18,6 +18,12 @@ import { init } from '../../src/entrypoints/init.js'
 import { resumeEngineSession } from './sessionResume.js'
 import { projectUndeliveredPrompts } from './historyProjection.js'
 import { loadAgentDefinitionsForRuntime } from './sessionController.js'
+import { getInvokedSkills } from '../../src/bootstrap/state.js'
+import { getClaudeMds, getMemoryFiles } from '../../src/utils/claudemd.js'
+import { loadMessageLogs } from '../../src/utils/sessionStorage.js'
+import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
+import { enumerateSessionsCatalog } from './sessionsCatalogDomain.js'
+import { getSkillDirCommands } from '../../src/skills/loadSkillsDir.js'
 
 async function main(): Promise<void> {
   const engineSessionId = process.argv[2]
@@ -33,11 +39,22 @@ async function main(): Promise<void> {
     cwd,
     await loadAgentDefinitionsForRuntime(cwd),
   )
+  const historyRow = (await loadMessageLogs()).find(log => log.sessionId === engineSessionId)
 
   const payload = {
     engineSessionId: result.engineSessionId,
     count: result.messages.length,
     hasMarker: JSON.stringify(result.messages).includes(marker),
+    instructionContext: getClaudeMds(await getMemoryFiles()),
+    invokedSkillPaths: [...getInvokedSkills().values()].map(skill => skill.skillPath),
+    discoveredSkillNames: (await getSkillDirCommands(cwd)).map(command => command.name),
+    hasHistoricalSkillListing: result.messages.some(message =>
+      message.type === 'attachment' && typeof message.attachment === 'object' &&
+      message.attachment !== null && 'type' in message.attachment &&
+      message.attachment.type === 'skill_listing'),
+    historyCwd: historyRow?.projectPath ?? null,
+    historyBinding: historyRow?.sessionBinding?.kind ?? null,
+    ...(process.argv.includes('--catalog') ? { catalog: await enumerateSessionsCatalog() } : {}),
     hasCompactBoundary: result.messages.some(
       message => message.type === 'system' && message.subtype === 'compact_boundary',
     ),
@@ -55,6 +72,7 @@ async function main(): Promise<void> {
     if (process.stdout.write('')) resolve()
     else process.stdout.once('drain', () => resolve())
   })
+  await releaseActiveTranscriptLease()
   process.exit(0)
 }
 

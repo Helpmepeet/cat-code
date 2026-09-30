@@ -1,3 +1,4 @@
+import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID } from 'crypto'
@@ -3728,6 +3729,7 @@ function convertToLogOption(
 ): LogOption {
   const lastMessage = transcript.at(-1)!
   const firstMessage = transcript[0]!
+  const relocation = readSessionRelocation(firstMessage.sessionId)
 
   // Get the first user message for the prompt
   const firstPrompt = extractFirstPrompt(transcript)
@@ -3746,7 +3748,7 @@ function convertToLogOption(
     firstPrompt,
     messageCount: countVisibleMessages(transcript),
     forked: transcript.some(message => message.forkedFrom !== undefined),
-    sessionBinding: firstMessage.sessionBinding,
+    sessionBinding: relocation?.target.binding ?? firstMessage.sessionBinding,
     isSidechain: firstMessage.isSidechain,
     teamName: firstMessage.teamName,
     agentName: firstMessage.agentName,
@@ -3760,7 +3762,7 @@ function convertToLogOption(
     attributionSnapshots: attributionSnapshots,
     contentReplacements,
     gitBranch: lastMessage.gitBranch,
-    projectPath: firstMessage.cwd,
+    projectPath: relocation?.target.cwd ?? firstMessage.cwd,
   }
 }
 
@@ -4929,6 +4931,8 @@ export async function loadTranscriptFile(
   sourceTruncated: boolean
   activeConversationTip: ActiveConversationTipEntry | undefined
 }> {
+  const relocationId = basename(filePath, '.jsonl')
+  if (validateUuid(relocationId)) assertSessionNotMoving(relocationId)
   const messages = new Map<UUID, TranscriptMessage>()
   const summaries = new Map<UUID, string>()
   const customTitles = new Map<UUID, string>()
@@ -6508,11 +6512,14 @@ async function readLiteMetadata(
   // Works even when the first line is truncated (>64KB message).
   const isSidechain =
     head.includes('"isSidechain":true') || head.includes('"isSidechain": true')
-  const projectPath = extractJsonStringField(head, 'cwd')
+  const relocationId = basename(filePath, '.jsonl')
+  const relocation = validateUuid(relocationId) ? readSessionRelocation(relocationId) : null
+  if (relocation?.phase === 'moving') throw new Error('Conversation move is incomplete')
+  const projectPath = relocation?.target.cwd ?? extractJsonStringField(head, 'cwd')
   const entrypoint = extractJsonStringField(head, 'entrypoint')
   const teamName = extractJsonStringField(head, 'teamName')
   const agentSetting = extractJsonStringField(head, 'agentSetting')
-  const sessionBinding = extractSessionBinding(head)
+  const sessionBinding = relocation?.target.binding ?? extractSessionBinding(head)
 
   // Prefer the last-prompt tail entry — captured by extractFirstPrompt at
   // write time (filtered, authoritative) and shows what the user was most

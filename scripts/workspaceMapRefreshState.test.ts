@@ -246,6 +246,25 @@ describe('Git-backed workspace map refresh', () => {
     expect(git(options.repoRoot, 'diff', '--cached', '--name-only')).toBe(map)
   })
 
+  test('finish preserves staged map bytes that differ from the reviewed working file', () => {
+    const options = fixture()
+    const run = startRefresh(options).run!
+    append(options.repoRoot, map, '\nreviewed working change\n')
+    const checked = checkRefresh({ ...options, runId: run.runId })
+    const reviewedBytes = readFileSync(join(options.repoRoot, map), 'utf8')
+    append(options.repoRoot, map, '\nstaged work from another session\n')
+    git(options.repoRoot, 'add', '--', map)
+    writeFileSync(join(options.repoRoot, map), reviewedBytes)
+    const stagedBytes = git(options.repoRoot, 'show', `:${map}`)
+
+    expect(() => finishRefresh({ ...options, runId: run.runId,
+      reviewedMapHash: checked.mapHash, maps: checked.changedMaps,
+      summary: 'Reviewed the current routing map.', baselineReviewed: true,
+    })).toThrow(`staged map content differs from the reviewed working file: ${map}`)
+    expect(git(options.repoRoot, 'show', `:${map}`)).toBe(stagedBytes)
+    expect(git(options.repoRoot, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD')).toBe('')
+  })
+
   test('CLI supports the start/check/finish contract without an audit JSON', () => {
     const options = fixture()
     const helper = join(import.meta.dir, 'workspaceMapRefreshState.ts')

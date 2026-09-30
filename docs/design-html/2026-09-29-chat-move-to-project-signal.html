@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat to project move signal</title>
+<style>
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 100 1000; src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2'); }
+@font-face { font-family: 'DM Mono'; font-style: normal; font-weight: 400; src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2'); }
+
+/* ---------- chrome (page only, never the app) ---------- */
+html, body { margin: 0; background: #f2f2f2; }
+.x-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; padding: 18px 28px 14px; font: 500 10px/1.4 ui-monospace, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: #6f6f6f; }
+.x-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.x-name { margin-right: 8px; color: #9a9a9a; }
+.x-btn { font: inherit; letter-spacing: inherit; text-transform: inherit; color: #6f6f6f; background: none; border: 0; border-bottom: 1px solid transparent; padding: 3px 6px; cursor: pointer; }
+.x-btn[aria-pressed="true"] { color: #222; border-bottom-color: #222; }
+.x-sep { width: 1px; height: 12px; background: #cfcfcf; margin: 0 8px; }
+.x-stage { display: flex; gap: 36px; align-items: flex-start; padding: 6px 28px 40px; overflow-x: auto; }
+.x-col { display: flex; flex-direction: column; gap: 8px; flex: none; }
+.x-label { font: 500 9.5px/1.4 ui-monospace, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: #8a8a8a; }
+
+/* ---------- specimen tokens: theme.css dark appearance ---------- */
+.s-root {
+  --app-bg: #09090b; --shell-chrome: #070709; --surface-raised: #111113; --card: #141416;
+  --seam: rgba(255,255,255,.06); --line: rgba(255,255,255,.09);
+  --t-primary: #f4f4f5; --t-muted: #a1a1aa; --t-subtle: #98989f; --t-faint: #838389; --t-ghost: #75757b;
+  --accent: #f472b6; --accent-rgb: 244 114 182; --on-fill: #09090b;
+  --good: #4ade80; --peer: #818cf8;
+  /* --source-project: the settings "project" scope hue */
+  --project: #60a5fa; --project-rgb: 96 165 250;
+  --scrim: rgba(0,0,0,.6); --elev-modal: 0 30px 80px rgba(0,0,0,.6);
+  font-family: 'DM Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: var(--t-primary);
+}
+.s-root *, .s-root *::before, .s-root *::after { box-sizing: border-box; }
+:where(.s-root) button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: default; text-align: inherit; }
+:where(.s-root) :is(p, h2) { margin: 0; }
+
+/* sidebar (Sidebar.tsx) */
+.s-sidebar { width: 288px; height: 640px; background: var(--shell-chrome); padding: 14px 8px 0; overflow: hidden; }
+.s-section { margin-bottom: 18px; }
+.s-sec-head { display: flex; align-items: center; gap: 4px; padding: 2px 4px 5px 8px; }
+.s-sec-label { font-size: 11px; font-weight: 500; color: var(--t-ghost); flex: none; }
+.s-sec-rule { height: 1px; flex: 1; min-width: 0; margin: 0 4px 0 6px; background: var(--seam); }
+.s-sec-plus { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; border-radius: 4px; border: 1px solid transparent; color: var(--t-faint); flex: none; }
+.s-row { position: relative; display: flex; align-items: center; gap: 7px; border-radius: 5px; border: 1px solid transparent; padding: 5.5px 6px 5.5px 5px; }
+.s-row.is-active { border-color: rgb(var(--accent-rgb) / .18); background: rgb(var(--accent-rgb) / .09); }
+.s-lane { width: 6px; height: 17px; display: flex; align-items: center; flex: none; align-self: flex-start; }
+.s-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--good); box-shadow: 0 0 0 2.5px rgba(74,222,128,.18); }
+.s-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; line-height: 17px; color: var(--t-muted); }
+.s-row.is-active .s-title { font-weight: 500; color: #fce7f3; }
+.s-grp { position: relative; margin-bottom: 10px; }
+.s-grp-head { position: relative; display: flex; align-items: center; gap: 5px; padding: 5px 4px 4px 7px; }
+.s-grp-name { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.s-grp-icon { width: 12px; height: 12px; display: flex; align-items: center; justify-content: center; color: var(--t-subtle); flex: none; }
+.s-grp-icon svg { width: 12px; height: 12px; }
+.s-grp-label { font-size: 12px; font-weight: 500; color: var(--t-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s-grp-count { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font: 400 10px 'DM Mono', monospace; font-variant-numeric: tabular-nums; color: var(--t-ghost); }
+
+/* session pane (SessionPane.tsx, TranscriptView.tsx) */
+.s-pane { position: relative; width: 820px; height: 640px; background: var(--app-bg); overflow: hidden; display: flex; flex-direction: column; }
+.s-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 0 32px 32px; }
+.s-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+.s-column { width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; padding: 24px 32px 0; }
+.s-user { display: flex; flex-direction: column; align-items: flex-end; }
+.s-bubble { max-width: 82%; border-radius: 16px 16px 4px 16px; border: 1px solid rgb(var(--accent-rgb) / .2); background: rgb(var(--accent-rgb) / .1); padding: 10px 16px; font-size: 14px; line-height: 1.625; color: var(--t-primary); }
+.s-bubble-strip { height: 25px; }
+.s-prose { font-size: 14px; font-weight: 500; line-height: 1.625; color: var(--t-primary); }
+
+/* composer */
+.s-dock { width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.s-form { display: flex; flex-direction: column; flex: none; }
+.s-input-row { position: relative; display: flex; align-items: flex-end; gap: 14px; padding: 0 4px; }
+.s-field { position: relative; flex: 1; min-width: 0; min-height: 36px; }
+.s-ph { position: absolute; left: 0; top: 6px; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--t-faint); pointer-events: none; white-space: nowrap; }
+.s-ph .peer { color: var(--peer); }
+.s-send { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--t-ghost); flex: none; }
+.s-rule { height: 2px; border-radius: 2px; background: rgba(255,255,255,.08); }
+
+/* ---------- shared ---------- */
+.p-move { border-radius: 9px; background: var(--accent); padding: 9px 18px; font-size: 13px; font-weight: 600; line-height: 1.2; color: var(--on-fill); white-space: nowrap; }
+.p-stay { border-radius: 9px; border: 1px solid var(--line); padding: 8px 16px; font-size: 13px; line-height: 1.2; color: var(--t-muted); white-space: nowrap; }
+.p-folder { display: flex; color: var(--project); flex: none; }
+.p-bar { position: relative; height: 3px; border-radius: 3px; background: rgba(255,255,255,.07); overflow: hidden; }
+.p-bar > span { position: absolute; inset: 0 45% 0 0; border-radius: 3px; background: var(--project); }
+.p-q { color: var(--t-faint); }
+
+/* moved marker, shared */
+.mv { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
+.mv-rule { height: 1px; flex: 1; background: rgb(var(--project-rgb) / .35); }
+.mv-mid { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--project); white-space: nowrap; }
+.mv-undo { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--t-subtle); }
+
+/* ---------- A1 · name card ---------- */
+.a1 { display: flex; align-items: center; gap: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); padding: 18px 20px 18px 22px; }
+.a1-lead { font-size: 12.5px; color: var(--t-subtle); }
+.a1-name { margin-top: 2px; display: flex; align-items: center; gap: 10px; font-size: 28px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+.a1-act { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.a1-act .p-bar { width: 140px; }
+
+/* ---------- A2 · bar ---------- */
+.a2 { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; border-radius: 12px; border: 1px solid rgb(var(--accent-rgb) / .35); background: rgb(var(--accent-rgb) / .1); padding: 11px 12px 11px 18px; }
+.a2-text { font-size: 15px; color: var(--t-muted); }
+.a2-text b { font-weight: 600; color: var(--t-primary); }
+.a2-act { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.a2-fill { position: absolute; inset: 0 45% 0 0; background: rgb(var(--accent-rgb) / .12); }
+.a2 > :not(.a2-fill) { position: relative; }
+.a2 .p-stay { border-color: rgb(var(--accent-rgb) / .25); }
+
+/* ---------- A3 · quick replies ---------- */
+.a3 { display: flex; flex-direction: column; gap: 12px; }
+.a3-ask { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; line-height: 1.625; }
+.a3-replies { display: flex; justify-content: flex-end; gap: 8px; }
+.a3-chip { border-radius: 16px 16px 4px 16px; padding: 10px 18px; font-size: 14px; line-height: 1.4; white-space: nowrap; }
+.a3-chip.move { background: var(--accent); color: var(--on-fill); font-weight: 600; }
+.a3-chip.stay { border: 1px solid rgb(var(--accent-rgb) / .3); color: var(--t-primary); }
+.a3-sent { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.a3-sent .p-bar { width: 150px; }
+
+/* ---------- E · sheets ---------- */
+.e-scrim { position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; z-index: 5; }
+.e-scrim.deep { background: rgba(0,0,0,.78); }
+
+/* E1 · dialog */
+.e1 { width: 340px; border-radius: 16px; border: 1px solid rgba(255,255,255,.08); background: var(--surface-raised); box-shadow: var(--elev-modal); padding: 28px 24px 20px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.e1-title { margin-top: 14px; font-size: 18px; font-weight: 600; line-height: 24px; letter-spacing: -.01em; }
+.e1-act { margin-top: 22px; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.e1-act button { text-align: center; }
+.e1 .p-bar { margin-top: 22px; width: 100%; }
+
+/* E2 · spotlight */
+.e2 { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.e2-lead { font-size: 15px; color: var(--t-muted); }
+.e2-name { margin-top: 6px; display: flex; align-items: center; gap: 14px; font-size: 52px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+.e2-act { margin-top: 30px; display: flex; gap: 10px; }
+.e2 .p-bar { margin-top: 30px; width: 220px; }
+
+/* E3 · bottom bar */
+.e3 { position: absolute; left: 20px; right: 20px; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 14px; border-radius: 16px 16px 0 0; border: 1px solid var(--line); border-bottom: 0; background: var(--surface-raised); box-shadow: 0 -24px 60px rgba(0,0,0,.55); padding: 26px 28px 30px; }
+.e3-title { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+.e3-act { margin-left: auto; display: flex; gap: 8px; }
+.e3-prog { position: absolute; top: -1px; left: 16px; right: 16px; height: 3px; border-radius: 3px; overflow: hidden; }
+.e3-prog > span { position: absolute; inset: 0 45% 0 0; background: var(--project); }
+.e3-veil { position: absolute; inset: 0; background: rgba(0,0,0,.35); z-index: 4; }
+
+/* ---------- wiring ---------- */
+#root[data-state="ask"] [data-when]:not([data-when~="ask"]),
+#root[data-state="moving"] [data-when]:not([data-when~="moving"]),
+#root[data-state="moved"] [data-when]:not([data-when~="moved"]),
+#root[data-style="a1"] [data-style-only]:not([data-style-only~="a1"]),
+#root[data-style="a2"] [data-style-only]:not([data-style-only~="a2"]),
+#root[data-style="a3"] [data-style-only]:not([data-style-only~="a3"]),
+#root[data-style="e1"] [data-style-only]:not([data-style-only~="e1"]),
+#root[data-style="e2"] [data-style-only]:not([data-style-only~="e2"]),
+#root[data-style="e3"] [data-style-only]:not([data-style-only~="e3"]) { display: none; }
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <div class="x-group"><span class="x-name">Style</span>
+    <button class="x-btn" data-set-style="a1" aria-pressed="true">A1 · Name card</button>
+    <button class="x-btn" data-set-style="a2" aria-pressed="false">A2 · Bar</button>
+    <button class="x-btn" data-set-style="a3" aria-pressed="false">A3 · Quick replies</button>
+    <span class="x-sep"></span>
+    <button class="x-btn" data-set-style="e1" aria-pressed="false">E1 · Dialog</button>
+    <button class="x-btn" data-set-style="e2" aria-pressed="false">E2 · Spotlight</button>
+    <button class="x-btn" data-set-style="e3" aria-pressed="false">E3 · Bottom bar</button>
+  </div>
+  <div class="x-group"><span class="x-name">State</span>
+    <button class="x-btn" data-set-state="ask" aria-pressed="true">Ask</button>
+    <button class="x-btn" data-set-state="moving" aria-pressed="false">Moving</button>
+    <button class="x-btn" data-set-state="moved" aria-pressed="false">Moved</button>
+  </div>
+</div>
+
+<div class="x-stage" id="root" data-style="a1" data-state="ask">
+
+  <div class="x-col">
+    <div class="x-label">Sidebar · expanded</div>
+    <div class="s-root s-sidebar">
+      <section class="s-section">
+        <div class="s-sec-head">
+          <span class="s-sec-label">Chats</span>
+          <span class="s-sec-rule"></span>
+          <button class="s-sec-plus" aria-label="New chat without a project"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+        </div>
+        <div class="s-row is-active" data-when="ask moving"><span class="s-lane"><span class="s-dot"></span></span><span class="s-title">Earlier question</span></div>
+        <div class="s-row"><span class="s-lane"></span><span class="s-title">Another chat</span></div>
+        <div class="s-row"><span class="s-lane"></span><span class="s-title">Third chat</span></div>
+      </section>
+      <section class="s-section">
+        <div class="s-sec-head">
+          <span class="s-sec-label">Projects</span>
+          <span class="s-sec-rule"></span>
+          <button class="s-sec-plus" aria-label="Add project"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+        </div>
+        <div class="s-grp">
+          <div class="s-grp-head">
+            <span class="s-grp-name">
+              <span class="s-grp-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+              <span class="s-grp-label">cat-code</span>
+            </span>
+            <span class="s-grp-count"><span data-when="ask moving">3</span><span data-when="moved">4</span></span>
+          </div>
+          <div class="s-row is-active" data-when="moved"><span class="s-lane"><span class="s-dot"></span></span><span class="s-title">Earlier question</span></div>
+          <div class="s-row"><span class="s-lane"></span><span class="s-title">Earlier cat-code session</span></div>
+          <div class="s-row"><span class="s-lane"></span><span class="s-title">Another cat-code session</span></div>
+          <div class="s-row"><span class="s-lane"></span><span class="s-title">Third cat-code session</span></div>
+        </div>
+        <div class="s-grp">
+          <div class="s-grp-head">
+            <span class="s-grp-name">
+              <span class="s-grp-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19V6a2 2 0 0 1 2-2h3.6l2 2.5H19a2 2 0 0 1 2 2V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg></span>
+              <span class="s-grp-label">other-project</span>
+            </span>
+            <span class="s-grp-count">2</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="x-col">
+    <div class="x-label">Session pane</div>
+    <div class="s-root s-pane">
+      <div class="s-main">
+        <div class="s-scroll">
+          <div class="s-column">
+            <div class="s-user"><div class="s-bubble">Earlier question in this chat.</div><div class="s-bubble-strip"></div></div>
+            <div class="s-prose">Earlier answer in this chat.</div>
+            <div class="s-user" data-when="ask moving"><div class="s-bubble">Now make the change in cat-code.</div><div class="s-bubble-strip"></div></div>
+
+            <!-- A1 · name card -->
+            <div class="a1" data-when="ask moving" data-style-only="a1">
+              <div>
+                <div class="a1-lead" data-when="ask">Work in</div>
+                <div class="a1-lead" data-when="moving">Moving to</div>
+                <div class="a1-name"><span class="p-folder"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span><span>cat-code<span class="p-q" data-when="ask">?</span></span></div>
+              </div>
+              <div class="a1-act" data-when="ask"><button class="p-stay">Stay in chat</button><button class="p-move">Move</button></div>
+              <div class="a1-act" data-when="moving"><div class="p-bar"><span></span></div></div>
+            </div>
+
+            <!-- A2 · bar -->
+            <div class="a2" data-when="ask moving" data-style-only="a2">
+              <span class="a2-fill" data-when="moving"></span>
+              <span class="p-folder"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+              <span class="a2-text" data-when="ask">Work in <b>cat-code</b>?</span>
+              <span class="a2-text" data-when="moving">Moving to <b>cat-code</b></span>
+              <div class="a2-act" data-when="ask"><button class="p-stay">Stay in chat</button><button class="p-move">Move</button></div>
+            </div>
+
+            <!-- A3 · quick replies -->
+            <div class="a3" data-when="ask moving" data-style-only="a3">
+              <div class="a3-ask"><span class="p-folder"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>Work in cat-code?</div>
+              <div class="a3-replies" data-when="ask"><button class="a3-chip stay">Stay in chat</button><button class="a3-chip move">Move to cat-code</button></div>
+              <div class="a3-sent" data-when="moving"><span class="a3-chip move">Move to cat-code</span><div class="p-bar"><span></span></div></div>
+            </div>
+
+            <!-- moved marker, all styles -->
+            <div class="mv" data-when="moved">
+              <div class="mv-rule"></div>
+              <div class="mv-mid"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg>cat-code<button class="mv-undo" title="Move back" aria-label="Move back"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 3 3 9 9 9"/></svg></button></div>
+              <div class="mv-rule"></div>
+            </div>
+
+            <div class="s-user" data-when="moved"><div class="s-bubble">Now make the change in cat-code.</div><div class="s-bubble-strip"></div></div>
+            <div class="s-prose" data-when="moved">Reply from the cat-code session.</div>
+          </div>
+        </div>
+
+        <div class="s-dock">
+          <form class="s-form" onsubmit="return false">
+            <div class="s-input-row">
+              <div class="s-field">
+                <div class="s-ph" data-when="ask">Ask Cat Code anything or describe a task…</div>
+                <div class="s-ph" data-when="moving">Connecting…</div>
+                <div class="s-ph" data-when="moved">Ask <span class="peer">Opal</span> anything or describe a task…</div>
+              </div>
+              <button class="s-send" aria-label="Send prompt"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+            </div>
+            <div class="s-rule"></div>
+          </form>
+        </div>
+      </div>
+
+      <!-- E1 · dialog -->
+      <div class="e-scrim" data-when="ask moving" data-style-only="e1">
+        <div class="e1">
+          <span class="p-folder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+          <h2 class="e1-title" data-when="ask">Work in cat-code?</h2>
+          <h2 class="e1-title" data-when="moving">Moving to cat-code</h2>
+          <div class="e1-act" data-when="ask"><button class="p-stay">Stay in chat</button><button class="p-move">Move</button></div>
+          <div class="p-bar" data-when="moving"><span></span></div>
+        </div>
+      </div>
+
+      <!-- E2 · spotlight -->
+      <div class="e-scrim deep" data-when="ask moving" data-style-only="e2">
+        <div class="e2">
+          <div class="e2-lead" data-when="ask">Work in</div>
+          <div class="e2-lead" data-when="moving">Moving to</div>
+          <div class="e2-name"><span class="p-folder"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span><span>cat-code<span class="p-q" data-when="ask">?</span></span></div>
+          <div class="e2-act" data-when="ask"><button class="p-stay">Stay in chat</button><button class="p-move">Move</button></div>
+          <div class="p-bar" data-when="moving"><span></span></div>
+        </div>
+      </div>
+
+      <!-- E3 · bottom bar -->
+      <div class="e3-veil" data-when="ask moving" data-style-only="e3"></div>
+      <div class="e3" data-when="ask moving" data-style-only="e3">
+        <div class="e3-prog" data-when="moving"><span></span></div>
+        <span class="p-folder"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+        <span class="e3-title" data-when="ask">Work in cat-code?</span>
+        <span class="e3-title" data-when="moving">Moving to cat-code</span>
+        <div class="e3-act" data-when="ask"><button class="p-stay">Stay in chat</button><button class="p-move">Move</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById('root');
+  function wire(attr, key) {
+    var buttons = document.querySelectorAll('[' + attr + ']');
+    buttons.forEach(function (button) {
+      button.addEventListener('click', function () {
+        root.dataset[key] = button.getAttribute(attr);
+        buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b === button)); });
+      });
+    });
+  }
+  wire('data-set-style', 'style');
+  wire('data-set-state', 'state');
+})();
+</script>
+</body>
+</html>

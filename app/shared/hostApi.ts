@@ -90,6 +90,15 @@ export type SessionDescriptor = {
   cwd: string
   /** Explicit association. Absent only in old external fixtures; host always sets it. */
   binding?: SessionBinding
+  moving?: boolean
+  canMoveBack?: boolean
+  /** Persisted move seams, ordered as the conversation crossed contexts. */
+  contextTransitions?: Array<{
+    id: string
+    afterFrameId: string | null
+    cwd: string
+    binding: SessionBinding
+  }>
   title: string | null
   /**
    * The session's peer NAME (PEER-SESSIONS §2), or null for a row that predates

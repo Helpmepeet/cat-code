@@ -259,12 +259,22 @@ export function retainCachedImagePreviews(
       frame.kind === 'generated-image-preview' ? [frame.toolUseId] : [],
     ),
   )
+  // A bounded cache can lose an old GenerateImage call while retaining the
+  // visible transcript/preview truncation marker. In that case absence of the
+  // tool call says nothing about whether an earlier preview still belongs to
+  // this conversation. Complete history replacements have no such marker, so
+  // they continue to discard previews for calls that were edited away.
+  const currentHistoryIsTruncated = current.frames.some(frame =>
+    isReplayTruncationFrame(frame) ||
+    (frame.kind === 'error' && frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID),
+  )
   const previews = new FrameReplayBuffer()
   for (const frame of [...previous.frames, ...current.frames]) {
     if (
       frame.kind === 'generated-image-preview' &&
       frame.sessionId === current.header.appSessionId &&
-      (currentImageToolIds.has(frame.toolUseId) ||
+      (currentHistoryIsTruncated ||
+        currentImageToolIds.has(frame.toolUseId) ||
         currentPreviews.has(frame.toolUseId))
     ) {
       previews.record(current.header.appSessionId, frame)
@@ -277,7 +287,7 @@ export function retainCachedImagePreviews(
   const needsNotice = !hasCurrentNotice && (
     mergeNotice !== undefined ||
     (previousNotice !== undefined &&
-      (currentImageToolIds.size > 0 || currentPreviews.size > 0))
+      (currentHistoryIsTruncated || currentImageToolIds.size > 0 || currentPreviews.size > 0))
   )
   const noticeToKeep = needsNotice ? previousNotice ?? mergeNotice : undefined
   return {

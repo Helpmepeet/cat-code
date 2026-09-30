@@ -35,7 +35,7 @@ import {
 export const LAZY_REPLAY_FLUSH_MS = 50
 
 type ReplayCoalescingEntry = {
-  mode: 'lazy-restore' | 'rewind'
+  mode: 'lazy-restore' | 'rewind' | 'relocation'
   frames: ServerFrame[]
   replayFrames: number
   replayBytes: number
@@ -85,6 +85,21 @@ export class AttachmentGate {
         replayBytes: 0,
         sawReplay: false,
       })
+      return []
+    }
+
+    if (entry.mode === 'relocation') {
+      if (frame.kind === 'lifecycle') {
+        // An interrupted replacement must leave the old transcript visible.
+        // Its partial bootstrap cannot become the displayed conversation.
+        this.replayCoalescing.delete(sessionId)
+        return [frame]
+      }
+      entry.frames.push(frame)
+      if (frame.kind === 'history.replay.complete') {
+        this.replayCoalescing.delete(sessionId)
+        return entry.frames
+      }
       return []
     }
 
@@ -161,6 +176,25 @@ export class AttachmentGate {
       replayBytes: 0,
       sawReplay: false,
     })
+  }
+
+  /** Hold a replacement engine's ready and bounded replay for one render. */
+  startRelocationReplayCoalescing(sessionId: SessionId): void {
+    if (this.replayCoalescing.has(sessionId)) return
+    this.replayCoalescing.set(sessionId, {
+      mode: 'relocation',
+      frames: [],
+      replayFrames: 0,
+      replayBytes: 0,
+      sawReplay: false,
+    })
+  }
+
+  /** A failed move drops any incomplete replacement bootstrap. */
+  cancelRelocationReplayCoalescing(sessionId: SessionId): void {
+    if (this.replayCoalescing.get(sessionId)?.mode === 'relocation') {
+      this.replayCoalescing.delete(sessionId)
+    }
   }
 
   /** Flush the bootstrap/replay batch when main's short window expires. */

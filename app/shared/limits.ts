@@ -18,6 +18,14 @@
 /** Max serialized INBOUND frame size (hostile renderer traffic). */
 export const MAX_FRAME_BYTES = 128 * 1024
 
+/** Closed startup refusal codes for a host-restored Auto mode. */
+export const AUTO_RESTORE_UNAVAILABLE_EXIT = {
+  feature: 72,
+  settings: 73,
+  'circuit-breaker': 74,
+  model: 75,
+} as const
+
 /**
  * Max serialized OUTBOUND frame size (trusted engine output). Large enough to
  * carry base64 images and big tool results; a sanity bound, not a policy gate.

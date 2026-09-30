@@ -147,6 +147,7 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
  */
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   ready: 'head',
+  'history.replay.complete': 'none',
 
   'permission.context': 'sticky',
   'settings.snapshot': 'sticky',

@@ -82,6 +82,8 @@ export type SessionActionKind =
   | 'peer-wake-blocked'
   | 'open-chat-folder'
   | 'copy-chat-folder-path'
+  | 'move-to-project'
+  | 'move-back'
 
 /** Menu grouping (dividers between non-empty sections), mirroring the prototype. */
 export type SessionActionSection = 'primary' | 'view' | 'transfer'
@@ -307,6 +309,20 @@ export function resolveSessionActions(
       enabled: exportable,
       ...(exportable ? {} : { reason: live ? DEFER.exporting : DEFER.notLive }),
     },
+    ...(tracked && (row.binding?.kind === 'managed' || row.canMoveBack)
+      ? [{
+          kind: row.binding?.kind === 'managed' ? 'move-to-project' as const : 'move-back' as const,
+          label: row.binding?.kind === 'managed' ? 'Move to project…' : 'Move back to Chats',
+          section: 'transfer' as const,
+          enabled: row.cwdExists && ctx.hasActiveTurn !== true && row.moving !== true &&
+            (row.status === 'ready' || !row.live),
+          ...(row.moving ? { reason: 'This Chat is moving.' }
+            : !row.cwdExists ? { reason: 'This Chat folder is unavailable.' }
+            : ctx.hasActiveTurn ? { reason: 'Wait for this Chat to finish.' }
+              : row.live && row.status !== 'ready'
+                ? { reason: 'Wait for this Chat to connect.' } : {}),
+        }]
+      : []),
     ...(row.binding?.kind === 'managed'
       ? [
           {

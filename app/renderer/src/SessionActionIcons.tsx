@@ -62,6 +62,9 @@ export function SessionActionIcon({
       return <ActionEyeOffIcon />
     case 'peer-wake-blocked':
       return <ActionBellOffIcon />
+    case 'move-back':
+      return <ActionRewindIcon />
+    case 'move-to-project':
     case 'open-chat-folder':
       return <ActionOpenIcon />
     case 'copy-chat-folder-path':

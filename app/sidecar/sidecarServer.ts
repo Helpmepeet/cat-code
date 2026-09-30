@@ -1210,6 +1210,11 @@ export class SidecarServer {
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
+    this.send(connection, {
+      kind: 'history.replay.complete',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+    })
     return connection
   }
 
@@ -6684,6 +6689,7 @@ export function buildPermissionContextSnapshot(
   )
   return {
     mode: context.mode,
+    ...(context.prePlanMode ? { prePlanMode: context.prePlanMode } : {}),
     alwaysAllowRules: cloneRulesBySource(context.alwaysAllowRules),
     alwaysDenyRules: cloneRulesBySource(context.alwaysDenyRules),
     alwaysAskRules: cloneRulesBySource(context.alwaysAskRules),

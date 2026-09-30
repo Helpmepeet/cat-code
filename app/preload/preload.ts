@@ -100,6 +100,7 @@ import {
   // Control plane (HC3 — fixed, per-method senders).
   CH_HOST_CREATE,
   CH_HOST_CREATE_MANAGED,
+  CH_HOST_MOVE_SESSION,
   CH_HOST_FOLDER_STATE,
   CH_HOST_FOLDER_RECREATE,
   CH_HOST_FOLDER_OPEN,
@@ -582,6 +583,10 @@ const bridge: CatCodeBridge = {
   createManagedChat(): Promise<HostResult<SessionDescriptor>> {
     sendGuard.assertAllowed({ createManagedChat: true })
     return ipcRenderer.invoke(CH_HOST_CREATE_MANAGED) as Promise<HostResult<SessionDescriptor>>
+  },
+  moveSession(appSessionId: SessionId, cwdToken: string | null): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ appSessionId, cwdToken })
+    return ipcRenderer.invoke(CH_HOST_MOVE_SESSION, { appSessionId, cwdToken }) as Promise<HostResult<SessionDescriptor>>
   },
   getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>> {
     sendGuard.assertAllowed({ appSessionId })

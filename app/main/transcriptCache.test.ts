@@ -318,6 +318,22 @@ test('an edit discards an image from the previous cached conversation tail', () 
   expect(retainCachedImagePreviews(afterEdit, beforeEdit).frames).toEqual([eventFrame(0)])
 })
 
+test.each([
+  ['replay ring', replayTruncationFrame()],
+  ['sidecar history replay', historyTruncationFrame()],
+])('a bounded %s keeps previews whose image tool call fell out of the cache', (_source, boundary) => {
+  const preview: ServerFrame = {
+    kind: 'generated-image-preview', protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID, toolUseId: 'toolu_image', mediaType: 'image/png', data: 'AAAA',
+  }
+  const previous = distill([readyFrame(), imageToolFrame(), preview])
+  const current = distill([readyFrame(), eventFrame(2), boundary])
+
+  expect(retainCachedImagePreviews(current, previous).frames).toEqual([
+    eventFrame(2), boundary, preview,
+  ])
+})
+
 test('v2 image caches leave an older installation cache readable', () => {
   const registryDir = tempDir()
   const oldDir = join(registryDir, 'transcript-cache')

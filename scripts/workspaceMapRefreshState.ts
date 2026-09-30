@@ -42,6 +42,15 @@ function git(repo: string, args: string[]): string {
     encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
   })
 }
+function gitDiffExists(repo: string, args: string[]): boolean {
+  try {
+    git(repo, args)
+    return false
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return true
+    throw error
+  }
+}
 function ancestor(repo: string, a: string, b: string): boolean {
   try { git(repo, ['merge-base', '--is-ancestor', a, b]); return true } catch { return false }
 }
@@ -248,6 +257,13 @@ export function finishRefresh(options: Options & { runId: string; reviewedMapHas
       if (!same(paths, checked.changedMaps) || paths.some(path => !MAP_PATH.test(path))) throw new Error('explicit map paths do not match the reviewed map diff')
       if (options.reviewedMapHash !== checked.mapHash) throw new Error('map bytes changed since review; review the new diff before finishing')
       if (paths.length === 0 && git(state.repositoryRoot, ['diff', '--cached', '--name-only', '--', 'docs/maps']).trim()) throw new Error('staged map edits prevent a no-op')
+      for (const path of paths) {
+        const staged = gitDiffExists(state.repositoryRoot, ['diff', '--cached', '--quiet', '--', path])
+        const workingDiffersFromIndex = gitDiffExists(state.repositoryRoot, ['diff', '--quiet', '--', path])
+        if (staged && workingDiffersFromIndex) {
+          throw new Error(`staged map content differs from the reviewed working file: ${path}`)
+        }
+      }
       run.prepared = { mapHash: checked.mapHash, paths, summary: options.summary.trim() }
       run.validation = checked.validation
       run.status = 'committing'

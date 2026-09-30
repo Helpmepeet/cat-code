@@ -1,3 +1,6 @@
+import { isRelocationControls, readSessionRelocation, writeSessionRelocation, type RelocationControls, type SessionLocation } from '../../src/utils/sessionRelocationState.js'
+import type { RelocationRequest } from '../../src/utils/sessionRelocation.js'
+import type { RunControlsSnapshot } from '../shared/protocol.js'
 /**
  * The host composition layer (D1 — `decisions/REGISTRY.md` §6/§6.1; trust zone —
  * `decisions/SECURITY-MINIMUM.md` Addendum, T8 / HC1–HC4).
@@ -23,9 +26,10 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { lstatSync, readFileSync } from 'node:fs'
 
 import type { SessionRegistry, RegistrySession } from './registry.js'
-import { MAX_REGISTRY_SESSIONS } from './registry.js'
+import { MAX_REGISTRY_SESSIONS, defaultTranscriptPath } from './registry.js'
 import { pickPeerName, randomPeerNameCursor } from './peerNames.js'
 import type {
   SidecarStatus,
@@ -36,10 +40,12 @@ import type { SessionId } from '../shared/protocol.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
 import { ManagedStorage } from './managedStorage.js'
 import {
+  AUTO_RESTORE_UNAVAILABLE_EXIT,
   PARKED_EXIT_CODE,
   RESUME_BUSY_EXIT_CODE,
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
+
 import {
   MAX_LIVE_SESSIONS,
   MAX_SESSION_TITLE_CHARS,
@@ -53,6 +59,18 @@ import {
   type HostResult,
   type SessionDescriptor,
 } from '../shared/hostApi.js'
+
+class AutoRestoreUnavailableError extends Error {
+  constructor(readonly reason: string) { super(`Auto mode is unavailable ${reason}`) }
+}
+
+function autoRestoreRefusal(code: number | null): AutoRestoreUnavailableError | null {
+  if (code === AUTO_RESTORE_UNAVAILABLE_EXIT.feature) return new AutoRestoreUnavailableError('because the classifier feature is unavailable')
+  if (code === AUTO_RESTORE_UNAVAILABLE_EXIT.settings) return new AutoRestoreUnavailableError('because the destination settings disable it')
+  if (code === AUTO_RESTORE_UNAVAILABLE_EXIT['circuit-breaker']) return new AutoRestoreUnavailableError('because its circuit breaker is active')
+  if (code === AUTO_RESTORE_UNAVAILABLE_EXIT.model) return new AutoRestoreUnavailableError('for the selected model in this project')
+  return null
+}
 
 /* ------------------------------------------------------------------------- *
  * Injected dependencies (main provides the electron-bound / real-fs ones; tests
@@ -115,6 +133,14 @@ export type HostOptions = {
   validateCwd: (cwd: string) => CwdValidation
   /** Host-owned storage allocator; app-data base is supplied by Electron main. */
   managedStorage?: ManagedStorage
+  relocate?: (request: RelocationRequest) => Promise<void>
+  /** Current peer-plane activity and unconsumed deliveries at the move gate. */
+  peerMoveState?: (appSessionId: SessionId) => { presence?: 'running' | 'needs_user' | 'idle'; pending: number; reservations?: number }
+  /** Release deferred peer deliveries after the moved row's scope is final. */
+  peerMoveSettled?: (appSessionId: SessionId) => void
+  /** Clear a failed move's partial bootstrap and arm history replay for recovery. */
+  prepareMoveReplayRecovery?: (appSessionId: SessionId, options: { persistSourceCache: boolean }) => void
+  cancelMoveReplayCoalescing?: (appSessionId: SessionId) => void
   /**
    * Called when a session is closed/restarted so main can evict its replay
    * buffer (the P3-0 carry — `AttachmentGate.clearSession`). Kept as an injected
@@ -153,6 +179,16 @@ export class Host implements HostApi {
   private readonly registry: SessionRegistry
   private readonly validateCwd: (cwd: string) => CwdValidation
   private readonly managedStorage?: ManagedStorage
+  private readonly relocate?: HostOptions['relocate']
+  private readonly peerMoveState?: HostOptions['peerMoveState']
+  private readonly peerMoveSettled?: HostOptions['peerMoveSettled']
+  private readonly prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
+  private readonly cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
+  private readonly moving = new Set<SessionId>()
+  private readonly runControls = new Map<SessionId, RunControlsSnapshot>()
+  private readonly permissionModes = new Map<SessionId, string>()
+  private readonly prePlanModes = new Map<SessionId, string>()
+  private readonly permissionClassifierAvailable = new Map<SessionId, boolean>()
   private readonly evictReplay: (appSessionId: SessionId) => void
   private readonly log: (line: string) => void
   private readonly now: () => number
@@ -172,6 +208,8 @@ export class Host implements HostApi {
   private branchSwitching = false
   /** One restore owns a registry id from validation through child registration. */
   private readonly restoring = new Set<SessionId>()
+  /** Internal relocation warmups must not open a closed Chat in the renderer. */
+  private readonly hiddenMoveWarmups = new Set<SessionId>()
 
   /**
    * appSessionIds currently gracefully closing (or having a crash tombstone
@@ -217,6 +255,11 @@ export class Host implements HostApi {
     this.supervisor = options.supervisor
     this.registry = options.registry
     this.validateCwd = options.validateCwd
+    this.relocate = options.relocate
+    this.peerMoveState = options.peerMoveState
+    this.peerMoveSettled = options.peerMoveSettled
+    this.prepareMoveReplayRecovery = options.prepareMoveReplayRecovery
+    this.cancelMoveReplayCoalescing = options.cancelMoveReplayCoalescing
     this.managedStorage = options.managedStorage
     this.evictReplay = options.evictReplay ?? (() => {})
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
@@ -251,6 +294,38 @@ export class Host implements HostApi {
     const appSessionId = event.sessionId
 
     if (event.type === 'frame') {
+      if (event.frame.kind === 'ready') {
+        this.runControls.delete(appSessionId)
+        this.permissionModes.delete(appSessionId)
+        this.prePlanModes.delete(appSessionId)
+        this.permissionClassifierAvailable.delete(appSessionId)
+      }
+      if (event.frame.kind === 'run-controls.snapshot') {
+        this.runControls.set(appSessionId, event.frame.runControls)
+        this.updateRelocationControls(appSessionId, {
+          model: event.frame.runControls.model.selected ?? null,
+          ...(event.frame.runControls.effort.selected ? { effort: event.frame.runControls.effort.selected } : {}),
+          fastMode: event.frame.runControls.fast.active,
+        }, true)
+      }
+      if (event.frame.kind === 'permission.context') {
+        this.permissionModes.set(appSessionId, event.frame.context.mode)
+        if (event.frame.context.prePlanMode) this.prePlanModes.set(appSessionId, event.frame.context.prePlanMode)
+        else this.prePlanModes.delete(appSessionId)
+        this.permissionClassifierAvailable.set(appSessionId, event.frame.context.permissionClassifierEnabled)
+        const mode = event.frame.context.mode
+        if (mode === 'default' || mode === 'acceptEdits' || mode === 'plan' || mode === 'dontAsk' || mode === 'auto') {
+          this.updateRelocationControls(appSessionId, {
+            mode,
+            prePlanMode: mode === 'plan' && (
+              event.frame.context.prePlanMode === 'default' ||
+              event.frame.context.prePlanMode === 'acceptEdits' ||
+              event.frame.context.prePlanMode === 'dontAsk' ||
+              event.frame.context.prePlanMode === 'auto'
+            ) ? event.frame.context.prePlanMode : undefined,
+          })
+        }
+      }
       // Relay the ready frame's engineSessionId into the registry row (the
       // two-id bridge, REGISTRY.md §2). Only the ready frame carries it.
       if (event.frame.kind === 'ready') {
@@ -275,6 +350,19 @@ export class Host implements HostApi {
         // echo (those ride `type:'user'` frames). Non-`event` snapshot frames
         // (ready/settings/accounts/goal/…) never enter this branch at all.
         const { frame } = event
+        if (!frame.replay && frame.event.type === 'message' && frame.event.message.type === 'user') {
+          await this.registry.markInputAccepted(appSessionId)
+          const row = this.registry.findSession(appSessionId)
+          if (row?.engineSessionId) {
+            try {
+              const move = readSessionRelocation(row.engineSessionId)
+              if (move?.phase === 'complete' && move.empty === true && move.appSessionId === appSessionId) {
+                const { empty: _empty, ...withInput } = move
+                writeSessionRelocation(withInput)
+              }
+            } catch (error) { this.log(`[host] could not mark first moved input: ${errText(error)}`) }
+          }
+        }
         if (
           !frame.replay &&
           frame.event.type === 'message' &&
@@ -475,6 +563,42 @@ export class Host implements HostApi {
     return { ok: true, value: descriptor }
   }
 
+  /** Reopen a reaped project-side Chat under its original app identity. */
+  async openRelocatedHistorySession(
+    engineSessionId: string,
+    title?: string,
+    forked = false,
+  ): Promise<HostResult<SessionDescriptor> | null> {
+    await this.launched
+    if (!isUuid(engineSessionId)) return hostError('session_not_found', 'malformed engine session id')
+    let move
+    try { move = readSessionRelocation(engineSessionId) }
+    catch { return hostError('session_unreachable', 'This Chat has an unreadable move record') }
+    if (!move) return null
+    if (move.phase !== 'complete') return hostError('session_unreachable', 'This Chat has an unfinished move. Restore its saved backup before reopening it')
+    if (move.target.binding.kind !== 'project' || !this.managedStorage?.hasSessionIdentity(
+      move.original.binding as Extract<SessionBinding, { kind: 'managed' }>, move.appSessionId, engineSessionId,
+    )) return hostError('session_unreachable', 'This Chat’s original identity could not be verified')
+    if (this.registry.findSession(move.appSessionId)) return hostError('session_unreachable', 'This Chat already has an app session')
+    const validated = this.validateCwd(move.target.cwd)
+    if (!validated.ok || validated.realpath !== move.target.cwd) return hostError('invalid_cwd', 'This Chat’s project folder is unavailable')
+    const reservation = this.reserveSpawn(true)
+    if (!reservation.ok) return reservation.result
+    return this.spawn({
+      appSessionId: move.appSessionId,
+      cwd: move.target.cwd,
+      binding: move.target.binding,
+      ...(move.empty === true && ['empty', 'missing'].includes(this.emptyHistoryFile(move.target.cwd, engineSessionId))
+        ? { freshEngineSessionId: engineSessionId }
+        : { resumeEngineSessionId: engineSessionId }),
+      title,
+      forked,
+      ...move.controls,
+      permissionMode: move.controls.mode,
+      preferSpawnModel: true,
+    }, reservation)
+  }
+
   async getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>> {
     await this.launched
     if (!isUuid(appSessionId)) return hostError('session_not_found', 'malformed session id')
@@ -580,6 +704,9 @@ export class Host implements HostApi {
         `no restorable session ${appSessionId}`,
       )
     }
+    if (this.moveRecordBlocked(row.engineSessionId)) {
+      return hostError('session_unreachable', 'This Chat has an unfinished or unreadable move. Restore its saved backup before reopening it')
+    }
     if (row.binding.kind === 'managed') {
       const storage = this.managedStorage?.resolve(row.binding)
       if (!storage?.ok) return hostError(storage?.reason === 'missing' ? 'managed_storage_missing' : 'managed_storage_invalid', 'this chat folder is missing or failed validation')
@@ -651,9 +778,9 @@ export class Host implements HostApi {
         : 'invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
     }
 
+    const relocationControls = this.restoredRelocationControls(row)
     const reservation = this.reserveSpawn(true)
     if (!reservation.ok) return reservation.result
-
     // Clear the crashed tombstone (guarded by `closing` so the fake/late exit
     // the kill fires is not re-reported as a fresh crash — same suppression as
     // closeSession; the child is already dead, so this only deregisters).
@@ -673,9 +800,13 @@ export class Host implements HostApi {
       appSessionId,
       cwd: validatedCwd.realpath,
       title: row.title,
-      resumeEngineSessionId: row.engineSessionId,
+      ...(this.isEmptySession(row)
+        ? { freshEngineSessionId: row.engineSessionId }
+        : { resumeEngineSessionId: row.engineSessionId }),
       forked: row.forked,
       binding: row.binding,
+      ...(relocationControls ? { ...relocationControls, permissionMode: relocationControls.mode } : {}),
+      ...(relocationControls ? { preferSpawnModel: true } : {}),
       // PEER-SESSIONS §2/§5 + R1 — a restore of a created peer must rebuild the
       // SAME identity. The row keeps `createdBy`, but `spawn` reads the creator
       // only from its input, so omitting it here left `CATCODE_SIDECAR_CREATED_BY`
@@ -763,12 +894,17 @@ export class Host implements HostApi {
     appSessionId: SessionId
     cwd: string
     title: string | null | undefined
-    resumeEngineSessionId: string | undefined
+    resumeEngineSessionId?: string
+    freshEngineSessionId?: string
     forked: boolean
     binding?: SessionBinding
     createdBy?: SessionId
-    model?: string
+    model?: string | null
     effort?: string
+    permissionMode?: RelocationControls['mode']
+    prePlanMode?: RelocationControls['prePlanMode']
+    fastMode?: boolean
+    preferSpawnModel?: boolean
   }, reservation: SpawnReservation): Promise<HostResult<SessionDescriptor>> {
     const { appSessionId, cwd, resumeEngineSessionId, forked } = input
     const title = input.title ?? undefined
@@ -831,11 +967,16 @@ export class Host implements HostApi {
         recreatedFolderNotice: binding.kind === 'managed' &&
           this.managedStorage?.wasRecreated(binding) === true,
         ...(resumeEngineSessionId !== undefined ? { resumeEngineSessionId } : {}),
+        ...(input.freshEngineSessionId !== undefined ? { freshEngineSessionId: input.freshEngineSessionId } : {}),
         ...(name !== undefined ? { name } : {}),
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
         ...(createdByName !== undefined ? { createdByName } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.effort !== undefined ? { effort: input.effort } : {}),
+        ...(input.permissionMode !== undefined ? { permissionMode: input.permissionMode } : {}),
+        ...(input.prePlanMode !== undefined ? { prePlanMode: input.prePlanMode } : {}),
+        ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
+        ...(input.preferSpawnModel === true ? { preferSpawnModel: true } : {}),
       })
       // The child is now supervisor-visible, so replace the in-flight slot with
       // the real live record before any later persistence await can yield.
@@ -877,7 +1018,7 @@ export class Host implements HostApi {
       // Unreachable in practice (we just upserted the row) — typed, not thrown.
       return hostError('spawn_failed', 'session vanished immediately after spawn')
     }
-    this.emit({ type: 'session-added', session: descriptor })
+    if (!this.hiddenMoveWarmups.has(appSessionId)) this.emit({ type: 'session-added', session: descriptor })
     return { ok: true, value: descriptor }
   }
 
@@ -1034,6 +1175,7 @@ export class Host implements HostApi {
 
   async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
     await this.launched
+    if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
     }
@@ -1129,8 +1271,448 @@ export class Host implements HostApi {
    * advisory fields that weaken the D6 crash-reap (§9-A3 identity match).
    * --------------------------------------------------------------------- */
 
+  isMoving(appSessionId: SessionId): boolean { return this.moving.has(appSessionId) }
+  isHiddenMoveWarmup(appSessionId: SessionId): boolean { return this.hiddenMoveWarmups.has(appSessionId) }
+
+  private updateRelocationControls(appSessionId: SessionId, update: Partial<RelocationControls>, replaceSelection = false): void {
+    const row = this.registry.findSession(appSessionId)
+    if (!row?.engineSessionId) return
+    try {
+      const record = readSessionRelocation(row.engineSessionId)
+      if (record?.phase !== 'complete' || record.appSessionId !== appSessionId || row.cwd !== record.target.cwd) return
+      const controls = { ...record.controls, ...update }
+      if (replaceSelection) {
+        if (!('model' in update)) delete controls.model
+        if (!('effort' in update)) delete controls.effort
+      }
+      if (JSON.stringify(controls) !== JSON.stringify(record.controls)) writeSessionRelocation({ ...record, controls })
+    } catch (error) { this.log(`[host] relocation controls could not be saved: ${errText(error)}`) }
+  }
+
+  private hasMoveOrigin(engineSessionId: string | null | undefined): boolean {
+    try { return !!engineSessionId && readSessionRelocation(engineSessionId)?.phase === 'complete' }
+    catch { return false }
+  }
+
+  private contextTransitionsFor(row: RegistrySession | undefined): SessionDescriptor['contextTransitions'] {
+    if (!row?.engineSessionId) return []
+    try {
+      const record = readSessionRelocation(row.engineSessionId)
+      if (record?.phase !== 'complete' || record.appSessionId !== row.appSessionId ||
+          record.target.cwd !== row.cwd) return []
+      return (record.transitions ?? []).map(transition => ({
+        id: transition.id,
+        afterFrameId: transition.afterFrameId,
+        cwd: transition.target.cwd,
+        binding: transition.target.binding,
+      }))
+    } catch { return [] }
+  }
+
+  private moveRecordBlocked(engineSessionId: string | null | undefined): boolean {
+    if (!engineSessionId) return false
+    try { return readSessionRelocation(engineSessionId)?.phase === 'moving' }
+    catch { return true }
+  }
+
+  private restoredRelocationControls(row: RegistrySession): RelocationControls | null {
+    if (!row.engineSessionId) return null
+    const record = readSessionRelocation(row.engineSessionId)
+    return record?.phase === 'complete' && record.appSessionId === row.appSessionId &&
+      record.target.cwd === row.cwd && JSON.stringify(record.target.binding) === JSON.stringify(row.binding)
+      ? record.controls : null
+  }
+
+  private emptyHistoryFile(cwd: string, engineSessionId: string): 'empty' | 'conversation' | 'missing' | 'invalid' {
+    const path = defaultTranscriptPath(cwd, engineSessionId)
+    try {
+      const file = lstatSync(path)
+      if (!file.isFile() || file.size > 16 * 1024 * 1024) return 'invalid'
+      return readFileSync(path, 'utf8').split('\n').some(line => {
+        if (!line) return false
+        const entry: unknown = JSON.parse(line)
+        return !!entry && typeof entry === 'object' && 'type' in entry &&
+          (entry.type === 'user' || entry.type === 'assistant')
+      }) ? 'conversation' : 'empty'
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid'
+    }
+  }
+
+  private isEmptySession(row: RegistrySession): boolean {
+    if (!row.engineSessionId || row.hasAcceptedInput === true) return false
+    const state = this.emptyHistoryFile(row.cwd, row.engineSessionId)
+    return state === 'empty' || (state === 'missing' && row.hasAcceptedInput === false &&
+        (row.binding.kind === 'managed' && !!this.managedStorage?.hasSessionIdentity(row.binding, row.appSessionId, row.engineSessionId) ||
+          this.restoredRelocationControls(row) !== null))
+  }
+
+  private waitForReadyMode(appSessionId: SessionId, controls: RelocationControls): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const mode = controls.mode
+      const readyWithMode = (): boolean => this.supervisor.listSessions().some(item =>
+        item.sessionId === appSessionId && item.status === 'ready') &&
+        this.permissionModes.get(appSessionId) === mode &&
+        (mode !== 'auto' || this.permissionClassifierAvailable.get(appSessionId) === true) &&
+        (mode !== 'plan' || !controls.prePlanMode || this.prePlanModes.get(appSessionId) === controls.prePlanMode) &&
+        (!controls.fastMode || this.runControls.get(appSessionId)?.fast.active === true ||
+          this.runControls.get(appSessionId)?.fast.supportedByModel === false ||
+          this.runControls.get(appSessionId)?.fast.available === false)
+      const done = (): void => { clearTimeout(timer); unsubscribe() }
+      const unsubscribe = this.supervisor.subscribe(event => {
+        if (event.sessionId !== appSessionId) return
+        if (event.type === 'exit') { done(); reject(mode === 'auto' || (mode === 'plan' && controls.prePlanMode === 'auto') ? autoRestoreRefusal(event.code) ?? new Error('The Chat could not reopen') : new Error('The Chat could not reopen')) }
+        else if (readyWithMode()) { done(); resolve() }
+      })
+      const timer = setTimeout(() => { done(); reject(new Error('The Chat is taking too long to reopen')) }, 60_000)
+      // The sidecar can emit both frames before spawn's advisory write returns.
+      if (readyWithMode()) { done(); resolve() }
+      else if (this.supervisor.listSessions().some(item => item.sessionId === appSessionId &&
+        (isTerminalStatus(item.status) || item.status === 'disconnected'))) {
+        done(); reject(new Error('The Chat could not reopen'))
+      }
+    })
+  }
+
+  private waitForMoveSourceReady(appSessionId: SessionId): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const ready = (): boolean => this.supervisor.listSessions().some(item =>
+        item.sessionId === appSessionId && item.status === 'ready') &&
+        this.registry.findSession(appSessionId)?.engineSessionId !== null &&
+        this.runControls.has(appSessionId) && this.permissionModes.has(appSessionId)
+      const done = (): void => { clearTimeout(timer); unsubscribe() }
+      const unsubscribe = this.supervisor.subscribe(event => {
+        if (event.sessionId !== appSessionId) return
+        if (event.type === 'exit') { done(); reject(new Error('The Chat could not connect')) }
+        else if (ready()) { done(); resolve() }
+      })
+      const timer = setTimeout(() => { done(); reject(new Error('The Chat is taking too long to connect')) }, 60_000)
+      if (ready()) { done(); resolve() }
+    })
+  }
+
+  private parkForMove(appSessionId: SessionId): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const unsubscribe = this.supervisor.subscribe(event => {
+        if (event.type !== 'exit' || event.sessionId !== appSessionId) return
+        clearTimeout(timer); unsubscribe()
+        if (event.code === PARKED_EXIT_CODE) resolve()
+        else reject(new Error('Chat could not stop cleanly'))
+      })
+      const timer = setTimeout(() => { unsubscribe(); reject(new Error('Chat is busy; wait for its work to finish')) }, 10_000)
+      this.supervisor.send(appSessionId, { type: 'app.park', requestId: randomUUID() })
+    })
+  }
+
+  private async settleInternalMoveWarmup(appSessionId: SessionId, wasParked: boolean): Promise<void> {
+    const record = this.supervisor.listSessions().find(item => item.sessionId === appSessionId)
+    try {
+      if (record?.status === 'ready') await this.parkForMove(appSessionId)
+      else if (record && !isTerminalStatus(record.status)) this.supervisor.killSession(appSessionId)
+      if (!wasParked) await this.registry.markClean(appSessionId)
+    } catch (error) {
+      this.log(`[host] internal move warmup could not stop: ${errText(error)}`)
+    }
+  }
+
+  /** Main supplies a picker-resolved cwd; null returns to the original owned Chat. */
+  async moveSession(appSessionId: SessionId, cwd: string | null): Promise<HostResult<SessionDescriptor>> {
+    await this.launched
+    const row = isUuid(appSessionId) ? this.registry.findSession(appSessionId) : undefined
+    if (row?.engineSessionId) {
+      try {
+        if (readSessionRelocation(row.engineSessionId)?.phase === 'moving') {
+          return hostError('session_unreachable', 'This Chat has an unfinished move. Restore its saved backup before reopening it')
+        }
+      } catch { return hostError('session_unreachable', 'This Chat has an unreadable move record') }
+    }
+    if (!row || !this.relocate) return hostError('session_not_found', 'This Chat is unavailable')
+    if (this.branchSwitching || this.moving.has(appSessionId) || this.restoring.has(appSessionId) || row.createdBy) {
+      return hostError('session_unreachable', 'Finish this Chat and its peers before moving it')
+    }
+    const hasPeerWork = () => {
+      const children = this.registry.restorable().filter(other => other.createdBy === appSessionId)
+      const liveIds = new Set(this.supervisor.listSessions()
+        .filter(item => !isTerminalStatus(item.status)).map(item => item.sessionId))
+      const busy = (id: SessionId) => {
+        const state = this.peerMoveState?.(id)
+        return (state?.pending ?? 0) > 0 || (state?.reservations ?? 0) > 0
+      }
+      return busy(appSessionId) || children.some(child =>
+        busy(child.appSessionId) ||
+        (liveIds.has(child.appSessionId) && this.peerMoveState?.(child.appSessionId).presence !== 'idle'))
+    }
+    if (hasPeerWork()) {
+      return hostError('session_unreachable', 'Finish active peer work and deliveries before moving this Chat')
+    }
+    let target: SessionLocation
+    if (cwd === null) {
+      let move
+      try { move = row.engineSessionId ? readSessionRelocation(row.engineSessionId) : null } catch { /* refusal below */ }
+      if (row.binding.kind !== 'project' || !move || move.original.binding.kind !== 'managed' ||
+          !row.engineSessionId || !this.managedStorage?.hasSessionIdentity(move.original.binding, appSessionId, row.engineSessionId)) {
+        return hostError('session_not_found', 'This conversation has no original Chat folder')
+      }
+      const original = this.managedStorage.resolve(move.original.binding)
+      if (!original.ok || original.cwd !== move.original.cwd) return hostError('managed_storage_missing', 'The original Chat folder is unavailable')
+      target = move.original
+    } else {
+      const validated = this.validateCwd(cwd)
+      if (row.binding.kind !== 'managed' || !validated.ok || validated.realpath === row.cwd) {
+        return hostError('invalid_cwd', 'Choose a project folder for this Chat')
+      }
+      target = { cwd: validated.realpath, binding: { kind: 'project' } }
+    }
+    const source = { cwd: row.cwd, binding: row.binding }
+    const live = this.supervisor.listSessions().find(item => item.sessionId === appSessionId)
+    if (live?.status === 'disconnected') return hostError('session_unreachable', 'Restart this Chat after its connection was lost')
+    const sourceWasInactive = !live || isTerminalStatus(live.status)
+    const sourceWasParked = row.shutdown === 'parked'
+    const previousSnapshot = this.runControls.get(appSessionId)
+    const previousMode = this.permissionModes.get(appSessionId)
+    const previousPrePlan = this.prePlanModes.get(appSessionId)
+    const previousCandidate = previousSnapshot && previousMode &&
+      (previousMode !== 'plan' || previousPrePlan)
+      ? { mode: previousMode, model: previousSnapshot.model.selected ?? null,
+          ...(previousSnapshot.effort.selected ? { effort: previousSnapshot.effort.selected } : {}),
+          fastMode: previousSnapshot.fast.active,
+          ...(previousMode === 'plan' ? { prePlanMode: previousPrePlan } : {}) }
+      : null
+    const previousControls: RelocationControls | null = isRelocationControls(previousCandidate) ? previousCandidate : null
+    this.moving.add(appSessionId)
+    this.emitStatus(appSessionId)
+    if (sourceWasInactive) this.hiddenMoveWarmups.add(appSessionId)
+    if (live?.status !== 'ready') {
+      try {
+        if (sourceWasInactive) {
+          this.runControls.delete(appSessionId)
+          this.permissionModes.delete(appSessionId)
+          this.prePlanModes.delete(appSessionId)
+          this.permissionClassifierAvailable.delete(appSessionId)
+          if (row.engineSessionId) {
+            const restored = await this.restoreSession(appSessionId)
+            if (!restored.ok) throw new Error(restored.error.message)
+          } else {
+            const warmReservation = this.reserveSpawn(true)
+            if (!warmReservation.ok) {
+              const failed = warmReservation.result
+              throw new Error(failed.ok ? 'No session slot available' : failed.error.message)
+            }
+            const started = await this.spawn({ appSessionId, cwd: row.cwd, binding: row.binding,
+              title: row.title, forked: row.forked, resumeEngineSessionId: undefined }, warmReservation)
+            if (!started.ok) throw new Error(started.error.message)
+          }
+        }
+        await this.waitForMoveSourceReady(appSessionId)
+      } catch (error) {
+        if (sourceWasInactive) await this.settleInternalMoveWarmup(appSessionId, sourceWasParked)
+        this.hiddenMoveWarmups.delete(appSessionId)
+        this.moving.delete(appSessionId)
+        this.emitStatus(appSessionId)
+        this.peerMoveSettled?.(appSessionId)
+        return hostError('session_unreachable', `Could not prepare this Chat to move: ${errText(error)}`)
+      }
+    } else if (!this.runControls.has(appSessionId) || !this.permissionModes.has(appSessionId)) {
+      try { await this.waitForMoveSourceReady(appSessionId) }
+      catch (error) {
+        this.hiddenMoveWarmups.delete(appSessionId)
+        this.moving.delete(appSessionId)
+        this.emitStatus(appSessionId)
+        this.peerMoveSettled?.(appSessionId)
+        return hostError('session_unreachable', `Could not prepare this Chat to move: ${errText(error)}`)
+      }
+    }
+    const movingRow = this.registry.findSession(appSessionId)
+    if (!movingRow?.engineSessionId || !this.canResume(appSessionId)) {
+      if (sourceWasInactive) await this.settleInternalMoveWarmup(appSessionId, sourceWasParked)
+      this.hiddenMoveWarmups.delete(appSessionId)
+      this.moving.delete(appSessionId)
+      this.emitStatus(appSessionId)
+      this.peerMoveSettled?.(appSessionId)
+      return hostError('session_unreachable', 'This Chat could not be prepared for a safe move')
+    }
+    const sourceEmpty = this.isEmptySession(movingRow)
+    const snapshot = this.runControls.get(appSessionId)
+    const sourceMode = this.permissionModes.get(appSessionId)
+    if (!snapshot || !sourceMode) {
+      if (sourceWasInactive) await this.settleInternalMoveWarmup(appSessionId, sourceWasParked)
+      this.hiddenMoveWarmups.delete(appSessionId); this.moving.delete(appSessionId); this.emitStatus(appSessionId)
+      this.peerMoveSettled?.(appSessionId)
+      return hostError('session_unreachable', 'Wait for this Chat to finish connecting before moving it')
+    }
+    if (sourceMode !== 'default' && sourceMode !== 'acceptEdits' && sourceMode !== 'plan' && sourceMode !== 'dontAsk' && sourceMode !== 'auto') {
+      if (sourceWasInactive) await this.settleInternalMoveWarmup(appSessionId, sourceWasParked)
+      this.hiddenMoveWarmups.delete(appSessionId); this.moving.delete(appSessionId); this.emitStatus(appSessionId)
+      this.peerMoveSettled?.(appSessionId)
+      return hostError('session_unreachable', 'This permission mode cannot move with the Chat')
+    }
+    const prePlanMode = this.prePlanModes.get(appSessionId)
+    if (sourceMode === 'plan' && prePlanMode !== 'default' && prePlanMode !== 'acceptEdits' &&
+        prePlanMode !== 'dontAsk' && prePlanMode !== 'auto') {
+      if (sourceWasInactive) await this.settleInternalMoveWarmup(appSessionId, sourceWasParked)
+      this.hiddenMoveWarmups.delete(appSessionId); this.moving.delete(appSessionId); this.emitStatus(appSessionId)
+      this.peerMoveSettled?.(appSessionId)
+      return hostError('session_unreachable', 'Leave Plan before moving this Chat from its current permission mode')
+    }
+    const controls: RelocationControls = previousControls && sourceWasInactive ? previousControls : {
+      mode: sourceMode,
+      model: snapshot.model.selected ?? null,
+      ...(snapshot.effort.selected ? { effort: snapshot.effort.selected } : {}),
+      fastMode: snapshot.fast.active,
+      ...(sourceMode === 'plan' ? { prePlanMode: prePlanMode as RelocationControls['prePlanMode'] } : {}),
+    }
+    // Reserve the replacement before stopping the source. Its live slot is
+    // transferred rather than counted twice while the source is still ready.
+    const reservation = this.reserveSpawn(true, true)
+    if (!reservation.ok) {
+      if (sourceWasInactive) await this.settleInternalMoveWarmup(appSessionId, sourceWasParked)
+      this.hiddenMoveWarmups.delete(appSessionId)
+      this.moving.delete(appSessionId)
+      this.emitStatus(appSessionId)
+      this.peerMoveSettled?.(appSessionId)
+      return reservation.result
+    }
+    this.moving.add(appSessionId)
+    this.restoring.add(appSessionId)
+    this.emitStatus(appSessionId)
+    let moveReservation: SpawnReservation | null = reservation
+    let sourceParked = false
+    let moveCommitted = false
+    let destinationVerified = false
+    let recoveryFailed = false
+    let recoveredMoved = false
+    let reopenedOriginal = false
+    try {
+      // Reuse the existing idle gate. A declined park times out without killing work.
+      await this.parkForMove(appSessionId)
+      sourceParked = true
+      if (hasPeerWork()) throw new Error('Finish active peer work and deliveries before moving this Chat')
+      await this.relocate({ appSessionId, engineSessionId: movingRow.engineSessionId, source, target, controls })
+      const destinationEmpty = readSessionRelocation(movingRow.engineSessionId)?.empty === true
+      moveCommitted = true
+      await this.registry.updateLocation(appSessionId, target.cwd, target.binding)
+      this.evictReplay(appSessionId)
+      this.supervisor.killSession(appSessionId)
+      this.permissionModes.delete(appSessionId)
+      this.prePlanModes.delete(appSessionId)
+      this.permissionClassifierAvailable.delete(appSessionId)
+      this.runControls.delete(appSessionId)
+      // spawn owns the reservation from here, including its failure release.
+      moveReservation = null
+      const result = await this.spawn({ appSessionId, cwd: target.cwd, binding: target.binding,
+        ...(destinationEmpty ? { freshEngineSessionId: movingRow.engineSessionId } : { resumeEngineSessionId: movingRow.engineSessionId }),
+        title: row.title, forked: row.forked,
+        ...controls,
+        permissionMode: controls.mode,
+        preferSpawnModel: true,
+      }, reservation)
+      if (!result.ok) throw new Error(result.error.message)
+      await this.waitForReadyMode(appSessionId, controls)
+      destinationVerified = true
+      if (sourceWasInactive) {
+        await this.parkForMove(appSessionId)
+        if (!sourceWasParked) await this.registry.markClean(appSessionId)
+      }
+      return { ok: true, value: this.descriptorFor(appSessionId)! }
+    } catch (error) {
+      if (moveCommitted && !destinationVerified) {
+        try { this.supervisor.killSession(appSessionId); await this.registry.markClean(appSessionId) }
+        catch (cleanupError) { this.log(`[host] moved Chat stop failed: ${errText(cleanupError)}`) }
+        if (error instanceof AutoRestoreUnavailableError) {
+          try {
+            await this.relocate({ appSessionId, engineSessionId: movingRow.engineSessionId, source: target, target: source, controls, rollback: true })
+            await this.registry.updateLocation(appSessionId, source.cwd, source.binding)
+            this.prepareMoveReplayRecovery?.(appSessionId, { persistSourceCache: false })
+            const reserved = this.reserveSpawn(true)
+            if (!reserved.ok) throw new Error('No session slot available to reopen the original Chat')
+            const reopened = await this.spawn({ appSessionId, cwd: source.cwd, binding: source.binding,
+              ...(sourceEmpty ? { freshEngineSessionId: movingRow.engineSessionId } : { resumeEngineSessionId: movingRow.engineSessionId }),
+              title: row.title, forked: row.forked,
+              ...controls, permissionMode: controls.mode, preferSpawnModel: true,
+            }, reserved)
+            if (!reopened.ok) throw new Error(reopened.error.message)
+            await this.waitForReadyMode(appSessionId, controls)
+            reopenedOriginal = true
+          } catch (reopenError) {
+            recoveryFailed = true
+            this.log(`[host] original Chat could not reopen after Auto refusal: ${errText(reopenError)}`)
+          }
+        }
+      } else if (sourceParked && !moveCommitted && moveReservation) {
+        // A refusal before the durable move record must leave the original Chat
+        // open. If mutation began, the record blocks all resume instead.
+        try {
+          const record = readSessionRelocation(movingRow.engineSessionId)
+          if (record?.phase === 'complete' && record.target.cwd === target.cwd &&
+              record.appSessionId === appSessionId) {
+            // The worker may have finished the atomic publication but lost its
+            // result pipe. Reconcile the row so it remains a restore offer.
+            await this.registry.updateLocation(appSessionId, target.cwd, target.binding)
+            moveCommitted = true
+            recoveredMoved = true
+          } else if (!record || (record.phase === 'complete' && record.target.cwd === source.cwd)) {
+            this.supervisor.killSession(appSessionId)
+            this.permissionModes.delete(appSessionId)
+            this.prePlanModes.delete(appSessionId)
+            this.permissionClassifierAvailable.delete(appSessionId)
+            this.runControls.delete(appSessionId)
+            this.prepareMoveReplayRecovery?.(appSessionId, { persistSourceCache: true })
+            const reserved = moveReservation
+            moveReservation = null
+            const reopened = await this.spawn({ appSessionId, cwd: source.cwd, binding: source.binding,
+              ...(sourceEmpty ? { freshEngineSessionId: movingRow.engineSessionId } : { resumeEngineSessionId: movingRow.engineSessionId }),
+              title: row.title, forked: row.forked,
+              ...controls, permissionMode: controls.mode,
+              preferSpawnModel: true,
+            }, reserved)
+            if (reopened.ok) {
+              await this.waitForReadyMode(appSessionId, controls)
+              reopenedOriginal = true
+            }
+            else recoveryFailed = true
+          }
+        } catch (reopenError) {
+          recoveryFailed = true
+          this.log(`[host] original Chat could not reopen: ${errText(reopenError)}`)
+        }
+      }
+      const detail = errText(error)
+      if (!reopenedOriginal) this.cancelMoveReplayCoalescing?.(appSessionId)
+      this.log(`[host] Chat move failed: ${detail}`)
+      const reasons: Array<[string, string]> = [
+        ['Open and trust this project', 'Open and trust this project before moving this Chat'],
+        ['Leave the worktree', 'Leave the worktree before moving this Chat'],
+        ['Finish the scheduled continuation', 'Finish the scheduled continuation before moving this Chat'],
+        ['only to its previous project', 'This Chat can currently return only to its previous project'],
+        ['still open in another process', 'Close the other process using this Chat before moving it'],
+        ['Chat is busy', 'Wait for this Chat to finish before moving it'],
+      ]
+      const reason = reasons.find(([phrase]) => detail.includes(phrase))?.[1]
+      return hostError('session_unreachable', error instanceof AutoRestoreUnavailableError
+        ? `${error.message}. ${recoveryFailed ? 'Restore the Chat from the sidebar.' : 'The Chat is back in its original location.'}`
+        : recoveryFailed
+        ? 'The move failed and the original Chat could not reopen. Restore it from the sidebar.'
+        : recoveredMoved ? 'The Chat moved, but could not reopen. Restore it from the sidebar.'
+        : reason ?? 'Could not move this Chat. Its saved history is retained.')
+    } finally {
+      if (sourceWasInactive && this.supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')) {
+        try {
+          await this.parkForMove(appSessionId)
+          if (!sourceWasParked) await this.registry.markClean(appSessionId)
+        } catch (error) { this.log(`[host] internal move warmup could not park: ${errText(error)}`) }
+      }
+      if (moveReservation) this.releaseSpawnReservation(moveReservation)
+      this.moving.delete(appSessionId)
+      this.peerMoveSettled?.(appSessionId)
+      this.restoring.delete(appSessionId)
+      this.hiddenMoveWarmups.delete(appSessionId)
+      this.emitStatus(appSessionId)
+    }
+  }
+
   async restartSession(appSessionId: SessionId): Promise<HostResult<void>> {
     await this.launched
+    if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
     }
@@ -1172,6 +1754,7 @@ export class Host implements HostApi {
         `transcript for ${appSessionId} is gone`,
       )
     }
+    const relocationControls = this.restoredRelocationControls(row)
     // A live restart replaces one process, but a terminal supervisor tombstone
     // starts a new one and therefore consumes a live slot.
     const reservation = this.reserveSpawn(isTerminalStatus(supervisorRecord.status))
@@ -1188,8 +1771,12 @@ export class Host implements HostApi {
         recreatedFolderNotice: row.binding.kind === 'managed' &&
           this.managedStorage?.wasRecreated(row.binding) === true,
         ...(row.engineSessionId !== null
-          ? { resumeEngineSessionId: row.engineSessionId }
+          ? this.isEmptySession(row)
+            ? { freshEngineSessionId: row.engineSessionId }
+            : { resumeEngineSessionId: row.engineSessionId }
           : {}),
+        ...(relocationControls ? { ...relocationControls, permissionMode: relocationControls.mode } : {}),
+        ...(relocationControls ? { preferSpawnModel: true } : {}),
         // The fresh process must boot with the SAME identity: a restart that
         // dropped the name would leave a live session no peer could address, and
         // one that dropped the creator's LABEL would leave it holding an id it
@@ -1259,7 +1846,8 @@ export class Host implements HostApi {
    */
   canPreview(appSessionId: SessionId): boolean {
     if (!isUuid(appSessionId)) return false
-    return this.descriptorFor(appSessionId)?.restorable === true
+    if (this.moveRecordBlocked(this.registry.findSession(appSessionId)?.engineSessionId)) return false
+    return this.registry.hasTranscript(appSessionId) && this.descriptorFor(appSessionId)?.restorable === true
   }
 
   /**
@@ -1272,9 +1860,14 @@ export class Host implements HostApi {
     if (!isUuid(appSessionId)) return false
     if (this.resumeFailed.has(appSessionId)) return false
     const row = this.registry.findSession(appSessionId)
+    try {
+      const move = row?.engineSessionId ? readSessionRelocation(row.engineSessionId) : null
+      if (move && (move.phase === 'moving' || move.appSessionId !== appSessionId ||
+          row?.cwd !== move.target.cwd || JSON.stringify(row.binding) !== JSON.stringify(move.target.binding))) return false
+    } catch { return false }
     if (row?.binding.kind === 'managed' && row.engineSessionId !== null &&
       !this.managedStorage?.hasSessionIdentity(row.binding, appSessionId, row.engineSessionId)) return false
-    return this.registry.hasTranscript(appSessionId)
+    return this.registry.hasTranscript(appSessionId) || (row !== undefined && this.isEmptySession(row))
   }
 
   /* --------------------------------------------------------------------- *
@@ -1295,7 +1888,7 @@ export class Host implements HostApi {
 
   /** Hold all new spawns while a checkout moves the files under live sessions. */
   beginBranchSwitch(): boolean {
-    if (this.branchSwitching || this.pendingSpawns > 0) return false
+    if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0) return false
     this.branchSwitching = true
     return true
   }
@@ -1304,7 +1897,7 @@ export class Host implements HostApi {
     this.branchSwitching = false
   }
 
-  private reserveSpawn(consumesLive: boolean):
+  private reserveSpawn(consumesLive: boolean, replacesLive = false):
     | { ok: true; token: string; consumesLive: boolean }
     | { ok: false; result: HostResult<never> } {
     if (this.branchSwitching) {
@@ -1315,7 +1908,7 @@ export class Host implements HostApi {
     // and is a file-growth backstop, so tying process concurrency to it meant
     // raising the row bound would raise the fork-bomb cap too. The reap only
     // trims TERMINAL rows; live rows are never evicted to make room.
-    if (consumesLive && this.liveCount() + this.pendingLiveSlots >= MAX_LIVE_SESSIONS) {
+    if (consumesLive && this.liveCount() + this.pendingLiveSlots - (replacesLive ? 1 : 0) >= MAX_LIVE_SESSIONS) {
       return { ok: false, result: hostError('session_limit', `at most ${MAX_LIVE_SESSIONS} live sessions`) }
     }
     const now = this.now()
@@ -1415,6 +2008,9 @@ export class Host implements HostApi {
       engineSessionId: row?.engineSessionId ?? null,
       cwd: row?.cwd ?? '',
       binding: row?.binding ?? { kind: 'project' },
+      moving: row ? this.moving.has(row.appSessionId) : false,
+      canMoveBack: row?.binding.kind === 'project' && this.hasMoveOrigin(row.engineSessionId),
+      contextTransitions: this.contextTransitionsFor(row),
       title: row?.title ?? null,
       // PEER-SESSIONS §2/§6. null ⇒ a row that predates the field and has not
       // been spawned since; false ⇒ the user has not blocked peer wake here.
@@ -1471,6 +2067,10 @@ export class Host implements HostApi {
   ): boolean {
     if (liveStatus !== null) return false
     if (!row || row.engineSessionId === null) return false
+    // Keep an interrupted move visible as a recovery row. The restore owner
+    // refuses it above, and preview remains closed, so no half-moved bytes are
+    // consumed while the user can still find the saved conversation.
+    if (this.moveRecordBlocked(row.engineSessionId)) return true
     return this.canResume(row.appSessionId)
   }
 
@@ -1501,6 +2101,7 @@ export class Host implements HostApi {
   }
 
   private emitStatus(appSessionId: SessionId): void {
+    if (this.hiddenMoveWarmups.has(appSessionId)) return
     const descriptor = this.descriptorFor(appSessionId)
     if (descriptor) {
       this.emit({ type: 'session-status', session: descriptor })

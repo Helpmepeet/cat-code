@@ -210,7 +210,7 @@ export function SessionPane({
   turnStartedAt = null,
   activeDescriptor,
   branch,
-  branchSwitchPending = false,
+  branchSwitchPending: checkoutSwitchPending = false,
   onSwitchBranch,
   sandboxed,
   activeLog,
@@ -289,6 +289,12 @@ export function SessionPane({
     [activeSessionId],
   )
   const toast = useToast()
+  const moveBack = useCallback(() => {
+    if (!activeSessionId) return
+    void getBridge().moveSession(activeSessionId, null).then(result => {
+      if (!result.ok) toast(result.error.message, { tone: 'warn' })
+    }).catch(() => toast('Could not move this Chat.', { tone: 'warn' }))
+  }, [activeSessionId, toast])
   const [managedFolderState, setManagedFolderState] = useState<
     | 'checking'
     | 'available'
@@ -688,6 +694,7 @@ export function SessionPane({
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
+  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true
   const composerReadOnly =
     branchSwitchPending || managedFolderUnavailable || !composerGate.editable
   // A named session is addressed by its own name (PEER-SESSIONS §6): the user
@@ -695,13 +702,13 @@ export function SessionPane({
   // peers use for it too. A row with no name (one that predates the field and
   // has not been spawned since) keeps the original prompt verbatim. The
   // connection copy is untouched either way.
-  const composerPlaceholder = managedFolderUnavailable
+  const composerPlaceholder = activeDescriptor?.moving ? 'Connecting…' : managedFolderUnavailable
     ? 'Recreate the chat folder to continue'
     : composerGate.editable
       ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
       : 'Connecting…'
   // The name carries the peer colour; the connection copy has no name in it.
-  const composerPlaceholderName = composerGate.editable && !managedFolderUnavailable
+  const composerPlaceholderName = composerGate.editable && !managedFolderUnavailable && !activeDescriptor?.moving
     ? composerPlaceholderParts(activeDescriptor?.name ?? null)
     : null
   const paused = permissionQueue.length > 0
@@ -753,7 +760,7 @@ export function SessionPane({
     ? previewEngaged
       ? 'resuming'
       : 'preview'
-    : restoreConnecting &&
+    : restoreConnecting && activeDescriptor?.moving !== true &&
         activeDescriptor?.engineSessionId != null &&
         nestedRows.length === 0
       ? 'connecting'
@@ -1645,8 +1652,8 @@ export function SessionPane({
             cwd={activeDescriptor?.cwd ?? null}
             managedChat={activeDescriptor?.binding?.kind === 'managed'}
             branch={branch}
-            onListBranches={onSwitchBranch ? listBranches : undefined}
-            onSwitchBranch={onSwitchBranch ? branchName => {
+            onListBranches={onSwitchBranch && !activeDescriptor?.moving ? listBranches : undefined}
+            onSwitchBranch={onSwitchBranch && !activeDescriptor?.moving ? branchName => {
               if (preparingImage || pickingFile) return Promise.resolve('Wait for the attachment to finish before switching branches.')
               return onSwitchBranch(branchName)
             } : undefined}
@@ -1656,16 +1663,25 @@ export function SessionPane({
             state={transcript}
             compacting={compacting}
             leases={leases}
-            agentBackground={agentBackground}
+            agentBackground={activeDescriptor?.moving ? null : agentBackground}
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
-            onLoadEarlier={onLoadEarlierHistory}
+            onLoadEarlier={activeDescriptor?.moving ? undefined : onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
-            onMessageAction={onMessageAction}
+            onMessageAction={activeDescriptor?.moving ? undefined : onMessageAction}
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}
+            contextTransitions={activeDescriptor?.contextTransitions}
+            onMoveBack={activeDescriptor?.canMoveBack && activeDescriptor.binding?.kind === 'project'
+              ? moveBack
+              : undefined}
+            moveBackDisabled={generating || activeDescriptor?.status !== 'ready' || activeDescriptor?.moving === true}
           />
+
+          {activeDescriptor?.moving ? (
+            <div className="chat-move-progress" role="status">Moving…</div>
+          ) : null}
 
           {/* D1a — a message sent during a response waits here until the engine
             * takes it, exactly as the terminal shows it above its own composer.

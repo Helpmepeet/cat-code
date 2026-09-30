@@ -989,6 +989,13 @@ export type ReadyFrame = {
   payload: AppReadyPayload
 }
 
+/** The sidecar has sent every retained history frame for this attachment. */
+export type HistoryReplayCompleteFrame = {
+  kind: 'history.replay.complete'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+}
+
 /**
  * A single controller event, forwarded raw. `event` is the whole
  * `AppSessionEvent` — including `event.message: SDKMessage` for `type:'message'`
@@ -1152,6 +1159,8 @@ export type ErrorFrame = {
  */
 export type PermissionContextSnapshot = {
   mode: string
+  /** Engine-owned return mode while Plan is active, when one is recorded. */
+  prePlanMode?: string
   /** Rule strings keyed by PermissionRuleSource (userSettings, cliArg, …). */
   alwaysAllowRules: Record<string, string[]>
   alwaysDenyRules: Record<string, string[]>
@@ -3760,6 +3769,7 @@ export type ActivityFrame = {
 
 export type ServerFramePayload =
   | ReadyFrame
+  | HistoryReplayCompleteFrame
   | SessionTitleFrame
   | EventFrame
   | TranscriptResetFrame
@@ -3821,6 +3831,7 @@ export type ServerFrameKind = ServerFramePayload['kind']
  */
 const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   ready: true,
+  'history.replay.complete': true,
   'session-title': true,
   event: true,
   'transcript.reset': true,
@@ -4269,6 +4280,8 @@ export type CatCodeBridge = {
   createSession(input: CreateSessionInput): Promise<HostResult<SessionDescriptor>>
   /** Create a new host-owned managed chat without a renderer-supplied path. */
   createManagedChat(): Promise<HostResult<SessionDescriptor>>
+  /** Manual move: a native picker token, or null for Move back. */
+  moveSession(appSessionId: SessionId, cwdToken: string | null): Promise<HostResult<SessionDescriptor>>
   getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>>
   recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   openSessionFolder(appSessionId: SessionId): Promise<HostResult<void>>

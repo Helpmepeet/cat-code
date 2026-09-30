@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Chat → Project · Visual concept</title>
+<style>
+@font-face{font-family:DM Sans;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');font-weight:100 1000;font-display:swap}
+@font-face{font-family:DM Mono;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');font-display:swap}
+:root{--paper:#fafaf9;--ink:#292b2b;--muted:#747875;--line:#d5d9d5;--green:#2c725b;--amber:#9c6b23;--red:#b24a44;--sans:'DM Sans',system-ui,sans-serif;--mono:'DM Mono',monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans)}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:2px solid #505550;outline-offset:5px}[hidden]{display:none!important}
+.x-shell{max-width:1280px;margin:auto;padding:30px 38px 24px}.x-head{display:flex;justify-content:space-between;gap:20px;align-items:center;color:var(--muted);font:10px/1.5 var(--mono);letter-spacing:.1em;text-transform:uppercase}.x-head h1{font:inherit;margin:0}.x-tabs{display:flex;gap:38px;border-bottom:1px solid var(--line);margin:35px 0 0;overflow-x:auto}.x-tab{flex:none;border:0;background:none;color:var(--muted);font:10px/1.5 var(--mono);text-transform:uppercase;letter-spacing:.07em;padding:14px 0 16px;border-bottom:2px solid transparent}.x-tab[aria-selected=true]{color:#303530;border-bottom-color:#303530}.x-tab span{margin-right:10px;color:#939893}.x-artboard{overflow-x:auto;margin:15px 0 0}.x-panel{min-width:800px}.x-controls{display:flex;justify-content:space-between;gap:20px;align-items:center;border-top:1px solid var(--line);padding:21px 0 0}.x-options{display:flex;gap:8px;flex-wrap:wrap}.x-option,.x-next{background:none;border:1px solid #cdd1cd;border-radius:3px;color:#737873;padding:11px 14px;font:10px/1.2 var(--mono);text-transform:uppercase;letter-spacing:.035em}.x-option[aria-pressed=true]{color:#2c312c;border-color:#515951;background:#f0f1ef}.x-option:hover,.x-next:hover{background:#eceeeb}.x-next{border:0;white-space:nowrap;padding-right:0}.x-footer{display:flex;justify-content:space-between;gap:20px;margin-top:22px;color:#909590;font:9px/1.5 var(--mono);letter-spacing:.06em;text-transform:uppercase}.x-sr{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+/* Concept diagrams, not replicas of application surfaces. */
+.diagram{display:block;width:100%;height:auto;min-height:470px;font-family:var(--sans)}.diagram text{fill:var(--ink)}.diagram .label{font-size:13px;fill:var(--muted);font-weight:450}.diagram .small{font-size:12px;fill:var(--muted)}.diagram .name{font-size:19px;font-weight:570;letter-spacing:-.3px}.diagram .big{font-size:26px;font-weight:550;letter-spacing:-.6px}.diagram .mono{font-family:var(--mono);font-size:11px;fill:var(--muted)}.diagram .message{font-size:22px;letter-spacing:-.35px}.diagram .shape{fill:var(--paper);stroke:#b9c1b9;stroke-width:1.7}.diagram .paper{fill:#fff;stroke:#b9c1b9;stroke-width:1.5}.diagram .line{fill:none;stroke:#c5cdc5;stroke-width:2}.diagram .thin{fill:none;stroke:#dce1db;stroke-width:1.5}.diagram .faint{opacity:.3}.diagram .muted{opacity:.55}.diagram .active{stroke:var(--green);stroke-width:2.6}.diagram .green{fill:var(--green)}.diagram .amber{fill:var(--amber)}.diagram .red{fill:var(--red)}.diagram .stroke-green{stroke:var(--green)}.diagram .stroke-amber{stroke:var(--amber)}.diagram .stroke-red{stroke:var(--red)}.diagram .route{fill:none;stroke-width:2.5;stroke-linecap:round}.diagram .flow{stroke-dasharray:1000;stroke-dashoffset:1000;animation:trace .75s ease-out forwards}.diagram .bubble{fill:#fff;stroke:#bbc3bb;stroke-width:1.8}.diagram .rule{stroke:#b5beb5;stroke-width:4;stroke-linecap:round}.diagram .stopped{stroke-dasharray:6 7}.diagram .chip{fill:#eff2ee;stroke:#bdc6bb;stroke-width:1.3}.diagram .tag{font-family:var(--mono);font-size:10px;fill:#747c73}.diagram .accent-paper{fill:#edf5ef;stroke:var(--green);stroke-width:1.7}
+@keyframes trace{to{stroke-dashoffset:0}}
+@media(prefers-reduced-motion:reduce){.diagram .flow{animation:none;stroke-dashoffset:0}}
+@media(max-width:720px){.x-shell{padding:20px 18px}.x-head{font-size:9px}.x-tabs{gap:24px;margin-top:24px}.x-tab{font-size:9px}.x-controls{align-items:flex-start;gap:10px}.x-options{gap:6px}.x-option{padding:10px;font-size:9px}.x-next{font-size:9px}.x-footer{font-size:8px}.diagram{min-height:390px}}
+</style>
+</head>
+<body>
+<main class="x-shell">
+  <header class="x-head"><h1>Chat → Project</h1><span>Concept diagrams · Proposed</span></header>
+  <nav class="x-tabs" role="tablist" aria-label="Visual chapters">
+    <button class="x-tab" id="tab-choice" role="tab" aria-controls="panel-choice" aria-selected="true" data-tab="choice"><span>01</span>Project choice</button>
+    <button class="x-tab" id="tab-context" role="tab" aria-controls="panel-context" aria-selected="false" tabindex="-1" data-tab="context"><span>02</span>Context change</button>
+    <button class="x-tab" id="tab-correction" role="tab" aria-controls="panel-correction" aria-selected="false" tabindex="-1" data-tab="correction"><span>03</span>Wrong guess</button>
+  </nav>
+  <div class="x-artboard">
+    <section class="x-panel" id="panel-choice" role="tabpanel" aria-labelledby="tab-choice"></section>
+    <section class="x-panel" id="panel-context" role="tabpanel" aria-labelledby="tab-context" hidden></section>
+    <section class="x-panel" id="panel-correction" role="tabpanel" aria-labelledby="tab-correction" hidden></section>
+  </div>
+  <div class="x-controls"><div class="x-options" id="options" aria-label="Diagram examples"></div><button class="x-next" id="next">Context change →</button></div>
+  <div class="x-footer"><span id="footer-left">Scripted examples · No live agent</span><span id="footer-right">01 / 03</span></div>
+  <div class="x-sr" id="announcement" role="status" aria-live="polite"></div>
+</main>
+<script>
+'use strict';
+const state={tab:'choice',example:'clear',context:0,correction:0};
+const tabs=['choice','context','correction'];
+const examples={
+  clear:{name:'Clear task',lines:['Fix the keyboard shortcut','in /Users/pt/cat-code.'],route:'attach',reason:'Clear intent + one project'},
+  unclear:{name:'Unclear task',lines:['Fix the sidebar','in the cat app.'],route:'ask',reason:'Uncertain destination'},
+  general:{name:'General chat',lines:['Why does bread','need time to rise?'],route:'stay',reason:'No project task'},
+  mention:{name:'Name mention',lines:['Use “Cat Code” as a name','in my birthday invitation.'],route:'stay',reason:'A name, not project work'}
+};
+const escapeText=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const text=(x,y,value,cls='label',anchor='start')=>`<text x="${x}" y="${y}" class="${cls}" text-anchor="${anchor}">${escapeText(value)}</text>`;
+const multi=(x,y,lines,cls='message',gap=31)=>`<text x="${x}" y="${y}" class="${cls}">${lines.map((s,i)=>`<tspan x="${x}" dy="${i?gap:0}">${escapeText(s)}</tspan>`).join('')}</text>`;
+const arrow=(d,tone='green',animated=false)=>`<path d="${d}" class="route stroke-${tone}${animated?' flow':''}" marker-end="url(#arrow-${tone})"/>`;
+const chatIcon=(x,y,tone='#6e796e')=>`<g transform="translate(${x} ${y})" fill="none" stroke="${tone}" stroke-width="1.8" stroke-linejoin="round"><path d="M0 0h26v18H10l-6 5v-5H0z"/><path d="M6 6h14M6 11h10"/></g>`;
+const folder=(x,y,w,h,tone='shape')=>`<path d="M${x} ${y+16}v-16h${w*.38}l14 16h${w*.62-14}v${h-16}h-${w}z" class="${tone}"/>`;
+const check=(x,y,tone='green')=>`<path d="M${x-6} ${y}l4 4 8-9" class="line stroke-${tone}"/>`;
+const cross=(x,y)=>`<path d="M${x-5} ${y-5}l10 10m0-10-10 10" class="line stroke-red"/>`;
+function svg(title,description,contents){return `<svg class="diagram" viewBox="0 0 1160 545" role="img" aria-labelledby="diagram-title diagram-desc"><title id="diagram-title">${escapeText(title)}</title><desc id="diagram-desc">${escapeText(description)}</desc><defs>${['green','amber','red','gray'].map(t=>`<marker id="arrow-${t}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1l7 4-7 4" fill="none" stroke="${({green:'#2c725b',amber:'#9c6b23',red:'#b24a44',gray:'#a6aea6'})[t]}" stroke-width="1.5"/></marker>`).join('')}</defs>${contents}</svg>`;}
+function choice(){
+ const e=examples[state.example];
+ const paths={attach:'M597 246H647Q667 246 667 226V124Q667 104 687 104H766',ask:'M597 246H766',stay:'M597 246H647Q667 246 667 266V389Q667 409 687 409H766'};
+ const outcome=(key,content)=>`<g class="${e.route===key?'':'faint'}">${content}</g>`;
+ return svg('Project choice',`Before delivery, a routing check considers user-authored intent and eligible trusted projects. Example: ${e.lines.join(' ')} ${e.reason}. ${e.route==='attach'?'The Chat attaches before this message reaches the project engine.':e.route==='ask'?'A confirmation is needed. The exact pending-message behaviour remains undecided.':'The message is delivered in the unassigned Chat.'}`,`
+ ${text(36,44,'Before delivery','big')}${text(775,44,'Three possible outcomes','label')}
+ <path d="M36 165h320v167H83l-24 20v-20H36z" class="bubble"/>
+ ${chatIcon(58,189)}${text(98,205,'You','label')}
+ ${multi(58,250,e.lines)}
+ ${text(57,385,'No project','name')}${text(57,410,'Private working folder','label')}
+ ${arrow('M356 246H449','gray')}
+ <circle cx="525" cy="246" r="69" class="shape"/>
+ ${text(525,240,'Project','name','middle')}${text(525,264,'match?','name','middle')}
+ ${Object.keys(paths).map(k=>`<path d="${paths[k]}" class="line" opacity=".3"/>`).join('')}
+ ${arrow(paths[e.route],e.route==='ask'?'amber':'green',true)}
+ ${outcome('attach',`${folder(779,68,320,102,e.route==='attach'?'accent-paper':'shape')}${check(809,112)}${text(832,119,'cat-code','name')}${text(804,148,'Automatic attachment','label')}`)}
+ ${outcome('ask',`<path d="M779 215h320M779 289h320" class="line ${e.route==='ask'?'stroke-amber':''}"/>${text(804,247,'Occasional confirmation','name')}${text(804,276,'A2 Bar · separate UI reference','label')}`)}
+ ${outcome('stay',`<path d="M779 369h320v97H812l-17 14v-14H779z" class="bubble ${e.route==='stay'?'stroke-green':''}"/>${chatIcon(803,391,e.route==='stay'?'#2c725b':'#6e796e')}${text(847,411,'Chat','name')}${text(804,444,'Still unassigned','label')}`)}
+ <path d="M525 315v32" class="thin"/>
+ ${text(525,368,'Trusted projects · names · aliases','small','middle')}
+ <path d="M433 391h184M433 419h184" class="thin"/>
+ ${text(443,409,'cat-code','mono')}${text(537,409,'Desktop app','small')}
+ ${text(443,438,'cat-app','mono')}${text(537,438,'UX reference','small')}
+ ${text(36,510,e.reason,e.route==='ask'?'name amber':'name green')}
+ `);
+}
+function conversationCard(x,y,label,engine,{active=false,stopped=false}={}){
+ return `<g><rect x="${x}" y="${y}" width="264" height="224" rx="6" class="${active?'accent-paper':'paper'}"/>${chatIcon(x+22,y+24,active?'#2c725b':'#6e796e')}${text(x+64,y+41,label,'name')}<path d="M${x+22} ${y+65}h220" class="thin"/><path d="M${x+103} ${y+91}h132M${x+140} ${y+108}h95M${x+29} ${y+141}h141M${x+29} ${y+158}h117" class="rule"/><rect x="${x+21}" y="${y+182}" width="222" height="26" rx="3" class="chip"/>${text(x+132,y+200,engine,'mono','middle')}${stopped?`<path d="M${x+235} ${y+30}v12m7-12v12" class="line stroke-red"/>`:''}</g>`;
+}
+function context(){
+ const step=state.context;
+ return svg('Context change',[
+ 'The new message is held before delivery. The host checks project trust, requests a safe stop, saves the existing conversation, and waits for the old engine process to exit.',
+ 'The same transcript and related session artifacts move into the project history directory within private app storage. They do not move into the Git working tree. IDs remain unchanged. The relocation is recoverable and remains unverified.',
+ 'A replacement engine process resumes the same conversation with the same IDs and an ordinary project binding. Project configuration loads through normal resume. The new user message is still held.',
+ 'The same Chat is grouped under cat-code and the held message is delivered once, subject to durable delivery tracking. History now lives in project history storage. Chat-created working files stay in the private Chat folder.'
+ ][step],`
+ ${text(36,43,'Before restart','big')}${text(857,43,'After restart','big')}
+ ${conversationCard(36,160,'This Chat','old process · exited',{active:step===0,stopped:true})}
+ ${text(57,418,'Private working folder','name')}${text(57,443,'Conversation saved','label')}
+ <g class="${step<2?'faint':''}">
+ ${conversationCard(852,160,'This Chat','new process · same IDs',{active:step===3})}
+ ${text(873,418,'Project working folder','name')}
+ </g>
+ ${text(35,119,'Save + confirmed exit','label')}
+ <path d="M301 201H397V93H751V201H845" class="line ${step===0?'faint':''}" marker-end="url(#arrow-gray)"/>
+ ${text(576,78,'History → project storage','name','middle')}
+ ${text(576,119,'Private app storage','small','middle')}
+ ${step>0?arrow('M301 201H397V93H751V201H845','green',true):''}
+ <g class="${step<2?'faint':''}">
+ ${text(576,194,'Project context','name','middle')}
+ ${folder(414,215,324,191,'shape')}
+ <rect x="438" y="239" width="276" height="145" rx="3" class="paper"/>
+ ${text(454,268,'CLAUDE.md + rules','label')}
+ ${text(454,300,'Settings + permissions','label')}
+ ${text(454,332,'Skills + tools + hooks','label')}
+ ${text(454,364,'Project memory','label')}
+ ${step>=2?[263,295,327,359].map(y=>check(693,y)).join(''):''}
+ ${arrow('M738 312H845',step>=2?'green':'gray',step>=2)}
+ ${text(576,438,'Project configuration · resume hooks','label','middle')}
+ </g>
+ ${step===3?`<g><path d="M874 441v44h18" class="line stroke-green"/>${text(895,449,'cat-code','label')}${text(895,489,'Keyboard fix','name green')}${text(1030,489,'← same Chat','small')}</g>`:text(874,444,'Same app + engine IDs','label')}
+ <path d="M57 476h17v21H57zM61 482h9m-9 5h7" class="line"/>
+ ${text(85,491,'Working files · original location','small')}
+ <rect x="440" y="471" width="272" height="38" rx="4" class="${step===3?'accent-paper':'paper'}"/>
+ ${text(576,496,step===3?'First project turn':'Pending message','label','middle')}
+ `);
+}
+function correction(){
+ const step=state.correction;
+ return svg('Wrong guess',[
+ 'The Chat is attached to the wrong project. Move back will change its active environment, not erase its history or undo edits.',
+ 'Move back waits for a safe stop, relocates the saved history back to Chat storage and resumes the prior unassigned environment. It is refused while a recorded worktree is active. The same Chat and IDs are retained.',
+ 'The same Chat continues unassigned. Suggestions for the rejected project are suppressed. Earlier project information remains in history and existing edits remain on disk; this is not a clean rewind.'
+ ][step],`
+ ${text(36,44,'Before move back','big')}${text(853,44,'After move back','big')}
+ ${conversationCard(36,145,'This Chat',step===0?'project process · active':'project process · stopped',{stopped:step>=1})}
+ ${text(58,405,'Wrong project','name red')}
+ <g class="${step===2?'':'faint'}">
+ ${conversationCard(852,145,'This Chat','new process · same IDs',{active:step===2})}
+ ${text(874,405,'Chat · unassigned','name green')}
+ <rect x="874" y="425" width="29" height="16" rx="8" fill="#e2e6df" stroke="#adb6a8"/><circle cx="883" cy="433" r="5" fill="#798373"/>
+ ${text(914,438,'cat-code suggestions off','label')}
+ </g>
+ <path d="M301 190H397V99H751V190H845" class="line" marker-end="url(#arrow-gray)"/>
+ ${text(576,83,'History → Chat storage','name','middle')}
+ ${step===2?arrow('M301 190H397V99H751V190H845','green',true):''}
+ <path d="M303 301H449M704 301H845" class="line" marker-end="url(#arrow-gray)"/>
+ <rect x="455" y="270" width="243" height="62" rx="5" class="shape"/>
+ ${text(576,308,'Relocate + resume','name','middle')}
+ ${text(576,242,step===0?'Move back':step===1?'Stopping + reconnecting':'Unassigned configuration','label','middle')}
+ ${text(576,382,'Earlier project content','label','middle')}
+ ${text(576,405,'Still in history','name','middle')}
+ <path d="M58 443h36l15 15v53H58z" class="paper"/>
+ <path d="M94 443v15h15M70 477h25M70 488h25" class="line stroke-red"/>
+ ${text(126,477,'Existing edits','name red')}${text(126,502,'No automatic undo','small')}
+ `);
+}
+const panels={choice,context,correction};
+function options(){
+ if(state.tab==='choice')return Object.entries(examples).map(([key,v])=>({key,label:v.name,selected:state.example===key}));
+ if(state.tab==='context')return ['Safe stop','Relocate','Resume','Attached'].map((label,i)=>({key:String(i),label,selected:state.context===i}));
+ return ['Wrong attachment','Relocate + resume','Unassigned'].map((label,i)=>({key:String(i),label,selected:state.correction===i}));
+}
+function render(){
+ for(const tab of tabs){
+  const button=document.getElementById('tab-'+tab), panel=document.getElementById('panel-'+tab), selected=state.tab===tab;
+  button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;panel.hidden=!selected;
+  // Empty inactive diagrams so their SVG title and marker IDs stay unique.
+  panel.innerHTML=selected?panels[tab]():'';
+ }
+ const optionsElement=document.getElementById('options');
+ optionsElement.innerHTML=options().map(o=>`<button class="x-option" data-option="${o.key}" aria-pressed="${o.selected}">${escapeText(o.label)}</button>`).join('');
+ document.getElementById('footer-left').textContent=state.tab==='choice'?'Pre-delivery check · Scripted examples':state.tab==='context'?'Proposed relocation · Runtime unverified':'Same Chat · History retained';
+ document.getElementById('footer-right').textContent=`0${tabs.indexOf(state.tab)+1} / 03`;
+ document.getElementById('next').textContent=state.tab==='choice'?'Context change →':state.tab==='context'?(state.context<3?'Next step →':'Wrong guess →'):(state.correction<2?'Next step →':'Project choice ↺');
+ document.getElementById('announcement').textContent=document.getElementById('diagram-desc').textContent;
+}
+document.querySelector('.x-tabs').addEventListener('click',event=>{const b=event.target.closest('[data-tab]');if(!b)return;state.tab=b.dataset.tab;render();});
+document.querySelector('.x-tabs').addEventListener('keydown',event=>{
+ if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+ event.preventDefault();let i=tabs.indexOf(state.tab);
+ i=event.key==='Home'?0:event.key==='End'?2:(i+(event.key==='ArrowRight'?1:2))%3;
+ state.tab=tabs[i];render();document.getElementById('tab-'+state.tab).focus();
+});
+document.getElementById('options').addEventListener('click',event=>{
+ const b=event.target.closest('[data-option]');if(!b)return;const key=b.dataset.option;
+ if(state.tab==='choice')state.example=key;else state[state.tab]=Number(key);
+ render();document.querySelector(`[data-option="${key}"]`).focus();
+});
+document.getElementById('next').addEventListener('click',()=>{
+ if(state.tab==='choice'){state.tab='context';state.context=0;}
+ else if(state.tab==='context'){if(state.context<3)state.context++;else{state.tab='correction';state.correction=0;}}
+ else if(state.correction<2)state.correction++;
+ else state.tab='choice';
+ render();
+});
+render();
+</script>
+</body>
+</html>

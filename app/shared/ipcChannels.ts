@@ -61,6 +61,7 @@ export const CH_PICK_SETTINGS_PROJECT = 'catcode:pick-settings-project'
 // one-way stream. ---
 export const CH_HOST_CREATE = 'catcode:host:create'
 export const CH_HOST_CREATE_MANAGED = 'catcode:host:create-managed'
+export const CH_HOST_MOVE_SESSION = 'catcode:host:move-session'
 export const CH_HOST_FOLDER_STATE = 'catcode:host:folder-state'
 export const CH_HOST_FOLDER_RECREATE = 'catcode:host:folder-recreate'
 export const CH_HOST_FOLDER_OPEN = 'catcode:host:folder-open'

@@ -35,6 +35,13 @@ import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness, MountedTree } from './domTestHarness.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import { formatPasteRef, type PasteEntry } from './composerState.js'
+import { AttachmentGate } from '../../main/attachmentGate.js'
+import {
+  PROTOCOL_VERSION,
+  type ServerFrame,
+} from '../../shared/protocol.js'
+import type { SessionDescriptor } from '../../shared/hostApi.js'
+import { createTranscriptState, projectServerFrames } from './transcriptProjector.js'
 
 let harness: DomTestHarness
 
@@ -453,4 +460,140 @@ test('a paste pill is removed at the position it holds right now', async () => {
 
   expect(stale.removals).toEqual([])
   expect(log.removals).toEqual([{ entry, at: 'hello '.length }])
+})
+
+const MOVE_SESSION = 'session-1'
+
+function moveReady(): ServerFrame {
+  return {
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION,
+    sessionId: MOVE_SESSION, engineSessionId: 'engine-session-1',
+    payload: {
+      type: 'app.ready', protocolVersion: 1, inputEnabled: true,
+      activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  }
+}
+
+function moveHistory(): ServerFrame {
+  return {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION,
+    sessionId: MOVE_SESSION, replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant', uuid: '00000000-0000-4000-8000-00000000ab91',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'The same conversation' }] },
+      } as never,
+    },
+  }
+}
+
+const moveComplete: ServerFrame = {
+  kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION,
+  sessionId: MOVE_SESSION,
+}
+
+function moveDescriptor(moving: boolean): SessionDescriptor {
+  return {
+    appSessionId: MOVE_SESSION, engineSessionId: 'engine-session-1',
+    cwd: '/tmp/project', title: null, forked: false, titleUpdatedAt: null,
+    status: 'ready', restorable: false, parked: false,
+    createdAt: 0, lastAttachedAt: 0, lastMessageSentAt: null,
+    moving,
+  }
+}
+
+test('Move to project and Move back retain the mounted conversation through delayed replay', async () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  let transcript = projectServerFrames(createTranscriptState(), [moveReady(), moveHistory()])
+  const pane = (moving: boolean) => (
+    <SessionPane
+      {...idleSessionPaneProps()}
+      activeDescriptor={moveDescriptor(moving)}
+      activeConnection={{ status: moving ? 'connecting' : 'ready', inputEnabled: !moving }}
+      transcript={transcript}
+      prompt="unfinished draft"
+      images={[{ id: 1, mediaType: 'image/png', data: 'aGVsbG8=', name: 'sketch.png' }]}
+    />
+  )
+  const tree = await harness.mount(pane(false))
+  const composer = composerOf(tree)
+  const sameComposer = () => tree.container.querySelector<HTMLElement>('[aria-label="Prompt"]')
+  const scroller = tree.container.querySelector<HTMLElement>('section > div.overflow-auto')
+  if (!scroller) throw new Error('no transcript scroller')
+  await act(async () => { composer.focus() })
+  scroller.scrollTop = 37
+
+  const expectContinuous = () => {
+    expect(tree.container.textContent).toContain('The same conversation')
+    expect(tree.container.textContent).not.toContain('Welcome back')
+    expect(tree.container.querySelectorAll('[data-row-key]')).toHaveLength(1)
+    expect(sameComposer()).toBe(composer)
+    expect(composer.textContent).toContain('unfinished draft')
+    expect(tree.container.querySelector('[aria-label="Remove sketch.png"]')).not.toBeNull()
+    expect(harness.document.activeElement).toBe(composer)
+    expect(scroller.scrollTop).toBe(37)
+  }
+  expectContinuous()
+
+  for (let move = 0; move < 2; move += 1) {
+    await tree.render(pane(true))
+    expectContinuous()
+    expect(tree.container.textContent).toContain('Moving…')
+    gate.startRelocationReplayCoalescing(MOVE_SESSION)
+    expect(gate.onFrame(MOVE_SESSION, moveReady())).toEqual([])
+    await tree.render(pane(true))
+    expectContinuous()
+    expect(gate.onFrame(MOVE_SESSION, moveHistory())).toEqual([])
+    await tree.render(pane(true))
+    expectContinuous()
+    transcript = projectServerFrames(transcript, gate.onFrame(MOVE_SESSION, moveComplete))
+    await tree.render(pane(false))
+    expectContinuous()
+  }
+
+  // A failed replacement discards its partial ready, then the host clears the
+  // moving flag. The old conversation and composer remain on the same pane.
+  gate.startRelocationReplayCoalescing(MOVE_SESSION)
+  await tree.render(pane(true))
+  expect(gate.onFrame(MOVE_SESSION, moveReady())).toEqual([])
+  expectContinuous()
+  gate.cancelRelocationReplayCoalescing(MOVE_SESSION)
+  await tree.render(pane(false))
+  expectContinuous()
+  expect(tree.container.textContent).not.toContain('Moving…')
+})
+
+test('moving an empty Chat keeps its existing Welcome mounted through reconnect', async () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  let transcript = projectServerFrames(createTranscriptState(), [moveReady()])
+  const pane = (moving: boolean) => (
+    <SessionPane
+      {...idleSessionPaneProps()}
+      activeDescriptor={moveDescriptor(moving)}
+      activeConnection={{ status: moving ? 'connecting' : 'ready', inputEnabled: !moving }}
+      transcript={transcript}
+      prompt="first message draft"
+    />
+  )
+  const tree = await harness.mount(pane(false))
+  const welcome = [...tree.container.querySelectorAll('div')]
+    .find(node => node.textContent?.trim() === 'Welcome back')
+  if (!welcome) throw new Error('no Welcome greeting')
+  const composer = composerOf(tree)
+  const sameComposer = () => tree.container.querySelector<HTMLElement>('[aria-label="Prompt"]')
+  gate.startRelocationReplayCoalescing(MOVE_SESSION)
+  await tree.render(pane(true))
+  expect(gate.onFrame(MOVE_SESSION, moveReady())).toEqual([])
+  await tree.render(pane(true))
+  expect(tree.container.contains(welcome)).toBe(true)
+  expect(sameComposer()).toBe(composer)
+  transcript = projectServerFrames(transcript, gate.onFrame(MOVE_SESSION, moveComplete))
+  await tree.render(pane(false))
+  expect(tree.container.contains(welcome)).toBe(true)
+  expect(tree.container.textContent).toContain('first message draft')
 })

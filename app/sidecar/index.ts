@@ -19,6 +19,7 @@ import { chmodSync, statSync } from 'node:fs'
 
 import { FrameDecoder } from '../shared/framing.js'
 import {
+  AUTO_RESTORE_UNAVAILABLE_EXIT,
   MAX_FRAME_BYTES,
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
@@ -26,7 +27,8 @@ import {
   RESUME_BUSY_EXIT_CODE,
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
-import { getSessionId } from '../../src/bootstrap/state.js'
+import { getSessionId, switchSession } from '../../src/bootstrap/state.js'
+import { asSessionId } from '../../src/types/ids.js'
 import { join } from 'node:path'
 import { isSessionBinding, type SessionBinding } from '../shared/sessionBinding.js'
 import { setManagedSessionPolicy } from '../../src/utils/managedSessionPolicy.js'
@@ -38,7 +40,7 @@ import {
   getTranscriptPath,
   loadDisplayTranscriptFromJsonlPath,
 } from '../../src/utils/sessionStorage.js'
-import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
+import { activateTranscriptLease, releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 import {
   mergeDisplayHistoryWithSeed,
   projectUndeliveredPrompts,
@@ -49,6 +51,9 @@ import {
   createSidecarSessionController,
   loadAgentDefinitionsForRuntime,
   readSpawnModel,
+  readSpawnFastMode,
+  readSpawnPermissionMode,
+  readSpawnPrePlanMode,
 } from './sessionController.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
 import {
@@ -85,10 +90,23 @@ let activeEngineSessionId: string | undefined
 let activeSidecarCleanup: SidecarCleanup | null = null
 let fatalExitStarted = false
 
+class AutoRestoreUnavailableError extends Error {
+  constructor(readonly reason: keyof typeof AUTO_RESTORE_UNAVAILABLE_EXIT) {
+    super(`Auto mode is unavailable: ${reason}`)
+  }
+}
+
 /** Persist only a closed fatal category before the sidecar terminates. */
 function exitAfterFatal(error: unknown): void {
   if (fatalExitStarted) return
   fatalExitStarted = true
+  if (error instanceof AutoRestoreUnavailableError) {
+    process.stderr.write(`[sidecar] ${error.message}\n`)
+    const code = AUTO_RESTORE_UNAVAILABLE_EXIT[error.reason]
+    if (activeSidecarCleanup) void activeSidecarCleanup.exit(code)
+    else process.exit(code)
+    return
+  }
   const isResumeFailure = error instanceof SidecarResumeError
   const isResumeBusy = error instanceof SidecarResumeBusyError
   activeOperationalLogger?.write({
@@ -156,6 +174,7 @@ type SidecarArgs = {
    * transcript through the engine's real machinery, never a fresh mint.
    */
   resumeEngineSessionId: string | undefined
+  freshEngineSessionId: string | undefined
   /** P1-0 only: inject the probe tool_use frame on first attach. */
   probeOnAttach: boolean
   binding: SessionBinding
@@ -224,11 +243,17 @@ function parseArgs(): SidecarArgs {
       throw new Error(`CATCODE_SIDECAR_CWD is not a directory: ${cwd}`)
     }
   }
+  const resumeEngineSessionId = process.env.CATCODE_SIDECAR_RESUME_SESSION_ID || undefined
+  const freshEngineSessionId = process.env.CATCODE_SIDECAR_FRESH_SESSION_ID || undefined
+  if (freshEngineSessionId && (resumeEngineSessionId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(freshEngineSessionId))) {
+    throw new Error('Invalid fresh conversation identity')
+  }
   return {
     socketPath,
     sessionId,
     cwd: cwd ?? process.cwd(),
-    resumeEngineSessionId: process.env.CATCODE_SIDECAR_RESUME_SESSION_ID || undefined,
+    resumeEngineSessionId,
+    freshEngineSessionId,
     probeOnAttach,
     binding,
     forked: process.env.CATCODE_SESSION_FORKED === 'true',
@@ -289,6 +314,19 @@ async function main(): Promise<void> {
   activeSidecarCleanup = sidecarCleanup
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
+  }
+  if (args.freshEngineSessionId) {
+    // An empty Chat can already have metadata or companion artifacts. Reject a
+    // hidden conversation rather than starting a fresh engine over its history.
+    const { getTranscriptPathForSession, loadTranscriptFile } = await import('../../src/utils/sessionStorage.js')
+    const { existsSync, lstatSync } = await import('node:fs')
+    const path = getTranscriptPathForSession(args.freshEngineSessionId as `${string}-${string}-${string}-${string}-${string}`)
+    await activateTranscriptLease(asSessionId(args.freshEngineSessionId))
+    if (existsSync(path) && !lstatSync(path).isFile()) throw new Error('Invalid empty conversation history')
+    if (existsSync(path) && (await loadTranscriptFile(path, { keepCompactedHistory: true })).messages.size > 0) {
+      throw new Error('Fresh conversation identity already has messages')
+    }
+    switchSession(asSessionId(args.freshEngineSessionId))
   }
 
   // Resume BEFORE reading the engine session id: processResumedConversation
@@ -422,6 +460,44 @@ async function main(): Promise<void> {
       disposeMcpLifecycle = dispose
     },
   })
+  const spawnPermissionMode = readSpawnPermissionMode()
+  const spawnPrePlanMode = readSpawnPrePlanMode()
+  if (spawnPrePlanMode && spawnPermissionMode !== 'plan') {
+    throw new Error('Plan return mode requires a restored Plan session')
+  }
+  if (spawnPermissionMode) {
+    if (!permissions) throw new Error('Permission context unavailable for restored mode')
+    if (spawnPermissionMode === 'auto' || spawnPrePlanMode === 'auto') {
+      const { unavailableReason } = permissions.getAutoRestoreState()
+      if (unavailableReason) throw new AutoRestoreUnavailableError(unavailableReason)
+    }
+    // Re-enter Plan through the engine's transition from its saved return mode.
+    // This restores prePlanMode and the matching Auto classifier state together.
+    if (spawnPrePlanMode) permissions.setMode(spawnPrePlanMode)
+    permissions.setMode(spawnPermissionMode)
+    if (permissions.getToolPermissionContext().mode !== spawnPermissionMode) {
+      throw new Error('Could not restore the selected permission mode')
+    }
+    if (spawnPrePlanMode && permissions.getToolPermissionContext().prePlanMode !== spawnPrePlanMode) {
+      throw new Error('Could not restore the Plan return mode')
+    }
+    if ((spawnPermissionMode === 'auto' || spawnPrePlanMode === 'auto') &&
+        !permissions.getAutoRestoreState().active && spawnPermissionMode === 'auto') {
+      throw new Error('Auto classifier did not initialize for restored mode')
+    }
+  }
+  const spawnFastMode = readSpawnFastMode()
+  if (spawnFastMode !== undefined) {
+    if (!runControls) throw new Error('Run controls unavailable for restored Fast mode')
+    const fast = runControls.getSnapshot().fast
+    const desired = spawnFastMode && fast.supportedByModel && fast.available
+    if (fast.active !== desired) {
+      const result = runControls.setFast(desired)
+      if (!result.ok || runControls.getSnapshot().fast.active !== desired) {
+        throw new Error('Could not restore the selected Fast mode')
+      }
+    }
+  }
   const mcpLifecycleStartGate = startMcpLifecycle
     ? createSidecarMcpLifecycleStartGate({
         isWorkspaceTrusted:

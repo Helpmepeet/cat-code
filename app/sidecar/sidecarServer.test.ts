@@ -7899,6 +7899,12 @@ test('message-targeted edit resets, replays retained history, then returns the p
         frame.event.message.uuid === retainedMessage.uuid,
     ),
   ).toBe(true)
+  const replayIndex = later.received.findIndex(frame =>
+    frame.kind === 'event' && frame.replay === true &&
+    frame.event.type === 'message' && frame.event.message.uuid === retainedMessage.uuid,
+  )
+  const completeIndex = later.received.findIndex(frame => frame.kind === 'history.replay.complete')
+  expect(completeIndex).toBe(replayIndex + 1)
 })
 
 test('message-targeted actions reject forged fields and malformed targets before effect', async () => {

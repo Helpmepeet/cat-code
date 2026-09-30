@@ -29,7 +29,10 @@ import {
   loadAgentDefinitionsForRuntime,
   loadSidecarToolPermissionContext,
   readSpawnEffort,
+  readSpawnFastMode,
   readSpawnModel,
+  readSpawnPermissionMode,
+  readSpawnPrePlanMode,
   selectResumedProviderModel,
 } from './sessionController.js'
 
@@ -742,14 +745,18 @@ test('the spawn run defaults treat an empty env value as absent, never as a valu
   // An unrecognised value degrades to the user's saved effort rather than
   // failing the boot or reaching the engine as a level it does not know.
   expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: 'whatever' })).toBeUndefined()
+  expect(readSpawnFastMode({ CATCODE_SIDECAR_FAST_MODE: '' })).toBeUndefined()
+  expect(readSpawnFastMode({ CATCODE_SIDECAR_FAST_MODE: '1' })).toBe(true)
+  expect(readSpawnFastMode({ CATCODE_SIDECAR_FAST_MODE: '0' })).toBe(false)
+  expect(() => readSpawnFastMode({ CATCODE_SIDECAR_FAST_MODE: 'true' })).toThrow()
+  expect(readSpawnPermissionMode({ CATCODE_SIDECAR_PERMISSION_MODE: 'plan' })).toBe('plan')
+  expect(readSpawnPrePlanMode({ CATCODE_SIDECAR_PRE_PLAN_MODE: 'auto' })).toBe('auto')
+  expect(() => readSpawnPrePlanMode({ CATCODE_SIDECAR_PRE_PLAN_MODE: 'bypassPermissions' })).toThrow()
 })
 
-test('a created peer boots on the spawn model, and a resumed session keeps its own', () => {
-  // PEER-SESSIONS R7 / HOST-REQUEST-PLANE §5. Precedence, top down: a resumed
-  // transcript's model, then the spawn model, then the saved setting. The first
-  // two are mutually exclusive in practice (main sends run defaults only on the
-  // create spawn, never on a restart), so the order records which one owns the
-  // choice rather than resolving a live tie.
+test('normal resume keeps its transcript model and relocation keeps the newer selection', () => {
+  // Only the relocation launch can put a newer composer selection ahead of a
+  // transcript model from an older turn.
   const previousOverride = getMainLoopModelOverride()
   const previousProvider = getSessionProvider()
   try {
@@ -765,6 +772,9 @@ test('a created peer boots on the spawn model, and a resumed session keeps its o
     expect(
       initializeSidecarModelProvider('claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'),
     ).toBe('claude-sonnet-4-5-20250929')
+    expect(
+      initializeSidecarModelProvider('claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', true),
+    ).toBe('claude-haiku-4-5-20251001')
   } finally {
     setMainLoopModelOverride(previousOverride)
     setSessionProvider(previousProvider)

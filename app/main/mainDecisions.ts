@@ -89,6 +89,7 @@ export const SIDECAR_MODE_ENTRIES = {
   'accounts-pool': { file: 'accountsPoolWorker.ts', runtimeFlags: false },
   'settings-inventory': { file: 'settingsInventoryWorker.ts', runtimeFlags: false },
   'settings-write': { file: 'settingsWriteWorker.ts', runtimeFlags: false },
+  relocation: { file: 'sessionRelocationWorker.ts', runtimeFlags: false },
   'usage-stats': { file: 'usageStatsWorker.ts', runtimeFlags: false },
   'debug-cleanup': { file: 'debugCleanupWorker.ts', runtimeFlags: true },
 } as const

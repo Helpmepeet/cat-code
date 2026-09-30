@@ -19,9 +19,11 @@ import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
 import {
+  getAutoModeUnavailableReason,
   isAutoModeGateEnabled,
   transitionPermissionMode,
 } from '../../src/utils/permissions/permissionSetup.js'
+import { isAutoModeActive } from '../../src/utils/permissions/autoModeState.js'
 import { shouldAllowManagedPermissionRulesOnly } from '../../src/utils/permissions/permissionsLoader.js'
 import type { PermissionSetModeMode } from '../shared/protocol.js'
 
@@ -74,6 +76,8 @@ export type SidecarPermissionDomain = {
    * guessed in the renderer.
    */
   getDisplayFacts(): PermissionDisplayFacts
+  /** Engine gate and active classifier state for host-restored Auto. */
+  getAutoRestoreState(): { unavailableReason: 'feature' | 'settings' | 'circuit-breaker' | 'model' | null; active: boolean }
   /**
    * Fires whenever the live context reference changes, INCLUDING changes made
    * without boundary involvement (C1 updates applied by the engine's decision
@@ -117,6 +121,13 @@ export function createSidecarPermissionDomain(
 
     getDisplayFacts() {
       return readPermissionDisplayFacts()
+    },
+
+    getAutoRestoreState() {
+      return {
+        unavailableReason: feature('TRANSCRIPT_CLASSIFIER') ? getAutoModeUnavailableReason() : 'feature',
+        active: feature('TRANSCRIPT_CLASSIFIER') ? isAutoModeActive() : false,
+      }
     },
 
     subscribeToolPermissionContext(listener) {

@@ -1,3 +1,5 @@
+import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
+import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import {
   createUsagePublication,
   isUsageDashboardEnabled,
@@ -125,6 +127,7 @@ import {
   // null (the native picker, HC1); the host-event channel is a one-way stream.
   CH_HOST_CREATE,
   CH_HOST_CREATE_MANAGED,
+  CH_HOST_MOVE_SESSION,
   CH_HOST_FOLDER_STATE,
   CH_HOST_FOLDER_RECREATE,
   CH_HOST_FOLDER_OPEN,
@@ -2036,6 +2039,9 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // Receipt is true whether the attachment gate forwards immediately or
     // buffers for replay; record that before deciding its outcome.
     traceFrame(traced, 'host.received')
+    // A closed Chat can be briefly warmed to capture engine controls. Those
+    // frames are internal to relocation; forwarding ready would open its pane.
+    if (host?.isHiddenMoveWarmup(event.sessionId)) return
     const gated = attachedFrameDelivery?.onFrame(event.sessionId, traced) ?? []
     if (gated.length === 0) traceFrame(traced, 'attachment.buffered')
     if (
@@ -2944,6 +2950,21 @@ function registerHostControlPlane(): void {
     return host.createManagedChat()
   })
 
+  ipcMain.handle(CH_HOST_MOVE_SESSION, async (_e, input: unknown): Promise<HostResult<SessionDescriptor>> => {
+    if (!host) return noHost<SessionDescriptor>()
+    const command = parseMoveSessionCommand(input)
+    if (!command) return { ok: false, error: { code: 'invalid_cwd', message: 'Invalid move request' } }
+    const cwd = command.cwdToken === null ? null : cwdTokens.consume(command.cwdToken)
+    if (cwd === undefined) return { ok: false, error: { code: 'invalid_cwd', message: 'Choose the project folder again' } }
+    try {
+      const result = await host.moveSession(command.appSessionId, cwd)
+      return result
+    } catch (error) {
+      attachmentGate.cancelRelocationReplayCoalescing(command.appSessionId)
+      throw error
+    }
+  })
+
   ipcMain.handle(CH_HOST_FOLDER_STATE, async (_e, id: unknown) => {
     if (!host) return noHost<'available' | 'missing'>()
     return host.getSessionFolderState(String(id))
@@ -3342,15 +3363,23 @@ function registerHostControlPlane(): void {
         openHistoryInFlight.set(engineId, promise)
         return promise
       }
-      // Spawn a resume through the SAME machinery restore uses: createSession with
-      // a MAIN-resolved cwd + resumeEngineSessionId → supervisor sets
+      // Spawn a resume through the SAME machinery restore uses. A completed
+      // relocation reopens under its original app identity; ordinary history
+      // uses createSession with a MAIN-resolved cwd + resumeEngineSessionId.
+      // The supervisor sets
       // CATCODE_SIDECAR_RESUME_SESSION_ID → sessionResume.ts (the engine's real
       // resume path). The workspace-trust gate still fail-closes the first turn at
       // that cwd (sidecarServer.ts:987); concurrent-resume of a terminal-live
       // transcript is unguarded here exactly as the engine's own /resume is
       // (SESSIONS-UNIFICATION.md, engine-precedent flag).
-      const promise = host
-        .createSession({
+      const promise = (async () => {
+        const relocated = await host.openRelocatedHistorySession(
+          engineId,
+          resolution.title,
+          resolution.forked === true,
+        )
+        if (relocated) return relocated
+        return host.createSession({
           cwd: resolution.cwd,
           resumeEngineSessionId: engineId,
           // Title is main-resolved from the sidecar-written catalog cache
@@ -3361,6 +3390,7 @@ function registerHostControlPlane(): void {
           ...(resolution.forked === true ? { forked: true } : {}),
           ...(resolution.binding !== undefined ? { binding: resolution.binding } : {}),
         })
+      })()
         .then(result => {
           // Bootstrap coalescing, the same guard `CH_HOST_RESTORE` arms: this
           // create RESUMES a transcript, so `ready` (sent first) must not reach
@@ -3373,8 +3403,8 @@ function registerHostControlPlane(): void {
           // restore") predates open-from-history, when a create could never
           // resume; a resuming create belongs on the restore side of it.
           //
-          // Armed here rather than before the spawn because the app session id
-          // does not exist until `createSession` mints it. The race that would
+          // Armed here rather than before the spawn because ordinary history
+          // opens mint an app session id in `createSession`. The race that would
           // defeat it is a sidecar attaching before this microtask runs — it
           // must first cold-start Bun, build the engine session and load the
           // transcript, so it cannot; failing it would merely reproduce the
@@ -3875,6 +3905,7 @@ function handOff(
   audience: 'renderer' | 'internal',
 ): ErrorFrame['code'] | null {
   if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
+  if (host?.isMoving(sessionId)) return 'session_not_ready'
   if (switchingSessionIds.has(sessionId) && (message.type === 'app.submit' || message.type === 'peer.deliver')) {
     return 'session_not_ready'
   }
@@ -4111,6 +4142,32 @@ function ensureHost(): Host {
     registry,
     validateCwd,
     managedStorage,
+    relocate: request => runSessionRelocationWorker({
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('relocation'),
+      cwd: request.source.cwd,
+      request: { type: 'session-relocation', version: 1, ...request },
+    }),
+    peerMoveState: appSessionId => ({
+      presence: peerPlane?.presenceOf(appSessionId),
+      pending: peerPlane?.pendingFor(appSessionId).length ?? 0,
+      reservations: peerPlane?.reservationsFor(appSessionId) ?? 0,
+    }),
+    peerMoveSettled: appSessionId => peerPlane?.onMoveSettled(appSessionId),
+    prepareMoveReplayRecovery: (appSessionId, options) => {
+      const beforeClear = () => {
+        if (options.persistSourceCache) persistTranscriptCache(appSessionId)
+        cancelReplayFlush(appSessionId)
+      }
+      if (attachedFrameDelivery) attachedFrameDelivery.evictSession(appSessionId, beforeClear)
+      else {
+        beforeClear()
+        attachmentGate.clearSession(appSessionId)
+      }
+      attachmentGate.startRelocationReplayCoalescing(appSessionId)
+    },
+    cancelMoveReplayCoalescing: appSessionId =>
+      attachmentGate.cancelRelocationReplayCoalescing(appSessionId),
     launched,
     log: line => logLegacyDiagnostic(line, 'host', 'host'),
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
@@ -4129,6 +4186,11 @@ function ensureHost(): Host {
       } else {
         beforeClear()
         attachmentGate.clearSession(appSessionId)
+      }
+      // This is the exact handoff between the parked source and replacement.
+      // The sidecar's completion frame, not a timer, releases ready plus replay.
+      if (host?.isMoving(appSessionId) && !host.isHiddenMoveWarmup(appSessionId)) {
+        attachmentGate.startRelocationReplayCoalescing(appSessionId)
       }
     },
   })
@@ -4164,6 +4226,7 @@ function ensureHost(): Host {
     // the roster offered it as a peer that no wake could ever reach. Same
     // predicate the sidebar's `restorable` flag is built from, not a second copy.
     canResume: appSessionId => liveHost.canResume(appSessionId),
+    isMoving: appSessionId => liveHost.isMoving(appSessionId),
     createSessionInWorkspace: (fromAppSessionId, peer) =>
       liveHost.createSessionInWorkspace(fromAppSessionId, peer),
     restoreSession: async appSessionId => {

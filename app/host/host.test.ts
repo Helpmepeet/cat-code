@@ -27,8 +27,9 @@ import { randomUUID } from 'node:crypto'
 
 import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
-import { Host, type CwdValidation } from './host.js'
+import { Host, type CwdValidation, type HostOptions } from './host.js'
 import { ManagedStorage } from './managedStorage.js'
+import { AttachmentGate } from '../main/attachmentGate.js'
 import type { SessionId } from '../shared/protocol.js'
 import type {
   SidecarStatus,
@@ -80,6 +81,9 @@ type FakeSpawnConfig = {
 
 class FakeSupervisor {
   readonly records = new Map<SessionId, FakeRecord>()
+  readonly spawnedIds: SessionId[] = []
+  readonly sent: Array<{ sessionId: SessionId; message: unknown }> = []
+  onSend?: (sessionId: SessionId, message: unknown) => void
   private readonly listeners = new Set<(e: SupervisorEvent) => void>()
   private pidSeq = 10000
   private sockSeq = 0
@@ -105,6 +109,7 @@ class FakeSupervisor {
       throw err
     }
     if (this.records.has(sessionId)) throw new Error('duplicate id')
+    this.spawnedIds.push(sessionId)
     this.records.set(sessionId, {
       sessionId,
       status: 'spawning',
@@ -184,6 +189,12 @@ class FakeSupervisor {
 
   getSessionSocketPath(sessionId: SessionId): string | undefined {
     return this.records.get(sessionId)?.socketPath
+  }
+
+  send(sessionId: SessionId, message: unknown): null {
+    this.sent.push({ sessionId, message })
+    this.onSend?.(sessionId, message)
+    return null
   }
 
   /* --- test drivers --- */
@@ -365,6 +376,11 @@ function makeHost(
     validateCwd?: (cwd: string) => CwdValidation
     registry?: SessionRegistry
     managedStorage?: ManagedStorage
+    relocate?: HostOptions['relocate']
+    peerMoveState?: HostOptions['peerMoveState']
+    peerMoveSettled?: HostOptions['peerMoveSettled']
+    prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
+    cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
   } = {},
 ): Harness {
   const storageDir = tempDir()
@@ -395,6 +411,11 @@ function makeHost(
     supervisor: supervisor as never,
     registry,
     managedStorage: overrides.managedStorage,
+    relocate: overrides.relocate,
+    peerMoveState: overrides.peerMoveState,
+    peerMoveSettled: overrides.peerMoveSettled,
+    prepareMoveReplayRecovery: overrides.prepareMoveReplayRecovery,
+    cancelMoveReplayCoalescing: overrides.cancelMoveReplayCoalescing,
     validateCwd:
       overrides.validateCwd ??
       ((c: string): CwdValidation =>
@@ -409,6 +430,163 @@ function makeHost(
 
   return { host, supervisor, registry, storageDir, cwd, events, evicted, logs, now, setNow }
 }
+
+function emitMoveReadyContext(supervisor: FakeSupervisor, appSessionId: SessionId): void {
+  supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
+    kind: 'run-controls.snapshot', protocolVersion: 2, sessionId: appSessionId,
+    runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
+  } as never })
+  supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
+    kind: 'permission.context', protocolVersion: 2, sessionId: appSessionId,
+    context: { mode: 'default', permissionClassifierEnabled: false },
+  } as never })
+}
+
+test.each(['pending delivery', 'in-flight reservation'] as const)(
+  'peer work arriving during park aborts relocation and recovery holds ready until history completes (%s)',
+  async workKind => {
+  const storageRoot = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(storageRoot, 'user-data'),
+    ownershipDir: join(storageRoot, 'config', 'chat-workspaces'),
+  })
+  const validateCwd = (cwd: string): CwdValidation =>
+    existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false }
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  const peerStates = new Map<string, { pending: number; reservations: number }>()
+  let childAppSessionId = ''
+  let relocationCalls = 0
+  const h = makeHost({
+    managedStorage,
+    validateCwd,
+    peerMoveState: id => peerStates.get(id) ?? { pending: 0, reservations: 0 },
+    relocate: async () => { relocationCalls += 1 },
+    prepareMoveReplayRecovery: id => {
+      gate.clearSession(id)
+      gate.startRelocationReplayCoalescing(id)
+    },
+    cancelMoveReplayCoalescing: id => gate.cancelRelocationReplayCoalescing(id),
+  })
+  const delivered: unknown[] = []
+  h.supervisor.subscribe(event => {
+    if (event.type === 'frame') delivered.push(...gate.onFrame(event.sessionId, event.frame))
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const appSessionId = created.value.appSessionId
+  // Peer work belongs to a retained child row. Managed parent rows do not
+  // themselves have peer deliveries or wake reservations.
+  childAppSessionId = randomUUID()
+  const childEngineSessionId = randomUUID()
+  writeTranscript(h.storageDir, childEngineSessionId)
+  await h.registry.upsertOnSpawn({
+    appSessionId: childAppSessionId,
+    cwd: h.cwd,
+    binding: { kind: 'project' },
+    engineSessionId: childEngineSessionId,
+    createdBy: appSessionId,
+  })
+  await h.registry.markClean(childAppSessionId)
+  peerStates.set(childAppSessionId, { pending: 0, reservations: 0 })
+  const engineSessionId = randomUUID()
+  h.supervisor.emitReady(appSessionId, engineSessionId)
+  emitMoveReadyContext(h.supervisor, appSessionId)
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineSessionId)
+  delivered.length = 0
+  h.supervisor.onSend = (id, message) => {
+    if (id === appSessionId && (message as { type?: string }).type === 'app.park') {
+      peerStates.set(childAppSessionId, workKind === 'pending delivery'
+        ? { pending: 1, reservations: 0 }
+        : { pending: 0, reservations: 1 })
+      h.supervisor.emitPark(id)
+    }
+  }
+
+  const moving = h.host.moveSession(appSessionId, h.cwd)
+  await settle(() => h.supervisor.spawnedIds.length === 2)
+  expect(relocationCalls).toBe(0)
+  h.supervisor.emitReady(appSessionId, engineSessionId)
+  emitMoveReadyContext(h.supervisor, appSessionId)
+  const result = await moving
+  expect(result.ok).toBe(false)
+  expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
+  expect(relocationCalls).toBe(0)
+
+  expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
+  const replay = {
+    kind: 'event', protocolVersion: 2, sessionId: appSessionId, replay: true,
+    event: { type: 'message', message: { type: 'user', message: { role: 'user', content: 'retained' } } },
+  } as never
+  expect(gate.onFrame(appSessionId, replay)).toEqual([])
+  const complete = { kind: 'history.replay.complete', protocolVersion: 2, sessionId: appSessionId } as never
+  const released = gate.onFrame(appSessionId, complete)
+  expect(released).toContainEqual(replay)
+  expect(released).toContainEqual(complete)
+  expect(gate.isReplayCoalescing(appSessionId)).toBe(false)
+  },
+)
+
+test('a worker-refused move keeps the reopened conversation behind replay completion', async () => {
+  const storageRoot = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(storageRoot, 'user-data'),
+    ownershipDir: join(storageRoot, 'config', 'chat-workspaces'),
+  })
+  const validateCwd = (cwd: string): CwdValidation =>
+    existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false }
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  let sourceCachePreservationRequested = false
+  const h = makeHost({
+    managedStorage,
+    validateCwd,
+    peerMoveState: () => ({ pending: 0, reservations: 0 }),
+    relocate: async () => { throw new Error('injected relocation refusal') },
+    prepareMoveReplayRecovery: (id, options) => {
+      sourceCachePreservationRequested = options.persistSourceCache
+      gate.clearSession(id)
+      gate.startRelocationReplayCoalescing(id)
+    },
+    cancelMoveReplayCoalescing: id => gate.cancelRelocationReplayCoalescing(id),
+  })
+  const delivered: unknown[] = []
+  h.supervisor.subscribe(event => {
+    if (event.type === 'frame') delivered.push(...gate.onFrame(event.sessionId, event.frame))
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const appSessionId = created.value.appSessionId
+  const engineSessionId = randomUUID()
+  h.supervisor.emitReady(appSessionId, engineSessionId)
+  emitMoveReadyContext(h.supervisor, appSessionId)
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineSessionId)
+  delivered.length = 0
+  h.supervisor.onSend = (id, message) => {
+    if (id === appSessionId && (message as { type?: string }).type === 'app.park') h.supervisor.emitPark(id)
+  }
+
+  const moving = h.host.moveSession(appSessionId, h.cwd)
+  await settle(() => h.supervisor.spawnedIds.length === 2)
+  h.supervisor.emitReady(appSessionId, engineSessionId)
+  emitMoveReadyContext(h.supervisor, appSessionId)
+  const result = await moving
+  expect(result.ok).toBe(false)
+  expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
+  expect(sourceCachePreservationRequested).toBe(true)
+
+  const ready = { kind: 'ready', protocolVersion: 2, sessionId: appSessionId,
+    engineSessionId, payload: { type: 'app.ready' } } as never
+  expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
+  const replay = { kind: 'event', protocolVersion: 2, sessionId: appSessionId,
+    replay: true, event: { type: 'message', message: { type: 'user' } } } as never
+  expect(gate.onFrame(appSessionId, replay)).toEqual([])
+  const released = gate.onFrame(appSessionId, {
+    kind: 'history.replay.complete', protocolVersion: 2, sessionId: appSessionId,
+  } as never)
+  expect(released[0]).toMatchObject(ready)
+  expect(released).toContainEqual(replay)
+})
 
 /* ------------------------------------------------------------------------- *
  * createSession — happy path + engineSessionId bridge + session-added

@@ -74,6 +74,14 @@ function replayFrame(index: number): ServerFrame {
   }
 }
 
+function replayComplete(): ServerFrame {
+  return {
+    kind: 'history.replay.complete',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+  }
+}
+
 function tracedReplayFrame(index: number): ServerFrame {
   return {
     ...replayFrame(index),
@@ -242,6 +250,43 @@ test('zero-history lazy restore holds ready until the window flush', () => {
 
   expect(gate.onFrame(SID, readyFrame())).toEqual([])
   expect(gate.flushReplayCoalescing(SID)).toEqual([readyFrame()])
+})
+
+test('relocation keeps the displayed history until the replacement replay is complete', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+
+  for (let move = 0; move < 2; move += 1) {
+    gate.startRelocationReplayCoalescing(SID)
+    expect(gate.onFrame(SID, readyFrame())).toEqual([])
+    expect(gate.onFrame(SID, replayFrame(move))).toEqual([])
+    expect(gate.isReplayCoalescing(SID)).toBe(true)
+    expect(gate.onFrame(SID, replayComplete())).toEqual([
+      readyFrame(), replayFrame(move), replayComplete(),
+    ])
+    expect(gate.isReplayCoalescing(SID)).toBe(false)
+  }
+})
+
+test('an empty relocation completes without a timed flush or a second ready', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startRelocationReplayCoalescing(SID)
+  expect(gate.onFrame(SID, readyFrame())).toEqual([])
+  expect(gate.onFrame(SID, replayComplete())).toEqual([
+    readyFrame(), replayComplete(),
+  ])
+})
+
+test('failed relocation drops a partial replacement bootstrap', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startRelocationReplayCoalescing(SID)
+  expect(gate.onFrame(SID, readyFrame())).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(0))).toEqual([])
+  gate.cancelRelocationReplayCoalescing(SID)
+  expect(gate.isReplayCoalescing(SID)).toBe(false)
+  expect(gate.onFrame(SID, pong('source-open'))).toEqual([pong('source-open')])
 })
 
 test('rewind reset, retained replay, and Edit result deliver as one batch', () => {

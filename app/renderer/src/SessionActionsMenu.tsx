@@ -4,7 +4,7 @@
  * A read-only-safe dropdown anchored to a point (the row ⋯ button rect or a
  * right-click position). It renders exactly what `resolveSessionActions`
  * decided — enabled verbs are clickable buttons, deferred verbs are inert rows
- * showing their honest reason on hover (a `title`) plus a muted "soon" tag, and
+ * showing their honest reason on hover (a `title`), and
  * cut verbs never reach this component. Presentation only: the parent owns every
  * effect via `onAction`. No inline styles — P0-2 tokens + the shell classes, the
  * SessionsPage sort-dropdown idiom (scrim + fixed panel).
@@ -333,9 +333,6 @@ function MenuRow({
           <SessionActionIcon kind={item.kind} />
         </span>
         <span className="flex-1 truncate">{item.label}</span>
-        <span className="shrink-0 text-[9.5px] font-semibold uppercase tracking-wide text-text-subtle/50">
-          soon
-        </span>
       </div>
     )
   }

@@ -121,6 +121,8 @@ export type PeerRequestPlaneDeps = {
    * publishes: live OR resumable.
    */
   canResume: (appSessionId: SessionId) => boolean
+  /** Host relocation gate; no old-workspace delivery may enter a moving row. */
+  isMoving?: (appSessionId: SessionId) => boolean
   /**
    * HR4 — the host's own create path, with the peer options it already exposes.
    * Not reimplemented here: the HC4 caps and the churn rule are the host's, and
@@ -514,6 +516,10 @@ export type PeerRequestPlane = {
   onSessionRemoved: (sessionId: SessionId) => void
   /** What main is still holding for a recipient (unacked message ids). */
   pendingFor: (sessionId: SessionId) => readonly string[]
+  /** Pending slots claimed by deliveries whose wake path has not settled. */
+  reservationsFor: (sessionId: SessionId) => number
+  /** Retry ready recipients after a host move has finished changing its scope. */
+  onMoveSettled: (sessionId: SessionId) => void
   /** The presence main last heard from a row, for `peers.list` and for tests. */
   presenceOf: (sessionId: SessionId) => ActivityPresence | undefined
 }
@@ -525,6 +531,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   const wakeTimeoutMs = deps.wakeTimeoutMs ?? PEER_WAKE_TIMEOUT_MS
   const hostCallTimeoutMs = deps.hostCallTimeoutMs ?? PEER_HOST_CALL_TIMEOUT_MS
   const isReady = deps.isReady
+  const isMoving = deps.isMoving ?? (() => false)
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer =
     deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>))
@@ -584,6 +591,14 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
 
   function rowFor(appSessionId: string): PeerRegistryRow | undefined {
     return deps.rows().find(row => row.appSessionId === appSessionId)
+  }
+
+  function stillSharesProject(senderId: SessionId, recipientId: SessionId): boolean {
+    const sender = rowFor(senderId)
+    const recipient = rowFor(recipientId)
+    return !!sender && !!recipient && !isMoving(senderId) && !isMoving(recipientId) &&
+      sender.binding?.kind !== 'managed' && recipient.binding?.kind !== 'managed' &&
+      sender.cwd === recipient.cwd
   }
 
   function statusOf(row: PeerRegistryRow): PeerStatus {
@@ -1065,7 +1080,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       // PEER-SESSIONS §5 — the one message that is not framed as peer-sent.
       untagged: true,
     }
-    if (!forwarded(appSessionId, message)) {
+    if (!stillSharesProject(sessionId, appSessionId) || !forwarded(appSessionId, message)) {
       deps.logRouted(sessionId, {
         from: fromName,
         to: name,
@@ -1234,6 +1249,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     // F7 — a live recipient was never woken, so `wake_failed` would tell the
     // sending model its peer is unreachable while the peer is sitting there
     // running. The two failures are different facts and get different reasons.
+    if (!stillSharesProject(sessionId, target.appSessionId)) {
+      return refuseAfterHolds('refused:delivery_failed')
+    }
     if (!forwarded(target.appSessionId, message)) {
       return refuseAfterHolds(live ? 'refused:delivery_failed' : 'refused:wake_failed')
     }
@@ -1399,6 +1417,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       })
       return
     }
+    if (isMoving(sessionId)) {
+      answer(sessionId, validated.requestId, {
+        ok: false,
+        error: fail('session_not_found', 'this session is changing workspace'),
+      })
+      return
+    }
 
     const request = validated.request
     try {
@@ -1452,18 +1477,11 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     }
   }
 
-  function onReady(sessionId: SessionId): void {
-    // F11 — remembered so a waiter that registers moments later resolves at once
-    // instead of sitting out the wake timeout for a session that is already up.
-    lastReadyAt.set(sessionId, now())
-    const waiters = readyWaiters.get(sessionId)
-    if (waiters) {
-      readyWaiters.delete(sessionId)
-      for (const waiter of waiters) {
-        clearTimer(waiter.timer)
-        waiter.resolve(true)
-      }
-    }
+  function redeliverPending(
+    sessionId: SessionId,
+    eligible: (entry: PendingMessage) => boolean = () => true,
+  ): void {
+    if (isMoving(sessionId)) return
     // §4 step 6 — anything this row never acked is redelivered now, over the
     // same store and the same path a parked row's message took. A `ready` that
     // follows the ORIGINAL forward (the create path waits for exactly that one)
@@ -1472,6 +1490,22 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     const held = pending.get(sessionId)
     if (!held || held.length === 0) return
     for (const entry of [...held]) {
+      if (!eligible(entry)) continue
+      // A ready can belong to a source warmup or to the replacement being
+      // opened. Keep the message until both endpoints have settled; the host
+      // calls onMoveSettled once it knows the final project bindings.
+      if (isMoving(entry.message.fromSessionId)) continue
+      if (!stillSharesProject(entry.message.fromSessionId, sessionId)) {
+        release(sessionId, entry.messageId)
+        deps.logRouted(entry.message.fromSessionId, {
+          from: entry.fromName,
+          to: entry.toName,
+          kind: entry.kind,
+          messageId: entry.messageId,
+          outcome: 'refused:delivery_failed',
+        })
+        continue
+      }
       // F5 — bounded. The redelivery exists for a recipient that DIED before
       // acking; a recipient that REJECTS the frame acks nothing either, and
       // without a counter it is re-sent on every ready for the life of the
@@ -1506,6 +1540,23 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     }
   }
 
+  function onReady(sessionId: SessionId): void {
+    // F11 — remembered so a waiter that registers moments later resolves at once
+    // instead of sitting out the wake timeout for a session that is already up.
+    lastReadyAt.set(sessionId, now())
+    const waiters = readyWaiters.get(sessionId)
+    if (waiters) {
+      readyWaiters.delete(sessionId)
+      for (const waiter of waiters) {
+        clearTimer(waiter.timer)
+        waiter.resolve(true)
+      }
+    }
+    // A ready may belong to a source warmup; moving recipients retain messages
+    // for the host's settlement callback instead of rejecting them prematurely.
+    redeliverPending(sessionId)
+  }
+
   return {
     handleRequest,
     recordActivity: (sessionId, next) => {
@@ -1515,6 +1566,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       runControls.set(sessionId, controls)
     },
     onReady,
+    onMoveSettled: movedSessionId => {
+      for (const recipientId of pending.keys()) {
+        const held = pending.get(recipientId) ?? []
+        if (deps.isReady(recipientId) && held.some(entry =>
+          entry.toAppSessionId === movedSessionId || entry.message.fromSessionId === movedSessionId)) {
+          redeliverPending(recipientId, entry =>
+            entry.toAppSessionId === movedSessionId || entry.message.fromSessionId === movedSessionId)
+        }
+      }
+    },
     onSessionDown: sessionId => {
       presence.delete(sessionId)
     },
@@ -1555,6 +1616,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       }
     },
     pendingFor: sessionId => (pending.get(sessionId) ?? []).map(entry => entry.messageId),
+    reservationsFor: sessionId => reservations.get(sessionId) ?? 0,
     presenceOf: sessionId => presence.get(sessionId),
   }
 }

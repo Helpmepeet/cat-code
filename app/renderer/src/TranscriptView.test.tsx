@@ -134,6 +134,80 @@ function renderRows(
   )
 }
 
+test('saved context transitions stay between their transcript turns as later rows arrive', () => {
+  const row = (id: string, content: string): NestedTranscriptRow => ({
+    ...blockSource,
+    id,
+    frameId: id,
+    kind: 'assistant-text',
+    role: 'assistant',
+    content,
+  })
+  const transitions = [
+    { id: 'move-alpha', afterFrameId: 'before', cwd: '/work/alpha', binding: { kind: 'project' as const } },
+    { id: 'return-chat', afterFrameId: 'alpha-reply', cwd: '/private/chats/one', binding: {
+      kind: 'managed' as const,
+      storageRootId: '00000000-0000-4000-8000-000000000001',
+      storageId: '00000000-0000-4000-8000-000000000002',
+    } },
+    { id: 'move-beta', afterFrameId: 'chat-reply', cwd: '/work/beta', binding: { kind: 'project' as const } },
+  ]
+  const rows = [row('before', 'BeforeMove'), row('alpha-reply', 'AlphaReply'), row('chat-reply', 'ChatReply')]
+  const draw = (currentRows: NestedTranscriptRow[]) => renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={currentRows}
+      cwd="/work/beta"
+      contextTransitions={transitions}
+      onMoveBack={() => {}}
+    />,
+  )
+  const beforeNextMessage = draw(rows)
+  const afterNextMessage = draw([...rows, row('beta-reply', 'BetaReply')])
+  for (const html of [beforeNextMessage, afterNextMessage]) {
+    const at = (value: string) => html.indexOf(value)
+    expect(at('BeforeMove')).toBeLessThan(at('data-context-transition="move-alpha"'))
+    expect(at('data-context-transition="move-alpha"')).toBeLessThan(at('AlphaReply'))
+    expect(at('AlphaReply')).toBeLessThan(at('data-context-transition="return-chat"'))
+    expect(at('data-context-transition="return-chat"')).toBeLessThan(at('ChatReply'))
+    expect(at('ChatReply')).toBeLessThan(at('data-context-transition="move-beta"'))
+    expect(html.match(/aria-label="Move back"/g)).toHaveLength(1)
+  }
+  expect(afterNextMessage.indexOf('data-context-transition="move-beta"')).toBeLessThan(afterNextMessage.indexOf('BetaReply'))
+  // A bounded replay without the anchor must not invent a seam at its tail.
+  expect(draw([row('beta-reply', 'BetaReply')])).not.toContain('data-context-transition=')
+})
+
+test('moves without intervening messages keep each transition in order', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[{
+        ...blockSource,
+        id: 'first-row',
+        frameId: 'first-frame',
+        kind: 'assistant-text',
+        role: 'assistant',
+        content: 'FirstTurn',
+      }]}
+      cwd="/work/beta"
+      contextTransitions={[
+        { id: 'alpha', afterFrameId: 'first-frame', cwd: '/work/alpha', binding: { kind: 'project' } },
+        { id: 'chat', afterFrameId: 'first-frame', cwd: '/chats/one', binding: {
+          kind: 'managed', storageRootId: '00000000-0000-4000-8000-000000000001', storageId: '00000000-0000-4000-8000-000000000002',
+        } },
+        { id: 'beta', afterFrameId: 'first-frame', cwd: '/work/beta', binding: { kind: 'project' } },
+      ]}
+    />,
+  )
+  const positions = [
+    'FirstTurn',
+    'data-context-transition="alpha"',
+    'data-context-transition="chat"',
+    'data-context-transition="beta"',
+  ].map(part => html.indexOf(part))
+  expect(positions).toEqual([...positions].sort((a, b) => a - b))
+  expect(positions.every(position => position >= 0)).toBe(true)
+})
+
 function thinkingRow(id: string, content: string): NestedTranscriptRow {
   return { ...blockSource, id, kind: 'thinking', content }
 }
@@ -3274,6 +3348,57 @@ test('indented user text remains literal and bounded even when it contains Markd
   expect(html).not.toContain('<strong>')
   expect(html).not.toContain('line 1000')
   expect(html).toContain('aria-hidden="true"')
+})
+
+test('indented code does not disable Markdown headings, nested lists, or links in the message', () => {
+  const content = [
+    '## Review notes',
+    '',
+    'Read the [guide](https://example.com/guide) before choosing:',
+    '',
+    '- First choice',
+    '  - Nested choice',
+    '    continuation text',
+    '  - [More details](https://example.com/details)',
+    '',
+    '```ts',
+    'const example = 1',
+    '```',
+  ].join('\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-markdown-with-indent',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('<h2>Review notes</h2>')
+  expect(html).toContain('<ul>')
+  expect(html).toContain('Nested choice')
+  expect(html).toContain('href="https://example.com/guide"')
+  expect(html).toContain('href="https://example.com/details"')
+  expect(html).toContain('aria-label="Copy code"')
+})
+
+test('pasted multiline code with link-looking string literals stays literal', () => {
+  const content = [
+    'def render_link():',
+    "    reference = '[docs](https://example.com)'",
+    '    return reference',
+  ].join('\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-pasted-code-link',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('    reference = &#x27;[docs](https://example.com)&#x27;')
+  expect(html).not.toContain('href="https://example.com"')
 })
 
 test('bounds a giant user message before mounting every paragraph', () => {
@@ -6553,4 +6678,38 @@ test('a TodoWrite call is projected but never drawn in the transcript', () => {
   // The sibling tool call in the same transcript still renders, so this is a
   // targeted drop and not an empty pane.
   expect(html).toContain('echo hi')
+})
+
+test('a move anchored to a hidden TodoWrite frame remains between visible turns', () => {
+  const sessionId = 'move-todo' as SessionId
+  let state = projectServerFrame(createTranscriptState(), inspectorReady(sessionId))
+  const text = (uuid: string, content: string): SDKMessage => ({
+    type: 'assistant',
+    uuid,
+    message: { id: uuid, role: 'assistant', content: [{ type: 'text', text: content }] },
+  } as SDKMessage)
+  state = projectServerFrame(state, inspectorMessage(sessionId, text('before-todo', 'BeforeTodo')))
+  state = projectServerFrame(state, inspectorMessage(sessionId, {
+    type: 'assistant',
+    uuid: 'todo-anchor',
+    message: { id: 'todo-message', role: 'assistant', content: [{
+      type: 'tool_use', id: 'todo-use', name: 'TodoWrite', input: { todos: [] },
+    }] },
+  } as SDKMessage))
+  state = projectServerFrame(state, inspectorMessage(sessionId, text('after-todo', 'AfterTodo')))
+  const html = renderToStaticMarkup(
+    <TranscriptView
+      activeSessionId={sessionId}
+      state={state}
+      contextTransitions={[{
+        id: 'move-after-todo',
+        afterFrameId: 'todo-anchor',
+        cwd: '/work/project',
+        binding: { kind: 'project' },
+      }]}
+    />,
+  )
+  expect(html).not.toContain('TodoWrite')
+  expect(html.indexOf('BeforeTodo')).toBeLessThan(html.indexOf('data-context-transition="move-after-todo"'))
+  expect(html.indexOf('data-context-transition="move-after-todo"')).toBeLessThan(html.indexOf('AfterTodo'))
 })

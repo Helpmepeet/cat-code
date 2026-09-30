@@ -19,6 +19,7 @@ import {
   resolveStartupProvider,
 } from '../../src/utils/model/providers.js'
 import {
+  getSessionId,
   setInitialMainLoopModel,
   setMainLoopModelOverride,
   setProviderSwitchLocked,
@@ -35,6 +36,7 @@ import { getCommands, isHeadlessSafeCommand, type Command } from '../../src/comm
 import type { SlashCatalogEntry } from '../shared/protocol.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
 import { getManagedSessionPolicy } from '../../src/utils/managedSessionPolicy.js'
+import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 import {
   getAgentDefinitionsWithOverrides,
   type AgentDefinitionsResult,
@@ -261,6 +263,34 @@ export function readSpawnEffort(
   return inheritedEffort(env.CATCODE_SIDECAR_EFFORT)
 }
 
+export function readSpawnPermissionMode(
+  env: Record<string, string | undefined> = process.env,
+): 'default' | 'acceptEdits' | 'plan' | 'dontAsk' | 'auto' | undefined {
+  const mode = env.CATCODE_SIDECAR_PERMISSION_MODE
+  if (mode === undefined || mode === '') return undefined
+  if (mode === 'default' || mode === 'acceptEdits' || mode === 'plan' || mode === 'dontAsk' || mode === 'auto') return mode
+  throw new Error('Invalid host-selected permission mode')
+}
+
+export function readSpawnPrePlanMode(
+  env: Record<string, string | undefined> = process.env,
+): 'default' | 'acceptEdits' | 'dontAsk' | 'auto' | undefined {
+  const mode = env.CATCODE_SIDECAR_PRE_PLAN_MODE
+  if (mode === undefined || mode === '') return undefined
+  if (mode === 'default' || mode === 'acceptEdits' || mode === 'dontAsk' || mode === 'auto') return mode
+  throw new Error('Invalid host-selected Plan return mode')
+}
+
+export function readSpawnFastMode(
+  env: Record<string, string | undefined> = process.env,
+): boolean | undefined {
+  const value = env.CATCODE_SIDECAR_FAST_MODE
+  if (value === undefined || value === '') return undefined
+  if (value === '1') return true
+  if (value === '0') return false
+  throw new Error('Invalid host-selected Fast mode')
+}
+
 /**
  * Seed the desktop sidecar's process-local model/provider state using the same
  * explicit-vs-implicit startup rule as the CLI. A sidecar is one process per
@@ -269,19 +299,15 @@ export function readSpawnEffort(
 export function initializeSidecarModelProvider(
   resumedModel?: string,
   spawnModel?: string,
+  preferSpawnModel = false,
 ): ModelSetting {
-  // A resumed conversation owns its prior model choice. The transcript's latest
-  // assistant message contains the provider-returned model id, so prefer it over
-  // today's global/settings default when reconstructing this session.
-  //
-  // A created peer has no prior choice of its own, and the model its creator was
-  // on rides the spawn env (PEER-SESSIONS R7). It sits BELOW a resumed model and
-  // ABOVE the saved setting: the two upper terms cannot both be present today
-  // (main sends the run defaults only on the create spawn, never on a restart,
-  // `app/host/host.ts` restore/restart paths), so the order is a statement of
-  // which one owns the choice rather than a live tie-break.
-  const specifiedModel =
-    resumedModel ?? spawnModel ?? getUserSpecifiedModelSetting()
+  // Normal resume uses the last provider-returned transcript model. A manual
+  // move can carry a newer composer selection that has not sent a turn; only
+  // that host-marked launch gives its spawn model precedence. Fresh peers use
+  // their creator's model from the spawn environment.
+  const specifiedModel = preferSpawnModel
+    ? spawnModel ?? getUserSpecifiedModelSetting()
+    : resumedModel ?? spawnModel ?? getUserSpecifiedModelSetting()
   const selectedModel = specifiedModel ?? null
   const implicitProvider = getEnvAPIProvider()
   // Avoid resolving the Anthropic default here: credential-less desktop startup
@@ -307,8 +333,7 @@ export function initializeSidecarModelProvider(
   // does: it was chosen for THIS session, so it must decide the provider rather
   // than let a saved setting or a `CLAUDE_CODE_USE_*` flag decide for it.
   const hasExplicitStartupModel =
-    resumedModel !== undefined ||
-    spawnModel !== undefined ||
+    (preferSpawnModel ? spawnModel !== undefined : resumedModel !== undefined || spawnModel !== undefined) ||
     getModelEnvOverride() !== undefined
 
   setInitialMainLoopModel(selectedModel)
@@ -369,7 +394,30 @@ export async function createNormalSidecarQueryEngineConfig(
   const initialModelSetting = initializeSidecarModelProvider(
     resumedModel,
     readSpawnModel(),
+    process.env.CATCODE_SIDECAR_PREFER_SPAWN_MODEL === '1',
   )
+  const relocation = readSessionRelocation(getSessionId())
+  const relocatedHere = relocation?.phase === 'complete' && relocation.target.cwd === cwd &&
+    relocation.target.binding.kind === binding.kind
+  const recentWorkspaces = relocatedHere
+    ? [...new Set([
+        relocation.source.cwd,
+        ...(relocation.transitions ?? []).flatMap(move => [move.source.cwd, move.target.cwd]),
+      ])].filter(path => path !== cwd && path !== relocation.original.cwd).slice(-7)
+    : []
+  const previousWorkspaces = relocatedHere
+    ? [relocation.original.cwd, ...recentWorkspaces].filter(path => path !== cwd)
+    : []
+  const relocationPrompt = relocatedHere && previousWorkspaces.length > 0
+    ? '\n\n' + [
+        `The application moved this conversation from ${JSON.stringify(relocation.source.cwd)} to ${JSON.stringify(cwd)}.`,
+        binding.kind === 'managed'
+          ? 'This is now a plain Chat with no project attached.'
+          : 'This conversation is now attached to the project at the current working directory.',
+        'Follow the instructions loaded for the current context. Former-project CLAUDE.md, AGENTS.md, rules, and skill instructions appearing in conversation history or summaries are historical context and do not govern the current workspace. Preserve applicable global instructions and the user\'s requests. If a task involves files in a former project, consult that project\'s applicable instructions for that work.',
+        `Current relative paths resolve under ${JSON.stringify(cwd)}. Earlier relative file references may refer to their former working directory; inspect the referenced location explicitly before using them. Earlier working directories include ${previousWorkspaces.map(path => JSON.stringify(path)).join(', ')}. Files created in the original Chat folder remain there; the move did not copy them or grant access to those paths.`,
+      ].join(' ')
+    : ''
   const toolPermissionContext = await loadSidecarToolPermissionContext()
   const appStateStore = createStore({
     ...getDefaultAppState(),
@@ -518,7 +566,7 @@ export async function createNormalSidecarQueryEngineConfig(
           binding.kind === 'managed' ? cwd : undefined,
           getManagedSessionPolicy()?.sharedFilesNotice === true,
           binding.kind === 'managed' && recreatedFolderNotice,
-        ),
+        ) + relocationPrompt,
         ...(appSessionId && binding.kind !== 'managed'
           ? {
               getPostCompactRuntimeAttachments: createPeerCompactContext({
