@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir } from 'node:fs/promises';
+import { afterEach, expect, test, spyOn } from 'bun:test';
+import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir, rename } from 'node:fs/promises';
+import { Database } from 'bun:sqlite';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectIndexedUsage, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
@@ -14,6 +15,76 @@ const row = (id: string, timestamp = cutoff, tokens = 10) => ({ type: 'assistant
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'usage-index-')); roots.push(root); return { path: join(root, 'cache.sqlite'), file: join(root, 's.jsonl') }; }
 const opts = (path: string) => ({ path, deadline: Date.now() + 60000 });
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+test('exhausted memory scratch spills without changing accounting or durable publication', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    const exec = Database.prototype.exec;
+    let bounded = false;
+    const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        const result = exec.call(this, sql);
+        if (this.filename === ':memory:' && !bounded) {
+            bounded = true;
+            exec.call(this, 'PRAGMA max_page_count=8');
+        }
+        return result;
+    });
+    try {
+        const indexed = await collectIndexedUsage([file], cutoff, opts(path));
+        expect(bounded).toBe(true);
+        expect(indexed.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+        expect(readSavedUsage(path)).toEqual(indexed);
+    } finally { limit.mockRestore(); }
+});
+test('append refresh retains existing rows, and interrupted tail publication rolls back atomically', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, Array.from({ length: 3000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    await collectIndexedUsage([file], cutoff, opts(path));
+    const db = new Database(path);
+    try {
+        db.exec(`CREATE TABLE mutations(kind TEXT PRIMARY KEY, count INTEGER);
+            INSERT INTO mutations VALUES ('insert',0),('delete',0);
+            CREATE TRIGGER record_insert AFTER INSERT ON records BEGIN UPDATE mutations SET count=count+1 WHERE kind='insert'; END;
+            CREATE TRIGGER record_delete AFTER DELETE ON records BEGIN UPDATE mutations SET count=count+1 WHERE kind='delete'; END;`);
+        for (const id of ['append-a', 'append-b']) {
+            await appendFile(file, JSON.stringify(row(id)) + '\n');
+            const updated = await collectIndexedUsage([file], cutoff, opts(path));
+            expect(updated.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+        }
+        expect(db.query('SELECT kind,count FROM mutations ORDER BY kind').all()).toEqual([{ kind: 'delete', count: 0 }, { kind: 'insert', count: 2 }]);
+        const saved = readSavedUsage(path);
+        await appendFile(file, JSON.stringify(row('interrupted')) + '\n');
+        await expect(collectIndexedUsage([file], cutoff, { ...opts(path), finalize() { throw new Error('interrupted after indexing'); } })).rejects.toThrow('interrupted after indexing');
+        expect(readSavedUsage(path)).toEqual(saved);
+        expect(db.query<{ count: number }, []>('SELECT count(*) AS count FROM records').get()!.count).toBe(3002);
+        const recovered = await collectIndexedUsage([file], cutoff, opts(path));
+        expect(recovered.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+        expect(db.query('SELECT kind,count FROM mutations ORDER BY kind').all()).toEqual([{ kind: 'delete', count: 0 }, { kind: 'insert', count: 3 }]);
+    } finally { db.close(); }
+});
+
+test('continuation falls back for prefix edits plus growth, truncation, replacement, and nonterminated tails', async () => {
+    const { path, file } = await fixture();
+    const text = (id: string, tokens = 10) => JSON.stringify(row(id, cutoff, tokens)) + '\n';
+    await writeFile(file, text('a'));
+    await collectIndexedUsage([file], cutoff, opts(path));
+    // Same inode, larger size, and changed historical accounting: growth is
+    // not sufficient evidence for retaining the previous prefix.
+    for (const mutate of [
+        async () => { await writeFile(file, text('a', 99) + text('b')); },
+        async () => { await writeFile(file, text('truncated')); },
+        async () => { await rename(file, file + '.old'); await writeFile(file, text('replacement') + text('extra')); },
+        async () => { await writeFile(file, text('tail').trimEnd()); },
+        async () => { await appendFile(file, '\n' + text('completed')); },
+        async () => { await appendFile(file, '{"type":'); },
+        async () => { await appendFile(file, '"user","uuid":"pending","sessionId":"s","timestamp":"' + cutoff + '"}\n'); },
+    ]) {
+        await mutate();
+        const indexed = await collectIndexedUsage([file], cutoff, opts(path));
+        const direct = await collectRetainedUsage([file], cutoff);
+        expect(indexed.ranges).toEqual(direct.ranges);
+        expect(indexed.coverage).toEqual(direct.coverage);
+    }
+});
 function autoModeRecords(values: unknown[], sourceScope: string): RetainedAutoModeRecord[] {
     return values.flatMap((value, index) => {
         if (!object(value) || typeof value.timestamp !== 'string') return [];

@@ -1,4 +1,6 @@
 import { open, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+export type StatsCheckpoint = { offset: number; generation: string; digest: string };
 export const STATS_CHUNK_BYTES = 64 * 1024;
 export const STATS_RECORD_BYTES = 4 * 1024 * 1024;
 export type StatsReadQuality = {
@@ -20,6 +22,9 @@ export async function readStatsRecords(path: string, consume: (record: StatsReco
     maxRecordBytes?: number;
     signal?: AbortSignal;
     deadline?: number;
+    continuation?: StatsCheckpoint;
+    onReset?: () => void;
+    onCheckpoint?: (checkpoint: StatsCheckpoint | null, continued: boolean) => void;
 } = {}): Promise<StatsReadQuality> {
     const chunkBytes = options.chunkBytes ?? STATS_CHUNK_BYTES;
     const maxRecordBytes = options.maxRecordBytes ?? STATS_RECORD_BYTES;
@@ -38,6 +43,30 @@ export async function readStatsRecords(path: string, consume: (record: StatsReco
             if (options.deadline !== undefined && Date.now() > options.deadline)
                 throw new Error('Usage collection timeout');
         };
+        // Growth and inode identity alone cannot prove append-only behavior:
+        // an in-place edit followed by an append has both. Verify the previous
+        // prefix on this same descriptor before retaining its projected rows.
+        // This trades sequential reads for avoiding JSON projection and writes.
+        let hash = createHash('sha256');
+        const prior = options.continuation;
+        let continued = false;
+        if (prior && prior.generation === generation && Number.isSafeInteger(prior.offset) && prior.offset > 0 && prior.offset < boundary) {
+            let position = 0, lastByte = -1;
+            while (position < prior.offset) {
+                check();
+                const read = await file.read(chunk, 0, Math.min(chunk.length, prior.offset - position), position);
+                if (!read.bytesRead) break;
+                hash.update(chunk.subarray(0, read.bytesRead));
+                lastByte = chunk[read.bytesRead - 1]!;
+                position += read.bytesRead;
+            }
+            continued = position === prior.offset && lastByte === 10 && hash.copy().digest('hex') === prior.digest;
+            if (continued) offset = quality.bytesRead = prior.offset;
+        }
+        if (!continued) {
+            hash = createHash('sha256');
+            options.onReset?.();
+        }
         const finish = async (terminated: boolean) => {
             if (oversized)
                 quality.oversizedRecords++;
@@ -82,6 +111,7 @@ export async function readStatsRecords(path: string, consume: (record: StatsReco
                 quality.shortReads++;
                 break;
             }
+            hash.update(chunk.subarray(0, bytesRead));
             let start = 0;
             for (let i = 0; i < bytesRead; i++) {
                 if (chunk[i] !== 10)
@@ -121,6 +151,8 @@ export async function readStatsRecords(path: string, consume: (record: StatsReco
         }
         if (!current || current.dev !== before.dev || current.ino !== before.ino || after.size < boundary || (after.size === boundary && after.mtimeMs !== before.mtimeMs))
             quality.changedSources = 1;
+        options.onCheckpoint?.(!quality.changedSources && !quality.shortReads && offset === boundary
+            ? { offset: boundary, generation, digest: hash.digest('hex') } : null, continued);
         return quality;
     }
     finally {

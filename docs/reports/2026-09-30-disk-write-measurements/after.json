@@ -1,0 +1,100 @@
+{
+  "accounting": "logical JSONL append bytes; SQLite changed rows and serialized WAL frames before close (not SSD bytes)",
+  "delivery": {
+    "frames": 12000,
+    "seconds": 600,
+    "writes": {
+      "delivery.trace": {
+        "records": 12000,
+        "bytes": 8707046
+      },
+      "trace.stream.rollup": {
+        "records": 10,
+        "bytes": 5402
+      },
+      "trace.loss": {
+        "records": 9,
+        "bytes": 3306
+      }
+    },
+    "bytesPerFrame": 726.3128333333333,
+    "MBPerHour": 52.294524
+  },
+  "operational": {
+    "turns": 100,
+    "seconds": 600,
+    "writes": {
+      "session.turn.started": {
+        "records": 100,
+        "bytes": 35379
+      },
+      "session.turn.completed": {
+        "records": 100,
+        "bytes": 30462
+      }
+    }
+  },
+  "analytics": {
+    "sourceBytes": 60577780,
+    "existingRecords": 50000,
+    "appendRecordsPerRound": 1,
+    "rounds": [
+      {
+        "round": 0,
+        "sourceBytesRead": 60577780,
+        "rowsInserted": 50000,
+        "rowsDeleted": 0,
+        "identityWrites": 100000,
+        "durableIdentityWrites": 0,
+        "walBytes": 26561672,
+        "shmRetainedBytes": 65536,
+        "elapsedMs": 2099,
+        "databaseRetainedBytes": 26406912
+      },
+      {
+        "round": 1,
+        "sourceBytesRead": 60578992,
+        "rowsInserted": 1,
+        "rowsDeleted": 0,
+        "identityWrites": 100002,
+        "durableIdentityWrites": 0,
+        "walBytes": 74192,
+        "shmRetainedBytes": 32768,
+        "elapsedMs": 1786,
+        "databaseRetainedBytes": 26447872
+      },
+      {
+        "round": 2,
+        "sourceBytesRead": 60580204,
+        "rowsInserted": 1,
+        "rowsDeleted": 0,
+        "identityWrites": 100004,
+        "durableIdentityWrites": 0,
+        "walBytes": 74192,
+        "shmRetainedBytes": 32768,
+        "elapsedMs": 1824,
+        "databaseRetainedBytes": 26447872
+      },
+      {
+        "round": 3,
+        "sourceBytesRead": 60581416,
+        "rowsInserted": 1,
+        "rowsDeleted": 0,
+        "identityWrites": 100006,
+        "durableIdentityWrites": 0,
+        "walBytes": 74192,
+        "shmRetainedBytes": 32768,
+        "elapsedMs": 1802,
+        "databaseRetainedBytes": 26447872
+      }
+    ]
+  },
+  "mcp": {
+    "messages": 6000,
+    "seconds": 600,
+    "records": 6000,
+    "bytes": 982890,
+    "largestRecordBytes": 164,
+    "MBPerHour": 5.89734
+  }
+}

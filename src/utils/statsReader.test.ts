@@ -3,11 +3,26 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtemp, writeFile, rm, open, appendFile, rename, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readStatsRecords } from './statsReader.js';
+import { readStatsRecords, type StatsCheckpoint } from './statsReader.js';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true }); });
 async function file(text: string) { const dir = await mkdtemp(join(tmpdir(), 'usage-reader-')); roots.push(dir); const path = join(dir, 's.jsonl'); await writeFile(path, text); return path; }
+test('validated continuation projects only the appended region with original byte offsets and generation', async () => {
+    const prefix = '{"name":"模型"}\n{"ok":1}\n';
+    const path = await file(prefix);
+    let checkpoint: StatsCheckpoint | null = null;
+    await readStatsRecords(path, () => {}, { onCheckpoint: value => { checkpoint = value; } });
+    expect(checkpoint).not.toBeNull();
+    await appendFile(path, '{"ok":2}\n');
+    const rows: { value: unknown; offset: number; generation: string }[] = [];
+    let reset = false, continued = false;
+    await readStatsRecords(path, row => { rows.push(row); }, { chunkBytes: 3, continuation: checkpoint!,
+        onReset: () => { reset = true; }, onCheckpoint: (_value, used) => { continued = used; } });
+    expect(reset).toBe(false);
+    expect(continued).toBe(true);
+    expect(rows).toEqual([{ value: { ok: 2 }, offset: Buffer.byteLength(prefix), generation: checkpoint!.generation }]);
+});
 test('C2/C3: malformed middle/end, split UTF8, valid final record and pending tail are explicit', async () => {
     const path = await file('{"name":"模型"}\nbroken\n{"ok":2}');
     const rows: unknown[] = [];

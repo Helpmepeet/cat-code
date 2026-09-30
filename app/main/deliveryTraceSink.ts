@@ -397,8 +397,11 @@ export function createDeliveryTraceSink({
   }
 
   /** Stops at the first failed append, so the queue drains in the order it was noted. */
-  const flushPendingLoss = (): void => {
+  const flushPendingLoss = (includeRingEvictions = false): void => {
     for (const [reason, loss] of pendingLosses) {
+      // The diagnostic ring advances during healthy traffic too. Keep its
+      // exact count/range, but publish at rollup cadence rather than per frame.
+      if (reason === 'in_memory_eviction' && !includeRingEvictions) continue
       if (!appendLine({
         schemaVersion: 1,
         recordKind: 'trace.loss',
@@ -648,6 +651,7 @@ export function createDeliveryTraceSink({
     ? setInterval(() => {
       sweepQuiescentStreams()
       emitStreamRollups()
+      flushPendingLoss(true)
     }, sweepIntervalMs)
     : null
   sweepTimer?.unref?.()
@@ -812,7 +816,10 @@ export function createDeliveryTraceSink({
       })
     },
     sweepQuiescentStreams,
-    emitStreamRollups,
+    emitStreamRollups() {
+      emitStreamRollups()
+      flushPendingLoss(true)
+    },
     close() {
       // A quit between two sweeps would otherwise lose the only account of a
       // stream that had already gone quiet. The per-episode latch keeps this
@@ -825,7 +832,7 @@ export function createDeliveryTraceSink({
       // After the sweep, so the last rollup carries the quiescence it just
       // counted; suppressed when the interval already reported this state.
       emitStreamRollups()
-      flushPendingLoss()
+      flushPendingLoss(true)
       if (sweepTimer) clearInterval(sweepTimer)
       traceLane.close()
       rollupLane.close()

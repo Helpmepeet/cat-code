@@ -237,6 +237,29 @@ const DELIVERED_STAGES = [
   'renderer.state.applied',
 ] as const
 
+test('healthy ring eviction publishes bounded loss bytes per rollup and preserves exact counts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-volume-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  const frames = MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM + 3000
+  try {
+    for (let sequence = 1; sequence <= frames; sequence++) {
+      const trace = mintDeliveryTrace(sequence, 'stream')
+      for (const stage of DELIVERED_STAGES) sink.mark({ sessionId: 'session', trace, stage, frameKind: 'event' })
+      if (sequence % 1000 === 0) sink.emitStreamRollups()
+    }
+    sink.close()
+    const losses = kinds(root, 'trace.loss')
+    expect(losses.length).toBeLessThanOrEqual(4)
+    expect(Buffer.byteLength(JSON.stringify(losses))).toBeLessThan(2048)
+    expect(losses.reduce((sum, record) => sum + Number(record.droppedCount), 0)).toBe(3000)
+    expect(losses[0]!.sequenceStart).toBe(1)
+    expect(losses.at(-1)!.sequenceEnd).toBe(3000)
+    expect(sink.stuckSessionSummaries()[0]!.traceLossCount).toBe(3000)
+    expect(sink.summary('session')!.applied).toBe(frames)
+    expect(kinds(root, 'delivery.trace')).toHaveLength(frames)
+  } finally { sink.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
 test('a frame that completes costs ONE record carrying every stage it passed', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-consolidated-'))
   const wall = { value: Date.parse('2026-08-31T00:00:00.000Z') }
@@ -776,7 +799,7 @@ test('both losses a single mark attributes are persisted, not just the last', ()
   // One mark, two evictions, two reasons. A single pending slot kept only the
   // second, and the sequence range the first would have named is unrecoverable
   // from the per-stream counter that survives it.
-  expect(kinds(root, 'trace.loss')).toMatchObject([
+  expect(kinds(root, 'trace.loss').sort((a, b) => String(a.reason).localeCompare(String(b.reason)))).toMatchObject([
     { reason: 'in_memory_eviction', sequenceStart: 1, sequenceEnd: 1, droppedCount: 1, streamEpoch: 'stream' },
     { reason: 'stream_evicted', sequenceStart: 1, sequenceEnd: 1, droppedCount: 1, streamEpoch: 'idle-0' },
   ])
