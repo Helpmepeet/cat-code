@@ -1775,7 +1775,7 @@ export function App() {
     }
   }, [focusCreatedSession])
 
-  /** Start in the active project, or choose one when no project is active. */
+  /** Start in the active project, or open a chat without a project. */
   const newChat = useCallback(async () => {
     if (newChatInFlightRef.current) return
     newChatInFlightRef.current = true
@@ -1787,12 +1787,12 @@ export function App() {
       ) {
         await newSessionInWorkspace(activeSessionRow.appSessionId)
       } else {
-        await newSession()
+        await newManagedChat()
       }
     } finally {
       newChatInFlightRef.current = false
     }
-  }, [activeSessionRow, newSession, newSessionInWorkspace])
+  }, [activeSessionRow, newManagedChat, newSessionInWorkspace])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -3350,11 +3350,7 @@ export function App() {
         return
       }
       if (event.key === 't' || event.key === 'T') {
-        // A new tab stays in the workspace you are already in: `newChat` reuses
-        // the active row's registry workspace (HC1 — the host re-derives the
-        // cwd, the renderer never names one) and only falls back to the native
-        // picker when there is no active row to inherit from. "Add project" and
-        // "Open folder" remain the deliberate pick-a-directory paths.
+        // New tabs share the project-aware action with the sidebar and palette.
         event.preventDefault()
         void newChat()
         return
@@ -4511,7 +4507,7 @@ export function App() {
               truncated={sessionCatalogSnapshot?.truncated ?? false}
               catalogLoaded={sessionCatalogSnapshot !== null}
               onOpenRow={openCatalogRow}
-              onNewSession={() => void newSession()}
+              onNewSession={() => void newChat()}
               // The row `⋯` menu gates Rename/Export on this same frame-plane
               // check (`App.tsx` `hasEngine:` above, `sessionActions.ts`
               // `resolveSessionActions`); the page's own write boundary

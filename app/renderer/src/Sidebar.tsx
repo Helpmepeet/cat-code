@@ -38,10 +38,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    ordering IS offered where it is the only sensible order: inside the Pinned
  *    section, which exists for exactly that.
  *  - 🔁 adapted: "New chat" opens a session in the ACTIVE workspace with no
- *    picker, falling back to the picker when nothing is open. The design source
- *    leaves the button unwired; a session here cannot exist without a workspace,
- *    and the picker is already what the Projects "+" does, so making both open
- *    it would give the rail two identical buttons.
+ *    picker, or creates a chat without a project when no project is active.
  *  - Rows render NO visible status chip: the design source's rows are bare, and
  *    the operator ruled out per-row status labels (2026-07-20). Status TEXT
  *    stays in the `aria-label` only (the O1 dot below is unlabeled, and is the
@@ -78,7 +75,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    first row) — a REGISTRY id, never a path. The host looks that id up, re-derives
  *    + re-validates the row's cwd from its OWN registry (exactly as restore does),
  *    and spawns there (HC1/T8 — the renderer authors no cwd). The whole-app ⌘T /
- *    TabBar "+" still uses the native picker (`onNewSession`), unchanged.
+ *    TabBar "+" shares the project-aware New chat action.
  *  - Session-row drag-to-panel is omitted; the built split model is drag-tab-to-
  *    edge (P3-6), which stays intact.
  *  - ➕ real-added (operator, 2026-07-26): the workspace GROUP HEADERS are
@@ -320,7 +317,7 @@ export function Sidebar({
    */
   onNewSessionInWorkspace?: (repId: SessionId) => void
   /** The existing project-aware New chat action; it uses the active project
-   * or opens the folder picker when there is no active project. */
+   * or creates a chat without a project when there is no active project. */
   onNewChat?: () => void
   /** Create a managed chat without a project, independently of the active view. */
   onNewManagedChat?: () => void

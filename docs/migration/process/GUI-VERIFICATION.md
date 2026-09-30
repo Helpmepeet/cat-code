@@ -24,8 +24,9 @@ bun run --cwd app dev
   allowlisted realpaths in cyclic order.
 - `CATCODE_DEBUG_STATE=1` writes the debug export only in dev builds.
 
-The app launches with no engine session. Use **Open a project** or **New session**
-to create one through the allowlisted picker.
+The app launches with no engine session. Use **Open folder** to create a project
+session through the allowlisted picker. **New chat**, the tab bar's **New session**,
+and ⌘T reuse the active project or create a normal chat without a project.
 
 Readiness is the stdout line:
 
