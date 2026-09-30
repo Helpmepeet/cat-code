@@ -83,7 +83,7 @@ import {
   type RestorePhase,
 } from './TranscriptView.js'
 import type { ToolCardExpansionStore } from './toolCardExpansion.js'
-import { observePaneBottomLock } from './markdownScrollCoordinator.js'
+import { observePaneBottomLock, observePaneScroll } from './markdownScrollCoordinator.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
   captureTranscriptScrollAnchor,
@@ -1197,9 +1197,28 @@ export function SessionPane({
   useEffect(() => {
     const el = transcriptScrollRef.current
     if (!el) return
-    return observePaneBottomLock(el, () => atBottomRef.current, scrollTop => {
+    const releaseBottomLock = observePaneBottomLock(el, () => atBottomRef.current, scrollTop => {
       previousScrollTopRef.current = scrollTop
     })
+    let contentHeight = el.scrollHeight
+    let viewportHeight = el.clientHeight
+    const releaseGeometry = observePaneScroll(el, () => {
+      const nextContentHeight = el.scrollHeight
+      const nextViewportHeight = el.clientHeight
+      if (nextContentHeight === contentHeight && nextViewportHeight === viewportHeight) return
+      contentHeight = nextContentHeight
+      viewportHeight = nextViewportHeight
+      // A shrink can reach the end without a scroll event. Only geometry changes
+      // may reacquire here, so a one-pixel upward scroll still releases follow.
+      if (!atBottomRef.current && contentHeight - el.scrollTop - viewportHeight <= 1) {
+        previousScrollTopRef.current = el.scrollTop
+        applyAtBottom(true)
+      }
+    })
+    return () => {
+      releaseGeometry()
+      releaseBottomLock()
+    }
   }, [])
 
   // Unbinding is the one moment the anchor is READ, so a capture still waiting

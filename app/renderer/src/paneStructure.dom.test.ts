@@ -24,7 +24,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import { SessionPane } from './SessionPane.js'
@@ -200,5 +200,90 @@ test('a pane that opens on a remembered row stays there, with messages waiting',
     expect(scrollerOf(container).scrollTop).not.toBe(1000)
   } finally {
     restore()
+  }
+})
+
+test.each([
+  {
+    change: 'content shrinks',
+    partial: { scrollHeight: 800, clientHeight: 400 },
+    bottom: { scrollHeight: 700, clientHeight: 400 },
+    growth: { scrollHeight: 900, clientHeight: 400 },
+  },
+  {
+    change: 'the viewport grows',
+    partial: { scrollHeight: 1000, clientHeight: 500 },
+    bottom: { scrollHeight: 1000, clientHeight: 700 },
+    growth: { scrollHeight: 1200, clientHeight: 700 },
+  },
+])('Latest clears when $change to the bottom without a scroll event', async ({ partial, bottom, growth }) => {
+  const geometry = { scrollHeight: 1000, clientHeight: 400 }
+  const restoreGeometry = stubScrollGeometry(geometry)
+  const originalObserver = globalThis.ResizeObserver
+  const callbacks = new Map<Element, () => void>()
+  globalThis.ResizeObserver = class extends originalObserver {
+    constructor(private readonly callback: ResizeObserverCallback) {
+      super(callback)
+    }
+    override observe(target: Element): void {
+      callbacks.set(target, () => this.callback([], this))
+    }
+  }
+  try {
+    const tree = await harness.mount(paneWithWaiting({
+      activeConnection: { status: 'ready', inputEnabled: true },
+    }))
+    const scroller = scrollerOf(tree.container)
+    const notifyResize = callbacks.get(scroller)
+    expect(notifyResize).toBeDefined()
+    const latest = () => [...tree.container.querySelectorAll('button')]
+      .find(button => button.textContent?.includes('Latest'))
+    await act(async () => {
+      // Following begins at the end; the reader then moves up.
+      scroller.scrollTop = 600
+      scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+      scroller.scrollTop = 300
+      scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+    expect(latest()).toBeDefined()
+
+    // A resize that still leaves content below must not resume following.
+    Object.assign(geometry, partial)
+    await act(async () => {
+      notifyResize?.()
+      await harness.nextFrame()
+    })
+    expect(latest()).toBeDefined()
+    expect(scroller.scrollTop).toBe(300)
+
+    // No scroll event: only the document resize reveals that we are at the end.
+    Object.assign(geometry, bottom)
+    await act(async () => {
+      notifyResize?.()
+      await harness.nextFrame()
+    })
+    expect(Boolean(latest())).toBe(false)
+
+    // Reaching the bottom by resize must also restore follow for later growth.
+    Object.assign(geometry, growth)
+    await act(async () => {
+      notifyResize?.()
+      await harness.nextFrame()
+    })
+    expect(scroller.scrollTop).toBe(500)
+    expect(latest()).toBeUndefined()
+
+    // The shared scroll frame must not undo an intentional one-pixel release.
+    await act(async () => {
+      scroller.scrollTop = 499
+      scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+      await harness.nextFrame()
+    })
+    expect(latest()).toBeDefined()
+    expect(scroller.scrollTop).toBe(499)
+  } finally {
+    await harness.unmountAll()
+    globalThis.ResizeObserver = originalObserver
+    restoreGeometry()
   }
 })
