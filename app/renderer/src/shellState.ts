@@ -56,6 +56,8 @@ export function reduceShellState(
   event: ShellStateAction,
 ): ShellState {
   switch (event.type) {
+    case 'project-routing':
+      return state
     case 'preview-open': {
       const id = event.sessionId
       const descriptor = state.byId[id]

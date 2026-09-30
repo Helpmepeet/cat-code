@@ -133,7 +133,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(57)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(59)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -181,7 +181,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(59)
+  expect(names.length).toBe(61)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -203,7 +203,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
   const channels = readChannelNames()
 
-  // The seven host/control-plane methods each ride a FIXED channel constant.
+  // Every host/control-plane method rides a fixed channel constant.
   expect(channels).toContain("export const CH_HOST_CREATE = 'catcode:host:create'")
   expect(channels).toContain("export const CH_HOST_MOVE_SESSION = 'catcode:host:move-session'")
   expect(channels).toContain(
@@ -234,6 +234,12 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   )
   expect(channels).toContain(
     "export const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
+  )
+  expect(channels).toContain(
+    "export const CH_HOST_PROJECT_ROUTES = 'catcode:host:project-routes'",
+  )
+  expect(channels).toContain(
+    "export const CH_HOST_RESOLVE_PROJECT_ROUTE = 'catcode:host:resolve-project-route'",
   )
   expect(channels).toContain("export const CH_HOST_EVENT = 'catcode:host:event'")
 
@@ -271,7 +277,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(28)
+  expect(invokeChannels.length).toBe(30)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_MANAGED',
@@ -292,6 +298,8 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_PREVIEW',
     'CH_HOST_SESSIONS_CATALOG',
     'CH_HOST_OPEN_HISTORY',
+    'CH_HOST_PROJECT_ROUTES',
+    'CH_HOST_RESOLVE_PROJECT_ROUTE',
     'CH_HOST_SAVE_TEXT',
     'CH_HOST_OPEN_WORKSPACE_FILE',
     'CH_HOST_ACCOUNT_DELETE',

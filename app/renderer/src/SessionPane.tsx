@@ -42,6 +42,8 @@ import {
   type ComposerGhostSnapshot,
 } from './composerSendMotion.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
+import { ProjectRoutingBar } from './ProjectRoutingBar.js'
+import type { ProjectRouteChoice, ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
 import { ComposerInput } from './ComposerInput.js'
 import { TodoStepReadout } from './TodoPlanPanel.js'
@@ -263,6 +265,8 @@ export function SessionPane({
   tasksSnapshot = null,
   pastes,
   pendingSubmit = null,
+  projectRoute = null,
+  onProjectRouteChoice,
   onRecallQueuedPrompts = null,
   queuedPrompts = EMPTY_QUEUED_PROMPTS,
   permissionContext,
@@ -701,7 +705,10 @@ export function SessionPane({
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
-  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true
+  const routeMoving = projectRoute?.phase === 'moving'
+  const routeCancellable = projectRoute !== null &&
+    ['checking', 'ask', 'failed', 'unsent'].includes(projectRoute.phase)
+  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true || routeMoving
   const composerReadOnly =
     branchSwitchPending || managedFolderUnavailable || !composerGate.editable
   // A named session is addressed by its own name (PEER-SESSIONS §6): the user
@@ -709,13 +716,13 @@ export function SessionPane({
   // peers use for it too. A row with no name (one that predates the field and
   // has not been spawned since) keeps the original prompt verbatim. The
   // connection copy is untouched either way.
-  const composerPlaceholder = activeDescriptor?.moving ? 'Connecting…' : managedFolderUnavailable
+  const composerPlaceholder = activeDescriptor?.moving || routeMoving ? 'Connecting…' : managedFolderUnavailable
     ? 'Recreate the chat folder to continue'
     : composerGate.editable
       ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
       : 'Connecting…'
   // The name carries the peer colour; the connection copy has no name in it.
-  const composerPlaceholderName = composerGate.editable && !managedFolderUnavailable && !activeDescriptor?.moving
+  const composerPlaceholderName = composerGate.editable && !managedFolderUnavailable && !activeDescriptor?.moving && !routeMoving
     ? composerPlaceholderParts(activeDescriptor?.name ?? null)
     : null
   const paused = permissionQueue.length > 0
@@ -1152,6 +1159,11 @@ export function SessionPane({
   // `shouldReleasePendingSubmitOnStop` in `composerState.ts`).
   const stopTurn = (): void => {
     if (!activeSessionId) return
+    if (routeCancellable) {
+      onProjectRouteChoice?.('cancel')
+      if (!generating) return
+    }
+    if (!generating) return
     if (shouldReleasePendingSubmitOnStop(pendingSubmit)) {
       releasePendingSubmit()
     }
@@ -1470,7 +1482,7 @@ export function SessionPane({
     // focus leaves the composer, and a focused permission card consumes Escape
     // as its own dismiss. The always-visible mount is the send-slot Stop below.
     // Mirrors the TUI Ctrl+C/Esc cancel.
-    if (event.key === 'Escape' && generating) {
+    if (event.key === 'Escape' && (generating || routeCancellable)) {
       event.preventDefault()
       stopTurn()
       return
@@ -1505,6 +1517,7 @@ export function SessionPane({
         return
       }
       event.preventDefault()
+      if (projectRoute !== null) return
       event.currentTarget.requestSubmit()
       return
     }
@@ -1706,7 +1719,7 @@ export function SessionPane({
             moveBackDisabled={generating || activeDescriptor?.status !== 'ready' || activeDescriptor?.moving === true}
           />
 
-          {activeDescriptor?.moving ? (
+          {activeDescriptor?.moving && projectRoute === null ? (
             <div className="chat-move-progress" role="status">Moving…</div>
           ) : null}
 
@@ -1812,6 +1825,14 @@ export function SessionPane({
                   </button>
                 ) : null}
               </div>
+            </div>
+          ) : null}
+          {projectRoute ? (
+            <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pb-3 pt-2.5">
+              <div className="flex flex-col items-end" aria-label="Pending message">
+                <QueuedRow text={projectRoute.text} />
+              </div>
+              <ProjectRoutingBar route={projectRoute} onChoice={onProjectRouteChoice} />
             </div>
           ) : null}
         </div>
@@ -2030,6 +2051,10 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (projectRoute !== null) {
+            event.preventDefault()
+            return
+          }
           if (managedFolderUnavailable) {
             event.preventDefault()
             return
@@ -2254,6 +2279,7 @@ export function SessionPane({
               title="Send"
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
+                projectRoute !== null ||
                 branchSwitchPending ||
                 managedFolderUnavailable ||
                 !composerGate.editable ||
@@ -2768,6 +2794,8 @@ type SessionPaneProps = {
   /** CC-16 — a prompt submitted before the engine could accept it. The cold-spawn
    * row is presentation metadata; every pending prompt still blocks a second hold. */
   pendingSubmit?: PendingSubmit | null
+  projectRoute?: ProjectRouteSnapshot | null
+  onProjectRouteChoice?: (choice: ProjectRouteChoice) => void
   /** D1a — messages this session has waiting for its running response, oldest
    * first. Display only: they stay out of the transcript until delivered. */
   queuedPrompts?: readonly QueuedPromptItem[]

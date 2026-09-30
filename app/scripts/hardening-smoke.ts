@@ -270,6 +270,11 @@ async function runProductionHardeningSmoke(
       'previewSession',
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',
+      // A held Chat submission may be routed only to a main/worker-selected
+      // project. The renderer reads snapshots and returns a closed choice; it
+      // cannot author a project path.
+      'readProjectRoutes',
+      'resolveProjectRoute',
       'restoreSession',
       // PEER-SESSIONS §6 — the user's standing "don't let peers reopen this
       // session" decision (HC3 fixed sender). Id plus a boolean: the renderer

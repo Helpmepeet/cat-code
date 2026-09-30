@@ -122,6 +122,7 @@ type SpawnReservation = {
 }
 
 export type HostOptions = {
+  hasPendingSubmit?: (appSessionId: SessionId) => boolean
   supervisor: SidecarSupervisor
   registry: SessionRegistry
   /**
@@ -175,6 +176,7 @@ function hostError(code: HostErrorCode, message: string): { ok: false; error: Ho
 }
 
 export class Host implements HostApi {
+  private readonly hasPendingSubmit: (appSessionId: SessionId) => boolean
   private readonly supervisor: SidecarSupervisor
   private readonly registry: SessionRegistry
   private readonly validateCwd: (cwd: string) => CwdValidation
@@ -252,6 +254,7 @@ export class Host implements HostApi {
   private peerNameCursor = randomPeerNameCursor()
 
   constructor(options: HostOptions) {
+    this.hasPendingSubmit = options.hasPendingSubmit ?? (() => false)
     this.supervisor = options.supervisor
     this.registry = options.registry
     this.validateCwd = options.validateCwd
@@ -698,6 +701,16 @@ export class Host implements HostApi {
     // §9-A4: fails session_not_found if the row OR its transcript is gone. The
     // registry only offers restorable rows whose transcript exists (launch reap),
     // and a null engineSessionId row is not resumable.
+    if (row?.engineSessionId === null && row.binding.kind === 'managed' && this.hasPendingSubmit(appSessionId)) {
+      const live = this.supervisor.listSessions().find(item => item.sessionId === appSessionId)
+      if (live && !isTerminalStatus(live.status)) return hostError('session_unreachable', 'This Chat is already connecting')
+      const folder = this.managedStorage?.resolve(row.binding)
+      if (!folder?.ok || folder.cwd !== row.cwd) return hostError('managed_storage_invalid', 'The Chat folder is unavailable')
+      const reservation = this.reserveSpawn(true)
+      if (!reservation.ok) return reservation.result
+      this.supervisor.killSession(appSessionId)
+      return this.spawn({ appSessionId, cwd: row.cwd, binding: row.binding, title: row.title, forked: row.forked }, reservation)
+    }
     if (!row || row.engineSessionId === null) {
       return hostError(
         'session_not_found',
@@ -1415,6 +1428,21 @@ export class Host implements HostApi {
     }
   }
 
+  /** A routed message is pending work, so unlike a manual closed-Chat move
+   * its destination must remain connected until transport can accept input. */
+  async prepareRoutedSubmit(appSessionId: SessionId): Promise<void> {
+    await this.launched
+    if (this.moving.has(appSessionId)) throw new Error('This Chat is moving')
+    const live = this.supervisor.listSessions().find(item => item.sessionId === appSessionId)
+    if (!live || isTerminalStatus(live.status)) {
+      const restored = await this.restoreSession(appSessionId)
+      if (!restored.ok) throw new Error(restored.error.message)
+    } else if (live.status === 'disconnected') {
+      throw new Error('Restart this Chat after its connection was lost')
+    }
+    await this.waitForMoveSourceReady(appSessionId)
+  }
+
   /** Main supplies a picker-resolved cwd; null returns to the original owned Chat. */
   async moveSession(appSessionId: SessionId, cwd: string | null): Promise<HostResult<SessionDescriptor>> {
     await this.launched
@@ -2066,7 +2094,8 @@ export class Host implements HostApi {
     liveStatus: SidecarStatus | null,
   ): boolean {
     if (liveStatus !== null) return false
-    if (!row || row.engineSessionId === null) return false
+    if (!row) return false
+    if (row.engineSessionId === null) return row.binding.kind === 'managed' && this.hasPendingSubmit(row.appSessionId)
     // Keep an interrupted move visible as a recovery row. The restore owner
     // refuses it above, and preview remains closed, so no half-moved bytes are
     // consumed while the user can still find the saved conversation.

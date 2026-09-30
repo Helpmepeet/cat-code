@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { requestSessionMove } from './sessionMoveAction.js'
+import type { ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import {
@@ -561,6 +562,9 @@ export function App() {
   )
   const pendingSubmitsRef = useRef(pendingSubmits)
   pendingSubmitsRef.current = pendingSubmits
+  const [projectRoutes, setProjectRoutes] = useState<Record<SessionId, ProjectRouteSnapshot>>({})
+  const projectRoutesRef = useRef(projectRoutes)
+  projectRoutesRef.current = projectRoutes
   // D5 — a submit the sidecar refuses (the mid-turn depth cap is the reachable
   // case) used to leave the composer empty and the images gone: `↑` history is
   // text-only, so the attachments had no recovery path at all. The submitted
@@ -1106,7 +1110,13 @@ export function App() {
       // through (a tool result on a user message, a republished staged snapshot,
       // both turn brackets, an error belonging to some other verb) passes by
       // without touching a retained copy.
-      const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)
+      const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames.filter(frame => {
+        if (frame.kind !== 'submit.result' || frame.accepted) return true
+        // The routing journal still owns refused input until Send or Cancel.
+        // Restoring a second composer copy here would invite duplicate sends.
+        const route = projectRoutesRef.current[frame.sessionId]
+        return route?.submitId !== frame.submitId
+      }))
       retainedSubmitsRef.current = answers.state
       const restoredBySession = new Map<SessionId, RetainedSubmit[]>()
       for (const { sessionId, retained } of answers.restored) {
@@ -1245,11 +1255,22 @@ export function App() {
   // that emits no host event) is never clobbered by a stale roster.
   useEffect(() => {
     const bridge = getBridge()
+    const routeEventsSeen = new Set<SessionId>()
+    let routesDisposed = false
     // Subscribe-before-snapshot (F3): install the live stream FIRST so no
     // session-added/status/removed can slip through the gap between the snapshot
     // read and the subscription. The snapshot is then folded as a BASELINE that
     // never clobbers a newer live event already applied (reduceShell hydrate).
     const unsubscribe = bridge.subscribeHost(event => {
+      if (event.type === 'project-routing') {
+        routeEventsSeen.add(event.appSessionId)
+        const next = { ...projectRoutesRef.current }
+        if (event.snapshot) next[event.appSessionId] = event.snapshot
+        else delete next[event.appSessionId]
+        projectRoutesRef.current = next
+        setProjectRoutes(next)
+        return
+      }
       // Catalog owner (decision #4): the global sessions catalog now arrives as a
       // read-only `sessions-catalog` host event (was the per-sidecar
       // `sessions.snapshot` frame). It is NOT a roster row — fold it into the
@@ -1308,6 +1329,12 @@ export function App() {
         }
       }
       if (event.type === 'session-removed') {
+        routeEventsSeen.add(event.appSessionId)
+        setProjectRoutes(current => {
+          const next = { ...current }
+          delete next[event.appSessionId]
+          return next
+        })
         dispatch({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchSessionEvent({
           type: 'session-removed',
@@ -1364,8 +1391,21 @@ export function App() {
       }
       dispatchShell({ type: 'event', event })
     })
+    void bridge.readProjectRoutes().then(snapshots => {
+      if (routesDisposed) return
+      setProjectRoutes(current => {
+        const next = { ...current }
+        for (const snapshot of snapshots) {
+          if (!routeEventsSeen.has(snapshot.appSessionId)) next[snapshot.appSessionId] = snapshot
+        }
+        return next
+      })
+    }).catch(error => {
+      if (!routesDisposed) toast(errorMessage(error), { tone: 'warn' })
+    })
     void hydrateHostRoster()
     return () => {
+      routesDisposed = true
       rosterReadAttemptRef.current += 1
       preloadCancelledRef.current = true
       unsubscribe()
@@ -2957,6 +2997,10 @@ export function App() {
     event: FormEvent<HTMLFormElement>,
   ): void {
     event.preventDefault()
+    if (projectRoutesRef.current[sessionId]) {
+      toast('Finish the pending message first.', { tone: 'info' })
+      return
+    }
     const sessionLog = selectRawMessageLog(state, sessionId)
     const sessionConnection = selectConnection(connection, sessionId)
     const images = selectImageAttachments(imageAttachmentState, sessionId)
@@ -3865,6 +3909,18 @@ export function App() {
 	            images={selectImageAttachments(imageAttachmentState, sessionId)}
             fileAttachment={selectFileAttachment(fileAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
+	            projectRoute={projectRoutes[sessionId] ?? null}
+	            onProjectRouteChoice={choice => {
+	              const route = projectRoutesRef.current[sessionId]
+	              if (!route) return
+	              void getBridge().resolveProjectRoute({
+	                appSessionId: sessionId,
+	                submitId: route.submitId,
+	                choice,
+	              }).then(result => {
+	                if (!result.ok) toast(result.error.message, { tone: 'warn' })
+	              }).catch(error => toast(errorMessage(error), { tone: 'warn' }))
+	            }}
 	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId)}
 	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
 	            history={selectHistory(historyState, sessionId)}

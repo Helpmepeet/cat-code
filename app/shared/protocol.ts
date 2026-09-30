@@ -55,6 +55,7 @@
 // isolation without dragging in the engine's Bun runtime graph. The sidecar,
 // which genuinely runs engine code, imports the real modules directly.
 import type { AppSessionEvent } from '@cat-code/engine/session-events'
+import type { ProjectRouteCommand, ProjectRouteSnapshot } from './projectRouting.js'
 import type {
   AppClientMessage,
   AppReadyPayload,
@@ -4282,6 +4283,8 @@ export type CatCodeBridge = {
   createManagedChat(): Promise<HostResult<SessionDescriptor>>
   /** Manual move: a native picker token, or null for Move back. */
   moveSession(appSessionId: SessionId, cwdToken: string | null): Promise<HostResult<SessionDescriptor>>
+  readProjectRoutes(): Promise<ProjectRouteSnapshot[]>
+  resolveProjectRoute(command: ProjectRouteCommand): Promise<HostResult<void>>
   getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>>
   recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>
   openSessionFolder(appSessionId: SessionId): Promise<HostResult<void>>

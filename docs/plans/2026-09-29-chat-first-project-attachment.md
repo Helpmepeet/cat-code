@@ -3,9 +3,15 @@
 > Manual saved or empty Chat → project → Move back → another project behavior is implemented
 > and recorded in [CHAT-RELOCATION](../migration/decisions/CHAT-RELOCATION.md).
 > The design-only authorization language and unverified list below are historical.
-> Automatic matching, the suggestion bar, and automatic first-message routing remain deferred.
+> Bounded automatic routing and its suggestion bar are now implemented for eligible managed Chats. The current implementation uses trusted known roots and conservative direct-work intent matching, with full-payload unsent/accepted/unknown recovery. Model intent classification remains deferred.
 
 Revised 2026-09-29 after the third adversarial review. The design text below records that checkpoint; the later manual implementation is governed by the decision linked above.
+
+## Implementation checkpoint, 2026-09-30
+
+Pre-delivery routing now holds the full prompt/options durably, uses an observation-only trusted-root worker, moves a clear recognized project-scoped work request automatically, and asks about a plausible unique name match. Quoted/log/reference/negated evidence and ambiguous candidates do not authorize movement. Stay suppression permits later explicit requests. A project binding remains sticky.
+
+Recovery distinguishes unsent, accepted receipts, and unknown handoffs. Restarts never automatically resend unknown messages; the bar exposes explicit recovery choices. The held delivery prepares the destination after a real host move, including when the manual host owner parks an inactive destination. Isolated process checks cover fresh and established Chats, trust refusal after classification, destination delivery, and recovery before and after movement. See the decision record for the implemented policy and limits. General exactly-once delivery, measured classifier accuracy, broad-language intent coverage, and Electron verification are not claimed. The product requirements below remain the target; the older unverified list records its original checkpoint.
 
 ## Implementation checkpoint, 2026-09-29
 

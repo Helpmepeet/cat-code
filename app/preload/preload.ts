@@ -16,6 +16,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
+import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projectRouting.js'
 import type {
   AccountDeleteMessage,
   AccountLogoutMessage,
@@ -101,6 +102,8 @@ import {
   CH_HOST_CREATE,
   CH_HOST_CREATE_MANAGED,
   CH_HOST_MOVE_SESSION,
+  CH_HOST_PROJECT_ROUTES,
+  CH_HOST_RESOLVE_PROJECT_ROUTE,
   CH_HOST_FOLDER_STATE,
   CH_HOST_FOLDER_RECREATE,
   CH_HOST_FOLDER_OPEN,
@@ -587,6 +590,14 @@ const bridge: CatCodeBridge = {
   moveSession(appSessionId: SessionId, cwdToken: string | null): Promise<HostResult<SessionDescriptor>> {
     sendGuard.assertAllowed({ appSessionId, cwdToken })
     return ipcRenderer.invoke(CH_HOST_MOVE_SESSION, { appSessionId, cwdToken }) as Promise<HostResult<SessionDescriptor>>
+  },
+  readProjectRoutes(): Promise<ProjectRouteSnapshot[]> {
+    sendGuard.assertAllowed({ readProjectRoutes: true })
+    return ipcRenderer.invoke(CH_HOST_PROJECT_ROUTES) as Promise<ProjectRouteSnapshot[]>
+  },
+  resolveProjectRoute(command: ProjectRouteCommand): Promise<HostResult<void>> {
+    sendGuard.assertAllowed(command)
+    return ipcRenderer.invoke(CH_HOST_RESOLVE_PROJECT_ROUTE, command) as Promise<HostResult<void>>
   },
   getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>> {
     sendGuard.assertAllowed({ appSessionId })

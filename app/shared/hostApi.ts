@@ -1,5 +1,6 @@
 import type { UsageCollectionResult } from './usageDashboard.js'
 import type { SettingsInventory } from './settingsInventoryWorker.js'
+import type { ProjectRouteSnapshot } from './projectRouting.js'
 /**
  * The host control-plane contract (D1 — `decisions/REGISTRY.md` §6.1; trust zone
  * — `decisions/SECURITY-MINIMUM.md` Addendum 2026-07-04, T8 / HC1–HC4).
@@ -394,6 +395,7 @@ export type HostEvent =
   | { type: 'accounts-pool'; pool: AccountsSnapshot }
   | { type: 'usage-dashboard'; result: UsageCollectionResult }
   | { type: 'usage-dashboard-loading' }
+  | { type: 'project-routing'; appSessionId: SessionId; snapshot: ProjectRouteSnapshot | null }
 
 /* ------------------------------------------------------------------------- *
  * Bounds (HC4 + title cap)

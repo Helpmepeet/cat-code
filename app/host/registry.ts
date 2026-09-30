@@ -234,6 +234,8 @@ export type RegistryDocument = {
  * ------------------------------------------------------------------------- */
 
 export type RegistryOptions = {
+  /** Pending input is recoverable content even before an engine transcript exists. */
+  retainSession?: (appSessionId: string) => boolean
   /**
    * Directory that holds `registry.json`. INJECTED at construction so tests
    * never touch the real config home. Canonical default (when omitted):
@@ -429,6 +431,7 @@ function corruptName(ts: number): string {
 }
 
 export class SessionRegistry {
+  private readonly retainSession: (appSessionId: string) => boolean
   private readonly dir: string
   private readonly path: string
   private readonly log: (line: string) => void
@@ -459,6 +462,7 @@ export class SessionRegistry {
   private writeFailed = false
 
   constructor(options: RegistryOptions = {}) {
+    this.retainSession = options.retainSession ?? (() => false)
     this.dir = options.storageDir ?? defaultRegistryDir()
     this.path = join(this.dir, 'registry.json')
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
@@ -689,6 +693,7 @@ export class SessionRegistry {
   private reap(): void {
     // Drop missing-transcript rows and null-engineSessionId terminal rows.
     this.doc.sessions = this.doc.sessions.filter(row => {
+      if (this.retainSession(row.appSessionId)) return true
       if (row.shutdown !== null && row.engineSessionId === null) {
         this.log(
           `[registry] reaped ${row.shutdown} row with no engineSessionId (${row.appSessionId}): ` +
@@ -760,7 +765,7 @@ export class SessionRegistry {
     if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
     const terminal = this.doc.sessions
-      .filter(isReapableForBound)
+      .filter(row => isReapableForBound(row) && !this.retainSession(row.appSessionId))
       .sort(
         (a, b) =>
           Number(a.peerWakeBlocked === true) - Number(b.peerWakeBlocked === true) ||

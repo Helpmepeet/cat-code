@@ -1,5 +1,13 @@
 import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
+import { FileProjectRoutingStore } from './projectRoutingStore.js'
+import { ProjectRoutingController } from './projectRoutingController.js'
+import { runProjectRoutingWorker } from './projectRoutingRunner.js'
+import {
+  parseProjectRouteCommand,
+  projectRouteText,
+  type ProjectRouteSnapshot,
+} from '../shared/projectRouting.js'
 import {
   createUsagePublication,
   isUsageDashboardEnabled,
@@ -128,6 +136,8 @@ import {
   CH_HOST_CREATE,
   CH_HOST_CREATE_MANAGED,
   CH_HOST_MOVE_SESSION,
+  CH_HOST_PROJECT_ROUTES,
+  CH_HOST_RESOLVE_PROJECT_ROUTE,
   CH_HOST_FOLDER_STATE,
   CH_HOST_FOLDER_RECREATE,
   CH_HOST_FOLDER_OPEN,
@@ -644,6 +654,7 @@ logOperational('process.started', 'info', { role: 'electron-main', pid: process.
 // registry into the typed control plane (P3-3); main is a CALLER of that host.
 let supervisor: SidecarSupervisor | null = null
 let host: Host | null = null
+let projectRouting: ProjectRoutingController | null = null
 let mainWindow: BrowserWindow | null = null
 let registryForDebug: SessionRegistry | null = null
 /**
@@ -2008,6 +2019,13 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       // not make it main's alone.
       peerPlane?.recordActivity(event.sessionId, frame.presence)
     }
+    if (frame.kind === 'submit.result') {
+      projectRouting?.onSubmitResult(
+        event.sessionId,
+        frame.submitId,
+        frame.accepted,
+      )
+    }
     if (frame.kind === 'run-controls.snapshot') {
       // The roster's model/effort, from the row's OWN engine-resolved state
       // rather than from anything a create asked for. Read here for the same
@@ -2019,6 +2037,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       })
     }
     if (isTerminalLifecycleFrame(frame)) {
+      projectRouting?.interrupted(event.sessionId)
       accountInvalidation.clear(event.sessionId)
       // Presence is a fact about a LIVE row. Absence means not live, nothing
       // else, so it is cleared here rather than left to read as stale.
@@ -2202,17 +2221,17 @@ function registerIpcHandlers(): void {
     const prompt: SubmitPrompt = selectedFile
       ? appendAttachmentFileMention(arg.prompt as SubmitPrompt, selectedFile)
       : (arg.prompt as SubmitPrompt)
-    const failure = forward(arg.sessionId, {
+    const message: Extract<SidecarClientMessage, { type: 'app.submit' }> = {
       type: 'app.submit',
       requestId: generateRequestId(),
       prompt,
       options,
-    })
-    // The submit never left main, so no sidecar will ever answer it. Say so with
-    // the renderer's own id rather than letting the retained message sit forever
-    // waiting for a frame that cannot come.
-    if (failure !== null) {
-      answerUnforwardedSubmit(arg.sessionId, options?.submitId, failure)
+    }
+    if (projectRouting) {
+      void projectRouting.submit(arg.sessionId, message, projectRouteText(prompt))
+    } else {
+      const failure = forward(arg.sessionId, message)
+      if (failure !== null) answerUnforwardedSubmit(arg.sessionId, options?.submitId, failure)
     }
   })
 
@@ -2220,6 +2239,7 @@ function registerIpcHandlers(): void {
     CH_ABORT,
     (_e, arg: { sessionId: SessionId; requestId: string; reason?: string }) => {
       if (typeof arg?.sessionId !== 'string' || typeof arg?.requestId !== 'string') return
+      projectRouting?.cancel(arg.sessionId)
       forward(arg.sessionId, {
         type: 'app.abort',
         requestId: arg.requestId,
@@ -2954,6 +2974,7 @@ function registerHostControlPlane(): void {
     if (!host) return noHost<SessionDescriptor>()
     const command = parseMoveSessionCommand(input)
     if (!command) return { ok: false, error: { code: 'invalid_cwd', message: 'Invalid move request' } }
+    projectRouting?.cancel(command.appSessionId)
     const cwd = command.cwdToken === null ? null : cwdTokens.consume(command.cwdToken)
     if (cwd === undefined) return { ok: false, error: { code: 'invalid_cwd', message: 'Choose the project folder again' } }
     try {
@@ -2963,6 +2984,19 @@ function registerHostControlPlane(): void {
       attachmentGate.cancelRelocationReplayCoalescing(command.appSessionId)
       throw error
     }
+  })
+
+  ipcMain.handle(CH_HOST_PROJECT_ROUTES, (): ProjectRouteSnapshot[] =>
+    projectRouting?.snapshots() ?? [],
+  )
+
+  ipcMain.handle(CH_HOST_RESOLVE_PROJECT_ROUTE, async (_e, input: unknown): Promise<HostResult<void>> => {
+    const command = parseProjectRouteCommand(input)
+    if (!command || !projectRouting || !projectRouting.hasPending(command.appSessionId)) {
+      return { ok: false, error: { code: 'session_not_found', message: 'This pending message is no longer available' } }
+    }
+    await projectRouting.resolve(command)
+    return { ok: true, value: undefined }
   })
 
   ipcMain.handle(CH_HOST_FOLDER_STATE, async (_e, id: unknown) => {
@@ -4118,7 +4152,13 @@ function ensureHost(): Host {
   // dir (<config-home>/desktop) unless overridden for tests. The session
   // sidecar's own launch string is the §9-A3 orphan-identity marker so the
   // launch sweep never SIGTERMs an innocent same-pid process.
+  const routingStore = new FileProjectRoutingStore(join(defaultRegistryDir(), 'project-routing.json'))
+  let recoveredPending = new Set<string>()
+  try { recoveredPending = new Set(routingStore.load().filter(row => row.outcome !== 'accepted').map(row => row.sessionId)) }
+  catch (error) { logLegacyDiagnostic(`[project-routing] recovery failed: ${errText(error)}`, 'project-routing', 'host') }
+  const hasPendingSubmit = (id: string) => projectRouting?.hasPending(id) ?? recoveredPending.has(id)
   const registry = new SessionRegistry({
+    retainSession: hasPendingSubmit,
     sidecarCommandMarker: sidecarLaunch().identityMarker,
     log: line => logLegacyDiagnostic(line, 'registry', 'host'),
   })
@@ -4138,6 +4178,7 @@ function ensureHost(): Host {
   registryLaunchSettled = launched
 
   host = new Host({
+    hasPendingSubmit,
     supervisor,
     registry,
     validateCwd,
@@ -4195,6 +4236,54 @@ function ensureHost(): Host {
     },
   })
   wireHostEvents(host)
+  projectRouting = new ProjectRoutingController({
+    store: routingStore,
+    prepareForward: appSessionId => host!.prepareRoutedSubmit(appSessionId),
+    eligible: appSessionId => {
+      const row = host?.listSessions().find(session => session.appSessionId === appSessionId)
+      return row?.binding?.kind === 'managed' && row.moving !== true
+    },
+    currentCwd: appSessionId =>
+      host?.listSessions().find(session => session.appSessionId === appSessionId)?.cwd ?? null,
+    classify: async (_appSessionId, text, previousUserMessages, suppressedRoots) => {
+      const roots = new Set<string>()
+      for (const row of host?.listSessions() ?? []) {
+        if (row.binding?.kind === 'project') roots.add(row.cwd)
+      }
+      for (const row of readSessionsCatalogCache(defaultRegistryDir())?.entries ?? []) {
+        if (row.binding?.kind === 'project' && row.cwdExists) roots.add(row.cwd)
+      }
+      const knownProjectRoots = [...roots]
+        .map(root => validateCwd(root))
+        .flatMap(result => result.ok ? [result.realpath] : [])
+        .slice(0, 128)
+      if (knownProjectRoots.length === 0) return { kind: 'stay' }
+      return runProjectRoutingWorker({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('project-routing'),
+        cwd: process.cwd(),
+        request: {
+          type: 'project-route',
+          version: 1,
+          text,
+          previousUserMessages,
+          knownProjectRoots,
+          suppressedRoots,
+          model: null,
+        },
+        log: line => logLegacyDiagnostic(line, 'project-routing', 'host'),
+      })
+    },
+    move: async (appSessionId, cwd) => {
+      const result = await host!.moveSession(appSessionId, cwd)
+      return result.ok ? { ok: true } : { ok: false, error: { message: result.error.message } }
+    },
+    forward,
+    answerRefused: answerUnforwardedSubmit,
+    publish: (appSessionId, snapshot) =>
+      sendHostEvent({ type: 'project-routing', appSessionId, snapshot }),
+    log: line => logLegacyDiagnostic(line, 'project-routing', 'host'),
+  })
 
   // HOST-REQUEST-PLANE §5 — the request plane, composed from the same host and
   // registry this function just built. It gets NARROW capabilities on purpose:

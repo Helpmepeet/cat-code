@@ -317,6 +317,8 @@ test('recreated managed folder notice reaches the model system prompt without ch
     expect(queryEngineConfig.initialMessages).toEqual(messages)
     const normal = buildDesktopSystemPrompt(undefined, cwd)
     expect(normal).not.toContain('Earlier file references in the conversation may no longer exist.')
+    expect(normal).toContain('Move to project…')
+    expect(normal).toContain('Changing directories in Bash does not move the conversation.')
     expect(buildDesktopSystemPrompt(undefined, undefined, false, true)).not.toContain(
       'Earlier file references in the conversation may no longer exist.',
     )

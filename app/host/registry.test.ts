@@ -1587,3 +1587,16 @@ test('a concurrent writer never rolls back a name or a wake block it did not cha
   expect(persisted?.name).toBe('Bear')
   expect(persisted?.peerWakeBlocked).toBe(true)
 })
+
+
+test('pending input protects a pre-ready row through launch until recovery is dismissed', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  seed(registryPath, [baseRow({ appSessionId: 'pending-chat', engineSessionId: null, shutdown: 'clean' })])
+  const protectedRegistry = new SessionRegistry({ storageDir, retainSession: id => id === 'pending-chat', log: () => {} })
+  await protectedRegistry.launch()
+  expect(protectedRegistry.findSession('pending-chat')?.engineSessionId).toBeNull()
+  const nextLaunch = new SessionRegistry({ storageDir, log: () => {} })
+  await nextLaunch.launch()
+  expect(nextLaunch.findSession('pending-chat')).toBeUndefined()
+})
