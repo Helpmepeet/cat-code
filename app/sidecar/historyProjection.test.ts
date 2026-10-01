@@ -4,6 +4,7 @@ import { deserializeMessagesWithInterruptDetection } from '../../src/utils/conve
 import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
+  createUserMessage,
   NO_RESPONSE_REQUESTED,
 } from '../../src/utils/messages.js'
 import {
@@ -118,6 +119,27 @@ describe('restored history projection', () => {
     )
 
     expect(merged).toEqual({ history: seed, truncated: true })
+  })
+
+  test('a workspace handoff resumes its complete history without a false missing prefix', () => {
+    const archival = [
+      createUserMessage({ content: 'Work in cat-code' }),
+      createAssistantMessage({ content: [{
+        type: 'tool_use', id: 'jump-1', name: 'JumpWorkspace', input: {},
+      }] }),
+      createUserMessage({ content: [{
+        type: 'tool_result', tool_use_id: 'jump-1', content: 'Workspace change accepted.',
+      }] }),
+    ]
+    const recovered = deserializeMessagesWithInterruptDetection(archival)
+    expect(recovered.turnInterruptionState.kind).toBe('interrupted_prompt')
+    const seed = projectResumedHistory(recovered.messages)
+    expect(seed.length).toBeGreaterThan(projectResumedHistory(archival).length)
+
+    expect(mergeDisplayHistoryWithSeed(archival, seed)).toEqual({
+      history: seed,
+      truncated: false,
+    })
   })
 
   /**

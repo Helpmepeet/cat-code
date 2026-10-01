@@ -350,6 +350,7 @@ export const TranscriptView = memo(function TranscriptView({
   restorePhase,
   revealHidden,
   loadEarlierPending,
+  hideHistoryBoundary = false,
   loadEarlierFailure,
   onLoadEarlier,
   onOpenAccounts,
@@ -392,6 +393,7 @@ export const TranscriptView = memo(function TranscriptView({
   revealHidden?: boolean
   /** A read further back is running for this session. */
   loadEarlierPending?: boolean
+  hideHistoryBoundary?: boolean
   /** What to say about the last read that did not work. */
   loadEarlierFailure?: string | null
   /**
@@ -428,9 +430,15 @@ export const TranscriptView = memo(function TranscriptView({
   moveBackDisabled?: boolean
 }) {
   const projectedRows = selectNestedTranscriptRows(state, activeSessionId, revealHidden)
+  const visibleRows = useMemo(
+    () => hideHistoryBoundary
+      ? projectedRows.filter(row => row.kind !== 'history-boundary')
+      : projectedRows,
+    [projectedRows, hideHistoryBoundary],
+  )
   return (
     <TranscriptRowsView
-      rows={withoutTodoRows(projectedRows)}
+      rows={withoutTodoRows(visibleRows)}
       boundaryRows={projectedRows}
       compacting={compacting ?? false}
       turnLive={turnLive}

@@ -30,7 +30,7 @@ import type { DomTestHarness } from './domTestHarness.js'
 import { SessionPane } from './SessionPane.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import { createTranscriptState, projectServerFrame } from './transcriptProjector.js'
-import { PROTOCOL_VERSION } from '../../shared/protocol.js'
+import { PROTOCOL_VERSION, HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
 import type { ServerFrame, SessionId } from '../../shared/protocol.js'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 
@@ -109,6 +109,47 @@ function paneWithWaiting(overrides: Record<string, unknown> = {}) {
     ...overrides,
   } as never)
 }
+
+test('opening an incomplete live session recovers history once and keeps manual retry after failure', async () => {
+  const incomplete = projectServerFrame(transcriptWithRows(), {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION,
+    requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID, code: 'internal_error',
+    message: 'Only the newest messages are shown.', retryable: false,
+  })
+  let requests = 0
+  const pane = (overrides: Record<string, unknown> = {}) => paneWithWaiting({
+    transcript: incomplete,
+    onLoadEarlierHistory: () => { requests += 1 },
+    ...overrides,
+  })
+  const tree = await harness.mount(pane({ preview: true }))
+  expect(requests).toBe(0)
+  await tree.render(pane({ activeConnection: { status: 'starting', inputEnabled: false } }))
+  expect(requests).toBe(0)
+  await tree.render(pane())
+  expect(requests).toBe(1)
+  expect(tree.container.textContent).not.toContain('Load earlier messages')
+  await tree.render(pane({ historyLoadEarlierAttempted: true, historyLoadEarlierPending: true }))
+  expect(requests).toBe(1)
+  expect(tree.container.textContent).not.toContain('Load earlier messages')
+  await tree.render(pane({ historyLoadEarlierAttempted: true, historyLoadEarlierFailure: 'Try again.' }))
+  expect(requests).toBe(1)
+  expect(tree.container.textContent).toContain('Try again.')
+  const retry = Array.from(tree.container.querySelectorAll('button'))
+    .find(button => button.textContent === 'Load earlier messages')!
+  await act(async () => { retry.click() })
+  expect(requests).toBe(2)
+  await tree.render(pane({ transcript: transcriptWithRows(), historyLoadEarlierAttempted: true }))
+  expect(tree.container.textContent).not.toContain("Earlier messages from this session aren't loaded.")
+  await tree.unmount()
+  await harness.mount(pane({ historyLoadEarlierAttempted: true }))
+  expect(requests).toBe(2)
+  // A replacement attach resets the shell's attempt; the same mounted pane
+  // must recover its new view as well.
+  const replacement = await harness.mount(pane({ historyLoadEarlierAttempted: true }))
+  await replacement.render(pane())
+  expect(requests).toBe(3)
+})
 
 function scrollerOf(container: HTMLElement): HTMLElement {
   const scroller = container.querySelector('.overflow-auto')

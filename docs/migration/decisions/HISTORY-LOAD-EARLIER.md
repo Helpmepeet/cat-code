@@ -230,6 +230,16 @@ overwritten when main has one and REMOVED when it does not.
 
 ## Renderer behavior
 
+- **Automatic recovery on live attach (amended 2026-10-01):** a visible live pane
+  with incomplete history sends one bounded request once its connection is ready.
+  The boundary control is withheld while this automatic recovery is pending.
+  App retains the attempt across tab switches and resets it on a replacement
+  `ready` or `transcript.reset`; a pane-local claim prevents duplicate effect
+  sends. A failure or a still-incomplete result leaves the boundary and manual
+  retry available. Preview panes do not initiate reads. The existing read ceiling,
+  inbound validation, main-authored view anchor, and insertion ordering remain
+  unchanged. The earlier user-initiated-only policy below is superseded for this
+  one automatic read per attached view.
 - The control appears on the truncation boundary row, and ONLY when that row is
   present. A complete transcript has no row and therefore no control.
 - Panes with no live engine process (a read-only preview of a closed session)

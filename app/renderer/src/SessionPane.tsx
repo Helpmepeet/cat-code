@@ -281,6 +281,7 @@ export function SessionPane({
   scrollAnchor = null,
   onScrollAnchorChange,
   historyLoadEarlierPending = false,
+  historyLoadEarlierAttempted = false,
   historyLoadEarlierFailure = null,
   onLoadEarlierHistory,
   setPermissionMode,
@@ -729,6 +730,27 @@ export function SessionPane({
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const historyIncomplete = activeSessionId !== null &&
+    transcript.sessions[activeSessionId]?.historyTruncated === true
+  const autoRecoverHistory = !preview && activeConnection.status === 'ready' &&
+    activeDescriptor?.moving !== true &&
+    onLoadEarlierHistory !== undefined
+  const hideHistoryBoundary = autoRecoverHistory && !historyLoadEarlierFailure &&
+    (!historyLoadEarlierAttempted || historyLoadEarlierPending)
+  // App retains the attempt across pane unmounts. Claim locally as well because
+  // StrictMode can run this effect twice before App commits the pending state.
+  const autoHistoryClaimRef = useRef<SessionId | null>(null)
+  useEffect(() => {
+    if (historyLoadEarlierAttempted || historyLoadEarlierPending || !historyIncomplete) {
+      autoHistoryClaimRef.current = null
+      return
+    }
+    if (!autoRecoverHistory || historyLoadEarlierFailure ||
+        autoHistoryClaimRef.current === activeSessionId) return
+    autoHistoryClaimRef.current = activeSessionId
+    onLoadEarlierHistory?.()
+  }, [autoRecoverHistory, historyIncomplete, historyLoadEarlierAttempted,
+    historyLoadEarlierPending, historyLoadEarlierFailure, activeSessionId, onLoadEarlierHistory])
   // Compaction is the one activity the rows cannot report: it runs between
   // turns of the loop and mints nothing until its boundary lands at the end.
   const compacting = selectIsCompacting(transcript, activeSessionId)
@@ -1705,6 +1727,7 @@ export function SessionPane({
             leases={leases}
             agentBackground={activeDescriptor?.moving ? null : agentBackground}
             loadEarlierPending={historyLoadEarlierPending}
+            hideHistoryBoundary={hideHistoryBoundary}
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={activeDescriptor?.moving ? undefined : onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
@@ -2767,6 +2790,8 @@ type SessionPaneProps = {
   onScrollAnchorChange?: (anchor: TranscriptScrollAnchor) => void
   /** A read further back is running for this session. */
   historyLoadEarlierPending?: boolean
+  /** App retains this across tab switches so opening a pane cannot retry forever. */
+  historyLoadEarlierAttempted?: boolean
   /** What to say about this session's last read that did not work. */
   historyLoadEarlierFailure?: string | null
   /**

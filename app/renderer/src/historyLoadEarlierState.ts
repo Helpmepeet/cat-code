@@ -44,6 +44,8 @@ export type HistoryLoadEarlierState = {
 }
 
 export type HistoryLoadEarlierAction =
+  /** A replacement replay is a new view, with its own automatic recovery. */
+  | { type: 'attached'; sessionId: SessionId }
   /** The verb was sent. */
   | { type: 'requested'; sessionId: SessionId; requestId: string }
   /** The verb never left the window. */
@@ -62,6 +64,12 @@ export function reduceHistoryLoadEarlierState(
   action: HistoryLoadEarlierAction,
 ): HistoryLoadEarlierState {
   switch (action.type) {
+    case 'attached': {
+      if (!(action.sessionId in state.bySession)) return state
+      const bySession = { ...state.bySession }
+      delete bySession[action.sessionId]
+      return { bySession }
+    }
     case 'requested':
       return withRequest(state, action.sessionId, {
         pendingRequestId: action.requestId,

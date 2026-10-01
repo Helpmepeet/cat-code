@@ -156,6 +156,13 @@ test('an answer to a request this page never made is ignored', () => {
   })
   expect(selectHistoryLoadEarlierPending(state, 'a')).toBe(true)
   expect(selectHistoryLoadEarlierFailure(state, 'a')).toBeNull()
+
+  state = reduceHistoryLoadEarlierState(state, { type: 'attached', sessionId: 'a' })
+  expect(state.bySession.a).toBeUndefined()
+  state = reduceHistoryLoadEarlierState(state, {
+    type: 'result', frame: result({ requestId: 'r2', ok: false, message: 'Old view.' }),
+  })
+  expect(state.bySession.a).toBeUndefined()
 })
 
 test('a session that lost its engine stops waiting for an answer', () => {

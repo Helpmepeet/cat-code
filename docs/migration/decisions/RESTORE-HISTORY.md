@@ -38,6 +38,11 @@ This is that idiom on our socket.
   `isInternalNoResponseSentinel`; legacy silent rate-limit fallback records are recognized only
   by the conjunction of `isApiErrorMessage` and the exact sentinel-only payload. A genuine
   assistant response with identical text remains visible because content alone never filters.
+  Resume-generated synthetic user prompts absent from the display read are excluded from
+  UUID alignment only, and retained unchanged in the visible seed tail. In particular, a
+  workspace handoff ending on a tool result generates a continuation during resume; that
+  new UUID is not evidence of missing older messages. Persisted synthetic prompts still
+  participate in alignment, and unrelated persisted tails still fail closed.
 - **Bounded archival read:** the display loader reads at most 8 MiB of the newest JSONL payload
   bytes plus a one-byte line-alignment probe, and at most 4,000 messages. A missing older
   predecessor is reported to the existing replay truncation path. The backfill worker uses the

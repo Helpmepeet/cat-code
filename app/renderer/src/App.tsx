@@ -1146,6 +1146,11 @@ export function App() {
       // one while parking. It releases the id just the same, so an undeliverable
       // recall is neither silent nor remembered forever.
       for (const frame of frames) {
+        if (frame.kind === 'ready' || frame.kind === 'transcript.reset') {
+          setHistoryLoadEarlier(prev =>
+            reduceHistoryLoadEarlierState(prev, { type: 'attached', sessionId: frame.sessionId }),
+          )
+        }
         if (frame.kind === 'prompt-recall.result') {
           const disposition = classifyRecallAnswer(
             recallRequestsRef.current,
@@ -1183,6 +1188,10 @@ export function App() {
           continue
         }
         if (frame.kind !== 'error' || frame.requestId === undefined) continue
+        const historyRequestId = frame.requestId
+        setHistoryLoadEarlier(prev => reduceHistoryLoadEarlierState(prev, {
+          type: 'unreachable', sessionId: frame.sessionId, requestId: historyRequestId,
+        }))
         if (!takeRecallErrorRequest(recallRequestsRef.current, frame.requestId)) {
           continue
         }
@@ -3837,6 +3846,7 @@ export function App() {
 	            onScrollAnchorChange={anchor =>
 	              rememberTranscriptScroll(sessionId, anchor)
 	            }
+	            historyLoadEarlierAttempted={historyLoadEarlier.bySession[sessionId] !== undefined}
 	            historyLoadEarlierPending={selectHistoryLoadEarlierPending(
 	              historyLoadEarlier,
 	              sessionId,
