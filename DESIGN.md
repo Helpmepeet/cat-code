@@ -113,6 +113,14 @@ large pill treatments within one control group.
   receive a restrained accent tinted bubble. Tool activity is compact and
   scannable; expand detail on demand. Code and command output use mono text and
   clear boundaries. See `TranscriptView.tsx` and `toolCardStyle.ts`.
+- **Workspace moves:** Agent jumps and manual moves share one centered transcript
+  divider with seam-coloured rules and muted text. Moving shows the running-tool
+  pulse, destination name, and project path; arrival shows “Working in”, a project
+  folder icon, and the existing Move back action. Chat has no folder or path.
+  Failed and stopped moves stay neutral. A live arrival washes the divider and
+  subsequent content in `--source-project` for 1.8 seconds while the rules cool
+  to the seam colour. Saved or restored seams stay at rest, as does reduced motion.
+  The moving composer keeps its normal placeholder, dimmed.
 - **Composer:** Keep the input visually connected to the transcript. Put model,
   reasoning, permission, and account controls in a compact action row. Reuse
   the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)

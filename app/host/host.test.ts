@@ -463,6 +463,23 @@ test('workspace reservation rejects stale process authority and serializes manua
   const operation = randomUUID()
   expect((await h.host.reserveWorkspaceJump(id, operation, randomUUID())).ok).toBe(false)
   expect((await h.host.reserveWorkspaceJump(id, operation, h.host.getSessionGeneration(id)!)).ok).toBe(true)
+  const accepted: import('../../src/utils/workspaceJumpState.js').WorkspaceJumpState = {
+    version: 1, appSessionId: id, engineSessionId: engine, operationId: operation,
+    sourceGeneration: h.host.getSessionGeneration(id)!,
+    source: { cwd: created.value.cwd, binding: created.value.binding! },
+    target: { cwd: realpathSync(h.cwd), binding: { kind: 'project' } },
+    acceptedAt: 1, phase: 'accepted', location: 'source', consumed: false, cancelled: false,
+    requiresUserReconciliation: false, sourceOutcomePersisted: false,
+    continuation: { id: randomUUID(), state: 'not_admitted' },
+  }
+  h.host.publishWorkspaceJumpDisplay(accepted)
+  const acceptedDescriptor = h.host.listSessions().find(row => row.appSessionId === id)
+  expect(acceptedDescriptor?.workspaceMove?.phase).toBe('moving')
+  expect(acceptedDescriptor?.workspaceMove?.target.path).toBe(realpathSync(h.cwd))
+  expect(acceptedDescriptor?.moving).toBe(false)
+  expect(h.events.at(-1)?.type).toBe('session-status')
+  h.host.publishWorkspaceJumpDisplay({ ...accepted, engineSessionId: randomUUID(), phase: 'settled', outcome: 'failed' })
+  expect(h.host.listSessions().find(row => row.appSessionId === id)?.workspaceMove?.phase).toBe('moving')
   expect((await h.host.moveSession(id, h.cwd)).ok).toBe(false)
   expect((await h.host.restartSession(id)).ok).toBe(false)
   expect((await h.host.closeSession(id)).ok).toBe(false)
@@ -641,10 +658,16 @@ test('a worker-refused move keeps the reopened conversation behind replay comple
 
   const moving = h.host.moveSession(appSessionId, h.cwd)
   await settle(() => h.supervisor.spawnedIds.length === 2)
+  const display = h.host.listSessions().find(row => row.appSessionId === appSessionId)?.workspaceMove
+  expect(display?.phase).toBe('moving')
+  expect(display?.target.path).toBe(realpathSync(h.cwd))
   h.supervisor.emitReady(appSessionId, engineSessionId)
   emitMoveReadyContext(h.supervisor, appSessionId)
   const result = await moving
   expect(result.ok).toBe(false)
+  const failedDisplay = h.host.listSessions().find(row => row.appSessionId === appSessionId)?.workspaceMove
+  expect(failedDisplay?.id).toBe(display?.id)
+  expect(failedDisplay?.phase).toBe('failed')
   expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
   expect(sourceCachePreservationRequested).toBe(true)
 

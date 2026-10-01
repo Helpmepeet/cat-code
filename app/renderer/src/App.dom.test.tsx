@@ -502,6 +502,7 @@ function moveDescriptor(moving: boolean): SessionDescriptor {
     status: 'ready', restorable: false, parked: false,
     createdAt: 0, lastAttachedAt: 0, lastMessageSentAt: null,
     moving,
+    workspaceMove: moving ? { id: 'manual-move', phase: 'moving', target: { kind: 'project', name: 'project', path: '/tmp/project' } } : null,
   }
 }
 
@@ -530,7 +531,7 @@ test('Move to project and Move back retain the mounted conversation through dela
   const expectContinuous = () => {
     expect(tree.container.textContent).toContain('The same conversation')
     expect(tree.container.textContent).not.toContain('Welcome back')
-    expect(tree.container.querySelectorAll('[data-row-key]')).toHaveLength(1)
+    expect(tree.container.querySelectorAll('[data-row-key]')).toHaveLength(tree.container.querySelector('[data-workspace-move]') ? 2 : 1)
     expect(sameComposer()).toBe(composer)
     expect(composer.textContent).toContain('unfinished draft')
     expect(tree.container.querySelector('[aria-label="Remove sketch.png"]')).not.toBeNull()
@@ -542,7 +543,9 @@ test('Move to project and Move back retain the mounted conversation through dela
   for (let move = 0; move < 2; move += 1) {
     await tree.render(pane(true))
     expectContinuous()
-    expect(tree.container.textContent).toContain('Moving…')
+    expect(tree.container.textContent).toContain('Moving to project /tmp/project')
+    expect(composer.getAttribute('aria-placeholder')).toContain('Ask')
+    expect(composer.getAttribute('aria-placeholder')).not.toContain('Connecting')
     gate.startRelocationReplayCoalescing(MOVE_SESSION)
     expect(gate.onFrame(MOVE_SESSION, moveReady())).toEqual([])
     await tree.render(pane(true))
@@ -564,7 +567,7 @@ test('Move to project and Move back retain the mounted conversation through dela
   gate.cancelRelocationReplayCoalescing(MOVE_SESSION)
   await tree.render(pane(false))
   expectContinuous()
-  expect(tree.container.textContent).not.toContain('Moving…')
+  expect(tree.container.querySelector('[data-workspace-move]')).toBeNull()
 })
 
 test('moving an empty Chat keeps its existing Welcome mounted through reconnect', async () => {

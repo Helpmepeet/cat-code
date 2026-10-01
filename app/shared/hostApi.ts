@@ -83,6 +83,18 @@ export type CreateSessionInput = {
   title?: string
 }
 
+/** Bounded, main-authored display metadata. Never accepted as renderer input. */
+export type WorkspaceMoveDisplay = {
+  id: string
+  phase: 'moving' | 'arrived' | 'failed' | 'stopped'
+  target: { kind: 'project' | 'chat'; name: string; path: string | null; displayPath?: string }
+  transitionId?: string
+  afterFrameId?: string | null
+  toolUseId?: string
+  replacedNotice?: string
+  agentJump?: true
+}
+
 /** Live view of a session — the registry row projected with its live status. */
 export type SessionDescriptor = {
   appSessionId: SessionId
@@ -92,6 +104,7 @@ export type SessionDescriptor = {
   /** Explicit association. Absent only in old external fixtures; host always sets it. */
   binding?: SessionBinding
   moving?: boolean
+  workspaceMove?: WorkspaceMoveDisplay | null
   canMoveBack?: boolean
   /** Persisted move seams, ordered as the conversation crossed contexts. */
   contextTransitions?: Array<{

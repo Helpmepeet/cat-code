@@ -62,6 +62,7 @@ type ComposerInputProps = {
   onRemovePaste: (entry: PasteEntry, at: number) => void
   onValueChange: (next: string) => void
   placeholder: string
+  placeholderDimmed?: boolean
   /**
    * The same text with the session's own name split out, so it can carry the
    * peer colour. Absent for an unnamed session and for the connection copy,
@@ -105,6 +106,7 @@ export function ComposerInput({
   onRemovePaste,
   onValueChange,
   placeholder,
+  placeholderDimmed = false,
   placeholderParts,
   pastes,
   placeholderHeld = false,
@@ -362,7 +364,7 @@ export function ComposerInput({
         <div
           aria-hidden
           className={`pointer-events-none absolute left-0 top-1.5 text-[15px] font-medium leading-normal text-text-faint${
-            placeholderJustReleased ? ' animate-arrive' : ''
+            (placeholderJustReleased ? ' animate-arrive' : '') + (placeholderDimmed ? ' workspace-moving-placeholder' : '')
           }`}
         >
           {placeholderParts == null ? (

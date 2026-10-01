@@ -2,6 +2,25 @@
 
 Status: manual relocation is implemented for saved and empty managed Chats moving to a trusted project, back to Chat, and then to another trusted project. The implemented and reviewed 2026-09-30 agent-directed amendment below replaces bounded pre-delivery routing. Full-payload held-message recovery remains required. Direct automatic project-to-project moves are outside this slice. Isolated validation and remaining verification boundaries are recorded in the linked plan.
 
+## Workspace move display, 2026-10-01
+
+The approved renderer redesign replaces ListWorkspaces and JumpWorkspace cards,
+the Moving box, and the project divider with one neutral seam. Main publishes
+bounded `SessionDescriptor.workspaceMove` metadata from the accepted target and
+durable jump outcome. It grants no renderer authority, adds no inbound message
+kind, and changes no transport, identity, relocation, or recovery contract.
+Manual moves publish their validated target through the same outbound field.
+The brief interval before host acceptance has no new divider. Rejected requests
+before acceptance retain their existing error handling.
+
+A live renderer pins the seam at acceptance and replaces its state in place.
+Completed moves reuse persisted context transitions. Failed/stopped jump metadata
+is reconstructed from the existing retained ledger; manual failure display is
+session-lifetime only and adds no persistence. Failed/stopped terminal notices
+named by main are replaced by the seam. Uncertain continuation retains its
+existing notice and shows the arrived label when durable location is destination.
+Arrival motion requires an observed live move and never plays on restored mounts.
+
 ## Agent-directed amendment, 2026-09-30
 
 The user authorized the refactor specified in

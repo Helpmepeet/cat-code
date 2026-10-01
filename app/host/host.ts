@@ -1,6 +1,6 @@
 import { isRelocationControls, readSessionRelocation, writeSessionRelocation, type RelocationControls, type SessionLocation } from '../../src/utils/sessionRelocationState.js'
 import type { RelocationRequest } from '../../src/utils/sessionRelocationState.js'
-import { hasVerifiedSourceCompensation, readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { hasVerifiedSourceCompensation, readWorkspaceJump, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
 /**
  * The host composition layer (D1 — `decisions/REGISTRY.md` §6/§6.1; trust zone —
@@ -26,6 +26,7 @@ import type { RunControlsSnapshot } from '../shared/protocol.js'
  * live session.
  */
 
+import { moveDisplayTarget, workspaceJumpDisplay } from './workspaceMoveDisplay.js'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 
@@ -59,6 +60,7 @@ import {
   type HostEvent,
   type HostResult,
   type SessionDescriptor,
+  type WorkspaceMoveDisplay,
 } from '../shared/hostApi.js'
 
 class AutoRestoreUnavailableError extends Error {
@@ -195,6 +197,7 @@ export class Host implements HostApi {
   private readonly prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
   private readonly cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
   private readonly moving = new Set<SessionId>()
+  private readonly workspaceMoves = new Map<SessionId, WorkspaceMoveDisplay>()
   private readonly workspaceJumpReservations = new Map<SessionId, { operationId: string; generation: string }>()
   private readonly runControls = new Map<SessionId, RunControlsSnapshot>()
   private readonly permissionModes = new Map<SessionId, string>()
@@ -1294,6 +1297,19 @@ export class Host implements HostApi {
    * advisory fields that weaken the D6 crash-reap (§9-A3 identity match).
    * --------------------------------------------------------------------- */
 
+  /** Main publishes a view of the accepted ledger, never a new move command. */
+  publishWorkspaceJumpDisplay(state: WorkspaceJumpState): void {
+    const row = this.registry.findSession(state.appSessionId)
+    if (!row || row.engineSessionId !== state.engineSessionId) return
+    try {
+      const record = readSessionRelocation(state.engineSessionId)
+      const display = workspaceJumpDisplay(state, record?.appSessionId === state.appSessionId ? record.transitions ?? [] : [])
+      if (display) this.workspaceMoves.set(state.appSessionId, display)
+      else this.workspaceMoves.delete(state.appSessionId)
+      this.emitStatus(state.appSessionId)
+    } catch { /* Display metadata cannot interfere with the durable operation. */ }
+  }
+
   isMoving(appSessionId: SessionId): boolean { return this.moving.has(appSessionId) }
   isWorkspaceJumpReserved(appSessionId: SessionId): boolean { return this.workspaceJumpReservations.has(appSessionId) }
   getSessionGeneration(appSessionId: SessionId): string | undefined { return this.supervisor.getSessionGeneration(appSessionId) }
@@ -1367,6 +1383,25 @@ export class Host implements HostApi {
   private hasMoveOrigin(engineSessionId: string | null | undefined): boolean {
     try { return !!engineSessionId && readSessionRelocation(engineSessionId)?.phase === 'complete' }
     catch { return false }
+  }
+
+  private workspaceMoveFor(row: RegistrySession): WorkspaceMoveDisplay | null {
+    const display = this.workspaceMoves.get(row.appSessionId)
+    if (!display) return null
+    const transition = this.contextTransitionsFor(row)?.at(-1)
+    const arrived = transition && (display.target.kind === 'chat'
+      ? transition.binding.kind === 'managed'
+      : transition.binding.kind === 'project' && transition.cwd === display.target.path)
+    // The persisted seam can precede replacement readiness. Associate it even
+    // while moving, so the renderer never draws a second divider at commit.
+    const associated = arrived
+      ? { ...display, transitionId: transition.id, afterFrameId: transition.afterFrameId }
+      : display
+    if (display.phase !== 'moving' || this.moving.has(row.appSessionId) ||
+        this.workspaceJumpReservations.has(row.appSessionId)) return associated
+    const settled: WorkspaceMoveDisplay = { ...associated, phase: arrived ? 'arrived' : 'failed' }
+    this.workspaceMoves.set(row.appSessionId, settled)
+    return settled
   }
 
   private contextTransitionsFor(row: RegistrySession | undefined): SessionDescriptor['contextTransitions'] {
@@ -1577,6 +1612,9 @@ export class Host implements HostApi {
           ...(previousMode === 'plan' ? { prePlanMode: previousPrePlan } : {}) }
       : null
     const previousControls: RelocationControls | null = isRelocationControls(previousCandidate) ? previousCandidate : null
+    if (!jump) this.workspaceMoves.set(appSessionId, {
+      id: randomUUID(), phase: 'moving', target: moveDisplayTarget(target),
+    })
     this.moving.add(appSessionId)
     this.emitStatus(appSessionId)
     if (sourceWasInactive) this.hiddenMoveWarmups.add(appSessionId)
@@ -2111,6 +2149,7 @@ export class Host implements HostApi {
       moving: row ? this.moving.has(row.appSessionId) : false,
       canMoveBack: row?.binding.kind === 'project' && this.hasMoveOrigin(row.engineSessionId),
       contextTransitions: this.contextTransitionsFor(row),
+      workspaceMove: row ? this.workspaceMoveFor(row) : null,
       title: row?.title ?? null,
       // PEER-SESSIONS §2/§6. null ⇒ a row that predates the field and has not
       // been spawned since; false ⇒ the user has not blocked peer wake here.
@@ -2196,6 +2235,7 @@ export class Host implements HostApi {
    * --------------------------------------------------------------------- */
 
   private emit(event: HostEvent): void {
+    if (event.type === 'session-removed') this.workspaceMoves.delete(event.appSessionId)
     for (const listener of this.listeners) {
       listener(event)
     }

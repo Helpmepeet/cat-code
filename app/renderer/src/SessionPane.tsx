@@ -717,13 +717,14 @@ export function SessionPane({
   // peers use for it too. A row with no name (one that predates the field and
   // has not been spawned since) keeps the original prompt verbatim. The
   // connection copy is untouched either way.
-  const composerPlaceholder = activeDescriptor?.moving || routeMoving ? 'Connecting…' : managedFolderUnavailable
+  const workspaceMoving = activeDescriptor?.moving === true || activeDescriptor?.workspaceMove?.phase === 'moving' || routeMoving
+  const composerPlaceholder = workspaceMoving ? composerPromptPlaceholder(activeDescriptor?.name ?? null) : managedFolderUnavailable
     ? 'Recreate the chat folder to continue'
     : composerGate.editable
       ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
       : 'Connecting…'
   // The name carries the peer colour; the connection copy has no name in it.
-  const composerPlaceholderName = composerGate.editable && !managedFolderUnavailable && !activeDescriptor?.moving && !routeMoving
+  const composerPlaceholderName = (composerGate.editable || workspaceMoving) && !managedFolderUnavailable
     ? composerPlaceholderParts(activeDescriptor?.name ?? null)
     : null
   const paused = permissionQueue.length > 0
@@ -1736,15 +1737,13 @@ export function SessionPane({
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}
             contextTransitions={activeDescriptor?.contextTransitions}
+            workspaceMove={activeDescriptor?.workspaceMove}
             onMoveBack={activeDescriptor?.canMoveBack && activeDescriptor.binding?.kind === 'project'
               ? moveBack
               : undefined}
             moveBackDisabled={generating || activeDescriptor?.status !== 'ready' || activeDescriptor?.moving === true}
           />
 
-          {activeDescriptor?.moving && projectRoute === null ? (
-            <div className="chat-move-progress" role="status">Moving…</div>
-          ) : null}
 
           {/* D1a — a message sent during a response waits here until the engine
             * takes it, exactly as the terminal shows it above its own composer.
@@ -2235,6 +2234,7 @@ export function SessionPane({
               ariaLabel="Prompt"
               disabled={!activeSessionId}
               readOnly={composerReadOnly}
+              placeholderDimmed={workspaceMoving}
               onFocus={engagePreviewPane}
               // CC-84 — a Finder drag carries its payload on
               // `dataTransfer.files`, so the field's text-only drop handler

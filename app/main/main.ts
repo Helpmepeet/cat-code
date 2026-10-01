@@ -4335,6 +4335,7 @@ function ensureHost(): Host {
       if (!(await requestWorkspaceControl(state.appSessionId, state.operationId, { action: 'continue' }))) throw new Error('Workspace continuation did not settle')
     },
     onStateChanged: state => {
+      host?.publishWorkspaceJumpDisplay(state)
       if (state.phase === 'settled' && state.continuation.state === 'settled' && !state.requiresUserReconciliation) {
         void requestWorkspaceControl(state.appSessionId, state.operationId, { action: 'release' })
       }
@@ -4342,7 +4343,11 @@ function ensureHost(): Host {
   })
   // Reconcile durable operations before any restored sidecar can start turns.
   for (const appSessionId of recoveredJumps.appSessionIds) {
-    try { workspaceJump.recover(appSessionId) } catch { /* unreadable records retain their rows and refuse admission */ }
+    try {
+      workspaceJump.recover(appSessionId)
+      const displayState = workspaceJump.snapshot(appSessionId)
+      if (displayState) host.publishWorkspaceJumpDisplay(displayState)
+    } catch { /* unreadable records retain their rows and refuse admission */ }
   }
 
   // HOST-REQUEST-PLANE §5 — the request plane, composed from the same host and

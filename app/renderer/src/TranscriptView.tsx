@@ -31,6 +31,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -44,7 +45,13 @@ import Markdown from 'react-markdown'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
-import type { SessionDescriptor } from '../../shared/hostApi.js'
+import {
+  withoutWorkspaceTools,
+  withoutReplacedMoveNotice,
+  readWorkspaceMoveDisplay,
+  useWorkspaceMoveView,
+} from './workspaceMoveView.js'
+import type { SessionDescriptor, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import {
@@ -362,6 +369,7 @@ export const TranscriptView = memo(function TranscriptView({
   columnRef,
   welcomeExiting = false,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
+  workspaceMove: workspaceMoveInput = null,
   onMoveBack,
   moveBackDisabled = false,
 }: {
@@ -426,6 +434,7 @@ export const TranscriptView = memo(function TranscriptView({
    * for one more render after `state` already has this session's first row. */
   welcomeExiting?: boolean
   contextTransitions?: SessionDescriptor['contextTransitions']
+  workspaceMove?: WorkspaceMoveDisplay | null
   onMoveBack?: () => void
   moveBackDisabled?: boolean
 }) {
@@ -463,6 +472,7 @@ export const TranscriptView = memo(function TranscriptView({
       columnRef={columnRef}
       welcomeExiting={welcomeExiting}
       contextTransitions={contextTransitions}
+      workspaceMove={readWorkspaceMoveDisplay(workspaceMoveInput)}
       onMoveBack={onMoveBack}
       moveBackDisabled={moveBackDisabled}
     />
@@ -471,30 +481,66 @@ export const TranscriptView = memo(function TranscriptView({
 
 function ContextTransitionRow({
   transition,
+  move,
+  arriving = false,
+  onArrivalMount,
   onMoveBack,
   moveBackDisabled,
 }: {
   transition: ContextTransition
+  move?: WorkspaceMoveDisplay | null
+  arriving?: boolean
+  onArrivalMount?: (element: HTMLElement) => void
   onMoveBack?: () => void
   moveBackDisabled: boolean
 }) {
-  const project = transition.binding.kind === 'project'
+  const project = move ? move.target.kind === 'project' : transition.binding.kind === 'project'
+  const phase = move?.phase ?? 'arrived'
+  const name = move?.target.name ?? (project ? basename(transition.cwd) : 'Chat')
+  const caption = phase === 'moving' ? 'Moving to' : phase === 'failed' ? 'Could not move to'
+    : phase === 'stopped' ? 'Stopped moving to' : 'Working in'
+  const dividerRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (arriving && dividerRef.current) onArrivalMount?.(dividerRef.current)
+  }, [arriving, onArrivalMount])
+  useLayoutEffect(() => {
+    const divider = dividerRef.current
+    const column = divider?.parentElement
+    if (!arriving || !divider || !column) return
+    // Geometry only: the stylesheet owns the wash. Keep scroll-memory rows as
+    // direct column children, rather than wrapping the destination transcript.
+    const measure = () => divider.style.setProperty('--workspace-wash-height',
+      `${Math.max(divider.offsetHeight, column.offsetHeight - divider.offsetTop + 6)}px`)
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(column)
+    return () => observer?.disconnect()
+  }, [arriving])
   return (
     <div
-      className="chat-project-divider"
+      ref={dividerRef}
+      className={`chat-project-divider${arriving ? ' chat-project-divider-arriving' : ''}`}
       data-context-transition={transition.id}
-      data-row-key={`context-transition:${transition.id}`}
+      data-workspace-move={move?.id}
+      data-row-key={`context-transition:${move?.id ?? transition.id}`}
+      role="status"
     >
+      {arriving ? <span className="workspace-arrival-wash" aria-hidden="true" /> : null}
       <span className="chat-project-divider-rule" />
       <span className="chat-project-divider-center">
-        {project ? (
+        {phase === 'moving' ? <span className="workspace-move-dot animate-pulse" aria-hidden="true" /> : null}
+        {project && phase === 'arrived' ? (
           <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
             <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9" />
             <path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4" />
           </svg>
         ) : null}
-        <span className="chat-project-divider-label">{project ? basename(transition.cwd) : 'Chat'}</span>
-        {onMoveBack ? (
+        <span className="workspace-move-caption">{caption} </span>
+        <span className="chat-project-divider-label">{name}</span>
+        {phase === 'moving' && move?.target.path ? (
+          <span className="workspace-move-path"> {move.target.displayPath ?? move.target.path}</span>
+        ) : null}
+        {phase === 'arrived' && onMoveBack ? (
           <button
             type="button"
             className="chat-project-divider-back"
@@ -537,6 +583,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   columnRef,
   welcomeExiting = false,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
+  workspaceMove: workspaceMoveInput = null,
   onMoveBack,
   moveBackDisabled = false,
 }: {
@@ -570,9 +617,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   columnRef?: Ref<HTMLDivElement>
   welcomeExiting?: boolean
   contextTransitions?: SessionDescriptor['contextTransitions']
+  workspaceMove?: WorkspaceMoveDisplay | null
   onMoveBack?: () => void
   moveBackDisabled?: boolean
 }) {
+  const workspaceMove = readWorkspaceMoveDisplay(workspaceMoveInput)
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
   // overlay is a sibling of the transcript column, not nested in a scrolling row.
@@ -633,10 +682,39 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
+  const moveView = useWorkspaceMoveView(workspaceMove, boundaryRows, restorePhase === null && !loadEarlierPending)
+  const displayRows = useMemo(() => withoutReplacedMoveNotice(withoutWorkspaceTools(rows), workspaceMove), [rows, workspaceMove])
+  const moveTransition = useMemo(() => workspaceMove ? {
+    id: workspaceMove.id,
+    afterFrameId: moveView.anchorFrameId,
+    cwd: workspaceMove.target.path ?? '',
+    // This synthetic seam is display-only; it never enters stored transcript state.
+    binding: workspaceMove.target.kind === 'project'
+      ? { kind: 'project' as const }
+      : { kind: 'managed' as const },
+  } : null, [workspaceMove, moveView.anchorFrameId])
+  const displayTransitions = useMemo(() => workspaceMove && moveTransition
+    ? [...contextTransitions.filter(transition => transition.id !== workspaceMove.transitionId), moveTransition]
+    : contextTransitions, [contextTransitions, workspaceMove, moveTransition])
   const { entries, narration } = useMemo(
-    () => layoutWithContextTransitions(rows, boundaryRows, reasoningMode, contextTransitions ?? []),
-    [rows, boundaryRows, reasoningMode, contextTransitions],
+    () => layoutWithContextTransitions(displayRows, boundaryRows, reasoningMode, displayTransitions),
+    [displayRows, boundaryRows, reasoningMode, displayTransitions],
   )
+
+  const renderTransition = (transition: ContextTransition) => {
+    const currentMove = workspaceMove?.id === transition.id ? workspaceMove : null
+    const isCurrentProject = (currentMove?.phase === 'arrived' || transition.id === contextTransitions.at(-1)?.id) &&
+      transition.binding.kind === 'project' && transition.cwd === cwd
+    return <ContextTransitionRow
+      key={`context-transition:${transition.id}`}
+      transition={transition}
+      move={currentMove}
+      arriving={currentMove !== null && moveView.arriving}
+      onArrivalMount={moveView.claimArrival}
+      onMoveBack={isCurrentProject ? onMoveBack : undefined}
+      moveBackDisabled={moveBackDisabled}
+    />
+  }
 
   let content: ReactNode
   if (rows.length === 0) {
@@ -655,17 +733,22 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         // folder…" (you are already in a project). Real data only: a null pool
         // snapshot degrades to "No Codex account data for this view yet.", never a
         // mock.
-        <WelcomeScreen
-          variant="session"
-          cwd={cwd}
-          managedChat={managedChat}
-          branch={branch}
-          onListBranches={onListBranches}
-          onSwitchBranch={onSwitchBranch}
-          sandboxed={sandboxed}
-          accounts={accounts}
-          accountsUsagePending={accountsUsagePending}
-        />
+        <>
+          <WelcomeScreen
+            variant="session"
+            cwd={cwd}
+            managedChat={managedChat}
+            branch={branch}
+            onListBranches={onListBranches}
+            onSwitchBranch={onSwitchBranch}
+            sandboxed={sandboxed}
+            accounts={accounts}
+            accountsUsagePending={accountsUsagePending}
+          />
+          <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 workspace-transcript-column">
+            {entries.flatMap(entry => entry.kind === 'transition' ? [renderTransition(entry.transition)] : [])}
+          </div>
+        </>
       )
   } else {
     // D2/§3 DelegateGroup: coalesce co-spawned parallel agents into ONE grouped
@@ -676,8 +759,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // The tool-run fold runs LAST and outside the reasoning-mode switch: a run of
     // reads or searches is a tool-card concern, not a reasoning-display
     // preference, so it must survive `blocks` mode too.
-    // Intentional: cached/restoring transcripts render without a divider or pulse.
-    // The operator rejected the startup pink hairline + dot (2026-07-29).
+    // Restored context seams remain at rest. They never replay live arrival motion.
     content = (
       // P4-24 fidelity: content is centered, full-bleed (no bordered box), with
       // 24px top / 32px side padding (Chat.jsx:1282 `margin: '0 auto'`).
@@ -707,21 +789,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // assistant prose, NOT the whole column.
       <div
         ref={columnRef}
-        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6 transcript-col-slide"
+        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6 transcript-col-slide workspace-transcript-column"
         data-card-style={cardStyle}
       >
         {entries.map(entry => {
-          if (entry.kind === 'transition') {
-            const transition = entry.transition
-            const isCurrentProject = transition.id === contextTransitions.at(-1)?.id &&
-              transition.binding.kind === 'project' && transition.cwd === cwd
-            return <ContextTransitionRow
-              key={`context-transition:${transition.id}`}
-              transition={transition}
-              onMoveBack={isCurrentProject ? onMoveBack : undefined}
-              moveBackDisabled={moveBackDisabled}
-            />
-          }
+          if (entry.kind === 'transition') return renderTransition(entry.transition)
           const item = entry.item
           // The wrapper publishes the row's identity to the pane's scroll memory
           // (`transcriptScrollMemory.ts`): the reading position is remembered as
@@ -943,8 +1015,9 @@ function displayItemFirstRowId(item: TranscriptLayoutItem): string {
   }
 }
 
-type ContextTransition = NonNullable<SessionDescriptor['contextTransitions']>[number]
-const EMPTY_CONTEXT_TRANSITIONS: ContextTransition[] = []
+type PersistedContextTransition = NonNullable<SessionDescriptor['contextTransitions']>[number]
+type ContextTransition = Omit<PersistedContextTransition, 'binding'> & { binding: { kind: 'project' | 'managed' } }
+const EMPTY_CONTEXT_TRANSITIONS: PersistedContextTransition[] = []
 type TranscriptLaneEntry =
   | { kind: 'item'; item: TranscriptLayoutItem }
   | { kind: 'transition'; transition: ContextTransition }
