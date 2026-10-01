@@ -451,9 +451,10 @@ export async function createNormalSidecarQueryEngineConfig(
   // in `getTools` knows about them. They are built through the engine's own
   // `buildTool`, so they carry the same defaults and the same permission path
   // every other tool does.
+  const workspaceJumpTools = createWorkspaceJumpTools()
   const tools = [
     ...getTools(appStateStore.getState().toolPermissionContext),
-    ...createWorkspaceJumpTools(),
+    ...workspaceJumpTools.tools,
     ...(binding.kind === 'managed'
       ? []
       : [
@@ -574,6 +575,9 @@ export async function createNormalSidecarQueryEngineConfig(
           binding.kind === 'managed' && recreatedFolderNotice,
           workspaceJumpUnavailable,
         ) + relocationPrompt,
+        ...(binding.kind === 'managed' && !workspaceJumpUnavailable
+          ? { getRuntimeSystemPromptAddendum: workspaceJumpTools.getInitialCatalogContext }
+          : {}),
         ...(appSessionId && binding.kind !== 'managed'
           ? {
               getPostCompactRuntimeAttachments: createPeerCompactContext({

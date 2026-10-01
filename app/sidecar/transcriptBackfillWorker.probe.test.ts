@@ -10,7 +10,9 @@ import {
   appendFileSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -33,6 +35,10 @@ import {
   type TranscriptBackfillSessionResult,
 } from '../shared/transcriptBackfill.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
+import type {
+  SessionLocation,
+  SessionRelocation,
+} from '../../src/utils/sessionRelocationState.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const minter = join(here, 'mintTranscript.fixture.ts')
@@ -368,4 +374,127 @@ test('a session the shared parser rejects becomes a failure record instead of an
   expect(failures[0]!.appSessionId).toBe(appSessionId)
   expect(failures[0]!.reason).toBe('invalid')
   expect(emitted[emitted.length - 1]).toEqual({ type: 'done', attempted: 1 })
+}, 120_000)
+
+test('backfill reads a real moved conversation from another launch folder without consuming recovery state, and refuses unsafe relocation records', async () => {
+  const configHome = temp('catcode-plb-moved-config-')
+  const original: SessionLocation = {
+    cwd: realpathSync(temp('catcode-plb-moved-chat-')),
+    binding: { kind: 'managed', storageRootId: randomUUID(), storageId: randomUUID() },
+  }
+  const target: SessionLocation = {
+    cwd: realpathSync(temp('catcode-plb-moved-project-')),
+    binding: { kind: 'project' },
+  }
+  const engineSessionId = randomUUID()
+  const appSessionId = randomUUID()
+  const nonce = `plb-moved-${randomUUID()}`
+  const blocker = join(configHome, 'block-network.ts')
+  writeFileSync(
+    blocker,
+    'globalThis.fetch = (async () => { throw new Error("Network disabled") }) as typeof fetch\n',
+  )
+  const env = {
+    ...process.env,
+    CLAUDE_CONFIG_DIR: configHome,
+    NODE_ENV: 'development',
+  }
+  writeFileSync(
+    join(configHome, '.config.json'),
+    JSON.stringify({ projects: { [target.cwd]: { hasTrustDialogAccepted: true } } }),
+  )
+  const mint = await spawnAndCollect(
+    ['bun', `--preload=${blocker}`, 'run', minter, engineSessionId, nonce],
+    { cwd: original.cwd, env: { ...env, TEST_ENABLE_SESSION_PERSISTENCE: '1' } },
+  )
+  expect(mint.code).toBe(0)
+  const sourcePath = mint.stdout
+    .split('\n')
+    .find(line => line.startsWith('MINTED_TRANSCRIPT_PATH='))!
+    .slice('MINTED_TRANSCRIPT_PATH='.length)
+  const rawTranscript = readFileSync(sourcePath, 'utf8')
+  const moved = await spawnAndCollect(
+    ['bun', `--preload=${blocker}`, 'run', join(here, 'sessionRelocationWorker.ts')],
+    { cwd: original.cwd, env },
+    `${JSON.stringify({
+      type: 'session-relocation',
+      version: 1,
+      engineSessionId,
+      appSessionId,
+      source: original,
+      target,
+      controls: { mode: 'default' },
+    })}\n`,
+  )
+  expect(moved.code).toBe(0)
+  const transcriptPath = join(
+    dirname(sourcePath),
+    '..',
+    target.cwd.replace(/[^a-zA-Z0-9]/g, '-'),
+    `${engineSessionId}.jsonl`,
+  )
+  const recordPath = join(configHome, 'session-relocations', `${engineSessionId}.json`)
+  const relocationText = readFileSync(recordPath, 'utf8')
+  const relocation = JSON.parse(relocationText) as SessionRelocation
+  const recoveryPath = join(configHome, 'interrupted-turns', `${engineSessionId}.json`)
+  mkdirSync(dirname(recoveryPath), { recursive: true })
+  const leaf = rawTranscript
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as { type: string; uuid: string })
+    .findLast(entry => entry.type === 'assistant' || entry.type === 'user')!
+  const recoveryText = JSON.stringify({
+    version: 1,
+    sessionId: engineSessionId,
+    leafUuid: leaf.uuid,
+    partialOutput: 'retain interrupted work',
+    partialOutputTruncated: false,
+    reason: 'user_abort',
+    capturedAt: Date.now(),
+  })
+  writeFileSync(recoveryPath, recoveryText)
+  const run = async (itemAppId = appSessionId, path = transcriptPath) => {
+    const result = await spawnAndCollect(
+      ['bun', `--preload=${blocker}`, 'run', worker, '--bare'],
+      { cwd: original.cwd, env },
+      JSON.stringify({
+        version: TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+        items: [{ appSessionId: itemAppId, engineSessionId, transcriptPath: path }],
+      }),
+    )
+    expect(result.code).toBe(0)
+    const records = result.stdout
+      .trim()
+      .split('\n')
+      .map(line => parseTranscriptBackfillResult(JSON.parse(line)))
+    expect(records.every(Boolean)).toBe(true)
+    expect(records.at(-1)).toEqual({ type: 'done', attempted: 1 })
+    return { result, record: records[0] }
+  }
+  const preview = await run()
+  expect(preview.result.stderr).not.toContain(
+    'Open this conversation from its current folder',
+  )
+  expect(preview.record?.type).toBe('session')
+  expect(JSON.stringify(preview.record)).toContain(nonce)
+  expect(readFileSync(transcriptPath, 'utf8')).toBe(rawTranscript)
+  expect(readFileSync(recordPath, 'utf8')).toBe(relocationText)
+  expect(readFileSync(recoveryPath, 'utf8')).toBe(recoveryText)
+
+  expect((await run(randomUUID())).record?.type).toBe('failure')
+  // A stale former-project file must not regain the canonical association.
+  mkdirSync(dirname(sourcePath), { recursive: true })
+  writeFileSync(sourcePath, rawTranscript)
+  expect((await run(appSessionId, sourcePath)).record?.type).toBe('failure')
+  writeFileSync(recordPath, JSON.stringify({ ...relocation, phase: 'moving' }))
+  const unfinished = await run()
+  expect(unfinished.record?.type).toBe('failure')
+  expect(unfinished.result.stderr).toContain('unfinished move')
+  const { controls: _controls, ...withoutControls } = relocation
+  writeFileSync(recordPath, JSON.stringify(withoutControls))
+  const unreadable = await run()
+  expect(unreadable.record?.type).toBe('failure')
+  expect(unreadable.result.stderr).toContain('Conversation move record could not be read')
+  expect(readFileSync(transcriptPath, 'utf8')).toBe(rawTranscript)
+  expect(readFileSync(recoveryPath, 'utf8')).toBe(recoveryText)
 }, 120_000)

@@ -22,7 +22,7 @@ export type WorkspaceJumpIdentity = { appSessionId: string; engineSessionId: str
 export type WorkspaceJumpCoordinatorDeps = {
   host: Pick<Host, 'reserveWorkspaceJump' | 'releaseWorkspaceJump' | 'moveWorkspaceJump' | 'getSessionGeneration'>
   row: (appSessionId: string) => PeerRegistryRow | undefined
-  knownProjectRoots: () => readonly string[]
+  knownProjects: () => readonly { path: string; lastUsedAt: number }[]
   validateCwd: (cwd: string) => CwdValidation
   /** Observation-only engine trust read. Never instructions, hooks, or accounts. */
   trustedProjectRoots: (roots: readonly string[]) => Promise<readonly string[]>
@@ -114,10 +114,15 @@ export class WorkspaceJumpCoordinator {
     return record === null || hasVerifiedSourceCompensation(state, record, appSessionId, row.engineSessionId, row.cwd)
   }
   private roots(): string[] {
-    return [...new Set(this.deps.knownProjectRoots().slice(0, 128).flatMap(path => {
-      const validated = this.deps.validateCwd(path)
-      return validated.ok ? [validated.realpath] : []
-    }))]
+    const recent = new Map<string, number>()
+    for (const project of this.deps.knownProjects()) {
+      const validated = this.deps.validateCwd(project.path)
+      if (!validated.ok) continue
+      const used = Number.isFinite(project.lastUsedAt) ? project.lastUsedAt : 0
+      recent.set(validated.realpath, Math.max(recent.get(validated.realpath) ?? 0, used))
+    }
+    // Conversation duplicates and aliases cannot consume the workspace bound.
+    return [...recent].sort(([a, at], [b, bt]) => bt - at || a.localeCompare(b)).slice(0, 128).map(([path]) => path)
   }
   private async list(appSessionId: string): Promise<Result<'workspaces.list'>> {
     for (const [handle, entry] of this.handles) {
@@ -133,10 +138,17 @@ export class WorkspaceJumpCoordinator {
     const roots = this.roots()
     const trusted = new Set(await this.deps.trustedProjectRoots(roots))
     if (!this.eligible(appSessionId) || this.identity(appSessionId)?.generation !== identity.generation) return refuse('This Chat changed while projects were listed')
-    // A new snapshot retires older handles, bounding memory per live conversation.
-    this.forgetHandles(appSessionId)
-    const workspaces = roots.filter(path => trusted.has(path)).map(path => {
-      const handle = randomUUID()
+    const available = roots.filter(path => trusted.has(path))
+    const previous = new Map<string, string>()
+    for (const [handle, entry] of this.handles) {
+      if (entry.appSessionId !== appSessionId) continue
+      if (!available.includes(entry.path)) this.handles.delete(handle)
+      else previous.set(entry.path, handle)
+    }
+    // Frozen initial context can keep selecting a still-current handle after a
+    // later listing. Only current canonical roots retain discovery authority.
+    const workspaces = available.map(path => {
+      const handle = previous.get(path) ?? randomUUID()
       this.handles.set(handle, { appSessionId, generation: identity.generation, path })
       return { handle, name: basename(path), path }
     })

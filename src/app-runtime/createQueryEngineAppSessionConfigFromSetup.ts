@@ -31,6 +31,7 @@ export type QueryEngineAppSessionSetup = {
   readFileCache: FileStateCache
   customSystemPrompt?: string
   appendSystemPrompt?: string
+  getRuntimeSystemPromptAddendum?: QueryEngineAppSessionConfig['getRuntimeSystemPromptAddendum']
   userSpecifiedModel?: string
   fallbackModel?: string
   thinkingConfig?: ThinkingConfig
@@ -63,6 +64,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
   readFileCache,
   customSystemPrompt,
   appendSystemPrompt,
+  getRuntimeSystemPromptAddendum,
   userSpecifiedModel,
   fallbackModel,
   thinkingConfig,
@@ -128,6 +130,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
     readFileCache,
     customSystemPrompt,
     appendSystemPrompt,
+    getRuntimeSystemPromptAddendum,
     userSpecifiedModel,
     fallbackModel,
     thinkingConfig,

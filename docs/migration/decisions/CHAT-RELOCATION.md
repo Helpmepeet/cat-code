@@ -69,6 +69,26 @@ rules, suggestion policy, and source reclassification are superseded by this
 amendment. Its delivery-recovery invariants remain required. Source and the
 validation record determine which amended paths have landed.
 
+### Initial discovery and destination attachment, 2026-10-01
+
+The [GUI follow-up](../../plans/2026-10-01-workspace-jump-followup.md) supplies
+bounded recent workspace metadata to the first conversational request. A supplied
+handle can go directly to `JumpWorkspace`; `ListWorkspaces` remains available
+when the intended workspace is absent or unresolved. Discovery loads no candidate
+instructions or files and leaves the destination decision with the conversational
+agent. “Reply in chat only,” “plan only,” and “do not edit files” alone do not
+prohibit workspace selection; an explicit instruction not to move does.
+
+A restored destination reservation normally has no source handoff boundary in
+its process. Attachment or idle may infer failure only for an operation locally
+reserved by that source sidecar. Restored holds continue to gate turn admission;
+explicit Stop and host-owned recovery remain authoritative.
+
+Observation-only preview loading uses the completed relocation record's target
+cwd, app identity, and canonical transcript path. It does not consume interruption
+recovery state. Incomplete, unreadable, or mismatched records remain refused;
+preview is neither a move nor a real resume.
+
 ## Contract
 
 The session menu offers **Move to project…** for a saved managed Chat. Main resolves a one-time native directory-picker token, and the host validates the resulting real path. The destination must already have engine-persisted trust. The same `appSessionId`, `engineSessionId`, transcript, sidebar row, and original managed-folder ownership survive every move. **Move back** returns the working context to the original Chat folder; it does not rewind messages, files, hooks, or external effects. Chat-created working files stay in that folder. The model's desktop prompt names the original and current directories and explains how to interpret earlier relative file references. It grants no additional filesystem access.

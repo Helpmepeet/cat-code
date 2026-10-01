@@ -174,6 +174,27 @@ does not grant reusable movement authority. The source engine saves its own
 terminal note before releasing the local hold. An unreadable durable operation
 cannot be reported as never accepted.
 
+### Initial discovery amendment, 2026-10-01
+
+Eligible managed conversations may observe the existing `workspaces.list` verb
+automatically before their first conversational model request. This observation
+does not classify input or choose a destination. The sidecar freezes a prompt
+addendum containing at most eight recent distinct canonical trusted workspaces
+and 8 KiB of serialized name/path/handle metadata. Input is processed and recorded
+first; Stop prevents provider admission and discards late discovery. Failure
+falls back to ordinary `ListWorkspaces`, without an automatic retry. Project-bound
+and consumed contexts do not provision this addendum.
+
+Main orders canonical roots by existing use timestamps, deduplicates before its
+128-root discovery cap, and retains the same handle for a still-current root in
+the requesting process generation. Later listings retire absent roots and expired
+generations, while retaining valid initial handles. Mappings remain bounded;
+listing neither grants trust nor bypasses ordinary tool-permission evaluation.
+Acceptance and readiness still revalidate canonical identity, known-root
+membership, saved trust, eligibility, and cancellation. No new wire verb, frame
+shape, peer authority, or protocol version is introduced. See the
+[follow-up validation plan](../../plans/2026-10-01-workspace-jump-followup.md).
+
 Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4.
 
 - **HR1 — main validates fail-closed.** `host.request` is decoded by the

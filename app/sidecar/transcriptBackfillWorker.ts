@@ -10,7 +10,7 @@
  */
 
 import { statSync } from 'node:fs'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import {
   MAX_TRANSCRIPT_BACKFILL_INPUT_BYTES,
@@ -66,11 +66,13 @@ async function main(): Promise<void> {
   const [
     { switchSession, getSdkBetas },
     { loadConversationForResume },
-    { loadDisplayTranscriptFromJsonlPath },
+    { getProjectDir, loadDisplayTranscriptFromJsonlPath },
     { mergeDisplayHistoryWithSeed, projectResumedHistory },
     { createMessageEvent },
     { getContextWindowForModel },
     { withRestoredSubagentHistory },
+    { assertSessionNotMoving, readSessionRelocation },
+    { getCwd, runWithCwdOverride },
   ] = await Promise.all([
     import('../../src/bootstrap/state.js'),
     import('../../src/utils/conversationRecovery.js'),
@@ -79,6 +81,8 @@ async function main(): Promise<void> {
     import('../../src/app-runtime/sessionEvents.js'),
     import('../../src/utils/context.js'),
     import('./subagentHistory.js'),
+    import('../../src/utils/sessionRelocationState.js'),
+    import('../../src/utils/cwd.js'),
   ])
   await bootstrapWorkerEngine()
 
@@ -119,10 +123,35 @@ async function main(): Promise<void> {
       // O1: mapper stamping and transcript resolution both consult process-global
       // session state. Explicit JSONL loading avoids the log branch's plan/history
       // copies; switchSession still adopts the exact id for toSDKMessages.
+      // A preview is not a resume from the app's launch directory. Resolve the
+      // completed move's authoritative location, retaining both identities and
+      // its canonical transcript path; former-project copies stay ineligible.
+      // Moving/unreadable records still hit the engine's ordinary refusal gate.
+      assertSessionNotMoving(item.engineSessionId)
+      const relocation = readSessionRelocation(item.engineSessionId)
+      if (
+        relocation &&
+        (relocation.appSessionId !== item.appSessionId ||
+          item.transcriptPath !==
+            join(getProjectDir(relocation.target.cwd), `${item.engineSessionId}.jsonl`))
+      ) {
+        await emit({
+          ...failureIdentity(item),
+          type: 'failure',
+          reason: 'session_mismatch',
+        })
+        continue
+      }
       switchSession(item.engineSessionId as never, dirname(item.transcriptPath))
-      const loaded = await loadConversationForResume(
-        item.engineSessionId,
-        item.transcriptPath,
+      const loaded = await runWithCwdOverride(
+        relocation?.target.cwd ?? getCwd(),
+        () =>
+          loadConversationForResume(
+            item.engineSessionId,
+            item.transcriptPath,
+            // Preview must leave durable interruption recovery for real resume.
+            { interruptedTurn: 'ignore' },
+          ),
       )
       if (!loaded) {
         await emit({ ...failureIdentity(item), type: 'failure', reason: 'invalid' })

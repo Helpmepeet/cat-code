@@ -98,6 +98,11 @@ Schema version `debugStateVersion: 1`:
 Use `rendererStateAt` as the freshness signal for renderer-owned fields. If the
 renderer crashes, `sessions` can keep changing while the renderer half is stale.
 
+`renderer.sidebar` is a diagnostic sample of at most 128 registry rows in the
+sidebar's activity order. When the active row falls outside the newest 128,
+the sample keeps the newest 127 plus that active row. Use host `sessions` for
+the complete registry roster; an absent sidebar row does not imply deletion.
+
 Each `sessions[]` row is the host session descriptor plus dev-only advisory
 fields:
 

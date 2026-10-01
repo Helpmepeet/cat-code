@@ -1,4 +1,7 @@
-import type { DebugRendererSnapshot } from '../../shared/debugState.js'
+import {
+  MAX_DEBUG_STATE_ITEMS,
+  type DebugRendererSnapshot,
+} from '../../shared/debugState.js'
 import type { SessionId } from '../../shared/protocol.js'
 import {
   selectPendingPermissionCount,
@@ -24,6 +27,17 @@ export function buildDebugShellStateSnapshot(args: {
   now?: () => number
 }): DebugRendererSnapshot {
   const now = args.now ?? Date.now
+  const sidebarDescriptors = selectShellDescriptors(args.shell)
+  const activeOutsideSample = sidebarDescriptors
+    .slice(MAX_DEBUG_STATE_ITEMS)
+    .find(descriptor => descriptor.appSessionId === args.activeSessionId)
+  // A valid host roster may exceed the diagnostic IPC cap. Keep the active
+  // row for GUI predicates without increasing the receiver's input budget.
+  const sidebarSample = sidebarDescriptors.slice(
+    0,
+    MAX_DEBUG_STATE_ITEMS - (activeOutsideSample ? 1 : 0),
+  )
+  if (activeOutsideSample) sidebarSample.push(activeOutsideSample)
   return {
     debugStateVersion: 1,
     rendererStateAt: now(),
@@ -48,7 +62,7 @@ export function buildDebugShellStateSnapshot(args: {
           needsAttention: visual.needsAttention,
         }
       }),
-      sidebar: selectShellDescriptors(args.shell).map(descriptor => {
+      sidebar: sidebarSample.map(descriptor => {
         // F9: the roster selector no longer carries a per-row visual; derive the
         // sidebar chip from the shared `sessionStatusVisual` (audit §I.2).
         const { label, tone } = sessionStatusVisual(

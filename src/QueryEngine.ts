@@ -181,6 +181,8 @@ export type QueryEngineConfig = {
   readFileCache: FileStateCache
   customSystemPrompt?: string
   appendSystemPrompt?: string
+  /** Trusted runtime metadata resolved after input persistence, before query. */
+  getRuntimeSystemPromptAddendum?: (signal: AbortSignal) => Promise<string | undefined>
   userSpecifiedModel?: string
   fallbackModel?: string
   thinkingConfig?: ThinkingConfig
@@ -351,6 +353,7 @@ export class QueryEngine {
       canUseTool,
       customSystemPrompt,
       appendSystemPrompt,
+      getRuntimeSystemPromptAddendum,
       userSpecifiedModel,
       fallbackModel,
       jsonSchema,
@@ -472,7 +475,7 @@ export class QueryEngine {
         ? await loadMemoryPrompt()
         : null
 
-    const effectiveAppendSystemPrompt = [
+    let effectiveAppendSystemPrompt = [
       ...(memoryMechanicsPrompt ? [memoryMechanicsPrompt] : []),
       ...(appendSystemPrompt ? [appendSystemPrompt] : []),
     ].filter(Boolean).join('\n\n') || undefined
@@ -896,6 +899,26 @@ export class QueryEngine {
       return
     }
 
+    if (getRuntimeSystemPromptAddendum && !this.abortController.signal.aborted) {
+      const signal = this.abortController.signal
+      const runtimeAddendum = await new Promise<string | undefined>(resolve => {
+        const abort = () => { signal.removeEventListener('abort', abort); resolve(undefined) }
+        signal.addEventListener('abort', abort, { once: true })
+        void Promise.resolve().then(() => getRuntimeSystemPromptAddendum(signal)).then(value => {
+          signal.removeEventListener('abort', abort)
+          resolve(signal.aborted ? undefined : value)
+        }, () => { signal.removeEventListener('abort', abort); resolve(undefined) })
+      })
+      if (runtimeAddendum) {
+        effectiveAppendSystemPrompt = [effectiveAppendSystemPrompt, runtimeAddendum].filter(Boolean).join('\n\n')
+        processUserInputContext.options.appendSystemPrompt = effectiveAppendSystemPrompt
+        systemPrompt = buildEffectiveSystemPrompt({
+          mainThreadAgentDefinition: undefined, toolUseContext: processUserInputContext,
+          customSystemPrompt: customPrompt, defaultSystemPrompt, appendSystemPrompt: effectiveAppendSystemPrompt,
+        })
+      }
+    }
+
     if (fileHistoryEnabled() && persistSession) {
       messagesFromUserInput
         .filter(messageSelector().replayableUserMessagesFilter)
@@ -932,7 +955,9 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
-    const queryIterator = query({
+    const queryIterator = this.abortController.signal.aborted
+      ? (async function* () { return { reason: 'aborted' } })()
+      : query({
       messages,
       systemPrompt,
       userContext,

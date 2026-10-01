@@ -4310,10 +4310,14 @@ function ensureHost(): Host {
   workspaceJump = new WorkspaceJumpCoordinator({
     host,
     row: appSessionId => registry.sessions.find(row => row.appSessionId === appSessionId),
-    knownProjectRoots: () => [...new Set([
-      ...host!.listSessions().filter(row => row.binding?.kind === 'project').map(row => row.cwd),
-      ...(readSessionsCatalogCache(defaultRegistryDir())?.entries ?? []).filter(row => row.binding?.kind === 'project' && row.cwdExists).map(row => row.cwd),
-    ])],
+    knownProjects: () => [
+      ...host!.listSessions().filter(row => row.binding?.kind === 'project').map(row => ({
+        path: row.cwd, lastUsedAt: Math.max(row.lastMessageSentAt ?? 0, row.lastAttachedAt),
+      })),
+      ...(readSessionsCatalogCache(defaultRegistryDir())?.entries ?? []).filter(row => row.binding?.kind === 'project' && row.cwdExists).map(row => ({
+        path: row.cwd, lastUsedAt: row.modifiedAtMs,
+      })),
+    ],
     validateCwd,
     trustedProjectRoots: roots => runWorkspaceListingWorker({ command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),

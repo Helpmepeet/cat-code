@@ -1,13 +1,65 @@
 import { expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { createConnectionState } from './connectionState.js'
-import type { PermissionState } from './permissionState.js'
+import { createPermissionState, type PermissionState } from './permissionState.js'
 import {
   createShellState,
   reduceShellState,
   type ShellState,
 } from './shellState.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
+import { parseDebugSnapshot } from '../../main/devHarness.js'
+import { sessionDescriptorFixture } from '../../shared/sessionDescriptor.fixture.js'
+
+test('a full registry roster exports an accepted sidebar sample retaining the active session', () => {
+  for (const [count, activeIndex] of [
+    [128, 0], [129, 0], [241, 0], [256, 0], [256, 255], [256, null],
+  ] as const) {
+    let shell = createShellState()
+    const activeSessionId = activeIndex === null
+      ? null
+      : `00000000-0000-4000-8000-${activeIndex.toString(16).padStart(12, '0')}`
+    for (let index = 0; index < count; index++) {
+      shell = reduceShellState(shell, {
+        type: 'session-added',
+        session: sessionDescriptorFixture({
+          appSessionId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
+          cwd: '/tmp/work',
+          createdAt: index,
+          restorable: index !== 0,
+          status: index === 0 ? 'ready' : 'exited',
+        }),
+      })
+    }
+    const snapshot = buildDebugShellStateSnapshot({
+      shell,
+      connection: createConnectionState(),
+      permissions: createPermissionState(),
+      activeSessionId,
+      now: () => 123,
+    })
+
+    const parsed = parseDebugSnapshot(snapshot)
+    expect(parsed.ok ? 'accepted' : parsed.error).toBe('accepted')
+    expect(snapshot.rendererStateAt).toBe(123)
+    expect(snapshot.renderer.activeSessionId).toBe(activeSessionId)
+    expect(snapshot.renderer.sidebar).toHaveLength(128)
+    const lastIndex = activeIndex === 0 ? 0 : count - 128
+    expect(snapshot.renderer.sidebar.at(-1)?.appSessionId).toBe(
+      `00000000-0000-4000-8000-${lastIndex.toString(16).padStart(12, '0')}`,
+    )
+    if (activeSessionId !== null) {
+      expect(snapshot.renderer.sidebar.some(row => row.appSessionId === activeSessionId)).toBe(true)
+    }
+    expect(snapshot.renderer.sidebar[0]?.appSessionId).toBe(
+      `00000000-0000-4000-8000-${(count - 1).toString(16).padStart(12, '0')}`,
+    )
+    expect(snapshot.renderer.tabs.map(tab => tab.appSessionId)).toEqual([
+      '00000000-0000-4000-8000-000000000000',
+    ])
+    expect(shell.order).toHaveLength(count)
+  }
+})
 
 const sessionA: SessionDescriptor = {
   appSessionId: '00000000-0000-4000-8000-0000000000aa',

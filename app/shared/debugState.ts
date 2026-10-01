@@ -4,6 +4,13 @@ import type { SessionId } from './protocol.js'
 export const DEBUG_STATE_VERSION = 1 as const
 export const DEBUG_SHELL_STATE_CHANNEL = 'catcode:debug:shell-state'
 
+/**
+ * Diagnostic collection bound, independent of the registry's file-growth cap.
+ * Producers sample larger rosters; the receiving boundary still rejects
+ * oversized collections rather than silently trimming untrusted input.
+ */
+export const MAX_DEBUG_STATE_ITEMS = 128
+
 export type DebugTone = 'live' | 'busy' | 'warn' | 'dead'
 export type DebugSidebarKind = 'live' | 'restorable'
 export type DebugPermissionMode =
@@ -48,6 +55,7 @@ export type DebugPermissionSession = {
 export type DebugRendererState = {
   activeSessionId: SessionId | null
   tabs: DebugTab[]
+  /** Newest registry rows, retaining the active row within the diagnostic cap. */
   sidebar: DebugSidebarRow[]
   permissions: Record<SessionId, DebugPermissionSession>
 }

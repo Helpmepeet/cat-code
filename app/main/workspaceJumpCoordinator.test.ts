@@ -38,7 +38,7 @@ function harness() {
   const held = new Map<string, string>()
   const deps: WorkspaceJumpCoordinatorDeps = {
     directory, row: id => id === appSessionId ? row : undefined,
-    knownProjectRoots: () => ['/projects/cat-code'],
+    knownProjects: () => [{ path: '/projects/cat-code', lastUsedAt: 1 }],
     validateCwd: path => ({ ok: true, realpath: path }),
     trustedProjectRoots: async roots => trusted ? roots : [],
     verifyReady: () => idle,
@@ -104,6 +104,63 @@ test('stale process readiness and revoked trust do not start a move', async () =
   h.setGeneration()
   expect((await h.coordinator.handleRequest(h.appSessionId, h.ready)).ok).toBe(false)
   expect(h.moved()).toBe(0)
+})
+
+test('recent listing deduplicates canonical workspaces before the bound and saved-trust filter', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => [
+    ...Array.from({ length: 150 }, (_, i) => ({ path: `/aliases/cat-${i}`, lastUsedAt: i })),
+    { path: '/projects/recent', lastUsedAt: 500 },
+    { path: '/projects/untrusted', lastUsedAt: 600 },
+    ...Array.from({ length: 130 }, (_, i) => ({ path: `/projects/old-${String(i).padStart(3, '0')}`, lastUsedAt: 1 })),
+  ]
+  h.deps.validateCwd = path => ({ ok: true, realpath: path.startsWith('/aliases/') ? '/projects/cat-code' : path })
+  h.deps.trustedProjectRoots = async roots => roots.filter(path => path !== '/projects/untrusted')
+  const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+  if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
+  expect(result.value.workspaces.map(row => row.path)).toEqual([
+    '/projects/recent', '/projects/cat-code',
+    ...Array.from({ length: 125 }, (_, i) => `/projects/old-${String(i).padStart(3, '0')}`),
+  ])
+})
+
+test('initial handles survive later listings, while expired roots and process generations retire authority', async () => {
+  const h = harness()
+  async function list() {
+    const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+    if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
+    return result.value.workspaces
+  }
+  const initial = (await list())[0]!
+  h.deps.knownProjects = () => [{ path: '/projects/newer', lastUsedAt: 10 }, { path: initial.path, lastUsedAt: 1 }]
+  expect((await list()).find(row => row.path === initial.path)?.handle).toBe(initial.handle)
+  h.deps.knownProjects = () => [{ path: '/projects/newer', lastUsedAt: 10 }]
+  await list()
+  h.deps.knownProjects = () => [{ path: initial.path, lastUsedAt: 20 }]
+  expect((await list())[0]?.handle).not.toBe(initial.handle)
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.jump', operationId: randomUUID(), destinationHandle: initial.handle })).ok).toBe(false)
+  const current = (await list())[0]!
+  h.setGeneration()
+  expect((await list())[0]?.handle).not.toBe(current.handle)
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.jump', operationId: randomUUID(), destinationHandle: current.handle })).ok).toBe(false)
+  expect(h.held.size).toBe(0)
+})
+
+test.each(['trust', 'canonical identity', 'caller', 'process generation'] as const)('listed handle rechecks %s before acceptance', async reason => {
+  const h = harness()
+  const listed = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+  if (!listed.ok || !('workspaces' in listed.value)) throw new Error('listing failed')
+  let requester = h.appSessionId
+  if (reason === 'trust') h.setTrusted(false)
+  if (reason === 'canonical identity') h.deps.validateCwd = path => ({ ok: true, realpath: path + '-replaced' })
+  if (reason === 'process generation') h.setGeneration()
+  if (reason === 'caller') {
+    requester = randomUUID()
+    h.deps.row = id => id === requester ? { ...h.row, appSessionId: requester, engineSessionId: randomUUID() } : h.row
+  }
+  expect((await h.coordinator.handleRequest(requester, { verb: 'workspace.jump', operationId: randomUUID(), destinationHandle: listed.value.workspaces[0]!.handle })).ok).toBe(false)
+  expect(h.held.size).toBe(0)
+  expect(h.coordinator.snapshot(h.appSessionId)).toBeNull()
 })
 
 test('published acceptance keeps its host reservation when state notification fails', async () => {

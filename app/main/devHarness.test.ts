@@ -141,6 +141,21 @@ test('parseDebugSnapshot rejects unknown keys, bad enums, and oversize strings',
     ...valid,
     renderer: { ...valid.renderer, tabs: [{ appSessionId: 's', title: 'x'.repeat(2000), label: 'ready', tone: 'live', restartable: false, needsAttention: false }] },
   }).ok).toBe(false)
+  const row = {
+    appSessionId: 's', title: 't', subtitle: 'work', kind: 'live',
+    label: 'unknown', tone: 'warn', restorable: false,
+  }
+  expect(parseDebugSnapshot({
+    ...valid, renderer: { ...valid.renderer, sidebar: Array(128).fill(row) },
+  }).ok).toBe(true)
+  expect(parseDebugSnapshot({
+    ...valid, renderer: { ...valid.renderer, sidebar: Array(129).fill(row) },
+  })).toEqual({ ok: false, error: 'bad sidebar' })
+  for (const invalid of [{ ...row, extra: true }, { ...row, kind: 'unknown' }, { ...row, tone: 'purple' }]) {
+    expect(parseDebugSnapshot({
+      ...valid, renderer: { ...valid.renderer, sidebar: [invalid] },
+    })).toEqual({ ok: false, error: 'bad sidebar row' })
+  }
 })
 
 test('picker defaultPath honors a valid active id hint, then recency fallback', () => {

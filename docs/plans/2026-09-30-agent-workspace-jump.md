@@ -1,6 +1,11 @@
 # Agent-directed workspace jump
 
 Status: implemented and reviewed; isolated verification complete.
+October 1 live GUI checks subsequently found false destination cancellation and
+other follow-up issues. Corrections and the initial workspace catalog are now
+implemented, with isolated verification recorded in
+[the GUI follow-up plan](2026-10-01-workspace-jump-followup.md). Post-fix GUI checks
+remain unperformed; the verification below does not establish a clean live handoff.
 The whole-plan review preceded implementation. Corrections include provider-attempt
 fencing, mutation reservation, source-failure settlement, recovery retention,
 typed suspension accounting, and cancellation before host acceptance.

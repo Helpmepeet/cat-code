@@ -621,6 +621,7 @@ export class SidecarServer {
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
   private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
+  private sourceHandoffOperation: string | null = null
   private handoffResult: { operationId: string; tipUuid: string; toolUseId: string } | null = null
   private handoffReadySent = false
   private handoffCancellationSent = false
@@ -1813,7 +1814,11 @@ export class SidecarServer {
         this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification() ||
         this.controller.getPendingPermissionRequests().length > 0 || this.tasks?.hasLiveWork() ||
         this.inFlightDurableWrites > 0 || this.accounts?.isOAuthLoginInFlight()) return false
-    try { this.controller.reserveHandoff(operationId); return true } catch { return false }
+    try {
+      this.controller.reserveHandoff(operationId)
+      this.sourceHandoffOperation = operationId
+      return true
+    } catch { return false }
   }
 
   /** Only an authenticated, exact-operation cancellation receipt may authorize
@@ -1858,7 +1863,9 @@ export class SidecarServer {
     const boundary = this.handoffResult
     if (!boundary && !this.activeTurn && !this.controller.isTurnActive()) {
       const operationId = this.controller.getHandoffReservation()
-      if (operationId && !this.handoffCancellationSent) {
+      // A restored destination hold has no source boundary in this process.
+      // Only a locally reserved source turn can have failed to produce one.
+      if (operationId && operationId === this.sourceHandoffOperation && !this.handoffCancellationSent) {
         this.handoffCancellationSent = true
         this.requestHandoffCancellation(operationId)
       }
