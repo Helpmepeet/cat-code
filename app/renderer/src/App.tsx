@@ -55,6 +55,10 @@ import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
+import {
+  canExecuteDesktopNewChat,
+  isDesktopNewChatCommand,
+} from './desktopChatCommands.js'
 import { CommandPalette } from './CommandPalette.js'
 import { buildPaletteItems, type PaletteItem } from './commandPaletteModel.js'
 import { applyServerFrameBatch, batch, withBatch } from './serverFrameBatch.js'
@@ -565,6 +569,10 @@ export function App() {
   const [projectRoutes, setProjectRoutes] = useState<Record<SessionId, ProjectRouteSnapshot>>({})
   const projectRoutesRef = useRef(projectRoutes)
   projectRoutesRef.current = projectRoutes
+  const [desktopCommandPending, setDesktopCommandPending] = useState<
+    ReadonlySet<SessionId>
+  >(() => new Set())
+  const desktopCommandPendingRef = useRef(new Set<SessionId>())
   // D5 — a submit the sidecar refuses (the mid-turn depth cap is the reachable
   // case) used to leave the composer empty and the images gone: `↑` history is
   // text-only, so the attachments had no recovery path at all. The submitted
@@ -1734,6 +1742,54 @@ export function App() {
     setActiveView('chat')
   }, [])
 
+  type FreshSessionOutcome =
+    | { status: 'created'; sessionId: SessionId }
+    | { status: 'failed' }
+  type DesktopCommandOutcome = FreshSessionOutcome | { status: 'already-pending' }
+  type FreshSessionTarget =
+    | { kind: 'managed' }
+    | { kind: 'workspace'; representativeSessionId: SessionId }
+
+  // Host creation has no app-wide guard and never changes pane focus. UI entry
+  // points keep their own guards; slash commands use a guard keyed by origin.
+  const createFreshSession = useCallback(
+    async (target: FreshSessionTarget): Promise<FreshSessionOutcome> => {
+      try {
+        const bridge = getBridge()
+        const result = target.kind === 'managed'
+          ? await bridge.createManagedChat()
+          : await bridge.createSessionInWorkspace(target.representativeSessionId)
+        if (!result.ok) {
+          setShellError(hostErrorMessage(result.error))
+          return { status: 'failed' }
+        }
+        return { status: 'created', sessionId: result.value.appSessionId }
+      } catch (error) {
+        setShellError(errorMessage(error))
+        return { status: 'failed' }
+      }
+    },
+    [],
+  )
+
+  const placeCreatedSessionForOrigin = useCallback(
+    (originSessionId: SessionId, createdSessionId: SessionId) => {
+      pendingExplicitSessionRef.current = createdSessionId
+      setWorkspaceLayoutState(current => {
+        const originIndex = current.panels.findIndex(
+          panel => panel.sessionId === originSessionId,
+        )
+        const next = originIndex >= 0
+          ? assignWorkspacePanelSession(current, originIndex, createdSessionId).state
+          : focusOrAssignWorkspaceSession(current, createdSessionId).state
+        return next
+      })
+      setActiveSessionId(createdSessionId)
+      setActiveView('chat')
+    },
+    [],
+  )
+
   const newSession = useCallback(async () => {
     const bridge = getBridge()
     try {
@@ -1755,34 +1811,30 @@ export function App() {
     if (newManagedChatInFlightRef.current) return
     newManagedChatInFlightRef.current = true
     try {
-      const bridge = getBridge()
-      const result = await bridge.createManagedChat()
-      if (result.ok) focusCreatedSession(result.value.appSessionId)
-      else setShellError(hostErrorMessage(result.error))
+      const result = await createFreshSession({ kind: 'managed' })
+      if (result.status === 'created') focusCreatedSession(result.sessionId)
     } catch (error) {
       setShellError(errorMessage(error))
     } finally {
       newManagedChatInFlightRef.current = false
     }
-  }, [focusCreatedSession])
+  }, [createFreshSession, focusCreatedSession])
 
   const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
-    const bridge = getBridge()
     try {
       // #15 — the per-workspace "+": the renderer names an EXISTING registry id
       // (a representative session in that workspace), NEVER a path. The host
       // re-derives + re-validates the cwd from its own registry (HC1) and spawns
       // a fresh session — no native picker, no renderer-authored cwd.
-      const result = await bridge.createSessionInWorkspace(repId)
-      if (result.ok) {
-        focusCreatedSession(result.value.appSessionId)
-      } else {
-        setShellError(hostErrorMessage(result.error))
-      }
+      const result = await createFreshSession({
+        kind: 'workspace',
+        representativeSessionId: repId,
+      })
+      if (result.status === 'created') focusCreatedSession(result.sessionId)
     } catch (error) {
       setShellError(errorMessage(error))
     }
-  }, [focusCreatedSession])
+  }, [createFreshSession, focusCreatedSession])
 
   /** Start in the active project, or open a chat without a project. */
   const newChat = useCallback(async () => {
@@ -3001,11 +3053,66 @@ export function App() {
     [applyOpenRoute],
   )
 
+  async function executeDesktopNewChat(
+    originSessionId: SessionId,
+  ): Promise<DesktopCommandOutcome> {
+    const descriptor = shellRef.current.byId[originSessionId]
+    if (!descriptor) {
+      setShellError('This chat is no longer available.')
+      return { status: 'failed' }
+    }
+    if (desktopCommandPendingRef.current.has(originSessionId)) {
+      return { status: 'already-pending' }
+    }
+    const allowed = canExecuteDesktopNewChat({
+      hasOrigin: true,
+      hasQueuedPrompt:
+        selectPendingSubmit(pendingSubmitsRef.current, originSessionId) !== null ||
+        selectQueuedPrompts(queuedPrompts, originSessionId).length > 0,
+      hasProjectRoute: projectRoutesRef.current[originSessionId] !== undefined,
+      workspaceBusy:
+        descriptor.moving === true || descriptor.workspaceMove?.phase === 'moving',
+      preparingAttachment: false,
+      managedFolderUnavailable: false,
+      creationPending: false,
+    })
+    if (!allowed) return { status: 'failed' }
+
+    desktopCommandPendingRef.current = new Set([
+      ...desktopCommandPendingRef.current,
+      originSessionId,
+    ])
+    setDesktopCommandPending(new Set(desktopCommandPendingRef.current))
+    const target: FreshSessionTarget = descriptor.binding?.kind === 'managed'
+      ? { kind: 'managed' }
+      : { kind: 'workspace', representativeSessionId: originSessionId }
+    try {
+      return await createFreshSession(target)
+    } finally {
+      const next = new Set(desktopCommandPendingRef.current)
+      next.delete(originSessionId)
+      desktopCommandPendingRef.current = next
+      setDesktopCommandPending(next)
+    }
+  }
+
   function submitSession(
     sessionId: SessionId,
     event: FormEvent<HTMLFormElement>,
   ): void {
     event.preventDefault()
+    const submittedDraft = selectPromptDraft(promptDraftsRef.current, sessionId)
+    if (isDesktopNewChatCommand(submittedDraft)) {
+      void executeDesktopNewChat(sessionId).then(result => {
+        if (result.status === 'created') {
+          if (selectPromptDraft(promptDraftsRef.current, sessionId) === submittedDraft) {
+            updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
+          }
+          placeCreatedSessionForOrigin(sessionId, result.sessionId)
+        }
+      })
+      return
+    }
     if (projectRoutesRef.current[sessionId]) {
       toast('Finish the pending message first.', { tone: 'info' })
       return
@@ -3915,6 +4022,7 @@ export function App() {
 	            images={selectImageAttachments(imageAttachmentState, sessionId)}
             fileAttachment={selectFileAttachment(fileAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
+	            desktopCommandPending={desktopCommandPending.has(sessionId)}
 	            projectRoute={projectRoutes[sessionId] ?? null}
 	            onProjectRouteChoice={choice => {
 	              const route = projectRoutesRef.current[sessionId]
