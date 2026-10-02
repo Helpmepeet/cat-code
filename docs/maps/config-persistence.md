@@ -1,13 +1,14 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-09-21
+Last refreshed: 2026-10-03
 
 ## Purpose
 
 Use this map to route work involving settings, config files, environment
-application, managed policy, transcripts, session restore, memory, and recovery.
-It is a navigation aid, not the source of truth. Verify behavior in source
-before changing persistence or precedence rules.
+application, managed policy, workspace cwd and repository identity, transcripts,
+session restore, memory, and recovery. It is a navigation aid, not the source of
+truth. Verify behavior in source before changing persistence or precedence
+rules.
 
 Start with `docs/maps/WORKSPACE_MAP.md` for broad routing, then use this file
 for the config and persistence slice.
@@ -43,6 +44,7 @@ for the config and persistence slice.
 | Project instruction files and rule globs | `src/utils/claudemd.ts`, `src/utils/instructionFiles.ts` | `src/utils/config.ts`, `src/utils/settings/settings.ts`, `src/utils/markdownConfigLoader.ts` | Project discovery checks Cat Code CLAUDE candidates and mode-selected `AGENTS.md`/`.claude/AGENTS.md` candidates, plus rules. The Project instructions mode uses user (when enabled), flag, then policy settings; project/local settings and `--add-dir` cannot enable AGENTS discovery. |
 | Memory type and scope selection | `src/memdir/memoryTypes.ts` | `src/memdir/memdir.ts`, `src/memdir/teamMemPrompts.ts`, `src/services/extractMemories/prompts.ts` | Feedback defaults to private; preserve an explicit team scope only when the guidance is clearly project-wide. Private corrections must not modify team memory. |
 | Project-keyed user state | `src/utils/config.ts` | `src/utils/git.ts`, `src/utils/path.ts` | `getProjectPathForConfig()` keys by canonical git root when available, otherwise original cwd. Values are stored inside the global config `projects` object, not in repo files. |
+| Workspace roots and repository lookup | `src/utils/cwd.ts`, `src/commands/add-dir/validation.ts` | `src/utils/detectRepository.ts`, `src/utils/githubRepoPathMapping.ts`, `src/utils/permissions/filesystem.ts` | Cwd overrides are async-context scoped; `/add-dir` validates added working roots against the current permission context; GitHub path mappings store canonical clone roots in global config. For desktop workspace listing and movement, follow the main/sidecar routes in `web-app-runtime.md` and `tools-permissions.md`. |
 | Trust persistence | `src/utils/config.ts` | `src/bootstrap/state.ts`, `src/components/TrustDialog/` | Trust can be session-only for some cases, or persisted as `projects[projectPath].hasTrustDialogAccepted`. Parent-directory checks are part of trust lookup. |
 | Legacy config migrations | `src/utils/config.ts` | `src/main.tsx`, `src/migrations/` | `config.ts` has local field migrations and backup behavior. Startup migrations handle renamed settings/config fields elsewhere. |
 | Env from settings before trust | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/services/remoteManagedSettings/syncCache.ts` | `applySafeConfigEnvironmentVariables()` applies global config env, all env from trusted user/flag/policy sources, then only `SAFE_ENV_VARS` from merged settings. |
