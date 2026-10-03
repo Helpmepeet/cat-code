@@ -391,8 +391,10 @@ import {
   selectPromptDraft,
   sendPermissionResponse,
   shouldShowAnthropicPoolAccount,
+  settleOAuthSubmitStatus,
   shouldShowFirstRunOAuth,
   type OAuthContext,
+  type OAuthSubmitStatus,
   type PromptDraftState,
 } from './appModel.js'
 import {
@@ -900,6 +902,12 @@ export function App() {
   const [oauthProvider, setOauthProvider] = useState<'anthropic' | 'openai'>(
     'anthropic',
   )
+  const [oauthCodeStatus, setOauthCodeStatus] = useState<OAuthSubmitStatus>({
+    state: 'idle',
+  })
+  const [oauthAliasStatus, setOauthAliasStatus] = useState<OAuthSubmitStatus>({
+    state: 'idle',
+  })
   const [activeView, setActiveView] = useState<
     'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
   >('chat')
@@ -1895,6 +1903,8 @@ export function App() {
         // functional update preserves it.
         setOauthContext(claimOAuthContextForAccountLogin)
         setOauthStarting(true)
+        setOauthCodeStatus({ state: 'idle' })
+        setOauthAliasStatus({ state: 'idle' })
       }
       getBridge().accountVerb(activeSessionId, verb)
     },
@@ -1927,7 +1937,7 @@ export function App() {
       ? [accountHealthBanner]
       : EMPTY_BANNERS
 
-  // P4-15 — the first-run surface and the add-account dialog both begin the SAME
+  // P4-15 — the first-run surface and the Accounts page both begin the SAME
   // engine OAuth flow (the `account.login` verb; browser handoff, the engine owns
   // the token write). Progress flows back on the `oauth.login.progress` frame,
   // driving the sub-states below; the account lands on the `accounts.snapshot`
@@ -1941,6 +1951,8 @@ export function App() {
       setOauthContext(context)
       setOauthStarting(true)
       setOauthProvider(provider)
+      setOauthCodeStatus({ state: 'idle' })
+      setOauthAliasStatus({ state: 'idle' })
       if (activeSessionId) {
         dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
       }
@@ -1954,6 +1966,8 @@ export function App() {
   const clearOAuth = useCallback(() => {
     setOauthStarting(false)
     setOauthContext(null)
+    setOauthCodeStatus({ state: 'idle' })
+    setOauthAliasStatus({ state: 'idle' })
     if (activeSessionId) {
       dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
     }
@@ -1961,13 +1975,29 @@ export function App() {
   }, [sendAccountVerb, activeSessionId])
 
   const submitOAuthPasteCode = useCallback(
-    (code: string) => sendAccountVerb(oauthPasteCodeVerb(code)),
+    (code: string) => {
+      const verb = oauthPasteCodeVerb(code)
+      setOauthCodeStatus({ state: 'pending', requestId: verb.requestId })
+      sendAccountVerb(verb)
+    },
     [sendAccountVerb],
   )
   const submitOAuthAlias = useCallback(
-    (alias: string) => sendAccountVerb(oauthAliasVerb(alias)),
+    (alias: string) => {
+      const verb = oauthAliasVerb(alias)
+      setOauthAliasStatus({ state: 'pending', requestId: verb.requestId })
+      sendAccountVerb(verb)
+    },
     [sendAccountVerb],
   )
+  // Both verbs can be refused while the flow stays put (an unparseable code, a
+  // taken alias); settle each from its own `account.result` so the surface can
+  // say why nothing moved instead of sitting silent.
+  const accountsLastResult = accounts.lastResult
+  useEffect(() => {
+    setOauthCodeStatus(current => settleOAuthSubmitStatus(current, accountsLastResult))
+    setOauthAliasStatus(current => settleOAuthSubmitStatus(current, accountsLastResult))
+  }, [accountsLastResult])
 
   // P4-15 — accept trust for the active session's cwd (the trust-gate's primary
   // action). The renderer NAMES no path (HC1): the sidecar persists trust for
@@ -4056,7 +4086,7 @@ export function App() {
     (oauthContext === 'first-run' && oauthProgress?.state === 'success')
 
   // An OAuth flow with NO owning context, on a non-empty pool, was started by the
-  // P4-5 AddAccountDialog ("add account"). Adopt it into the SAME shared OAuth
+  // Accounts page. Adopt it into the SAME shared OAuth
   // surface (as a top-level overlay) so its sub-states — crucially the alias step
   // a new account needs — are reachable, rather than stranding the flow with no
   // UI. Reuses `account.login`'s back-channel; no second login path.
@@ -4464,20 +4494,23 @@ export function App() {
            * through the same `StartupOAuth`/add-account surfaces as any other
            * sign-in. */}
 
-          {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
-           * owning surface: adopt it into the shared OAuth surface as a top-level
+          {/* P4-15 — an Accounts-page OAuth flow started with no owning
+           * surface: adopt it into the shared OAuth surface as a modal
            * overlay so it can complete (incl. the alias step), regardless of the
            * active view. First-run owns its own surface above. */}
           {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
             <div className="absolute inset-0 z-50">
-                <StartupOAuth
-                  view={firstRunOAuthView}
-                  provider={oauthProvider}
-                  onBegin={provider => beginOAuth('add-account', provider)}
-                  onCancel={clearOAuth}
+              <StartupOAuth
+                view={firstRunOAuthView}
+                provider={oauthProvider}
+                presentation="modal"
+                codeStatus={oauthCodeStatus}
+                aliasStatus={oauthAliasStatus}
+                onBegin={provider => beginOAuth('add-account', provider)}
+                onCancel={clearOAuth}
                 onPasteCode={submitOAuthPasteCode}
                 onSubmitAlias={submitOAuthAlias}
-                  onRetry={() => beginOAuth('add-account', oauthProvider)}
+                onRetry={() => beginOAuth('add-account', oauthProvider)}
               />
             </div>
           ) : null}
@@ -4622,6 +4655,8 @@ export function App() {
               <StartupOAuth
                 view={firstRunOAuthView}
                 provider={oauthProvider}
+                codeStatus={oauthCodeStatus}
+                aliasStatus={oauthAliasStatus}
                 onBegin={provider => beginOAuth('first-run', provider)}
                 onCancel={clearOAuth}
                 onPasteCode={submitOAuthPasteCode}

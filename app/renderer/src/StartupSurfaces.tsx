@@ -15,7 +15,7 @@
  *    `ReauthOAuthProgress` card that had survived it: with no banner left to
  *    launch the flow, its `'reauth'` context could only be set by the card's own
  *    Retry button, so the card could never appear. Re-linking an account runs
- *    through `StartupOAuth` and the add-account dialog like any other sign-in.
+ *    through `StartupOAuth` like any other sign-in.
  *
  * Real backing:
  *  - Trust: `isPathTrusted(cwd)` / `hasTrustDialogAccepted`
@@ -35,7 +35,8 @@
  *    coordinated operator step — see the P4-15 report §0.
  */
 
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { OAuthSubmitStatus } from './appModel.js'
 import { useModalFocus } from './overlayFocus.js'
 import { toneClasses, type Tone } from './tone.js'
 
@@ -107,19 +108,22 @@ function SecondaryButton({
 }
 
 /**
- * Full-bleed centered gate shell with the brand mark + a two-step (Trust →
- * Sign in) progress indicator. `absolute inset-0` so it overlays its positioned
- * parent — the trust gate mounts it inside one session's panel, the first-run
- * OAuth surface mounts it app-level.
+ * Centered gate shell. `absolute inset-0` so it overlays its positioned parent.
+ * `page` is the startup sequence (trust gate, first-run sign-in): brand mark and
+ * the Trust → Sign in steps on an opaque ground. `modal` is a sign-in started
+ * from inside a working app (adding or restoring an account): the same card over
+ * a scrim, without startup chrome, because there is no sequence to show.
  */
 export function StartupShell({
   step,
   children,
   onEscape,
+  presentation = 'page',
 }: {
   step: 'trust' | 'auth'
   children: ReactNode
   onEscape?: () => void
+  presentation?: 'page' | 'modal'
 }): ReactNode {
   const shellRef = useRef<HTMLDivElement>(null)
   useModalFocus({
@@ -135,22 +139,36 @@ export function StartupShell({
       aria-modal="true"
       aria-label={step === 'trust' ? 'Workspace trust' : 'Sign in'}
       tabIndex={-1}
-      className="absolute inset-0 z-40 flex items-center justify-center overflow-auto bg-app-bg/95 p-6"
+      className={`absolute inset-0 z-40 flex items-center justify-center overflow-auto p-6 ${
+        presentation === 'modal'
+          ? 'animate-scrim-in bg-scrim backdrop-blur-sm'
+          : 'bg-app-bg/95'
+      }`}
     >
-      <div className="absolute left-6 top-5 flex items-center gap-2.5">
-        <PawLogo />
-        <span className="text-[13px] font-semibold text-text-primary">cat code</span>
-      </div>
-      <div className="absolute right-6 top-5 flex items-center gap-2 text-[10px] text-text-subtle">
-        <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-        <span>Trust</span>
-        <span className="h-px w-4 bg-white/10" />
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${step === 'auth' ? 'bg-accent' : 'bg-white/15'}`}
-        />
-        <span>Sign in</span>
-      </div>
-      <div className="w-full max-w-[500px] rounded-2xl border border-shell-seam bg-surface-panel px-9 pb-8 pt-9 shadow-[var(--elev-modal)]">
+      {presentation === 'page' ? (
+        <>
+          <div className="absolute left-6 top-5 flex items-center gap-2.5">
+            <PawLogo />
+            <span className="text-[13px] font-semibold text-text-primary">cat code</span>
+          </div>
+          <div className="absolute right-6 top-5 flex items-center gap-2 text-[10px] text-text-subtle">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            <span>Trust</span>
+            <span className="h-px w-4 bg-shell-seam" />
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${step === 'auth' ? 'bg-accent' : 'bg-text-ghost'}`}
+            />
+            <span>Sign in</span>
+          </div>
+        </>
+      ) : null}
+      <div
+        className={`w-full rounded-2xl border border-shell-seam shadow-[var(--elev-modal)] ${
+          step === 'auth'
+            ? 'max-w-[440px] bg-surface-raised px-8 pb-7 pt-8'
+            : 'max-w-[500px] bg-surface-panel px-9 pb-8 pt-9'
+        }`}
+      >
         {children}
       </div>
     </div>
@@ -227,7 +245,8 @@ export function WorkspaceTrustGate({
   )
 }
 
-/* ── first-run Codex OAuth ─────────────────────────────────────────────────── */
+
+/* ── sign-in (Claude / ChatGPT subscription OAuth) ─────────────────────────── */
 
 /**
  * The renderer-visible OAuth sub-states — a projection of the engine's real
@@ -242,15 +261,127 @@ export type StartupOAuthView =
   | { phase: 'success' }
   | { phase: 'error'; message: string }
 
-/** Pink spinner shared by every OAuth waiting affordance (auth + reauth). */
+type OAuthProvider = 'anthropic' | 'openai'
+
+const IDLE_SUBMIT: OAuthSubmitStatus = { state: 'idle' }
+
+/**
+ * Per-provider wording. The engines hand back different urls, which decides
+ * where a pasted value comes from: Codex gives the real authorize url, whose
+ * redirect to `localhost:1455` normally lands on its own and carries the code
+ * in its address (`runCodexOAuthFlow` accepts that pasted address); Anthropic
+ * gives its manual-flow url, whose page always ends on a `code#state` value to
+ * paste (`OAuthService.startOAuthFlow`). So a copied Claude link always needs
+ * the paste field, and a copied ChatGPT link needs it only when that page fails.
+ */
+const PROVIDER_COPY: Record<
+  OAuthProvider,
+  {
+    name: string
+    detail: string
+    initial: string
+    pastePlaceholder: string
+  }
+> = {
+  anthropic: {
+    name: 'Claude',
+    detail: 'Claude subscription',
+    initial: 'C',
+    pastePlaceholder: 'Paste the code from the sign-in page',
+  },
+  openai: {
+    name: 'ChatGPT',
+    detail: 'ChatGPT subscription for Codex models',
+    initial: 'G',
+    pastePlaceholder: 'Paste the page address',
+  },
+}
+
 function OAuthSpinner(): ReactNode {
   return (
     <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent/20 border-t-accent" />
   )
 }
 
-/** Green check shared by the success affordances (matches the prototype tick). */
-function OAuthCheck(): ReactNode {
+function ProviderMark({ provider }: { provider: OAuthProvider }): ReactNode {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] border text-[15px] font-bold ${
+        provider === 'anthropic'
+          ? 'border-accent/25 bg-accent/10 text-accent'
+          : 'border-tone-info/25 bg-tone-info/10 text-tone-info'
+      }`}
+    >
+      {PROVIDER_COPY[provider].initial}
+    </span>
+  )
+}
+
+/** A round status badge heading the outcome steps (alias, success, error). */
+function OutcomeMark({ tone }: { tone: 'good' | 'danger' }): ReactNode {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${
+        tone === 'good'
+          ? 'bg-tone-good/12 text-tone-good'
+          : 'bg-tone-danger/12 text-tone-danger'
+      }`}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {tone === 'good' ? (
+          <polyline points="20 6 9 17 4 12" />
+        ) : (
+          <>
+            <line x1="12" y1="7" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12" y2="17" />
+          </>
+        )}
+      </svg>
+    </span>
+  )
+}
+
+function OAuthHeading({
+  mark,
+  title,
+  children,
+}: {
+  mark: ReactNode
+  title: string
+  children?: ReactNode
+}): ReactNode {
+  return (
+    <div className="mb-6">
+      <div className="mb-4">{mark}</div>
+      <h1 className="text-[20px] font-semibold tracking-tight text-text-primary">
+        {title}
+      </h1>
+      {children ? (
+        <p className="mt-2 text-[13px] leading-relaxed text-text-muted">{children}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function OAuthFooter({ children }: { children: ReactNode }): ReactNode {
+  return <div className="mt-6 flex justify-end gap-2">{children}</div>
+}
+
+const INPUT_CLASS =
+  'min-w-0 flex-1 rounded-lg border bg-app-bg px-3 py-2 text-[13px] text-text-primary outline-none placeholder:text-text-faint focus:border-accent/50'
+
+function CopyIcon(): ReactNode {
   return (
     <svg
       width="14"
@@ -258,10 +389,28 @@ function OAuthCheck(): ReactNode {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="3"
+      strokeWidth="2.2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="shrink-0 text-tone-good"
+      aria-hidden="true"
+    >
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </svg>
+  )
+}
+
+function CheckIcon(): ReactNode {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden="true"
     >
       <polyline points="20 6 9 17 4 12" />
@@ -270,104 +419,229 @@ function OAuthCheck(): ReactNode {
 }
 
 /**
- * The paste-code fallback — the engine-minted authorize `url` plus an input that
- * dispatches the pasted code (the `account.oauthPasteCode` verb; the engine
- * exchanges it, the renderer never retains a token). Rendered only once the url
- * has arrived (`waiting_for_login`), matching the prototype's "Visit … and paste
- * the code you get back" affordance (`Startup.jsx:216`, `ConsoleOAuthFlow.tsx:672`).
+ * The link actions. Copy leads: the usual route is pasting the link into the
+ * browser profile signed in to the right account, not the default browser the
+ * engine opened. If the clipboard write fails, the link appears as selectable
+ * text so it can still be copied by hand.
  */
-function PasteCodeFallback({
-  url,
-  onPasteCode,
-}: {
-  url: string
-  onPasteCode: (code: string) => void
-}): ReactNode {
-  const [code, setCode] = useState('')
+function SignInLinkActions({ url }: { url: string | null }): ReactNode {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  useEffect(() => {
+    if (copyState !== 'copied') return
+    const timer = window.setTimeout(() => setCopyState('idle'), 2000)
+    return () => window.clearTimeout(timer)
+  }, [copyState])
   return (
-    <div className="mb-3.5">
-      <div className="mb-2 text-[11px] leading-relaxed text-text-faint">
-        Browser didn&apos;t open? Visit{' '}
-        <code className="break-all font-mono text-[10.5px] text-text-subtle">{url}</code>{' '}
-        and paste the code you get back.
-      </div>
-      <form
-        className="flex gap-2"
-        onSubmit={e => {
-          e.preventDefault()
-          const trimmed = code.trim()
-          if (!trimmed) return
-          onPasteCode(trimmed)
-          setCode('')
-        }}
-      >
-        <input
-          value={code}
-          onChange={e => setCode(e.target.value)}
-          placeholder="Paste authorization code"
-          className="min-w-0 flex-1 rounded-lg border border-shell-seam bg-app-bg px-3 py-2 font-mono text-[12px] text-text-primary outline-none focus:border-accent/40"
-        />
+    <div>
+      <div className="flex gap-2">
         <button
-          type="submit"
-          className="rounded-lg border border-shell-seam px-3 py-2 text-[12px] text-text-muted transition-colors hover:bg-shell-hover"
+          // Remount when the link arrives: the button mounts disabled, so its
+          // first autofocus has nothing to land on.
+          key={url === null ? 'pending' : 'ready'}
+          type="button"
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          disabled={url === null}
+          onClick={() => {
+            if (url === null) return
+            void navigator.clipboard
+              .writeText(url)
+              .then(() => setCopyState('copied'))
+              .catch(() => setCopyState('failed'))
+          }}
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-[13px] font-semibold text-on-fill disabled:opacity-50"
         >
-          Submit
+          {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
+          {url === null
+            ? 'Preparing link'
+            : copyState === 'copied'
+              ? 'Link copied'
+              : 'Copy sign-in link'}
         </button>
-      </form>
+        {url === null ? null : (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-lg border border-shell-seam px-4 py-2.5 text-[13px] text-text-muted transition-colors hover:bg-shell-hover hover:text-text-primary"
+          >
+            Open in browser
+          </a>
+        )}
+      </div>
+      {copyState === 'failed' && url !== null ? (
+        <div className="mt-2">
+          <p role="alert" className="mb-1.5 text-[12px] text-tone-danger">
+            Could not copy.
+          </p>
+          <input
+            readOnly
+            value={url}
+            aria-label="Sign-in link"
+            onFocus={e => e.currentTarget.select()}
+            className={`${INPUT_CLASS} w-full border-shell-seam font-mono text-[11.5px]`}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
 
 /**
- * The waiting affordance body (spinner + status label + paste-code fallback),
- * shared by the first-run surface and the reauth progress card so both read
- * identically (`Startup.jsx:198-221` auth / `:427-430` reauth).
+ * The paste route: whatever the browser ends on goes out on the
+ * `account.oauthPasteCode` verb (the engine exchanges it; the renderer never
+ * holds a token). A refused value stays in the field with the engine's reason.
  */
-function OAuthWaitingBody({
-  url,
+function PasteCodeForm({
+  provider,
+  codeStatus,
   onPasteCode,
 }: {
-  url: string | null
+  provider: OAuthProvider
+  codeStatus: OAuthSubmitStatus
   onPasteCode: (code: string) => void
 }): ReactNode {
+  const copy = PROVIDER_COPY[provider]
+  const [code, setCode] = useState('')
+  const pending = codeStatus.state === 'pending'
+  const error = codeStatus.state === 'rejected' ? codeStatus.message : null
   return (
     <>
-      <div className="mb-3.5 flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-        <OAuthSpinner />
-        <span className="text-[12.5px] text-text-muted">
-          Waiting for browser authorization…
-        </span>
-      </div>
-      {url ? <PasteCodeFallback url={url} onPasteCode={onPasteCode} /> : null}
+      <form
+        className="flex gap-2"
+        onSubmit={e => {
+          e.preventDefault()
+          const trimmed = code.trim()
+          if (!trimmed || pending) return
+          onPasteCode(trimmed)
+        }}
+      >
+        <input
+          value={code}
+          onChange={e => setCode(e.target.value)}
+          aria-label={copy.pastePlaceholder}
+          aria-invalid={error !== null}
+          placeholder={copy.pastePlaceholder}
+          spellCheck={false}
+          autoComplete="off"
+          className={`${INPUT_CLASS} ${error ? 'border-tone-danger/50' : 'border-shell-seam'}`}
+        />
+        <button
+          type="submit"
+          disabled={pending || code.trim() === ''}
+          className="rounded-lg border border-shell-seam px-3.5 py-2 text-[12.5px] text-text-primary transition-colors hover:bg-shell-hover disabled:opacity-50"
+        >
+          {pending ? 'Checking…' : 'Continue'}
+        </button>
+      </form>
+      {error ? (
+        <p role="alert" className="mt-2 break-words text-[12px] text-tone-danger">
+          {error}
+        </p>
+      ) : null}
     </>
   )
 }
 
-/** The Codex `waiting_for_alias` naming step (`Startup.jsx:129`, `ConsoleOAuthFlow.tsx:48`). */
-function AliasForm({
-  onSubmitAlias,
+function OAuthWaiting({
+  provider,
+  url,
+  codeStatus,
+  onPasteCode,
   onCancel,
 }: {
-  onSubmitAlias: (alias: string) => void
+  provider: OAuthProvider
+  url: string | null
+  codeStatus: OAuthSubmitStatus
+  onPasteCode: (code: string) => void
   onCancel: () => void
 }): ReactNode {
-  const [alias, setAlias] = useState('')
+  const accepted = codeStatus.state === 'accepted'
+  const name = PROVIDER_COPY[provider].name
   return (
-    <StartupShell step="auth" onEscape={onCancel}>
-      <div className="mb-5">
-        <Pill tone="good" label="Authorized" />
+    <>
+      <OAuthHeading mark={<ProviderMark provider={provider} />} title={`Sign in with ${name}`} />
+      {accepted ? null : <SignInLinkActions url={url} />}
+      <div
+        role="status"
+        className="mt-4 flex items-center gap-2.5 text-[12.5px] text-text-subtle"
+      >
+        <OAuthSpinner />
+        {url === null
+          ? 'Preparing sign-in'
+          : accepted
+            ? 'Finishing sign-in'
+            : 'Waiting for approval'}
       </div>
-      <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
-        Name this account
-      </h1>
-      <p className="mb-[18px] max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-        Optional alias to tell this Codex account apart in the pool. Leave blank
-        to use the account email.
-      </p>
+      {url !== null && !accepted ? (
+        provider === 'anthropic' ? (
+          <div className="mt-5 border-t border-shell-seam pt-4">
+            <PasteCodeForm
+              provider={provider}
+              codeStatus={codeStatus}
+              onPasteCode={onPasteCode}
+            />
+          </div>
+        ) : (
+          <details className="group mt-5 border-t border-shell-seam pt-4">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[12.5px] text-text-muted transition-colors hover:text-text-primary [&::-webkit-details-marker]:hidden">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="transition-transform group-open:rotate-90"
+              >
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+              Approved, but the page didn&apos;t load?
+            </summary>
+            <div className="mt-3 pl-[18px]">
+              <PasteCodeForm
+                provider={provider}
+                codeStatus={codeStatus}
+                onPasteCode={onPasteCode}
+              />
+            </div>
+          </details>
+        )
+      ) : null}
+      <OAuthFooter>
+        <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+      </OAuthFooter>
+    </>
+  )
+}
+
+/**
+ * The Codex `waiting_for_alias` naming step (`ConsoleOAuthFlow.tsx`
+ * `getCodexAliasPrompt`). The tokens are already captured, so there is no
+ * cancel here: Skip saves the account unnamed, which is what the TUI's empty
+ * Enter does. A refused alias keeps the step open with the engine's reason.
+ */
+function OAuthAlias({
+  aliasStatus,
+  onSubmitAlias,
+}: {
+  aliasStatus: OAuthSubmitStatus
+  onSubmitAlias: (alias: string) => void
+}): ReactNode {
+  const [alias, setAlias] = useState('')
+  const busy = aliasStatus.state === 'pending' || aliasStatus.state === 'accepted'
+  const error = aliasStatus.state === 'rejected' ? aliasStatus.message : null
+  return (
+    <>
+      <OAuthHeading mark={<OutcomeMark tone="good" />} title="Name this account" />
       <form
+        id="oauth-alias"
         onSubmit={e => {
           e.preventDefault()
-          onSubmitAlias(alias)
+          if (!busy) onSubmitAlias(alias)
         }}
       >
         <input
@@ -375,23 +649,90 @@ function AliasForm({
           autoFocus
           value={alias}
           onChange={e => setAlias(e.target.value)}
-          placeholder="work · personal · team-a"
-          className="mb-3.5 w-full rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-2.5 font-mono text-[13px] text-text-primary outline-none focus:border-accent/40"
+          aria-label="Account name"
+          aria-invalid={error !== null}
+          placeholder="work"
+          spellCheck={false}
+          autoComplete="off"
+          className={`${INPUT_CLASS} w-full ${error ? 'border-tone-danger/50' : 'border-shell-seam'}`}
         />
+        {error ? (
+          <p role="alert" className="mt-2 break-words text-[12px] text-tone-danger">
+            {error}
+          </p>
+        ) : null}
+      </form>
+      <OAuthFooter>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onSubmitAlias('')}
+          className="rounded-lg border border-shell-seam px-4 py-2.5 text-[12.5px] text-text-muted transition-colors hover:bg-shell-hover disabled:opacity-50"
+        >
+          Skip
+        </button>
         <button
           type="submit"
-          className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-on-fill"
+          form="oauth-alias"
+          disabled={busy || alias.trim() === ''}
+          className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-on-fill disabled:opacity-50"
         >
-          Continue <span className="ml-1.5 text-[11px] opacity-60">↵</span>
+          {busy ? 'Saving…' : 'Save'}
         </button>
-      </form>
-    </StartupShell>
+      </OAuthFooter>
+    </>
+  )
+}
+
+function ProviderChoice({
+  provider,
+  autoFocus,
+  onBegin,
+}: {
+  provider: OAuthProvider
+  autoFocus?: boolean
+  onBegin: (provider: OAuthProvider) => void
+}): ReactNode {
+  const copy = PROVIDER_COPY[provider]
+  return (
+    <button
+      type="button"
+      // eslint-disable-next-line jsx-a11y/no-autofocus
+      autoFocus={autoFocus}
+      onClick={() => onBegin(provider)}
+      className="group flex w-full items-center gap-3 rounded-[11px] border border-shell-seam bg-app-bg px-3.5 py-3 text-left transition-colors hover:border-accent/40 hover:bg-shell-hover focus-visible:border-accent/60 focus-visible:outline-none"
+    >
+      <ProviderMark provider={provider} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13.5px] font-semibold text-text-primary">
+          {copy.name}
+        </span>
+        <span className="block text-[12px] text-text-subtle">{copy.detail}</span>
+      </span>
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        className="shrink-0 text-text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-text-muted"
+      >
+        <polyline points="9 6 15 12 9 18" />
+      </svg>
+    </button>
   )
 }
 
 export function StartupOAuth({
   view,
   provider,
+  presentation = 'page',
+  codeStatus = IDLE_SUBMIT,
+  aliasStatus = IDLE_SUBMIT,
   onBegin,
   onCancel,
   onPasteCode,
@@ -399,124 +740,81 @@ export function StartupOAuth({
   onRetry,
 }: {
   view: StartupOAuthView
-  provider: 'anthropic' | 'openai'
-  onBegin: (provider: 'anthropic' | 'openai') => void
+  provider: OAuthProvider
+  /** `page` for first-run, `modal` for a sign-in started from inside the app. */
+  presentation?: 'page' | 'modal'
+  /** Outcome of the last pasted code (`account.oauthPasteCode`). */
+  codeStatus?: OAuthSubmitStatus
+  /** Outcome of the last alias submission (`account.oauthAlias`). */
+  aliasStatus?: OAuthSubmitStatus
+  onBegin: (provider: OAuthProvider) => void
   onCancel: () => void
   onPasteCode: (code: string) => void
   onSubmitAlias: (alias: string) => void
   onRetry: () => void
 }): ReactNode {
+  const shell = (children: ReactNode, onEscape: (() => void) | undefined) => (
+    <StartupShell step="auth" presentation={presentation} onEscape={onEscape}>
+      {children}
+    </StartupShell>
+  )
   switch (view.phase) {
-    case 'waiting':
-      return (
-        <StartupShell step="auth" onEscape={onCancel}>
-          <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
-            Continue in your browser
-          </h1>
-          <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-            Opening browser to sign in… authorize the request, then return here.
-            Your {provider === 'anthropic' ? 'Anthropic' : 'Codex'} account appears
-            here after you finish in the browser.
-          </p>
-          <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
-          <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
-        </StartupShell>
+    case 'ready':
+      return shell(
+        <>
+          <OAuthHeading mark={<PawLogo />} title="Sign in to get started" />
+          <div className="flex flex-col gap-2">
+            <ProviderChoice provider="anthropic" autoFocus onBegin={onBegin} />
+            <ProviderChoice provider="openai" onBegin={onBegin} />
+          </div>
+        </>,
+        onCancel,
       )
 
-    case 'success':
-      return (
-        <StartupShell step="auth" onEscape={onCancel}>
-          <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
-            Signed in
-          </h1>
-          <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-            Account linked. Setting up your workspace…
-          </p>
-          <div className="flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-            <OAuthCheck />
-            <span className="text-[12.5px] text-text-muted">Authorized</span>
-          </div>
-        </StartupShell>
+    case 'waiting':
+      return shell(
+        <OAuthWaiting
+          provider={provider}
+          url={view.url}
+          codeStatus={codeStatus}
+          onPasteCode={onPasteCode}
+          onCancel={onCancel}
+        />,
+        onCancel,
       )
 
     case 'alias':
-      return <AliasForm onSubmitAlias={onSubmitAlias} onCancel={onCancel} />
-
-    case 'error':
-      return (
-        <StartupShell step="auth" onEscape={onCancel}>
-          <div className="mb-5">
-            <Pill tone="danger" label="OAuth error" />
-          </div>
-          <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
-            Sign-in didn&apos;t complete
-          </h1>
-          <p className="mb-4 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-            The browser flow was cancelled or timed out before authorization came
-            back.
-          </p>
-          <div className="mb-[22px] rounded-lg border border-tone-danger/20 bg-tone-danger/[0.06] px-3 py-2.5">
-            <code className="break-all font-mono text-[12px] text-tone-danger">
-              OAuth error: {view.message}
-            </code>
-          </div>
-          <div className="flex gap-2">
-            <PrimaryButton autoFocus onClick={onRetry}>
-              Retry <span className="ml-1.5 text-[11px] opacity-60">↵</span>
-            </PrimaryButton>
-            <SecondaryButton onClick={onCancel}>Back</SecondaryButton>
-          </div>
-        </StartupShell>
+      return shell(
+        <OAuthAlias aliasStatus={aliasStatus} onSubmitAlias={onSubmitAlias} />,
+        undefined,
       )
 
-    case 'ready':
-      return (
-        <StartupShell step="auth" onEscape={onCancel}>
-          <div className="mb-5">
-            <Pill tone="info" label="Sign in" />
-          </div>
-          <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
-            Choose your provider
-          </h1>
-          <p className="mb-5 max-w-[460px] text-[13px] leading-relaxed text-text-muted">
-            Link an Anthropic Claude or ChatGPT / Codex subscription. You can switch
-            models later without signing out.
+    case 'success':
+      return shell(
+        <div role="status">
+          <OAuthHeading mark={<OutcomeMark tone="good" />} title="Signed in" />
+        </div>,
+        undefined,
+      )
+
+    case 'error':
+      return shell(
+        <>
+          <OAuthHeading mark={<OutcomeMark tone="danger" />} title="Sign-in didn't finish" />
+          <p
+            role="alert"
+            className="-mt-3 break-words rounded-[10px] bg-tone-danger/[0.07] px-3.5 py-3 text-[12.5px] leading-relaxed text-tone-danger"
+          >
+            {view.message}
           </p>
-          <div className="flex flex-col gap-2.5">
-            <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
-              <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-accent/25 bg-accent/10 text-[13px] font-bold text-accent">
-                A
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13.5px] font-semibold text-text-primary">
-                  Anthropic · Claude subscription
-                </span>
-                <span className="text-[11.5px] text-text-subtle">
-                  Claude Opus, Sonnet, and Haiku via Anthropic OAuth
-                </span>
-              </span>
-              <PrimaryButton autoFocus onClick={() => onBegin('anthropic')}>
-                Open browser to sign in
-              </PrimaryButton>
-            </div>
-            <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
-              <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-tone-info/25 bg-tone-info/10 text-[13px] font-bold text-tone-info">
-                C
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13.5px] font-semibold text-text-primary">
-                  Codex · ChatGPT subscription
-                </span>
-                <span className="text-[11.5px] text-text-subtle">
-                  OpenAI models via ChatGPT / Codex OAuth
-                </span>
-              </span>
-              <PrimaryButton onClick={() => onBegin('openai')}>
-                Open browser to sign in
-              </PrimaryButton>
-            </div>
-          </div>
-        </StartupShell>
+          <OAuthFooter>
+            <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+            <PrimaryButton autoFocus onClick={onRetry}>
+              Try again
+            </PrimaryButton>
+          </OAuthFooter>
+        </>,
+        onCancel,
       )
 
     default: {

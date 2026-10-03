@@ -1,5 +1,6 @@
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import type {
+  AccountResultFrame,
   AccountsSnapshot,
   CatCodeBridge,
   PermissionResponseInput,
@@ -68,6 +69,35 @@ export function claimOAuthContextForAccountLogin(
   current: OAuthContext,
 ): Exclude<OAuthContext, null> {
   return current ?? 'add-account'
+}
+
+/**
+ * A paste-code or alias submission made from the OAuth surface. Both verbs can
+ * be refused by the engine (an unparseable code, a taken alias) while the flow
+ * itself stays where it was, so the surface needs the verb's own outcome to
+ * explain why nothing moved.
+ */
+export type OAuthSubmitStatus =
+  | { state: 'idle' }
+  | { state: 'pending'; requestId: string }
+  | { state: 'accepted' }
+  | { state: 'rejected'; message: string }
+
+/** Settle a pending submission once its own `account.result` arrives. */
+export function settleOAuthSubmitStatus(
+  current: OAuthSubmitStatus,
+  result: AccountResultFrame | null,
+): OAuthSubmitStatus {
+  if (
+    current.state !== 'pending' ||
+    result === null ||
+    result.requestId !== current.requestId
+  ) {
+    return current
+  }
+  return result.ok
+    ? { state: 'accepted' }
+    : { state: 'rejected', message: result.message }
 }
 
 export function shouldShowAnthropicPoolAccount(

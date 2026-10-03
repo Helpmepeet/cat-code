@@ -81,7 +81,6 @@ import {
 } from './composerPopover.js'
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
-import type { ToastTone } from './toastModel.js'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── pure helpers (unit-tested without a DOM, like tone.ts / toastReducer) ── */
@@ -253,81 +252,39 @@ type DeleteTarget = AccountLabel & {
 }
 
 /**
- * Sign-in, in both of its meanings: adding an account and restoring one whose
- * credentials died. It is deliberately ONE dialog on ONE verb, because the
- * engine flow is one flow. `account.login` carries no account id: which account
- * a sign-in lands on is decided by whoever the user picks in the browser, and
- * the sidecar re-links by comparing the returned identity against the pool
- * (`accountsDomain.ts:263`).
- *
- * That is exactly why the repair copy exists. The identity is chosen out in the
- * browser where nothing can guard it, so naming the expected account is the only
- * thing standing between a repair and a silently-added second account.
+ * Restoring an account whose credentials died. Adding one needs no dialog: the
+ * sign-in surface opens straight away. This one exists for its warning.
+ * `account.login` carries no account id: which account a sign-in lands on is
+ * decided by whoever the user picks in the browser, and the sidecar re-links by
+ * comparing the returned identity against the pool (`accountsDomain.ts`
+ * `createRealOAuthLoginRunner`). Naming the expected account is the only thing
+ * standing between a repair and a silently-added second account.
  */
-function AddAccountDialog({
+function RelinkAccountDialog({
   account,
   onAuthorize,
   onClose,
 }: {
-  /** The account being restored, or undefined when adding a new one. */
-  account?: AccountLabel
+  account: AccountLabel
   onAuthorize: () => void
   onClose: () => void
 }) {
-  const [submitting, setSubmitting] = useState(false)
-  const name = account ? account.alias ?? account.id : null
+  const name = account.alias ?? account.id
   return (
     <ALDialog
-      title={account ? 'Sign in again' : 'Add Codex account'}
-      sub={
-        account
-          ? `Restores ${name}. Its name and history stay as they are.`
-          : 'Signs in with your ChatGPT Plus/Pro subscription via OAuth.'
-      }
+      title={`Sign in to ${name} again`}
       onClose={onClose}
       footer={
-        submitting ? (
+        <>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-        ) : (
-          <>
-            <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-            <PrimaryBtn
-              onClick={() => {
-                setSubmitting(true)
-                onAuthorize()
-              }}
-            >
-              Open browser to sign in
-            </PrimaryBtn>
-          </>
-        )
+          <PrimaryBtn onClick={onAuthorize}>Sign in</PrimaryBtn>
+        </>
       }
     >
-      {submitting ? (
-        <div className="flex items-center gap-2.5 text-[13px] text-text-muted">
-          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-text-ghost border-t-accent" />
-          Opening your browser…
-        </div>
-      ) : (
-        <p className="text-[12.5px] leading-relaxed text-text-muted">
-          We&apos;ll open your browser to authorize, then capture the callback
-          locally on{' '}
-          <code className="font-mono text-text-primary">127.0.0.1:1455</code>.{' '}
-          {account ? (
-            <>
-              Pick the same ChatGPT account you used for{' '}
-              <span className="font-semibold text-text-primary">{name}</span>:
-              signing in with a different one adds a second account instead of
-              restoring this one.
-            </>
-          ) : (
-            <>
-              No API key needed: this is an OpenAI account (ChatGPT subscription)
-              login.
-            </>
-          )}
-        </p>
-      )}
+      <p className="text-[12.5px] leading-relaxed text-text-muted">
+        Pick the same ChatGPT account. A different one is added as a new
+        account.
+      </p>
     </ALDialog>
   )
 }
@@ -884,7 +841,6 @@ function WaitingState() {
 /* ── page ── */
 
 type DialogState =
-  | { kind: 'add' }
   | { kind: 'relink'; account: AccountLabel }
   | { kind: 'touchall' }
   | { kind: 'rename'; account: AccountStatus }
@@ -940,24 +896,29 @@ export function AccountsPage({
     setDismissedCapKey(prev => nextDismissedCapKey(prev, capKey))
   }, [capKey])
 
-  // Dispatch a toast-and-close verb; `tone` softens the SUCCESS tone only (a
-  // started sign-in is an 'info', not a completion). A refusal keeps the failure
-  // tone whatever the caller asked for: the sign-in verbs are refused outright
-  // when no session is open, and an override would paint that refusal as neutral
-  // news while nothing had happened.
-  function submit(
-    verb: AccountVerbMessage,
-    tone?: ToastTone,
-    targetAccountId?: string,
-  ): void {
+  // Dispatch a toast-and-close verb.
+  function submit(verb: AccountVerbMessage, targetAccountId?: string): void {
     if (targetAccountId) setPendingAccountId(targetAccountId)
     pendingRef.current = {
       requestId: verb.requestId,
       onDone: result => {
-        toast(result.message, {
-          tone: result.ok ? tone ?? resultToastTone(true) : resultToastTone(false),
-        })
+        toast(result.message, { tone: resultToastTone(result.ok) })
         setDialog(null)
+      },
+    }
+    onVerb(verb)
+  }
+
+  // Start a sign-in. The app-level sign-in surface takes over at once and shows
+  // its progress, so a started sign-in needs no toast; a refused one still gets
+  // one, since nothing else would say so.
+  function beginSignIn(provider: 'anthropic' | 'openai'): void {
+    setDialog(null)
+    const verb = loginVerb(provider)
+    pendingRef.current = {
+      requestId: verb.requestId,
+      onDone: result => {
+        if (!result.ok) toast(result.message, { tone: resultToastTone(false) })
       },
     }
     onVerb(verb)
@@ -977,7 +938,6 @@ export function AccountsPage({
           overlay.expectedCredentialGeneration,
           overlay.operationId,
         ),
-        undefined,
         account.id,
       )
       return
@@ -1083,7 +1043,7 @@ export function AccountsPage({
               </div>
               <button
                 type="button"
-                onClick={() => submit(loginVerb('anthropic'), 'info')}
+                onClick={() => beginSignIn('anthropic')}
                 className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
               >
                 + Add Anthropic
@@ -1168,7 +1128,7 @@ export function AccountsPage({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDialog({ kind: 'add' })}
+                  onClick={() => beginSignIn('openai')}
                   className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
                 >
                   + Add account
@@ -1246,16 +1206,10 @@ export function AccountsPage({
         )}
       </div>
 
-      {dialog?.kind === 'add' ? (
-        <AddAccountDialog
-          onAuthorize={() => submit(loginVerb('openai'), 'info')}
-          onClose={() => setDialog(null)}
-        />
-      ) : null}
       {dialog?.kind === 'relink' ? (
-        <AddAccountDialog
+        <RelinkAccountDialog
           account={dialog.account}
-          onAuthorize={() => submit(loginVerb('openai'), 'info')}
+          onAuthorize={() => beginSignIn('openai')}
           onClose={() => setDialog(null)}
         />
       ) : null}
@@ -1284,7 +1238,6 @@ export function AccountsPage({
                 dialog.target.id,
                 dialog.target.expectedCredentialGeneration,
               ),
-              undefined,
               dialog.target.id,
             )
           }
@@ -1304,7 +1257,6 @@ export function AccountsPage({
                 dialog.account.id,
                 dialog.account.credentialGeneration,
               ),
-              undefined,
               dialog.account.id,
             )
           }

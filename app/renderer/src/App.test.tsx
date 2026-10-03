@@ -36,6 +36,7 @@ import {
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
+  settleOAuthSubmitStatus,
   shouldShowAnthropicPoolAccount,
   shouldShowFirstRunOAuth,
 } from './appModel.js'
@@ -171,6 +172,32 @@ test('generic account login claims an add-account OAuth owner without stealing a
   expect(claimOAuthContextForAccountLogin(null)).toBe('add-account')
   expect(claimOAuthContextForAccountLogin('add-account')).toBe('add-account')
   expect(claimOAuthContextForAccountLogin('first-run')).toBe('first-run')
+})
+
+test('an OAuth paste/alias submission settles only from its own account.result', () => {
+  const result = (requestId: string, ok: boolean) => ({
+    kind: 'account.result' as const,
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: 's1',
+    requestId,
+    verb: 'account.oauthPasteCode' as const,
+    ok,
+    message: ok ? 'Code submitted.' : 'Could not parse input.',
+  })
+  const pending = { state: 'pending', requestId: 'r1' } as const
+  // Another verb's result leaves it pending; so does no result yet.
+  expect(settleOAuthSubmitStatus(pending, null)).toBe(pending)
+  expect(settleOAuthSubmitStatus(pending, result('r2', false))).toBe(pending)
+  expect(settleOAuthSubmitStatus(pending, result('r1', true))).toEqual({
+    state: 'accepted',
+  })
+  expect(settleOAuthSubmitStatus(pending, result('r1', false))).toEqual({
+    state: 'rejected',
+    message: 'Could not parse input.',
+  })
+  // A settled or idle status never re-settles from a stale frame.
+  const idle = { state: 'idle' } as const
+  expect(settleOAuthSubmitStatus(idle, result('r1', false))).toBe(idle)
 })
 
 test('composer attributes a Claude subscription account only to the active subscription route', () => {
