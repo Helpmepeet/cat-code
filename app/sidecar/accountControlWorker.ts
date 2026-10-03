@@ -20,7 +20,17 @@ async function main(): Promise<void> {
       provider === 'openai' ? 'openai' : providers.getConfiguredAnthropicProvider(),
     ),
   })
-  await serveAccountControl(process.stdin, domain, event =>
+  await serveAccountControl(process.stdin, {
+    setOAuthProgressSink: sink => domain.setOAuthProgressSink(sink),
+    async runVerb(verb) {
+      if (verb.type === 'account.login') {
+        // Dedicated delete/sign-out workers can change inventory while idle.
+        await codex.loadPoolForObservation()
+        anthropic.loadClaudePoolForObservation()
+      }
+      return domain.runVerb(verb)
+    },
+  }, event =>
     emitWorkerRecord(event, MAX_ACCOUNT_CONTROL_RECORD_BYTES, 'account control result'),
   )
   process.exit(0)

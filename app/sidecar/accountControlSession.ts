@@ -1,6 +1,7 @@
 import type { SidecarAccountsDomain } from './accountsDomain.js'
 import { ACCOUNT_CONTROL_VERSION, MAX_ACCOUNT_CONTROL_RECORD_BYTES, parseAccountControlVerb, type AccountControlEvent } from '../shared/accountControlWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { MAX_FRAMES_PER_WINDOW, RATE_WINDOW_MS } from '../shared/limits.js'
 
 /** No session/controller is constructed. The real account domain owns OAuth and writes. */
 export async function serveAccountControl(
@@ -19,12 +20,20 @@ export async function serveAccountControl(
     void emit({ type: 'progress', version: ACCOUNT_CONTROL_VERSION, provider, progress })
   })
   let pending = Buffer.alloc(0)
+  let windowStarted = Date.now()
+  let requestCount = 0
   try {
     for await (const chunk of input) {
       pending = Buffer.concat([pending, chunk])
       let newline: number
       while ((newline = pending.indexOf(0x0a)) >= 0) {
         if (newline > MAX_ACCOUNT_CONTROL_RECORD_BYTES) throw new Error('account control request too large')
+        const now = Date.now()
+        if (now - windowStarted >= RATE_WINDOW_MS) {
+          windowStarted = now
+          requestCount = 0
+        }
+        if (++requestCount > MAX_FRAMES_PER_WINDOW) throw new Error('account control rate limit exceeded')
         const line = pending.subarray(0, newline)
         pending = pending.subarray(newline + 1)
         const verb = parseAccountControlVerb(JSON.parse(line.toString('utf8')))

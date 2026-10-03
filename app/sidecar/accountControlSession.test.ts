@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { serveAccountControl } from './accountControlSession.js'
 import { MAX_ACCOUNT_CONTROL_RECORD_BYTES, type AccountControlVerb } from '../shared/accountControlWorker.js'
-import { MAX_TEXT_FIELD_CHARS } from '../shared/limits.js'
+import { MAX_FRAMES_PER_WINDOW, MAX_TEXT_FIELD_CHARS } from '../shared/limits.js'
 
 async function* input(line: string) { yield Buffer.from(line) }
 
@@ -58,4 +58,19 @@ test('caps an unterminated account control request before parsing', async () => 
     setOAuthProgressSink: () => {},
     runVerb: async verb => ({ verb: verb.type, result: { ok: true, message: 'Done' }, poolChanged: false }),
   }, async () => {})).rejects.toThrow('request too large')
+})
+
+test('stops a request burst at the receiving boundary before another engine action', async () => {
+  const payload = Array.from({ length: MAX_FRAMES_PER_WINDOW + 1 }, (_, index) =>
+    JSON.stringify({ type: 'account.rename', requestId: `r${index}`, accountId: 'a', alias: 'work' }) + '\n',
+  ).join('')
+  let actions = 0
+  await expect(serveAccountControl(input(payload), {
+    setOAuthProgressSink: () => {},
+    runVerb: async verb => {
+      if (verb.type !== 'account.oauthCancel') actions++
+      return { verb: verb.type, result: { ok: true, message: 'Done' }, poolChanged: false }
+    },
+  }, async () => {})).rejects.toThrow('rate limit exceeded')
+  expect(actions).toBe(MAX_FRAMES_PER_WINDOW)
 })

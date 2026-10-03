@@ -136,9 +136,18 @@ refused paste codes and aliases, so the approved sign-in surface shows the
 refusal inline. Progress travels through the `account-oauth` host event; main
 replays its latest provider and progress when the renderer becomes ready.
 
-Main bounds pending requests and worker starts, keeps the worker alive during
-OAuth, and reaps it after inactivity, a completed cancellation, or app shutdown.
-A successful login or pool mutation refreshes the existing host pool owner.
+Main bounds pending requests and worker starts; the receiver also enforces the
+shared frame rate limit. Main keeps the worker alive during OAuth and reaps it
+after inactivity, a completed cancellation, or app shutdown. Later commands
+wait for cancellation teardown before starting another worker. Completed success
+is not replayed as an active attempt into a fresh renderer. First-run completion
+stays visible until the global inventory permits advancing, without blocking
+Settings or other app destinations.
+
+The reusable worker reloads both observation pools before each login so profile
+deletion or sign-out by a separate worker cannot leave first-run provider
+activation based on stale inventory. A successful login or pool mutation
+refreshes the existing host pool owner.
 Delete and sign-out retain their existing one-shot workers. The worker protocol
 has its own version and closed schemas; session wire shapes and version remain
 unchanged. Account credentials stay in the engine plane.

@@ -4029,10 +4029,8 @@ export function App() {
       })
     : EMPTY_PALETTE_ITEMS
 
-  // P4-15 — the active session's per-domain startup facts. Trust gate (per
-  // session-create, `workspace-trust.snapshot` P4-14) takes precedence over
-  // first-run OAuth (no credentialed account → pool initialized but empty),
-  // mirroring the engine's trust→auth startup order (`init.ts`).
+  // Chat startup checks its workspace trust before global account availability.
+  // App destinations remain accessible while those chat gates are showing.
   const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)
   const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
     workspaceTrust,
@@ -4040,17 +4038,14 @@ export function App() {
   )
   const showTrustGate =
     activeView === 'chat' && !!activeSessionId && activeTrustSnapshot?.trusted === false
-  const showFirstRunOAuth = activeView === 'chat' && shouldShowFirstRunOAuth(
+  const firstRunAuthRequired = shouldShowFirstRunOAuth(
     // Login writes the global pool, including before a chat exists.
     selectGlobalAccountsSnapshot(accounts),
-    showTrustGate,
+    false,
   )
+  const showFirstRunOAuth = activeView === 'chat' && !showTrustGate && firstRunAuthRequired
 
-  // P4-15 — the live OAuth progress (the back-channel) + the sub-state VIEWS
-  // derived from it. One view now: the first-run surface (and the add-account
-  // overlay, which reuses it) owns starting/waiting_for_login/waiting_for_alias/
-  // success/error. The reauth card that used to own waiting/error is deleted
-  // (P4-34); the blocking modal was already CUT.
+  // First-run and the Accounts overlay render the same app-owned attempt.
   const oauthProgress = appOAuthProgress
   const firstRunOAuthView: StartupOAuthView = oauthProgress
     ? oauthProgress.state === 'waiting_for_login'
@@ -4069,8 +4064,10 @@ export function App() {
   // Keep the first-run surface mounted through its `success` dwell even once the
   // account has landed (pool no longer empty), so the "Signed in" beat is seen.
   const showFirstRunOAuthSurface =
-    (showFirstRunOAuth && oauthContext !== 'add-account') ||
-    (oauthContext === 'first-run' && oauthProgress?.state === 'success')
+    activeView === 'chat' && (
+      (showFirstRunOAuth && oauthContext !== 'add-account') ||
+      (oauthContext === 'first-run' && oauthProgress?.state === 'success')
+    )
 
   // An OAuth flow with NO owning context, on a non-empty pool, was started by the
   // Accounts page. Adopt it into the SAME shared OAuth
@@ -4104,18 +4101,17 @@ export function App() {
     }
   }, [showFirstRunOAuthSurface, oauthContext, oauthProgress])
 
-  // First-run `success`: brief dwell on the "Signed in" card, then clear so the
-  // now-populated pool advances to the normal UI (the real flow completes on the
-  // token write; this is a short presentation beat, not a scripted auth timer).
+  // Wait for the independent pool read before clearing first-run completion;
+  // otherwise a slow read would show the sign-in choices again after success.
   useEffect(() => {
-    if (oauthContext !== 'first-run' || oauthProgress?.state !== 'success') return
+    if (oauthContext !== 'first-run' || oauthProgress?.state !== 'success' || firstRunAuthRequired) return
     const timer = window.setTimeout(() => {
       setOauthStarting(false)
       setOauthContext(null)
       setAppOAuthProgress(null)
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [oauthContext, oauthProgress])
+  }, [oauthContext, oauthProgress, firstRunAuthRequired])
 
   // Add-account `success`: keep the shared surface mounted long enough to
   // acknowledge completion, then clear its app-owned progress. Unlike the

@@ -33,17 +33,49 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [])
   }
   window.catcode = bridge as CatCodeBridge
   const tree = await harness.mount(<ToastContext.Provider value={message => toasts.push(message)}><App /></ToastContext.Provider>)
-  await act(async () => { hostEvent({ type: 'accounts-pool', pool: {
+  const pool = {
     accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true,
     anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: false,
-  } }) })
+  }
+  await act(async () => { hostEvent({ type: 'accounts-pool', pool }) })
   const click = async (label: string) => {
     const button = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === label || button.getAttribute('aria-label') === label || button.getAttribute('title') === label)
     if (!button) throw new Error(`missing button ${label}`)
     await act(async () => { button.click() })
   }
-  return { calls, toasts, tree, click, hostEvent: (event: HostEvent) => hostEvent(event) }
+  return { calls, toasts, tree, click, pool, hostEvent: (event: HostEvent) => hostEvent(event) }
 }
+
+test('first-run completion waits for global availability', async () => {
+  const { tree, pool, hostEvent } = await mountAccountsApp()
+  const choice = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('Claude subscription'))!
+  await act(async () => { choice.click() })
+  await act(async () => { hostEvent({ type: 'account-oauth', provider: 'anthropic', progress: { state: 'success' } }) })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1000)) })
+  expect(tree.container.textContent).toContain('Signed in')
+  // A credentialed global route arrives after the independent inventory read.
+  await act(async () => { hostEvent({ type: 'accounts-pool', pool: { ...pool, anthropicRouteAvailable: true } }) })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1000)) })
+  expect(tree.container.textContent).not.toContain('Signed in')
+  expect(tree.container.querySelector('[aria-label="Sign in"]')).toBeNull()
+})
+
+test('Settings remains accessible while first-run completion waits for inventory', async () => {
+  const { tree, click, hostEvent } = await mountAccountsApp()
+  window.catcode.readSettingsInventory = async () => ({
+    ok: true,
+    inventory: {
+      cwd: '/synthetic-user', extensions: { mcp: [], plugins: [], skills: [], hooks: [] },
+      agents: { definitions: [], failedFiles: [], availableMcpServers: [] }, settings: null, memory: null,
+    },
+  })
+  const choice = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('Claude subscription'))!
+  await act(async () => { choice.click() })
+  await act(async () => { hostEvent({ type: 'account-oauth', provider: 'anthropic', progress: { state: 'success' } }) })
+  await click('Settings')
+  expect(tree.container.querySelector('nav[aria-label="Settings categories"]')).not.toBeNull()
+  expect(tree.container.querySelector('[aria-label="Sign in"]')).toBeNull()
+})
 
 test('Accounts starts login, cancels, and reaches naming with no open sessions', async () => {
   const { calls, toasts, tree, click, hostEvent } = await mountAccountsApp()

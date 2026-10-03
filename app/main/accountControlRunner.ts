@@ -17,6 +17,8 @@ export function createAccountControlRunner(options: {
   let send: ((input: string) => void) | null = null
   let abort: AbortController | null = null
   let disposed = false
+  let retirement: Promise<void> | null = null
+  let releaseRetirement: (() => void) | null = null
   let latest: ProgressEvent | null = null
   let loginActive = false
   let idleTimer: ReturnType<typeof setTimeout> | null = null
@@ -25,6 +27,12 @@ export function createAccountControlRunner(options: {
   const clearIdle = () => {
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = null
+  }
+  const finishRetirement = () => {
+    const release = releaseRetirement
+    retirement = null
+    releaseRetirement = null
+    release?.()
   }
   const idle = () => {
     clearIdle()
@@ -41,6 +49,7 @@ export function createAccountControlRunner(options: {
   }
 
   async function start(): Promise<void> {
+    if (retirement) await retirement
     if (send) return
     if (task) await task
     if (send) return
@@ -72,10 +81,14 @@ export function createAccountControlRunner(options: {
         idle()
         // The Codex flow can keep its callback listener alive after a cancel.
         // Reap this owner before the next login tries to bind the same port.
-        if (event.verb === 'account.oauthCancel' && event.ok && pending.size === 0) {
-          clearIdle()
-          send = null
-          controller.abort()
+        if (event.verb === 'account.oauthCancel') {
+          if (event.ok) {
+            clearIdle()
+            send = null
+            controller.abort()
+          } else {
+            finishRetirement()
+          }
         }
         return 'continue'
       },
@@ -86,6 +99,7 @@ export function createAccountControlRunner(options: {
       abort = null
       for (const request of pending.values()) request.reject(new Error('account worker stopped'))
       pending.clear()
+      finishRetirement()
       if (loginActive && !disposed) progress({ type: 'progress', version: 1, provider: latest?.provider ?? 'openai', progress: { state: 'error', message: 'Sign-in stopped. Try again.' } })
       if (protocolError) options.launch().log?.('[account-control] worker output rejected')
     })
@@ -96,15 +110,22 @@ export function createAccountControlRunner(options: {
       const verb = parseAccountControlVerb(raw)
       if (!verb || disposed || pending.size >= 16 || pending.has(verb.requestId)) throw new Error('account control request rejected')
       clearIdle()
-      await start()
+      do {
+        await start()
+        // A cancellation may have been admitted while start() yielded.
+      } while (retirement)
       // Concurrent callers may have awaited the same retiring worker.
       if (pending.size >= 16 || pending.has(verb.requestId) || !send) throw new Error('account control busy')
       return new Promise<AccountResultFrame>((resolve, reject) => {
+        if (verb.type === 'account.oauthCancel') {
+          retirement = new Promise<void>(release => { releaseRetirement = release })
+        }
         pending.set(verb.requestId, { verb, resolve, reject })
         send!(`${JSON.stringify(verb)}\n`)
       })
     },
-    replay: () => latest,
+    // Success is a presentation beat, not an active attempt on renderer reload.
+    replay: () => latest?.progress?.state === 'success' ? null : latest,
     dispose() { disposed = true; clearIdle(); send = null; abort?.abort(); return task ?? Promise.resolve() },
   }
 }
