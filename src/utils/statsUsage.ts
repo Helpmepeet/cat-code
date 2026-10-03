@@ -6,7 +6,7 @@ import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, loca
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent, UsageEffort, UsageEffortLevel, UsageParallel } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts } from './modelCostRates.js';
-import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
     classifyHistoricalAutoModeToolResult,
@@ -32,10 +32,10 @@ export interface UsageIdentityStore {
     set(name: string): { has(key: string): boolean; add(key: string): unknown };
 }
 const zero = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
-const zeroEffort = (): UsageEffort => ({ state: 'unavailable', requests: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0 }, tokens: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0 }, unattributedRequests: 0 });
+const zeroEffort = (): UsageEffort => ({ state: 'unavailable', requests: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0, ultra: 0 }, tokens: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0, ultra: 0 }, unattributedRequests: 0 });
 const zeroParallel = (): UsageParallel => ({ state: 'unavailable', minutes: [0, 0, 0], peak: 0 });
 const effortLevel = (value: unknown): UsageEffortLevel | null =>
-    value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' ? value : null;
+    USAGE_EFFORT_LEVELS.find(level => level === value) ?? null;
 const zeroCost = (): UsageTokenCostEstimate => ({ usd: 0, pricedTokens: 0 });
 const total = (t: UsageTokens) => t.fresh + t.read + t.write + t.output;
 function standardTokenCost(model: string | null, tokens: UsageTokens): UsageTokenCostEstimate {
@@ -1114,7 +1114,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             for (const i of [0, 1, 2] as const) bucket.parallel.minutes[i] = plus(bucket.parallel.minutes[i], day.parallel.minutes[i]);
             bucket.parallel.peak = Math.max(bucket.parallel.peak, day.parallel.peak);
             if (day.parallel.state === 'available') bucket.parallel.state = 'available';
-            for (const level of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+            for (const level of USAGE_EFFORT_LEVELS) {
                 bucket.effort.requests[level] = plus(bucket.effort.requests[level], day.effort.requests[level]);
                 bucket.effort.tokens[level] = plus(bucket.effort.tokens[level], day.effort.tokens[level]);
             }
@@ -1194,7 +1194,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             for (const i of [0, 1, 2] as const) parallel.minutes[i] = plus(parallel.minutes[i], day.parallel.minutes[i]);
             parallel.peak = Math.max(parallel.peak, day.parallel.peak);
             if (day.parallel.state === 'available') parallel.state = 'available';
-            for (const level of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+            for (const level of USAGE_EFFORT_LEVELS) {
                 effort.requests[level] = plus(effort.requests[level], day.effort.requests[level]);
                 effort.tokens[level] = plus(effort.tokens[level], day.effort.tokens[level]);
             }
@@ -1216,5 +1216,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 18, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 19, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

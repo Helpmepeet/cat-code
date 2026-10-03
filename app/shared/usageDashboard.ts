@@ -157,7 +157,7 @@ export type UsageHour = {
     /** Exclusive token totals supplied only for the seven-day window. */
     tokens?: number;
 };
-export const USAGE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const USAGE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export type UsageEffortLevel = typeof USAGE_EFFORT_LEVELS[number];
 export type UsageEffortCounts = Record<UsageEffortLevel, number>;
 export type UsageEffort = {
@@ -260,7 +260,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 2;
     metricVersion: 1;
-    countingVersion: 18;
+    countingVersion: 19;
     pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';

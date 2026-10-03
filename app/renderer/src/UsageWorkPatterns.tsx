@@ -7,7 +7,7 @@ import './usageWorkPatterns.css';
 import { UsageChartHoverContext } from './usageChartHover.js';
 import { usageTenMinuteClock, usageTenMinuteSlotCount } from './usageWorkPatternsState.js';
 
-const effortLabel: Record<UsageEffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' };
+const effortLabel: Record<UsageEffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
 const parallelLabel = ['1 session', '2 sessions', '3+ sessions'] as const;
 const formatHours = (minutes: number) => minutes > 0 && minutes < 6 ? `${Math.round(minutes)}m` : `${(minutes / 60).toFixed(1)}h`;
 

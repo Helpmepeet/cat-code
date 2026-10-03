@@ -14,7 +14,7 @@
 .usage-pattern-key li { display:grid; grid-template-columns:9px minmax(0,1fr) auto; gap:8px; align-items:center; }
 .usage-pattern-key i { width:9px; height:9px; border-radius:2px; }
 .usage-pattern-key b { font:500 11px var(--font-mono); font-variant-numeric:tabular-nums; }
-.usage-pattern-effort-key { grid-template-columns:repeat(5,minmax(0,1fr)); margin-bottom:17px; }
+.usage-pattern-effort-key { grid-template-columns:repeat(6,minmax(0,1fr)); margin-bottom:17px; }
 .usage-pattern-effort-key li { grid-template-columns:9px minmax(0,1fr); }
 .usage-pattern-effort-key b { grid-column:2; }
 .usage-pattern-p1 { fill:var(--usage-blue); background:var(--usage-blue); }
@@ -25,6 +25,7 @@
 .usage-pattern-e3 { fill:light-dark(#76b0df,#4c83b9); background:light-dark(#76b0df,#4c83b9); }
 .usage-pattern-e4 { fill:light-dark(#4589c9,#77ade1); background:light-dark(#4589c9,#77ade1); }
 .usage-pattern-e5 { fill:light-dark(#2162ad,#a8cff0); background:light-dark(#2162ad,#a8cff0); }
+.usage-pattern-e6 { fill:light-dark(#124780,#d3e9fb); background:light-dark(#124780,#d3e9fb); }
 .usage-running { margin:15px 0; }
 .usage-running svg { display:block; width:100%; height:86px; }
 .usage-running polyline { fill:none; stroke:var(--usage-blue); stroke-width:1.5; }
