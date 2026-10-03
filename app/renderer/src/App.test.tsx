@@ -2856,27 +2856,6 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(inspectorBody).toContain('selectWorkspaceTrustSnapshot(')
   expect(inspectorBody).toContain('selectDiagnosticsSnapshot(diagnostics, activeSessionId)')
 
-  // Global profile mutations are durable state, so both must take the
-  // session-independent host path before the fallback that rejects other
-  // account verbs when no chat session is open.
-  const verbStart = source.indexOf('const sendAccountVerb = useCallback(')
-  const verbBody = source.slice(
-    verbStart,
-    source.indexOf('\n  // Flipping 7d/30d', verbStart),
-  )
-  expect(verbBody.indexOf("verb.type === 'account.delete'")).toBeLessThan(
-    verbBody.indexOf('if (!activeSessionId)'),
-  )
-  expect(verbBody.indexOf("verb.type === 'account.logout'")).toBeLessThan(
-    verbBody.indexOf('if (!activeSessionId)'),
-  )
-  expect(verbBody).toContain('.deleteAccount(verb)')
-  expect(verbBody).toContain('.signOutAccount(verb)')
-  expect(verbBody).toContain('if (!activeSessionId) {')
-  expect(verbBody).toContain("kind: 'account.result'")
-  expect(verbBody).toContain('requestId: verb.requestId')
-  expect(verbBody).toContain('ok: false')
-
   // Main owns the global pool refresh. A session snapshot stays session-scoped
   // and must never be promoted over a fresher host snapshot.
   expect(source).not.toContain('promotedAccountsSnapshotRef')

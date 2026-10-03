@@ -219,7 +219,6 @@ import {
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectGlobalAccountsSnapshot,
-  selectOAuthProgress,
   selectWelcomeAccountsSnapshot,
   useAccountsPoolPresentationState,
 } from './accountsState.js'
@@ -899,6 +898,7 @@ export function App() {
   // begin click and the first progress frame.
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
   const [oauthStarting, setOauthStarting] = useState(false)
+  const [appOAuthProgress, setAppOAuthProgress] = useState<import('../../shared/protocol.js').OAuthLoginProgress | null>(null)
   const [oauthProvider, setOauthProvider] = useState<'anthropic' | 'openai'>(
     'anthropic',
   )
@@ -1301,6 +1301,11 @@ export function App() {
       // NOT a roster row — fold it and return before the roster logic runs.
       if (event.type === 'accounts-pool') {
         dispatchAccounts({ type: 'pool', pool: event.pool })
+        return
+      }
+      if (event.type === 'account-oauth') {
+        setOauthProvider(event.provider)
+        setAppOAuthProgress(event.progress)
         return
       }
       // The independent usage worker publishes a session-free dashboard.
@@ -1839,9 +1844,8 @@ export function App() {
     setActiveView('chat')
   }, [workspaceLayout])
 
-  // Session-local account controls still address their pane's sidecar. Deleting
-  // a saved profile is global durable state instead, so the Accounts page sends
-  // those global mutations to main's session-independent engine worker.
+  // Account management belongs to the app. Composer switches still address
+  // their own pane's sidecar in renderSessionPane.
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
       if (verb.type === 'account.delete' || verb.type === 'account.logout') {
@@ -1874,27 +1878,8 @@ export function App() {
           })
         return
       }
-      if (!activeSessionId) {
-        // The Accounts page is reachable with no session open, but a verb needs
-        // an engine process to carry it. Answer with a real outcome instead of
-        // dropping the click: the page waits for one before it closes its
-        // confirmation dialog, so returning silently leaves that dialog up
-        // forever. Renderer-local — this result never crosses the wire.
-        dispatchAccounts({
-          type: 'frame',
-          frame: {
-            kind: 'account.result',
-            protocolVersion: PROTOCOL_VERSION,
-            sessionId: '',
-            requestId: verb.requestId,
-            verb: verb.type,
-            ok: false,
-            message: 'Open a session first, then change accounts from there.',
-          },
-        })
-        return
-      }
       if (verb.type === 'account.login') {
+        setAppOAuthProgress(null)
         setOauthProvider(verb.provider ?? 'openai')
         // AccountsPage starts login through this generic verb callback rather
         // than `beginOAuth`. Claim the attempt here so waiting/manual-code/
@@ -1906,9 +1891,21 @@ export function App() {
         setOauthCodeStatus({ state: 'idle' })
         setOauthAliasStatus({ state: 'idle' })
       }
-      getBridge().accountVerb(activeSessionId, verb)
+      void getBridge().manageAccount(verb).then(frame => {
+        dispatchAccounts({ type: 'frame', frame })
+        if (verb.type === 'account.login' && !frame.ok) {
+          setAppOAuthProgress({ state: 'error', message: frame.message })
+        }
+      }).catch(() => {
+        const message = 'Could not complete this account action. Try again.'
+        dispatchAccounts({ type: 'frame', frame: {
+          kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '',
+          requestId: verb.requestId, verb: verb.type, ok: false, message,
+        } })
+        if (verb.type === 'account.login') setAppOAuthProgress({ state: 'error', message })
+      })
     },
-    [activeSessionId],
+    [],
   )
 
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
@@ -1937,12 +1934,7 @@ export function App() {
       ? [accountHealthBanner]
       : EMPTY_BANNERS
 
-  // P4-15 — the first-run surface and the Accounts page both begin the SAME
-  // engine OAuth flow (the `account.login` verb; browser handoff, the engine owns
-  // the token write). Progress flows back on the `oauth.login.progress` frame,
-  // driving the sub-states below; the account lands on the `accounts.snapshot`
-  // re-broadcast the sidecar fires on `success` — no renderer token path.
-  // `context` tags which surface owns the flow.
+  // First-run and Accounts share one app-owned OAuth flow across tab changes.
   const beginOAuth = useCallback(
     (
       context: Exclude<OAuthContext, null>,
@@ -1953,26 +1945,21 @@ export function App() {
       setOauthProvider(provider)
       setOauthCodeStatus({ state: 'idle' })
       setOauthAliasStatus({ state: 'idle' })
-      if (activeSessionId) {
-        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-      }
+      setAppOAuthProgress(null)
       sendAccountVerb(loginVerb(provider))
     },
-    [sendAccountVerb, activeSessionId],
+    [sendAccountVerb],
   )
 
-  // Clear the OAuth surface locally (cancel / back / dwell timeout) AND tell the
-  // sidecar to abandon the in-flight attempt (drops its late progress).
+  // Clear the surface and cancel the app-owned attempt, including late progress.
   const clearOAuth = useCallback(() => {
     setOauthStarting(false)
     setOauthContext(null)
     setOauthCodeStatus({ state: 'idle' })
     setOauthAliasStatus({ state: 'idle' })
-    if (activeSessionId) {
-      dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-    }
+    setAppOAuthProgress(null)
     sendAccountVerb(oauthCancelVerb())
-  }, [sendAccountVerb, activeSessionId])
+  }, [sendAccountVerb])
 
   const submitOAuthPasteCode = useCallback(
     (code: string) => {
@@ -4046,16 +4033,16 @@ export function App() {
   // session-create, `workspace-trust.snapshot` P4-14) takes precedence over
   // first-run OAuth (no credentialed account → pool initialized but empty),
   // mirroring the engine's trust→auth startup order (`init.ts`).
-  const activeAccountsSnapshot = selectAccountsSnapshot(accounts, activeSessionId)
   const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)
   const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
     workspaceTrust,
     activeSessionId,
   )
   const showTrustGate =
-    !!activeSessionId && activeTrustSnapshot?.trusted === false
-  const showFirstRunOAuth = shouldShowFirstRunOAuth(
-    activeAccountsSnapshot,
+    activeView === 'chat' && !!activeSessionId && activeTrustSnapshot?.trusted === false
+  const showFirstRunOAuth = activeView === 'chat' && shouldShowFirstRunOAuth(
+    // Login writes the global pool, including before a chat exists.
+    selectGlobalAccountsSnapshot(accounts),
     showTrustGate,
   )
 
@@ -4064,7 +4051,7 @@ export function App() {
   // overlay, which reuses it) owns starting/waiting_for_login/waiting_for_alias/
   // success/error. The reauth card that used to own waiting/error is deleted
   // (P4-34); the blocking modal was already CUT.
-  const oauthProgress = selectOAuthProgress(accounts, activeSessionId)
+  const oauthProgress = appOAuthProgress
   const firstRunOAuthView: StartupOAuthView = oauthProgress
     ? oauthProgress.state === 'waiting_for_login'
       ? { phase: 'waiting', url: oauthProgress.url }
@@ -4082,7 +4069,7 @@ export function App() {
   // Keep the first-run surface mounted through its `success` dwell even once the
   // account has landed (pool no longer empty), so the "Signed in" beat is seen.
   const showFirstRunOAuthSurface =
-    showFirstRunOAuth ||
+    (showFirstRunOAuth && oauthContext !== 'add-account') ||
     (oauthContext === 'first-run' && oauthProgress?.state === 'success')
 
   // An OAuth flow with NO owning context, on a non-empty pool, was started by the
@@ -4125,15 +4112,13 @@ export function App() {
     const timer = window.setTimeout(() => {
       setOauthStarting(false)
       setOauthContext(null)
-      if (activeSessionId) {
-        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-      }
+      setAppOAuthProgress(null)
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [oauthContext, oauthProgress, activeSessionId])
+  }, [oauthContext, oauthProgress])
 
   // Add-account `success`: keep the shared surface mounted long enough to
-  // acknowledge completion, then clear its session-scoped progress. Unlike the
+  // acknowledge completion, then clear its app-owned progress. Unlike the
   // old orphan adoption path, retry retains the add-account owner throughout.
   useEffect(() => {
     if (oauthContext !== 'add-account' || oauthProgress?.state !== 'success') {
@@ -4142,12 +4127,10 @@ export function App() {
     const timer = window.setTimeout(() => {
       setOauthStarting(false)
       setOauthContext(null)
-      if (activeSessionId) {
-        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-      }
+      setAppOAuthProgress(null)
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [oauthContext, oauthProgress, activeSessionId])
+  }, [oauthContext, oauthProgress])
 
   return (
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>

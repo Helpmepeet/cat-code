@@ -47,6 +47,8 @@ import { fileURLToPath } from 'node:url'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { createAccountControlRunner } from './accountControlRunner.js'
+import { parseAccountControlVerb } from '../shared/accountControlWorker.js'
 import { spawn } from 'node:child_process'
 import {
   closeSync,
@@ -102,6 +104,7 @@ import {
   CH_ANSWER_QUESTIONS,
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
+  CH_HOST_MANAGE_ACCOUNT,
   CH_WORKSPACE_TRUST_VERB,
   CH_TASK_CONTROL_VERB,
   CH_RUN_CONTROL_VERB,
@@ -761,6 +764,7 @@ let usageAbort: AbortController | null = null
 let usagePending = false
 const usageEnabled = isUsageDashboardEnabled()
 let accountsPoolDriver: SingleFlightDriver | null = null
+let accountControl: ReturnType<typeof createAccountControlRunner> | null = null
 let accountProfileMutationInFlight = false
 let accountProfileMutationAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
@@ -2425,6 +2429,8 @@ function registerIpcHandlers(): void {
       sendHostEvent({ type: 'usage-dashboard', result })
     }
     if (usagePending) sendHostEvent({ type: 'usage-dashboard-loading' })
+    const oauth = accountControl?.replay()
+    if (oauth) sendHostEvent({ type: 'account-oauth', provider: oauth.provider, progress: oauth.progress })
   })
 
   ipcMain.on(CH_DELIVERY_ACK, (_e, payload: unknown) => {
@@ -3542,6 +3548,31 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(CH_HOST_MANAGE_ACCOUNT, async (event, raw: unknown): Promise<AccountResultFrame> => {
+    const verb = parseAccountControlVerb(raw)
+    const failure = (): AccountResultFrame => ({
+      kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '',
+      requestId: verb?.requestId ?? '', verb: verb?.type ?? 'account.login',
+      ok: false, message: 'Could not complete this account action. Try again.',
+    })
+    if (!isMainWindowSender(event) || !verb) return failure()
+    accountControl ??= createAccountControlRunner({
+      launch: () => ({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('account-control'),
+        cwd: app.getPath('home'),
+        onWorkerLifecycle: createWorkerLifecycleLogger('account-control'),
+        log: line => process.stderr.write(`${line}\n`),
+      }),
+      onProgress: update => sendHostEvent({ type: 'account-oauth', provider: update.provider, progress: update.progress }),
+      onPoolChanged: () => {
+        accountsPoolPublicationGate.invalidate()
+        refreshAccountsPoolNow()
+      },
+    })
+    try { return await accountControl.run(verb) } catch { return failure() }
+  })
+
   ipcMain.handle(
     CH_HOST_ACCOUNT_DELETE,
     async (
@@ -4509,6 +4540,8 @@ function shutdownRuntime(): void {
  * covers the window where a driver has not been armed yet.
  */
 function stopBackgroundDrivers(): void {
+  accountControl?.dispose()
+  accountControl = null
   startupTimers.cancelAll()
   transcriptBackfillAbort?.abort()
   transcriptBackfillAbort = null

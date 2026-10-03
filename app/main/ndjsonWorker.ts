@@ -47,6 +47,8 @@ export type NdjsonWorkerOptions = {
   maxRecordBytes: number
   /** Written once to stdin before it is closed. Absent closes stdin empty. */
   input?: string
+  /** Interactive workers keep stdin open and return a cleanup for their sender. */
+  connectInput?: (send: (input: string) => void) => () => void
   /**
    * Destructive one-shot writes cannot outlive Electron teardown. Abort sends
    * SIGKILL immediately because app.exit can destroy escalation timers.
@@ -183,12 +185,19 @@ export async function runNdjsonWorker(
   const closed = waitForClose(child)
   let code: number | null
   let signal: NodeJS.Signals | null
+  let disconnectInput: (() => void) | undefined
   try {
-    child.stdin.end(options.input)
+    if (options.connectInput) {
+      disconnectInput = options.connectInput(input => { child.stdin.write(input) })
+    } else {
+      child.stdin.end(options.input)
+    }
+    if (options.signal?.aborted) onAbort()
     ;({ code, signal } = await closed)
     childClosed = true
     options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
+    disconnectInput?.()
     clearTimeout(timeout)
     if (forceKillTimer !== null) clearTimeout(forceKillTimer)
     options.signal?.removeEventListener('abort', onAbort)

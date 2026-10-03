@@ -21,9 +21,9 @@
  * usage-history data source/session. This page ships the real spine: pool table
  * + lifecycle verbs + active headroom, all from the redacted `AccountsSnapshot`.
  *
- * Writes go ONLY through the `onVerb` prop. Session-local verbs use the HC3
- * `accountVerb` channel; destructive profile deletion uses the fixed
- * session-independent host sender and a one-shot engine worker. Both re-resolve
+ * Writes go ONLY through the `onVerb` prop. App-level account management uses
+ * main's account worker; destructive profile mutations use their one-shot
+ * host workers. Both re-resolve
  * the target from engine-owned pool state. Optimistic UI is forbidden: a dialog
  * dispatches its verb, remembers the minted `requestId`, and closes + toasts only
  * when the matching `account.result` (`lastResult`) arrives.

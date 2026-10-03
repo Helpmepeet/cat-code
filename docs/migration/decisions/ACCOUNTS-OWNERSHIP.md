@@ -115,8 +115,33 @@ Codex/auth caches, and re-broadcasts its redacted snapshots. A profile re-added
 before a delayed notice is preserved.
 
 The per-session `accounts.snapshot` frame and session-local `account.*` route
-remain for composer account switching and the long-lived OAuth flow. This
-amendment moves only destructive global profile deletion off the session plane.
+remain for composer account switching. App-level OAuth and account management
+now follow the session-free amendment below.
+
+### Session-free sign-in amendment (2026-10-03)
+
+First-run sign-in and the Accounts page use the fixed `manageAccount` preload
+method, without creating or borrowing a chat session. Main validates the closed
+`AccountControlVerb` allowlist and lazily starts one account-control engine
+worker. That worker loads the real account pools for observation and calls
+`accountsDomain.runVerb()`; it never initializes a chat, hooks, or MCP clients.
+Composer account switching continues to target its pane's sidecar.
+
+The worker keeps stdin open across login, paste-code, and naming submissions.
+It validates each bounded request again at the receiving engine boundary and
+publishes bounded, secret-screened progress and correlated results. Main checks
+the result request ID and verb before returning an `account.result` to the
+renderer. The renderer reduces that result into `accounts.lastResult`, including
+refused paste codes and aliases, so the approved sign-in surface shows the
+refusal inline. Progress travels through the `account-oauth` host event; main
+replays its latest provider and progress when the renderer becomes ready.
+
+Main bounds pending requests and worker starts, keeps the worker alive during
+OAuth, and reaps it after inactivity, a completed cancellation, or app shutdown.
+A successful login or pool mutation refreshes the existing host pool owner.
+Delete and sign-out retain their existing one-shot workers. The worker protocol
+has its own version and closed schemas; session wire shapes and version remain
+unchanged. Account credentials stay in the engine plane.
 
 ### Observation-cache amendment (2026-09-12)
 

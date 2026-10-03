@@ -87,6 +87,7 @@ export const SIDECAR_MODE_ENTRIES = {
   'transcript-backfill': { file: 'transcriptBackfillWorker.ts', runtimeFlags: false },
   'catalog': { file: 'sessionsCatalogWorker.ts', runtimeFlags: false },
   'accounts-pool': { file: 'accountsPoolWorker.ts', runtimeFlags: false },
+  'account-control': { file: 'accountControlWorker.ts', runtimeFlags: false },
   'settings-inventory': { file: 'settingsInventoryWorker.ts', runtimeFlags: false },
   'settings-write': { file: 'settingsWriteWorker.ts', runtimeFlags: false },
   'workspace-listing': { file: 'workspaceListingWorker.ts', runtimeFlags: false },

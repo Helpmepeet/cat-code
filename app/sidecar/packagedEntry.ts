@@ -25,6 +25,7 @@ const MODES = {
   'transcript-backfill': () => import('./transcriptBackfillWorker.js'),
   'catalog': () => import('./sessionsCatalogWorker.js'),
   'accounts-pool': () => import('./accountsPoolWorker.js'),
+  'account-control': () => import('./accountControlWorker.js'),
   'settings-inventory': () => import('./settingsInventoryWorker.js'),
   'settings-write': () => import('./settingsWriteWorker.js'),
   'workspace-listing': () => import('./workspaceListingWorker.js'),
