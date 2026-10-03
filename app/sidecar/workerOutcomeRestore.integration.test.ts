@@ -32,6 +32,9 @@ const { AgentTool } = await import('../../src/tools/AgentTool/AgentTool.js')
 const { FileReadTool } = await import('../../src/tools/FileReadTool/FileReadTool.js')
 const { runAsyncAgentLifecycle } = await import('../../src/tools/AgentTool/agentToolUtils.js')
 const { resumeEngineSession } = await import('./sessionResume.js')
+const { compactResumeFixture } = await import('../../src/utils/conversationRecovery.fixture.js')
+const { loadDisplayTranscriptFromJsonlPath } = await import('../../src/utils/sessionStorage.js')
+const { mergeDisplayHistoryWithSeed, projectResumedHistory } = await import('./historyProjection.js')
 
 afterAll(async () => {
   mock.restore()
@@ -60,7 +63,7 @@ test('desktop restore returns the undelivered worker outcome to the parent with 
   const ack = createUserMessage({ content: [AgentTool.mapToolResultToToolResultBlockParam({
     status: 'async_launched', isAsync: true, agentId: 'worker', description: 'Fixture', prompt: 'fixture', outputFile: '/tmp/unused', canCheckProgress: false,
   } as never, 'launch-worker')] })
-  await recordTranscript([createUserMessage({ content: 'start fixture' }), assistant, ack])
+  await recordTranscript([...compactResumeFixture(), assistant, ack])
   await flushSessionStorage()
   const transcriptPath = getTranscriptPath()
   appendSubagentSpawned(transcriptPath, {
@@ -93,6 +96,12 @@ test('desktop restore returns the undelivered worker outcome to the parent with 
   expect(outcomes[0]).toMatchObject({ origin: { kind: 'task-notification', toolUseId: 'launch-worker', taskId: 'worker' } })
   expect(JSON.stringify(outcomes)).toContain('fixed fixture.ts; checks passed')
   expect(JSON.stringify(restored.messages)).not.toContain('still running')
+  const display = await loadDisplayTranscriptFromJsonlPath(transcriptPath, { maxMessages: 100, maxBytes: 1024 * 1024 })
+  const seed = projectResumedHistory(restored.messages)
+  const merged = mergeDisplayHistoryWithSeed(display.messages, seed)
+  expect(merged.truncated).toBe(false)
+  expect(JSON.stringify(merged.history)).toContain('completed response')
+  expect(merged.history.slice(-seed.length)).toEqual(seed)
   // Normal parent persistence is the durable acceptance boundary, not scheduling.
   await recordTranscript(restored.messages)
   await flushSessionStorage()
