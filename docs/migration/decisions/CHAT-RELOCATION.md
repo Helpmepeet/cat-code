@@ -54,7 +54,11 @@ reachable. The existing lease, backup, interrupted-relocation refusal, identitie
 process replacement, and destination context owners remain authoritative.
 
 Destination trust/canonical identity are checked in the replacement process
-before executable workspace configuration or hooks. A separately recorded
+before executable workspace configuration or hooks. Manual relocations without
+a jump ledger use the completed relocation record to validate both conversation
+identities, the current binding, canonical destination, and saved trust. This
+also applies to empty conversations launched with their existing engine ID.
+A separately recorded
 internal continuation uses the real controller and does not rerun the original
 UserPromptSubmit hook or resubmit the user prompt. Admission and settlement are
 durable; uncertain admitted work is not automatically replayed. Accepted failures
