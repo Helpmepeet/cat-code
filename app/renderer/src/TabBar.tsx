@@ -1,6 +1,6 @@
 /**
- * TabBar — one tab per LIVE session. Presentational: it renders the roster +
- * per-tab visual state and raises intent callbacks; all host calls live in App.
+ * TabBar — a mixed session/page strip. Presentational: session tabs receive
+ * per-tab visual state, page tabs are renderer-only, and all host calls live in App.
  *
  * ARIA tab widget with roving tabindex: only the active tab is tabbable, arrows
  * move focus+selection between tabs, Enter/Space activate. This is an unmodified-
@@ -20,6 +20,7 @@ import {
   type SessionActionsAnchor,
 } from './sessionActions.js'
 import { tabLabel } from './tabBarModel.js'
+import { targetKey, type NavigationTarget, type PageTab } from './pageTabNavigation.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 import { ActionBranchIcon } from './SessionActionIcons.js'
@@ -33,12 +34,28 @@ export type TabModel = {
   visual: TabVisualState
 }
 
+export type TabBarEntry =
+  | { kind: 'session'; model: TabModel }
+  | { kind: 'page'; page: PageTab }
+
+const PAGE_LABELS: Record<PageTab, string> = {
+  goals: 'Goals',
+  accounts: 'Accounts',
+  usage: 'Analytics',
+  settings: 'Settings',
+  sessions: 'Sessions',
+}
+
 export function TabBar({
   tabs,
+  navigationTabs,
+  selectedTarget,
   activeSessionId,
   rosterReady = true,
   onSelect,
   onClose,
+  onSelectTarget,
+  onCloseTarget,
   onRestart,
   onNewTab,
   onOpenActions,
@@ -49,11 +66,15 @@ export function TabBar({
   fullscreenMedia,
 }: {
   tabs: TabModel[]
-  activeSessionId: SessionId | null
+  navigationTabs?: TabBarEntry[]
+  selectedTarget?: NavigationTarget | null
+  activeSessionId?: SessionId | null
   /** App's host roster snapshot has completed, including an empty roster. */
   rosterReady?: boolean
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
+  onSelectTarget?: (target: NavigationTarget) => void
+  onCloseTarget?: (target: NavigationTarget) => void
   onRestart: (sessionId: SessionId) => void
   onNewTab: () => void
   /**
@@ -85,32 +106,47 @@ export function TabBar({
    * (`windowChrome.ts`); the app never passes it. */
   fullscreenMedia?: FullscreenMediaQuery | null
 }) {
+  const entries: TabBarEntry[] = navigationTabs ??
+    tabs.map(model => ({ kind: 'session', model }))
+  const selected: NavigationTarget | null = navigationTabs
+    ? selectedTarget ?? null
+    : activeSessionId
+      ? { kind: 'session', sessionId: activeSessionId }
+      : null
+  const selectTarget = (target: NavigationTarget) => {
+    if (onSelectTarget) onSelectTarget(target)
+    else if (target.kind === 'session') onSelect(target.sessionId)
+  }
+  const closeTarget = (target: NavigationTarget) => {
+    if (onCloseTarget) onCloseTarget(target)
+    else if (target.kind === 'session') onClose(target.sessionId)
+  }
   // macOS hides the traffic lights in fullscreen, and the well is dead chrome
   // once they are gone.
   const reserveWell = useTrafficLightWell(fullscreenMedia)
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
   const tabRefs = useRef<Array<HTMLDivElement | null>>([])
-  const committedTabIds = useRef<Set<SessionId> | null>(null)
+  const committedTabIds = useRef<Set<string> | null>(null)
   const hydrationCommitted = useRef(false)
   const freshTabs = new Set(
-    tabs.map(tab => tab.descriptor.appSessionId).filter(id =>
-      rosterReady && hydrationCommitted.current && !committedTabIds.current?.has(id),
+    entries.map(entry => targetKey(entryTarget(entry))).filter(key =>
+      rosterReady && hydrationCommitted.current && !committedTabIds.current?.has(key),
     ),
   )
   const entrance = useEntranceLatch(freshTabs)
 
   // Exactly one tab is tabbable (roving tabindex): the active one, or the first
   // tab when nothing is active yet, so the tablist is always keyboard-reachable.
-  const activeIndex = tabs.findIndex(
-    tab => tab.descriptor.appSessionId === activeSessionId,
+  const activeIndex = entries.findIndex(tab =>
+    selected !== null && targetKey(entryTarget(tab)) === targetKey(selected),
   )
   const tabbableIndex = activeIndex >= 0 ? activeIndex : 0
 
   useLayoutEffect(() => {
-    committedTabIds.current = new Set(tabs.map(tab => tab.descriptor.appSessionId))
+    committedTabIds.current = new Set(entries.map(entry => targetKey(entryTarget(entry))))
     if (rosterReady) hydrationCommitted.current = true
-  }, [tabs, rosterReady])
+  }, [entries, rosterReady])
 
   useLayoutEffect(() => {
     if (activeIndex < 0) return
@@ -121,35 +157,36 @@ export function TabBar({
         ? 'instant'
         : 'smooth',
     })
-  }, [activeIndex, activeSessionId])
+  }, [activeIndex, selected])
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
-    const id = tabs[index]?.descriptor.appSessionId
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+    const entry = entries[index]
     switch (event.key) {
       case 'ArrowRight':
       case 'ArrowLeft':
       case 'Home':
       case 'End': {
-        if (tabs.length === 0) return
+        if (entries.length === 0) return
         event.preventDefault()
         const target =
           event.key === 'Home'
             ? 0
             : event.key === 'End'
-              ? tabs.length - 1
+              ? entries.length - 1
               : event.key === 'ArrowRight'
-                ? (index + 1) % tabs.length
-                : (index - 1 + tabs.length) % tabs.length
-        const next = tabs[target]?.descriptor.appSessionId
-        if (next) onSelect(next) // roving tabindex → selection follows focus
+                ? (index + 1) % entries.length
+                : (index - 1 + entries.length) % entries.length
+        const next = entries[target]
+        if (next) selectTarget(entryTarget(next))
         tabRefs.current[target]?.focus()
         return
       }
       case 'Enter':
       case ' ': {
-        if (!id) return
+        if (!entry) return
         event.preventDefault()
-        onSelect(id)
+        selectTarget(entryTarget(entry))
         return
       }
       default:
@@ -172,7 +209,7 @@ export function TabBar({
        * transcript. */
       data-window-chrome
       role="tablist"
-      aria-label="Sessions"
+      aria-label="Workspace tabs"
     >
       {/* The traffic lights are drawn by macOS on top of the page, so this is
        * the one piece of the bar that has to be empty. 84 = the 12px
@@ -187,23 +224,40 @@ export function TabBar({
       />
 
       <div className="flex flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {tabs.map((tab, index) => (
-          <Tab
-            key={tab.descriptor.appSessionId}
+        {entries.map((entry, index) => entry.kind === 'page' ? (
+          <PageTabButton
+            key={targetKey(entryTarget(entry))}
             ref={element => {
               tabRefs.current[index] = element
-              entrance.refFor(tab.descriptor.appSessionId, 'animate-tab-in')(element)
+              entrance.refFor(targetKey(entryTarget(entry)), 'animate-tab-in')(element)
             }}
-            tab={tab}
+            page={entry.page}
             index={index}
-            isActive={tab.descriptor.appSessionId === activeSessionId}
-            arriving={entrance.active.has(tab.descriptor.appSessionId)}
+            arriving={entrance.active.has(targetKey(entryTarget(entry)))}
+            onArrivalAnimationEnd={event => entrance.onAnimationEnd(targetKey(entryTarget(entry)), event)}
+            active={selected?.kind === 'page' && selected.page === entry.page}
+            tabbable={index === tabbableIndex}
+            onSelect={() => selectTarget(entryTarget(entry))}
+            onClose={() => closeTarget(entryTarget(entry))}
+            onKeyDown={event => onTabKeyDown(event, index)}
+          />
+        ) : (
+          <Tab
+            key={targetKey(entryTarget(entry))}
+            ref={element => {
+              tabRefs.current[index] = element
+              entrance.refFor(targetKey(entryTarget(entry)), 'animate-tab-in')(element)
+            }}
+            tab={entry.model}
+            index={index}
+            isActive={selected?.kind === 'session' && entry.model.descriptor.appSessionId === selected.sessionId}
+            arriving={entrance.active.has(targetKey(entryTarget(entry)))}
             onArrivalAnimationEnd={event =>
-              entrance.onAnimationEnd(tab.descriptor.appSessionId, event)
+              entrance.onAnimationEnd(targetKey(entryTarget(entry)), event)
             }
             isTabbable={index === tabbableIndex}
-            onSelect={onSelect}
-            onClose={onClose}
+            onSelect={sessionId => selectTarget({ kind: 'session', sessionId })}
+            onClose={sessionId => closeTarget({ kind: 'session', sessionId })}
             onRestart={onRestart}
             onOpenActions={onOpenActions}
             onKeyDown={event => onTabKeyDown(event, index)}
@@ -221,7 +275,7 @@ export function TabBar({
         </button>
       </div>
 
-      {onAddPanel ? (
+      {onAddPanel && selected?.kind === 'session' ? (
         <div className="flex shrink-0 items-center gap-1 border-l border-shell-seam px-2.5 [-webkit-app-region:no-drag]">
           {panelCount < MAX_WORKSPACE_PANELS ? (
             <button
@@ -282,6 +336,70 @@ function UnsplitIcon() {
       <rect x="0" y="0" width="15" height="11" rx="1.5" fill="currentColor" opacity="0.6" />
       <line x1="7.5" y1="1.5" x2="7.5" y2="9.5" stroke="var(--app-bg)" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
+  )
+}
+
+function entryTarget(entry: TabBarEntry): NavigationTarget {
+  return entry.kind === 'session'
+    ? { kind: 'session', sessionId: entry.model.descriptor.appSessionId }
+    : { kind: 'page', page: entry.page }
+}
+
+function PageTabButton({
+  ref,
+  page,
+  index,
+  arriving,
+  onArrivalAnimationEnd,
+  active,
+  tabbable,
+  onSelect,
+  onClose,
+  onKeyDown,
+}: {
+  ref: (element: HTMLDivElement | null) => void
+  page: PageTab
+  index: number
+  arriving: boolean
+  onArrivalAnimationEnd: AnimationEventHandler<HTMLDivElement>
+  active: boolean
+  tabbable: boolean
+  onSelect: () => void
+  onClose: () => void
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
+}) {
+  const label = PAGE_LABELS[page]
+  return (
+    <div
+      ref={ref}
+      role="tab"
+      aria-selected={active}
+      aria-label={`${label} page`}
+      title={`${label}${index < 9 ? `  ⌘${index + 1}` : ''}`}
+      onAnimationEnd={onArrivalAnimationEnd}
+      tabIndex={tabbable ? 0 : -1}
+      onClick={onSelect}
+      onKeyDown={onKeyDown}
+      className={`group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 [-webkit-app-region:no-drag] ${active ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]'}${arriving ? ' animate-tab-in' : ''}`}
+    >
+      {active ? <span className="absolute inset-x-0 bottom-0 h-[1.5px] rounded-t-sm bg-accent" aria-hidden="true" /> : null}
+      <span className={`min-w-0 flex-1 truncate text-xs ${active ? 'text-text-primary' : 'text-text-subtle'}`}>{label}</span>
+      <button
+        type="button"
+        title={`Close ${label}`}
+        aria-label={`Close ${label} page`}
+        className="flex h-[18px] w-0 shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-[opacity,background-color,color] hover:bg-white/10 hover:text-text-primary group-hover:w-[18px] group-hover:opacity-100 focus-visible:w-[18px] focus-visible:opacity-100"
+        onKeyDown={event => {
+          if (!event.metaKey && !event.ctrlKey) event.stopPropagation()
+        }}
+        onClick={event => {
+          event.stopPropagation()
+          onClose()
+        }}
+      >
+        ×
+      </button>
+    </div>
   )
 }
 

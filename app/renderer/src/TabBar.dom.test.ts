@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor } from './sessionDescriptorFixture.js'
-import { TabBar, type TabModel } from './TabBar.js'
+import { TabBar, type TabBarEntry, type TabModel } from './TabBar.js'
+import type { NavigationTarget } from './pageTabNavigation.js'
 
 let harness: DomTestHarness
 const noop = () => {}
@@ -101,4 +102,92 @@ test('the selected tab scrolls into view with reduced-motion-aware behavior', as
     HTMLElement.prototype.scrollIntoView = originalScroll
     window.matchMedia = originalMatchMedia
   }
+})
+
+test('mixed tabs expose one selection and page close intent without session controls', async () => {
+  const first = tab('first')
+  const entries: TabBarEntry[] = [
+    { kind: 'session', model: first },
+    { kind: 'page', page: 'accounts' },
+  ]
+  const selected: NavigationTarget[] = []
+  const closed: NavigationTarget[] = []
+  const tree = await harness.mount(createElement(TabBar, {
+    tabs: [first],
+    navigationTabs: entries,
+    selectedTarget: { kind: 'page', page: 'accounts' },
+    onSelect: noop,
+    onClose: noop,
+    onSelectTarget: target => selected.push(target),
+    onCloseTarget: target => closed.push(target),
+    onOpenActions: noop,
+    onAddPanel: noop,
+    panelCount: 2,
+    canAddPanel: true,
+    onRestart: noop,
+    onNewTab: noop,
+  }))
+
+  const tabs = [...tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
+  expect(tabs.map(element => element.getAttribute('aria-selected'))).toEqual(['false', 'true'])
+  expect(tabs.map(element => element.tabIndex)).toEqual([-1, 0])
+  expect(tabs[1]?.getAttribute('aria-label')).toBe('Accounts page')
+  expect(tabs[1]?.getAttribute('draggable')).toBeNull()
+  expect(tabs[1]?.getAttribute('title')).toContain('⌘2')
+  expect(tabs[1]?.querySelector('[title="Restart this session"]')).toBeNull()
+  expect(tabs[1]?.querySelector('[title="Session actions"]')).toBeNull()
+  expect(tree.container.querySelector('[aria-label="Split view"]')).toBeNull()
+
+  await act(async () => {
+    tabs[1]?.querySelector<HTMLButtonElement>('[aria-label="Close Accounts page"]')?.click()
+  })
+  expect(closed).toEqual([{ kind: 'page', page: 'accounts' }])
+
+  await act(async () => {
+    tabs[1]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+  })
+  expect(selected).toEqual([{ kind: 'session', sessionId: 'first' }])
+  await act(async () => { tabs[0]?.click() })
+  expect(selected).toEqual([
+    { kind: 'session', sessionId: 'first' },
+    { kind: 'session', sessionId: 'first' },
+  ])
+  await act(async () => { tabs[0]?.querySelector<HTMLButtonElement>('[aria-label="Close session first"]')?.click() })
+  expect(closed.at(-1)).toEqual({ kind: 'session', sessionId: 'first' })
+})
+
+test('mixed navigation does not mark retained session context selected when selection is empty', async () => {
+  const retainedContext = tab('retained-context')
+  const tree = await harness.mount(createElement(TabBar, {
+    tabs: [retainedContext],
+    navigationTabs: [{ kind: 'session', model: retainedContext }],
+    selectedTarget: null,
+    activeSessionId: 'retained-context',
+    onSelect: noop,
+    onClose: noop,
+    onRestart: noop,
+    onNewTab: noop,
+  }))
+
+  expect(tree.container.querySelector('[role="tab"]')?.getAttribute('aria-selected')).toBe('false')
+})
+
+
+test('a newly opened page enters once and retains its mixed keyboard slot', async () => {
+  const first = tab('first')
+  const props = { tabs: [first], onSelect: noop, onClose: noop, onRestart: noop, onNewTab: noop }
+  const tree = await harness.mount(createElement(TabBar, { ...props,
+    navigationTabs: [{ kind: 'session', model: first }], selectedTarget: { kind: 'session', sessionId: 'first' },
+  }))
+  const withPage = () => createElement(TabBar, { ...props,
+    navigationTabs: [{ kind: 'session', model: first }, { kind: 'page', page: 'goals' }], selectedTarget: { kind: 'page', page: 'goals' },
+  })
+  await tree.render(withPage())
+  await tree.render(withPage())
+  const entering = tree.container.querySelectorAll('[role="tab"].animate-tab-in')
+  expect(entering).toHaveLength(1)
+  expect(entering[0]?.getAttribute('aria-label')).toBe('Goals page')
+  await act(async () => { entering[0]?.dispatchEvent(new Event('animationend', { bubbles: true })) })
+  await tree.render(withPage())
+  expect(tree.container.querySelector('.animate-tab-in')).toBeNull()
 })

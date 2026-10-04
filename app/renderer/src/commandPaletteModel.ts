@@ -43,7 +43,7 @@ export type PaletteItem = {
   run: () => void
 }
 
-export type PalettePage = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+export type PalettePage = 'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
 
 export type PaletteHandlers = {
   newSession: () => void

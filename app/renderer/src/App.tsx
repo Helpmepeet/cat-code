@@ -40,7 +40,6 @@ import {
   createShellState,
   reduceShellState,
   selectPaneSessions,
-  sessionAtSlot,
   type ShellState,
 } from './shellState.js'
 import {
@@ -51,7 +50,20 @@ import {
 } from './rosterBootstrap.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
-import { TabBar, type TabModel } from './TabBar.js'
+import { TabBar, type TabBarEntry, type TabModel } from './TabBar.js'
+import {
+  createTabNavigation,
+  applyForegroundSelectionIfCurrent,
+  claimForegroundSelection,
+  createForegroundSelectionClaim,
+  isForegroundSelectionCurrent,
+  isSessionSelected,
+  reduceTabNavigation,
+  selectedPage,
+  selectedSessionId,
+  supersedeForegroundSelection,
+  type PageTab,
+} from './pageTabNavigation.js'
 import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
@@ -843,6 +855,8 @@ export function App() {
     undefined,
     createSessionsCatalogState,
   )
+  const sessionsCatalogRef = useRef(sessionsCatalog)
+  sessionsCatalogRef.current = sessionsCatalog
   // P4-6b — the WRITE half of the ⋯ menu: the sidecar's `session-action.result`
   // per session (A's reducer, previously unwired). Read by the outcome toast below.
   const [sessionActionRuntime, dispatchSessionActionRuntime] = useReducer(
@@ -908,9 +922,27 @@ export function App() {
   const [oauthAliasStatus, setOauthAliasStatus] = useState<OAuthSubmitStatus>({
     state: 'idle',
   })
-  const [activeView, setActiveView] = useState<
-    'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
-  >('chat')
+  const [tabNavigation, dispatchTabNavigation] = useReducer(
+    reduceTabNavigation,
+    undefined,
+    createTabNavigation,
+  )
+  const activeView = selectedPage(tabNavigation)
+  const selectedNavigationSessionId = selectedSessionId(tabNavigation)
+  const tabNavigationRef = useRef(tabNavigation)
+  tabNavigationRef.current = tabNavigation
+  const foregroundSelectionClaimRef = useRef(createForegroundSelectionClaim())
+  const openPage = useCallback((page: PageTab) => {
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({ type: 'open-page', page })
+  }, [])
+  const closePage = useCallback((page: PageTab) => {
+    const selected = tabNavigationRef.current.selected
+    if (selected?.kind === 'page' && selected.page === page) {
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    }
+    dispatchTabNavigation({ type: 'close', target: { kind: 'page', page } })
+  }, [])
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
   // listSessions() below, then kept live off subscribeHost.
@@ -1467,9 +1499,10 @@ export function App() {
   const focusActivePaneAfterRosterChange = useCallback(() => {
     const current = activeSessionIdRef.current
     const currentShell = shellRef.current
-    const paneOrder = selectPaneSessions(currentShell).map(
-      descriptor => descriptor.appSessionId,
-    )
+    const paneOrder = filterInteractiveSessionDescriptors(
+      selectPaneSessions(currentShell),
+      selectSessionsCatalog(sessionsCatalogRef.current),
+    ).map(descriptor => descriptor.appSessionId)
     const pendingClose =
       current === null
         ? undefined
@@ -1492,7 +1525,7 @@ export function App() {
 
   useEffect(() => {
     focusActivePaneAfterRosterChange()
-  }, [focusActivePaneAfterRosterChange, shell])
+  }, [focusActivePaneAfterRosterChange, shell, sessionsCatalog])
 
   useEffect(() => {
     for (const sessionId in shell.previews) {
@@ -1557,12 +1590,29 @@ export function App() {
                   permissions,
                   sessionId,
                 ),
-                isActive: sessionId === activeSessionId,
+                isActive: isSessionSelected(tabNavigation, sessionId),
               }),
         }
       }),
-    [shell, connection, permissions, activeSessionId, sessionCatalogSnapshot],
+    [shell, connection, permissions, tabNavigation, sessionCatalogSnapshot],
   )
+  const tabBarEntries: TabBarEntry[] = useMemo(() => {
+    const sessionEntries = new Map(
+      tabs.map(model => [
+        model.descriptor.appSessionId,
+        { kind: 'session', model } as const,
+      ]),
+    )
+    const entries: TabBarEntry[] = []
+    for (const target of tabNavigation.tabs) {
+      if (target.kind === 'page') entries.push({ kind: 'page', page: target.page })
+      else {
+        const session = sessionEntries.get(target.sessionId)
+        if (session) entries.push(session)
+      }
+    }
+    return entries
+  }, [tabs, tabNavigation.tabs])
   // The active session's worker snapshot, read once for the docked roster and
   // footer strip so both read one truth.
   const activeLiveWorkersSnapshot = selectLiveWorkersSnapshot(
@@ -1574,6 +1624,21 @@ export function App() {
     [tabs],
   )
   const paneSessionKey = paneSessionIds.join('\u0000')
+  useEffect(() => {
+    dispatchTabNavigation({ type: 'reconcile-sessions', sessionIds: paneSessionIds })
+  }, [paneSessionKey])
+
+  // Visible selection owns pane focus. Roster repairs may retain another session
+  // as project context while a page is selected, but never redirect navigation.
+  useEffect(() => {
+    if (!selectedNavigationSessionId) return
+    setActiveSessionId(selectedNavigationSessionId)
+    setWorkspaceLayoutState(current => {
+      const next = focusOrAssignWorkspaceSession(current, selectedNavigationSessionId).state
+      return workspaceLayoutsEqual(current, next) ? current : next
+    })
+  }, [selectedNavigationSessionId])
+
   const tabDescriptorsById = useMemo(
     () =>
       new Map(
@@ -1738,24 +1803,32 @@ export function App() {
     writeWorkspaceLayoutToStorage(getWorkspaceStorage(), workspaceLayout)
   }, [hostSnapshotReady, pendingRestore, workspaceLayout])
 
-  const focusCreatedSession = useCallback((sessionId: SessionId) => {
-    pendingExplicitSessionRef.current = sessionId
-    setWorkspaceLayoutState(current =>
-      focusOrAssignWorkspaceSession(current, sessionId).state,
+  const focusCreatedSession = useCallback((sessionId: SessionId, claim: number) => {
+    applyForegroundSelectionIfCurrent(
+      foregroundSelectionClaimRef.current,
+      claim,
+      () => {
+        pendingExplicitSessionRef.current = sessionId
+        setWorkspaceLayoutState(current =>
+          focusOrAssignWorkspaceSession(current, sessionId).state,
+        )
+        setActiveSessionId(sessionId)
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
+      },
     )
-    setActiveSessionId(sessionId)
-    setActiveView('chat')
   }, [])
 
   const newSession = useCallback(async () => {
     const bridge = getBridge()
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     try {
       // HC1 — the renderer never authors a path: pick → one-time token → create.
       const token = await bridge.pickDirectory(activeSessionId)
       if (!token) return // cancelled
       const result = await bridge.createSession({ cwdToken: token })
       if (result.ok) {
-        focusCreatedSession(result.value.appSessionId)
+        focusCreatedSession(result.value.appSessionId, selectionClaim)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
@@ -1767,10 +1840,11 @@ export function App() {
   const newManagedChat = useCallback(async () => {
     if (newManagedChatInFlightRef.current) return
     newManagedChatInFlightRef.current = true
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     try {
       const bridge = getBridge()
       const result = await bridge.createManagedChat()
-      if (result.ok) focusCreatedSession(result.value.appSessionId)
+      if (result.ok) focusCreatedSession(result.value.appSessionId, selectionClaim)
       else setShellError(hostErrorMessage(result.error))
     } catch (error) {
       setShellError(errorMessage(error))
@@ -1781,6 +1855,7 @@ export function App() {
 
   const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
     const bridge = getBridge()
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     try {
       // #15 — the per-workspace "+": the renderer names an EXISTING registry id
       // (a representative session in that workspace), NEVER a path. The host
@@ -1788,7 +1863,7 @@ export function App() {
       // a fresh session — no native picker, no renderer-authored cwd.
       const result = await bridge.createSessionInWorkspace(repId)
       if (result.ok) {
-        focusCreatedSession(result.value.appSessionId)
+        focusCreatedSession(result.value.appSessionId, selectionClaim)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
@@ -1837,11 +1912,15 @@ export function App() {
     // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
     // in-flight streaming into a background session is lost on switch.
     pendingExplicitSessionRef.current = null
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({
+      type: 'select',
+      target: { kind: 'session', sessionId },
+    })
     const result = focusOrAssignWorkspaceSession(workspaceLayout, sessionId)
     setWorkspaceLayoutState(result.state)
     setLayoutNotice(null)
     setActiveSessionId(sessionId)
-    setActiveView('chat')
   }, [workspaceLayout])
 
   // Account management belongs to the app. Composer switches still address
@@ -2352,6 +2431,11 @@ export function App() {
     (index: number, sessionId: SessionId) => {
       setWorkspaceLayoutState(current => focusWorkspacePanel(current, index))
       setActiveSessionId(sessionId)
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
     },
     [],
   )
@@ -2370,6 +2454,13 @@ export function App() {
       setActiveSessionId(
         result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
       )
+      const focusedSessionId =
+        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId: focusedSessionId },
+      })
       setLayoutNotice(
         result.blocked === 'duplicate'
           ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
@@ -2387,6 +2478,13 @@ export function App() {
       setActiveSessionId(
         result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
       )
+      const focusedSessionId =
+        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId: focusedSessionId },
+      })
       setLayoutNotice(
         result.blocked === 'duplicate'
           ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
@@ -2406,6 +2504,15 @@ export function App() {
       setActiveSessionId(
         next.panels[next.activeIndex]?.sessionId ?? activeSessionId,
       )
+      const focusedSessionId =
+        next.panels[next.activeIndex]?.sessionId ?? activeSessionId
+      if (focusedSessionId) {
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        dispatchTabNavigation({
+          type: 'select',
+          target: { kind: 'session', sessionId: focusedSessionId },
+        })
+      }
       setLayoutNotice(null)
     },
     [activeSessionId, workspaceLayout],
@@ -2547,11 +2654,13 @@ export function App() {
       if (pendingExplicitSessionRef.current === sessionId) {
         pendingExplicitSessionRef.current = null
       }
+      dispatchTabNavigation({ type: 'close', target: { kind: 'session', sessionId } })
       if (activeSessionIdRef.current !== sessionId) return
 
-      const currentPaneOrder = selectPaneSessions(shellRef.current).map(
-        descriptor => descriptor.appSessionId,
-      )
+      const currentPaneOrder = filterInteractiveSessionDescriptors(
+        selectPaneSessions(shellRef.current),
+        selectSessionsCatalog(sessionsCatalogRef.current),
+      ).map(descriptor => descriptor.appSessionId)
       const paneOrder = currentPaneOrder.filter(
         candidate => candidate !== sessionId,
       )
@@ -2573,10 +2682,15 @@ export function App() {
   )
 
   const closeTab = useCallback(async (sessionId: SessionId) => {
+    const selectedTarget = tabNavigationRef.current.selected
+    if (selectedTarget?.kind === 'session' && selectedTarget.sessionId === sessionId) {
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    }
     const shell = shellRef.current
-    const openOrder = selectPaneSessions(shell).map(
-      descriptor => descriptor.appSessionId,
-    )
+    const openOrder = filterInteractiveSessionDescriptors(
+      selectPaneSessions(shell),
+      selectSessionsCatalog(sessionsCatalogRef.current),
+    ).map(descriptor => descriptor.appSessionId)
     if (openOrder.includes(sessionId)) {
       pendingCloseRequestsRef.current.set(sessionId, {
         openOrder,
@@ -2645,6 +2759,7 @@ export function App() {
     sessionId: SessionId,
     branch: string,
   ): Promise<string | null> => {
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     if (selectPendingSubmit(pendingSubmitsRef.current, sessionId) !== null) {
       return 'This chat has a pending prompt. Start a new chat to choose another branch.'
     }
@@ -2668,7 +2783,7 @@ export function App() {
       }
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
-      focusCreatedSession(result.value.appSessionId)
+      focusCreatedSession(result.value.appSessionId, selectionClaim)
       return null
     } catch (error) {
       return errorMessage(error)
@@ -2711,8 +2826,11 @@ export function App() {
   }, [])
 
   const restoreLiveSession = useCallback(
-    async (sessionId: SessionId, options: { focus?: boolean } = {}) => {
+    async (sessionId: SessionId, options: { focus?: boolean; selectionClaim?: number } = {}) => {
       const bridge = getBridge()
+      const selectionClaim = options.selectionClaim ?? (options.focus === false
+        ? null
+        : claimForegroundSelection(foregroundSelectionClaimRef.current))
       try {
         const result = await bridge.restoreSession(sessionId)
         if (result.ok) {
@@ -2729,9 +2847,20 @@ export function App() {
           // they were already reading, and by the time a ~seconds-long engine
           // boot finishes they may have moved on. Every OTHER caller is a click
           // on the session, where taking focus is the point.
-          if (options.focus !== false) {
-            setActiveSessionId(result.value.appSessionId)
-            setActiveView('chat')
+          if (options.focus !== false && selectionClaim !== null) {
+            const completeFocus = () => {
+              setActiveSessionId(result.value.appSessionId)
+              supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+              dispatchTabNavigation({
+                type: 'select',
+                target: { kind: 'session', sessionId: result.value.appSessionId },
+              })
+            }
+            applyForegroundSelectionIfCurrent(
+              foregroundSelectionClaimRef.current,
+              selectionClaim,
+              completeFocus,
+            )
           }
         } else {
           lazyRestoreClaimsRef.current.delete(sessionId)
@@ -2752,7 +2881,9 @@ export function App() {
   const engagePreview = useCallback(
     (sessionId: SessionId) => {
       if (!claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) return
-      void restoreLiveSession(sessionId)
+      void restoreLiveSession(sessionId, {
+        selectionClaim: claimForegroundSelection(foregroundSelectionClaimRef.current),
+      })
     },
     [restoreLiveSession],
   )
@@ -2786,28 +2917,34 @@ export function App() {
     [releasePendingSubmit, restoreLiveSession],
   )
 
-  const openPreviewPane = useCallback((sessionId: SessionId) => {
+  const openPreviewPane = useCallback((sessionId: SessionId, selectionClaim: number) => {
     swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
+    if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
     setWorkspaceLayoutState(current =>
       focusOrAssignWorkspaceSession(current, sessionId).state,
     )
     setActiveSessionId(sessionId)
-    setActiveView('chat')
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({
+      type: 'select',
+      target: { kind: 'session', sessionId },
+    })
   }, [])
 
   // PL-A store-first path: a startup-preloaded transcript opens synchronously
   // with zero click-time IPC. A not-preloaded/cache-miss row retains IS-B's
   // existing fetch then eager-restore fallback.
   const performRestore = useCallback(
-    (sessionId: SessionId) => {
+    (sessionId: SessionId, requestedClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)) => {
+      const selectionClaim = requestedClaim
       const descriptor = shellRef.current.byId[sessionId]
       if (removedIdsRef.current.has(sessionId) || !descriptor?.restorable) return
       if (
         openPreloadedPreview(
           previewTranscriptRef.current,
           sessionId,
-          () => openPreviewPane(sessionId),
+          () => openPreviewPane(sessionId, selectionClaim),
         )
       ) {
         return
@@ -2826,11 +2963,11 @@ export function App() {
           }
           if (cache) {
             dispatchPreviewTranscript({ type: 'preview-load', cache })
-            openPreviewPane(sessionId)
+            openPreviewPane(sessionId, selectionClaim)
             return
           }
           if (claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) {
-            await restoreLiveSession(sessionId)
+            await restoreLiveSession(sessionId, { focus: true, selectionClaim })
           }
         } catch (error) {
           setShellError(errorMessage(error))
@@ -2854,6 +2991,7 @@ export function App() {
   // unresolvable id returns a typed error rendered honestly.
   const openHistorySession = useCallback(
     async (engineSessionId: string): Promise<SessionDescriptor | null> => {
+      const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
       const bridge = getBridge()
       try {
         const result = await bridge.openHistorySession(engineSessionId)
@@ -2863,11 +3001,17 @@ export function App() {
         }
         const descriptor = result.value
         if (descriptor.restorable) {
-          void performRestore(descriptor.appSessionId)
+          void performRestore(descriptor.appSessionId, selectionClaim)
           return descriptor
         }
-        setActiveSessionId(descriptor.appSessionId)
-        setActiveView('chat')
+        if (isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) {
+          setActiveSessionId(descriptor.appSessionId)
+          supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+          dispatchTabNavigation({
+            type: 'select',
+            target: { kind: 'session', sessionId: descriptor.appSessionId },
+          })
+        }
         return descriptor
       } catch (error) {
         setShellError(errorMessage(error))
@@ -3360,8 +3504,8 @@ export function App() {
   // between the two: exactly one card is ever handed it, so exactly one
   // listener exists, and it is never registered beside a dedicated flow's.
 
-  // Shell keyboard: keyboard-first tab switching + create/close, matching the
-  // prototype's chords (⌘T new · ⌘W close · ⌘1..9 jump-to-tab). Only fires on a
+  // Shell keyboard: keyboard-first mixed-tab switching + create/close (⌘T new,
+  // ⌘W close selected tab, ⌘1..9 by visible strip order). Only fires on a
   // meta/ctrl chord, and the permission card's own list claims Ctrl for exactly
   // ⌃P/⌃N (`permissionKeyIntent`), which this handler does not use — so the two
   // key maps stay disjoint even where both accept Ctrl.
@@ -3382,21 +3526,24 @@ export function App() {
         return
       }
       if (event.key === 'w' || event.key === 'W') {
-        if (!activeSessionId) return
+        const selected = tabNavigationRef.current.selected
+        if (!selected) return
         event.preventDefault()
-        void closeTab(activeSessionId)
+        if (selected.kind === 'session') void closeTab(selected.sessionId)
+        else closePage(selected.page)
         return
       }
       if (event.key >= '1' && event.key <= '9') {
-        const target = sessionAtSlot(shell, Number(event.key))
+        const target = tabBarEntries[Number(event.key) - 1]
         if (!target) return
         event.preventDefault()
-        selectTab(target)
+        if (target.kind === 'session') selectTab(target.model.descriptor.appSessionId)
+        else openPage(target.page)
       }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [shell, activeSessionId, newChat, closeTab, selectTab])
+  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries])
 
   function copyForLlm(sessionId: SessionId): void {
     const text = buildDebugExport(
@@ -3581,7 +3728,7 @@ export function App() {
                 )
               }
             } : undefined}
-            onManageAccounts={() => setActiveView('accounts')}
+            onManageAccounts={() => openPage('accounts')}
             onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
@@ -4003,28 +4150,32 @@ export function App() {
   const paletteItems = paletteOpen
     ? buildPaletteItems({
         rows: visibleShellDescriptors,
-        activeSessionId,
-        hasPanels: workspacePanels.length > 0,
+        activeSessionId: selectedNavigationSessionId,
+        hasPanels: activeView === 'chat' && workspacePanels.length > 0,
         slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
         recentItemIds: recentPaletteItemIds,
         handlers: {
           // Labelled ⌘T in the palette, so it must match the chord exactly.
           newSession: () => void newChat(),
           closeActiveSession: () => {
-            if (activeSessionId) void closeTab(activeSessionId)
+            if (selectedNavigationSessionId) void closeTab(selectedNavigationSessionId)
           },
           restartActiveSession: () => {
-            if (activeSessionId) restartTab(activeSessionId)
+            if (selectedNavigationSessionId) restartTab(selectedNavigationSessionId)
           },
           copyActiveTranscript: () => {
-            if (activeSessionId) copyForLlm(activeSessionId)
+            if (selectedNavigationSessionId) copyForLlm(selectedNavigationSessionId)
           },
           closeCurrentPanel: () =>
             closeWorkspacePanelAt(workspaceLayout.activeIndex),
           selectLiveSession: selectTab,
           restoreSession: sessionId => void performRestore(sessionId),
           openTasks: () => openTasksDialog(),
-          navigatePage: page => setActiveView(page),
+          navigatePage: page => {
+            if (page === 'chat') {
+              if (activeSessionId) selectTab(activeSessionId)
+            } else openPage(page)
+          },
         },
       })
     : EMPTY_PALETTE_ITEMS
@@ -4146,10 +4297,19 @@ export function App() {
          * cannot yield while it is also a full-height column. */}
         <TabBar
           tabs={tabs}
-          activeSessionId={activeSessionId}
+          navigationTabs={tabBarEntries}
+          selectedTarget={tabNavigation.selected}
           rosterReady={hostSnapshotReady}
           onSelect={selectTab}
-          onClose={closeTab}
+          onSelectTarget={target => {
+            if (target.kind === 'session') selectTab(target.sessionId)
+            else openPage(target.page)
+          }}
+          onClose={sessionId => void closeTab(sessionId)}
+          onCloseTarget={target => {
+            if (target.kind === 'session') void closeTab(target.sessionId)
+            else closePage(target.page)
+          }}
           onRestart={restartTab}
           onNewTab={newChat}
           onOpenActions={(sessionId, anchor) =>
@@ -4168,7 +4328,11 @@ export function App() {
           rows={sessionCatalogRows}
           activeSessionId={activeSessionId}
           activeView={activeView}
-          onSelectView={setActiveView}
+          onSelectView={view => {
+            if (view === 'chat') {
+              if (activeSessionId) selectTab(activeSessionId)
+            } else openPage(view)
+          }}
           onSelectLive={selectTab}
           onRestore={sessionId => void performRestore(sessionId)}
           onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
@@ -4675,7 +4839,7 @@ export function App() {
             <div className="flex min-h-0 flex-1 flex-col">
               <BannerStack
                 banners={accountHealthBanners}
-                onAction={() => setActiveView('accounts')}
+                onAction={() => openPage('accounts')}
                 onDismiss={banner => setDismissedAccountHealthId(banner.id)}
               />
   	          <WorkspaceLayout

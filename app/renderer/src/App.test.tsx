@@ -226,7 +226,7 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   const html = renderToStaticMarkup(<App />)
 
   expect(html).toContain('role="tablist"')
-  expect(html).toContain('aria-label="Sessions"')
+  expect(html).toContain('aria-label="Workspace tabs"')
   expect(html).toContain('aria-label="New session"')
   expect(html).toContain('Welcome back')
   expect(html).toContain('Open a project')
@@ -316,7 +316,7 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   expect(admissionBody).toContain('maxProjectedBytes: remainingBytes')
 
   expect(restoreBody).toContain('openPreloadedPreview(')
-  expect(restoreBody).toContain('openPreviewPane(sessionId)')
+  expect(restoreBody).toContain('openPreviewPane(sessionId, selectionClaim)')
   expect(restoreBody).toContain('await bridge.previewSession(sessionId)')
   expect(restoreBody).toContain('removedIdsRef.current.has(sessionId)')
   expect(restoreBody).toContain('!descriptor?.restorable')
@@ -324,7 +324,7 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
     restoreBody.indexOf('bridge.previewSession(sessionId)'),
   )
   expect(restoreBody.indexOf('bridge.previewSession(sessionId)')).toBeLessThan(
-    restoreBody.indexOf('await restoreLiveSession(sessionId)'),
+    restoreBody.indexOf('await restoreLiveSession(sessionId, { focus: true, selectionClaim })'),
   )
   expect(source).toContain('event.session.restorable')
   expect(source).toContain(
@@ -486,10 +486,10 @@ test('new-session creation focuses the created session in the workspace panel', 
   expect(helperBody).toContain('focusOrAssignWorkspaceSession')
   expect(helperBody).toContain('setWorkspaceLayoutState')
   expect(newSessionBody).toContain(
-    'focusCreatedSession(result.value.appSessionId)',
+    'focusCreatedSession(result.value.appSessionId, selectionClaim)',
   )
   expect(workspaceBody).toContain(
-    'focusCreatedSession(result.value.appSessionId)',
+    'focusCreatedSession(result.value.appSessionId, selectionClaim)',
   )
 })
 

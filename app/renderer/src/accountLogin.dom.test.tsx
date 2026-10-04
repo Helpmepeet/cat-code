@@ -15,6 +15,7 @@ afterAll(async () => { await harness.teardown() })
 async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = []) {
   window.localStorage.clear()
   const calls: AccountVerbMessage[] = []
+  const lifecycleCalls: string[] = []
   const toasts: string[] = []
   let hostEvent: (event: HostEvent) => void = () => {}
   const bridge: Partial<CatCodeBridge> = {
@@ -29,7 +30,14 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [])
       return { kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '', requestId: verb.requestId, verb: verb.type, ok: !refusedVerbs.includes(verb.type), message: verb.type === 'account.oauthPasteCode' ? 'That code was refused.' : verb.type === 'account.oauthAlias' ? 'That name is taken.' : 'Done' }
     },
     accountVerb: () => { throw new Error('login borrowed a session') },
-    createSession: () => { throw new Error('login created a chat') },
+    createSession: () => {
+      lifecycleCalls.push('createSession')
+      throw new Error('login created a chat')
+    },
+    closeSession: () => {
+      lifecycleCalls.push('closeSession')
+      throw new Error('page navigation closed a session')
+    },
   }
   window.catcode = bridge as CatCodeBridge
   const tree = await harness.mount(<ToastContext.Provider value={message => toasts.push(message)}><App /></ToastContext.Provider>)
@@ -43,8 +51,56 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [])
     if (!button) throw new Error(`missing button ${label}`)
     await act(async () => { button.click() })
   }
-  return { calls, toasts, tree, click, pool, hostEvent: (event: HostEvent) => hostEvent(event) }
+  return { calls, lifecycleCalls, toasts, tree, click, pool, hostEvent: (event: HostEvent) => hostEvent(event) }
 }
+
+test('sidebar pages open unique mixed tabs and page closing never calls session lifecycle', async () => {
+  const { lifecycleCalls, tree, click } = await mountAccountsApp()
+  await click('Goals')
+  await click('Accounts')
+  expect(tree.container.querySelector('main h1')?.textContent).toBe('Accounts')
+  await click('Goals')
+  expect(tree.container.querySelector('main h1')?.textContent).toBe('Goals')
+
+  const pageTabs = () => [
+    ...tree.container.querySelectorAll<HTMLElement>('[role="tab"][aria-label$="page"]'),
+  ]
+  expect(pageTabs().map(tab => tab.getAttribute('aria-label'))).toEqual([
+    'Goals page',
+    'Accounts page',
+  ])
+  expect(pageTabs().map(tab => tab.getAttribute('aria-selected'))).toEqual(['true', 'false'])
+  await act(async () => {
+    pageTabs()[0]?.querySelector<HTMLButtonElement>('[aria-label="Close Goals page"]')?.click()
+  })
+  expect(pageTabs().map(tab => tab.getAttribute('aria-label'))).toEqual(['Accounts page'])
+  expect(pageTabs()[0]?.getAttribute('aria-selected')).toBe('true')
+  await click('Goals')
+  expect(pageTabs().map(tab => tab.getAttribute('aria-label'))).toEqual([
+    'Accounts page',
+    'Goals page',
+  ])
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', ctrlKey: true, bubbles: true }))
+  })
+  expect(pageTabs().map(tab => tab.getAttribute('aria-selected'))).toEqual(['true', 'false'])
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true }))
+  })
+  expect(pageTabs().map(tab => tab.getAttribute('aria-selected'))).toEqual(['false', 'true'])
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', metaKey: true, bubbles: true }))
+  })
+  expect(pageTabs().map(tab => tab.getAttribute('aria-label'))).toEqual(['Accounts page'])
+  expect(pageTabs()[0]?.getAttribute('aria-selected')).toBe('true')
+  await act(async () => {
+    pageTabs()[0]?.querySelector<HTMLButtonElement>('[aria-label="Close Accounts page"]')?.click()
+  })
+  expect(pageTabs()).toHaveLength(0)
+  expect(tree.container.textContent).toContain('Claude subscription')
+  expect(tree.container.textContent).not.toContain('Welcome back')
+  expect(lifecycleCalls).toEqual([])
+})
 
 test('first-run completion waits for global availability', async () => {
   const { tree, pool, hostEvent } = await mountAccountsApp()
