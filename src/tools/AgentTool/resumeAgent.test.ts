@@ -189,6 +189,35 @@ describe('resumeAgentBackground', () => {
     expect(childContext?.options.mcpResources).toEqual(parentResources)
   })
 
+  test('restores the persisted Opus route instead of adopting its Codex parent', async () => {
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose', model: 'claude-opus-5-5', provider: 'firstParty',
+    })
+    const context = createToolUseContext() as ToolUseContext
+    context.options.mainLoopModel = 'gpt-6.1-sol'
+    context.options.mainLoopProvider = 'openai'
+    context.options.commands = []
+    context.options.mcpResources = {}
+    context.abortController = new AbortController()
+    context.readFileState = new Map() as never
+    let childContext: ToolUseContext | undefined
+    runAsyncAgentLifecycle.mockImplementation(mock(async ({ makeStream }) => {
+      const stream = makeStream(({ toolUseContext }) => {
+        childContext = toolUseContext
+        throw new Error('captured resumed context')
+      })
+      await expect(stream.next()).rejects.toThrow('captured resumed context')
+    }) as never)
+
+    await resumeAgentBackground({
+      agentId: 'agent-resume', prompt: 'continue',
+      canUseTool: (() => undefined) as never, toolUseContext: context,
+    })
+    await runAsyncAgentLifecycle.mock.results[0]!.value
+    expect(childContext?.options.mainLoopModel).toBe('claude-opus-5-5')
+    expect(childContext?.options.mainLoopProvider).toBe('firstParty')
+  })
+
   test('holds lifecycle ownership until the detached background run settles, not just through setup', async () => {
     const lifecycle = deferred<void>()
     runAsyncAgentLifecycle.mockImplementation(

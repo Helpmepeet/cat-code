@@ -8,7 +8,7 @@ import { join } from 'path'
 import { PassThrough } from 'stream'
 import stripAnsi from 'strip-ansi'
 import * as React from 'react'
-import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
+import { resetStateForTests, setSessionProvider, switchSession } from '../../bootstrap/state.js'
 import { getCwd } from '../../utils/cwd.js'
 import { readSessionState } from '../../utils/workerState.js'
 import { asSessionId } from '../../types/ids.js'
@@ -47,10 +47,11 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 import type { ScopedMcpServerConfig } from '../../services/mcp/types.js'
 
 const realQueryModule = await import('../../query.js')
-let queryScript: () => AsyncGenerator<Message> = async function* () {}
+let queryScript: (context?: ToolUseContext, systemPrompt?: string[]) => AsyncGenerator<Message> = async function* () {}
 mock.module('../../query.js', () => ({
   ...realQueryModule,
-  query: () => queryScript(),
+  query: (params: { toolUseContext?: ToolUseContext; systemPrompt?: string[] }) =>
+    queryScript(params.toolUseContext, params.systemPrompt),
 }))
 
 const realRunAgentModule = await import('./runAgent.js')
@@ -200,6 +201,42 @@ const originalRandom = Math.random
 const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
 const originalSdkDisableBuiltins =
   process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
+
+test.each(['general-purpose', undefined])('an explicit Opus pin from a Codex parent reaches Anthropic with its own prompt and tools (type=%s)', async subagent_type => {
+  setSessionProvider('openai')
+  const parent = createToolContextForCwd() as ToolUseContext
+  parent.options.mainLoopModel = 'gpt-6.1-sol'
+  parent.options.mainLoopProvider = 'openai'
+  parent.setResponseLength = () => {}
+  useRealRunAgent = true
+  let child: ToolUseContext | undefined
+  let prompt: string[] | undefined
+  queryScript = async function* (context, systemPrompt) {
+    child = context
+    prompt = systemPrompt
+    const response = createAssistantMessage({ content: 'review complete' })
+    response.message.model = 'claude-opus-5-5'
+    yield response
+  }
+
+  const result = await AgentTool.call(
+    { ...baseInput, subagent_type, model: 'claude-opus-5-5' },
+    parent,
+    undefined as never,
+    undefined as never,
+  )
+
+  expect(child?.options.mainLoopModel).toBe('claude-opus-5-5')
+  expect(child?.options.mainLoopProvider).toBe('firstParty')
+  expect(child?.options.tools.map(tool => tool.name)).toContain('Edit')
+  expect(child?.options.tools.map(tool => tool.name)).not.toContain('Apply_patch')
+  expect(prompt?.join('\n')).toContain('exact model ID is claude-opus-5-5')
+  expect(parent.options.mainLoopProvider).toBe('openai')
+  if (result.data.status !== 'completed') throw new Error('Opus review did not complete')
+  expect(result.data.model).toBe('claude-opus-5-5')
+  const receipt = AgentTool.mapToolResultToToolResultBlockParam({ ...result.data, status: 'completed' }, 'receipt')
+  expect(JSON.stringify(receipt.content)).toContain('claude-opus-5-5')
+})
 
 afterEach(() => {
   Math.random = originalRandom

@@ -89,8 +89,8 @@ import {
   type AskParentSessionToolResult,
 } from '../AskParentSessionTool/AskParentSessionTool.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../AskParentSessionTool/prompt.js'
-import { getAgentModel } from '../../utils/model/agent.js'
-import { resolveRequestProvider } from '../../utils/model/providers.js'
+import { resolveAgentModel, type AgentModelRoute } from '../../utils/model/agent.js'
+import type { APIProvider } from '../../utils/model/providers.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
 import { type EffortLevel, resolveSubagentEffort } from '../../utils/effort.js'
 import {
@@ -390,6 +390,7 @@ async function* runAgentInCleanupScope({
   querySource,
   override,
   model,
+  modelRoute,
   effort,
   maxTurns,
   outputFormat,
@@ -430,6 +431,8 @@ async function* runAgentInCleanupScope({
     agentRunId?: string
   }
   model?: ModelAlias
+  /** Frozen dispatch route, also restored from worker metadata on resume. */
+  modelRoute?: AgentModelRoute
   /** Effort level the caller selected for this spawn. Outranks the agent
    * definition's `effort:` pin and the parent's current effort; see
    * resolveSubagentEffort() for the full chain and for why it is dropped on
@@ -523,15 +526,12 @@ async function* runAgentInCleanupScope({
   const rootSetAppState =
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
 
-  const resolvedAgentModel = getAgentModel(
+  const { model: resolvedAgentModel, provider: resolvedAgentProvider } = modelRoute ?? resolveAgentModel(
     agentDefinition.model,
     toolUseContext.options.mainLoopModel,
     model,
     permissionMode,
-    resolveRequestProvider(
-      toolUseContext.options.mainLoopModel,
-      toolUseContext.options.mainLoopProvider,
-    ),
+    toolUseContext.options.mainLoopProvider,
   )
 
   const agentId = override?.agentId ? override.agentId : createAgentId()
@@ -745,6 +745,11 @@ async function* runAgentInCleanupScope({
     }
   }
 
+  if (!useExactTools) {
+    // Loaded after tools.ts initializes to avoid its AgentTool import cycle.
+    const { alignProviderFileEditTool } = await import('../../tools.js')
+    availableTools = alignProviderFileEditTool(availableTools, appState.toolPermissionContext, resolvedAgentProvider)
+  }
   const resolvedTools = useExactTools
     ? availableTools
     : resolveAgentTools(
@@ -778,6 +783,7 @@ async function* runAgentInCleanupScope({
       agentDefinition,
       toolUseContext,
       resolvedAgentModel,
+      resolvedAgentProvider,
       additionalWorkingDirectories,
       resolvedTools,
       workerName ?? undefined,
@@ -1043,10 +1049,7 @@ async function* runAgentInCleanupScope({
     debug: toolUseContext.options.debug,
     verbose: toolUseContext.options.verbose,
     mainLoopModel: resolvedAgentModel,
-    mainLoopProvider: resolveRequestProvider(
-      resolvedAgentModel,
-      toolUseContext.options.mainLoopProvider,
-    ),
+    mainLoopProvider: resolvedAgentProvider,
     // For fork children (useExactTools), inherit thinking config to match the
     // parent's API request prefix for prompt cache hits. For regular
     // sub-agents, disable thinking to control output token costs.
@@ -1135,6 +1138,8 @@ async function* runAgentInCleanupScope({
   )
   void writeAgentMetadata(agentId, {
     agentType: agentDefinition.agentType,
+    model: resolvedAgentModel,
+    provider: resolvedAgentProvider,
     ...(workerName && { agentName: workerName }),
     ...(cwd && { assignedCwd: cwd }),
     ...(worktreePath && { worktreePath }),
@@ -1505,6 +1510,7 @@ async function getAgentSystemPrompt(
   agentDefinition: AgentDefinition,
   toolUseContext: Pick<ToolUseContext, 'options'>,
   resolvedAgentModel: string,
+  resolvedAgentProvider: APIProvider,
   additionalWorkingDirectories: string[],
   resolvedTools: readonly Tool[],
   workerName?: string,
@@ -1512,17 +1518,21 @@ async function getAgentSystemPrompt(
   const enabledToolNames = new Set(resolvedTools.map(t => t.name))
   let agentPrompt: string
   try {
-    agentPrompt = agentDefinition.getSystemPrompt({ toolUseContext })
+    agentPrompt = agentDefinition.getSystemPrompt({
+      toolUseContext: {
+        ...toolUseContext,
+        options: {
+          ...toolUseContext.options,
+          mainLoopModel: resolvedAgentModel,
+          mainLoopProvider: resolvedAgentProvider,
+        },
+      },
+    })
   } catch (error) {
     logForDebugging(
       `Failed to get system prompt for agent ${agentDefinition.agentType}: ${errorMessage(error)}`,
     )
-    agentPrompt = getDefaultAgentPrompt(
-      resolveRequestProvider(
-        resolvedAgentModel,
-        toolUseContext.options.mainLoopProvider,
-      ),
-    )
+    agentPrompt = getDefaultAgentPrompt(resolvedAgentProvider)
   }
 
   return enhanceSystemPromptWithEnvDetails(
@@ -1530,10 +1540,7 @@ async function getAgentSystemPrompt(
     resolvedAgentModel,
     additionalWorkingDirectories,
     enabledToolNames,
-    resolveRequestProvider(
-      resolvedAgentModel,
-      toolUseContext.options.mainLoopProvider,
-    ),
+    resolvedAgentProvider,
   )
 }
 

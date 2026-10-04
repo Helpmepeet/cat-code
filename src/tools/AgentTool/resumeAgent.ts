@@ -23,8 +23,9 @@ import {
   filterOrphanedThinkingOnlyMessages,
   filterUnresolvedToolUses,
   filterWhitespaceOnlyAssistantMessages,
+  SYNTHETIC_MODEL,
 } from '../../utils/messages.js'
-import { getAgentModel } from '../../utils/model/agent.js'
+import { resolveAgentModel } from '../../utils/model/agent.js'
 import { getQuerySourceForAgent } from '../../utils/promptCategory.js'
 import {
   getAgentTranscriptForSession,
@@ -257,13 +258,20 @@ async function resumeAgentBackgroundLocked(
     }
   }
 
-  // Resolve model for analytics metadata (runAgent resolves its own internally)
-  const resolvedAgentModel = getAgentModel(
-    selectedAgent.model,
+  // Keep the worker on its own route when the parent uses another provider.
+  // Old metadata has no route, so recover the last model that actually answered.
+  const previousAssistant = resumedMessages.findLast(message =>
+    message.type === 'assistant' && message.message.model && message.message.model !== SYNTHETIC_MODEL,
+  )
+  const previousModel = previousAssistant?.type === 'assistant' ? previousAssistant.message.model : undefined
+  const modelRoute = meta?.model && meta.provider ? { model: meta.model, provider: meta.provider } : resolveAgentModel(
+    isResumedFork ? undefined : previousModel ?? selectedAgent.model,
     toolUseContext.options.mainLoopModel,
     undefined,
     permissionMode,
+    toolUseContext.options.mainLoopProvider,
   )
+  const { model: resolvedAgentModel, provider: resolvedAgentProvider } = modelRoute
 
   const workerPermissionContext = {
     ...appState.toolPermissionContext,
@@ -308,6 +316,7 @@ async function resumeAgentBackgroundLocked(
       isBuiltInAgent(selectedAgent),
     ),
     model: undefined,
+    modelRoute,
     // Fork resume: pass parent's system prompt (cache-identical prefix).
     // Non-fork: undefined → runAgent recomputes under wrapWithCwd so
     // getCwd() sees resumedWorktreePath.
@@ -398,6 +407,7 @@ async function resumeAgentBackgroundLocked(
   const metadata = {
     prompt,
     resolvedAgentModel,
+    resolvedAgentProvider,
     isBuiltInAgent: isBuiltInAgent(selectedAgent),
     startTime,
     agentType: selectedAgent.agentType,

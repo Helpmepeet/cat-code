@@ -647,7 +647,7 @@ export const CODEX_MODELS = [
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
 
 /**
- * Maps Claude model names to corresponding Codex model names.
+ * Maps legacy provider-local Claude tier names to corresponding Codex models.
  *
  * Reached whenever a Claude model string is served by the Codex path, which is
  * the normal case on a Codex session rather than an exotic one:
@@ -655,10 +655,11 @@ export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
  * for `gpt-*`, so every other id falls through to the SESSION provider.
  *
  * The ladder is by TIER, and the two fallbacks are deliberately not the same
- * value as the top rung. A caller naming `opus` is asking for the most capable
+ * value as the top rung. A legacy caller naming `opus` asks for the most capable
  * model and gets the Codex frontier; a caller naming nothing is almost always a
  * cheap auxiliary call, so it stays mid tier and must not be "consistently"
- * pointed at Sol.
+ * pointed at Sol. New explicit worker selections resolve their provider before
+ * reaching this adapter; the exact Opus 5.5 pin must never be translated.
  *
  * @param claudeModel - The Claude model name to map
  * @returns The corresponding Codex model ID
@@ -668,6 +669,9 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   const remapped = remapRetiredGptModel(claudeModel)
   if (isCodexModel(remapped)) return remapped
   const lower = remapped.toLowerCase()
+  if (lower.replace(/\[(?:1m|2m)\]$/, '') === 'claude-opus-5-5') {
+    throw new Error('Opus 5.5 requires an Anthropic provider; it cannot run through OpenAI.')
+  }
   if (lower.includes('opus')) return 'gpt-6.1-sol'
   if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-6-luna'
   return DEFAULT_CODEX_MODEL

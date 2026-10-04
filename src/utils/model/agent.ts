@@ -9,7 +9,12 @@ import {
   getRuntimeMainLoopModel,
   parseUserSpecifiedModel,
 } from './model.js'
-import { getAPIProvider, resolveRequestProvider, type APIProvider } from './providers.js'
+import {
+  getAPIProvider,
+  resolveModelSelectionProvider,
+  resolveRequestProvider,
+  type APIProvider,
+} from './providers.js'
 
 // @[MODEL LAUNCH]: 'claude-opus-5-5' is a deliberate version pin, not an alias.
 // Re-point it (or add the successor beside it) when a newer Opus ships.
@@ -29,6 +34,29 @@ export type AgentModelOption = {
  */
 export function getDefaultSubagentModel(): string {
   return 'inherit'
+}
+
+export type AgentModelRoute = { model: string; provider: APIProvider }
+
+/** A new worker's explicit selection may cross providers without changing its parent. */
+export function resolveAgentModel(
+  agentModel: string | undefined,
+  parentModel: string,
+  toolSpecifiedModel?: AgentModelSelection,
+  permissionMode?: PermissionMode,
+  parentProvider?: APIProvider,
+): AgentModelRoute {
+  const provider = resolveRequestProvider(parentModel, parentProvider)
+  const model = getAgentModel(
+    agentModel, parentModel, toolSpecifiedModel, permissionMode, provider,
+  )
+  const selection = process.env.CLAUDE_CODE_SUBAGENT_MODEL || toolSpecifiedModel || agentModel
+  return {
+    model,
+    provider: selection && selection !== 'inherit'
+      ? resolveModelSelectionProvider(model, provider)
+      : resolveRequestProvider(model, provider),
+  }
 }
 
 /**

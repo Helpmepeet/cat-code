@@ -45,7 +45,7 @@ import { asAgentId } from '../../types/ids.js'
 import type { Message as MessageType } from '../../types/message.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { resolveRequestProvider } from '../../utils/model/providers.js'
+import { resolveRequestProvider, type APIProvider } from '../../utils/model/providers.js'
 import { isInProtectedNamespace } from '../../utils/envUtils.js'
 import { AbortError, errorMessage } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
@@ -53,6 +53,7 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import {
   extractTextContent,
   getLastAssistantMessage,
+  SYNTHETIC_MODEL,
 } from '../../utils/messages.js'
 import type { PermissionMode } from '../../utils/permissions/PermissionMode.js'
 import { permissionRuleValueFromString } from '../../utils/permissions/permissionRuleParser.js'
@@ -661,6 +662,7 @@ export function finalizeAgentTool(
   metadata: {
     prompt: string
     resolvedAgentModel: string
+    resolvedAgentProvider?: APIProvider
     isBuiltInAgent: boolean
     startTime: number
     agentType: string
@@ -757,13 +759,17 @@ export function finalizeAgentTool(
     ? getTokenCountFromUsage(lastAssistantMessage.message.usage)
     : (totalTokensOverride ?? 0)
   const totalToolUseCount = countToolUses(agentMessages)
+  const executedModel = agentMessages.findLast(message =>
+    message.type === 'assistant' && message.message.model && message.message.model !== SYNTHETIC_MODEL,
+  )
+  const resultModel = executedModel?.type === 'assistant' ? executedModel.message.model : resolvedAgentModel
   const { changedFiles, changedFilesTruncated } = collectChangedFiles(agentMessages)
 
   logEvent('tengu_agent_tool_completed', {
     agent_type:
       agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     model:
-      resolvedAgentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      resultModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     prompt_char_count: prompt.length,
     response_char_count: content.length,
     assistant_message_count: agentMessages.length,
@@ -790,7 +796,7 @@ export function finalizeAgentTool(
     agentType,
     ...(agentName ? { agentName } : {}),
     ...(continuationCapabilities ? { continuationCapabilities } : {}),
-    model: resolvedAgentModel,
+    model: resultModel,
     ...(account ? { account } : {}),
     changedFiles,
     ...(changedFilesTruncated !== undefined ? { changedFilesTruncated } : {}),
@@ -1167,7 +1173,7 @@ export async function runAsyncAgentLifecycle({
     const terminalAccount =
       resolveRequestProvider(
         metadata.resolvedAgentModel,
-        toolUseContext.options.mainLoopProvider,
+        metadata.resolvedAgentProvider ?? toolUseContext.options.mainLoopProvider,
       ) === 'openai'
         ? snapshotLeaseAccount(taskId)
         : undefined

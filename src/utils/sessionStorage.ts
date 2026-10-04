@@ -449,6 +449,9 @@ function getAgentMetadataPathForSession(
 
 export type AgentMetadata = {
   agentType: string
+  /** Dispatch route; older files resume using their transcript's actual model. */
+  model?: string
+  provider?: import('./model/providers.js').APIProvider
   /** Friendly system/user-facing name for targeting this subagent. */
   agentName?: string
   /** Explicit cwd override assigned by AgentTool call (mutually exclusive with
