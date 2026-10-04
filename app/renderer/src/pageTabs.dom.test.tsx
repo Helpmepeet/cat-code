@@ -32,9 +32,9 @@ function ready(id: string): ServerFrame {
     payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } }
 }
 
-async function mountApp(sessions: SessionDescriptor[] = [], split = false) {
+async function mountApp(sessions: SessionDescriptor[] = [], split = false, savedActiveIndex = 0) {
   window.localStorage.clear()
-  if (split) window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify({ version: 1, panels: ['a', 'b'], widths: [35, 65], activeIndex: 0 }))
+  if (split) window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify({ version: 1, panels: ['a', 'b'], widths: [35, 65], activeIndex: savedActiveIndex }))
   let hostListener: (event: HostEvent) => void = () => {}
   let frameListener: (frames: ServerFrame[]) => void = () => {}
   const lifecycle: string[] = []
@@ -237,6 +237,43 @@ test('page navigation preserves saved splits and Settings loses removed session 
   expect(app.inventoryCwds.at(-1)).toBeNull()
 })
 
+
+test.each(['session', 'page'] as const)('deferred saved split restoration preserves newer %s selection', async selection => {
+  const app = await mountApp([
+    sessionDescriptor('a'),
+    sessionDescriptor('b', { status: 'exited', restorable: true }),
+  ], true, 1)
+  const pending = deferred<TranscriptCache | null>()
+  window.catcode.previewSession = () => pending.promise
+  await app.click('Pin sidebar open')
+  await act(async () => {
+    for (const header of app.tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"][aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"]')) header.click()
+  })
+  const row = [...app.tree.container.querySelectorAll<HTMLElement>('[role="button"]')]
+    .find(element => element.getAttribute('aria-label')?.startsWith('session b,'))!
+  expect(row).not.toBeUndefined()
+  await act(async () => { row.click() })
+  if (selection === 'session') await app.key('1')
+  else await app.click('Goals')
+  const cache: TranscriptCache = {
+    header: { appSessionId: 'b', engineSessionId: 'engine-b', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', guardVersion: 1, writtenAt: 0 },
+    frames: [],
+  }
+  await act(async () => { pending.resolve(cache) })
+  const saved = JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!)
+  expect(saved.panels).toEqual(['a', 'b'])
+  expect(saved.widths).toEqual([35, 65])
+  if (selection === 'page') {
+    expect(app.selected()).toEqual(['Goals page'])
+    expect(app.visible.at(-1)).toEqual([])
+    await app.key('1')
+  }
+  expect(app.selected()[0]).toContain('Session a,')
+  const panels = [...app.tree.container.querySelectorAll('section[aria-label^="Panel "]')]
+    .map(element => element.getAttribute('aria-label'))
+  expect(panels).toEqual(['Panel 1 session a, live, active', 'Panel 2 session b, closed, inactive'])
+  expect(JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!).activeIndex).toBe(0)
+})
 
 test('catalog exclusions and background park, crash, and restart never replace the selected page', async () => {
   const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('sdk')])

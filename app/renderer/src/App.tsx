@@ -1739,8 +1739,7 @@ export function App() {
 
   // Re-apply-on-restore (P3-6): the held `pendingRestore` split snaps back once
   // EVERY session it references owns a live or preview pane — order-independent,
-  // overriding
-  // whatever the operator clicked while restoring. Abandoned if a referenced
+  // preserving the current visible session's focus. Abandoned if a referenced
   // session is unrecoverable (neither live nor restorable), which unblocks the
   // disk write below so the operator's actual layout can persist instead.
   const restorableIds = useMemo(
@@ -1785,7 +1784,10 @@ export function App() {
     if (!pendingRestore || !hostSnapshotReady) return
     const ready = readyToRestoreLayout(pendingRestore, paneSessionIds)
     if (ready) {
-      setWorkspaceLayoutState(ready)
+      const selected = tabNavigationRef.current.selected
+      setWorkspaceLayoutState(selected?.kind === 'session'
+        ? focusOrAssignWorkspaceSession(ready, selected.sessionId).state
+        : ready)
       setPendingRestore(null)
       return
     }
