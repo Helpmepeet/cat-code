@@ -688,6 +688,90 @@ describe('state survives a child leaving and re-entering the mounted range', () 
     expect(pane.querySelector(`[data-transcript-entry="${anchorKey}"]`)).not.toBeNull()
   })
 
+  test('outer anchoring counts height changes once and ignores lower appends', async () => {
+    let rows = Array.from({ length: 240 }, (_, index) => historyTextRow(index))
+    let documentHeight = rows.length * 82
+    let bodyGrowth = 0
+    let prependCount = 0
+    const growingIndex = 104
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.classList.contains('transcript-virtual-column')) {
+        const pane = this.closest<HTMLElement>('[data-testid="pane"]')!
+        return {
+          top: -pane.scrollTop, bottom: documentHeight - pane.scrollTop,
+          left: 0, right: 1000, width: 1000, height: documentHeight,
+        } as DOMRect
+      }
+      if (this.firstElementChild?.hasAttribute('data-markdown-leaf')) {
+        const entry = this.closest<HTMLElement>('[data-transcript-entry]')!
+        const pane = this.closest<HTMLElement>('[data-testid="pane"]')!
+        const index = Number(entry.getAttribute('data-transcript-entry')!.split(':')[1])
+        const height = 72 + (index === growingIndex ? bodyGrowth : 0)
+        const top = (index + prependCount) * 82 +
+          (index > growingIndex ? bodyGrowth : 0) - pane.scrollTop
+        return { top, bottom: top + height, left: 0, right: 1000, width: 1000, height } as DOMRect
+      }
+      return originalRect.call(this)
+    }
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute('data-testid') === 'pane' ? 800 : 0 },
+    })
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute('data-testid') === 'pane' ? documentHeight : 0 },
+    })
+    try {
+      const { tree, pane, store } = await mountPane(rows)
+      const writes: number[] = []
+      let position = 0
+      Object.defineProperty(pane, 'scrollTop', {
+        configurable: true,
+        get: () => position,
+        set: (next: number) => { position = next; writes.push(next) },
+      })
+      const settle = async () => {
+        await scrollPane(pane)
+        await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+      }
+      pane.scrollTop = 9000
+      await settle()
+      // Endpoint equality misses an intermediate counter-scroll and return.
+      expect(writes).toEqual([9000])
+
+      bodyGrowth = 40
+      documentHeight += bodyGrowth
+      rows = rows.map((row, index) => index === growingIndex
+        ? { ...row, content: 'A taller body above the viewport' }
+        : row)
+      await tree.render(createElement(Pane, { rows, store }))
+      await settle()
+      expect(writes).toEqual([9000, 9040])
+
+      rows = [...rows, historyTextRow(240)]
+      documentHeight += 82
+      await tree.render(createElement(Pane, { rows, store }))
+      await settle()
+      expect(writes).toEqual([9000, 9040])
+
+      const earlier = Array.from({ length: 10 }, (_, index) => historyTextRow(index - 10))
+      prependCount = earlier.length
+      documentHeight += 820
+      await tree.render(createElement(Pane, { rows: [...earlier, ...rows], store }))
+      await settle()
+      expect(writes).toEqual([9000, 9040, 9860])
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+      if (originalHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalHeight)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      if (originalScrollHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', originalScrollHeight)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight')
+    }
+  })
+
   test('a member scrolled out and back returns expanded', async () => {
     const store = createToolCardExpansionStore()
     store.set('run:toolu_read_0', true)

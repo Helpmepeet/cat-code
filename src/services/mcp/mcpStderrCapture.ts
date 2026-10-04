@@ -40,8 +40,8 @@ export function captureMcpStartupStderr(stream: StderrStream) {
     },
     dispose(): void {
       collecting = false
-      output = ''
-      truncated = false
+      // Timeout cleanup can precede the connection failure handler's take().
+      // Retain only the bounded startup excerpt until that handler consumes it.
       stream.off('data', handler)
     },
   }

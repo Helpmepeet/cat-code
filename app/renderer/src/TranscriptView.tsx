@@ -54,6 +54,7 @@ import {
 import type { SessionDescriptor, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   PEER_BUBBLE_CLASS,
   PEER_TONE_CLASS,
@@ -81,6 +82,7 @@ import {
   selectInitialCompositeChildWindow,
   INITIAL_CHILD_VIEWPORT_HEIGHT,
   type CompositeChildMeasurement,
+  type CompositeChildEntry,
   type CompositeChildWindow,
 } from './compositeChildWindow.js'
 import {
@@ -1258,7 +1260,13 @@ function BoundedChildList({
   const scheduleRef = useRef<() => void>(() => {})
   const paneScrollerRef = useRef<HTMLElement | null>(null)
   const focusedEntryKeyRef = useRef<string | null>(null)
-  const boxRef = useRef<{ height: number; topSpacer: number } | null>(null)
+  const boxRef = useRef<{
+    height: number
+    topSpacer: number
+    entries: readonly CompositeChildEntry[]
+    nestedHeights: ReadonlyMap<Element, number>
+  } | null>(null)
+  const compensatedPrefixDeltaRef = useRef(0)
 
   useLayoutEffect(() => {
     const previousEntries = previousEntriesRef.current
@@ -1272,7 +1280,10 @@ function BoundedChildList({
       const oldPrefix = previousEntries.slice(0, previousWindow.start).reduce((sum, entry) => sum + entry.height, 0)
       const newPrefix = entries.slice(0, retainedIndex).reduce((sum, entry) => sum + entry.height, 0)
       const delta = newPrefix - oldPrefix
-      if (delta !== 0) paneScrollerRef.current.scrollTop += delta
+      if (delta !== 0) {
+        paneScrollerRef.current.scrollTop += delta
+        compensatedPrefixDeltaRef.current += delta
+      }
       const root = rootRef.current
       const scroller = paneScrollerRef.current
       if (root && scroller) {
@@ -1353,14 +1364,30 @@ function BoundedChildList({
     if (root === null || scroller === null) return
     const rect = root.getBoundingClientRect()
     const previous = boxRef.current
-    boxRef.current = { height: rect.height, topSpacer: childWindow.topSpacerHeight }
+    const nestedHeights = readNestedPaneHeights(root)
+    boxRef.current = { height: rect.height, topSpacer: childWindow.topSpacerHeight, entries, nestedHeights }
+    const compensatedPrefixDelta = compensatedPrefixDeltaRef.current
+    compensatedPrefixDeltaRef.current = 0
     if (previous === null) return
-    // A history prepend changes the leading virtual spacer. The entry-key
-    // anchor above already moves scrollTop by that exact prefix delta, so do
-    // not report the same movement a second time as a body correction.
-    const delta = rect.height - previous.height - (childWindow.topSpacerHeight - previous.topSpacer)
+    // Exclude only the prefix movement the keyed anchor already compensated.
+    // Scrolling changes the spacer partition without changing document height.
+    const delta = ownPaneHeightDelta(
+      rect.height - previous.height,
+      previous.nestedHeights,
+      nestedHeights,
+    ) - compensatedPrefixDelta
     if (delta === 0) return
-    const unchangedPrefix = Math.min(previous.topSpacer, childWindow.topSpacerHeight)
+    let commonPrefix = 0
+    while (
+      commonPrefix < previous.entries.length && commonPrefix < entries.length &&
+      previous.entries[commonPrefix].key === entries[commonPrefix].key &&
+      previous.entries[commonPrefix].height === entries[commonPrefix].height
+    ) commonPrefix += 1
+    // An append changes the document below the viewport, not at the current
+    // window's leading spacer. Locate list edits at their first changed entry.
+    const unchangedPrefix = commonPrefix < Math.max(previous.entries.length, entries.length)
+      ? entries.slice(0, commonPrefix).reduce((sum, entry) => sum + entry.height, 0)
+      : Math.min(previous.topSpacer, childWindow.topSpacerHeight)
     const offset =
       rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop + unchangedPrefix
     reportPaneHeightCorrection(scroller, { offset, delta })
@@ -1432,7 +1459,7 @@ function BoundedChildList({
   }, [mountedSignature])
 
   return (
-    <div className={className} data-card-style={dataCardStyle} onFocusCapture={event => {
+    <div className={className} data-card-style={dataCardStyle} data-pane-height-owner="" onFocusCapture={event => {
       if (!transcriptEntries || !(event.target instanceof Element)) return
       focusedEntryKeyRef.current = event.target.closest('[data-transcript-entry]')
         ?.getAttribute('data-transcript-entry') ?? null

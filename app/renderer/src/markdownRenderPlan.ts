@@ -308,6 +308,8 @@ export function planMarkdownLeaves(
       cached !== null &&
       cached !== undefined &&
       cached.body === body &&
+      cached.rehypePlugins === rehypePlugins &&
+      cached.allowPlainTextAppend === allowPlainTextAppend &&
       cached.recognizeCallouts === recognizeCallouts &&
       cached.math === math
     ) {

@@ -1,5 +1,9 @@
 # Resource-waste improvements, 2026-10-04
 
+The subsequent [fixing review](2026-10-04-resource-waste-review.md) closed seven
+findings, including scroll-correction ownership, cache configuration changes,
+catalog preflight recovery, and MCP timeout diagnostics. It records final checks.
+
 All eight audited mechanisms were revalidated in the current checkout and
 addressed. Work stayed on the existing branch with three GPT-6-Luna collaboration
 workers and root integration. The original audited SHA predates the current

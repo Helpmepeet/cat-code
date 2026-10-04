@@ -54,7 +54,7 @@ import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
  * fsync+rename pairs/day to republish an unchanged catalog. The engine-free
  * fingerprint now suppresses both the worker spawn and cache rewrite when
  * transcript metadata and workspace existence are unchanged. Main also skips
- * timer-driven worker launches while no app window is focused, then refreshes
+ * timer-driven worker launches while all app windows are hidden or minimized, then refreshes
  * immediately if a cadence tick was skipped. The cold first run remains
  * immediate, and changed terminal files are still picked up on the next tick.
  */
@@ -91,7 +91,13 @@ export type SessionsCatalogRunOutcome = 'delivered' | 'failure' | 'empty' | 'unc
 export async function runSessionsCatalogWorker(
   options: SessionsCatalogRunOptions,
 ): Promise<SessionsCatalogRunOutcome> {
-  if (await options.shouldSkip?.()) return 'unchanged'
+  try {
+    if (await options.shouldSkip?.()) return 'unchanged'
+  } catch {
+    // The source check is an optimization. Its failure must still allow the
+    // engine-owned enumeration to recover and publish a current catalog.
+    options.log?.('[catalog-runner] source preflight failed; running catalog worker')
+  }
   let outcome: SessionsCatalogRunOutcome = 'empty'
   let recordSeen = false
   let protocolError: string | null = null

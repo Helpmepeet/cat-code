@@ -166,6 +166,24 @@ describe('runSessionsCatalogWorker — accept + deliver', () => {
     expect(outcome).toBe('failure')
     expect(called).toBe(false)
   })
+
+  test('a failed source preflight still permits worker recovery and publication', async () => {
+    const delivered: SessionsCatalogSnapshot[] = []
+    const outcome = await runSessionsCatalogWorker({
+      command: 'bun', args: [], cwd: process.cwd(),
+      shouldSkip: async () => { throw new Error('source metadata unavailable') },
+      spawnWorker: fakeSpawn({
+        stdout: ndjson({
+          type: 'catalog',
+          version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
+          catalog: catalog(['recovered']),
+        }),
+      }),
+      onCatalog: snapshot => delivered.push(snapshot),
+    })
+    expect(outcome).toBe('delivered')
+    expect(delivered[0]?.entries.map(entry => entry.sessionId)).toEqual(['recovered'])
+  })
 })
 
 describe('runSessionsCatalogWorker — fail closed', () => {

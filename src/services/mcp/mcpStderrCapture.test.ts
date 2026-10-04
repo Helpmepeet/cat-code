@@ -31,3 +31,14 @@ test('truncates at the diagnostic character cap and marks later output', () => {
   expect(diagnostic).toHaveLength(8 * 1024 + '\n[stderr truncated]'.length)
   capture.dispose()
 })
+
+test('failed startup diagnostics survive cleanup until consumed', () => {
+  const stream = new EventEmitter()
+  const capture = captureMcpStartupStderr(stream)
+  stream.emit('data', Buffer.from('startup failure detail'))
+  capture.dispose()
+
+  expect(stream.listenerCount('data')).toBe(0)
+  expect(capture.take()).toBe('startup failure detail')
+  expect(capture.take()).toBe('')
+})

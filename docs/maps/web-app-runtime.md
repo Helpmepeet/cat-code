@@ -163,6 +163,9 @@ active desktop app stack, not older dedicated-app design docs.
   transcript anchors. `markdownRenderPlan.ts` permits conservative plain-text
   suffix reuse, and `markdownPlugins.ts` bounds settled-fence highlighting reuse.
   Syntax or document-wide context changes still use the full Markdown parser.
+  `paneHeightOwnership.ts` subtracts retained nested bodies' height changes from
+  their parents' corrections. List edits use the first changed entry as their
+  correction offset, so a lower append does not move a reader of older rows.
 - Child display restoration uses `getDisplayAgentTranscriptForSession` in
   `src/utils/sessionStorage.ts` with shared byte/message/output budgets in
   `app/sidecar/subagentHistory.ts`. Oversized rejected branches consume source

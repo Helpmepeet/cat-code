@@ -202,6 +202,22 @@ describe('semantic leaves keep their document context', () => {
     expect(mount(leaves, 0, leaves.length)).toContain('href="https://example.com/guide"')
   })
 
+  test('unchanged source adopts a changed plugin pipeline', () => {
+    const cache = createMarkdownPlanCache()
+    const source = 'A settled paragraph'
+    planMarkdownLeaves('pipeline-row', source, { cache })
+    const markParagraphs = () => (tree: { children: ElementContent[] }) => {
+      for (const node of tree.children) {
+        if (node.type === 'element') node.properties.className = ['new-pipeline']
+      }
+    }
+    const leaves = planMarkdownLeaves('pipeline-row', source, {
+      cache,
+      rehypePlugins: [markParagraphs],
+    })
+    expect(mount(leaves, 0, leaves.length)).toContain('class="new-pipeline"')
+  })
+
   test('a plain trailing paragraph reuses resolved references elsewhere in the full document', () => {
     const cache = createMarkdownPlanCache()
     const source = 'See [the guide][guide].\n\n[guide]: https://example.com/guide\n\nThe settled ending'
