@@ -45,7 +45,20 @@ test('an unfeatured sidecar does not advertise classifier-backed auto', () => {
   expect(domain.getDisplayFacts().permissionClassifierEnabled).toBe(false)
 })
 
-test('the production sidecar feature flag activates the real auto transition', async () => {
+test.each([
+  ['gpt-6.1-sol', 'openai', true],
+  ['claude-opus-5-5', 'firstParty', true],
+  ['claude-sonnet-5-5', 'firstParty', true],
+  ['opus', 'firstParty', true],
+  ['sonnet', 'firstParty', true],
+  ['claude-opus-5', 'firstParty', true],
+  ['claude-sonnet-5', 'firstParty', true],
+  ['claude-opus-4-6', 'firstParty', true],
+  ['claude-sonnet-4-6', 'firstParty', true],
+  ['claude-haiku-4-5', 'firstParty', false],
+  ['claude-sonnet-4-5', 'firstParty', false],
+  ['claude-opus-5-5', 'bedrock', false],
+] as const)('%s on %s enforces Auto availability and the real transition', async (model, provider, available) => {
   const configDir = mkdtempSync(join(tmpdir(), 'catcode-auto-mode-'))
   try {
     const child = Bun.spawn(
@@ -57,6 +70,9 @@ test('the production sidecar feature flag activates the real auto transition', a
           import { getDefaultAppState } from './src/state/AppStateStore.ts'
           import { createStore } from './src/state/store.ts'
           import { createSidecarPermissionDomain } from './app/sidecar/permissionDomain.ts'
+          import { setSessionProvider } from './src/bootstrap/state.ts'
+
+          setSessionProvider(${JSON.stringify(provider)})
 
           const base = getDefaultAppState()
           const store = createStore({
@@ -64,8 +80,16 @@ test('the production sidecar feature flag activates the real auto transition', a
             toolPermissionContext: { ...base.toolPermissionContext },
           })
           const domain = createSidecarPermissionDomain(store)
-          if (!domain.getDisplayFacts().permissionClassifierEnabled) {
-            throw new Error('feature-enabled sidecar did not advertise auto')
+          if (domain.getDisplayFacts().permissionClassifierEnabled !== ${available}) {
+            throw new Error('incorrect auto availability for ${model}/${provider}')
+          }
+          if (!${available}) {
+            let rejected = false
+            try { domain.setMode('auto') } catch { rejected = true }
+            if (!rejected || domain.getToolPermissionContext().mode === 'auto') {
+              throw new Error('unavailable auto mode was accepted')
+            }
+            process.exit(0)
           }
           domain.setMode('auto')
           const context = store.getState().toolPermissionContext
@@ -75,14 +99,19 @@ test('the production sidecar feature flag activates the real auto transition', a
           ) {
             throw new Error('classifier-backed auto transition did not run')
           }
+          const restore = domain.getAutoRestoreState()
+          if (restore.unavailableReason !== null || !restore.active) {
+            throw new Error('active auto mode is unavailable for restoration')
+          }
         `,
       ],
       {
         cwd: join(import.meta.dir, '..', '..'),
         env: {
           ...process.env,
-          ANTHROPIC_MODEL: 'gpt-5.6-terra',
-          CLAUDE_CODE_USE_OPENAI: '1',
+          CAT_CODE_MODEL: model,
+          ANTHROPIC_MODEL: model,
+          USER_TYPE: 'external',
           CLAUDE_CONFIG_DIR: configDir,
         },
         stdout: 'pipe',

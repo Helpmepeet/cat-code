@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-10-01.
+Last refreshed: 2026-10-04.
 
 ## Purpose
 
@@ -59,6 +59,7 @@ The live tool system is assembled in layers:
 | Bridge-mediated approvals | `src/hooks/useCanUseTool.tsx` | `src/bridge/mergeBridgePermissionCallbacks.ts`, `src/hooks/usePtcloveBridge.ts`, `src/hooks/useReplBridge.tsx` | Approval prompts can be mirrored to both REPL bridge and ptclove bridge callbacks before the local dialog resolves. |
 | Rule-based permission engine | `src/utils/permissions/permissions.ts` | `src/utils/permissions/PermissionRule.ts`, `src/utils/permissions/PermissionResult.ts`, `src/utils/permissions/permissionRuleParser.ts` | Use this when changing rule precedence, bypass behavior, ask/deny matching, or auto-mode classifier routing. |
 | Auto-mode classifier pipeline and fallback | `src/utils/permissions/yoloClassifier.ts` | `src/utils/permissions/yoloClassifier.test.ts`, `src/utils/permissions/autoModeProviderLadder.ts`, `src/services/api/client.ts` | Standard builds run the upstream port: a 64-token harm-only first stage followed by conditional full adjudication. Each stage owns an independent provider ladder; malformed or unavailable results fail closed. |
+| Auto-mode model availability | `src/utils/betas.ts` (`modelSupportsAutoMode`) | `src/utils/permissions/permissionSetup.ts`, `app/sidecar/permissionDomain.ts`, `app/sidecar/permissionDomain.test.ts` | The first-party Claude allowlist covers Opus/Sonnet 4.6, 5 and 5.5. Check it when changing model defaults or resume remapping; the desktop picker and restored Auto state both consume this gate. Settings and circuit-breaker checks still apply. |
 | Permission-context construction | `src/utils/permissions/permissionSetup.ts` | `src/utils/permissions/permissionsLoader.ts`, `src/utils/settings/settings.ts`, `src/commands/add-dir/validation.ts` | This is where session mode, additional working dirs, auto-mode safety stripping, and on-disk rule loading are assembled into `ToolPermissionContext`. |
 | File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.cat-code` plus legacy `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
 | Sandbox integration | `src/utils/permissions/pathValidation.ts` | `src/utils/sandbox/sandbox-adapter.ts`, `src/tools/BashTool/shouldUseSandbox.ts`, `src/utils/permissions/permissions.ts` | The path validator treats sandbox write allowlists as an extra write scope for out-of-working-dir paths. Bash sandbox auto-allow is decided higher up in permissions. |
