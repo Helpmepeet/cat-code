@@ -207,6 +207,32 @@ function getProviderFileEditTool(): Tool {
   return getAPIProvider() === 'openai' ? FilePatchTool : FileEditTool
 }
 
+/**
+ * A session's base tool list is frozen at construction, but a model switch can
+ * change the provider mid-session, and the system prompt names the edit tool
+ * for the current provider. Swap the provider edit tool in place so the tool
+ * the model receives is the one its prompt names. A list carrying neither (or
+ * both) is returned unchanged.
+ */
+export function alignProviderFileEditTool(
+  tools: Tools,
+  permissionContext: ToolPermissionContext,
+): Tools {
+  const wanted = getProviderFileEditTool()
+  const unwantedName =
+    wanted === FilePatchTool ? FileEditTool.name : FilePatchTool.name
+  if (
+    !tools.some(tool => tool.name === unwantedName) ||
+    tools.some(tool => tool.name === wanted.name)
+  ) {
+    return tools
+  }
+  const allowed = filterToolsByDenyRules([wanted], permissionContext).length > 0
+  return tools.flatMap(tool =>
+    tool.name !== unwantedName ? [tool] : allowed ? [wanted] : [],
+  )
+}
+
 export function getAllBaseTools(): Tools {
   return [
     AgentTool,

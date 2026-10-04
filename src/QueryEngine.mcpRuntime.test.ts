@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { getSessionProvider, setSessionProvider } from './bootstrap/state.js'
 import type { Command } from './commands.js'
 import { resolveMcpRuntimeInputs } from './QueryEngine.js'
 import type { MCPServerConnection, ServerResource } from './services/mcp/types.js'
@@ -8,6 +9,8 @@ import {
   type McpRuntimeSnapshot,
   type Tool,
 } from './Tool.js'
+import { FileEditTool } from './tools/FileEditTool/FileEditTool.js'
+import { FilePatchTool } from './tools/FilePatchTool/FilePatchTool.js'
 
 // The sidecar injects a tool set the default built-ins do not contain. If the
 // dynamic path regenerated built-ins instead of layering onto what the caller
@@ -125,5 +128,70 @@ describe('resolveMcpRuntimeInputs', () => {
     } as ServerResource)
 
     expect(live.resources['cua-driver']).toHaveLength(1)
+  })
+})
+
+// A sidecar session freezes its base tools at construction, so a chat started
+// on one provider and switched to another kept the old edit tool while the
+// system prompt named the new provider's tool.
+describe('resolveMcpRuntimeInputs provider edit tool', () => {
+  const initialProvider = getSessionProvider()
+  afterEach(() => setSessionProvider(initialProvider))
+
+  test('a switch to OpenAI swaps Edit for apply_patch', () => {
+    setSessionProvider('openai')
+    const resolved = resolveMcpRuntimeInputs({
+      tools: [injectedTool, FileEditTool],
+      commands: [],
+      mcpClients: [],
+      getAppState: () => appStateWith(),
+    })
+
+    expect(resolved.tools.map(t => t.name)).toEqual([
+      'InjectedOnlyTool',
+      FilePatchTool.name,
+    ])
+  })
+
+  test('a switch to Anthropic swaps apply_patch for Edit on the live path', () => {
+    setSessionProvider('firstParty')
+    const resolved = resolveMcpRuntimeInputs({
+      tools: [FilePatchTool],
+      commands: [],
+      mcpClients: [],
+      getMcpRuntimeSnapshot: () => snapshot({ tools: [] }),
+      getAppState: () => appStateWith(),
+    })
+
+    expect(resolved.tools.map(t => t.name)).toEqual([FileEditTool.name])
+  })
+
+  test('a denied replacement leaves no edit tool rather than a denied one', () => {
+    setSessionProvider('openai')
+    const permissionContext = {
+      ...getEmptyToolPermissionContext(),
+      alwaysDenyRules: { localSettings: [FilePatchTool.name] },
+    }
+    const resolved = resolveMcpRuntimeInputs({
+      tools: [injectedTool, FileEditTool],
+      commands: [],
+      mcpClients: [],
+      getAppState: () => appStateWith(permissionContext),
+    })
+
+    expect(resolved.tools.map(t => t.name)).toEqual(['InjectedOnlyTool'])
+  })
+
+  test('a matching edit tool keeps the static list by reference', () => {
+    setSessionProvider('firstParty')
+    const tools = [injectedTool, FileEditTool]
+    const resolved = resolveMcpRuntimeInputs({
+      tools,
+      commands: [],
+      mcpClients: [],
+      getAppState: () => appStateWith(),
+    })
+
+    expect(resolved.tools).toBe(tools)
   })
 })

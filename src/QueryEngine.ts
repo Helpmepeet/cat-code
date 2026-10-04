@@ -46,7 +46,7 @@ import {
   type ToolUseContext,
   toolMatchesName,
 } from './Tool.js'
-import { assembleToolPool } from './tools.js'
+import { alignProviderFileEditTool, assembleToolPool } from './tools.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import type { Message, MessageOrigin, UserMessage } from './types/message.js'
@@ -272,9 +272,10 @@ export function resolveMcpRuntimeInputs(
     getMcpRuntimeSnapshot,
     getAppState,
   } = config
+  const permissionContext = getAppState().toolPermissionContext
   if (!getMcpRuntimeSnapshot) {
     return {
-      tools,
+      tools: alignProviderFileEditTool(tools, permissionContext),
       commands,
       mcpClients,
       mcpResources: mcpResources ?? {},
@@ -290,9 +291,9 @@ export function resolveMcpRuntimeInputs(
     // and tests inject tool sets that getTools() would not reproduce. Deny-rule
     // filtering and name dedup still apply to the MCP half.
     tools: assembleToolPool(
-      getAppState().toolPermissionContext,
+      permissionContext,
       snapshot.tools,
-      tools,
+      alignProviderFileEditTool(tools, permissionContext),
     ),
     commands: [...commands, ...snapshot.commands],
     mcpClients: [...snapshot.clients],
