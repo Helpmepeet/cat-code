@@ -1381,7 +1381,7 @@ export function categorizeRetryableAPIError(
 
 export function getErrorMessageIfRefusal(
   stopReason: BetaStopReason | null,
-  model: string,
+  stopDetails?: unknown,
 ): AssistantMessage | undefined {
   if (stopReason !== 'refusal') {
     return
@@ -1389,17 +1389,24 @@ export function getErrorMessageIfRefusal(
 
   logEvent('tengu_refusal_api_response', {})
 
-  const baseMessage = getIsNonInteractiveSession()
-    ? `${API_ERROR_MESSAGE_PREFIX}: Cat Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Try rephrasing the request or attempting a different approach.`
-    : `${API_ERROR_MESSAGE_PREFIX}: Cat Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Please double press esc to edit your last message or start a new session for Cat Code to assist with a different task.`
-
-  const modelSuggestion =
-    model !== 'claude-sonnet-4-20250514'
-      ? ' If you are seeing this refusal repeatedly, try running /model claude-sonnet-4-20250514 to switch models.'
-      : ''
+  // The SDK predates stop_details. Read only bounded display fields from the
+  // provider response; refusals can have null or unknown categories.
+  const details = stopDetails !== null && typeof stopDetails === 'object'
+    ? stopDetails as Record<string, unknown>
+    : undefined
+  const category = typeof details?.category === 'string'
+    ? details.category.slice(0, 80)
+    : undefined
+  const explanation = typeof details?.explanation === 'string'
+    ? details.explanation.slice(0, 2000)
+    : undefined
+  const baseMessage = `${API_ERROR_MESSAGE_PREFIX}: Claude declined this request${category ? ` (${category})` : ''}.`
+  const guidance = category === 'reasoning_extraction'
+    ? ' Ask for a brief explanation or action summary rather than private reasoning.'
+    : ' Review the request and conversation context, or start a new chat for a different task.'
 
   return createAssistantAPIErrorMessage({
-    content: baseMessage + modelSuggestion,
+    content: baseMessage + (explanation ? ` ${explanation}` : '') + guidance,
     error: 'invalid_request',
   })
 }
