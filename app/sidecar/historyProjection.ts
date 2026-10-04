@@ -102,8 +102,9 @@ export function projectUndeliveredPrompts(
  *
  * The archival loader may cross compact boundaries, while the seed must stay
  * compacted. UUID alignment lets the visible tail remain byte-for-byte the
- * engine projection. Resume-generated synthetic prompts have no disk identity
- * to align; they remain in the seed but do not imply a missing archival prefix.
+ * engine projection. Resume-generated synthetic prompts and recovered worker
+ * notifications have no disk identity to align; they remain in the seed but do
+ * not imply a missing archival prefix.
  * If the persisted tail cannot be aligned, fail closed to the seed
  * and mark the display as truncated instead of presenting divergent context.
  */
@@ -120,7 +121,9 @@ export function mergeDisplayHistoryWithSeed(
   }
   const displayUuids = new Set(displayHistory.map(message => message.uuid))
   const persistedSeed = seedHistory.filter(message =>
-    !(message.type === 'user' && message.isSynthetic && !displayUuids.has(message.uuid)),
+    !(message.type === 'user' &&
+      (message.isSynthetic || message.origin?.kind === 'task-notification') &&
+      !displayUuids.has(message.uuid)),
   )
   if (persistedSeed.length === 0) {
     return { history: seedHistory, truncated: displayHistory.length > 0 }

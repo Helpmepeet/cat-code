@@ -9,9 +9,8 @@
  * `getCommands(cwd)` catalog (the `commands: []` defect fix).
  *
  * Presentation-only + pure helpers. Selecting a command inserts `/name ` into
- * the composer draft; the user submits it verbatim through the EXISTING
- * `app.submit` path — command PARSING/EXECUTION stays engine-side and the
- * renderer never gains a command-execution capability (SECURITY-MINIMUM T2/§2).
+ * the composer draft for completion. Ordinary commands are submitted through
+ * `app.submit`; desktop `/clear` and `/new` are handled by the desktop host.
  *
  * Rows carry the full prototype metadata — name + arg hint + description — from
  * the read-only `slash-catalog.snapshot` (the sidecar projects the engine-side

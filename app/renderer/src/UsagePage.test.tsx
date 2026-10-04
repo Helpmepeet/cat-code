@@ -54,9 +54,14 @@ test('new panels distinguish unavailable history from recorded aggregates', () =
     expect(renderToStaticMarkup(<UsageParallelSessions {...props}/>)).toContain('Not recorded in this period.');
     expect(renderToStaticMarkup(<UsageReasoningEffort {...props}/>)).toContain('Not recorded in this period.');
     summary.parallel = { state: 'available', minutes: [30, 10, 0], peak: 2 };
-    summary.effort = { state: 'available', requests: { low: 0, medium: 0, high: 3, xhigh: 0, max: 0 }, tokens: { low: 0, medium: 0, high: 120, xhigh: 0, max: 0 }, unattributedRequests: 0 };
+    summary.effort = { state: 'available', requests: { low: 0, medium: 0, high: 3, xhigh: 0, max: 0, ultra: 2 }, tokens: { low: 0, medium: 0, high: 120, xhigh: 0, max: 0, ultra: 80 }, unattributedRequests: 0 };
     expect(renderToStaticMarkup(<UsageParallelSessions {...props}/>)).toContain('25%');
-    expect(renderToStaticMarkup(<UsageReasoningEffort {...props}/>)).toContain('High');
+    summary.days[0]!.effort = structuredClone(summary.effort);
+    const effortHtml = renderToStaticMarkup(<UsageReasoningEffort {...props}/>);
+    expect(effortHtml).toContain('High');
+    expect(effortHtml).toContain('<span>Ultra</span><b>2</b>');
+    expect(effortHtml).toContain('Ultra: 40.0%');
+    expect(effortHtml).toContain('class="usage-pattern-e6"');
 });
 
 test('partial coverage retains visible counts and qualifies the recorded cache rate', () => {

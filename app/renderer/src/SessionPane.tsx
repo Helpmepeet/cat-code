@@ -96,6 +96,11 @@ import {
 } from './transcriptScrollMemory.js'
 import { SlashCommandPicker } from './SlashCommandPicker.js'
 import {
+  canExecuteDesktopNewChat,
+  isDesktopNewChatCommand,
+  mergeDesktopSlashCatalog,
+} from './desktopChatCommands.js'
+import {
   MENTION_LISTBOX_ID,
   SLASH_COMMAND_LISTBOX_ID,
   mentionOptionId,
@@ -269,6 +274,7 @@ export function SessionPane({
   onProjectRouteChoice,
   onRecallQueuedPrompts = null,
   queuedPrompts = EMPTY_QUEUED_PROMPTS,
+  desktopCommandPending = false,
   permissionContext,
   permissionKeyTargetRequestId = null,
   permissionQueue,
@@ -404,9 +410,8 @@ export function SessionPane({
     : undefined
   // SlashCommandPicker (P3-7): typeahead over THIS session's real slash catalog
   // (the `slash_commands` the sidecar's `getCommands(cwd)` produced, captured
-  // from the init frame). Picking inserts `/name ` into the draft; the user
-  // submits it verbatim through the existing app.submit — no command-execution
-  // capability is added to the renderer.
+  // from the init frame), overlaid with desktop chat commands. Picking inserts
+  // `/name ` into the draft; submission resolves the desktop command first.
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
   // P1-2 raw-frame debug view (F2, 2026-07-08): collapsed by default and its
@@ -436,12 +441,10 @@ export function SessionPane({
   // init frame) when the rich snapshot is absent — a session that predates it, or
   // a degraded catalog load — so the picker never regresses below name-only.
   const slashEntries: readonly SlashCatalogEntry[] =
-    slashCatalog.length > 0
-      ? slashCatalog
-      : selectSlashCommands(transcript, activeSessionId).map(name => ({
-          name,
-          description: '',
-        }))
+    mergeDesktopSlashCatalog(
+      slashCatalog,
+      selectSlashCommands(transcript, activeSessionId),
+    )
   const slashQuery = parseSlashDraft(prompt)
   const slashMatches =
     slashQuery === null ? [] : filterSlashCommands(slashEntries, slashQuery)
@@ -451,6 +454,7 @@ export function SessionPane({
     slashMatches.length === 0
       ? 0
       : Math.min(slashActiveIndex, slashMatches.length - 1)
+  const desktopCommand = isDesktopNewChatCommand(prompt)
 
   // Reset selection (and re-open after an Escape) whenever the query text
   // changes — i.e. the user typed. Keyed on the query so an Escape (which does
@@ -710,6 +714,15 @@ export function SessionPane({
   const routeCancellable = projectRoute !== null &&
     ['checking', 'ask', 'failed', 'unsent'].includes(projectRoute.phase)
   const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true || routeMoving
+  const canExecuteDesktopCommand = canExecuteDesktopNewChat({
+    hasOrigin: activeSessionId !== null && activeDescriptor?.appSessionId === activeSessionId,
+    hasQueuedPrompt: pendingSubmit !== null || queuedPrompts.length > 0,
+    hasProjectRoute: projectRoute !== null,
+    workspaceBusy: branchSwitchPending || activeDescriptor?.workspaceMove?.phase === 'moving',
+    preparingAttachment: preparingImage || pickingFile,
+    managedFolderUnavailable,
+    creationPending: desktopCommandPending,
+  })
   const composerReadOnly =
     branchSwitchPending || managedFolderUnavailable || !composerGate.editable
   // A named session is addressed by its own name (PEER-SESSIONS §6): the user
@@ -1440,6 +1453,29 @@ export function SessionPane({
     // input here (Enter on a face must not submit, Backspace must not edit the
     // draft, ↑/↓ must not recall). This form handler is composer-field-only.
     if (event.target !== composerRef.current?.element) return
+    if (
+      event.key === 'Enter' &&
+      desktopCommand &&
+      !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+    ) {
+      event.preventDefault()
+      event.currentTarget.requestSubmit()
+      return
+    }
+    if (
+      event.key === 'Enter' &&
+      desktopCommand &&
+      (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey)
+    ) {
+      const el = composerRef.current
+      if (!el) return
+      event.preventDefault()
+      const start = el.selectionStart
+      const end = el.selectionEnd
+      pendingCaretRef.current = { base: end, prevLength: prompt.length }
+      setPrompt(`${prompt.slice(0, start)}\n${prompt.slice(end)}`)
+      return
+    }
     if (slashOpen) {
       switch (event.key) {
         case 'ArrowDown':
@@ -1530,7 +1566,7 @@ export function SessionPane({
     // does produce a `<br>`; Alt/Meta+Enter is where it silently did not.
     if (event.key === 'Enter') {
       const el = composerRef.current
-      if (event.shiftKey || event.altKey || event.metaKey) {
+      if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
         if (!el) return
         event.preventDefault()
         const start = el.selectionStart
@@ -2074,6 +2110,11 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (desktopCommand) {
+            if (canExecuteDesktopCommand) submit(event)
+            else event.preventDefault()
+            return
+          }
           if (projectRoute !== null) {
             event.preventDefault()
             return
@@ -2277,7 +2318,7 @@ export function SessionPane({
            * composer, and while a permission card holds focus Escape is that
            * card's dismiss instead. A control that is only reachable when the
            * user happens to be in the textarea is not an interrupt. */}
-          {generating ? (
+          {generating && !(desktopCommand && canExecuteDesktopCommand) ? (
             <button
               aria-label="Stop the turn"
               title="Stop (Esc)"
@@ -2303,15 +2344,17 @@ export function SessionPane({
               title="Send"
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
-                projectRoute !== null ||
-                branchSwitchPending ||
-                managedFolderUnavailable ||
-                !composerGate.editable ||
-                preparingImage ||
-                (prompt.trim().length === 0 &&
-                  images.length === 0 &&
-                  fileAttachment === null) ||
-                pendingSubmit !== null
+                desktopCommand
+                  ? !canExecuteDesktopCommand
+                  : projectRoute !== null ||
+                    branchSwitchPending ||
+                    managedFolderUnavailable ||
+                    !composerGate.editable ||
+                    preparingImage ||
+                    (prompt.trim().length === 0 &&
+                      images.length === 0 &&
+                      fileAttachment === null) ||
+                    pendingSubmit !== null
               }
               type="submit"
             >
@@ -2825,6 +2868,8 @@ type SessionPaneProps = {
   /** D1a — messages this session has waiting for its running response, oldest
    * first. Display only: they stay out of the transcript until delivered. */
   queuedPrompts?: readonly QueuedPromptItem[]
+  /** A desktop `/clear` or `/new` request is creating its destination chat. */
+  desktopCommandPending?: boolean
   /** D1b — take every waiting message back into the composer. The pane always
    * passes it; what hides the control is having nothing waiting, since the rows
    * and the control are rendered together. */

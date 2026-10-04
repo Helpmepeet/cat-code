@@ -1,5 +1,5 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, UsageEffort, UsageParallel, } from './usageDashboard.js';
-import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
 import { shiftLocalCalendarDays } from '../../src/utils/usageWindow.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -17,11 +17,10 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 const positive = (v: unknown): v is number => safe(v) && v > 0;
 const label = (v: unknown): v is string => typeof v === 'string' && new TextEncoder().encode(v).byteLength <= MAX_USAGE_LABEL_BYTES;
 const id = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64 && /^[a-zA-Z0-9_-]+$/.test(v);
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 function effort(v: unknown): v is UsageEffort {
-    if (!obj(v) || !ownKeys(v, ['state', 'requests', 'tokens', 'unattributedRequests']) || !obj(v.requests) || !obj(v.tokens) || !ownKeys(v.requests, EFFORT_LEVELS) || !ownKeys(v.tokens, EFFORT_LEVELS) || !EFFORT_LEVELS.every(level => safe((v.requests as Record<string, unknown>)[level]) && safe((v.tokens as Record<string, unknown>)[level])) || !safe(v.unattributedRequests)) return false;
-    const known = EFFORT_LEVELS.reduce((sum, level) => sum + (v.requests as Record<string, number>)[level]!, 0);
-    const tokenCount = EFFORT_LEVELS.reduce((sum, level) => sum + (v.tokens as Record<string, number>)[level]!, 0);
+    if (!obj(v) || !ownKeys(v, ['state', 'requests', 'tokens', 'unattributedRequests']) || !obj(v.requests) || !obj(v.tokens) || !ownKeys(v.requests, USAGE_EFFORT_LEVELS) || !ownKeys(v.tokens, USAGE_EFFORT_LEVELS) || !USAGE_EFFORT_LEVELS.every(level => safe((v.requests as Record<string, unknown>)[level]) && safe((v.tokens as Record<string, unknown>)[level])) || !safe(v.unattributedRequests)) return false;
+    const known = USAGE_EFFORT_LEVELS.reduce((sum, level) => sum + (v.requests as Record<string, number>)[level]!, 0);
+    const tokenCount = USAGE_EFFORT_LEVELS.reduce((sum, level) => sum + (v.tokens as Record<string, number>)[level]!, 0);
     return safe(known) && safe(tokenCount) && (v.state === (known + tokenCount === 0 ? 'unavailable' : v.unattributedRequests ? 'partial' : 'available'));
 }
 function parallel(v: unknown, day = false): v is UsageParallel {
@@ -350,7 +349,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
         const bucketStart = localMidnightAt(d.date, timezone);
         const bucketEnd = localMidnightAt(addDays(d.date, bucketDays), timezone);
         const parallelMinutes = d.parallel.minutes.reduce((sum, value) => sum + value, 0);
-        const attributedTokens = EFFORT_LEVELS.reduce((sum, level) => sum + d.effort.tokens[level], 0);
+        const attributedTokens = USAGE_EFFORT_LEVELS.reduce((sum, level) => sum + d.effort.tokens[level], 0);
         const maxSlots = Math.ceil((bucketEnd - bucketStart) / 600000);
         if (!safe(parallelMinutes) || parallelMinutes > Math.floor((bucketEnd - bucketStart) / 60000) || d.parallel.peak > d.sessions || !safe(attributedTokens) || attributedTokens > tokenSum(d.tokens) || d.parallel.tenMinutePeaks?.some(([slot]) => slot >= maxSlots)) return false;
         if (d.tools.some(tool => !rangeToolIds.has(tool.id) || tool.builds?.items.some(build => Date.parse(build.firstObservedAt) < bucketStart || Date.parse(build.firstObservedAt) >= bucketEnd || Date.parse(build.firstObservedAt) > Date.parse(asOf)))) return false;
@@ -360,7 +359,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
     if (all && v.days.some(d => d.date < startDate)) return false;
     const days = v.days as UsageDay[];
     const rangeParallel = v.parallel as UsageParallel, rangeEffort = v.effort as UsageEffort;
-    if ([0, 1, 2].some(i => days.reduce((sum, item) => sum + item.parallel.minutes[i]!, 0) !== rangeParallel.minutes[i]) || Math.max(0, ...days.map(item => item.parallel.peak)) !== rangeParallel.peak || EFFORT_LEVELS.some(level => days.reduce((sum, item) => sum + item.effort.requests[level], 0) !== rangeEffort.requests[level] || days.reduce((sum, item) => sum + item.effort.tokens[level], 0) !== rangeEffort.tokens[level]) || days.reduce((sum, item) => sum + item.effort.unattributedRequests, 0) !== rangeEffort.unattributedRequests) return false;
+    if ([0, 1, 2].some(i => days.reduce((sum, item) => sum + item.parallel.minutes[i]!, 0) !== rangeParallel.minutes[i]) || Math.max(0, ...days.map(item => item.parallel.peak)) !== rangeParallel.peak || USAGE_EFFORT_LEVELS.some(level => days.reduce((sum, item) => sum + item.effort.requests[level], 0) !== rangeEffort.requests[level] || days.reduce((sum, item) => sum + item.effort.tokens[level], 0) !== rangeEffort.tokens[level]) || days.reduce((sum, item) => sum + item.effort.unattributedRequests, 0) !== rangeEffort.unattributedRequests) return false;
     const sum = (key: keyof UsageTokens): number => days.reduce((n: number, d: UsageDay) => n + d.tokens[key], 0);
     if (v.tokens.fresh !== sum('fresh') || v.tokens.read !== sum('read') || v.tokens.write !== sum('write') || v.tokens.output !== sum('output'))
         return false;
@@ -407,7 +406,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 18 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 19 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];

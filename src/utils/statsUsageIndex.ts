@@ -9,11 +9,11 @@ import { readStatsRecords, type StatsReadQuality, type StatsCheckpoint } from '.
 import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
 import { localDateKey, shiftLocalCalendarDays } from './usageWindow.js';
 import { projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
-import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
+import { USAGE_EFFORT_LEVELS, type UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v10.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v11.sqlite');
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
@@ -64,7 +64,7 @@ function projectRecord(v: unknown): unknown {
             row.subtype = v.subtype;
             // Closed aggregate dimension only. No diagnostic payload, prompt,
             // account prefix, path, or permission rule enters the index.
-            row.effort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(v.effort as string) ? v.effort : null;
+            row.effort = USAGE_EFFORT_LEVELS.some(level => level === v.effort) ? v.effort : null;
             return row;
         }
         const allowed = fields[v.subtype];

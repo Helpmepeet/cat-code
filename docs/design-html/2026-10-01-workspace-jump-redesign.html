@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace jump</title>
+<style>
+@font-face { font-family: 'DM Sans'; font-weight: 100 1000; src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2'); }
+@font-face { font-family: 'DM Mono'; font-weight: 400; src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2'); }
+@font-face { font-family: 'DM Mono'; font-weight: 500; src: url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2'); }
+
+/* ---------- chrome (x-) ---------- */
+html, body { margin: 0; background: #09090b; }
+.x-page { padding: 28px 24px 64px; font-family: ui-monospace, Menlo, monospace; }
+.x-title { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: #77777d; margin: 0 0 22px; }
+.x-grid { display: grid; grid-template-columns: 96px minmax(0, 480px) minmax(0, 480px); column-gap: 40px; }
+.x-head { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: #77777d; padding-bottom: 10px; border-bottom: 1px solid #2a2a2e; }
+.x-state { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: #77777d; padding-top: 22px; }
+.x-cell { padding: 14px 0 26px; border-bottom: 1px solid #1c1c1f; min-width: 0; }
+.x-state { border-bottom: 1px solid #1c1c1f; }
+.x-sub { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: #5d5d63; margin: 18px 0 6px; }
+
+/* ---------- specimen: app tokens (theme.css, dark) ---------- */
+.sp {
+  --app-bg: #09090b;
+  --accent: #f472b6;
+  --accent-rgb: 244 114 182;
+  --tone-good: #4ade80;
+  --tone-warn: #fbbf24;
+  --tone-danger: #f87171;
+  --tone-info: #60a5fa;
+  --source-project: #60a5fa;
+  --shell-seam: rgba(255, 255, 255, 0.06);
+  --shell-hover: rgba(255, 255, 255, 0.045);
+  --text-primary: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #98989f;
+  --text-faint: #838389;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--app-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mono { font-family: 'DM Mono', ui-monospace, monospace; }
+
+/* UserBubble */
+.bubble-row { display: flex; justify-content: flex-end; }
+.bubble {
+  max-width: 82%;
+  border-radius: 16px 16px 4px 16px;
+  border: 1px solid rgb(var(--accent-rgb) / .2);
+  background: rgb(var(--accent-rgb) / .1);
+  padding: 10px 16px;
+  font-size: 14px; line-height: 1.625;
+}
+.prose { font-size: 14px; line-height: 1.625; color: var(--text-primary); }
+
+/* ToolCardShell, 'cards' style */
+.card { width: 100%; overflow: hidden; border-radius: 6px; border: 1px solid var(--shell-seam); background: rgba(255,255,255,.025); }
+.card-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+.card-mark { width: 16px; flex: none; text-align: center; font-size: 13px; color: var(--text-muted); }
+.card-word { flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); }
+.card-target { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 6px; height: 6px; flex: none; border-radius: 999px; }
+.dot-pending { background: var(--accent); animation: pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
+.dot-success { background: var(--tone-good); }
+.dot-error { background: var(--tone-danger); }
+.dot-cancelled { background: var(--tone-warn); }
+@keyframes pulse { 50% { opacity: .5; } }
+.card-body { border-top: 1px solid var(--shell-seam); background: rgba(0,0,0,.28); padding: 4px 12px 10px; }
+.card-body p { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+/* .chat-move-progress */
+.chat-move-progress {
+  padding: 11px 18px;
+  border: 1px solid color-mix(in srgb, var(--tone-info) 35%, transparent);
+  border-radius: 12px;
+  color: var(--tone-info);
+  background: color-mix(in srgb, var(--tone-info) 10%, transparent);
+}
+/* .chat-project-divider */
+.chat-project-divider { display: flex; align-items: center; gap: 10px; color: var(--tone-info); font-size: 12px; font-weight: 600; }
+.chat-project-divider-rule { height: 1px; flex: 1; background: color-mix(in srgb, var(--tone-info) 35%, transparent); }
+.chat-project-divider-center { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chat-project-divider-center > svg { width: 15px; height: 15px; flex: none; }
+.back { display: flex; align-items: center; justify-content: center; width: 25px; height: 25px; border-radius: 6px; color: var(--text-muted); background: none; border: 0; padding: 0; cursor: pointer; }
+.back:hover { color: var(--text-primary); background: var(--shell-hover); }
+.back svg { width: 14px; height: 14px; }
+
+/* composer input line */
+.composer-line { padding: 6px 0; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--text-subtle); }
+
+/* ---------- proposed: one jump line ---------- */
+.jump-line { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); min-height: 25px; }
+.jump-rule { height: 1px; flex: 1; background: var(--shell-seam); }
+.jump-center { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.jump-center > svg { width: 15px; height: 15px; flex: none; color: var(--source-project); }
+.jump-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); flex: none; margin: 0 4px 0 2px; animation: pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
+.jump-name { color: var(--text-primary); font-weight: 500; }
+.jump-path { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; }
+.composer-line.quiet { color: var(--text-faint); }
+
+/* ---------- arrival variants ---------- */
+.x-section { margin-top: 56px; }
+.x-vgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 8px 48px; }
+.x-vhead { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid #2a2a2e; margin-bottom: 14px; }
+.x-vlabel { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: #77777d; }
+.x-btn { font: inherit; font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: #8a8a90; background: none; border: 1px solid #2a2a2e; border-radius: 3px; padding: 3px 8px; cursor: pointer; }
+.x-btn:hover { color: #c4c4c8; border-color: #3a3a3e; }
+.x-vcell { padding-bottom: 32px; }
+
+.anim .jump-line { position: relative; }
+.anim .j-folder { position: relative; display: inline-flex; color: var(--source-project); }
+.anim .j-folder svg { width: 15px; height: 15px; }
+.anim .j-moving, .anim .j-folder, .anim .back { display: none; }
+.anim.is-moving .j-moving { display: inline-flex; align-items: center; }
+.anim.is-arrived .j-folder { display: inline-flex; }
+.anim.is-arrived .back { display: flex; }
+.anim.is-moving .jump-path { display: inline; }
+.anim .j-after { position: relative; display: flex; flex-direction: column; gap: 12px; }
+.anim .prose { visibility: hidden; }
+.anim.is-arrived .prose { visibility: visible; animation: catcode-arrive var(--motion-arrive) var(--ease-standard) both; animation-delay: 700ms; }
+.anim .jump-rule { position: relative; overflow: hidden; }
+.sp.anim {
+  --motion-arrive: 180ms;
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes catcode-arrive { from { opacity: 0; } to { opacity: 1; } }
+
+/* A: rules draw outward in project colour, then cool to seam */
+.v-a.is-arrived .jump-rule { animation: a-draw 1500ms var(--ease-enter) both; }
+.v-a.is-arrived .jump-rule:first-child { transform-origin: right center; }
+.v-a.is-arrived .jump-rule:last-child { transform-origin: left center; }
+@keyframes a-draw {
+  0% { transform: scale(0, 2); background: var(--source-project); }
+  35% { transform: scale(1, 2); background: var(--source-project); }
+  100% { transform: scale(1, 1); background: var(--shell-seam); }
+}
+.v-a.is-arrived .j-folder { animation: a-pop 600ms var(--ease-enter) both; }
+@keyframes a-pop { 0% { transform: scale(.4); opacity: 0; } 45% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
+
+/* B: folder lands, rings ripple out */
+.v-b.is-arrived .j-folder { animation: b-drop 520ms cubic-bezier(.3, 1.6, .5, 1) both; }
+@keyframes b-drop { from { transform: translateY(-12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.v-b .j-folder::before, .v-b .j-folder::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px;
+  border: 1.5px solid var(--source-project); border-radius: 50%; opacity: 0; pointer-events: none;
+}
+.v-b.is-arrived .j-folder::before { animation: b-ring 1100ms ease-out 260ms both; }
+.v-b.is-arrived .j-folder::after { animation: b-ring 1100ms ease-out 440ms both; }
+@keyframes b-ring { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(5.5); opacity: 0; } }
+.v-b.is-arrived .jump-name, .v-b.is-arrived .jump-path { animation: b-slide 400ms var(--ease-enter) 160ms both; }
+@keyframes b-slide { from { transform: translateX(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* C: name stamps in large, shrinks into place */
+.v-c.is-arrived .jump-center { animation: c-stamp 1100ms var(--ease-enter) both; }
+@keyframes c-stamp {
+  0% { transform: scale(2.1); opacity: 0; }
+  20% { transform: scale(2.1); opacity: 1; }
+  65% { transform: scale(1); }
+  100% { transform: scale(1); }
+}
+.v-c.is-arrived .jump-name { animation: c-ink 1400ms ease both; }
+@keyframes c-ink { 0%, 50% { color: var(--source-project); } 100% { color: var(--text-primary); } }
+.v-c.is-arrived .jump-rule { animation: catcode-arrive 400ms var(--ease-standard) 650ms both; }
+
+/* D: project-colour wash over the new section, fading out */
+.v-d .j-after::before { content: ''; position: absolute; inset: -6px -12px; border-radius: 6px; pointer-events: none; }
+.v-d.is-arrived .j-after::before { animation: d-wash 1800ms var(--ease-standard) both; }
+@keyframes d-wash {
+  0% { background-color: color-mix(in srgb, var(--source-project) 16%, transparent); }
+  100% { background-color: transparent; }
+}
+.v-d.is-arrived .jump-rule { animation: d-rule 1800ms var(--ease-standard) both; }
+@keyframes d-rule { 0% { background: color-mix(in srgb, var(--source-project) 60%, transparent); } 100% { background: var(--shell-seam); } }
+.v-d.is-arrived .prose { animation-delay: 250ms; }
+
+/* E: glints sweep outward along the rules (compaction seam, reversed, once) */
+.v-e .jump-rule::after {
+  content: ''; position: absolute; top: 0; height: 1px; width: 45%; opacity: 0;
+}
+.v-e .jump-rule:first-child::after { right: 0; background: linear-gradient(to left, transparent, var(--source-project), transparent); }
+.v-e .jump-rule:last-child::after { left: 0; background: linear-gradient(to right, transparent, var(--source-project), transparent); }
+.v-e.is-arrived .jump-rule:first-child::after { animation: e-left 900ms var(--ease-standard) 120ms both; }
+.v-e.is-arrived .jump-rule:last-child::after { animation: e-right 900ms var(--ease-standard) 120ms both; }
+@keyframes e-left { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(-240%); opacity: 1; } }
+@keyframes e-right { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(240%); opacity: 1; } }
+.v-e.is-arrived .j-folder { animation: e-flash 900ms ease both; }
+@keyframes e-flash { 0% { transform: scale(1.35); filter: brightness(1.8); } 100% { transform: scale(1); filter: none; } }
+
+/* arrived label variants (motion D) */
+.lbl .j-mv, .lbl .j-ar { display: none; align-items: center; gap: 6px; }
+.lbl.is-moving .j-mv { display: inline-flex; }
+.lbl.is-arrived .j-ar { display: inline-flex; }
+.lbl .j-ar > svg { width: 15px; height: 15px; flex: none; color: var(--source-project); }
+.lbl .j-from { color: var(--text-muted); }
+.lbl .j-arrow { color: var(--text-faint); }
+
+@media (prefers-reduced-motion: reduce) { .dot-pending, .jump-dot { animation: none; } }
+@media (max-width: 760px) {
+  .x-grid { grid-template-columns: minmax(0, 1fr); }
+  .x-head.x-blank { display: none; }
+  .x-state { padding-top: 18px; border-bottom: 0; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/>
+    <path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/>
+  </symbol>
+  <symbol id="rewind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="1 4 1 10 7 10"/>
+    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+  </symbol>
+</svg>
+
+<div class="x-page">
+  <p class="x-title">Workspace jump</p>
+  <div class="x-grid">
+    <div class="x-head x-blank"></div>
+    <div class="x-head">Current</div>
+    <div class="x-head">Proposed</div>
+
+    <!-- ===== REQUESTED ===== -->
+    <div class="x-state">Requested</div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">ListWorkspaces</span><span class="dot dot-success"></span></div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">JumpWorkspace</span><span class="dot dot-pending"></span></div></div>
+      </div>
+    </div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center"><span class="jump-dot"></span>Moving to <span class="jump-name">cat-code</span><span class="jump-path">~/cat-code</span></span><span class="jump-rule"></span></div>
+      </div>
+    </div>
+
+    <!-- ===== MOVING ===== -->
+    <div class="x-state">Moving</div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">ListWorkspaces</span><span class="dot dot-success"></span></div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">JumpWorkspace</span><span class="dot dot-success"></span></div></div>
+        <div class="chat-move-progress" role="status">Moving…</div>
+      </div>
+      <div class="x-sub">Composer</div>
+      <div class="sp"><div class="composer-line">Connecting…</div></div>
+    </div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center"><span class="jump-dot"></span>Moving to <span class="jump-name">cat-code</span><span class="jump-path">~/cat-code</span></span><span class="jump-rule"></span></div>
+      </div>
+      <div class="x-sub">Composer</div>
+      <div class="sp"><div class="composer-line quiet">Ask Cat Code anything or describe a task…</div></div>
+    </div>
+
+    <!-- ===== ARRIVED ===== -->
+    <div class="x-state">Arrived</div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">ListWorkspaces</span><span class="dot dot-success"></span></div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">JumpWorkspace</span><span class="dot dot-success"></span></div></div>
+        <div class="chat-project-divider"><span class="chat-project-divider-rule"></span><span class="chat-project-divider-center"><svg><use href="#folder"/></svg><span>cat-code</span><button class="back" aria-label="Move back" title="Move back"><svg><use href="#rewind"/></svg></button></span><span class="chat-project-divider-rule"></span></div>
+        <div class="prose">Sample answer text.</div>
+      </div>
+    </div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center"><svg><use href="#folder"/></svg><span class="jump-name">cat-code</span><span class="jump-path">~/cat-code</span><button class="back" aria-label="Move back" title="Move back"><svg><use href="#rewind"/></svg></button></span><span class="jump-rule"></span></div>
+        <div class="prose">Sample answer text.</div>
+      </div>
+    </div>
+
+    <!-- ===== FAILED ===== -->
+    <div class="x-state">Failed</div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">ListWorkspaces</span><span class="dot dot-success"></span></div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">JumpWorkspace</span><span class="dot dot-error"></span></div><div class="card-body"><p>The workspace request is unavailable. The conversation or destination may have changed.</p></div></div>
+        <div class="prose">Sample answer text.</div>
+      </div>
+    </div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center">Could not move to <span class="jump-name">cat-code</span></span><span class="jump-rule"></span></div>
+        <div class="prose">Sample answer text.</div>
+      </div>
+    </div>
+
+    <!-- ===== STOPPED ===== -->
+    <div class="x-state">Stopped</div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">ListWorkspaces</span><span class="dot dot-success"></span></div></div>
+        <div class="card"><div class="card-head"><span class="card-mark">•</span><span class="card-word">Tool</span><span class="card-target mono">JumpWorkspace</span><span class="dot dot-cancelled"></span></div><div class="card-body"><p>This tool was stopped before it finished.</p></div></div>
+      </div>
+    </div>
+    <div class="x-cell">
+      <div class="sp">
+        <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center">Stopped moving to <span class="jump-name">cat-code</span></span><span class="jump-rule"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-section">
+    <div class="x-vhead"><span class="x-title" style="margin:0">Arrival motion</span><button class="x-btn" data-replay-all>Replay all</button></div>
+    <div class="x-vgrid" id="variants"></div>
+  </div>
+
+  <div class="x-section">
+    <div class="x-vhead"><span class="x-title" style="margin:0">Arrived label · motion D</span><button class="x-btn" data-replay-labels>Replay all</button></div>
+    <div class="x-vgrid" id="labels"></div>
+  </div>
+</div>
+
+<template id="label">
+  <div class="x-vcell">
+    <div class="x-vhead"><span class="x-vlabel"></span><button class="x-btn" data-replay>Replay</button></div>
+    <div class="sp anim lbl v-d">
+      <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+      <div class="j-after">
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center"><span class="j-mv"><span class="jump-dot"></span>Moving to <span class="jump-name">cat-code</span><span class="jump-path">~/cat-code</span></span><span class="j-ar"></span></span><span class="jump-rule"></span></div>
+        <div class="prose">Sample answer text.</div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="variant">
+  <div class="x-vcell">
+    <div class="x-vhead"><span class="x-vlabel"></span><button class="x-btn" data-replay>Replay</button></div>
+    <div class="sp anim">
+      <div class="bubble-row"><div class="bubble">What is cat-code?</div></div>
+      <div class="j-after">
+        <div class="jump-line"><span class="jump-rule"></span><span class="jump-center"><span class="j-moving"><span class="jump-dot"></span>Moving to</span><span class="j-folder"><svg><use href="#folder"/></svg></span><span class="jump-name">cat-code</span><span class="jump-path">~/cat-code</span><button class="back" aria-label="Move back" title="Move back"><svg><use href="#rewind"/></svg></button></span><span class="jump-rule"></span></div>
+        <div class="prose">Sample answer text.</div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+const VARIANTS = [['a', 'A · Draw'], ['b', 'B · Ripple'], ['c', 'C · Stamp'], ['d', 'D · Wash'], ['e', 'E · Glint']]
+const MOVING_MS = 1600
+const grid = document.getElementById('variants')
+const tpl = document.getElementById('variant')
+const players = []
+for (const [key, label] of VARIANTS) {
+  const node = tpl.content.firstElementChild.cloneNode(true)
+  node.querySelector('.x-vlabel').textContent = label
+  const sp = node.querySelector('.sp')
+  sp.classList.add('v-' + key)
+  let timer = 0
+  const play = () => {
+    clearTimeout(timer)
+    sp.classList.remove('is-arrived')
+    sp.classList.add('is-moving')
+    timer = setTimeout(() => {
+      sp.classList.remove('is-moving')
+      void sp.offsetWidth
+      sp.classList.add('is-arrived')
+    }, MOVING_MS)
+  }
+  node.querySelector('[data-replay]').addEventListener('click', play)
+  players.push(play)
+  grid.appendChild(node)
+}
+document.querySelector('[data-replay-all]').addEventListener('click', () => players.forEach(p => p()))
+players.forEach(p => p())
+
+const FOLDER = '<svg><use href="#folder"/></svg>'
+const BACK = '<button class="back" aria-label="Move back" title="Move back"><svg><use href="#rewind"/></svg></button>'
+const NAME = '<span class="jump-name">cat-code</span>'
+const PATH = '<span class="jump-path">~/cat-code</span>'
+const LABELS = [
+  ['A · Name', FOLDER + NAME + PATH + BACK],
+  ['B · Moved to', FOLDER + 'Moved to ' + NAME + PATH + BACK],
+  ['C · From → to', '<span class="j-from">Chat</span><span class="j-arrow">→</span>' + FOLDER + NAME + PATH + BACK],
+  ['D · Working in', FOLDER + 'Working in ' + NAME + BACK],
+  ['E · Name only', FOLDER + '<span class="jump-name" title="~/cat-code">cat-code</span>' + BACK],
+]
+const labelGrid = document.getElementById('labels')
+const labelTpl = document.getElementById('label')
+const labelPlayers = []
+for (const [label, html] of LABELS) {
+  const node = labelTpl.content.firstElementChild.cloneNode(true)
+  node.querySelector('.x-vlabel').textContent = label
+  node.querySelector('.j-ar').innerHTML = html
+  const sp = node.querySelector('.sp')
+  let timer = 0
+  const play = () => {
+    clearTimeout(timer)
+    sp.classList.remove('is-arrived')
+    sp.classList.add('is-moving')
+    timer = setTimeout(() => {
+      sp.classList.remove('is-moving')
+      void sp.offsetWidth
+      sp.classList.add('is-arrived')
+    }, MOVING_MS)
+  }
+  node.querySelector('[data-replay]').addEventListener('click', play)
+  labelPlayers.push(play)
+  labelGrid.appendChild(node)
+}
+document.querySelector('[data-replay-labels]').addEventListener('click', () => labelPlayers.forEach(p => p()))
+labelPlayers.forEach(p => p())
+</script>
+</body>
+</html>

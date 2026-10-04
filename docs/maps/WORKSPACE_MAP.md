@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-10-01
+Last refreshed: 2026-10-04
 
 ## Purpose
 
@@ -29,7 +29,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-09-29 |
 | [`docs/maps/codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-09-30 |
 | [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-04 |
-| [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, config files, transcripts, memory, migrations, and persistence scope. | 2026-10-04 |
+| [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, project identity, workspace path discovery, transcripts, memory, migrations, and persistence scope. | 2026-10-04 |
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-09-21 |
 | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-09-29 |
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
@@ -62,7 +62,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | IDE and LSP integration | `src/services/lsp/manager.ts`, `src/commands/ide/` | `src/tools/LSPTool/`, IDE components/hooks/utils, plugin LSP integration | [`docs/maps/ide-lsp.md`](ide-lsp.md) |
 | Native/browser/client integrations | `src/utils/claudeInChrome/`, `src/utils/computerUse/` | `src/native-ts/`, `src/voice/`, desktop/mobile/chrome/voice commands | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) |
 | Proactive and assistant services | `src/proactive/` | `src/services/autoDream/`, `src/services/MagicDocs/`, `src/services/tips/`, trigger/sleep/brief surfaces | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) |
-| Workspace and repository discovery | `src/utils/cwd.ts` | `src/commands/add-dir/`, `src/utils/detectRepository.ts`, `src/utils/githubRepoPathMapping.ts` | [`docs/maps/config-persistence.md`](config-persistence.md) |
+| Workspace and repository discovery | `src/utils/cwd.ts`, `app/main/workspaceJumpCoordinator.ts` | `src/commands/add-dir/`, `src/utils/{detectRepository,githubRepoPathMapping}.ts`, `app/sidecar/workspaceJumpTools.ts`, `app/main/workspaceListingRunner.ts` | [`docs/maps/config-persistence.md`](config-persistence.md), [`docs/maps/web-app-runtime.md`](web-app-runtime.md), [`docs/maps/tools-permissions.md`](tools-permissions.md) |
 | Diagnostics, logging, and validation | `src/screens/Doctor.tsx`, `src/utils/debug.ts` | `src/utils/log.ts`, analytics/telemetry surfaces, stats/cost/status diagnostics | [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) |
 
 ## Maintenance Rules

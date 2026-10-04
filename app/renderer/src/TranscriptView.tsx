@@ -6314,35 +6314,44 @@ function ReasoningNode({
 }
 
 /** A step that is real reasoning text rather than a heading: the body renders in
- * the app's ordinary prose grammar under its own step, and can be folded away on
- * its own so one long body does not push the rest of the run off-screen (the
- * run's head collapses everything; this collapses just this step). */
+ * the app's ordinary prose grammar under its own step. Clicking the body folds
+ * it to its first line, and clicking the line unfolds it, so one long body does
+ * not push the rest of the run off-screen (the run's head collapses everything;
+ * this folds just this step). A click that ends a text selection or lands on an
+ * interactive descendant is not a fold. */
 function ReasoningProse({ content, sourceId }: { content: string; sourceId: string }) {
-  const [hidden, setHidden] = useTranscriptDisclosure(`reasoning:${sourceId}`)
+  const [folded, setFolded] = useTranscriptDisclosure(`reasoning:${sourceId}`)
+  const toggle = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (window.getSelection()?.toString()) return
+    if ((event.target as Element).closest('a, button, input, select, textarea, [contenteditable="true"]')) return
+    setFolded(!folded)
+  }
   return (
-    <>
-      {hidden ? null : (
-        <div className="md-prose mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle">
-          <BoundedMarkdown
-            sourceId={sourceId}
-            source={content}
-            renderLeaf={leaf => (
-              <MarkdownErrorBoundary fallback={content}>
-                <MarkdownTree tree={leaf.tree} />
-              </MarkdownErrorBoundary>
-            )}
-          />
-        </div>
-      )}
-      <button
-        type="button"
-        aria-expanded={!hidden}
-        onClick={() => setHidden(!hidden)}
-        className="font-mono text-[10.5px] text-text-faint hover:text-text-subtle"
-      >
-        {hidden ? 'show reasoning' : 'hide'}
-      </button>
-    </>
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={!folded}
+      onClick={toggle}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget) return
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        setFolded(!folded)
+      }}
+      className={`md-prose mb-1.5 mt-1 cursor-pointer border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle transition-colors duration-100 ease-out hover:text-text-muted focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-accent/40${
+        folded ? ' line-clamp-1' : ''
+      }`}
+    >
+      <BoundedMarkdown
+        sourceId={sourceId}
+        source={content}
+        renderLeaf={leaf => (
+          <MarkdownErrorBoundary fallback={content}>
+            <MarkdownTree tree={leaf.tree} />
+          </MarkdownErrorBoundary>
+        )}
+      />
+    </div>
   )
 }
 

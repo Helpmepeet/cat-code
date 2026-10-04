@@ -368,11 +368,14 @@ test('All includes old retained history, stays sparse across gaps, and excludes 
 
 test('All buckets long history without truncating totals or double-counting bucket sessions', async () => {
     const rows = Array.from({ length: 400 }, (_, index) => msg(new Date(Date.UTC(2020, 0, index + 1, 10)).toISOString(), `m${index}`, 1, `t${index}`));
-    const path = await file(rows);
+    const path = await file([
+        { type: 'system', subtype: 'codex_send_path', sessionId: 's', uuid: 'effort', timestamp: '2020-01-01T09:59:59.000Z', effort: 'ultra' },
+        ...rows,
+    ]);
     const snapshot = await collectRetainedUsage([path], asOf);
     const all = snapshot.ranges.all;
     expect(all.tokens.fresh).toBe(400);
-    expect(all.records).toBe(400);
+    expect(all.records).toBe(401);
     expect(all.requests).toBe(400);
     expect(all.activeDays).toBe(400);
     expect(all.bucketDays).toBeGreaterThan(1);
@@ -380,6 +383,9 @@ test('All buckets long history without truncating totals or double-counting buck
     expect(all.days.every(day => day.sessions === 1)).toBe(true);
     expect(all.days.reduce((sum, day) => sum + day.requests, 0)).toBe(400);
     expect(all.days.reduce((sum, day) => sum + day.tokens.fresh, 0)).toBe(400);
+    expect(all.effort).toMatchObject({ state: 'available', requests: { ultra: 400 }, tokens: { ultra: 4000 }, unattributedRequests: 0 });
+    expect(all.days.reduce((sum, day) => sum + day.effort.requests.ultra, 0)).toBe(400);
+    expect(all.days.reduce((sum, day) => sum + day.effort.tokens.ultra, 0)).toBe(4000);
     const { groupUsageSummary } = await import('../../app/sidecar/usageSummary.js');
     const { parseUsageCollectionResult } = await import('../../app/shared/usageStatsWorker.js');
     for (const range of ['7d', '30d', 'all'] as const) snapshot.ranges[range] = groupUsageSummary(snapshot.ranges[range]);

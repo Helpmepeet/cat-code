@@ -197,7 +197,7 @@ test('v14 comparison snapshots rebuild from indexed records without rereading so
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(18);
+    expect(rebuilt.countingVersion).toBe(19);
     expect(rebuilt.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
@@ -237,13 +237,20 @@ test('index excludes text and tool input, retaining missing-ID block positions',
     try { expect(JSON.stringify(db.query('SELECT value FROM records').all())).not.toContain('DO NOT INDEX'); }
     finally { db.close(); }
 });
-test('effort projection keeps only a closed level and produces the same aggregate as a direct scan', async () => {
+for (const level of ['high', 'ultra'] as const) test(`effort projection retains ${level} in cold and warm collections without unrelated diagnostic fields`, async () => {
     const { path, file } = await fixture();
-    const facts = { type: 'system', subtype: 'run_facts', sessionId: 's', uuid: 'facts', timestamp: '2026-09-13T11:59:59.000Z', effort: 'high', permissionMode: 'DO NOT INDEX MODE', model: 'DO NOT INDEX MODEL', contextWindow: 200000, ruleText: 'DO NOT INDEX RULE' };
+    const facts = { type: 'system', subtype: 'run_facts', sessionId: 's', uuid: 'facts', timestamp: '2026-09-13T11:59:59.000Z', effort: level, permissionMode: 'DO NOT INDEX MODE', model: 'DO NOT INDEX MODEL', contextWindow: 200000, ruleText: 'DO NOT INDEX RULE' };
     await writeFile(file, [facts, row('a')].map(value => JSON.stringify(value)).join('\n'));
     const indexed = await collectIndexedUsage([file], cutoff, opts(path));
-    expect(indexed.ranges['7d'].effort).toEqual((await collectRetainedUsage([file], cutoff)).ranges['7d'].effort);
-    expect(indexed.ranges['7d'].effort.requests.high).toBe(1);
+    const direct = await collectRetainedUsage([file], cutoff);
+    const warm = await collectIndexedUsage([file], cutoff, opts(path));
+    for (const result of [direct, indexed, warm]) {
+        for (const range of ['7d', '30d', 'all'] as const) {
+            expect(result.ranges[range].effort.requests[level]).toBe(1);
+            expect(result.ranges[range].effort.tokens[level]).toBe(10);
+            expect(result.ranges[range].effort.state).toBe('available');
+        }
+    }
     const { Database } = await import('bun:sqlite');
     const db = new Database(path, { readonly: true });
     try {
@@ -337,8 +344,8 @@ test('excludes historical Auto mode inference and tool-result content', async ()
         expect(projected).not.toContain('policy_blocked');
     } finally { db.close(); }
 });
-test('uses a successor index path when auto-mode metadata enters the projection', () => {
-    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v10.sqlite');
+test('uses a successor index path when Ultra enters the projection', () => {
+    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v11.sqlite');
 });
 test('cold and warm index snapshots retain owning-session attribution without retaining content', async () => {
     const { path, file } = await fixture();
@@ -454,7 +461,7 @@ test('v17 grouped snapshots rebuild named categories from indexed records withou
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(18);
+    expect(rebuilt.countingVersion).toBe(19);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);

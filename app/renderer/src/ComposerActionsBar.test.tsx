@@ -383,7 +383,6 @@ test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
   expect(offFast).toContain('h-[22px] w-[22px]')
   expect(offFast).toContain('fill="none"')
   expect(offFast).toContain('stroke="currentColor"')
-  expect(offFast).toContain('border-transparent')
   expect(offFast).toContain('text-text-ghost')
 
   const on = render({
@@ -395,8 +394,8 @@ test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
   expect(onFast).toContain('h-[22px] w-[22px]')
   expect(onFast).toContain('fill="currentColor"')
   expect(onFast).toContain('stroke="none"')
-  expect(onFast).toContain('border-tone-warn/30')
-  expect(onFast).toContain('bg-tone-warn/10')
+  expect(onFast).not.toContain('border-tone-warn/30')
+  expect(onFast).not.toContain('bg-tone-warn/10')
   expect(onFast).toContain('text-tone-warn')
 })
 
