@@ -179,6 +179,18 @@ html[data-appearance='light'] { --elev-rail: 4px 0 20px rgba(24,24,27,.1); }
 .s-rnav .s-av { margin-top: 4px; }
 .s-foot.icons { border-top-color: transparent; padding: 0; }
 .s-foot.icons .s-rnav { width: 48px; margin-top: 0; }
+/* ── spacing and ink, on the decorated rails ── */
+.s-rail.p.sp-relaxed .s-row { padding-top: 5.5px; padding-bottom: 5.5px; }
+.s-rail.p.sp-relaxed .s-sec { margin-bottom: 18px; }
+.s-rail.p.sp-relaxed .s-sec-head { padding-bottom: 5px; }
+.s-rail.p.sp-relaxed .s-grp { margin-bottom: 10px; }
+.s-rail.p.sp-relaxed .s-grp-head { padding-top: 5px; padding-bottom: 4px; }
+.s-rail.p.sp-airy .s-row { padding-top: 7px; padding-bottom: 7px; }
+.s-rail.p.sp-airy .s-sec { margin-bottom: 22px; }
+.s-rail.p.sp-airy .s-sec-head { padding-bottom: 6px; }
+.s-rail.p.sp-airy .s-grp { margin-bottom: 12px; }
+.s-rail.p.sp-airy .s-grp-head { padding-top: 6px; padding-bottom: 5px; }
+.s-rail.ink-quiet .s-row:not(:hover):not(.is-hover):not(.is-active) .s-title { color: light-dark(#63636b, #a1a1aa); }
 </style>
 </head>
 <body>
@@ -195,6 +207,15 @@ html[data-appearance='light'] { --elev-rail: 4px 0 20px rgba(24,24,27,.1); }
   <div class="x-group"><span>Live resting footer</span>
     <button class="x-btn" data-rest="strip" aria-pressed="true">Strip</button>
     <button class="x-btn" data-rest="icons" aria-pressed="false">Icons</button>
+  </div>
+  <div class="x-group"><span>Rows</span>
+    <button class="x-btn" data-sp="tight" aria-pressed="false">Tight</button>
+    <button class="x-btn" data-sp="relaxed" aria-pressed="true">Relaxed</button>
+    <button class="x-btn" data-sp="airy" aria-pressed="false">Airy</button>
+  </div>
+  <div class="x-group"><span>Titles</span>
+    <button class="x-btn" data-ink="bright" aria-pressed="false">Bright</button>
+    <button class="x-btn" data-ink="quiet" aria-pressed="true">Quiet</button>
   </div>
 </div>
 <div class="x-grid" id="grid"></div>
@@ -290,7 +311,7 @@ function footer(v, mode) {
 }
 
 function rail(v, foot, decor) {
-  const cls = 's-rail' + (v === 'cur' ? '' : ' p') + (decor ? DECOR.filter(([k]) => decorOn[k]).map(([k]) => ' d-' + k).join('') : '');
+  const cls = 's-rail' + (v === 'cur' ? '' : ' p') + (decor ? DECOR.filter(([k]) => decorOn[k]).map(([k]) => ' d-' + k).join('') + ` sp-${sp} ink-${ink}` : '');
   const secHead = (label, plus) => `<div class="s-sec-head"><span class="s-sec-label">${label}</span><span class="s-sec-rule"></span>${plus ? `<button class="s-plus">${I.plus}</button>` : ''}</div>`;
   const groups = GROUPS.map(g =>
     `<div class="s-grp"><div class="s-grp-head"><span class="s-folder">${g.collapsed ? I.folderClosed : I.folderOpen}</span><span class="s-grp-name">${g.name}</span><span class="s-grp-count">${g.count}</span></div>` +
@@ -317,6 +338,8 @@ function railNav() {
 const COLS = [['cur', 'Current', false], ['A', 'A', false], ['A', 'A · decorated', true]];
 let foot = 'list';
 let rest = 'strip';
+let sp = 'relaxed';
+let ink = 'quiet';
 function render() {
   document.getElementById('grid').innerHTML = COLS.map(([v, l, d]) =>
     `<div class="x-col"><div class="x-label">${l}</div>${rail(v, foot, d)}</div>`).join('') +
@@ -324,9 +347,9 @@ function render() {
   live.mount();
 }
 
-/* Hover-open rail. Footer: list when the pointer is within ZONE px of the
- * footer's top edge, else the resting form. */
-const HOVER_DELAY = 120, HIDE_DELAY = 200, ZONE = 48;
+/* Hover-open rail. Footer: list while the pointer is inside the band the
+ * collapsed rail's icon column occupies, else the resting form. */
+const HOVER_DELAY = 120, HIDE_DELAY = 200;
 const live = {
   open: false, near: false, y: 0, show: null, hide: null,
   mount() {
@@ -339,6 +362,7 @@ const live = {
       ? rail('A', this.near ? 'list' : rest, true).replace('class="s-rail', 'class="s-rail is-open')
       : `<aside class="s-rail p is-closed"><div class="s-head"></div>${railNav()}</aside>`;
     const aside = this.el.firstElementChild;
+    if (!this.open) this.zoneH = aside.getBoundingClientRect().bottom - aside.querySelector('.s-rnav').getBoundingClientRect().top;
     aside.onmouseenter = e => {
       clearTimeout(this.hide); this.y = e.clientY;
       if (this.open) return;
@@ -352,7 +376,7 @@ const live = {
   },
   track() {
     const f = this.el.querySelector('.s-foot');
-    const near = this.y >= f.getBoundingClientRect().top - ZONE;
+    const near = this.y >= this.el.getBoundingClientRect().bottom - this.zoneH;
     if (near !== this.near) {
       this.near = near;
       f.outerHTML = footer('A', near ? 'list' : rest);
@@ -381,6 +405,16 @@ document.querySelectorAll('[data-foot]').forEach(b => b.onclick = () => {
 document.querySelectorAll('[data-rest]').forEach(b => b.onclick = () => {
   rest = b.dataset.rest;
   document.querySelectorAll('[data-rest]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  render();
+});
+document.querySelectorAll('[data-sp]').forEach(b => b.onclick = () => {
+  sp = b.dataset.sp;
+  document.querySelectorAll('[data-sp]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  render();
+});
+document.querySelectorAll('[data-ink]').forEach(b => b.onclick = () => {
+  ink = b.dataset.ink;
+  document.querySelectorAll('[data-ink]').forEach(x => x.setAttribute('aria-pressed', x === b));
   render();
 });
 </script>

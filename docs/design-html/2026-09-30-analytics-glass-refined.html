@@ -1,0 +1,1810 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics Glass Refined</title>
+<style>
+@font-face{font-family:"DM Sans";src:url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2");font-weight:100 1000;font-style:normal}
+@font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2");font-weight:400}
+@font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Medium.woff2") format("woff2");font-weight:500}
+
+/* ================= CHROME (x-) : not the app ================= */
+html,body{margin:0;height:100%}
+body{background:#e4e4e6;overflow:hidden}
+.x-bar{position:fixed;inset:0 0 auto 0;height:38px;display:flex;align-items:center;gap:22px;padding:0 16px;background:#f3f3f4;border-bottom:1px solid #cdcdd1;font:10px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#77777c;z-index:10}
+.x-bar button{all:unset;cursor:pointer;padding:12px 0 10px;border-bottom:1px solid transparent;color:#77777c}
+.x-bar button:hover{color:#333}
+.x-bar button[aria-pressed=true]{color:#1b1b1d;border-bottom-color:#1b1b1d}
+.x-bar button:disabled{opacity:.35;cursor:default}
+.x-bar button:focus-visible{outline:1px dashed #555;outline-offset:2px}
+.x-sep{flex:1}
+.x-id{color:#a0a0a5}
+.x-notes{position:fixed;top:39px;right:0;bottom:0;width:280px;padding:16px 18px;background:#f3f3f4;border-left:1px solid #cdcdd1;font:10px/1.7 ui-monospace,Menlo,monospace;color:#5d5d62;z-index:9;overflow:auto;letter-spacing:.02em}
+.x-notes[hidden]{display:none}
+.x-notes h4{margin:0 0 6px;font:inherit;text-transform:uppercase;letter-spacing:.12em;color:#1b1b1d}
+.x-notes h5{margin:14px 0 4px;font:inherit;text-transform:uppercase;letter-spacing:.12em;color:#9a9aa0}
+.x-notes ul{margin:0;padding-left:14px}
+.x-stage{position:fixed;inset:39px 0 0 0;padding:14px}
+.x-stage.x-notes-open{right:280px}
+
+/* ================= SPECIMEN: desktop + window frame ================= */
+.desk{position:absolute;inset:0;background:
+  radial-gradient(60% 40% at 32% 0%,#6d5a3a 0%,transparent 70%),
+  radial-gradient(40% 35% at 78% 6%,#4a4a36 0%,transparent 70%),
+  radial-gradient(50% 60% at 95% 70%,#26343a 0%,transparent 70%),
+  radial-gradient(45% 55% at 0% 80%,#2c3530 0%,transparent 70%),
+  linear-gradient(#2a2a26,#16181a)}
+.desk.light{background:
+  radial-gradient(60% 40% at 32% 0%,#e9d8b8 0%,transparent 70%),
+  radial-gradient(40% 35% at 78% 6%,#dfe2cf 0%,transparent 70%),
+  radial-gradient(50% 60% at 95% 70%,#c9d9df 0%,transparent 70%),
+  radial-gradient(45% 55% at 0% 80%,#d3dcd5 0%,transparent 70%),
+  linear-gradient(#ecebe6,#dcdedf)}
+.win{position:relative;height:100%;display:flex;flex-direction:column;border-radius:11px;overflow:hidden;box-shadow:0 22px 70px rgba(0,0,0,.45),0 0 0 .5px rgba(0,0,0,.7),inset 0 0 0 .5px rgba(255,255,255,.12);
+  font-family:var(--font-sans);color:var(--color-text-primary);font-size:14px;-webkit-font-smoothing:antialiased;
+  background:var(--glass-tint);backdrop-filter:blur(40px) saturate(1.4);-webkit-backdrop-filter:blur(40px) saturate(1.4);
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+.win[data-theme=dark]{color-scheme:dark;--color-app-bg:#09090b;--color-shell-chrome:#070709;--color-surface-raised:#111113;--color-surface-panel:#0a0a0c;--color-shell-seam:rgba(255,255,255,.06);--color-shell-hover:rgba(255,255,255,.045);--color-text-primary:#f4f4f5;--color-text-muted:#a1a1aa;--color-text-subtle:#98989f;--color-accent:#f472b6;--color-accent-soft:#f9a8d4;--color-tone-danger:#f87171;--glass-tint:rgba(24,24,26,.62)}
+.win[data-theme=light]{color-scheme:light;--color-app-bg:#fcfcfd;--color-shell-chrome:#f1f1f4;--color-surface-raised:#ffffff;--color-surface-panel:#f7f7f9;--color-shell-seam:rgba(9,9,11,.1);--color-shell-hover:rgba(9,9,11,.04);--color-text-primary:#18181b;--color-text-muted:#52525b;--color-text-subtle:#575761;--color-accent:#bb3e84;--color-accent-soft:#ad3078;--color-tone-danger:#dc2626;--glass-tint:rgba(246,246,248,.66)}
+.win button{background:transparent;border:0;color:inherit;font:inherit;cursor:pointer;padding:0;margin:0}
+.win *,.win *::before,.win *::after{box-sizing:border-box}
+.win-tabs{flex:none;height:42px;display:flex;align-items:stretch;border-bottom:1px solid var(--color-shell-seam);font-size:12.5px;color:var(--color-text-muted)}
+.lights{display:flex;gap:8px;align-items:center;padding:0 18px 0 14px;width:84px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.25)}
+.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.wtab{position:relative;display:flex;align-items:center;gap:8px;width:176px;padding:0 12px;border-right:1px solid var(--color-shell-seam);white-space:nowrap}
+.wtab.on{color:var(--color-text-primary);background:var(--color-shell-hover)}
+.wtab.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1.5px;background:var(--color-accent)}
+.wtab .dot{width:6px;height:6px;border-radius:50%;background:#4ade80}
+.wtab .dot.p{background:var(--color-accent)}
+.wtab .kb{margin-left:auto;color:var(--color-text-subtle)}
+.wplus{display:flex;align-items:center;padding:0 14px;font-size:16px;color:var(--color-text-subtle)}
+.wsplit{margin:8px 10px 8px auto;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--color-shell-seam);border-radius:6px;font-size:11px;color:var(--color-text-subtle)}
+.wsplit i{width:12px;height:9px;border:1.3px solid currentColor;border-radius:2px;background:linear-gradient(90deg,currentColor 0 45%,transparent 45%)}
+.win-body{flex:1;min-height:0;display:flex;position:relative}
+.win-rail{flex:none;width:48px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:10px;padding:12px 0 14px;border-right:1px solid var(--color-shell-seam);color:var(--color-text-subtle)}
+.win-rail span{width:30px;height:30px;display:grid;place-items:center;border-radius:7px}
+.win-rail span.on{color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 14%,transparent)}
+.win-rail svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.win-rail .av{width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,var(--color-accent) 25%,transparent);color:var(--color-accent);font-size:10px;font-weight:600}
+
+/* ================= APP CSS (source: usageDashboard.css + siblings) ================= */
+.usage-page{overflow:auto;flex:1;min-width:0;padding:24px 28px 52px;background:transparent;color:var(--color-text-primary);position:relative}
+.usage-content{max-width:1180px;margin:auto;
+  --usage-panel:var(--color-surface-raised);--usage-muted:var(--color-text-subtle);--usage-grid:var(--color-shell-seam);--usage-secondary:var(--color-text-muted);
+  --usage-blue:light-dark(#2563eb,#60a5fa);--usage-teal:light-dark(#087f75,#40c4aa);--usage-amber:light-dark(#d97706,#fbbf24);--usage-coral:light-dark(#dc2626,#f87171);--usage-violet:light-dark(#7c3aed,#a78bfa);--usage-cyan:light-dark(#0284c7,#38bdf8);--usage-emerald:light-dark(#16a34a,#34d399);--usage-pink:light-dark(#db2777,#f472b6);--usage-other:light-dark(#64748b,#94a3b8);
+  --usage-model-purple:light-dark(#b9a3de,#c4b5fd);--usage-model-blue:light-dark(#85b8d6,#5eead4);--usage-model-orange:light-dark(#dfb29a,#fdba74);--usage-model-yellow:light-dark(#b8ca97,#bef264);--usage-model-pink:light-dark(#acbaca,#cbd5e1);
+  --usage-tokens:var(--usage-blue);--usage-cache:light-dark(#c4b5fd,#4c3d7a);--usage-requests:var(--usage-amber);--usage-errors:var(--usage-coral);--usage-sessions:var(--usage-violet);--usage-output:light-dark(#dda2bf,#f472b6);--usage-fresh:light-dark(#8fb8e8,#60a5fa);--usage-writes:var(--usage-amber);--usage-success:var(--usage-emerald);--usage-selection:var(--color-accent);--usage-delta-up:light-dark(#16a34a,#4ade80);--usage-delta-down:light-dark(#dc2626,#f87171)}
+.usage-chart text,.usage-heatmap text,.usage-range,.usage-metric strong,.usage-cache-values dd,.usage-model-key small{font-family:var(--font-mono)}
+.usage-page h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.4px}
+.usage-page h2{margin:0;font-size:14px;font-weight:600}
+.usage-header{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.usage-header-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.usage-note{color:var(--usage-secondary);font-size:12px;line-height:1.5}
+.usage-freshness{display:flex;flex-wrap:wrap;gap:6px 8px;margin:4px 0 0;color:var(--usage-secondary);font-size:12px;font-variant-numeric:tabular-nums}
+.usage-freshness span+span::before{content:'·';margin-right:8px}
+.usage-refresh{display:inline-flex;width:34px;height:34px;align-items:center;justify-content:center;padding:0;border:1px solid var(--color-shell-seam)!important;border-radius:50%;background:var(--usage-panel)!important;color:var(--color-text-primary)}
+.usage-refresh-icon{width:15px;height:15px}
+.usage-refresh:hover{background:var(--color-shell-hover)!important}
+.animate-spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.usage-range{display:flex;gap:4px;padding:2px;border:0;background:transparent}
+.usage-range button{padding:7px 12px;font-size:12px;border-radius:999px;color:var(--usage-secondary)}
+.usage-range button:hover{background:var(--color-shell-hover)}
+.usage-range button[aria-pressed=true]{color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 12%,transparent)}
+.usage-page button:focus-visible,.usage-page summary:focus-visible,.usage-page g:focus-visible,.usage-page svg:focus-visible{outline:2px solid var(--usage-selection);outline-offset:3px}
+.usage-overview{margin:20px 0 16px}
+.usage-comparison{margin:0 0 7px;color:var(--usage-secondary);font-size:11px}
+.usage-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--color-shell-seam);border:1px solid var(--color-shell-seam);border-radius:10px;overflow:hidden}
+.usage-metric{min-width:0;padding:15px 16px 13px;background:var(--usage-panel)}
+.usage-metric h2{margin:0 0 8px;color:var(--usage-secondary);font:500 11px var(--font-sans)!important}
+.usage-metric strong{display:block;font-size:26px;line-height:1.12;letter-spacing:-.03em;font-weight:500;font-variant-numeric:tabular-nums}
+.usage-metric-foot{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 8px;min-height:18px;margin-top:10px}
+.usage-metric-foot svg{width:64px;height:18px;margin-left:auto}
+.usage-metric-foot polyline{fill:none;stroke:var(--usage-metric-color,var(--usage-tokens));stroke-width:1.4;stroke-linejoin:round}
+.usage-metric-sessions{--usage-metric-color:var(--usage-sessions)}.usage-metric-requests{--usage-metric-color:var(--usage-requests)}.usage-metric-cache{--usage-metric-color:var(--usage-cache)}
+.usage-metric-delta{font:500 11px var(--font-mono);color:var(--usage-secondary);white-space:nowrap}
+.usage-delta-up{color:var(--usage-delta-up)}.usage-delta-down{color:var(--usage-delta-down)}.usage-delta-flat{color:var(--usage-muted)}
+.usage-panels{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.usage-panel{min-width:0;padding:17px 17px 15px;border:1px solid var(--color-shell-seam);border-radius:10px;background:var(--usage-panel)}
+.usage-page .usage-panel-heading{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:14px;font-weight:600;color:var(--color-text-primary)}
+.usage-chart{width:100%;display:block;overflow:visible}
+.usage-axis{fill:var(--usage-muted);font-size:10px;font-variant-numeric:tabular-nums;font-family:var(--font-mono)}
+.usage-selected{fill:var(--usage-selection);fill-opacity:.12}
+.usage-selection-underline{fill:var(--usage-selection)}
+.usage-legend{display:flex;flex-wrap:wrap;gap:7px 16px;list-style:none;margin:12px 0 0;padding:0;font-size:11px;color:var(--usage-secondary)}
+.usage-legend>span{display:flex;align-items:center;gap:6px}
+.usage-legend b{font-family:var(--font-mono);font-size:10px;font-weight:400}
+.usage-token-flow-panel{padding:20px 18px 18px}
+.usage-flow-toolbar{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:14px 20px;margin-bottom:6px}
+.usage-page .usage-flow-toolbar .usage-panel-heading{margin:0}
+.usage-flow-controls{display:flex;gap:8px;flex-wrap:wrap}
+.usage-flow-grid-line{stroke:var(--usage-grid);stroke-width:1}
+.usage-flow-hover-point{stroke:var(--usage-panel);stroke-width:1.5}
+.usage-flow-legend{margin-top:12px;gap:8px}
+.usage-flow-series-toggle{display:flex;align-items:center;gap:7px;padding:7px 10px!important;border:1px solid var(--color-shell-seam)!important;border-radius:999px;color:var(--color-text-primary);font-size:11px!important}
+.usage-flow-series-toggle:hover{background:var(--color-shell-hover)}
+.usage-flow-series-toggle[aria-pressed=false]{opacity:.48}
+.usage-flow-series-toggle b{color:var(--usage-muted)}
+.usage-flow-series-eye{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.usage-chart-tooltip>rect{fill:var(--usage-panel);stroke:var(--usage-secondary);stroke-width:.6}
+.usage-chart-tooltip text{fill:var(--usage-secondary);font:11px var(--font-mono)}
+.usage-chart-tooltip .usage-tooltip-title{fill:var(--color-text-primary);font-weight:500}
+.usage-flow-tooltip>rect{fill:var(--usage-panel);stroke:var(--color-shell-seam);stroke-width:1}
+.usage-flow-tooltip text{fill:var(--usage-secondary);font:11px var(--font-sans)}
+.usage-flow-tooltip .usage-tooltip-title,.usage-flow-tooltip .usage-flow-tooltip-value{fill:var(--color-text-primary);font-weight:600}
+.usage-day-detail{margin-top:16px;padding-top:14px;border-top:1px solid var(--color-shell-seam)}
+.usage-detail-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.usage-detail-header h3{margin:0;font-size:14px;font-weight:600}
+.usage-detail-header button{color:var(--color-accent);font-size:12px;padding:5px 10px}
+.usage-day-figures{display:flex;flex-wrap:wrap;gap:18px 28px;margin:12px 0 16px;color:var(--usage-secondary);font-size:12px}
+.usage-day-figures>div{display:flex;flex-direction:column;gap:2px}
+.usage-day-figures strong{font:500 22px var(--font-mono);letter-spacing:-.025em;color:var(--color-text-primary)}
+.usage-page table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+.usage-page th,.usage-page td{padding:10px 8px;border-bottom:1px solid var(--color-shell-seam);text-align:right;vertical-align:top}
+.usage-page th:first-child,.usage-page td:first-child{text-align:left}
+.usage-page th{font-weight:500}
+.usage-page thead{color:var(--usage-secondary)}
+.usage-page caption{text-align:left;font-weight:600;padding:12px 0}
+.usage-session-table th:first-child{width:60%}
+.usage-page .usage-session-table thead th{font:600 11px var(--font-sans)}
+.usage-session-name{color:var(--color-accent)!important;text-align:left;font-weight:500!important}
+.usage-session-name:hover{text-decoration:underline;text-underline-offset:2px}
+.usage-session-project{display:block;margin-top:4px;color:var(--usage-secondary);font-size:11px;font-weight:400}
+.usage-table-scroll{overflow-x:auto}
+.usage-secondary-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.usage-area-cache{color:var(--usage-cache)}
+.usage-trend-chart{margin-top:12px}
+.usage-area-fill{fill:currentColor;fill-opacity:.09}
+.usage-trend-grid{stroke:var(--usage-grid);stroke-width:1}
+.usage-area-line{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.usage-area-point{fill:currentColor;stroke:var(--usage-panel);stroke-width:1.5}
+.usage-trend-marker{stroke:currentColor;stroke-opacity:.5;stroke-dasharray:3 3}
+.usage-details-card-header{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px;min-height:50px;margin-bottom:2px}
+.usage-page .usage-details-card-header .usage-panel-heading{margin:0}
+.usage-details-card-header p{margin:3px 0 0;color:var(--usage-secondary);font-size:11.5px;line-height:1.4}
+.usage-details-card-header>strong{font:500 32px/1 var(--font-mono);letter-spacing:-.035em;white-space:nowrap}
+.usage-page .usage-details-values{display:flex;flex-direction:column;margin:14px 0 0;font-size:12.5px}
+.usage-page .usage-details-values>div{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--color-shell-seam)}
+.usage-page .usage-details-values>div:first-child{border-top:0}
+.usage-page .usage-details-values dt{display:flex;align-items:center;gap:8px;color:var(--usage-secondary)}
+.usage-page .usage-details-values dt i{width:9px;height:9px;flex:none;border-radius:2.5px}
+.usage-page .usage-details-values dd{margin:0;font:400 12px var(--font-mono);white-space:nowrap}
+.usage-details-cache-read{background:var(--usage-cache)}.usage-details-fresh{background:var(--usage-fresh)}.usage-details-cache-write{background:var(--usage-writes)}
+.usage-model-scope{justify-content:flex-end;width:max-content;margin-left:auto}
+.usage-model-mix{display:grid;grid-template-columns:minmax(0,190px) minmax(0,1fr);gap:20px;align-items:center;min-height:210px;margin-top:10px}
+.usage-details-donut{position:relative}
+.usage-model-donut{display:block;width:100%}
+.usage-details-donut path{cursor:pointer;transition:opacity .15s}
+.usage-details-donut .usage-model-selected{stroke:var(--usage-panel);stroke-width:2px}
+.usage-details-donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;text-align:center}
+.usage-details-donut-center span{max-width:96px;overflow:hidden;color:var(--usage-secondary);font:11px/1.2 var(--font-mono);text-overflow:ellipsis;white-space:nowrap}
+.usage-details-donut-center strong{margin-top:5px;font:500 25px/1 var(--font-mono);letter-spacing:-.025em}
+.usage-details-donut-center>strong:only-child{font:500 18px/1.15 var(--font-sans);letter-spacing:-.01em}
+.usage-details-donut-center small{margin-top:4px;color:var(--usage-secondary);font:11px/1.2 var(--font-mono)}
+.usage-model-key{display:grid;list-style:none;margin:0;padding:0}
+.usage-model-key li+li{border-top:1px solid var(--color-shell-seam)}
+.usage-model-key button{display:grid;grid-template-columns:9px minmax(0,1fr) auto 46px;align-items:center;gap:8px;width:100%;padding:8px 3px;text-align:left;font-size:12px;border-radius:4px}
+.usage-model-key button:hover{background:var(--color-shell-hover)}
+.usage-model-key button b,.usage-model-key button small{text-align:right;font:400 11px var(--font-mono);white-space:nowrap}
+.usage-model-key button small{color:var(--usage-secondary)}
+.usage-model-muted{opacity:.45}
+.usage-tool-ok{fill:var(--usage-success);background:var(--usage-success)}
+.usage-tool-error{fill:var(--usage-errors);background:var(--usage-errors)}
+.usage-tool-unmatched{fill:var(--usage-other);background:var(--usage-other)}
+.usage-tool-legend{justify-content:flex-end;margin:0 0 4px}
+.usage-tool-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.usage-tool-bars{margin-top:10px}
+.usage-tool-bars button{display:grid;grid-template-columns:76px minmax(0,1fr) 58px;gap:11px;align-items:center;width:calc(100% + 10px);padding:6px 5px;margin-inline:-5px;border-radius:5px;text-align:left;font-size:12px}
+.usage-tool-bars button>span{overflow:hidden;text-overflow:ellipsis}
+.usage-tool-bars button>b{text-align:right;font:400 11px var(--font-mono)}
+.usage-tool-bars button:hover,.usage-tool-bars button[aria-pressed=true]{background:var(--color-shell-hover)}
+.usage-tool-bars svg{display:block;width:100%;height:11px}
+.usage-tool-error-trend{margin-top:18px;padding-top:15px;border-top:1px solid var(--color-shell-seam)}
+.usage-tool-error-trend>header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.usage-tool-error-trend h3{margin:0;font-size:13px;font-weight:550}
+.usage-tool-error-trend header p{margin:3px 0 0;color:var(--usage-secondary);font-size:11.5px}
+.usage-tool-build-toggle{display:inline-flex;align-items:center;gap:7px;padding:5px 8px!important;border:1px solid var(--color-shell-seam)!important;border-radius:5px;color:var(--usage-secondary);font-size:11px!important}
+.usage-tool-build-toggle:hover,.usage-tool-build-toggle[aria-pressed=true]{background:var(--color-shell-hover);color:var(--color-text-primary)}
+.usage-tool-build-toggle i{width:7px;height:7px;transform:rotate(45deg);border-radius:1px;background:var(--usage-violet)}
+.usage-tool-picker{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 8px}
+.usage-tool-picker button{display:inline-flex;align-items:center;gap:6px;padding:5px 8px!important;border:1px solid var(--color-shell-seam)!important;border-radius:999px;color:var(--usage-secondary);font-size:11px!important}
+.usage-tool-picker button:hover{background:var(--color-shell-hover);color:var(--color-text-primary)}
+.usage-tool-picker button[aria-pressed=true]{border-color:var(--usage-errors)!important;background:color-mix(in srgb,var(--usage-errors) 8%,transparent);color:var(--color-text-primary)}
+.usage-tool-error-chart{display:block;width:100%;overflow:visible}
+.usage-tool-error-grid{stroke:var(--color-shell-seam);stroke-width:1}
+.usage-tool-error-line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.usage-tool-error-series circle{fill:var(--usage-panel);stroke-width:2;cursor:pointer}
+.usage-tool-error-series g[aria-pressed=true] circle{stroke-width:4}
+.usage-tool-build-marker{cursor:pointer}
+.usage-tool-build-marker path{stroke:var(--usage-panel);stroke-width:1}
+.usage-tool-build-marker[aria-pressed=true] path{stroke:var(--color-text-primary);stroke-width:2}
+.usage-readout{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;min-height:18px;margin-top:4px;font-size:11px}
+.usage-readout span{color:var(--usage-secondary);font-family:var(--font-mono)}
+.usage-readout button{text-decoration:underline}
+.usage-chart-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;color:var(--usage-secondary);font-size:12px}
+.usage-heat-key{display:flex;align-items:center;gap:4px}
+.usage-heat-key i{display:block;width:10px;height:10px;border-radius:2px}
+.usage-heat-0{fill:color-mix(in srgb,var(--color-text-primary) 8%,var(--usage-panel));background:color-mix(in srgb,var(--color-text-primary) 8%,var(--usage-panel))}
+.usage-heat-1{fill:light-dark(oklch(from var(--color-accent) .9 calc(c * .35) h),oklch(from var(--color-accent) .4 calc(c * .6) h));background:light-dark(oklch(from var(--color-accent) .9 calc(c * .35) h),oklch(from var(--color-accent) .4 calc(c * .6) h))}
+.usage-heat-2{fill:light-dark(oklch(from var(--color-accent) .81 calc(c * .55) h),oklch(from var(--color-accent) .5 calc(c * .75) h));background:light-dark(oklch(from var(--color-accent) .81 calc(c * .55) h),oklch(from var(--color-accent) .5 calc(c * .75) h))}
+.usage-heat-3{fill:light-dark(oklch(from var(--color-accent) .72 calc(c * .75) h),oklch(from var(--color-accent) .6 calc(c * .85) h));background:light-dark(oklch(from var(--color-accent) .72 calc(c * .75) h),oklch(from var(--color-accent) .6 calc(c * .85) h))}
+.usage-heat-4{fill:light-dark(oklch(from var(--color-accent) .63 calc(c * .9) h),oklch(from var(--color-accent) .7 calc(c * .95) h));background:light-dark(oklch(from var(--color-accent) .63 calc(c * .9) h),oklch(from var(--color-accent) .7 calc(c * .95) h))}
+.usage-heat-5{fill:var(--color-accent);background:var(--color-accent)}
+.usage-heat-selected{stroke:var(--color-text-primary);stroke-width:1.5px}
+.usage-heatmap{display:block;width:100%;height:auto}
+.usage-heatmap g{cursor:pointer}.usage-heatmap g[aria-disabled=true]{cursor:default}
+.usage-heatmap g:focus{outline:none}.usage-heatmap g:focus-visible rect{stroke:var(--color-text-primary);stroke-width:2px}
+.usage-interaction-readout{display:flex;flex-wrap:wrap;gap:6px 16px;min-height:18px;margin-top:10px;color:var(--usage-secondary);font-size:12px}
+.usage-interaction-readout strong{color:var(--color-text-primary);font-weight:500}
+.usage-auto-mode{display:grid;gap:16px;margin:16px 0 0}
+.usage-auto-flow-heading{margin:0 0 4px;font-size:14px;font-weight:600}
+.usage-auto-flow-chart{display:block;width:100%;height:auto}
+.usage-auto-flow-ribbon{--fc:var(--usage-other);fill:none;stroke:var(--fc);stroke-opacity:.23;transition:stroke-opacity .12s ease}
+.usage-auto-flow-ribbon-active{stroke-opacity:.55}
+.usage-auto-flow-hit{fill:none;stroke:transparent;cursor:pointer}
+.usage-auto-flow-node{fill:var(--usage-other)}
+.usage-auto-flow-node-label{fill:var(--usage-secondary);font:11px var(--font-mono);paint-order:stroke;pointer-events:none;stroke:var(--usage-panel);stroke-linejoin:round;stroke-width:3px}
+.usage-auto-flow-node-attempts{fill:var(--usage-selection)}
+.usage-auto-flow-node-allowed,.usage-auto-flow-ribbon-allowed{--fc:var(--usage-success);fill:var(--usage-success)}
+.usage-auto-flow-ribbon-allowed,.usage-auto-flow-ribbon-blocked{fill:none}
+.usage-auto-flow-node-blocked,.usage-auto-flow-ribbon-blocked{--fc:var(--usage-errors)}
+.usage-auto-flow-node-blocked{fill:var(--usage-errors)}
+.usage-auto-mode-block-rate{margin-top:18px;padding-top:15px;border-top:1px solid var(--color-shell-seam)}
+.usage-auto-mode-block-rate>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.usage-auto-mode-block-rate h3,.usage-auto-bars-chart h3{margin:0;font-size:13px;font-weight:550}
+.usage-auto-mode-block-rate header p{margin:3px 0 0;color:var(--usage-secondary);font-size:11.5px}
+.usage-auto-mode-block-rate-headline{display:flex;flex-direction:column;align-items:flex-end;gap:2px;color:var(--usage-secondary);font:11px var(--font-mono)}
+.usage-auto-mode-block-rate-headline strong{color:var(--color-text-primary);font-size:14px;font-weight:550}
+.usage-auto-mode-block-rate-grid{stroke:var(--color-shell-seam)}
+.usage-auto-mode-block-rate-line{fill:none;stroke:var(--usage-coral);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.usage-auto-mode-block-rate-dot{fill:var(--usage-coral);stroke:var(--usage-panel);stroke-width:2;cursor:pointer}
+.usage-auto-mode-block-rate-dot.prov{fill:var(--usage-panel);stroke:var(--usage-coral)}
+.usage-auto-bars{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.usage-auto-bars-scroll{overflow-x:auto;margin-top:10px}
+.usage-auto-decision-chart{display:block;width:100%;height:auto;overflow:visible}
+.usage-auto-bars-grid{stroke:var(--usage-grid)}
+.usage-auto-outcome-allowed{fill:var(--usage-success);background:var(--usage-success)}
+.usage-auto-outcome-blocked{fill:var(--usage-errors);background:var(--usage-errors)}
+.usage-auto-outcome-error{fill:var(--usage-violet);background:var(--usage-violet)}
+.usage-auto-outcome-cancelled{fill:var(--usage-other);background:var(--usage-other)}
+.usage-auto-decision-chart rect{cursor:pointer}
+.usage-auto-bars-readout{min-height:16px;margin:5px 0 0;color:var(--usage-secondary);font:11px var(--font-mono)}
+.usage-auto-outcome-legend{display:flex;flex-wrap:wrap;gap:7px 13px;margin:10px 0 0;padding:0;list-style:none;color:var(--usage-secondary);font-size:11px}
+.usage-auto-outcome-legend li{display:flex;align-items:center;gap:5px}
+.usage-auto-outcome-legend i{width:8px;height:8px;border-radius:2px}
+.usage-auto-outcome-legend b{color:var(--color-text-primary);font:500 11px var(--font-mono)}
+.usage-auto-category-bars{display:grid;gap:10px;margin:14px 0 0;padding:0;list-style:none}
+.usage-auto-category-bars li>div{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:baseline;gap:7px;margin-bottom:4px;font-size:11.5px}
+.usage-auto-category-bars b,.usage-auto-category-bars small{font-family:var(--font-mono);font-weight:500}
+.usage-auto-category-bars small{color:var(--usage-secondary);font-weight:400}
+.usage-auto-category-bars svg{display:block;width:100%;height:8px}
+.usage-auto-category-track{fill:color-mix(in srgb,var(--color-surface-panel) 80%,var(--color-text-primary))}
+.usage-auto-category-fill{fill:var(--usage-errors)}
+.usage-values{margin-top:18px;border-top:1px solid var(--color-shell-seam);padding-top:12px;font-size:12px}
+.usage-values>summary{cursor:pointer;padding:10px 0;color:var(--color-text-primary);font-size:13px;font-weight:600}
+.usage-values-sections{display:grid;gap:18px;padding:6px 0 20px}
+.usage-values-sections>section{min-width:0;padding:14px 16px;border:1px solid var(--color-shell-seam);border-radius:10px;background:var(--usage-panel)}
+.usage-values-sections table{min-width:max-content}
+.usage-values-definition{margin:4px 0 0;color:var(--usage-secondary);font-size:11px}
+.tc{position:relative}
+.tc svg{display:block;width:100%;overflow:visible}
+.tc svg:focus{outline:none}
+.tc svg:focus-visible{outline:2px solid var(--usage-selection);outline-offset:3px}
+.m-dim{opacity:.28;transition:opacity .15s}
+.usage-heatmap rect.hx{stroke:var(--color-text-primary);stroke-width:1.5px}
+.tc-tip{position:absolute;pointer-events:none;z-index:3;display:none}
+
+/* ================= LEDGER ================= */
+.win[data-dir=ledger]{
+  .usage-page{background:var(--color-app-bg);padding:0 40px 72px}
+  .usage-content{max-width:1120px;--lg-ink:var(--color-text-primary);--lg-rule:color-mix(in srgb,var(--color-text-primary) 14%,transparent);--lg-hair:color-mix(in srgb,var(--color-text-primary) 8%,transparent)}
+  .lg-top{position:sticky;top:0;z-index:4;background:var(--color-app-bg);padding:26px 0 0}
+  .lg-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:1px solid var(--lg-ink)}
+  .lg-head h1{font-size:26px;font-weight:500;letter-spacing:-.02em}
+  .lg-head p{margin:6px 0 0;color:var(--usage-secondary);font-size:12.5px}
+  .lg-range{display:flex;gap:18px;font-size:13px}
+  .lg-range button{color:var(--usage-secondary);padding:4px 0;border-bottom:1.5px solid transparent}
+  .lg-range button[aria-pressed=true]{color:var(--lg-ink);border-bottom-color:var(--color-accent)}
+  .lg-range button:hover{color:var(--lg-ink)}
+  .lg-read{display:flex;gap:28px;align-items:baseline;min-height:34px;padding:9px 0;border-bottom:1px solid var(--lg-rule);font:12px var(--font-mono);color:var(--usage-secondary)}
+  .lg-read strong{color:var(--lg-ink);font:500 12px var(--font-sans)}
+  .lg-read b{color:var(--lg-ink);font-weight:500}
+  .lg-read .pin{color:var(--color-accent)}
+  .lg-figs{display:grid;grid-template-columns:repeat(5,1fr);margin:26px 0 8px}
+  .lg-fig{padding:0 18px;border-left:1px solid var(--lg-rule)}
+  .lg-fig:first-child{padding-left:0;border-left:0}
+  .lg-fig h2{font:500 11.5px var(--font-sans);color:var(--usage-secondary);margin:0 0 10px}
+  .lg-fig strong{display:block;font:400 34px/1 var(--font-sans);letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+  .lg-fig small{display:block;margin-top:9px;font:11px var(--font-mono);color:var(--usage-secondary)}
+  .lg-fig small em{font-style:normal;color:var(--lg-ink)}
+  .lg-sec{display:grid;grid-template-columns:170px minmax(0,1fr);gap:28px;padding:26px 0;border-top:1px solid var(--lg-rule)}
+  .lg-sec:first-of-type{border-top:0}
+  .lg-label h2{font-size:13.5px;font-weight:600;margin:0}
+  .lg-label p{margin:6px 0 0;color:var(--usage-secondary);font-size:11.5px;line-height:1.45}
+  .lg-label .big{display:block;margin-top:14px;font:400 30px/1 var(--font-sans);letter-spacing:-.03em;color:var(--lg-ink)}
+  .lg-switch{display:flex;gap:14px;margin-top:14px;font-size:12px}
+  .lg-switch button{color:var(--usage-secondary);border-bottom:1px solid transparent;padding:2px 0}
+  .lg-switch button[aria-pressed=true]{color:var(--lg-ink);border-bottom-color:var(--lg-ink)}
+  .lg-mult{display:grid;grid-template-columns:110px minmax(0,1fr) 80px;align-items:center;column-gap:14px;border-top:1px solid var(--lg-hair)}
+  .lg-mult:first-child{border-top:0}
+  .lg-mult>span{font-size:12.5px}
+  .lg-mult>b{text-align:right;font:400 12px var(--font-mono)}
+  .lg-mult>b small{display:block;color:var(--usage-secondary);font-size:10.5px;margin-top:2px}
+  .usage-axis{fill:color-mix(in srgb,var(--color-text-primary) 45%,transparent)}
+  .usage-flow-grid-line,.usage-trend-grid,.usage-tool-error-grid,.usage-auto-mode-block-rate-grid,.usage-auto-bars-grid{stroke:var(--lg-hair)}
+  .lg-cross{stroke:var(--lg-ink);stroke-width:1}
+  .lg-cross.sel{stroke:var(--color-accent)}
+  .lg-dot{fill:var(--color-app-bg);stroke:var(--lg-ink);stroke-width:1.5}
+  .tc-tip{display:none!important}
+  .lg-day{margin-top:18px;padding:16px 0 0;border-top:1px solid var(--lg-ink)}
+  .lg-day header{display:flex;justify-content:space-between;align-items:baseline}
+  .lg-day h3{margin:0;font-size:15px;font-weight:600}
+  .lg-day header button{font-size:12px;color:var(--color-accent)}
+  .usage-day-figures strong{font:400 24px var(--font-sans)}
+  .usage-page table th,.usage-page table td{border-bottom-color:var(--lg-hair)}
+  .lg-share{display:flex;gap:2px;height:14px;margin:4px 0 14px}
+  .lg-share i{display:block;height:100%;transition:opacity .15s}
+  .lg-table{width:100%}
+  .lg-table tr{cursor:pointer}
+  .lg-table td,.lg-table th{padding:8px 6px!important}
+  .lg-table tr:hover td{background:var(--color-shell-hover)}
+  .lg-table .sw{display:inline-block;width:9px;height:9px;margin-right:8px;vertical-align:-1px}
+  .lg-tools{display:grid;grid-template-columns:90px minmax(0,1fr) 64px 58px minmax(0,1.2fr);align-items:center;column-gap:14px;font-size:12px}
+  .lg-tools>.h{color:var(--usage-secondary);font-size:11px;padding-bottom:6px;border-bottom:1px solid var(--lg-rule)}
+  .lg-tools>.c{padding:5px 0;border-bottom:1px solid var(--lg-hair);min-height:40px;display:flex;align-items:center}
+  .lg-tools>.r{justify-content:flex-end;font:12px var(--font-mono)}
+  .lg-bar{height:5px;background:var(--lg-ink);opacity:.85}
+  .lg-bar.err{display:inline-block}
+  .lg-tools .tc{width:100%}
+  .usage-heat-0{fill:color-mix(in srgb,var(--color-text-primary) 6%,var(--color-app-bg));background:color-mix(in srgb,var(--color-text-primary) 6%,var(--color-app-bg))}
+  .usage-heat-1{fill:color-mix(in srgb,var(--lg-ink) 18%,var(--color-app-bg));background:color-mix(in srgb,var(--lg-ink) 18%,var(--color-app-bg))}
+  .usage-heat-2{fill:color-mix(in srgb,var(--lg-ink) 34%,var(--color-app-bg));background:color-mix(in srgb,var(--lg-ink) 34%,var(--color-app-bg))}
+  .usage-heat-3{fill:color-mix(in srgb,var(--lg-ink) 52%,var(--color-app-bg));background:color-mix(in srgb,var(--lg-ink) 52%,var(--color-app-bg))}
+  .usage-heat-4{fill:color-mix(in srgb,var(--lg-ink) 72%,var(--color-app-bg));background:color-mix(in srgb,var(--lg-ink) 72%,var(--color-app-bg))}
+  .usage-heat-5{fill:var(--lg-ink);background:var(--lg-ink)}
+  .usage-heat-selected{stroke:var(--color-accent);stroke-width:2px}
+  .usage-auto-flow-ribbon{stroke-opacity:.14}
+  .usage-auto-flow-node,.usage-auto-flow-node-attempts{fill:var(--lg-ink)}
+  .usage-auto-flow-node-label{stroke:var(--color-app-bg)}
+  .usage-auto-mode-block-rate,.usage-auto-bars-chart{border-top:0;padding-top:0;margin-top:0}
+  .usage-auto-mode-block-rate-line{stroke:var(--lg-ink);stroke-width:1.5}
+  .usage-auto-mode-block-rate-dot{fill:var(--lg-ink);stroke:var(--color-app-bg)}
+  .usage-auto-mode-block-rate-dot.prov{fill:var(--color-app-bg);stroke:var(--lg-ink)}
+  .usage-auto-category-fill{fill:var(--lg-ink)}
+  .usage-auto-category-bars svg{height:4px}
+  .usage-details-cache-read{background:var(--lg-ink)}.usage-details-fresh{background:color-mix(in srgb,var(--lg-ink) 45%,transparent)}.usage-details-cache-write{background:color-mix(in srgb,var(--lg-ink) 20%,transparent)}
+  .usage-auto-category-track{fill:var(--lg-hair)}
+  .lg-auto{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:26px 34px}
+  .lg-auto>.w{grid-column:1/-1}
+  .usage-values{border-top:1px solid var(--lg-ink)}
+  .usage-values-sections>section{border:0;border-top:1px solid var(--lg-rule);border-radius:0;background:transparent;padding:14px 0}
+}
+
+/* ================= CONSOLE ================= */
+.win[data-dir=console]{
+  .usage-page{background:#0a0a0c;padding:14px 16px 40px;font-family:var(--font-mono)}
+  .usage-content{max-width:none;--usage-panel:#0e0e11;--cn-line:rgba(255,255,255,.08);--cn-dim:#6e6e76;--cn-fg:#d8d8dc;--cn-hi:#f4f4f5;--cn-cache:#7c5cff;--cn-fresh:#0b9bcc;--cn-out:#e0408f;--cn-ok:#34d399;--cn-err:#f87171;font-size:11.5px;color:var(--cn-fg)}
+  button{font-family:var(--font-mono)}
+  .cn-head{display:flex;align-items:center;gap:14px;padding:0 2px 10px;border-bottom:1px solid var(--cn-line)}
+  .cn-head h1{font:500 13px var(--font-mono);letter-spacing:0;text-transform:lowercase;color:var(--cn-hi)}
+  .cn-head .meta{color:var(--cn-dim)}
+  .cn-head .sp{flex:1}
+  .cn-seg{display:flex;border:1px solid var(--cn-line)}
+  .cn-seg button{padding:4px 10px;color:var(--cn-dim);border-left:1px solid var(--cn-line)}
+  .cn-seg button:first-child{border-left:0}
+  .cn-seg button[aria-pressed=true]{background:var(--cn-hi);color:#0a0a0c}
+  .cn-seg button:hover:not([aria-pressed=true]){color:var(--cn-hi)}
+  .cn-keys{color:var(--cn-dim)}
+  .cn-keys kbd{font:inherit;padding:0 4px;border:1px solid var(--cn-line);color:var(--cn-fg)}
+  .cn-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1px;background:var(--cn-line);border:1px solid var(--cn-line);margin-top:10px}
+  .cn-p{background:#0a0a0c;min-width:0;padding:10px 12px 12px}
+  .cn-t{display:flex;align-items:center;gap:10px;margin:-10px -12px 10px;padding:6px 12px;border-bottom:1px solid var(--cn-line);color:var(--cn-dim);text-transform:lowercase}
+  .cn-t b{color:var(--cn-hi);font-weight:500}
+  .cn-t .sp{flex:1}
+  .cn-t button{color:var(--cn-dim)}
+  .cn-t button[aria-pressed=true]{color:var(--cn-hi)}
+  .cn-t button:hover{color:var(--cn-hi)}
+  .s2{grid-column:span 2}.s3{grid-column:span 3}.s4{grid-column:span 4}.s5{grid-column:span 5}.s6{grid-column:span 6}.s7{grid-column:span 7}.s8{grid-column:span 8}.s12{grid-column:span 12}
+  .cn-kpi h2{font:400 11px var(--font-mono);color:var(--cn-dim);text-transform:lowercase;margin:0}
+  .cn-kpi strong{display:block;margin-top:6px;font:500 22px/1 var(--font-mono);color:var(--cn-hi);letter-spacing:-.02em}
+  .cn-kpi .d{margin-left:8px;font-size:11px;font-weight:400}
+  .cn-kpi .up{color:#4ade80}.cn-kpi .down{color:#f87171}.cn-kpi .flat{color:var(--cn-dim)}
+  .cn-kpi svg{display:block;width:100%;height:26px;margin-top:10px}
+  .cn-kpi rect{fill:#3a3a42}.cn-kpi rect.on{fill:var(--cn-hi)}
+  .usage-axis{fill:var(--cn-dim);font-size:10px}
+  .usage-flow-grid-line,.usage-trend-grid,.usage-tool-error-grid,.usage-auto-mode-block-rate-grid,.usage-auto-bars-grid{stroke:var(--cn-line);stroke-dasharray:2 3}
+  .cn-bars rect{shape-rendering:crispEdges}
+  .cn-col{fill:rgba(255,255,255,.06)}
+  .cn-col.sel{fill:color-mix(in srgb,var(--color-accent) 22%,transparent)}
+  .cn-cross{stroke:var(--cn-hi);stroke-width:1;stroke-dasharray:2 2}
+  .tc-tip{background:#16161a;border:1px solid #33333a;padding:6px 8px;font:11px/1.55 var(--font-mono);color:var(--cn-fg);white-space:nowrap}
+  .tc-tip b{color:var(--cn-hi);font-weight:500}
+  .tc-tip i{display:inline-block;width:7px;height:7px;margin-right:6px}
+  .tc-tip .v{float:right;margin-left:16px;color:var(--cn-hi)}
+  .cn-legend{display:flex;gap:14px;margin-top:8px;color:var(--cn-dim)}
+  .cn-legend button{display:flex;gap:6px;align-items:center;color:var(--cn-fg)}
+  .cn-legend button[aria-pressed=false]{color:var(--cn-dim);text-decoration:line-through}
+  .cn-legend i{width:8px;height:8px;display:inline-block}
+  .cn-brush{margin-top:8px;cursor:crosshair;user-select:none}
+  .cn-brush rect.b{fill:#2c2c33}
+  .cn-brush .win2{fill:rgba(255,255,255,.07);stroke:var(--cn-hi);stroke-width:1}
+  .cn-brush .shade{fill:rgba(10,10,12,.72)}
+  .cn-tbl{max-height:356px;overflow:auto;margin:-2px -12px -12px}
+  .cn-tbl table{font:11px var(--font-mono);width:100%}
+  .cn-tbl th,.cn-tbl td{padding:3px 10px!important;border-bottom:1px solid rgba(255,255,255,.04)!important;white-space:nowrap}
+  .cn-tbl thead th{position:sticky;top:0;background:#0e0e11;color:var(--cn-dim);font-weight:400;text-transform:lowercase;cursor:pointer}
+  .cn-tbl thead th:hover{color:var(--cn-hi)}
+  .cn-tbl tbody tr{cursor:pointer}
+  .cn-tbl tbody tr:hover,.cn-tbl tbody tr.hv{background:rgba(255,255,255,.07)}
+  .cn-tbl tbody tr.sel{background:color-mix(in srgb,var(--color-accent) 20%,transparent)}
+  .cn-tbl td.dim{color:var(--cn-dim)}
+  .cn-tbl .bar{display:inline-block;height:7px;background:var(--cn-fg);opacity:.55;vertical-align:0}
+  .cn-list{display:grid;gap:7px}
+  .cn-list button{display:grid;grid-template-columns:120px minmax(0,1fr) 64px 50px;gap:10px;align-items:center;text-align:left;padding:2px 0}
+  .cn-list button:hover span{color:var(--cn-hi)}
+  .cn-list .trk{height:8px;background:#1b1b20;position:relative}
+  .cn-list .trk i{position:absolute;inset:0 auto 0 0}
+  .cn-list b{text-align:right;font-weight:400;color:var(--cn-hi)}
+  .cn-list small{text-align:right;color:var(--cn-dim);font-size:11px}
+  .cn-day{display:grid;grid-template-columns:repeat(4,auto) 1fr;gap:4px 26px;align-items:end;margin-bottom:10px}
+  .cn-day div span{display:block;color:var(--cn-dim)}
+  .cn-day div strong{font:500 18px var(--font-mono);color:var(--cn-hi)}
+  .usage-session-table th,.usage-session-table td{padding:5px 8px!important;border-bottom-color:var(--cn-line)!important}
+  .usage-area-cache{color:var(--cn-cache)}
+  .usage-area-fill{fill-opacity:.14}
+  .usage-area-line{stroke-width:1.5}
+  .usage-heat-0{fill:#16161a}.usage-heat-1{fill:#1d3a2c}.usage-heat-2{fill:#1f6440}.usage-heat-3{fill:#2a9258}.usage-heat-4{fill:#3fc47a}.usage-heat-5{fill:#8ef0b6}
+  .usage-heat-key i.usage-heat-0{background:#16161a}.usage-heat-key i.usage-heat-1{background:#1d3a2c}.usage-heat-key i.usage-heat-2{background:#1f6440}.usage-heat-key i.usage-heat-3{background:#2a9258}.usage-heat-key i.usage-heat-4{background:#3fc47a}.usage-heat-key i.usage-heat-5{background:#8ef0b6}
+  .usage-heat-selected{stroke:#fff;stroke-width:1.5px}
+  .usage-heat-key i{border-radius:0}
+  .usage-chart-toolbar,.usage-interaction-readout{font-size:11px;color:var(--cn-dim)}
+  .usage-interaction-readout strong{color:var(--cn-hi)}
+  .usage-auto-flow-node-label{stroke:#0a0a0c}
+  .usage-tool-error-series circle{fill:#0a0a0c}
+  .usage-auto-mode-block-rate-dot{stroke:#0a0a0c}
+  .usage-auto-mode-block-rate-dot.prov{fill:#0a0a0c;stroke:var(--usage-coral)}
+  .usage-auto-category-track{fill:#1b1b20}
+  .cn-flow td .bar{height:9px}
+  .cn-flow .allowed{background:var(--cn-ok)!important;opacity:.8!important}
+  .cn-flow .blocked{background:var(--cn-err)!important;opacity:.8!important}
+  .usage-readout{font-size:11px}
+  .cn-pick{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px}
+  .cn-pick button{color:var(--cn-dim);display:flex;align-items:center;gap:5px}
+  .cn-pick button[aria-pressed=true]{color:var(--cn-hi)}
+  .cn-pick i{width:7px;height:7px;display:inline-block}
+  .usage-values{border-top-color:var(--cn-line)}
+  .usage-values>summary{font:500 12px var(--font-mono)}
+  .usage-values-sections>section{border-radius:0;background:#0a0a0c}
+}
+
+/* ================= SPECTRUM ================= */
+.win[data-dir=spectrum]{
+  .usage-page{background:radial-gradient(900px 360px at 18% -80px,rgba(124,92,255,.22),transparent 70%),radial-gradient(700px 320px at 92% -60px,rgba(224,64,143,.16),transparent 70%),#0d0c14}
+  .usage-content{--usage-panel:#14131e;--sp-line:rgba(255,255,255,.07);--sp-cache:#7c5cff;--sp-fresh:#0b9bcc;--sp-out:#e0408f;--usage-cache:#7c5cff;--usage-fresh:#0b9bcc;--usage-output:#e0408f}
+  .usage-header h1{font-size:24px;font-weight:600;letter-spacing:-.02em}
+  .usage-range{background:rgba(255,255,255,.05);border-radius:999px;padding:3px}
+  .usage-range button[aria-pressed=true]{color:#fff;background:linear-gradient(135deg,#7c5cff,#e0408f)}
+  .sp-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:22px 0 16px}
+  .sp-kpi{position:relative;overflow:hidden;padding:16px 16px 58px;border-radius:14px;background:var(--usage-panel);border:1px solid var(--sp-line)}
+  .sp-kpi h2{font:500 11.5px var(--font-sans)!important;color:var(--usage-secondary);margin:0}
+  .sp-kpi strong{display:block;margin-top:8px;font:500 28px/1 var(--font-mono);letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+  .sp-kpi .usage-metric-delta{position:absolute;top:16px;right:14px}
+  .sp-kpi svg{position:absolute;left:0;right:0;bottom:0;width:100%;height:52px}
+  .usage-panel{border-radius:16px;border-color:var(--sp-line);background:var(--usage-panel)}
+  .sp-total{display:flex;align-items:baseline;gap:10px;margin:2px 0 0}
+  .sp-total strong{font:500 30px/1 var(--font-mono);letter-spacing:-.03em;background:linear-gradient(90deg,#b8a6ff,#ff8cc6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sp-total span{color:var(--usage-secondary);font-size:12px}
+  .usage-range.sm button{padding:6px 11px}
+  .usage-flow-grid-line,.usage-trend-grid,.usage-tool-error-grid,.usage-auto-mode-block-rate-grid,.usage-auto-bars-grid{stroke:rgba(255,255,255,.05)}
+  .sp-cross{stroke:rgba(255,255,255,.55);stroke-width:1}
+  .sp-dot{stroke:#fff;stroke-width:2}
+  .tc-tip{background:rgba(24,22,36,.94);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:9px 11px;font:11.5px/1.6 var(--font-sans);color:#e8e6f5;box-shadow:0 10px 30px rgba(0,0,0,.45);white-space:nowrap;min-width:170px}
+  .tc-tip b{display:block;margin-bottom:3px;color:#fff;font-weight:600}
+  .tc-tip i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px}
+  .tc-tip .v{float:right;margin-left:18px;font-family:var(--font-mono);color:#fff}
+  .usage-flow-series-toggle{border-color:rgba(255,255,255,.1)!important;background:rgba(255,255,255,.03)}
+  .usage-area-cache{color:#9d86ff}
+  .usage-details-card-header>strong{background:linear-gradient(90deg,#b8a6ff,#7fd8ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .usage-heat-0{fill:#1b1a28;background:#1b1a28}
+  .usage-heat-1{fill:#3b1f4c;background:#3b1f4c}.usage-heat-2{fill:#5e2567;background:#5e2567}.usage-heat-3{fill:#8c2c7e;background:#8c2c7e}.usage-heat-4{fill:#c23a8c;background:#c23a8c}.usage-heat-5{fill:#ff5fa8;background:#ff5fa8}
+  .usage-heatmap rect{transition:filter .15s}
+  .usage-heatmap g:hover rect{filter:brightness(1.35)}
+  .sp-donut path{transition:transform .2s ease,opacity .15s}
+  .usage-auto-flow-ribbon{stroke-opacity:.38}
+  .usage-auto-flow-ribbon-active{stroke-opacity:.8}
+  .usage-auto-flow-node-attempts{fill:#b8a6ff}
+  .usage-auto-mode-block-rate-line{stroke:#ff6b8b;filter:drop-shadow(0 0 4px rgba(255,107,139,.6))}
+  .usage-tool-error-line{filter:drop-shadow(0 0 3px currentColor)}
+  .usage-values-sections>section{border-radius:14px}
+}
+
+/* ================= GLASS ================= */
+.win[data-dir=glass]{
+  --glass-tint:light-dark(rgba(246,246,248,.38),rgba(22,22,26,.34));
+  .usage-page{background:transparent;padding-top:0}
+  .usage-content{--usage-panel:light-dark(rgba(255,255,255,.5),rgba(52,52,60,.36));--gl-edge:light-dark(rgba(255,255,255,.85),rgba(255,255,255,.12));--gl-line:light-dark(rgba(0,0,0,.08),rgba(255,255,255,.08));--gl-blur:blur(28px) saturate(1.7);--usage-cache:light-dark(#8b72e8,#7c5cff);--usage-fresh:light-dark(#0b88b5,#0b9bcc);--usage-output:light-dark(#d23a85,#e0408f)}
+  .gl-top{position:sticky;top:0;z-index:5;margin:0 -28px;padding:14px 28px 12px;transition:background .2s,box-shadow .2s}
+  .gl-top.stuck{background:light-dark(rgba(250,250,252,.6),rgba(28,28,32,.55));backdrop-filter:var(--gl-blur);-webkit-backdrop-filter:var(--gl-blur);box-shadow:0 1px 0 var(--gl-line)}
+  .gl-top .usage-header{padding-top:10px}
+  .gl-seg{position:relative;display:flex;padding:2px;border-radius:9px;background:light-dark(rgba(0,0,0,.06),rgba(255,255,255,.08));box-shadow:inset 0 0 0 .5px var(--gl-line)}
+  .gl-seg button{position:relative;z-index:1;width:76px;padding:5px 0;font-size:12px;color:var(--usage-secondary);transition:color .2s}
+  .gl-seg button[aria-pressed=true]{color:var(--color-text-primary)}
+  .gl-thumb{position:absolute;top:2px;left:2px;width:76px;height:calc(100% - 4px);border-radius:7px;background:light-dark(#fff,rgba(255,255,255,.16));box-shadow:0 1px 3px rgba(0,0,0,.18),inset 0 .5px 0 var(--gl-edge);transition:transform .32s cubic-bezier(.3,.7,.2,1)}
+  .usage-panel,.gl-shelf,.usage-values-sections>section{background:var(--usage-panel);border:0;border-radius:14px;box-shadow:inset 0 .5px 0 var(--gl-edge),inset 0 0 0 .5px var(--gl-line),0 8px 30px rgba(0,0,0,.12);backdrop-filter:var(--gl-blur);-webkit-backdrop-filter:var(--gl-blur)}
+  .gl-shelf{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin:8px 0 16px}
+  .gl-shelf .usage-metric{background:transparent;border-left:.5px solid var(--gl-line)}
+  .gl-shelf .usage-metric:first-child{border-left:0}
+  .usage-metric-foot svg{width:84px;height:24px}
+  .usage-metric-foot polyline{stroke-width:1.6}
+  .usage-refresh{background:light-dark(rgba(255,255,255,.6),rgba(255,255,255,.08))!important;border:0!important;box-shadow:inset 0 0 0 .5px var(--gl-line)}
+  .usage-flow-grid-line,.usage-trend-grid,.usage-tool-error-grid,.usage-auto-mode-block-rate-grid,.usage-auto-bars-grid{stroke:var(--gl-line)}
+  .gl-cross{stroke:var(--color-text-primary);stroke-opacity:.35;stroke-width:1}
+  .gl-dot{stroke:light-dark(#fff,#1c1c20);stroke-width:2}
+  .tc-tip{background:light-dark(rgba(255,255,255,.72),rgba(40,40,46,.7));backdrop-filter:blur(20px) saturate(1.8);-webkit-backdrop-filter:blur(20px) saturate(1.8);border-radius:10px;padding:8px 11px;font:11.5px/1.6 var(--font-sans);box-shadow:inset 0 .5px 0 var(--gl-edge),0 0 0 .5px var(--gl-line),0 10px 28px rgba(0,0,0,.22);white-space:nowrap;min-width:160px}
+  .tc-tip b{display:block;font-weight:600;margin-bottom:2px}
+  .tc-tip i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:7px}
+  .tc-tip .v{float:right;margin-left:18px;font-family:var(--font-mono)}
+  .usage-flow-series-toggle{border:0!important;background:light-dark(rgba(0,0,0,.04),rgba(255,255,255,.06));box-shadow:inset 0 0 0 .5px var(--gl-line)}
+  .usage-range button[aria-pressed=true]{color:var(--color-text-primary);background:light-dark(#fff,rgba(255,255,255,.16));box-shadow:0 1px 2px rgba(0,0,0,.15)}
+  .usage-range{background:light-dark(rgba(0,0,0,.05),rgba(255,255,255,.06));border-radius:999px}
+  .usage-area-cache{color:var(--usage-cache)}
+  .usage-auto-flow-node-label{stroke:transparent}
+  .gl-sheet{position:absolute;top:0;right:0;bottom:0;width:420px;z-index:8;overflow:auto;padding:22px 22px 30px;background:light-dark(rgba(250,250,252,.86),rgba(30,30,34,.84));backdrop-filter:blur(36px) saturate(1.8);-webkit-backdrop-filter:blur(36px) saturate(1.8);box-shadow:inset .5px 0 0 var(--gl-edge),-20px 0 50px rgba(0,0,0,.25);transform:translateX(0);animation:glIn .34s cubic-bezier(.3,.7,.2,1)}
+  .gl-sheet h3{margin:0;font-size:17px;font-weight:600}
+  .gl-sheet header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .gl-sheet header button{width:26px;height:26px;border-radius:50%;background:light-dark(rgba(0,0,0,.06),rgba(255,255,255,.1));display:grid;place-items:center}
+  .gl-sheet .gl-mix{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px;margin:6px 0 16px}
+  .gl-sheet table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+  .gl-sheet th,.gl-sheet td{padding:9px 6px;border-bottom:.5px solid var(--gl-line);text-align:right;vertical-align:top}
+  .gl-sheet th:first-child,.gl-sheet td:first-child{text-align:left}
+  .gl-sheet thead{color:var(--usage-secondary)}
+  .gl-sheet thead th{font:600 11px var(--font-sans)}
+  .gl-sheet .usage-note{font-size:12px;color:var(--usage-secondary)}
+  .gl-sheet .usage-day-figures{margin:12px 0 16px;gap:14px 20px;color:var(--usage-secondary);font-size:12px}
+  .gl-scrim{position:absolute;inset:0;z-index:7;background:rgba(0,0,0,.12)}
+  .usage-heat-0{fill:light-dark(rgba(0,0,0,.06),rgba(255,255,255,.07));background:light-dark(rgba(0,0,0,.06),rgba(255,255,255,.07))}
+}
+@keyframes glIn{from{transform:translateX(40px);opacity:0}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}}
+.win[data-dir=glass] .gl-anim .usage-panel,.win[data-dir=glass] .gl-anim .gl-shelf{animation:fadeUp .38s cubic-bezier(.3,.7,.2,1) both}
+.win[data-dir=glass] .gl-anim .usage-panels>*:nth-child(2){animation-delay:.04s}
+.win[data-dir=glass] .gl-anim .usage-panels>*:nth-child(3){animation-delay:.08s}
+/* ================= GLASS REFINED ================= */
+.win[data-refined]{
+  .rf-section{margin:26px 2px 10px;font:600 11px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--usage-secondary)}
+  .rf-section:first-child{margin-top:4px}
+  .usage-delta-neutral{color:var(--usage-secondary)}
+  .rf-sub{display:block;margin-top:4px;font:400 11px var(--font-mono);color:var(--usage-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .usage-metric strong{display:block}
+  .rf-info{display:inline-grid;place-items:center;width:15px;height:15px;margin-left:6px;border-radius:50%;font:600 9.5px/1 var(--font-sans);color:var(--usage-secondary);box-shadow:inset 0 0 0 1px var(--gl-line);vertical-align:1px;cursor:help}
+  .rf-info:hover{color:var(--color-text-primary)}
+  .rf-weekend{fill:light-dark(rgba(0,0,0,.025),rgba(255,255,255,.022))}
+  .rf-avg{stroke:var(--usage-secondary);stroke-width:1;stroke-dasharray:3 4;opacity:.8}
+  .rf-anno{font:500 10.5px var(--font-mono);fill:var(--color-text-primary)}
+  .rf-anno-dim{font:400 10.5px var(--font-mono);fill:var(--usage-secondary)}
+  .rf-dip{fill:none;stroke:var(--color-text-primary);stroke-width:1.2}
+  .usage-model-key button{grid-template-columns:9px minmax(0,1fr) 54px auto 46px}
+  .rf-spark{width:54px;height:16px;display:block}
+  .rf-spark polyline{fill:none;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round}
+  .usage-tool-bars button{grid-template-columns:76px minmax(0,1fr) 52px 44px}
+  .usage-tool-bars button>small{text-align:right;font:400 11px var(--font-mono);color:var(--usage-secondary)}
+  .usage-tool-bars button>small.hi{color:var(--usage-delta-down)}
+  .rf-tools-head{display:grid;grid-template-columns:76px minmax(0,1fr) 52px 44px;gap:11px;padding:0 0 2px;font-size:10.5px;color:var(--usage-secondary)}
+  .rf-tools-head span:nth-child(n+3){text-align:right}
+  .rf-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .rf-pair .usage-tool-error-trend{margin-top:0;padding-top:0;border-top:0}
+  .rf-heat-stats{display:flex;gap:18px;font-size:12px;color:var(--usage-secondary)}
+  .rf-heat-stats b{font:500 12px var(--font-mono);color:var(--color-text-primary);margin-right:4px}
+  .usage-auto-mode-block-rate-headline span{white-space:nowrap}
+}
+@media (prefers-reduced-motion:reduce){.win *{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="x-bar" role="toolbar" aria-label="Variants">
+  <span class="x-id">Analytics glass</span>
+  <span id="x-tabs" style="display:flex;gap:20px"></span>
+  <span class="x-sep"></span>
+  <button id="x-theme" type="button">Dark</button>
+  <button id="x-notes-btn" type="button" aria-pressed="false">Notes</button>
+</div>
+<aside class="x-notes" id="x-notes" hidden></aside>
+<div class="x-stage" id="x-stage">
+  <div class="desk" id="desk"></div>
+  <div class="win" id="win" data-dir="current" data-theme="dark">
+    <div class="win-tabs">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="wtab on"><span class="dot"></span>cat-code<span class="kb">⋮</span></div>
+      <div class="wtab"><span class="dot p"></span>Remember pineapple</div>
+      <div class="wplus">+</div>
+      <div class="wsplit"><i></i>Split</div>
+    </div>
+    <div class="win-body">
+      <nav class="win-rail" aria-hidden="true">
+        <span><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></span>
+        <span><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+        <span class="on"><svg viewBox="0 0 24 24"><path d="M5 20V11M10 20V5M15 20v-7M20 20V8"/></svg></span>
+        <span><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
+        <span class="av">M</span>
+      </nav>
+      <main class="usage-page" id="page" aria-labelledby="usage-title"></main>
+    </div>
+  </div>
+</div>
+<script>
+'use strict';
+/* ============================== utils ============================== */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const DAY = 86400000;
+const civ = d => Date.parse(`${d}T00:00:00.000Z`);
+const dkey = t => new Date(t).toISOString().slice(0, 10);
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WDS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const chartDate = (d, yr = false) => { const p = new Date(civ(d)); return `${MON[p.getUTCMonth()]} ${p.getUTCDate()}${yr ? ` '${String(p.getUTCFullYear()).slice(-2)}` : ''}`; };
+const dayText = (d, wd = false) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', ...(wd ? { weekday: 'short' } : {}) }).format(new Date(`${d}T12:00:00Z`));
+const C = n => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: n >= 1e9 ? 2 : 1 }).format(n);
+const N = n => Math.round(n).toLocaleString('en-US');
+const P = n => n == null ? 'Not applicable' : `${n.toFixed(1)}%`;
+const tot = t => t.fresh + t.read + t.write + t.output;
+const crr = t => t.fresh + t.read > 0 ? t.read / (t.fresh + t.read) * 100 : null;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const r3 = v => Number(v.toFixed(2)).toString();
+function ceilAxis(v) { if (v <= 0) return 1; const u = 10 ** Math.floor(Math.log10(v)); return ([1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10].find(s => s >= v / u) ?? 10) * u; }
+function ticksFor(start, endEx, width) {
+  const first = civ(start), days = Math.max(1, Math.round((civ(endEx) - first) / DAY));
+  const count = Math.max(2, Math.floor(width / (days > 365 ? 90 : 64))), interval = Math.max(1, Math.ceil(days / count));
+  const out = []; for (let d = 0; d < days; d += interval) out.push(dkey(first + d * DAY));
+  if (days > 1) { if ((days - 1) % interval < interval && out.length > 1) out.pop(); out.push(dkey(first + (days - 1) * DAY)); }
+  return out;
+}
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hash(s) { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+function metricDelta(cur, prev, points) {
+  if (cur == null || prev == null || (!points && prev === 0)) return null;
+  const v = points ? cur - prev : (cur - prev) / prev * 100, r = Math.round(v * 10) / 10;
+  const dir = r > 0 ? 'up' : r < 0 ? 'down' : 'flat';
+  const mag = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(Math.abs(r));
+  return { dir, text: `${dir === 'up' ? '▲ ' : dir === 'down' ? '▼ ' : ''}${mag}${points ? ' pp' : '%'}`, desc: `${mag}${points ? ' percentage points' : '%'} ${dir === 'up' ? 'increase' : dir === 'down' ? 'decrease' : 'change'}` };
+}
+/* stacked-area geometry, ported from usageStackedAreaState.ts */
+function curveSegs(p, k = 1.2) {
+  return p.slice(0, -1).map((from, i) => {
+    const b = p[i - 1] ?? from, to = p[i + 1], a = p[i + 2] ?? to;
+    return { from, c1: { x: clamp(from.x + (to.x - b.x) * k / 6, from.x, to.x), y: from.y + (to.y - b.y) * k / 6 }, c2: { x: clamp(to.x - (a.x - from.x) * k / 6, from.x, to.x), y: to.y - (a.y - from.y) * k / 6 }, to };
+  });
+}
+function curvePath(pts, cs, rev = false) {
+  const f = rev ? pts.at(-1) : pts[0]; if (!f) return '';
+  let s = `M${r3(f.x)},${r3(f.y)}`;
+  for (const c of rev ? [...cs].reverse() : cs) { const a = rev ? c.c2 : c.c1, b = rev ? c.c1 : c.c2, t = rev ? c.from : c.to; s += ` C${r3(a.x)},${r3(a.y)} ${r3(b.x)},${r3(b.y)} ${r3(t.x)},${r3(t.y)}`; }
+  return s;
+}
+const smooth = pts => curvePath(pts, curveSegs(pts));
+function stackGeom(samples, ceiling, top, bottom) {
+  const L = samples.reduce((n, s) => Math.max(n, s.values.length), 0);
+  const B = Array.from({ length: L + 1 }, () => []);
+  for (const s of samples) { let t = 0; B[0].push({ x: s.x, y: bottom }); for (let l = 0; l < L; l++) { t += Math.max(0, s.values[l] || 0); B[l + 1].push({ x: s.x, y: bottom - t / ceiling * (bottom - top) }); } }
+  const CV = B.map(b => curveSegs(b));
+  for (let l = 0; l < CV.length; l++) for (let i = 0; i < CV[l].length; i++) { const c = CV[l][i], lo = CV[l - 1]?.[i]; c.c1.y = clamp(c.c1.y, top, lo?.c1.y ?? bottom); c.c2.y = clamp(c.c2.y, top, lo?.c2.y ?? bottom); }
+  const centers = Array.from({ length: L }, (_, l) => {
+    const pts = B[l].map((lo, i) => ({ x: lo.x, y: (lo.y + B[l + 1][i].y) / 2 }));
+    const out = []; let path = '';
+    CV[l].forEach((lo, i) => {
+      const up = CV[l + 1][i], on = (samples[i]?.values[l] ?? 0) > 0 || (samples[i + 1]?.values[l] ?? 0) > 0;
+      if (!on) { if (path) out.push(path); path = ''; return; }
+      if (!path) path = `M${r3(pts[i].x)},${r3(pts[i].y)}`;
+      path += ` C${r3(lo.c1.x)},${r3((lo.c1.y + up.c1.y) / 2)} ${r3(lo.c2.x)},${r3((lo.c2.y + up.c2.y) / 2)} ${r3(pts[i + 1].x)},${r3(pts[i + 1].y)}`;
+    });
+    if (path) out.push(path); return out;
+  });
+  return {
+    paths: Array.from({ length: L }, (_, l) => `${curvePath(B[l + 1], CV[l + 1])} ${curvePath(B[l], CV[l], true).replace(/^M/, 'L')} Z`),
+    tops: Array.from({ length: L }, (_, l) => curvePath(B[l + 1], CV[l + 1])),
+    centers,
+  };
+}
+
+/* ============================== data ============================== */
+const HIST0 = '2026-03-09', LAST = '2026-09-30', ENDX = '2026-10-01';
+const SEPT = [22, 20, 28, 40, 36, 25, 175, 14, 5, 3, 4, 90, 410, 12, 2, 3, 1, 30, 85, 48, 22, 36, 52, 18, 6, 4, 110, 30, 4, 3];
+const MODEL_DEFS = [
+  { id: 'claude-opus-5-5', kind: 'named', label: 'claude-opus-5-5' },
+  { id: 'gpt-5.6-sol', kind: 'named', label: 'gpt-5.6-sol' },
+  { id: 'gpt-6-luna', kind: 'named', label: 'gpt-6-luna' },
+  { id: 'gpt-6.1-sol', kind: 'named', label: 'gpt-6.1-sol' },
+  { id: 'other', kind: 'other', label: 'Other' },
+];
+const isRetired = m => m.kind === 'named' && /^gpt-5\.6-(?:sol|luna)(?:-|$)/i.test(m.label);
+const TOOL_DEFS = [['bash', 'Bash', .36, .068], ['read', 'Read', .22, .012], ['edit', 'Edit', .15, .041], ['grep', 'Grep', .08, .018], ['write', 'Write', .045, .022], ['glob', 'Glob', .035, .006], ['todowrite', 'TodoWrite', .03, .003], ['agent', 'Agent', .02, .035], ['webfetch', 'WebFetch', .015, .12], ['other', 'Other', .045, .03]];
+const BUILD_DAYS = { '2026-09-03': ['a41c9e02', false, '10:12'], '2026-09-09': ['5f7d2b91', true, '14:40'], '2026-09-14': ['c03e6a77', false, '09:05'], '2026-09-21': ['9b12f4d0', false, '16:22'], '2026-09-27': ['457b9b72', false, '11:48'] };
+const TITLES = ['Fix sidebar focus ring', 'Usage collector refactor', 'Transcript cache eviction', 'Peer request plane tests', 'Theme token cleanup', 'Composer paste handling', 'Session relocation worker', 'Hardening smoke run', 'Model picker copy', 'Replay buffer bounds', 'Attachment gate review', 'Heatmap keyboard nav', 'Release notes draft', 'Account pool retry', 'Map refresh script', 'Sidecar spawn timing', 'Tab strip overflow', 'Diff viewer wrap', 'Permission prompt copy', 'Protocol version bump'];
+const PROJECTS = ['cat-code', 'cat-code', 'cat-code', 'cat-code', 'dotfiles', 'site'];
+const RAW = new Map();
+(function generate() {
+  const R = rng(20260930), list = [];
+  for (let t = civ(HIST0); t <= civ(LAST); t += DAY) {
+    const d = dkey(t), dow = new Date(t).getUTCDay(), we = dow === 0 || dow === 6;
+    let T;
+    if (d >= '2026-09-01') T = SEPT[+d.slice(8) - 1] * 1e6 * (.94 + R() * .12);
+    else if (d >= '2026-05-18' && d <= '2026-05-27') T = 0;
+    else { const p = (t - civ(HIST0)) / (civ('2026-09-01') - civ(HIST0)); const zero = R() < (we ? .5 : .08); const spike = R() < .07 ? 2.5 + R() * 4 : 1; T = zero ? 0 : (9 + p * 40) * 1e6 * (we ? .35 : 1) * spike * (.35 + R() * 1.3); }
+    list.push({ d, T });
+  }
+  const sep = list.filter(x => x.d >= '2026-09-01'), f = 1.362e9 / sep.reduce((s, x) => s + x.T, 0); sep.forEach(x => { x.T *= f; });
+  for (const { d, T } of list) {
+    let rate = d < '2026-06-01' ? .9 + R() * .05 : .949 + R() * .026; if (d === '2026-09-16') rate = .46; if (d === '2026-09-11') rate = .88;
+    const output = Math.round(T * .0037 * (.7 + R() * .6)), read = Math.round((T - output) * rate), fresh = Math.round(T - output - read);
+    RAW.set(d, { date: d, tokens: { fresh, read, write: 0, output }, sessions: T > 0 ? Math.round(2 + Math.sqrt(T / 1e6) * .9 + R() * 5) : 0, requests: T > 0 ? Math.round((250 + Math.sqrt(T / 1e6) * 95) * (.75 + R() * .5)) : 0 });
+  }
+  const sd = [...RAW.values()].filter(x => x.date >= '2026-09-01');
+  const sf = 267 / sd.reduce((s, x) => s + x.sessions, 0), rf = 35193 / sd.reduce((s, x) => s + x.requests, 0);
+  [...RAW.values()].forEach(x => { if (!x.sessions) return; x.sessions = Math.max(1, Math.round(x.sessions * sf)); x.requests = Math.round(x.requests * rf); });
+  RAW.get('2026-09-13').sessions += 267 - sd.reduce((s, x) => s + x.sessions, 0);
+  RAW.get('2026-09-13').requests += 35193 - sd.reduce((s, x) => s + x.requests, 0);
+  for (const x of RAW.values()) {
+    const d = x.date, T = tot(x.tokens);
+    x.records = Math.round(x.requests * 1.8);
+    x.models = [];
+    if (T > 0) {
+      const w = [['sol', .55 * (.7 + R() * .6)], ['luna', .25 * (.6 + R() * .8)], ['claude', d < '2026-04-20' ? 0 : .12 * (.4 + R() * 1.2)], ['other', .07 * (.5 + R())]].filter(([, v]) => v > 0);
+      const ids = { sol: d < '2026-09-04' ? 'gpt-5.6-sol' : 'gpt-6.1-sol', luna: 'gpt-6-luna', claude: 'claude-opus-5-5', other: 'other' };
+      const sw = w.reduce((s, [, v]) => s + v, 0); let acc = 0;
+      x.models = w.map(([k, v], i) => { const tt = i === w.length - 1 ? T - acc : Math.round(T * v / sw); acc += tt; return { id: ids[k], total: tt }; });
+    }
+    x.tools = []; x.results = 0; x.errors = 0;
+    if (x.requests > 0) {
+      let left = x.requests;
+      const tools = TOOL_DEFS.map(([id, , share, err], i) => {
+        const req = i === 0 ? 0 : Math.round(x.requests * share * (.7 + R() * .6));
+        return { id, req, err };
+      });
+      tools[0].req = Math.max(0, x.requests - tools.slice(1).reduce((s, t) => s + t.req, 0));
+      for (const t of tools) {
+        if (!t.req) continue;
+        const results = t.req - Math.round(t.req * .004 * R() * 2);
+        const errors = Math.round(results * t.err * (.5 + R()) * (d === '2026-09-09' && t.id === 'bash' ? 2.8 : 1));
+        const tool = { id: t.id, requests: t.req, results, errors };
+        const b = BUILD_DAYS[d];
+        if (b && ['bash', 'edit', 'read'].includes(t.id)) { const rq = Math.round(t.req * .6), rs = Math.round(results * .6); tool.builds = { items: [{ sha: b[0], dirty: b[1], requests: rq, results: rs, errors: Math.round(errors * (d === '2026-09-09' ? .8 : .55)), firstObservedAt: `${d}T${b[2]}:00.000Z` }] }; }
+        x.tools.push(tool); x.results += results; x.errors += errors;
+      }
+      left = 0;
+    }
+    const cov = d < '2026-07-20' ? 'unavailable' : d < '2026-07-26' ? 'partial' : 'complete';
+    const pop = (att, blk, extra) => {
+      const o = { allowed: 0, policy_blocked: 0, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 };
+      if (cov === 'unavailable' || !att) return { outcomes: o, coverage: { state: cov, invalidRecords: 0, orphanRecords: 0 } };
+      o.policy_blocked = Math.round(att * blk); o.review_required = Math.round(att * .008 * R() * extra); o.operational_error = Math.round(att * .006 * R() * extra); o.cancelled = Math.round(att * .02 * R());
+      o.unknown_outcome = d === '2026-09-09' || d === '2026-09-22' ? 2 : 0; o.incomplete = d === LAST ? 3 : 0;
+      o.allowed = att - o.policy_blocked - o.review_required - o.operational_error - o.cancelled - o.unknown_outcome - o.incomplete;
+      return { outcomes: o, coverage: { state: cov, invalidRecords: 0, orphanRecords: 0 } };
+    };
+    x.auto = { allTools: pop(Math.round(x.requests * .34), .035 + R() * .03, 1), commands: pop(Math.round(x.requests * .14), .02 + R() * .035, 0) };
+  }
+})();
+function contributorsFor(date) {
+  const x = RAW.get(date); if (!x || !x.sessions) return { state: 'full', omitted: 0, items: [] };
+  const R = rng(hash(date)), T = tot(x.tokens), k = x.sessions;
+  const w = Array.from({ length: k }, () => R() ** 3 + .01), sw = w.reduce((a, b) => a + b, 0);
+  const all = w.map((v, i) => {
+    const share = v / sw, tk = { fresh: Math.round(x.tokens.fresh * share), read: Math.round(x.tokens.read * share), write: 0, output: Math.round(x.tokens.output * share) };
+    const usd = (tk.fresh * 1.25 + tk.read * .125 + tk.output * 10) / 1e6;
+    return { id: `${date}-${i}`, engineSessionId: (hash(date + i) >>> 0).toString(16).padStart(8, '0'), title: TITLES[(hash(date) + i * 7) % TITLES.length], project: PROJECTS[(hash(date + 'p') + i) % PROJECTS.length], tokens: tk, usd, priced: R() > .08 };
+  }).sort((a, b) => tot(b.tokens) - tot(a.tokens));
+  return { state: all.length > 20 ? 'truncated' : 'full', omitted: Math.max(0, all.length - 20), items: all.slice(0, 20) };
+}
+const ZPOP = () => ({ outcomes: { allowed: 0, policy_blocked: 0, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 }, coverage: { state: 'complete', invalidRecords: 0, orphanRecords: 0 } });
+function mergeCov(states) { if (!states.length) return 'unavailable'; if (states.every(s => s === 'complete')) return 'complete'; if (states.every(s => s === 'unavailable')) return 'unavailable'; return 'partial'; }
+function addPop(into, p) { for (const k in p.outcomes) into.outcomes[k] += p.outcomes[k]; }
+function agg(raws, date, withContrib) {
+  const day = { date, tokens: { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: 'unreported', models: [], sessions: 0, records: 0, requests: 0, results: 0, errors: 0, tools: [], auto: { allTools: ZPOP(), commands: ZPOP() } };
+  const mm = new Map(), tm = new Map(), ac = [], cc = [];
+  for (const r of raws) {
+    for (const k in day.tokens) day.tokens[k] += r.tokens[k];
+    day.sessions += r.sessions; day.records += r.records; day.requests += r.requests; day.results += r.results; day.errors += r.errors;
+    for (const m of r.models) mm.set(m.id, (mm.get(m.id) ?? 0) + m.total);
+    for (const t of r.tools) { const e = tm.get(t.id) ?? { id: t.id, requests: 0, results: 0, errors: 0 }; e.requests += t.requests; e.results += t.results; e.errors += t.errors; if (t.builds) e.builds = { items: [...(e.builds?.items ?? []), ...t.builds.items] }; tm.set(t.id, e); }
+    addPop(day.auto.allTools, r.auto.allTools); addPop(day.auto.commands, r.auto.commands); ac.push(r.auto.allTools.coverage.state); cc.push(r.auto.commands.coverage.state);
+  }
+  day.auto.allTools.coverage.state = mergeCov(ac); day.auto.commands.coverage.state = mergeCov(cc);
+  day.models = [...mm].map(([id, total]) => ({ id, total }));
+  day.tools = [...tm.values()];
+  day.contributors = withContrib ? contributorsFor(date) : { state: 'unavailable', omitted: 0, items: [] };
+  return day;
+}
+function summarize(range, start, bucket) {
+  const days = [], raws = [];
+  for (let t = civ(start); t < civ(ENDX); t += bucket * DAY) {
+    const list = []; for (let k = 0; k < bucket; k++) { const r = RAW.get(dkey(t + k * DAY)); if (r) list.push(r); }
+    raws.push(...list);
+    const a = agg(list, dkey(t), bucket === 1);
+    if (tot(a.tokens) > 0 || a.requests > 0) days.push(a);
+  }
+  const all = agg(raws, start, false);
+  const models = MODEL_DEFS.map(m => ({ ...m, tokens: { fresh: 0, read: 0, write: 0, output: 0 } }));
+  for (const r of raws) { const T = tot(r.tokens); if (!T) continue; for (const m of r.models) { const e = models.find(x => x.id === m.id); for (const k in e.tokens) e.tokens[k] += r.tokens[k] * m.total / T; } }
+  const sum = {
+    range, bucketDays: bucket === 1 ? undefined : bucket, startDate: start, endDateExclusive: ENDX, tokens: all.tokens, sessions: all.sessions, records: all.records, requests: all.requests,
+    activeDays: raws.filter(r => tot(r.tokens) > 0 || r.requests > 0).length, cacheWriteReporting: 'unreported', cachedInputShare: null, days,
+    models: models.filter(m => tot(m.tokens) > 0).sort((a, b) => tot(b.tokens) - tot(a.tokens)),
+    tools: TOOL_DEFS.map(([id, label]) => { const t = all.tools.find(x => x.id === id) ?? { requests: 0, results: 0, errors: 0 }; return { id, kind: id === 'other' ? 'other' : 'named', label, requests: t.requests, results: t.results, errors: t.errors }; }).filter(t => t.requests > 0),
+    detail: { state: 'grouped', omittedModels: 3, omittedTools: 14 },
+  };
+  const A = all.auto, allowed = A.allTools.outcomes.allowed, blocked = A.allTools.outcomes.policy_blocked;
+  const split = (n, parts) => { let acc = 0; return parts.map(([k, f], i) => { const v = i === parts.length - 1 ? n - acc : Math.round(n * f); acc += v; return [k, v]; }); };
+  sum.autoMode = {
+    allTools: A.allTools, commands: A.commands,
+    buckets: days.map(d => ({ date: d.date, allTools: d.auto.allTools, commands: d.auto.commands })),
+    routes: [...split(allowed, [['base', .38], ['allowlist', .22], ['accept_edits', .12], ['stage1', .22], ['stage2', .06]]).map(([route, count]) => ({ route, outcome: 'allowed', count })), ...split(blocked, [['guard', .25], ['stage1', .5], ['stage2', .25]]).map(([route, count]) => ({ route, outcome: 'policy_blocked', count }))].filter(r => r.count > 0),
+    categories: split(blocked, [['destructive', .34], ['outside', .24], ['network', .18], ['secrets', .12], ['other', .12]]).map(([key, count]) => ({ key, kind: key === 'other' ? 'other' : 'named', label: { destructive: 'Destructive commands', outside: 'Writes outside workspace', network: 'Network access', secrets: 'Secrets access', other: 'Other' }[key], count })),
+  };
+  if (range !== 'all') {
+    const n = range === '7d' ? 7 : 30, pr = []; for (let k = 1; k <= n; k++) { const r = RAW.get(dkey(civ(start) - k * DAY)); if (r) pr.push(r); }
+    const p = agg(pr, start, false); sum.previousPeriod = { startInclusive: dkey(civ(start) - n * DAY), endInclusive: dkey(civ(start) - DAY), tokens: p.tokens, sessions: p.sessions, requests: p.requests, activeDays: pr.filter(r => tot(r.tokens) > 0).length };
+  }
+  return sum;
+}
+const DATA = { '7d': summarize('7d', '2026-09-24', 1), '30d': summarize('30d', '2026-09-01', 1), all: summarize('all', HIST0, 2) };
+const ACTIVITY = { firstDate: HIST0, lastDate: LAST, days: RAW };
+
+/* ============================== palettes ============================== */
+const MC_APP = { 'claude-opus-5-5': 'var(--usage-fresh)', 'gpt-5.6-sol': 'var(--usage-model-blue)', 'gpt-6-luna': 'var(--usage-model-purple)', 'gpt-6.1-sol': 'var(--usage-model-blue)', other: 'var(--usage-model-pink)' };
+const TC_APP = { output: 'var(--usage-output)', fresh: 'var(--usage-fresh)', cache: 'var(--usage-cache)' };
+const MC_NEW = { 'gpt-6.1-sol': '#16a394', 'gpt-6-luna': '#9a6cf0', 'claude-opus-5-5': '#c07f10', 'gpt-5.6-sol': '#3b82f6', other: '#6b7280' };
+const TC_NEW = { cache: '#7c5cff', fresh: '#0b9bcc', output: '#e0408f' };
+const MC_INK = { 'gpt-6.1-sol': 'color-mix(in srgb,var(--color-text-primary) 88%,transparent)', 'gpt-6-luna': 'color-mix(in srgb,var(--color-text-primary) 58%,transparent)', 'claude-opus-5-5': 'color-mix(in srgb,var(--color-text-primary) 36%,transparent)', 'gpt-5.6-sol': 'color-mix(in srgb,var(--color-text-primary) 22%,transparent)', other: 'color-mix(in srgb,var(--color-text-primary) 14%,transparent)' };
+const TOOL_APP = ['var(--usage-blue)', 'var(--usage-amber)', 'var(--usage-teal)', 'var(--usage-violet)', 'var(--usage-cyan)', 'var(--usage-coral)', 'light-dark(#697c22,#bbca70)', 'light-dark(#a54e88,#d897c5)', 'light-dark(#956343,#cdaa8b)', 'var(--usage-other)'];
+
+/* ============================== state ============================== */
+const S = { dir: 'refined', theme: 'dark', range: '30d', date: '', mode: 'type', hidden: { type: [], model: [] }, allModels: false, donutAll: false, donutSel: '', toolSel: '', errTools: null, commits: true, errPin: null, flowPin: null, barAct: null, table: false, zoom: null, sort: ['date', -1], hover: '', hsrc: '', mfocus: '' };
+let HOV = [], PREV = { range: '30d', counts: {} }, SPEC_PREV = null;
+const D = () => DIRS[S.dir];
+const isGlass = () => (D().cssDir ?? S.dir) === 'glass';
+const cur = () => DATA[S.range];
+const hasRetired = sum => sum.models.some(isRetired);
+const mcolor = id => (D().mc ?? MC_APP)[id] ?? 'var(--usage-other)';
+const tcolor = id => (D().tc ?? TC_APP)[id];
+const bucketLabel = (sum, date) => { const b = sum.bucketDays || 1; if (b === 1) return date; const end = Math.min(civ(date) + b * DAY, civ(sum.endDateExclusive)) - DAY; return `${date} to ${dkey(end)}`; };
+const niceLabel = (sum, date) => { const b = sum.bucketDays || 1; if (b === 1) return dayText(date, true); const end = Math.min(civ(date) + b * DAY, civ(sum.endDateExclusive)) - DAY; return `${dayText(date)} to ${dayText(dkey(end))}`; };
+const labelFor = (sum, date) => D().nice ? niceLabel(sum, date) : bucketLabel(sum, date);
+
+function outsideIn(items, f) {
+  const ranked = items.map((item, i) => ({ item, i })).sort((a, b) => f(b.item) - f(a.item) || a.i - b.i).map(x => x.item);
+  const lo = [], up = []; ranked.forEach((x, i) => (i % 2 === 0 ? lo : up).push(x)); return [...lo, ...up.reverse()];
+}
+function flowSeries(sum, mode, hidden = new Set()) {
+  if (mode === 'model') {
+    const ms = sum.models.filter(m => S.allModels || !hasRetired(sum) || !isRetired(m)).filter(m => !hidden.has(m.id));
+    return outsideIn(ms, m => tot(m.tokens)).map(m => ({ id: m.id, label: m.label, color: mcolor(m.id), total: tot(m.tokens), value: d => d.models.find(x => x.id === m.id)?.total ?? 0, model: m.id }));
+  }
+  const types = [
+    { id: 'output', label: 'Output', color: tcolor('output'), total: sum.tokens.output, value: d => d.tokens.output },
+    { id: 'fresh', label: 'Input', color: tcolor('fresh'), total: sum.tokens.fresh, value: d => d.tokens.fresh },
+    { id: 'cache', label: 'Cache', color: tcolor('cache'), total: sum.tokens.read + sum.tokens.write, value: d => d.tokens.read + d.tokens.write },
+  ].filter(t => !hidden.has(t.id));
+  return outsideIn(types, t => t.total);
+}
+function flowSamples(sum, series) {
+  const vals = new Map(sum.days.map(d => [d.date, series.map(s => Math.max(0, s.value(d)))]));
+  const empty = () => series.map(() => 0), step = (sum.bucketDays || 1) * DAY, first = civ(sum.startDate), last = civ(sum.endDateExclusive) - DAY;
+  let prev = first - step;
+  for (const d of sum.days) { const t = civ(d.date); if (t - prev > step) for (const b of [prev + step, t - step]) vals.set(dkey(b), empty()); prev = t; }
+  const fin = first + Math.floor(Math.max(0, last - first) / step) * step;
+  if (prev < fin) for (const b of [prev + step, fin]) vals.set(dkey(b), empty());
+  return [...vals].sort(([a], [b]) => a.localeCompare(b)).map(([date, values]) => ({ date, values }));
+}
+function trendPoints(sum, metric) {
+  const vals = new Map(sum.days.map(d => [d.date, metric === 'cache' ? crr(d.tokens) : metric === 'errors' ? (d.results ? d.errors / d.results * 100 : null) : d.requests]));
+  const step = (sum.bucketDays || 1) * DAY, first = civ(sum.startDate), last = civ(sum.endDateExclusive) - DAY;
+  let prev = first - step;
+  for (const d of sum.days) { const t = civ(d.date); if (t - prev > step) for (const b of [prev + step, t - step]) vals.set(dkey(b), metric === 'requests' ? 0 : null); prev = t; }
+  const fin = first + Math.floor((last - first) / step) * step;
+  if (prev < fin) for (const b of [prev + step, fin]) vals.set(dkey(b), metric === 'requests' ? 0 : null);
+  return [...vals].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({ date, values: [v] }));
+}
+
+/* ============================== generic time chart ============================== */
+/* c: {id, sum, kind:'stack'|'line', series:[{id,label,color,model}], samples:[{date,values}], height, left, rightPad, top, bottomPad, yMax, yFracs, yFmt,
+      look:{fill, stroke, points, cross, marker, curve, glow, thin}, tip:{kind:'flow'|'trend'|'html'|'none', rows(date), text(date)}, tickMax, tickY, noTicks, persistSel, selectRect, domain, anim} */
+function timeChart(el, c) {
+  const W = Math.max(240, el.clientWidth || 640), sum = c.sum, bucket = sum.bucketDays || 1;
+  const dom0 = c.domain?.[0] ?? sum.startDate, dom1 = c.domain?.[1] ?? sum.endDateExclusive;
+  const left = c.left ?? 46, right = W - (c.rightPad ?? 8), top = c.top ?? 10, H = c.height, bottom = H - (c.bottomPad ?? 34);
+  const width = right - left, plotH = bottom - top, first = civ(dom0), last = civ(dom1) - DAY, span = Math.max(1, (civ(dom1) - first) / DAY), step = width * bucket / span;
+  const slotX = d => left + (civ(d) - first) / DAY / span * width;
+  const Xslot = d => slotX(d) + Math.min(step, right - slotX(d)) / 2;
+  const Xpos = d => left + (last === first ? .5 : (civ(d) - first) / (last - first)) * width;
+  const X = c.xMode === 'slot' ? Xslot : Xpos;
+  const inDom = d => civ(d) >= first && civ(d) < civ(dom1);
+  const samples = c.samples.filter(s => inDom(s.date));
+  const yMax = c.yMax, Y = v => bottom - v / yMax * plotH;
+  const look = { fill: 'solid', stroke: 'none', points: 'none', cross: 'none', marker: 5.5, curve: false, ...c.look };
+  const uid = `${c.id}-${Math.random().toString(36).slice(2, 7)}`;
+  let defs = '', body = '';
+  // grid
+  for (const f of c.yFracs ?? []) { const v = yMax * f, y = bottom - f * plotH; body += `<g><line x1="${left}" y1="${y}" x2="${right}" y2="${y}" class="${c.gridClass ?? 'usage-flow-grid-line'}"/>${c.yFmt ? `<text x="${left - (c.yLabelGap ?? 8)}" y="${y + 4}" text-anchor="end" class="usage-axis">${c.yFmt(v)}</text>` : ''}</g>`; }
+  if (c.selectRect && S.date && inDom(S.date) && sum.days.some(d => d.date === S.date)) body += `<rect x="${slotX(S.date)}" y="${top}" width="${Math.min(step, right - slotX(S.date))}" height="${plotH}" class="usage-selected"/>`;
+  if (look.fill === 'grad' || look.glow) {
+    c.series.forEach((s, i) => { defs += `<linearGradient id="g-${uid}-${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${s.color};stop-opacity:${look.gradTop ?? .85}"/><stop offset="1" style="stop-color:${s.color};stop-opacity:${look.gradBottom ?? .08}"/></linearGradient>`; });
+    if (look.glow) defs += `<filter id="glow-${uid}" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+  }
+  defs += `<clipPath id="clip-${uid}"><rect x="${left}" y="${top - 2}" width="${width}" height="${plotH + 2}"/></clipPath>`;
+  const fillOf = (s, i) => look.fill === 'grad' ? `url(#g-${uid}-${i})` : s.color;
+  let geomPaths = null;
+  const drawStack = vals => {
+    const smp = vals ?? samples;
+    const zero = c.series.map(() => 0);
+    const pts = [{ x: left, values: smp[0]?.values ?? zero }, ...smp.map(s => ({ x: X(s.date), values: s.values })), { x: right, values: smp.at(-1)?.values ?? zero }];
+    return stackGeom(pts, yMax, top, bottom);
+  };
+  if (c.kind === 'stack') {
+    const g = drawStack();
+    geomPaths = g;
+    body += `<g clip-path="url(#clip-${uid})" class="tc-layers">`;
+    c.series.forEach((s, i) => {
+      const dm = s.model && D().linkModels ? ` data-model="${s.model}"` : '';
+      body += `<path class="tc-area" data-i="${i}"${dm} d="${g.paths[i]}" style="fill:${fillOf(s, i)};${look.fillOpacity ? `fill-opacity:${look.fillOpacity}` : ''}"/>`;
+      if (look.stroke !== 'none') body += `<path class="tc-top" data-i="${i}"${dm} d="${g.tops[i]}" style="fill:none;stroke:${s.color};stroke-width:${look.strokeW ?? 1.6}" ${look.glow ? `filter="url(#glow-${uid})"` : ''}/>`;
+      const peak = Math.max(0, ...samples.map(x => x.values[i] ?? 0)) / yMax * plotH;
+      if (look.thin !== false && peak > 0 && peak < 1) for (const p of g.centers[i]) body += `<path class="tc-thin" data-i="${i}"${dm} d="${p}" style="fill:none;stroke:${s.color};stroke-width:1"/>`;
+    });
+    body += '</g>';
+  } else {
+    body += `<g clip-path="url(#clip-${uid})">`;
+    c.series.forEach((s, i) => {
+      const segs = []; let seg = [];
+      for (const p of samples) { const v = p.values[i]; if (v == null) { if (seg.length) segs.push(seg); seg = []; } else seg.push({ x: X(p.date), y: Y(v), date: p.date }); }
+      if (seg.length) segs.push(seg);
+      const dm = s.model && D().linkModels ? ` data-model="${s.model}"` : '';
+      for (const sg of segs) {
+        const path = look.curve && sg.length > 2 ? smooth(sg) : sg.map((p, k) => `${k ? 'L' : 'M'}${r3(p.x)},${r3(p.y)}`).join(' ');
+        if (look.fill !== 'none') body += `<path${dm} d="${path} L${r3(sg.at(-1).x)},${bottom} L${r3(sg[0].x)},${bottom} Z" style="fill:${fillOf(s, i)};fill-opacity:${look.fill === 'grad' ? 1 : (look.fillOpacity ?? .09)};stroke:none"/>`;
+        body += `<path${dm} d="${path}" style="fill:none;stroke:${s.color};stroke-width:${look.strokeW ?? 2};stroke-linecap:round;stroke-linejoin:round" ${look.glow ? `filter="url(#glow-${uid})"` : ''}/>`;
+      }
+      if (look.points !== 'none') {
+        const valid = samples.filter(p => p.values[i] != null && sum.days.some(d => d.date === p.date));
+        valid.forEach((p, k) => { if (look.points === 'all' || k === valid.length - 1) body += `<circle cx="${r3(X(p.date))}" cy="${r3(Y(p.values[i]))}" r="${k === valid.length - 1 ? 3.4 : 2.6}" class="usage-area-point" style="fill:${s.color}"/>`; });
+      }
+    });
+    body += '</g>';
+  }
+  if (c.selectRect && S.date && inDom(S.date) && sum.days.some(d => d.date === S.date)) body += `<rect x="${slotX(S.date)}" y="${bottom + 4}" width="${Math.min(step, right - slotX(S.date))}" height="3" rx="1.5" class="usage-selection-underline"/>`;
+  if (!c.noTicks) {
+    let tk = ticksFor(dom0, dom1, width);
+    if (c.tickMax) tk = tk.filter((_, i, a) => a.length <= c.tickMax || i % Math.ceil(a.length / c.tickMax) === 0 || i === a.length - 1);
+    const yr = span > 365;
+    tk.forEach((d, i) => { body += `<text x="${r3(Xpos(d))}" y="${H - (c.tickY ?? 9)}" text-anchor="${i === 0 ? 'start' : i === tk.length - 1 ? 'end' : 'middle'}" class="usage-axis">${chartDate(d, yr)}</text>`; });
+  }
+  body += `<rect class="tc-hit" x="${left}" y="${top}" width="${width}" height="${plotH + 8}" fill="transparent"/><g class="tc-hv" pointer-events="none"></g>`;
+  el.classList.add('tc');
+  el.innerHTML = `<svg class="${c.svgClass ?? 'usage-chart'}" viewBox="0 0 ${W} ${H}" height="${H}" tabindex="0" role="group" aria-label="${esc(c.aria ?? '')}"><defs>${defs}</defs>${body}</svg><div class="tc-tip"></div>`;
+  const svg = el.firstElementChild, hv = svg.querySelector('.tc-hv'), tipEl = el.querySelector('.tc-tip');
+  const dates = sum.days.map(d => d.date).filter(inDom);
+  const valueAt = date => samples.find(s => s.date === date)?.values ?? [];
+  function update(date, src) {
+    const mine = src === c.id;
+    let d = date && dates.includes(date) && (mine || D().sync) ? date : '';
+    let tipOn = mine && !!d;
+    if (!d && c.persistSel && S.date && dates.includes(S.date)) d = S.date;
+    hv.innerHTML = ''; tipEl.style.display = 'none';
+    if (!d) return;
+    const x = X(d), v = valueAt(d);
+    let out = '';
+    if (look.cross === 'dash') out += `<line x1="${x}" x2="${x}" y1="${top}" y2="${bottom}" class="usage-trend-marker" style="color:${c.series[0].color}"/>`;
+    else if (look.cross !== 'none') out += `<line x1="${x}" x2="${x}" y1="${top}" y2="${bottom}" class="${look.cross}${S.date === d ? ' sel' : ''}"/>`;
+    const pts = [];
+    if (c.kind === 'stack') { let acc = 0; c.series.forEach((s, i) => { acc += v[i] ?? 0; if ((v[i] ?? 0) > 0) pts.push({ s, y: Y(acc), v: v[i] }); }); }
+    else c.series.forEach((s, i) => { if (v[i] != null) pts.push({ s, y: Y(v[i]), v: v[i] }); });
+    if (c.kind === 'stack' && !mine && look.cross === 'none') { /* current: markers only on source */ }
+    else for (const p of pts) out += `<circle cx="${x}" cy="${p.y}" r="${look.marker}" class="${look.markerClass ?? 'usage-flow-hover-point'}" style="fill:${p.s.color}"/>`;
+    const tip = c.tip ?? { kind: 'none' };
+    if (tipOn && tip.kind === 'flow') {
+      const rows = pts.map(p => ({ label: p.s.label, color: p.s.color, value: C(p.v) })), tw = 190, th = 28 + rows.length * 18;
+      const tx = Math.max(0, Math.min(W - tw, x > W / 2 ? x - tw - 14 : x + 14)), ty = Math.max(top, Math.min(bottom - th, (pts.length ? Math.min(...pts.map(p => p.y)) : top) - 18));
+      out += `<g class="usage-chart-tooltip usage-flow-tooltip" transform="translate(${tx},${ty})"><rect width="${tw}" height="${th}" rx="8"/><text x="10" y="17" class="usage-tooltip-title">${labelFor(sum, d)}</text>${rows.map((r, k) => `<circle cx="10" cy="${33 + k * 18}" r="2.5" style="fill:${r.color}"/><text x="18" y="${37 + k * 18}">${esc(r.label)}</text><text x="${tw - 10}" y="${37 + k * 18}" text-anchor="end" class="usage-flow-tooltip-value">${r.value}</text>`).join('')}</g>`;
+    } else if (tipOn && tip.kind === 'trend') {
+      out += `<g class="usage-chart-tooltip" transform="translate(${Math.max(0, Math.min(W - 250, x - 125))},${top})"><rect width="250" height="50" rx="7"/><text x="12" y="20" class="usage-tooltip-title">${labelFor(sum, d)}</text><text x="12" y="39">${esc(tip.text(d, v))}</text></g>`;
+    } else if (tipOn && tip.kind === 'html') {
+      const rows = tip.rows ? tip.rows(d, v, pts) : pts.map(p => ({ label: p.s.label, color: p.s.color, value: C(p.v) }));
+      tipEl.innerHTML = `<b>${esc(labelFor(sum, d))}</b>${rows.map(r => `<div>${r.color ? `<i style="background:${r.color}"></i>` : ''}${esc(r.label)}<span class="v">${esc(r.value)}</span></div>`).join('')}`;
+      tipEl.style.display = 'block';
+      const scale = el.clientWidth / W, tw = tipEl.offsetWidth;
+      const px = x * scale, left0 = px > el.clientWidth / 2 ? px - tw - 16 : px + 16;
+      tipEl.style.left = `${clamp(left0, 0, el.clientWidth - tw)}px`;
+      tipEl.style.top = `${(pts.length ? Math.min(...pts.map(p => p.y)) : top) * scale - 10}px`;
+    }
+    hv.innerHTML = out;
+  }
+  HOV.push(update);
+  const toDate = ev => {
+    const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * W / r.width;
+    let best = '', bd = Infinity; for (const d of dates) { const dd = Math.abs(X(d) - x); if (dd < bd) { bd = dd; best = d; } }
+    return best;
+  };
+  svg.addEventListener('mousemove', ev => { const d = toDate(ev); if (d) setHover(d, c.id); });
+  svg.addEventListener('mouseleave', () => setHover('', c.id));
+  svg.addEventListener('click', ev => { const d = toDate(ev); if (d && c.selectable !== false) select(d); });
+  svg.addEventListener('keydown', ev => {
+    const i = dates.indexOf(S.hover && S.hsrc === c.id ? S.hover : (S.date || ''));
+    if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { ev.preventDefault(); const n = clamp((i < 0 ? (ev.key === 'ArrowRight' ? -1 : dates.length) : i) + (ev.key === 'ArrowRight' ? 1 : -1), 0, dates.length - 1); setHover(dates[n], c.id); }
+    else if ((ev.key === 'Enter' || ev.key === ' ') && S.hover) { ev.preventDefault(); select(S.hover, c.id); }
+    else if (ev.key === 'Escape') { setHover('', c.id); if (S.date) select(''); }
+  });
+  svg.addEventListener('blur', () => { if (S.hsrc === c.id) setHover('', c.id); });
+  update('', null);
+  return { X, Y, drawStack, svg, uid, left, right, top, bottom, W, H };
+}
+function thinTicks(tk, n = 6) {
+  if (!D().fewTicks || tk.length <= n) return tk;
+  const k = Math.ceil((tk.length - 1) / (n - 1)), out = tk.filter((_, i) => i % k === 0), rest = tk.length - 1 - (out.length - 1) * k;
+  if (rest > 0) { if (rest < k / 2) out[out.length - 1] = tk.at(-1); else out.push(tk.at(-1)); }
+  return out;
+}
+function setHover(date, src) {
+  if (S.hover === date && S.hsrc === src) return;
+  S.hover = date; S.hsrc = src;
+  for (const f of HOV) f(date, src);
+  D().onHover?.(date, src);
+}
+function select(date, focusSrc) {
+  S.date = date; S.hover = ''; S.hsrc = '';
+  render({ focus: focusSrc });
+}
+
+/* ============================== shared pieces (app markup) ============================== */
+const REFRESH_SVG = '<svg class="usage-refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg>';
+const EYE = hidden => `<svg class="usage-flow-series-eye" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.7-4 7.5-4 7.5 4 7.5 4-2.7 4-7.5 4-7.5-4-7.5-4Z"/><circle cx="10" cy="10" r="2"/>${hidden ? '<path d="m3 3 14 14"/>' : ''}</svg>`;
+const RANGES = [['7d', '7 days'], ['30d', '30 days'], ['all', 'All']];
+function periodText(sum) { const last = dkey(civ(sum.endDateExclusive) - DAY); return `${dayText(sum.startDate)} to ${dayText(last)}`; }
+function rangeButtons(cls = 'usage-range', labels = RANGES) { return `<div class="${cls}" role="group" aria-label="Analytics period">${labels.map(([v, l]) => `<button type="button" data-a="range:${v}" aria-pressed="${S.range === v}">${l}</button>`).join('')}</div>`; }
+function metricItems(sum) {
+  const prev = sum.range !== 'all' ? sum.previousPeriod : null;
+  const avg = (t, a) => a ? tot(t) / a : 0;
+  const dl = (a, b, pts) => prev ? metricDelta(a, b, pts) : null;
+  let rt = 0, ra = 0; const act = sum.range === 'all' ? [] : sum.days.map(d => { rt += tot(d.tokens); ra++; return rt / ra; });
+  const cr = crr(sum.tokens);
+  return [
+    { kind: 'tokens', label: 'Total tokens', raw: tot(sum.tokens), fmt: 'C', value: C(tot(sum.tokens)), delta: dl(tot(sum.tokens), prev && tot(prev.tokens)), series: sum.days.map(d => tot(d.tokens)) },
+    { kind: 'tokens', label: 'Per active day', raw: avg(sum.tokens, sum.activeDays), fmt: 'C', value: C(avg(sum.tokens, sum.activeDays)), delta: dl(avg(sum.tokens, sum.activeDays), prev && avg(prev.tokens, prev.activeDays)), series: act },
+    { kind: 'sessions', label: 'Sessions', raw: sum.sessions, fmt: 'N', value: N(sum.sessions), delta: dl(sum.sessions, prev?.sessions), series: sum.days.map(d => d.sessions) },
+    { kind: 'requests', label: 'Tool requests', raw: sum.requests, fmt: 'N', value: N(sum.requests), delta: dl(sum.requests, prev?.requests), series: sum.days.map(d => d.requests) },
+    { kind: 'cache', label: 'Cache read rate', raw: cr, fmt: 'P', value: P(cr), delta: dl(cr, prev && crr(prev.tokens), true), series: sum.days.map(d => crr(d.tokens)).filter(v => v != null) },
+  ];
+}
+const comparison = sum => sum.range === 'all' ? '' : `vs prior ${sum.range === '7d' ? '7' : '30'} days`;
+function sparkPoints(series, w = 62, h = 15, x0 = 1, y0 = 17) { const max = Math.max(1, ...series); return series.map((v, i) => `${r3(x0 + i / Math.max(1, series.length - 1) * w)},${r3(y0 - v / max * h)}`).join(' '); }
+function pMetrics(sum, wrapCls = 'usage-cards') {
+  const items = metricItems(sum), cmp = comparison(sum);
+  return `<section class="usage-overview">${cmp ? `<p class="usage-comparison">${cmp}</p>` : ''}<div class="${wrapCls}">${items.map(it => `<section class="usage-metric usage-metric-${it.kind}"><h2>${it.label}</h2><strong>${it.value}</strong><div class="usage-metric-foot">${it.delta ? `<span class="usage-metric-delta usage-delta-${it.delta.dir}" title="${it.delta.desc}, ${cmp}">${it.delta.text}</span>` : ''}${it.series.length > 1 ? `<svg viewBox="0 0 64 18" aria-hidden="true"><polyline points="${sparkPoints(it.series)}"/></svg>` : ''}</div></section>`).join('')}</div></section>`;
+}
+function pFlowToolbar(sum, extra = '') {
+  return `<div class="usage-flow-toolbar"><div class="usage-flow-heading"><h2 class="usage-panel-heading">Tokens</h2>${extra}</div><div class="usage-flow-controls"><div class="usage-range" role="group" aria-label="Stack tokens by">${['type', 'model'].map(v => `<button type="button" data-a="mode:${v}" aria-pressed="${S.mode === v}">By ${v}</button>`).join('')}</div>${S.mode === 'model' && hasRetired(sum) ? `<div class="usage-range" role="group" aria-label="Model history"><button type="button" data-a="allmodels:0" aria-pressed="${!S.allModels}">Current</button><button type="button" data-a="allmodels:1" aria-pressed="${S.allModels}">All models</button></div>` : ''}</div></div>`;
+}
+function pFlowLegend(sum) {
+  const hidden = new Set(S.hidden[S.mode]);
+  return `<div class="usage-legend usage-flow-legend" aria-label="Token flow series">${flowSeries(sum, S.mode).map(s => { const shown = !hidden.has(s.id); return `<button class="usage-flow-series-toggle" type="button" data-a="series:${s.id}" aria-pressed="${shown}"${s.model && D().linkModels ? ` data-mh="${s.model}"` : ''}><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" style="fill:${s.color}"/></svg><span>${esc(s.label)}</span><b>${C(s.total)}</b>${EYE(!shown)}</button>`; }).join('')}</div>`;
+}
+function pDayDetail(sum, sel, opts = {}) {
+  const b = sum.bucketDays || 1;
+  const head = b === 1 ? dayText(sel.date, true) : bucketLabel(sum, sel.date);
+  return `<section class="usage-day-detail ${opts.cls ?? ''}" aria-label="Analytics for ${bucketLabel(sum, sel.date)}"><header class="usage-detail-header"><h3 tabindex="-1" id="day-h">${head}</h3><button type="button" data-a="clear">Clear</button></header>
+  <div class="usage-day-figures"><div><strong>${C(tot(sel.tokens))}</strong> tokens</div><div><strong>${N(sel.sessions)}</strong> sessions</div><div><strong>${N(sel.requests)}</strong> tool requests</div><div><strong>${N(sel.errors)}</strong> errors</div></div>
+  ${S.range === 'all' ? `<p class="usage-note">Session lists cover the last 30 days. <button type="button" data-a="range:30d" style="color:var(--color-accent);text-decoration:underline">Show in 30 days</button></p>` : pContributors(sel.contributors)}</section>`;
+}
+function pContributors(c, limit = 10) {
+  if (!c || c.state === 'unavailable') return '<p class="usage-note">Session details are unavailable for this day.</p>';
+  if (!c.items.length) return '<p class="usage-note">No contributing sessions were recorded for this day.</p>';
+  const items = c.items.slice(0, limit), total = c.items.length + c.omitted;
+  const cost = it => it.priced ? (it.usd < .01 ? '<$0.01' : `$${it.usd.toFixed(2)}`) : '–';
+  return `<div class="usage-table-scroll"><table class="usage-session-table"><thead><tr><th scope="col">Session</th><th scope="col">Tokens</th><th scope="col"><span title="API list prices for priced tokens; excludes cache writes">Est. cost</span></th></tr></thead><tbody>${items.map(it => `<tr><th scope="row"><button class="usage-session-name" type="button">${esc(it.title)}</button><small class="usage-session-project">${esc(it.project)}</small></th><td title="${N(tot(it.tokens))} tokens">${C(tot(it.tokens))}</td><td>${cost(it)}</td></tr>`).join('')}</tbody></table></div>${total > items.length ? `<p class="usage-note">Top ${N(items.length)} of ${N(total)} sessions. Day totals include all.</p>` : ''}`;
+}
+function cacheValues(sum) {
+  return `<dl class="usage-cache-values usage-details-values"><div><dt><i class="usage-details-cache-read"></i>Cache reads</dt><dd title="${N(sum.tokens.read)}">${C(sum.tokens.read)}</dd></div><div><dt><i class="usage-details-cache-write"></i>Cache writes</dt><dd title="Not reported">–</dd></div><div><dt><i class="usage-details-fresh"></i>Input</dt><dd title="Uncached input: ${N(sum.tokens.fresh)}">${C(sum.tokens.fresh)}</dd></div></dl>`;
+}
+function pCachePanel(sum) {
+  return `<div class="usage-details-summary"><header class="usage-details-card-header"><div><h2 class="usage-panel-heading">Prompt cache</h2><p>Cache reads / (cache reads + input)</p></div><strong>${P(crr(sum.tokens))}</strong></header><div class="usage-area-trend usage-area-cache"><div data-m="cache" class="usage-trend-chart"></div></div>${cacheValues(sum)}</div>`;
+}
+function donutModels(sum) { const hr = hasRetired(sum); const models = hr && !S.donutAll ? sum.models.filter(m => !isRetired(m)) : sum.models; return { hr, models, total: models.reduce((s, m) => s + tot(m.tokens), 0) }; }
+function pModelPanel(sum, cls = '') {
+  const { hr, models, total } = donutModels(sum);
+  return `${hr ? `<div class="usage-range usage-model-scope" role="group" aria-label="Model history"><button type="button" data-a="donutall:0" aria-pressed="${!S.donutAll}">Current</button><button type="button" data-a="donutall:1" aria-pressed="${S.donutAll}">All models</button></div>` : ''}<div class="usage-model-mix ${cls}"><div class="usage-details-donut"><div data-m="donut"></div><div class="usage-details-donut-center" id="donut-center"></div></div><ul class="usage-model-key">${models.map(m => { const v = tot(m.tokens); return `<li><button type="button" data-mh="${m.id}" data-a="msel:${m.id}" data-model="${m.id}" aria-pressed="${S.donutSel === m.id}"><svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2.5" style="fill:${mcolor(m.id)}"/></svg><span>${esc(m.label)}</span><b title="${N(v)} tokens">${C(v)}</b><small>${P(total ? v / total * 100 : 0)}</small></button></li>`; }).join('')}</ul></div>`;
+}
+function donutCenter(sum) {
+  const { hr, models, total } = donutModels(sum);
+  const a = models.find(m => m.id === (S.mfocus || S.donutSel));
+  const count = models.filter(m => m.kind === 'named').length + (S.donutAll || !hr ? sum.detail.omittedModels : 0);
+  const topM = !a && D().refined ? models.reduce((x, m) => tot(m.tokens) > tot(x.tokens) ? m : x, models[0]) : null;
+  if (topM) return `<span>${esc(topM.label)}</span><strong>${P(tot(topM.tokens) / total * 100)}</strong><small>${C(tot(topM.tokens))} tokens</small>`;
+  return a ? `<span>${esc(a.label)}</span><strong>${P(tot(a.tokens) / total * 100)}</strong><small>${C(tot(a.tokens))} tokens</small>` : `<strong>${count} ${count === 1 ? 'model' : 'models'}</strong>`;
+}
+function toolColors(sum) { return Object.fromEntries(sum.tools.map((t, i) => [t.id, (D().toolColors ?? TOOL_APP)[i % 10]])); }
+function defaultErrTools(sum) { return [...sum.tools].sort((a, b) => b.errors - a.errors || b.results - a.results).slice(0, 3).map(t => t.id); }
+function errToolsSel(sum) { const ch = S.errTools ?? defaultErrTools(sum); const v = ch.filter(id => sum.tools.some(t => t.id === id)); return v.length || ch.length === 0 ? v : defaultErrTools(sum); }
+const toolNote = sum => `${sum.detail.omittedTools > 0 ? `<p class="usage-note">Other includes ${N(sum.detail.omittedTools)} tool names.</p>` : ''}`;
+function pToolsPanel(sum) { return pToolBars(sum, false, false) + pToolErr(sum) + toolNote(sum); }
+function pToolBars(sum, rf = false, withNote = true) {
+  const tools = [...sum.tools].sort((a, b) => rf && (a.kind === 'other') !== (b.kind === 'other') ? (a.kind === 'other' ? 1 : -1) : b.requests - a.requests), max = Math.max(1, ...tools.map(t => t.requests)), detail = tools.find(t => t.id === S.toolSel);
+  const avgErr = sum.tools.reduce((s, t) => s + t.errors, 0) / Math.max(1, sum.tools.reduce((s, t) => s + t.results, 0)) * 100;
+  const errCell = t => { const r = t.results ? t.errors / t.results * 100 : null; return `<small class="${r != null && r > avgErr * 1.5 ? 'hi' : ''}" title="Errors / matched results">${r == null ? '–' : P(r)}</small>`; };
+  return `<div class="usage-legend usage-tool-legend"><span><i class="usage-tool-ok"></i>Successful</span><span><i class="usage-tool-error"></i>Error</span><span><i class="usage-tool-unmatched"></i>Unmatched</span></div>
+  <div class="usage-tool-bars">${rf ? '<div class="rf-tools-head"><span></span><span></span><span>Requests</span><span>Errors</span></div>' : ''}${tools.map(t => { const ok = (t.results - t.errors) / max * 100, er = t.errors / max * 100, un = (t.requests - t.results) / max * 100; return `<button type="button" data-a="tool:${t.id}" aria-pressed="${S.toolSel === t.id}"><span>${t.label}</span><svg viewBox="0 0 100 11" preserveAspectRatio="none" aria-hidden="true"><rect width="${ok}" height="11" rx="1.5" class="usage-tool-ok"/>${er > 0 ? `<rect x="${ok}" width="${er}" height="11" rx="1.5" class="usage-tool-error"/>` : ''}${un > 0 ? `<rect x="${ok + er}" width="${un}" height="11" rx="1.5" class="usage-tool-unmatched"/>` : ''}</svg><b>${N(t.requests)}</b>${rf ? errCell(t) : ''}</button>`; }).join('')}</div>
+  ${detail ? `<p class="usage-note" role="status">${detail.label}: ${N(detail.results - detail.errors)} successful · ${N(detail.errors)} errors · ${N(detail.requests - detail.results)} without a matched result</p>` : ''}
+  ${withNote ? toolNote(sum) : ''}`;
+}
+function pToolErr(sum, rf = false) {
+  const tc = toolColors(sum), chosen = errToolsSel(sum);
+  return `<section class="usage-tool-error-trend"><header><div>${rf ? `<h2 class="usage-panel-heading">Error rate over time${info('Recorded errors / matched results')}</h2>` : '<h3>Error rate over time</h3><p>Recorded errors / matched results</p>'}</div><button type="button" class="usage-tool-build-toggle" data-a="commits" aria-pressed="${S.commits}"><i></i>Commits</button></header>
+  <div class="usage-tool-picker" role="group" aria-label="Tools shown in error rate graph">${sum.tools.map(t => `<button type="button" data-a="pick:${t.id}" aria-pressed="${chosen.includes(t.id)}"><svg width="7" height="7" aria-hidden="true"><circle cx="3.5" cy="3.5" r="3.5" style="fill:${tc[t.id]}"/></svg>${t.label}</button>`).join('')}</div>
+  <div data-m="toolerr"></div><div class="usage-readout" id="err-readout" role="status"></div></section>`;
+}
+const info = text => `<span class="rf-info" tabindex="0" role="img" aria-label="${esc(text)}" title="${esc(text)}">i</span>`;
+function heatPeriod(cells) { const f = cells[0]?.date, l = cells.at(-1)?.date; if (!f) return ''; const yr = f.slice(0, 4) !== l.slice(0, 4); return f === l ? chartDate(f) : `${chartDate(f, yr)} to ${chartDate(l, yr)}`; }
+function pHeatPanel() { return `<div class="usage-chart-toolbar"><span id="heat-period"></span><div class="usage-heat-key"><span>Less</span>${[0, 1, 2, 3, 4, 5].map(l => `<i class="usage-heat-${l}"></i>`).join('')}<span>More</span></div></div><div data-m="heat"></div><div class="usage-interaction-readout" id="heat-readout" role="status"></div>`; }
+function pAutoPanel(sum, rf = false) {
+  const am = sum.autoMode, rate = cmdRate(am.commands);
+  return `<section class="usage-auto-mode"><section class="usage-auto-flow"><h3 class="usage-auto-flow-heading">Decision flow</h3><div data-m="flow"></div><div class="usage-readout" id="flow-readout" role="status"></div></section>
+  <section class="usage-auto-mode-block-rate"><header><div>${rf ? `<h3>Command block rate${info('Policy-denied commands / command attempts')}</h3>` : '<h3>Command block rate</h3><p>Policy-denied commands / command attempts</p>'}</div>${rate.rate != null ? `<div class="usage-auto-mode-block-rate-headline"><strong>${rate.state === 'provisional' && !rf ? 'Provisional ' : ''}${P(rate.rate * 100)}</strong><span>${N(rate.num)} ${rf ? 'of' : '/'} ${N(rate.den)} commands${rf && rate.state === 'provisional' ? `, ${N(am.commands.outcomes.incomplete + am.commands.outcomes.unknown_outcome)} unresolved` : ''}</span></div>` : ''}</header><div data-m="rate"></div><div class="usage-readout" id="rate-readout" role="status"></div></section>
+  <div class="usage-auto-bars"><section class="usage-auto-bars-chart"><header><h3>Decisions over time</h3></header><div data-m="decisions"></div><p class="usage-auto-bars-readout" id="bars-readout" role="status"></p><ul class="usage-auto-outcome-legend">${autoGroups(am).map(g => `<li><i class="usage-auto-outcome-${g.group}"></i><span>${g.label}</span><b>${N(g.count)}</b></li>`).join('')}</ul></section>
+  <section class="usage-auto-bars-chart"><header><h3>Block reasons</h3></header>${pCategories(am)}</section></div></section>`;
+}
+function pCategories(am) {
+  const blocked = am.allTools.outcomes.policy_blocked, cats = [...am.categories].sort((a, b) => b.count - a.count).filter(c => c.count > 0), max = Math.max(0, ...cats.map(c => c.count));
+  return `<ol class="usage-auto-category-bars">${cats.map(c => `<li><div><span>${c.label}</span><b>${N(c.count)}</b><small>${(c.count / blocked * 100).toFixed(1)}%</small></div><svg viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true"><rect class="usage-auto-category-track" width="100" height="8" rx="2"/><rect class="usage-auto-category-fill" width="${max ? c.count / max * 100 : 0}" height="8" rx="2"/></svg></li>`).join('')}</ol>`;
+}
+const OUTCOMES = ['allowed', 'policy_blocked', 'review_required', 'operational_error', 'cancelled', 'unknown_outcome', 'incomplete'];
+const GROUPS = [{ group: 'allowed', label: 'Allowed', o: ['allowed'] }, { group: 'blocked', label: 'Blocked', o: ['policy_blocked'] }, { group: 'error', label: 'Error', o: ['operational_error', 'review_required', 'unknown_outcome', 'incomplete'] }, { group: 'cancelled', label: 'Cancelled', o: ['cancelled'] }];
+const autoGroups = am => GROUPS.map(g => ({ ...g, count: g.o.reduce((s, k) => s + am.allTools.outcomes[k], 0) }));
+function cmdRate(pop) {
+  const num = pop.outcomes.policy_blocked, den = OUTCOMES.reduce((s, k) => s + pop.outcomes[k], 0);
+  if (pop.coverage.state !== 'complete' || !den) return { num, den, rate: null, state: 'unavailable' };
+  return { num, den, rate: num / den, state: pop.outcomes.incomplete + pop.outcomes.unknown_outcome ? 'provisional' : 'confirmed' };
+}
+function pValuesTable(sum) {
+  const body = !S.table ? '' : `<div class="usage-values-sections">
+  <section><h2>Tokens and prompt cache</h2><div class="usage-table-scroll"><table><caption>Recorded tokens by local period, full counts</caption><thead><tr><th>Period</th><th>Input</th><th>Cache reads</th><th>Cache writes</th><th>Output</th><th>Total</th><th>Cache read rate</th><th>Sessions</th><th>Tool requests</th></tr></thead><tbody>${sum.days.map(d => `<tr><th scope="row">${bucketLabel(sum, d.date)}</th><td>${N(d.tokens.fresh)}</td><td>${N(d.tokens.read)}</td><td>Not reported</td><td>${N(d.tokens.output)}</td><td>${N(tot(d.tokens))}</td><td>${P(crr(d.tokens))}</td><td>${N(d.sessions)}</td><td>${N(d.requests)}</td></tr>`).join('')}</tbody></table></div><p class="usage-values-definition">Cache read rate = cache reads / (cache reads + input). Cache share also includes cache writes and requires complete reporting. Cache in the Tokens chart combines reads and writes.</p></section>
+  <section><h2>Models</h2><div class="usage-table-scroll"><table><caption>Recorded tokens by model and local period</caption><thead><tr><th>Period</th>${sum.models.map(m => `<th>${m.label}</th>`).join('')}</tr></thead><tbody>${sum.days.map(d => `<tr><th scope="row">${bucketLabel(sum, d.date)}</th>${sum.models.map(m => `<td>${N(d.models.find(x => x.id === m.id)?.total ?? 0)}</td>`).join('')}</tr>`).join('')}</tbody></table></div><p class="usage-values-definition">Other groups ${sum.detail.omittedModels} models.</p></section>
+  <section><h2>Tools</h2><div class="usage-table-scroll"><table><caption>Recorded tool outcomes</caption><thead><tr><th>Tool</th><th>Requests</th><th>Successful</th><th>Errors</th><th>No result</th></tr></thead><tbody>${sum.tools.map(t => `<tr><th scope="row">${t.label}</th><td>${N(t.requests)}</td><td>${N(t.results - t.errors)}</td><td>${N(t.errors)}</td><td>${N(t.requests - t.results)}</td></tr>`).join('')}</tbody></table></div></section>
+  <section><h2>Auto mode</h2><div class="usage-table-scroll"><table><caption>Raw decision outcomes by local period</caption><thead><tr><th>Period</th><th>Coverage</th><th>Allowed</th><th>Blocked</th><th>Needs review</th><th>Operational error</th><th>Cancelled</th><th>Unknown</th><th>Incomplete</th></tr></thead><tbody>${sum.autoMode.buckets.map(b => `<tr><th scope="row">${bucketLabel(sum, b.date)}</th><td>${b.allTools.coverage.state}</td>${OUTCOMES.map(k => `<td>${b.allTools.coverage.state === 'unavailable' ? '–' : N(b.allTools.outcomes[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section></div>`;
+  return `<details class="usage-values" ${S.table ? 'open' : ''}><summary data-a="table">View as table</summary>${body}</details>`;
+}
+
+/* ============================== mounts ============================== */
+const M = {};
+M.tokens = el => {
+  const sum = cur(), hidden = new Set(S.hidden[S.mode]), series = flowSeries(sum, S.mode, hidden);
+  const shown = d => series.reduce((s, x) => s + x.value(d), 0);
+  const max = ceilAxis(Math.max(1, ...sum.days.map(shown)));
+  const W = el.clientWidth || 640, narrow = W < 560, dir = D();
+  const o = dir.tokensChart?.(sum, series) ?? {};
+  return timeChart(el, {
+    id: 'tokens', sum, kind: 'stack', xMode: 'slot', series, samples: flowSamples(sum, series), height: narrow ? 250 : 300, left: 46, rightPad: 8, top: 10, bottomPad: 34,
+    yMax: max, yFracs: [0, 1 / 3, 2 / 3, 1], yFmt: v => C(Math.round(v)), tickMax: narrow ? 4 : 6, tickY: 9, selectRect: true,
+    look: { fill: 'solid', cross: 'none', marker: 5.5 }, tip: { kind: 'flow' }, aria: 'Daily recorded tokens', ...o,
+  });
+};
+M.cache = el => {
+  const sum = cur(), W = el.clientWidth || 500, dir = D();
+  const o = dir.cacheChart?.(sum) ?? {};
+  return timeChart(el, {
+    id: 'cache', sum, kind: 'line', xMode: 'pos', series: [{ id: 'cache', label: 'Cache read rate', color: 'currentColor' }], samples: trendPoints(sum, 'cache'),
+    height: W < 360 ? 128 : 150, left: 40, rightPad: 10, top: 12, bottomPad: 22, yMax: 100, yFracs: [0, .5, 1], yFmt: v => `${Number(v.toFixed(1))}%`, yLabelGap: 7, gridClass: 'usage-trend-grid', tickY: 3,
+    look: { fill: 'solid', fillOpacity: .09, points: 'all', cross: 'dash', marker: 4.6, markerClass: 'usage-area-point' }, persistSel: true,
+    tip: { kind: 'trend', text: (d, v) => `${P(v[0])} cache read rate` }, aria: 'Cache read rate, 0 to 100 percent', ...o,
+  });
+};
+M.donut = el => {
+  const sum = cur(), { models, total } = donutModels(sum), big = D().donutBig;
+  const c0 = 92, inner = big ? 52 : 58, outer = 88, gap = .035; let ang = -Math.PI / 2;
+  const pt = (r, a) => [c0 + r * Math.cos(a), c0 + r * Math.sin(a)];
+  const arcs = models.flatMap(m => {
+    const share = total ? tot(m.tokens) / total : 0, sweep = share * Math.PI * 2, g = Math.min(gap, sweep * .25), s = ang + g / 2, e = ang + sweep - g / 2; const mid = ang + sweep / 2; ang += sweep;
+    if (share <= 0 || e <= s) return [];
+    const [x0, y0] = pt(outer, s), [x1, y1] = pt(outer, e), [x2, y2] = pt(inner, e), [x3, y3] = pt(inner, s), lg = e - s > Math.PI ? 1 : 0;
+    return [{ m, share, mid, d: `M${x0} ${y0} A${outer} ${outer} 0 ${lg} 1 ${x1} ${y1} L${x2} ${y2} A${inner} ${inner} 0 ${lg} 0 ${x3} ${y3} Z` }];
+  });
+  el.innerHTML = `<svg class="usage-model-donut ${big ? 'sp-donut' : ''}" viewBox="-6 -6 196 196" role="group" aria-label="Model usage: ${N(total)} tokens">${D().donutDefs ?? ''}${arcs.map(a => `<path d="${a.d}" data-model="${a.m.id}" data-mh="${a.m.id}" data-mid="${a.mid}" data-a="msel:${a.m.id}" tabindex="0" role="button" aria-label="${a.m.label}: ${N(tot(a.m.tokens))} tokens, ${P(a.share * 100)}" class="${S.donutSel === a.m.id ? 'usage-model-selected' : ''}" style="fill:${mcolor(a.m.id)}"/>`).join('')}</svg>`;
+  $('#donut-center').innerHTML = donutCenter(sum);
+  modelFocus(S.mfocus);
+};
+function modelFocus(id) {
+  S.mfocus = id;
+  const act = id || (D().linkModels ? '' : S.donutSel);
+  const page = $('#page');
+  $$('[data-model]', page).forEach(e => {
+    const inDonutArea = e.closest('.usage-model-mix, .lg-models, .cn-models') || D().linkModels;
+    if (!inDonutArea) return;
+    const dim = !!(act || S.donutSel) && e.dataset.model !== (act || S.donutSel);
+    e.classList.toggle(D().linkModels ? 'm-dim' : 'usage-model-muted', dim);
+    if (!D().linkModels) e.classList.remove('m-dim');
+  });
+  if (D().donutBig) $$('.sp-donut path').forEach(p => { const on = p.dataset.model === (act || S.donutSel); const mid = +p.dataset.mid; p.style.transform = on ? `translate(${Math.cos(mid) * 6}px,${Math.sin(mid) * 6}px)` : ''; });
+  const cEl = $('#donut-center'); if (cEl) cEl.innerHTML = donutCenter(cur());
+  D().onModel?.(act);
+}
+M.toolerr = el => {
+  const sum = cur(), W = Math.max(240, el.clientWidth || 640), tc = toolColors(sum), sel = errToolsSel(sum), bucket = sum.bucketDays || 1;
+  const H = W < 360 ? 156 : 176, top = 24, bottom = H - 25, left = 42, right = W - 10;
+  const first = civ(sum.startDate), last = civ(sum.endDateExclusive) - DAY, X = d => left + (last === first ? .5 : (civ(d) - first) / (last - first)) * (right - left);
+  const series = sel.map(id => { const tool = sum.tools.find(t => t.id === id); const pts = trendPoints(sum, 'requests').map(p => { const day = sum.days.find(d => d.date === p.date); const t = day?.tools.find(x => x.id === id); return { date: p.date, requests: t?.requests ?? 0, results: t?.results ?? 0, errors: t?.errors ?? 0, rate: t?.results ? t.errors / t.results * 100 : null, builds: t?.builds?.items ?? [] }; }); return { id, label: tool.label, pts }; });
+  const peak = Math.max(0, ...series.flatMap(s => s.pts.map(p => p.rate ?? 0))), ceiling = Math.min(100, Math.max(10, ceilAxis(peak * 1.15))), tickN = Math.max(1, Math.round(ceiling / 25));
+  const Y = r => bottom - r / ceiling * (bottom - top);
+  let body = '';
+  for (let i = 0; i <= tickN; i++) { const v = ceiling * i / tickN; body += `<g><text x="${left - 7}" y="${Y(v) + 4}" text-anchor="end" class="usage-axis">${Number(v.toFixed(1))}%</text><line x1="${left}" x2="${right}" y1="${Y(v)}" y2="${Y(v)}" class="usage-tool-error-grid"/></g>`; }
+  const markers = new Map();
+  for (const s of series) {
+    let seg = [], segs = []; for (const p of s.pts) { if (p.rate == null) { if (seg.length) segs.push(seg); seg = []; } else seg.push(p); } if (seg.length) segs.push(seg);
+    body += `<g class="usage-tool-error-series" style="color:${tc[s.id]}">${segs.map(sg => `<path d="${sg.map((p, k) => `${k ? 'L' : 'M'}${r3(X(p.date))},${r3(Y(p.rate))}`).join(' ')}" class="usage-tool-error-line" style="stroke:${tc[s.id]}"/>`).join('')}${s.pts.filter(p => p.rate != null).map(p => `<g role="button" tabindex="-1" data-err="${s.id}|${p.date}" aria-pressed="${S.errPin === `${s.id}|${p.date}`}"><circle cx="${r3(X(p.date))}" cy="${r3(Y(p.rate))}" r="3" style="stroke:${tc[s.id]}"/></g>`).join('')}</g>`;
+    for (const p of s.pts) for (const b of p.builds) { const k = `${p.date}:${b.sha}`; const m = markers.get(k) ?? { date: p.date, sha: b.sha, dirty: b.dirty, at: b.firstObservedAt, tools: [] }; m.tools.push({ label: s.label, id: s.id, b }); markers.set(k, m); }
+  }
+  if (S.commits) for (const m of markers.values()) body += `<g class="usage-tool-build-marker" data-build="${m.date}:${m.sha}" transform="translate(${X(m.date)},${top + 4})"><path d="M0 -3 L3 0 L0 3 L-3 0 Z" style="fill:${tc[m.tools[0].id]}"/></g>`;
+  const tk = thinTicks(ticksFor(sum.startDate, sum.endDateExclusive, right - left));
+  body += tk.map((d, i) => `<text x="${X(d)}" y="${H - 3}" text-anchor="${i === 0 ? 'start' : i === tk.length - 1 ? 'end' : 'middle'}" class="usage-axis">${chartDate(d, last - first > 365 * DAY)}</text>`).join('');
+  body += '<g class="tc-hv" pointer-events="none"></g>';
+  el.innerHTML = `<svg class="usage-tool-error-chart" viewBox="0 0 ${W} ${H}" height="${H}" role="group" aria-label="Recorded tool error rates">${body}</svg>`;
+  const ro = $('#err-readout');
+  const show = key => {
+    if (!key) { ro.innerHTML = ''; return; }
+    if (key.includes('|')) { const [id, date] = key.split('|'), s = series.find(x => x.id === id), p = s?.pts.find(x => x.date === date); if (!p) return; ro.innerHTML = `<strong>${s.label}, ${labelFor(sum, date)}</strong><span>${N(p.errors)} errors / ${N(p.results)} matched results (${P(p.rate)}), ${N(p.requests)} requests</span>${S.errPin ? '<button type="button" data-a="errclear">Clear selection</button>' : ''}`; }
+    else { const m = markers.get(key); if (!m) return; ro.innerHTML = `<strong>Cat Code build ${m.sha}${m.dirty ? ' dirty' : ''}, ${labelFor(sum, m.date)}</strong><span>${m.tools.map(t => `${t.label}: ${N(t.b.errors)} / ${N(t.b.results)} (${P(t.b.errors / t.b.results * 100)})`).join(', ')}</span>${S.errPin ? '<button type="button" data-a="errclear">Clear selection</button>' : ''}`; }
+  };
+  $$('[data-err],[data-build]', el).forEach(g => { const k = g.dataset.err ?? g.dataset.build; g.addEventListener('mouseenter', () => show(k)); g.addEventListener('mouseleave', () => show(S.errPin)); g.addEventListener('click', () => { S.errPin = S.errPin === k ? null : k; render(); }); });
+  show(S.errPin);
+  const hv = el.querySelector('.tc-hv');
+  HOV.push((date, src) => { hv.innerHTML = D().sync && date && sum.days.some(d => d.date === date) ? `<line x1="${X(date)}" x2="${X(date)}" y1="${top}" y2="${bottom}" class="${D().crossClass}"/>` : ''; });
+};
+M.heat = el => {
+  const dir = D(), BOX = dir.heat?.box ?? 28, MAXB = dir.heat?.max ?? 44, GAP = dir.heat?.gap ?? 4, W = el.clientWidth || 800, sum = cur(), b = sum.bucketDays || 1;
+  const last = civ(ACTIVITY.lastDate), first = civ(ACTIVITY.firstDate), lastMon = last - (new Date(last).getUTCDay() + 6) % 7 * DAY;
+  const weeks = Math.floor((lastMon - (first - (new Date(first).getUTCDay() + 6) % 7 * DAY)) / (7 * DAY)) + 1;
+  const cols = Math.max(1, Math.min(weeks, Math.floor((W + GAP) / (BOX + GAP)))), size = Math.min(MAXB, (W - (cols - 1) * GAP) / cols);
+  const cells = []; for (let c = 0; c < cols; c++) for (let r = 0; r < 7; r++) { const t = lastMon - (cols - 1 - c) * 7 * DAY + r * DAY; if (t < first || t > last) continue; const d = dkey(t); cells.push({ date: d, day: ACTIVITY.days.get(d), c, r }); }
+  const tk = cell => cell.day ? tot(cell.day.tokens) : 0, max = Math.max(1, ...cells.map(tk));
+  const H = 7 * size + 6 * GAP, selT = S.date ? civ(S.date) : NaN;
+  const isSel = d => { const o = (civ(d) - selT) / DAY; return o >= 0 && o < (S.range === 'all' ? b : 1); };
+  const ok = d => d >= sum.startDate && d < sum.endDateExclusive;
+  el.innerHTML = `<svg class="usage-heatmap" viewBox="0 0 ${W} ${H}" role="group" aria-label="Tokens by local day">${cells.map(cell => { const n = tk(cell), lv = n === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(n / max * 5))); return `<g data-date="${cell.date}" role="button" tabindex="${cell.date === LAST ? 0 : -1}" aria-pressed="${isSel(cell.date)}" ${ok(cell.date) ? '' : 'aria-disabled="true"'} aria-label="${cell.date}: ${N(n)} tokens"><rect x="${cell.c * (size + GAP)}" y="${cell.r * (size + GAP)}" width="${size}" height="${size}" rx="${dir.heat?.radius ?? Math.max(2, Math.round(size * .12))}" class="usage-heat-${lv}${isSel(cell.date) ? ' usage-heat-selected' : ''}"/></g>`; }).join('')}</svg>`;
+  $('#heat-period').textContent = heatPeriod(cells);
+  const ro = $('#heat-readout');
+  const show = d => { const cell = cells.find(x => x.date === d); ro.innerHTML = cell ? `<strong>${WDS[new Date(civ(d)).getUTCDay()]}, ${chartDate(d)}</strong><span>${N(tk(cell))} tokens, ${N(cell.day?.requests ?? 0)} tool requests</span>` : ''; };
+  const pick = d => { if (!ok(d)) return; const bucket = S.range === 'all' ? sum.days.find(x => { const o = (civ(d) - civ(x.date)) / DAY; return o >= 0 && o < b; }) : null; select(bucket?.date ?? d); };
+  $$('g[data-date]', el).forEach(g => {
+    const d = g.dataset.date;
+    g.addEventListener('mouseenter', () => show(d)); g.addEventListener('focus', () => show(d)); g.addEventListener('mouseleave', () => show('')); g.addEventListener('blur', () => show(''));
+    g.addEventListener('click', () => pick(d));
+    g.addEventListener('keydown', ev => { const st = { ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1 }[ev.key]; if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(d); } else if (ev.key === 'Escape') select(''); else if (st) { ev.preventDefault(); const n = el.querySelector(`[data-date="${dkey(civ(d) + st * DAY)}"]`); if (n) { g.tabIndex = -1; n.tabIndex = 0; n.focus(); } } });
+  });
+  if (dir.sync) HOV.push(date => { $$('rect.hx', el).forEach(r => r.classList.remove('hx')); if (date) { const r = el.querySelector(`[data-date="${date}"] rect`); r?.classList.add('hx'); } show(date); });
+};
+function flowLayout(am, width) {
+  const OV = { base: 'Base paths', forced: 'Base paths', guard: 'Base paths', accept_edits: 'Base paths', allowlist: 'Base paths', stage1: 'Stage 1', stage2: 'Stage 2', unknown: 'Base paths' };
+  const edges = new Map();
+  const add = (from, to, count, outcome) => { const k = from + '>' + to; const e = edges.get(k); if (e) e.count += count; else edges.set(k, { from, to, outcome, count }); };
+  for (const r of am.routes) { if (r.outcome !== 'allowed' && r.outcome !== 'policy_blocked') continue; const node = OV[r.route], g = r.outcome === 'allowed' ? 'allowed' : 'blocked'; add('Attempts', node, r.count); add(node, g, r.count, g); }
+  const E = [...edges.values()];
+  if (!E.length) return null;
+  const TOP = 34, MAXH = 320, GAPN = 20, NW = 14, LEFT = 96, RIGHT = 96, inner = Math.max(1, width - LEFT - RIGHT);
+  const cols = [['Attempts'], ['Base paths', 'Stage 1', 'Stage 2'].filter(n => E.some(e => e.to === n)), ['allowed', 'blocked'].filter(n => E.some(e => e.to === n))];
+  const total = E.filter(e => e.from === 'Attempts').reduce((s, e) => s + e.count, 0);
+  const val = id => id === 'Attempts' ? total : E.filter(e => e.to === id).reduce((s, e) => s + e.count, 0);
+  const ky = Math.min(...cols.map(c => (MAXH - (c.length - 1) * GAPN) / c.reduce((s, id) => s + val(id), 0)));
+  const nodes = new Map();
+  cols.forEach((c, ci) => { const hsum = c.reduce((s, id) => s + val(id) * ky, 0) + (c.length - 1) * GAPN; let y = TOP + (MAXH - hsum) / 2; for (const id of c) { const h = val(id) * ky; nodes.set(id, { id, label: id === 'allowed' ? 'Allowed' : id === 'blocked' ? 'Blocked' : id, column: ci, x: LEFT + ci / 2 * (inner - NW), y, width: NW, height: h, out: ci < 2, in0: y, out0: y }); y += h + GAPN; } });
+  const links = [...E].sort((a, b) => nodes.get(a.from).y - nodes.get(b.from).y || nodes.get(a.to).y - nodes.get(b.to).y).map((e, i) => {
+    const s = nodes.get(e.from), t = nodes.get(e.to), h = e.count * ky;
+    const y0 = s.out0 + h / 2; s.out0 += h; const y1 = t.in0 + h / 2; t.in0 += h;
+    const x0 = s.x + NW, x1 = t.x, xm = (x0 + x1) / 2;
+    return { ...e, id: `l${i}`, height: h, path: `M${x0},${y0}C${xm},${y0} ${xm},${y1} ${x1},${y1}`, s, t };
+  });
+  return { width, height: TOP + MAXH + 24, total, nodes: [...nodes.values()], links };
+}
+M.flow = el => {
+  const sum = cur(), W = el.clientWidth || 900, L = flowLayout(sum.autoMode, W), dir = D();
+  if (!L) { el.innerHTML = '<p class="usage-note">Decision flow unavailable</p>'; return; }
+  const out = (l) => l.outcome ?? (['allowed', 'blocked'].includes(l.to) ? l.to : '');
+  el.innerHTML = `<svg class="usage-auto-flow-chart" width="${L.width}" height="${L.height}" viewBox="0 0 ${L.width} ${L.height}" role="group" aria-label="Decision flow for ${N(L.total)} decisions">${dir.flowDefs?.(L) ?? ''}${L.links.map(l => `<path class="usage-auto-flow-ribbon${out(l) ? ` usage-auto-flow-ribbon-${out(l)}` : ''}${S.flowPin === l.id ? ' usage-auto-flow-ribbon-active' : ''}" data-l="${l.id}" d="${l.path}" stroke-width="${Math.max(1.25, l.height)}" ${dir.flowStroke ? `style="stroke:${dir.flowStroke(l)}"` : ''}/><path class="usage-auto-flow-hit" d="${l.path}" stroke-width="${Math.max(12, l.height)}" pointer-events="all" tabindex="0" role="button" data-lh="${l.id}"/>`).join('')}${L.nodes.map(n => { const lp = n.column === 2 ? { x: n.x + n.width + 8, y: n.y + n.height / 2, a: 'start', b: 'middle' } : n.column === 0 ? { x: n.x - 8, y: n.y + n.height / 2, a: 'end', b: 'middle' } : { x: n.x + n.width / 2, y: n.y - 8, a: 'middle', b: 'auto' }; return `<rect class="usage-auto-flow-node usage-auto-flow-node-${['allowed', 'blocked'].includes(n.id) ? n.id : n.id.toLowerCase().replace(/ /g, '-')}" x="${n.x}" y="${n.y}" width="${n.width}" height="${n.height}" rx="2"/><text class="usage-auto-flow-node-label" x="${lp.x}" y="${lp.y}" text-anchor="${lp.a}" dominant-baseline="${lp.b}">${n.label}</text>`; }).join('')}</svg>`;
+  const ro = $('#flow-readout');
+  const show = id => { $$('.usage-auto-flow-ribbon', el).forEach(p => p.classList.toggle('usage-auto-flow-ribbon-active', p.dataset.l === id)); const l = L.links.find(x => x.id === id); ro.innerHTML = l ? `<p><strong>${l.s.label} to ${l.t.label}</strong> · ${N(l.count)} of ${N(L.total)} allowed or blocked decisions · ${P(l.count / L.total * 100)}</p>${S.flowPin ? '<button type="button" data-a="flowclear">Clear selection</button>' : ''}` : ''; };
+  $$('[data-lh]', el).forEach(p => { const id = p.dataset.lh; p.addEventListener('mouseenter', () => show(id)); p.addEventListener('focus', () => show(id)); p.addEventListener('mouseleave', () => show(S.flowPin)); p.addEventListener('blur', () => show(S.flowPin)); p.addEventListener('click', () => { S.flowPin = S.flowPin === id ? null : id; render(); }); });
+  show(S.flowPin);
+};
+M.rate = el => {
+  const sum = cur(), am = sum.autoMode, W = Math.max(240, el.clientWidth || 700), H = W < 360 ? 150 : 174, top = 20, bottom = H - 25, left = 44, right = W - 10;
+  const pts = [...am.buckets].sort((a, b) => a.date.localeCompare(b.date)).map(b => ({ date: b.date, ...cmdRate(b.commands), pop: b.commands }));
+  const num = pts.filter(p => p.rate != null);
+  if (!num.length) { el.innerHTML = '<p class="usage-note">Complete command coverage is unavailable</p>'; return; }
+  const peak = Math.max(0, ...num.map(p => p.rate * 100)), ceiling = Math.min(100, Math.max(5, ceilAxis(peak * 1.15)));
+  const s0 = civ(sum.startDate), e0 = civ(sum.endDateExclusive) - DAY, X = d => left + clamp((civ(d) - s0) / (e0 - s0), 0, 1) * (right - left), Y = r => bottom - r * 100 / ceiling * (bottom - top);
+  const segs = []; let cur2 = [];
+  for (const p of pts) { const prev = cur2.at(-1); const contig = !prev || civ(p.date) - civ(prev.date) === (sum.bucketDays || 1) * DAY; if (p.state !== 'confirmed' || !contig) { if (cur2.length) segs.push(cur2); cur2 = []; if (p.state === 'confirmed') cur2.push(p); continue; } cur2.push(p); } if (cur2.length) segs.push(cur2);
+  const tk = thinTicks(ticksFor(sum.startDate, sum.endDateExclusive, right - left));
+  el.innerHTML = `<svg class="usage-auto-mode-block-rate-chart" viewBox="0 0 ${W} ${H}" height="${H}" style="display:block;width:100%;overflow:visible;margin-top:12px" role="group" aria-label="Command block rate, 0 to ${ceiling}%">${[0, 1 / 3, 2 / 3, 1].map(f => `<g><text x="${left - 7}" y="${Y(ceiling * f / 100) + 4}" text-anchor="end" class="usage-axis">${Number((ceiling * f).toFixed(1))}%</text><line x1="${left}" x2="${right}" y1="${Y(ceiling * f / 100)}" y2="${Y(ceiling * f / 100)}" class="usage-auto-mode-block-rate-grid"/></g>`).join('')}${segs.map(sg => `<path d="${sg.map((p, k) => `${k ? 'L' : 'M'}${r3(X(p.date))},${r3(Y(p.rate))}`).join(' ')}" class="usage-auto-mode-block-rate-line"/>`).join('')}${num.map(p => `<circle data-rd="${p.date}" cx="${r3(X(p.date))}" cy="${r3(Y(p.rate))}" r="3.2" class="usage-auto-mode-block-rate-dot${p.state === 'provisional' ? ' prov' : ''}"/>`).join('')}${tk.map((d, i) => `<text x="${X(d)}" y="${H - 3}" text-anchor="${i === 0 ? 'start' : i === tk.length - 1 ? 'end' : 'middle'}" class="usage-axis">${chartDate(d)}</text>`).join('')}<g class="tc-hv" pointer-events="none"></g><rect class="rate-hit" x="${left}" y="${top}" width="${right - left}" height="${bottom - top}" fill="transparent"/></svg>`;
+  const ro = $('#rate-readout'), svg = el.firstElementChild, hv = svg.querySelector('.tc-hv');
+  const show = d => { $$('circle[data-rd]', el).forEach(c => c.setAttribute('r', c.dataset.rd === d ? 4.5 : 3.2)); const p = pts.find(x => x.date === d); if (!p || p.rate == null) { ro.innerHTML = ''; return; } const pop = p.pop.outcomes, unr = pop.incomplete + pop.unknown_outcome; ro.innerHTML = `<strong>${D().nice ? niceLabel(sum, d) : d}</strong><span>${N(p.num)} policy-denied commands / ${N(p.den)} recorded commands, ${P(p.rate * 100)}${pop.review_required ? `, ${N(pop.review_required)} review-required decisions` : ''}${unr ? `, ${N(unr)} unresolved` : ''}</span><span>${p.state === 'confirmed' ? 'Confirmed' : 'Provisional'}</span>`; };
+  const near = ev => { const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * W / r.width; let best = null, bd = 1e9; for (const p of num) { const dd = Math.abs(X(p.date) - x); if (dd < bd) { bd = dd; best = p.date; } } return best; };
+  svg.addEventListener('mousemove', ev => { const d = near(ev); show(d); if (D().sync) setHover(d, 'rate'); });
+  svg.addEventListener('mouseleave', () => { show(''); if (D().sync) setHover('', 'rate'); });
+  HOV.push((date, src) => { if (src === 'rate') return; hv.innerHTML = D().sync && date && num.some(p => p.date === date) ? `<line x1="${X(date)}" x2="${X(date)}" y1="${top}" y2="${bottom}" class="${D().crossClass}"/>` : ''; });
+};
+M.decisions = el => {
+  const sum = cur(), am = sum.autoMode, dir = D();
+  if (am.allTools.coverage.state === 'unavailable') { el.innerHTML = '<p class="usage-note">Decision history unavailable</p>'; return; }
+  const bk = [...am.buckets].sort((a, b) => a.date.localeCompare(b.date)), all = OUTCOMES.reduce((s, k) => s + am.allTools.outcomes[k], 0);
+  const fit = dir.barsFit, W = fit ? Math.max(300, el.clientWidth) : Math.max(640, bk.length * 64), H = fit ? 190 : 220, left = 42, right = 12, top = 18, bottom = 32, iw = W - left - right, ih = H - top - bottom;
+  const val = (b, g) => g.o.reduce((s, k) => s + b.allTools.outcomes[k], 0), totals = bk.map(b => GROUPS.reduce((s, g) => s + val(b, g), 0)), maxV = ceilAxis(Math.max(0, ...totals));
+  const bw = Math.max(fit ? 2 : 10, Math.min(38, iw / Math.max(1, bk.length) * (fit ? .72 : .68)));
+  const f0 = civ(bk[0].date), l0 = civ(bk.at(-1).date), X = i => l0 === f0 ? left + iw / 2 : left + iw * (civ(bk[i].date) - f0) / (l0 - f0), Y = v => top + ih - v / maxV * ih;
+  let body = [0, .5, 1].map(f => `<g><line class="usage-auto-bars-grid" x1="${left}" x2="${W - right}" y1="${Y(maxV * f)}" y2="${Y(maxV * f)}"/><text class="usage-axis" x="${left - 7}" y="${Y(maxV * f) + 4}" text-anchor="end">${N(maxV * f)}</text></g>`).join('');
+  bk.forEach((b, i) => { let acc = 0; body += `<g ${b.allTools.coverage.state === 'partial' ? 'opacity=".68"' : ''}>${GROUPS.map(g => { const v = val(b, g), s0 = acc; acc += v; return v > 0 ? `<rect class="usage-auto-outcome-${g.group}" data-bar="${b.date}:${g.group}" x="${X(i) - bw / 2}" y="${Y(s0 + v)}" width="${bw}" height="${v / maxV * ih}" ${fit ? 'rx="1"' : ''}/>` : ''; }).join('')}${fit ? '' : `<text class="usage-axis" x="${X(i)}" y="${H - 9}" text-anchor="middle">${b.date}</text>`}</g>`; });
+  if (fit) { const tk = thinTicks(ticksFor(sum.startDate, sum.endDateExclusive, iw).filter(d => civ(d) >= f0 && civ(d) <= l0)); body += tk.map((d, i) => `<text class="usage-axis" x="${left + iw * (civ(d) - f0) / Math.max(1, l0 - f0)}" y="${H - 9}" text-anchor="${i === 0 ? 'start' : i === tk.length - 1 ? 'end' : 'middle'}">${chartDate(d)}</text>`).join(''); }
+  el.innerHTML = `<div class="usage-auto-bars-scroll"><svg class="usage-auto-decision-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Automatic permission decisions by period">${body}</svg></div>`;
+  const ro = $('#bars-readout');
+  const show = k => { if (!k) { ro.textContent = ''; return; } const [date, group] = k.split(':'), g = GROUPS.find(x => x.group === group), b = bk.find(x => x.date === date), v = val(b, g); ro.textContent = `${date}: ${g.label}, ${N(v)} of ${N(all)} attempts, ${P(v / all * 100)}`; };
+  $$('rect[data-bar]', el).forEach(r => { r.addEventListener('click', () => { S.barAct = S.barAct === r.dataset.bar ? null : r.dataset.bar; show(S.barAct); }); if (dir.sync) r.addEventListener('mouseenter', () => show(r.dataset.bar)); });
+  show(S.barAct);
+};
+
+/* ============================== CURRENT page ============================== */
+function pageCurrent() {
+  const sum = cur(), sel = sum.days.find(d => d.date === S.date);
+  return `<div class="usage-content">
+  <header class="usage-header"><div><h1 id="usage-title">Analytics</h1><p class="usage-freshness"><span>${periodText(sum)}</span><span>Updated 9:35 AM</span></p></div><div class="usage-header-actions"><button class="usage-refresh" type="button" data-a="refresh" aria-label="Refresh analytics" title="Refresh analytics">${REFRESH_SVG}</button>${rangeButtons()}</div></header>
+  ${pMetrics(sum)}
+  <div class="usage-panels">
+    <section class="usage-panel usage-wide usage-token-flow-panel">${pFlowToolbar(sum)}<div data-m="tokens" class="usage-flow-chart"></div>${pFlowLegend(sum)}${(sum.bucketDays || 1) > 1 ? `<p class="usage-note">${sum.bucketDays}-day totals</p>` : ''}${sel ? pDayDetail(sum, sel) : ''}</section>
+    <div class="usage-secondary-panels usage-wide"><section class="usage-panel">${pCachePanel(sum)}</section><section class="usage-panel"><h2 class="usage-panel-heading">Model usage</h2>${pModelPanel(sum)}</section></div>
+    <section class="usage-panel usage-wide"><h2 class="usage-panel-heading">Tools</h2>${pToolsPanel(sum)}</section>
+    <section class="usage-panel usage-wide"><h2 class="usage-panel-heading">Daily activity</h2>${pHeatPanel()}</section>
+    <section class="usage-panel usage-wide"><h2 class="usage-panel-heading">Auto mode</h2>${pAutoPanel(sum)}</section>
+  </div>
+  ${pValuesTable(sum)}</div>`;
+}
+
+/* ============================== LEDGER page ============================== */
+function lgReading(date) {
+  const sum = cur(), d = sum.days.find(x => x.date === (date || S.date));
+  if (!d) return `<strong>${periodText(sum)}</strong><span><b>${C(tot(sum.tokens))}</b> tokens</span><span><b>${N(sum.sessions)}</b> sessions</span><span><b>${N(sum.requests)}</b> tool requests</span><span><b>${P(crr(sum.tokens))}</b> cache reads</span>`;
+  return `<strong class="${!date || date === S.date ? 'pin' : ''}">${niceLabel(sum, d.date)}</strong><span><b>${C(tot(d.tokens))}</b> tokens</span><span><b>${N(d.sessions)}</b> sessions</span><span><b>${N(d.requests)}</b> tool requests</span><span><b>${P(crr(d.tokens))}</b> cache reads</span><span><b>${d.results ? P(d.errors / d.results * 100) : '–'}</b> tool errors</span>`;
+}
+function pageLedger() {
+  const sum = cur(), sel = sum.days.find(d => d.date === S.date), items = metricItems(sum), cmp = comparison(sum);
+  const series = flowSeries(sum, S.mode);
+  const { models, total } = donutModels(sum);
+  const tools = [...sum.tools].sort((a, b) => b.requests - a.requests), tmax = Math.max(...tools.map(t => t.requests));
+  const rate = cmdRate(sum.autoMode.commands);
+  return `<div class="usage-content">
+  <div class="lg-top"><header class="lg-head"><div><h1 id="usage-title">Analytics</h1><p>${periodText(sum)} · Updated 9:35 AM</p></div>${rangeButtons('lg-range')}</header><div class="lg-read" id="lg-read" aria-live="polite">${lgReading('')}</div></div>
+  <div class="lg-figs">${items.map(it => `<div class="lg-fig"><h2>${it.label}</h2><strong>${it.value}</strong><small>${it.delta ? `<em>${it.delta.text.replace('▲ ', '+').replace('▼ ', '−')}</em> ${cmp}` : '&nbsp;'}</small></div>`).join('')}</div>
+  <section class="lg-sec"><div class="lg-label"><h2>Tokens</h2><p>Each row on its own scale</p><div class="lg-switch">${['type', 'model'].map(v => `<button type="button" data-a="mode:${v}" aria-pressed="${S.mode === v}">By ${v}</button>`).join('')}</div>${S.mode === 'model' && hasRetired(sum) ? `<div class="lg-switch"><button type="button" data-a="allmodels:0" aria-pressed="${!S.allModels}">Current</button><button type="button" data-a="allmodels:1" aria-pressed="${S.allModels}">All models</button></div>` : ''}</div>
+    <div><div>${[...series].reverse().map((s, i, a) => `<div class="lg-mult"${s.model ? ` data-model="${s.model}"` : ''}><span>${esc(s.label)}</span><div data-m="lgrow" data-sid="${s.id}" data-last="${i === a.length - 1 ? 1 : 0}"></div><b>${C(s.total)}<small>${P(s.total / tot(sum.tokens) * 100)}</small></b></div>`).join('')}</div>
+    ${sel ? `<div class="lg-day"><header><h3 tabindex="-1" id="day-h">${niceLabel(sum, sel.date)}</h3><button type="button" data-a="clear">Clear</button></header><div class="usage-day-figures"><div><strong>${C(tot(sel.tokens))}</strong> tokens</div><div><strong>${N(sel.sessions)}</strong> sessions</div><div><strong>${N(sel.requests)}</strong> tool requests</div><div><strong>${N(sel.errors)}</strong> errors</div></div>${S.range === 'all' ? '<p class="usage-note">Session lists cover the last 30 days.</p>' : pContributors(sel.contributors)}</div>` : ''}</div></section>
+  <section class="lg-sec"><div class="lg-label"><h2>Prompt cache</h2><p>Cache reads / (cache reads + input)</p><span class="big">${P(crr(sum.tokens))}</span></div><div><div data-m="cache"></div>${cacheValues(sum)}</div></section>
+  <section class="lg-sec lg-models"><div class="lg-label"><h2>Model usage</h2>${hasRetired(sum) ? `<div class="lg-switch"><button type="button" data-a="donutall:0" aria-pressed="${!S.donutAll}">Current</button><button type="button" data-a="donutall:1" aria-pressed="${S.donutAll}">All models</button></div>` : ''}</div>
+    <div><div class="lg-share">${models.map(m => `<i data-model="${m.id}" data-mh="${m.id}" style="width:${tot(m.tokens) / total * 100}%;background:${mcolor(m.id)}"></i>`).join('')}</div>
+    <table class="lg-table"><thead><tr><th>Model</th><th>Tokens</th><th>Share</th><th>Input</th><th>Output</th></tr></thead><tbody>${models.map(m => `<tr data-model="${m.id}" data-mh="${m.id}"><th scope="row"><span class="sw" style="background:${mcolor(m.id)}"></span>${esc(m.label)}</th><td>${C(tot(m.tokens))}</td><td>${P(tot(m.tokens) / total * 100)}</td><td>${C(m.tokens.fresh)}</td><td>${C(m.tokens.output)}</td></tr>`).join('')}</tbody></table>${S.donutAll || !hasRetired(sum) ? `<p class="usage-note">Other groups ${sum.detail.omittedModels} models.</p>` : ''}</div></section>
+  <section class="lg-sec"><div class="lg-label"><h2>Tools</h2><p>Error rate: recorded errors / matched results</p><span class="big">${P(sum.tools.reduce((s, t) => s + t.errors, 0) / sum.tools.reduce((s, t) => s + t.results, 0) * 100)}</span></div>
+    <div class="lg-tools"><span class="h">Tool</span><span class="h">Requests</span><span class="h" style="text-align:right">Count</span><span class="h" style="text-align:right">Errors</span><span class="h">Error rate over time</span>${tools.map(t => `<span class="c">${t.label}</span><span class="c"><i class="lg-bar" style="width:${t.requests / tmax * 100}%"></i></span><span class="c r">${N(t.requests)}</span><span class="c r">${P(t.results ? t.errors / t.results * 100 : 0)}</span><span class="c"><div data-m="lgerr" data-tool="${t.id}"></div></span>`).join('')}</div></section>
+  <section class="lg-sec"><div class="lg-label"><h2>Daily activity</h2><p id="heat-period"></p></div><div><div data-m="heat"></div><div class="usage-interaction-readout" id="heat-readout"></div></div></section>
+  <section class="lg-sec"><div class="lg-label"><h2>Auto mode</h2><p>Command block rate</p><span class="big">${rate.rate != null ? P(rate.rate * 100) : '–'}</span><p>${N(rate.num)} / ${N(rate.den)} commands</p></div>
+    <div class="lg-auto"><div class="w"><h3 class="usage-auto-flow-heading">Decision flow</h3><div data-m="flow"></div><div class="usage-readout" id="flow-readout"></div></div>
+    <section class="usage-auto-mode-block-rate"><header><div><h3>Command block rate</h3></div></header><div data-m="rate"></div><div class="usage-readout" id="rate-readout"></div></section>
+    <section class="usage-auto-bars-chart"><header><h3>Decisions over time</h3></header><div data-m="decisions"></div><p class="usage-auto-bars-readout" id="bars-readout"></p><ul class="usage-auto-outcome-legend">${autoGroups(sum.autoMode).map(g => `<li><i class="usage-auto-outcome-${g.group}"></i><span>${g.label}</span><b>${N(g.count)}</b></li>`).join('')}</ul></section>
+    <section class="usage-auto-bars-chart w"><header><h3>Block reasons</h3></header>${pCategories(sum.autoMode)}</section></div></section>
+  ${pValuesTable(sum)}</div>`;
+}
+M.lgrow = el => {
+  const sum = cur(), s = flowSeries(sum, S.mode).find(x => x.id === el.dataset.sid), lastRow = el.dataset.last === '1';
+  const samples = flowSamples(sum, [s]), peak = Math.max(1, ...samples.map(x => x.values[0]));
+  return timeChart(el, { id: `lg-${s.id}`, sum, kind: 'line', xMode: 'slot', series: [{ ...s, color: 'var(--lg-ink)' }], samples, height: lastRow ? 92 : 70, left: 46, rightPad: 4, top: 8, bottomPad: lastRow ? 22 : 4, noTicks: !lastRow, tickY: 4, tickMax: 6,
+    yMax: ceilAxis(peak), yFracs: [0, 1], yFmt: v => v ? C(v) : '', look: { fill: 'solid', fillOpacity: .07, curve: true, strokeW: 1.4, cross: 'lg-cross', marker: 3, markerClass: 'lg-dot' }, persistSel: true, tip: { kind: 'none' }, aria: `${s.label} tokens` });
+};
+M.lgerr = el => {
+  const sum = cur(), id = el.dataset.tool;
+  const samples = trendPoints(sum, 'requests').map(p => { const t = sum.days.find(d => d.date === p.date)?.tools.find(x => x.id === id); return { date: p.date, values: [t?.results ? t.errors / t.results * 100 : null] }; });
+  const peak = Math.max(1, ...samples.map(x => x.values[0] ?? 0));
+  return timeChart(el, { id: `lge-${id}`, sum, kind: 'line', xMode: 'pos', series: [{ id, label: id, color: 'var(--lg-ink)' }], samples, height: 30, left: 2, rightPad: 2, top: 3, bottomPad: 3, noTicks: true, yMax: Math.max(5, ceilAxis(peak)), look: { fill: 'none', strokeW: 1.1, cross: 'lg-cross', marker: 2.5, markerClass: 'lg-dot' }, tip: { kind: 'none' }, persistSel: true, aria: `${id} error rate` });
+};
+
+/* ============================== CONSOLE page ============================== */
+function pageConsole() {
+  const sum = cur(), sel = sum.days.find(d => d.date === S.date), items = metricItems(sum);
+  const dom = S.zoom ?? [sum.startDate, sum.endDateExclusive];
+  const days = sum.days.filter(d => d.date >= dom[0] && d.date < dom[1]);
+  const sortKey = S.sort[0], sd = S.sort[1];
+  const keyf = { date: d => d.date, tokens: d => tot(d.tokens), fresh: d => d.tokens.fresh, output: d => d.tokens.output, cache: d => crr(d.tokens) ?? 0, sessions: d => d.sessions, requests: d => d.requests };
+  const rows = [...days].sort((a, b) => { const x = keyf[sortKey](a), y = keyf[sortKey](b); return (x > y ? 1 : x < y ? -1 : 0) * sd; });
+  const maxT = Math.max(...days.map(d => tot(d.tokens)));
+  const { models, total } = donutModels(sum);
+  const tools = [...sum.tools].sort((a, b) => b.requests - a.requests);
+  const hidden = new Set(S.hidden[S.mode]);
+  const th = (k, l) => `<th data-a="sort:${k}">${l}${sortKey === k ? (sd > 0 ? ' ↑' : ' ↓') : ''}</th>`;
+  const L = flowLayout(sum.autoMode, 900), rate = cmdRate(sum.autoMode.commands), tcol = toolColors(sum), chosen = errToolsSel(sum);
+  return `<div class="usage-content">
+  <header class="cn-head"><h1 id="usage-title">analytics</h1><span class="meta">${periodText(sum).toLowerCase()} · updated 09:35</span><span class="sp"></span>${rangeButtons('cn-seg', [['7d', '7d'], ['30d', '30d'], ['all', 'all']])}<button type="button" data-a="refresh" class="cn-seg" style="padding:4px 9px;color:var(--cn-dim)">refresh</button></header>
+  <div class="cn-grid">
+    ${items.map((it, i) => `<section class="cn-p cn-kpi ${i === 4 ? 's2' : i === 0 ? 's3' : 's2'}" ${i === 0 ? '' : ''}><h2>${it.label}</h2><strong>${it.value}${it.delta ? `<span class="d ${it.delta.dir}">${it.delta.text}</span>` : ''}</strong><div data-m="cnspark" data-i="${i}"></div></section>`).join('')}<section class="cn-p s1" style="grid-column:span 1;color:var(--cn-dim)"><h2 style="font:400 11px var(--font-mono);margin:0">vs</h2><strong style="display:block;margin-top:6px;color:var(--cn-fg);font-weight:400">${comparison(sum) ? `prior ${sum.range === '7d' ? '7d' : '30d'}` : 'n/a'}</strong></section>
+    <section class="cn-p s8"><div class="cn-t"><b>tokens</b><span>${S.zoom ? `${chartDate(dom[0])} to ${chartDate(dkey(civ(dom[1]) - DAY))}` : `${(sum.bucketDays || 1) > 1 ? `${sum.bucketDays}-day totals` : 'daily'}`}</span><span class="sp"></span>${S.zoom ? '<button type="button" data-a="unzoom">reset zoom</button>' : ''}<span>|</span>${['type', 'model'].map(v => `<button type="button" data-a="mode:${v}" aria-pressed="${S.mode === v}">by ${v}</button>`).join('')}${S.mode === 'model' && hasRetired(sum) ? `<span>|</span><button type="button" data-a="allmodels:${S.allModels ? 0 : 1}" aria-pressed="${S.allModels}">+retired</button>` : ''}</div>
+      <div data-m="cnbars"></div><div data-m="cnbrush"></div>
+      <div class="cn-legend">${flowSeries(sum, S.mode).map(s => `<button type="button" data-a="series:${s.id}" aria-pressed="${!hidden.has(s.id)}"${s.model ? ` data-mh="${s.model}" data-model="${s.model}"` : ''}><i style="background:${s.color}"></i>${esc(s.label.toLowerCase())} <span style="color:var(--cn-dim)">${C(s.total)}</span></button>`).join('')}</div></section>
+    <section class="cn-p s4"><div class="cn-t"><b>days</b><span>${days.length}</span></div><div class="cn-tbl" id="cn-tbl"><table><thead><tr>${th('date', 'date')}${th('tokens', 'tokens')}${th('fresh', 'in')}${th('output', 'out')}${th('cache', 'cache')}${th('sessions', 'sess')}${th('requests', 'reqs')}</tr></thead><tbody>${rows.map(d => `<tr data-day="${d.date}" class="${S.date === d.date ? 'sel' : ''}"><td>${d.date.slice(5)}</td><td><span class="bar" style="width:${Math.max(1, tot(d.tokens) / maxT * 36)}px"></span> ${C(tot(d.tokens))}</td><td class="dim">${C(d.tokens.fresh)}</td><td class="dim">${C(d.tokens.output)}</td><td>${crr(d.tokens)?.toFixed(1) ?? '–'}</td><td>${d.sessions}</td><td>${N(d.requests)}</td></tr>`).join('')}</tbody></table></div></section>
+    ${sel ? `<section class="cn-p s12"><div class="cn-t"><b>day</b><span>${bucketLabel(sum, sel.date)}</span><span class="sp"></span><button type="button" data-a="clear">clear</button></div><div class="cn-day"><div><span>tokens</span><strong>${C(tot(sel.tokens))}</strong></div><div><span>sessions</span><strong>${N(sel.sessions)}</strong></div><div><span>tool requests</span><strong>${N(sel.requests)}</strong></div><div><span>errors</span><strong>${N(sel.errors)}</strong></div></div>${S.range === 'all' ? '<p class="usage-note">Session lists cover the last 30 days.</p>' : pContributors(sel.contributors)}</section>` : ''}
+    <section class="cn-p s4"><div class="cn-t"><b>prompt cache</b><span>reads / (reads + input)</span><span class="sp"></span><b>${P(crr(sum.tokens))}</b></div><div class="usage-area-cache"><div data-m="cache"></div></div><div class="cn-list" style="margin-top:8px"><div style="display:flex;justify-content:space-between"><span style="color:var(--cn-dim)">cache reads</span><span>${C(sum.tokens.read)}</span></div><div style="display:flex;justify-content:space-between"><span style="color:var(--cn-dim)">cache writes</span><span>–</span></div><div style="display:flex;justify-content:space-between"><span style="color:var(--cn-dim)">input</span><span>${C(sum.tokens.fresh)}</span></div></div></section>
+    <section class="cn-p s4 cn-models"><div class="cn-t"><b>models</b><span>${models.length} shown</span><span class="sp"></span>${hasRetired(sum) ? `<button type="button" data-a="donutall:${S.donutAll ? 0 : 1}" aria-pressed="${S.donutAll}">+retired</button>` : ''}</div><div class="cn-list">${models.map(m => `<button type="button" data-model="${m.id}" data-mh="${m.id}"><span>${esc(m.label)}</span><span class="trk"><i style="width:${tot(m.tokens) / total * 100}%;background:${mcolor(m.id)}"></i></span><b>${C(tot(m.tokens))}</b><small>${P(tot(m.tokens) / total * 100)}</small></button>`).join('')}</div><p class="usage-note" style="font-size:11px">other groups ${sum.detail.omittedModels} models</p></section>
+    <section class="cn-p s4"><div class="cn-t"><b>tool error rate</b><span class="sp"></span><button type="button" data-a="commits" aria-pressed="${S.commits}">commits</button></div><div class="cn-pick">${sum.tools.slice(0, 10).map(t => `<button type="button" data-a="pick:${t.id}" aria-pressed="${chosen.includes(t.id)}"><i style="background:${tcol[t.id]}"></i>${t.label.toLowerCase()}</button>`).join('')}</div><div data-m="toolerr"></div><div class="usage-readout" id="err-readout"></div></section>
+    <section class="cn-p s7"><div class="cn-t"><b>tools</b><span>${N(sum.requests)} requests</span><span class="sp"></span><span>other includes ${sum.detail.omittedTools} names</span></div><div class="cn-tbl" style="max-height:none;margin-bottom:-12px"><table><thead><tr><th>tool</th><th>requests</th><th>ok</th><th>err</th><th>no result</th><th>err rate</th></tr></thead><tbody>${tools.map(t => `<tr data-a="tool:${t.id}" class="${S.toolSel === t.id ? 'sel' : ''}"><td>${t.label.toLowerCase()}</td><td><span class="bar" style="width:${t.requests / tools[0].requests * 60}px"></span> ${N(t.requests)}</td><td class="dim">${N(t.results - t.errors)}</td><td style="color:${t.errors / t.results > .05 ? 'var(--cn-err)' : 'inherit'}">${N(t.errors)}</td><td class="dim">${N(t.requests - t.results)}</td><td>${P(t.errors / t.results * 100)}</td></tr>`).join('')}</tbody></table></div></section>
+    <section class="cn-p s5"><div class="cn-t"><b>activity</b><span id="heat-period"></span></div><div data-m="heat"></div><div class="usage-interaction-readout" id="heat-readout"></div><div class="usage-chart-toolbar" style="margin:8px 0 0"><span></span><div class="usage-heat-key"><span>less</span>${[0, 1, 2, 3, 4, 5].map(l => `<i class="usage-heat-${l}"></i>`).join('')}<span>more</span></div></div></section>
+    <section class="cn-p s5 cn-flow"><div class="cn-t"><b>auto mode · decision flow</b><span class="sp"></span><span>${L ? N(L.total) : 0} decisions</span></div>${L ? `<div class="cn-tbl" style="max-height:none;margin-bottom:-12px"><table><thead><tr><th>route</th><th>outcome</th><th>count</th><th>share</th></tr></thead><tbody>${L.links.filter(l => l.from !== 'Attempts').map(l => `<tr><td>${l.s.label.toLowerCase()}</td><td>${l.t.label.toLowerCase()}</td><td><span class="bar ${l.to}" style="width:${Math.max(1, l.count / L.total * 120)}px"></span> ${N(l.count)}</td><td class="dim">${P(l.count / L.total * 100)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="usage-note">Decision flow unavailable</p>'}</section>
+    <section class="cn-p s7"><div class="cn-t"><b>command block rate</b><span>policy-denied / attempts</span><span class="sp"></span><b>${rate.rate != null ? P(rate.rate * 100) : '–'}</b><span>${N(rate.num)} / ${N(rate.den)}</span></div><div data-m="rate"></div><div class="usage-readout" id="rate-readout"></div></section>
+    <section class="cn-p s7"><div class="cn-t"><b>decisions</b><span class="sp"></span>${autoGroups(sum.autoMode).map(g => `<span><i class="usage-auto-outcome-${g.group}" style="display:inline-block;width:7px;height:7px"></i> ${g.label.toLowerCase()} ${N(g.count)}</span>`).join('')}</div><div data-m="decisions"></div><p class="usage-auto-bars-readout" id="bars-readout"></p></section>
+    <section class="cn-p s5"><div class="cn-t"><b>block reasons</b></div>${pCategories(sum.autoMode)}</section>
+  </div>
+  ${pValuesTable(sum)}</div>`;
+}
+M.cnspark = el => {
+  const sum = cur(), it = metricItems(sum)[+el.dataset.i], s = it.series, W = el.clientWidth || 200, H = 26;
+  if (s.length < 2) { el.innerHTML = ''; return; }
+  const max = Math.max(...s), min = it.kind === 'cache' ? Math.min(...s) - 2 : 0, bw = W / s.length;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${s.map((v, i) => { const h = Math.max(1, (v - min) / (max - min || 1) * (H - 2)); return `<rect data-d="${sum.days[i]?.date}" x="${i * bw + .5}" y="${H - h}" width="${Math.max(1, bw - 1.5)}" height="${h}"/>`; }).join('')}</svg>`;
+  HOV.push(date => $$('rect', el).forEach(r => r.classList.toggle('on', r.dataset.d === (date || S.date))));
+  $$('rect', el).forEach(r => r.classList.toggle('on', r.dataset.d === S.date));
+};
+M.cnbars = el => {
+  const sum = cur(), hidden = new Set(S.hidden[S.mode]), series = flowSeries(sum, S.mode, hidden), dom = S.zoom ?? [sum.startDate, sum.endDateExclusive];
+  const days = sum.days.filter(d => d.date >= dom[0] && d.date < dom[1]);
+  const W = el.clientWidth || 700, H = 250, left = 44, right = W - 6, top = 8, bottom = H - 22, iw = right - left, ih = bottom - top;
+  const span = (civ(dom[1]) - civ(dom[0])) / DAY, b = sum.bucketDays || 1, step = iw * b / span, bw = Math.max(1, step * .74);
+  const sx = d => left + (civ(d) - civ(dom[0])) / DAY / span * iw;
+  const max = ceilAxis(Math.max(1, ...days.map(d => series.reduce((s, x) => s + x.value(d), 0))));
+  const Y = v => bottom - v / max * ih;
+  let body = [0, .25, .5, .75, 1].map(f => `<line x1="${left}" x2="${right}" y1="${Y(max * f)}" y2="${Y(max * f)}" class="usage-flow-grid-line"/><text x="${left - 6}" y="${Y(max * f) + 3}" text-anchor="end" class="usage-axis">${C(max * f)}</text>`).join('');
+  body += `<rect class="cn-col" id="cn-colhv" x="0" y="${top}" width="0" height="${ih}"/>`;
+  if (S.date && days.some(d => d.date === S.date)) body += `<rect class="cn-col sel" x="${sx(S.date)}" y="${top}" width="${step}" height="${ih}"/>`;
+  body += '<g class="cn-bars">' + days.map(d => { let acc = 0; return series.map(s => { const v = s.value(d); if (!v) return ''; const y0 = Y(acc), y1 = Y(acc + v); acc += v; const h = Math.max(v > 0 ? .8 : 0, y0 - y1); return `<rect x="${sx(d.date) + (step - bw) / 2}" y="${y0 - h}" width="${bw}" height="${h}" style="fill:${s.color}"${s.model ? ` data-model="${s.model}"` : ''}/>`; }).join(''); }).join('') + '</g>';
+  const tk = ticksFor(dom[0], dom[1], iw);
+  body += tk.map((d, i) => `<text x="${sx(d) + step / 2}" y="${H - 5}" text-anchor="${i === 0 ? 'start' : i === tk.length - 1 ? 'end' : 'middle'}" class="usage-axis">${chartDate(d)}</text>`).join('');
+  body += `<line class="cn-cross" id="cn-cross" x1="0" x2="0" y1="${top}" y2="${bottom}" style="display:none"/><rect x="${left}" y="${top}" width="${iw}" height="${ih}" fill="transparent" class="cn-hit"/>`;
+  el.classList.add('tc');
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}" tabindex="0" role="group" aria-label="Daily tokens bars">${body}</svg><div class="tc-tip"></div>`;
+  const svg = el.firstElementChild, tip = el.querySelector('.tc-tip'), col = svg.querySelector('#cn-colhv'), cross = svg.querySelector('#cn-cross');
+  const update = (date, src) => {
+    const d = days.find(x => x.date === date);
+    if (!d) { col.setAttribute('width', 0); cross.style.display = 'none'; tip.style.display = 'none'; return; }
+    col.setAttribute('x', sx(d.date)); col.setAttribute('width', step); cross.style.display = ''; cross.setAttribute('x1', sx(d.date) + step / 2); cross.setAttribute('x2', sx(d.date) + step / 2);
+    tip.innerHTML = `<b>${bucketLabel(sum, d.date)}</b> <span style="color:var(--cn-dim)">${WDS[new Date(civ(d.date)).getUTCDay()].toLowerCase()}</span>${[...series].reverse().map(s => `<div><i style="background:${s.color}"></i>${esc(s.label.toLowerCase())}<span class="v">${C(s.value(d))}</span></div>`).join('')}<div style="color:var(--cn-dim)">sessions<span class="v">${d.sessions}</span></div><div style="color:var(--cn-dim)">tool reqs<span class="v">${N(d.requests)}</span></div>`;
+    tip.style.display = 'block';
+    const sc = el.clientWidth / W, px = (sx(d.date) + step / 2) * sc, tw = tip.offsetWidth;
+    tip.style.left = `${clamp(px > el.clientWidth / 2 ? px - tw - 12 : px + 12, 0, el.clientWidth - tw)}px`; tip.style.top = '14px';
+  };
+  HOV.push(update);
+  const near = ev => { const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * W / r.width; return days.find(d => x >= sx(d.date) && x < sx(d.date) + step)?.date ?? ''; };
+  svg.addEventListener('mousemove', ev => setHover(near(ev), 'cnbars'));
+  svg.addEventListener('mouseleave', () => setHover('', 'cnbars'));
+  svg.addEventListener('click', ev => { const d = near(ev); if (d) select(d); });
+};
+M.cnbrush = el => {
+  const sum = cur(), W = el.clientWidth || 700, H = 38, left = 44, right = W - 6, iw = right - left, b = sum.bucketDays || 1;
+  const span = (civ(sum.endDateExclusive) - civ(sum.startDate)) / DAY, step = iw * b / span, sx = d => left + (civ(d) - civ(sum.startDate)) / DAY / span * iw;
+  const max = Math.max(...sum.days.map(d => tot(d.tokens)));
+  const z = S.zoom, zx0 = z ? sx(z[0]) : left, zx1 = z ? sx(z[1]) : right;
+  el.innerHTML = `<svg class="cn-brush" viewBox="0 0 ${W} ${H}" height="${H}" style="display:block;width:100%">${sum.days.map(d => { const h = Math.max(1, tot(d.tokens) / max * (H - 6)); return `<rect class="b" x="${sx(d.date) + step * .13}" y="${H - 2 - h}" width="${Math.max(1, step * .74)}" height="${h}"/>`; }).join('')}${z ? `<rect class="shade" x="${left}" y="0" width="${zx0 - left}" height="${H}"/><rect class="shade" x="${zx1}" y="0" width="${right - zx1}" height="${H}"/>` : ''}<rect class="win2" id="bw" x="${zx0}" y=".5" width="${Math.max(0, zx1 - zx0)}" height="${H - 1}" style="${z ? '' : 'display:none'}"/></svg>`;
+  const svg = el.firstElementChild, bwr = svg.querySelector('#bw');
+  const toX = ev => { const r = svg.getBoundingClientRect(); return clamp((ev.clientX - r.left) * W / r.width, left, right); };
+  const toDate = x => dkey(civ(sum.startDate) + Math.floor((x - left) / iw * span / b) * b * DAY);
+  let x0 = null;
+  svg.addEventListener('mousedown', ev => { ev.preventDefault(); x0 = toX(ev); bwr.style.display = ''; bwr.setAttribute('x', x0); bwr.setAttribute('width', 0); });
+  window.addEventListener('mousemove', ev => { if (x0 == null) return; const x = toX(ev); bwr.setAttribute('x', Math.min(x0, x)); bwr.setAttribute('width', Math.abs(x - x0)); }, { signal: RENDER_ABORT.signal });
+  window.addEventListener('mouseup', ev => { if (x0 == null) return; const x = toX(ev); const a = Math.min(x0, x), c2 = Math.max(x0, x); x0 = null; if (c2 - a < step) { S.zoom = null; render(); return; } const d0 = toDate(a), d1 = dkey(civ(toDate(c2)) + b * DAY); S.zoom = [d0, d1 > sum.endDateExclusive ? sum.endDateExclusive : d1]; render(); }, { signal: RENDER_ABORT.signal });
+  svg.addEventListener('dblclick', () => { S.zoom = null; render(); });
+};
+function cnTableHover(date) {
+  const tb = $('#cn-tbl'); if (!tb) return;
+  $$('tr.hv', tb).forEach(r => r.classList.remove('hv'));
+  if (!date) return;
+  const row = tb.querySelector(`tr[data-day="${date}"]`); if (!row) return;
+  row.classList.add('hv');
+  if (S.hsrc !== 'table') { const top = row.offsetTop - tb.clientHeight / 2; tb.scrollTop = top; }
+}
+
+/* ============================== SPECTRUM page ============================== */
+function pageSpectrum() {
+  const sum = cur(), sel = sum.days.find(d => d.date === S.date), items = metricItems(sum), cmp = comparison(sum);
+  const colors = ['#7c5cff', '#0b9bcc', '#9a6cf0', '#c07f10', '#16a394'];
+  return `<div class="usage-content">
+  <header class="usage-header"><div><h1 id="usage-title">Analytics</h1><p class="usage-freshness"><span>${periodText(sum)}</span><span>Updated 9:35 AM</span></p></div><div class="usage-header-actions"><button class="usage-refresh" type="button" data-a="refresh" aria-label="Refresh analytics">${REFRESH_SVG}</button>${rangeButtons()}</div></header>
+  <div class="sp-kpis">${items.map((it, i) => `<section class="sp-kpi"><h2>${it.label}</h2><strong data-count="${it.raw ?? 0}" data-fmt="${it.fmt}" data-k="${i}">${it.value}</strong>${it.delta ? `<span class="usage-metric-delta usage-delta-${it.delta.dir}" title="${it.delta.desc}, ${cmp}">${it.delta.text}</span>` : ''}${spArea(it.series, colors[i], i)}</section>`).join('')}</div>
+  <div class="usage-panels">
+    <section class="usage-panel usage-token-flow-panel">${pFlowToolbar(sum, `<div class="sp-total"><strong data-count="${tot(sum.tokens)}" data-fmt="C" data-k="tt">${C(tot(sum.tokens))}</strong><span>${cmp || periodText(sum)}</span></div>`)}<div data-m="tokens"></div>${pFlowLegend(sum)}${(sum.bucketDays || 1) > 1 ? `<p class="usage-note">${sum.bucketDays}-day totals</p>` : ''}${sel ? pDayDetail(sum, sel) : ''}</section>
+    <div class="usage-secondary-panels"><section class="usage-panel">${pCachePanel(sum)}</section><section class="usage-panel"><h2 class="usage-panel-heading">Model usage</h2>${pModelPanel(sum)}</section></div>
+    <section class="usage-panel"><h2 class="usage-panel-heading">Tools</h2>${pToolsPanel(sum)}</section>
+    <section class="usage-panel"><h2 class="usage-panel-heading">Daily activity</h2>${pHeatPanel()}</section>
+    <section class="usage-panel"><h2 class="usage-panel-heading">Auto mode</h2>${pAutoPanel(sum)}</section>
+  </div>${pValuesTable(sum)}</div>`;
+}
+function spArea(series, color, i) {
+  if (series.length < 2) return '';
+  const w = 200, h = 52, max = Math.max(...series), min = Math.min(...series) * (i === 4 ? .98 : 0);
+  const pts = series.map((v, k) => ({ x: k / (series.length - 1) * w, y: h - 4 - (v - min) / (max - min || 1) * (h - 12) }));
+  const line = smooth(pts);
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="spk${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".45"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${line} L${w},${h} L0,${h} Z" fill="url(#spk${i})"/><path d="${line}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function spResample(sum, series, n = 140) {
+  const smp = flowSamples(sum, series), f = civ(sum.startDate), span = (civ(sum.endDateExclusive) - f) / DAY, b = sum.bucketDays || 1;
+  const xs = smp.map(s => ((civ(s.date) - f) / DAY + b / 2) / span);
+  return Array.from({ length: n }, (_, k) => {
+    const t = k / (n - 1); let j = xs.findIndex(x => x >= t);
+    if (j <= 0) return (smp[j < 0 ? smp.length - 1 : 0]?.values ?? series.map(() => 0)).slice();
+    const a = smp[j - 1], c2 = smp[j], u = (t - xs[j - 1]) / (xs[j] - xs[j - 1]);
+    return a.values.map((v, q) => v + (c2.values[q] - v) * u);
+  });
+}
+function spAnimate(opts) {
+  const el = $('[data-m="tokens"]'); if (!el?._chart) return;
+  const sum = cur(), hidden = new Set(S.hidden[S.mode]), series = flowSeries(sum, S.mode, hidden), ch = el._chart;
+  const next = spResample(sum, series), prev = SPEC_PREV && SPEC_PREV.key === S.mode && SPEC_PREV.m[0]?.length === next[0]?.length ? SPEC_PREV : null;
+  const nextMax = ceilAxis(Math.max(1, ...sum.days.map(d => series.reduce((s, x) => s + x.value(d), 0))));
+  SPEC_PREV = { key: S.mode, m: next, max: nextMax };
+  if (!prev || !opts.rangeChanged || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const paths = $$('.tc-area', el), tops = $$('.tc-top', el), t0 = performance.now(), dur = 620, n = next.length;
+  const frame = now => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - (1 - k) ** 3;
+    const mx = prev.max + (nextMax - prev.max) * e;
+    const samples = next.map((row, i) => ({ x: ch.left + i / (n - 1) * (ch.right - ch.left), values: row.map((v, q) => (prev.m[i][q] ?? 0) + (v - (prev.m[i][q] ?? 0)) * e) }));
+    const g = stackGeom(samples, mx, ch.top, ch.bottom);
+    paths.forEach((p, q) => p.setAttribute('d', g.paths[q])); tops.forEach((p, q) => p.setAttribute('d', g.tops[q]));
+    if (k < 1) requestAnimationFrame(frame); else { el._chart = M.tokens(el); }
+  };
+  requestAnimationFrame(frame);
+}
+function countUp() {
+  $$('[data-count]').forEach(e => {
+    const to = +e.dataset.count, k = e.dataset.k, from = PREV.counts[k]; PREV.counts[k] = to;
+    if (from == null || from === to || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const f = { C, N, P }[e.dataset.fmt], t0 = performance.now();
+    const step = now => { const u = Math.min(1, (now - t0) / 600), v = from + (to - from) * (1 - (1 - u) ** 3); e.textContent = f(v); if (u < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  });
+}
+
+/* ============================== GLASS page ============================== */
+function pageGlass() {
+  const sum = cur(), sel = sum.days.find(d => d.date === S.date);
+  const idx = RANGES.findIndex(r => r[0] === S.range);
+  return `<div class="usage-content">
+  <div class="gl-top" id="gl-top"><header class="usage-header"><div><h1 id="usage-title">Analytics</h1><p class="usage-freshness"><span>${periodText(sum)}</span><span>Updated 9:35 AM</span></p></div><div class="usage-header-actions"><button class="usage-refresh" type="button" data-a="refresh" aria-label="Refresh analytics">${REFRESH_SVG}</button><div class="gl-seg" role="group" aria-label="Analytics period"><span class="gl-thumb" id="gl-thumb" style="transform:translateX(${idx * 76}px)"></span>${RANGES.map(([v, l]) => `<button type="button" data-a="range:${v}" aria-pressed="${S.range === v}">${l}</button>`).join('')}</div></div></header></div>
+  <div class="gl-anim" id="gl-anim">
+  ${pMetrics(sum, 'gl-shelf')}
+  <div class="usage-panels">
+    <section class="usage-panel usage-token-flow-panel">${pFlowToolbar(sum)}<div data-m="tokens"></div>${pFlowLegend(sum)}${(sum.bucketDays || 1) > 1 ? `<p class="usage-note">${sum.bucketDays}-day totals</p>` : ''}</section>
+    <div class="usage-secondary-panels"><section class="usage-panel">${pCachePanel(sum)}</section><section class="usage-panel"><h2 class="usage-panel-heading">Model usage</h2>${pModelPanel(sum)}</section></div>
+    <section class="usage-panel"><h2 class="usage-panel-heading">Tools</h2>${pToolsPanel(sum)}</section>
+    <section class="usage-panel"><h2 class="usage-panel-heading">Daily activity</h2>${pHeatPanel()}</section>
+    <section class="usage-panel"><h2 class="usage-panel-heading">Auto mode</h2>${pAutoPanel(sum)}</section>
+  </div>${pValuesTable(sum)}</div></div>`;
+}
+function glSheet() {
+  const sum = cur(), sel = sum.days.find(d => d.date === S.date), host = $('.win-body');
+  $$('.gl-sheet,.gl-scrim', host).forEach(e => e.remove());
+  if (!isGlass() || !sel) return;
+  const T = tot(sel.tokens), parts = [['cache', sel.tokens.read], ['fresh', sel.tokens.fresh], ['output', sel.tokens.output]];
+  host.insertAdjacentHTML('beforeend', `<div class="gl-scrim" data-a="clear"></div><aside class="gl-sheet usage-content" aria-label="Analytics for ${sel.date}"><header><h3 tabindex="-1" id="day-h">${niceLabel(sum, sel.date)}</h3><button type="button" data-a="clear" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.5"><path d="M1 1l8 8M9 1L1 9"/></svg></button></header>
+  <div class="gl-mix">${parts.map(([k, v]) => `<i style="flex:${Math.max(v / T, .006)};background:${tcolor(k)}"></i>`).join('')}</div>
+  <div class="usage-day-figures" style="display:grid;grid-template-columns:1fr 1fr"><div><strong>${C(T)}</strong> tokens</div><div><strong>${N(sel.sessions)}</strong> sessions</div><div><strong>${N(sel.requests)}</strong> tool requests</div><div><strong>${N(sel.errors)}</strong> errors</div></div>
+  <dl class="usage-details-values" style="display:flex;flex-direction:column;margin:0 0 14px;font-size:12.5px">${parts.map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-top:.5px solid var(--gl-line)"><dt style="color:var(--usage-secondary);display:flex;gap:8px;align-items:center"><i style="width:8px;height:8px;border-radius:2px;background:${tcolor(k)}"></i>${{ cache: 'Cache', fresh: 'Input', output: 'Output' }[k]}</dt><dd style="margin:0;font:12px var(--font-mono)">${C(v)}</dd></div>`).join('')}</dl>
+  ${S.range === 'all' ? '<p class="usage-note">Session lists cover the last 30 days.</p>' : pContributors(sel.contributors)}</aside>`);
+}
+
+/* ============================== GLASS REFINED ============================== */
+function rfMetrics(sum) {
+  const items = metricItems(sum), rt = sum.tokens;
+  const sub = {
+    'Total tokens': `${C(rt.output)} output`,
+    'Per active day': `${sum.activeDays} active days`,
+    'Sessions': `${(sum.sessions / Math.max(1, sum.activeDays)).toFixed(1)} per active day`,
+    'Tool requests': `${N(sum.requests / Math.max(1, sum.sessions))} per session`,
+    'Cache read rate': `${C(rt.read)} reads`,
+  };
+  return `<div class="gl-shelf">${items.map(it => { const dcls = it.delta ? (it.kind === 'cache' ? it.delta.dir : 'neutral') : ''; return `<section class="usage-metric usage-metric-${it.kind}"><h2>${it.label}</h2><strong>${it.value}</strong><span class="rf-sub">${sub[it.label]}</span><div class="usage-metric-foot">${it.delta ? `<span class="usage-metric-delta usage-delta-${dcls}" title="${it.delta.desc}">${it.delta.text}</span>` : ''}${it.series.length > 1 ? `<svg viewBox="0 0 64 18" aria-hidden="true"><polyline points="${sparkPoints(it.series)}"/></svg>` : ''}</div></section>`; }).join('')}</div>`;
+}
+function rfPeriod(sum) {
+  const p = sum.range !== 'all' ? sum.previousPeriod : null;
+  return `<span>${periodText(sum)}</span>${p ? `<span>vs ${dayText(p.startInclusive)} to ${dayText(p.endInclusive)}</span>` : ''}<span>Updated 9:35 AM</span>`;
+}
+function rfCachePanel(sum) {
+  return `<div class="usage-details-summary"><header class="usage-details-card-header"><div><h2 class="usage-panel-heading">Prompt cache${info('Cache reads / (cache reads + input)')}</h2></div><strong>${P(crr(sum.tokens))}</strong></header><div class="usage-area-trend usage-area-cache"><div data-m="cache" class="usage-trend-chart"></div></div>${cacheValues(sum)}</div>`;
+}
+function rfModelSpark(sum, id) {
+  const vals = sum.days.map(d => d.models.find(x => x.id === id)?.total ?? 0);
+  return `<svg class="rf-spark" viewBox="0 0 56 18" aria-hidden="true"><polyline points="${sparkPoints(vals, 54, 14, 1, 16)}" style="stroke:${mcolor(id)}"/></svg>`;
+}
+function rfModelPanel(sum) {
+  const { hr, models, total } = donutModels(sum);
+  return `${hr ? `<div class="usage-range usage-model-scope" role="group" aria-label="Model history"><button type="button" data-a="donutall:0" aria-pressed="${!S.donutAll}">Current</button><button type="button" data-a="donutall:1" aria-pressed="${S.donutAll}">All models</button></div>` : ''}<div class="usage-model-mix"><div class="usage-details-donut"><div data-m="donut"></div><div class="usage-details-donut-center" id="donut-center"></div></div><ul class="usage-model-key">${models.map(m => { const v = tot(m.tokens); return `<li><button type="button" data-mh="${m.id}" data-a="msel:${m.id}" data-model="${m.id}" aria-pressed="${S.donutSel === m.id}"><svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2.5" style="fill:${mcolor(m.id)}"/></svg><span>${esc(m.label)}</span>${rfModelSpark(sum, m.id)}<b title="${N(v)} tokens">${C(v)}</b><small>${P(total ? v / total * 100 : 0)}</small></button></li>`; }).join('')}</ul></div>`;
+}
+function rfHeatStats() {
+  const dates = [...ACTIVITY.days.entries()].filter(([, d]) => tot(d.tokens) > 0).map(([k]) => k).sort();
+  let best = 0, run = 0, prev = null;
+  for (const d of dates) { run = prev && civ(d) - civ(prev) === DAY ? run + 1 : 1; best = Math.max(best, run); prev = d; }
+  let now = 0; for (let t = civ(LAST); ACTIVITY.days.get(dkey(t)) && tot(ACTIVITY.days.get(dkey(t)).tokens) > 0; t -= DAY) now++;
+  return `<div class="rf-heat-stats"><span><b>${dates.length}</b>active days</span><span><b>${best}</b>longest streak</span><span><b>${now}</b>current streak</span></div>`;
+}
+function pageRefined() {
+  const sum = cur(), idx = RANGES.findIndex(r => r[0] === S.range);
+  return `<div class="usage-content">
+  <div class="gl-top" id="gl-top"><header class="usage-header"><div><h1 id="usage-title">Analytics</h1><p class="usage-freshness">${rfPeriod(sum)}</p></div><div class="usage-header-actions"><button class="usage-refresh" type="button" data-a="refresh" aria-label="Refresh analytics">${REFRESH_SVG}</button><div class="gl-seg" role="group" aria-label="Analytics period"><span class="gl-thumb" id="gl-thumb" style="transform:translateX(${idx * 76}px)"></span>${RANGES.map(([v, l]) => `<button type="button" data-a="range:${v}" aria-pressed="${S.range === v}">${l}</button>`).join('')}</div></div></header></div>
+  <div class="gl-anim" id="gl-anim">
+  <h2 class="rf-section">Usage</h2>
+  ${rfMetrics(sum)}
+  <div class="usage-panels">
+    <section class="usage-panel usage-token-flow-panel">${pFlowToolbar(sum)}<div data-m="tokens"></div>${pFlowLegend(sum)}${(sum.bucketDays || 1) > 1 ? `<p class="usage-note">${sum.bucketDays}-day totals</p>` : ''}</section>
+    <div class="usage-secondary-panels"><section class="usage-panel"><h2 class="usage-panel-heading">Model usage</h2>${rfModelPanel(sum)}</section><section class="usage-panel">${rfCachePanel(sum)}</section></div>
+    <section class="usage-panel"><div class="usage-chart-toolbar"><h2 class="usage-panel-heading" style="margin:0">Daily activity</h2>${rfHeatStats()}</div>${pHeatPanel()}</section>
+  </div>
+  <h2 class="rf-section">Tools</h2>
+  <div class="rf-pair"><section class="usage-panel"><h2 class="usage-panel-heading">Tools</h2>${pToolBars(sum, true)}</section><section class="usage-panel">${pToolErr(sum, true)}</section></div>
+  <h2 class="rf-section">Auto mode</h2>
+  <div class="usage-panels"><section class="usage-panel">${pAutoPanel(sum, true)}</section></div>
+  ${pValuesTable(sum)}</div></div>`;
+}
+function niceAxis(max) {
+  max = Math.max(1, max);
+  const e = Math.floor(Math.log10(max)), steps = [e - 1, e].flatMap(k => [1, 2, 2.5, 5].map(m => m * 10 ** k)).filter(st => { const c = Math.ceil(max / st); return c >= 3 && c <= 5; });
+  const step = steps.sort((a, b) => Math.ceil(max / a) * a - Math.ceil(max / b) * b || b - a)[0] ?? max;
+  const top = Math.ceil(max / step) * step;
+  return { yMax: top, yFracs: Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step / top) };
+}
+function rfAfterMount() {
+  const sum = cur(), b = sum.bucketDays || 1;
+  const tk = $('[data-m=tokens]')?._chart;
+  if (tk) {
+    const series = flowSeries(sum, S.mode, new Set(S.hidden[S.mode])), shown = d => series.reduce((s, x) => s + x.value(d), 0);
+    const act = sum.days.filter(d => shown(d) > 0), avg = act.reduce((s, d) => s + shown(d), 0) / Math.max(1, act.length);
+    const peak = sum.days.reduce((a, d) => shown(d) > shown(a) ? d : a, sum.days[0]);
+    const ns = 'http://www.w3.org/2000/svg', svg = tk.svg;
+    const back = document.createElementNS(ns, 'g'), front = document.createElementNS(ns, 'g');
+    front.setAttribute('pointer-events', 'none');
+    if (b === 1) {
+      const step = (tk.right - tk.left) / sum.days.length;
+      back.innerHTML = sum.days.filter(d => [0, 6].includes(new Date(civ(d.date)).getUTCDay())).map(d => `<rect class="rf-weekend" x="${tk.X(d.date) - step / 2}" y="${tk.top}" width="${step}" height="${tk.bottom - tk.top}"/>`).join('');
+    }
+    svg.insertBefore(back, svg.querySelector('defs').nextSibling);
+    let fr = '';
+    if (act.length > 1) { const y = tk.Y(avg); fr += `<line class="rf-avg" x1="${tk.left}" x2="${tk.right}" y1="${y}" y2="${y}"/><text class="rf-anno-dim" x="${tk.right - 4}" y="${y - 5}" text-anchor="end">Avg ${C(avg)}</text>`; }
+    if (peak && shown(peak) > 0) { const x = tk.X(peak.date), y = tk.Y(shown(peak)), anchor = x > tk.right - 90 ? 'end' : x < tk.left + 90 ? 'start' : 'middle'; fr += `<text class="rf-anno" x="${x}" y="${Math.max(tk.top + 10, y - 9)}" text-anchor="${anchor}">${b === 1 ? chartDate(peak.date) : niceLabel(sum, peak.date)} · ${C(shown(peak))}</text>`; }
+    front.innerHTML = fr;
+    svg.insertBefore(front, svg.querySelector('.tc-hit'));
+  }
+  const ch = $('[data-m=cache]')?._chart;
+  if (ch) {
+    const days = sum.days.filter(d => crr(d.tokens) != null), low = days.reduce((a, d) => crr(d.tokens) < crr(a.tokens) ? d : a, days[0]);
+    const avg = crr(sum.tokens);
+    if (low && avg - crr(low.tokens) > 5) {
+      const x = ch.X(low.date), y = ch.Y(crr(low.tokens)), ns = 'http://www.w3.org/2000/svg', g = document.createElementNS(ns, 'g');
+      g.setAttribute('pointer-events', 'none');
+      g.innerHTML = `<circle class="rf-dip" cx="${x}" cy="${y}" r="4.5"/><text class="rf-anno" x="${x + 9}" y="${y + 4}">${chartDate(low.date)} · ${P(crr(low.tokens))}</text>`;
+      ch.svg.insertBefore(g, ch.svg.querySelector('.tc-hit'));
+    }
+  }
+}
+
+/* ============================== directions ============================== */
+const htmlTip = { kind: 'html' };
+const DIRS = {
+  current: { name: 'Current', themes: ['dark', 'light'], sync: false, crossClass: 'usage-trend-marker', page: pageCurrent,
+    notes: { what: ['Source-accurate layout, tokens, strings', 'Glass window on, opaque cards', 'Palette from usageDashboard.css'], act: ['Range switch', 'By type / By model, Current / All models', 'Series eye toggles', 'Token tooltip, click a day for detail', 'Cache hover, donut hover and pin', 'Tool bars, error picker, commits', 'Heatmap hover and click', 'Flow ribbons, block rate, decision bars', 'View as table'] } },
+  ledger: { name: 'Ledger', themes: ['light', 'dark'], sync: true, nice: true, linkModels: true, crossClass: 'lg-cross', mc: MC_INK, page: pageLedger, heat: { box: 16, max: 20, gap: 3, radius: 1 }, barsFit: true,
+    cacheChart: () => ({ series: [{ id: 'cache', label: 'Cache read rate', color: 'var(--lg-ink)' }], look: { fill: 'solid', fillOpacity: .06, points: 'none', cross: 'lg-cross', marker: 3, markerClass: 'lg-dot', strokeW: 1.4 }, tip: { kind: 'none' }, height: 130 }),
+    onHover: date => { const r = $('#lg-read'); if (r) r.innerHTML = lgReading(date); },
+    notes: { what: ['No cards; hairline rules, label column', 'Figures row, no sparklines', 'Tokens as small multiples, own scales', 'Ink palette, accent only for pin', 'Share bar and table replace donut', 'Per-tool error sparklines replace picker', 'Decision bars fit the width', 'Sticky reading line'], act: ['Synced crosshair on every time chart', 'Reading line follows hover', 'Click pins a day, arrows step, Esc clears', 'Model hover links share bar and table'] } },
+  console: { name: 'Console', themes: ['dark'], sync: true, linkModels: true, crossClass: 'cn-cross', mc: MC_NEW, tc: TC_NEW, page: pageConsole, heat: { box: 11, max: 13, gap: 2, radius: 0 }, barsFit: true,
+    toolColors: ['#3b82f6', '#c07f10', '#16a394', '#9a6cf0', '#0b9bcc', '#e0408f', '#8a9a3a', '#b35a9a', '#a0704a', '#6b7280'],
+    cacheChart: () => ({ look: { fill: 'solid', fillOpacity: .14, points: 'none', cross: 'cn-cross', marker: 3.5, markerClass: 'usage-area-point', strokeW: 1.5 }, tip: htmlTip, height: 120, tickY: 3 }),
+    onHover: date => cnTableHover(date),
+    notes: { what: ['Mono type, 12-column panel grid', 'KPI cells with daily bar strips', 'Stacked daily bars replace area', 'Day table beside the chart', 'Tools as a sortable table', 'Flow as a route table', 'Validated categorical palette'], act: ['Brush strip under bars zooms; dbl-click resets', 'Bar, table row, KPI strip, heatmap hover linked', 'Sortable day table headers', 'Arrow keys step days page-wide, Enter pins, Esc clears', 'Model hover links bars and model list'] } },
+  spectrum: { name: 'Spectrum', themes: ['dark'], sync: true, nice: true, linkModels: true, crossClass: 'sp-cross', mc: MC_NEW, tc: TC_NEW, page: pageSpectrum, donutBig: true, barsFit: true,
+    toolColors: ['#3b82f6', '#c07f10', '#16a394', '#9a6cf0', '#0b9bcc', '#e0408f', '#8a9a3a', '#b35a9a', '#a0704a', '#6b7280'],
+    tokensChart: () => ({ look: { fill: 'grad', stroke: 'line', glow: true, gradTop: .75, gradBottom: .06, cross: 'sp-cross', marker: 5, markerClass: 'sp-dot', thin: true, strokeW: 1.8 }, tip: htmlTip }),
+    cacheChart: () => ({ series: [{ id: 'cache', label: 'Cache read rate', color: '#9d86ff' }], look: { fill: 'grad', gradTop: .45, gradBottom: 0, glow: true, curve: true, points: 'none', cross: 'sp-cross', marker: 4.5, markerClass: 'sp-dot', strokeW: 2 }, tip: { kind: 'html', rows: (d, v) => [{ label: 'Cache read rate', color: '#9d86ff', value: P(v[0]) }] } }),
+    flowStroke: l => `url(#fg-${l.to === 'allowed' || l.to === 'blocked' ? l.to : 'mid'})`,
+    flowDefs: () => `<defs><linearGradient id="fg-mid" x1="0" x2="1"><stop offset="0" stop-color="#b8a6ff"/><stop offset="1" stop-color="#7fd8ff"/></linearGradient><linearGradient id="fg-allowed" x1="0" x2="1"><stop offset="0" stop-color="#7fd8ff"/><stop offset="1" stop-color="#34d399"/></linearGradient><linearGradient id="fg-blocked" x1="0" x2="1"><stop offset="0" stop-color="#7fd8ff"/><stop offset="1" stop-color="#ff6b8b"/></linearGradient></defs>`,
+    notes: { what: ['Deep violet canvas, header glow', 'KPI tiles with gradient area sparklines', 'Gradient-filled token layers, glowing edges', 'Validated vivid categorical palette', 'Donut slices pop out', 'Gradient flow ribbons, glowing trend lines'], act: ['Range switch morphs the token area', 'Numbers count up on range change', 'Synced crosshair with floating tooltip', 'Model hover links donut, legend, area (By model)', 'Click a day for detail'] } },
+  glass: { name: 'Glass', themes: ['dark', 'light'], sync: true, nice: true, linkModels: true, crossClass: 'gl-cross', tc: { cache: 'var(--usage-cache)', fresh: 'var(--usage-fresh)', output: 'var(--usage-output)' }, page: pageGlass,
+    tokensChart: () => ({ look: { fill: 'grad', stroke: 'line', gradTop: .6, gradBottom: .05, cross: 'gl-cross', marker: 4.5, markerClass: 'gl-dot', strokeW: 1.4 }, tip: htmlTip, selectRect: false }),
+    cacheChart: () => ({ look: { fill: 'solid', fillOpacity: .12, curve: true, points: 'none', cross: 'gl-cross', marker: 4, markerClass: 'gl-dot', strokeW: 1.8 }, tip: { kind: 'html', rows: (d, v) => [{ label: 'Cache read rate', value: P(v[0]) }] } }),
+    notes: { what: ['Translucent panels over window material', 'Sticky header turns to glass on scroll', 'macOS segmented control', 'KPI shelf in one glass slab', 'Soft gradient areas, glass tooltips'], act: ['Sliding thumb on range change', 'Panels settle in on range change', 'Click a day opens a side sheet; Esc closes', 'Synced crosshair', 'Model hover links donut, legend, area (By model)'] } },
+};
+DIRS.refined = { ...DIRS.glass, name: 'Glass refined', cssDir: 'glass', refined: true, fewTicks: true, barsFit: true, page: pageRefined, afterMount: rfAfterMount,
+  tokensChart: (sum, series) => ({ ...DIRS.glass.tokensChart(), ...niceAxis(Math.max(1, ...sum.days.map(d => series.reduce((s, x) => s + x.value(d), 0)))), yFmt: v => C(Math.round(v)) }),
+  notes: { what: ['Comparison period in the subtitle', 'Second line of detail on each top number', 'Neutral colour for volume changes; cache rate keeps green or red', 'Round token axis steps', 'Average line and peak label on Tokens', 'Weekend shading', 'Formula subtitles moved into info marks', 'Cache dip marked', 'Donut centre shows the top model', 'Trend line per model row', 'Error rate column per tool; Other last', 'At most 6 date labels per chart', 'Heatmap: active days and streaks', 'Decision bars fit the width with short dates', 'Block rate shows unresolved count', 'Section headings: Usage, Tools, Auto mode', 'Daily activity moved into Usage; Tools and error rate side by side'], act: ['Same as Glass'] } };
+const ORDER = ['glass', 'refined'];
+
+/* ============================== render + events ============================== */
+let RENDER_ABORT = new AbortController();
+function render(opts = {}) {
+  RENDER_ABORT.abort(); RENDER_ABORT = new AbortController();
+  const page = $('#page'), st = page.scrollTop, win = $('#win');
+  HOV = [];
+  win.dataset.dir = D().cssDir ?? S.dir; win.dataset.theme = S.theme; win.toggleAttribute('data-refined', !!D().refined);
+  $('#desk').classList.toggle('light', S.theme === 'light');
+  page.innerHTML = D().page();
+  $$('[data-m]', page).forEach(el => { const r = M[el.dataset.m](el); if (r) el._chart = r; });
+  D().afterMount?.();
+  page.scrollTop = opts.top ? 0 : st;
+  if (S.hover) { const h = S.hover, s = S.hsrc; S.hover = ''; setHover(h, s); }
+  D().onHover?.('', '');
+  modelFocus(S.mfocus);
+  glSheet();
+  if (S.dir === 'spectrum') { spAnimate(opts); countUp(); } else PREV.counts = {};
+  if (isGlass()) {
+    const top = $('#gl-top'); const onScroll = () => top?.classList.toggle('stuck', page.scrollTop > 8); onScroll(); page.addEventListener('scroll', onScroll, { signal: RENDER_ABORT.signal });
+    if (opts.rangeChanged) { const th = $('#gl-thumb'), pi = RANGES.findIndex(r => r[0] === opts.prevRange); if (th && pi >= 0) { const ni = RANGES.findIndex(r => r[0] === S.range); th.style.transition = 'none'; th.style.transform = `translateX(${pi * 76}px)`; th.getBoundingClientRect(); th.style.transition = ''; th.style.transform = `translateX(${ni * 76}px)`; } }
+    else $('#gl-anim')?.classList.remove('gl-anim');
+  }
+  if (S.date && opts.focusDetail) $('#day-h')?.focus({ preventScroll: S.dir !== 'current' });
+  chrome();
+}
+function chrome() {
+  $('#x-tabs').innerHTML = ORDER.map((k, i) => `<button type="button" data-x="${k}" aria-pressed="${S.dir === k}">${i + 1} ${DIRS[k].name}</button>`).join('');
+  const t = $('#x-theme'), th = D().themes; t.disabled = th.length < 2; t.textContent = S.theme === 'dark' ? 'Dark' : 'Light';
+  const n = D().notes;
+  $('#x-notes').innerHTML = `<h4>${D().name}</h4><h5>Changes</h5><ul>${n.what.map(x => `<li>${x}</li>`).join('')}</ul><h5>Interactions</h5><ul>${n.act.map(x => `<li>${x}</li>`).join('')}</ul>`;
+}
+$('#x-tabs').addEventListener('click', e => { const b = e.target.closest('[data-x]'); if (!b) return; switchDir(b.dataset.x); });
+function switchDir(k) { S.dir = k; if (!D().themes.includes(S.theme)) S.theme = D().themes[0]; S.hover = ''; S.mfocus = ''; S.zoom = null; SPEC_PREV = null; render({ top: true }); }
+$('#x-theme').addEventListener('click', () => { if (D().themes.length < 2) return; S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); });
+$('#x-notes-btn').addEventListener('click', e => { const n = $('#x-notes'); n.hidden = !n.hidden; e.currentTarget.setAttribute('aria-pressed', !n.hidden); $('#x-stage').classList.toggle('x-notes-open', !n.hidden); render(); });
+const winEl = $('#win');
+winEl.addEventListener('click', e => {
+  const a = e.target.closest('[data-a]'); if (!a) return;
+  const [k, v] = a.dataset.a.split(':');
+  if (k === 'range') { if (S.range === v) return; const prevRange = S.range; S.range = v; S.date = ''; S.zoom = null; S.errPin = null; S.flowPin = null; S.barAct = null; S.toolSel = ''; render({ rangeChanged: true, prevRange }); return; }
+  if (k === 'mode') { S.mode = v; SPEC_PREV = null; }
+  else if (k === 'allmodels') { S.allModels = v === '1'; SPEC_PREV = null; }
+  else if (k === 'donutall') S.donutAll = v === '1';
+  else if (k === 'series') { const h = new Set(S.hidden[S.mode]); h.has(v) ? h.delete(v) : h.add(v); S.hidden[S.mode] = [...h]; SPEC_PREV = null; }
+  else if (k === 'clear') { S.date = ''; }
+  else if (k === 'msel') { S.donutSel = S.donutSel === v ? '' : v; modelFocus(S.mfocus); a.setAttribute?.('aria-pressed', S.donutSel === v); return; }
+  else if (k === 'tool') S.toolSel = S.toolSel === v ? '' : v;
+  else if (k === 'pick') { const base = errToolsSel(cur()); S.errTools = base.includes(v) ? base.filter(x => x !== v) : [...base, v]; }
+  else if (k === 'commits') S.commits = !S.commits;
+  else if (k === 'errclear') S.errPin = null;
+  else if (k === 'flowclear') S.flowPin = null;
+  else if (k === 'table') { e.preventDefault(); S.table = !S.table; }
+  else if (k === 'sort') { S.sort = S.sort[0] === v ? [v, -S.sort[1]] : [v, v === 'date' ? -1 : -1]; }
+  else if (k === 'unzoom') S.zoom = null;
+  else if (k === 'refresh') { a.querySelector('svg')?.classList.add('animate-spin'); setTimeout(() => a.querySelector('svg')?.classList.remove('animate-spin'), 900); return; }
+  render();
+});
+winEl.addEventListener('click', e => { const r = e.target.closest('tr[data-day]'); if (r) select(r.dataset.day === S.date ? '' : r.dataset.day); });
+winEl.addEventListener('mouseover', e => {
+  const r = e.target.closest('tr[data-day]'); if (r) setHover(r.dataset.day, 'table');
+  const m = e.target.closest('[data-mh]'); if (m) modelFocus(m.dataset.mh);
+});
+winEl.addEventListener('mouseout', e => {
+  const r = e.target.closest('tr[data-day]'); if (r && !r.contains(e.relatedTarget)) setHover('', 'table');
+  const m = e.target.closest('[data-mh]'); if (m && !m.contains(e.relatedTarget)) modelFocus('');
+});
+winEl.addEventListener('focusin', e => { const m = e.target.closest('[data-mh]'); if (m) modelFocus(m.dataset.mh); });
+winEl.addEventListener('focusout', e => { if (e.target.closest('[data-mh]')) modelFocus(''); });
+document.addEventListener('keydown', e => {
+  const tg = e.target instanceof Element ? e.target : document.body;
+  if (tg.closest('input,textarea')) return;
+  if (isGlass() && e.key === 'Escape' && S.date) { select(''); return; }
+  if (S.dir === 'console' && !tg.closest('svg[tabindex], g[role=button], .x-bar')) {
+    const sum = cur(), dom = S.zoom ?? [sum.startDate, sum.endDateExclusive], dates = sum.days.map(d => d.date).filter(d => d >= dom[0] && d < dom[1]);
+    const i = dates.indexOf(S.hover || S.date);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); const n = clamp((i < 0 ? (e.key === 'ArrowRight' ? -1 : dates.length) : i) + (e.key === 'ArrowRight' ? 1 : -1), 0, dates.length - 1); setHover(dates[n], 'kbd'); return; }
+    if (e.key === 'Enter' && S.hover) { e.preventDefault(); select(S.hover); return; }
+    if (e.key === 'Escape') { setHover('', 'kbd'); if (S.date) select(''); return; }
+  }
+  if (!tg.closest('.win') && ORDER[+e.key - 1]) switchDir(ORDER[+e.key - 1]);
+});
+let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => render(), 120); });
+(() => { const h = new URLSearchParams(location.hash.slice(1)); if (DIRS[h.get('dir')]) S.dir = h.get('dir'); if (D().themes.includes(h.get('theme'))) S.theme = h.get('theme'); else S.theme = D().themes[0]; if (DATA[h.get('range')]) S.range = h.get('range'); if (h.get('date')) S.date = h.get('date'); if (h.get('mode')) S.mode = h.get('mode'); })();
+document.fonts?.ready.then(() => render());
+render();
+</script>
+</body>
+</html>

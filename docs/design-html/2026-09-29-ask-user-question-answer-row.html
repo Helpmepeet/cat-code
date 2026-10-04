@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Answered Question Row</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* App tokens from app/renderer/src/theme.css (dark :root, light appearance). */
+:root{
+  color-scheme:dark;
+  --app-bg:#09090b;
+  --accent:#f472b6;
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f; --text-faint:#838389; --text-ghost:#75757b;
+  --seam:rgba(255,255,255,.06); --hover:rgba(255,255,255,.04);
+  --good:#4ade80; --danger:#f87171;
+  --bash:#a3e635; --read:#60a5fa; --grep:#fbbf24; --web:#22d3ee; --skill:#5eead4; --mcp:#c084fc;
+  --c-sky:#38bdf8; --c-yellow:#facc15; --c-rose:#fb7185;
+  --x-ground:#151518; --x-line:rgba(255,255,255,.08); --x-ink:#8a8a92; --x-dim:#5f5f66; --x-hi:#c4c4cb;
+  --sans:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --app-bg:#fcfcfd;
+  --accent:#bb3e84;
+  --text-primary:#18181b; --text-muted:#52525b; --text-subtle:#575761; --text-faint:#6a6a74; --text-ghost:#767680;
+  --seam:rgba(9,9,11,.1); --hover:rgba(24,24,27,.04);
+  --good:#15803d; --danger:#dc2626;
+  --bash:#4d7c0f; --read:#2563eb; --grep:#a35f00; --web:#0e7490; --skill:#0f766e; --mcp:#7c3aed;
+  --c-sky:#0369a1; --c-yellow:#a16207; --c-rose:#be123c;
+  --x-ground:#ececef; --x-line:rgba(9,9,11,.1); --x-ink:#5a5a63; --x-dim:#8a8a93; --x-hi:#27272a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--x-ground);-webkit-font-smoothing:antialiased}
+pre{margin:0}
+
+/* ---------- page chrome (x-), never inside a specimen ---------- */
+.x-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:22px;padding:10px 24px;background:var(--x-ground);border-bottom:1px solid var(--x-line);font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--x-ink)}
+.x-title{color:var(--x-hi)}
+.x-group{display:flex;align-items:center;gap:2px}
+.x-group-label{color:var(--x-dim);margin-right:8px}
+.x-btn{font:inherit;letter-spacing:inherit;text-transform:inherit;color:var(--x-dim);background:none;border:0;padding:5px 8px;cursor:pointer}
+.x-btn[aria-pressed="true"]{color:var(--x-hi);text-decoration:underline;text-underline-offset:4px}
+.x-grid{display:grid;grid-template-columns:repeat(2,minmax(0,600px));gap:0 28px;padding:0 24px 48px;justify-content:center}
+.x-colhead{padding:22px 0 8px;font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--x-ink)}
+.x-state{grid-column:1 / -1;padding:26px 0 8px;border-top:1px solid var(--x-line);margin-top:18px;font:500 9.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--x-dim)}
+.x-state:first-of-type{border-top:0;margin-top:0}
+.x-cell{background:var(--app-bg);padding:18px 20px}
+
+/* ---------- specimen: shared transcript row (TOOL_CARD_*_CLASS.lines) ---------- */
+.s-col{display:flex;flex-direction:column;gap:8px;font-family:var(--sans)}
+.s-head{display:flex;width:100%;align-items:center;gap:10px;padding:2px 0;border-radius:4px;text-align:left;background:none;border:0;font:inherit;color:inherit;cursor:pointer}
+.s-head:hover{background:var(--hover)}
+.s-mark{width:16px;flex-shrink:0;text-align:center;font-size:13px;line-height:18px}
+.s-word{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.s-target{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px;line-height:16px;color:var(--text-primary)}
+.s-dot{width:6px;height:6px;flex-shrink:0;border-radius:9999px}
+.s-dot.ok{background:var(--good)} .s-dot.err{background:var(--danger)} .s-dot.run{background:var(--accent);animation:s-pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes s-pulse{50%{opacity:.5}}
+.s-bash{color:var(--bash)} .s-other{color:var(--text-muted)} .s-read{color:var(--read)} .s-grep{color:var(--grep)} .s-web{color:var(--web)} .s-edit{color:var(--accent)} .s-skill{color:var(--skill)} .s-mcp{color:var(--mcp)}
+.s-body{margin-left:24px;border-left:1px solid var(--seam);padding-left:12px}
+.s-body-inner{padding:4px 0 8px}
+.s-out{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:11.5px;line-height:1.625;color:var(--text-muted)}
+.s-out.err{color:var(--danger)}
+.s-out.input{color:var(--text-subtle)}
+
+/* ---------- specimen: proposed answered-question row ---------- */
+.q-row{display:flex;gap:10px;align-items:flex-start}
+.q-mark{width:16px;flex-shrink:0;text-align:center;font-size:13px;line-height:18px;color:var(--text-muted)}
+.q-word{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;line-height:18px}
+.q-word.grey{color:var(--text-muted)} .q-word.accent{color:var(--accent)} .q-word.sky{color:var(--c-sky)} .q-word.yellow{color:var(--c-yellow)} .q-word.rose{color:var(--c-rose)}
+.q-mark.grey{color:var(--text-muted)} .q-mark.accent{color:var(--accent)} .q-mark.sky{color:var(--c-sky)} .q-mark.yellow{color:var(--c-yellow)} .q-mark.rose{color:var(--c-rose)}
+.q-list{min-width:0;flex:1;display:flex;flex-direction:column;gap:10px}
+.q-item{min-width:0}
+
+.q-answer{font-size:13px;line-height:18px;color:var(--text-primary);font-weight:500}
+.q-note{font-size:12px;line-height:17px;color:var(--text-subtle);margin-top:2px}
+.q-declined{font-size:13px;line-height:18px;color:var(--text-subtle)}
+.q-wait{display:inline-block;width:6px;height:6px;border-radius:9999px;background:var(--accent);vertical-align:middle;animation:s-pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+
+.q-question{font-size:12.5px;line-height:18px;color:var(--text-muted)}
+.qb-answer{margin-top:2px}
+</style>
+</head>
+<body>
+<div class="x-bar">
+  <span class="x-title">AskUserQuestion &middot; answered row</span>
+  <span class="x-group"><span class="x-group-label">Theme</span>
+    <button class="x-btn" data-theme-btn="dark" aria-pressed="true">Dark</button>
+    <button class="x-btn" data-theme-btn="light" aria-pressed="false">Light</button>
+  </span>
+  <span class="x-group"><span class="x-group-label">Current</span>
+    <button class="x-btn" data-exp-btn="0" aria-pressed="true">Collapsed</button>
+    <button class="x-btn" data-exp-btn="1" aria-pressed="false">Expanded</button>
+  </span>
+  <span class="x-group"><span class="x-group-label">Mark color</span>
+    <button class="x-btn" data-color-btn="grey" aria-pressed="false">Grey</button>
+    <button class="x-btn" data-color-btn="accent" aria-pressed="true">Accent</button>
+    <button class="x-btn" data-color-btn="sky" aria-pressed="false">Sky</button>
+    <button class="x-btn" data-color-btn="yellow" aria-pressed="false">Yellow</button>
+    <button class="x-btn" data-color-btn="rose" aria-pressed="false">Rose</button>
+  </span>
+  <span class="x-group"><span class="x-group-label">Word</span>
+    <button class="x-btn" data-word-btn="0" aria-pressed="true">Off</button>
+    <button class="x-btn" data-word-btn="1" aria-pressed="false">On</button>
+  </span>
+</div>
+<div class="x-grid" id="grid"></div>
+
+<script>
+const REJECT = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+
+const Q_LIVE = {
+  question: 'May I launch Cat Code Dev and click the Fast control to verify this fix in the live interface?',
+  header: 'GUI check', multiSelect: false,
+  options: [{ label: 'Yes, launch it' }, { label: 'No, skip the live check' }],
+}
+const Q_LAYOUT = {
+  question: 'Which layout should the settings page use?', header: 'Layout', multiSelect: false,
+  options: [{ label: 'Tabs' }, { label: 'Single scroll' }, { label: 'Sidebar sections' }],
+}
+const Q_SECTIONS = {
+  question: 'Which sections should ship first?', header: 'Sections', multiSelect: true,
+  options: [{ label: 'Appearance' }, { label: 'Accounts' }, { label: 'Keyboard' }, { label: 'Advanced' }],
+}
+const Q_DOT = {
+  question: 'Which color should the status dot use?', header: 'Dot color', multiSelect: false,
+  options: [{ label: 'Tone color' }, { label: 'Accent' }, { label: 'Monochrome' }],
+}
+
+// status: success | error | pending. answers keyed by question text (tool output shape).
+const STATES = [
+  { name: 'Typed answer', status: 'success', questions: [Q_LIVE], answers: { [Q_LIVE.question]: 'I will do it' } },
+  { name: 'Picked option', status: 'success', questions: [Q_LIVE], answers: { [Q_LIVE.question]: 'Yes, launch it' } },
+  { name: 'Two questions, multi-select', status: 'success', questions: [Q_LAYOUT, Q_SECTIONS],
+    answers: { [Q_LAYOUT.question]: 'Single scroll', [Q_SECTIONS.question]: 'Appearance, Keyboard' } },
+  { name: 'Answer with notes', status: 'success', questions: [Q_DOT], answers: { [Q_DOT.question]: 'Monochrome' },
+    annotations: { [Q_DOT.question]: { notes: 'Keep it quiet next to the send button' } } },
+  { name: 'Declined', status: 'error', questions: [Q_LIVE], answers: {} },
+  { name: 'Waiting', status: 'pending', questions: [Q_LAYOUT, Q_SECTIONS], answers: {} },
+]
+
+let color = 'accent', expanded = false, word = false
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+
+// Neighbor row, identical on both sides.
+const FAMILY_ROWS = [
+  ['s-read', '≡', 'Read', 'app/renderer/src/TranscriptView.tsx'],
+  ['s-grep', '⌕', 'Search', 'isAskUserQuestionRequest'],
+  ['s-web', '↗', 'Web', 'developer.mozilla.org'],
+  ['s-edit', '±', 'Edit', 'app/renderer/src/toolCardStyle.ts'],
+  ['s-skill', '§', 'Skill', 'design-html'],
+  ['s-mcp', '⧉', 'MCP', 'browser_batch'],
+].map(([c, m, w, t]) => `<div><button class="s-head" type="button"><span class="s-mark ${c}">${m}</span><span class="s-word ${c}">${w}</span><span class="s-target">${t}</span><span class="s-dot ok"></span></button></div>`).join('')
+const BASH_ROW = `<div><button class="s-head" type="button"><span class="s-mark s-bash">$</span><span class="s-word s-bash">Bash</span><span class="s-target">bun test app/renderer/src/AskQuestionFlow.dom.test.tsx</span><span class="s-dot ok"></span></button></div>`
+
+// mapToolResultToToolResultBlockParam, verbatim shape.
+function resultText(st) {
+  const parts = Object.entries(st.answers).map(([q, a]) => {
+    const p = [`"${q}"="${a}"`]
+    const n = st.annotations?.[q]
+    if (n?.preview) p.push(`selected preview:\n${n.preview}`)
+    if (n?.notes) p.push(`user notes: ${n.notes}`)
+    return p.join(' ')
+  }).join(', ')
+  return `User has answered your questions: ${parts}. You can now continue with the user's answers in mind.`
+}
+
+function currentRow(st) {
+  const dot = st.status === 'success' ? 'ok' : st.status === 'error' ? 'err' : 'run'
+  const open = expanded || st.status === 'error'
+  let body = ''
+  if (open) {
+    const text = st.status === 'error' ? REJECT
+      : st.status === 'pending' ? JSON.stringify({ questions: st.questions }, null, 2)
+      : resultText(st)
+    const cls = st.status === 'error' ? 'err' : st.status === 'pending' ? 'input' : ''
+    body = `<div class="s-body"><div class="s-body-inner"><pre class="s-out ${cls}">${esc(text)}</pre></div></div>`
+  }
+  return `<div><button class="s-head" type="button" aria-expanded="${open}"><span class="s-mark s-other">&bull;</span><span class="s-word s-other">Tool</span><span class="s-target">AskUserQuestion</span><span class="s-dot ${dot}"></span></button>${body}</div>`
+}
+
+
+function answerNode(st, q) {
+  if (st.status === 'error') return `<div class="q-declined">Declined</div>`
+  if (st.status === 'pending') return `<div class="q-answer"><span class="q-wait"></span></div>`
+  const note = st.annotations?.[q.question]?.notes
+  return `<div class="q-answer">${esc(st.answers[q.question])}</div>` + (note ? `<div class="q-note">${esc(note)}</div>` : '')
+}
+
+
+function proposedB(st) {
+  const items = st.questions.map(q =>
+    `<div class="q-item"><div class="q-question">${esc(q.question)}</div><div class="qb-answer">${answerNode(st, q)}</div></div>`
+  ).join('')
+  return `<div class="q-row"><span class="q-mark ${color}">?</span>${word ? `<span class="q-word ${color}">Question</span>` : ''}<div class="q-list">${items}</div></div>`
+}
+
+
+
+function render() {
+  let h = `<div class="x-colhead">Current</div><div class="x-colhead">Proposed</div>`
+  const pick = STATES[1]
+  h += `<div class="x-state">Among other tools</div>`
+  h += `<div class="x-cell"><div class="s-col">${BASH_ROW}${FAMILY_ROWS}${currentRow(pick)}</div></div>`
+  h += `<div class="x-cell"><div class="s-col">${BASH_ROW}${FAMILY_ROWS}${proposedB(pick)}</div></div>`
+  for (const st of STATES) {
+    h += `<div class="x-state">${esc(st.name)}</div>`
+    h += `<div class="x-cell"><div class="s-col">${BASH_ROW}${currentRow(st)}</div></div>`
+    h += `<div class="x-cell"><div class="s-col">${BASH_ROW}${proposedB(st)}</div></div>`
+  }
+  document.getElementById('grid').innerHTML = h
+}
+
+function bind(attr, apply) {
+  document.querySelectorAll(`[${attr}]`).forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll(`[${attr}]`).forEach(o => o.setAttribute('aria-pressed', String(o === b)))
+    apply(b.getAttribute(attr)); render()
+  }))
+}
+bind('data-theme-btn', v => document.documentElement.dataset.theme = v)
+bind('data-exp-btn', v => expanded = v === '1')
+bind('data-color-btn', v => color = v)
+bind('data-word-btn', v => word = v === '1')
+render()
+</script>
+</body>
+</html>
