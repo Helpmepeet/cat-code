@@ -567,11 +567,11 @@ function ModelEffortFace({
 }
 
 /**
- * Where the rail's centre line sits, in pixels from each edge: half a rung's
- * width, so the track starts and ends under the first and last tick. Shared by
- * the `inset-x-3` track classes and the pointer maths in `rungIndexAt`.
+ * Where the first and last tick sit, in pixels from the track's ends: half the
+ * thumb's width, so a thumb at either end sits flush inside the pill. Shared by
+ * the `w-7` tick buttons, the `w-3.5` fill caps, and `rungIndexAt`.
  */
-const RAIL_EDGE_PX = 12
+const RAIL_EDGE_PX = 14
 
 /** The rung nearest a pointer's x position on the rail, clamped to its ends. */
 function rungIndexAt(rail: HTMLElement, clientX: number, count: number): number {
@@ -664,35 +664,31 @@ function EffortSlider({
   }
 
   return (
-    <div className="px-2 pb-1.5">
-      <div className="flex items-center justify-between pb-0.5">
+    <div className="px-2 pb-2">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center pb-2">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
           Effort
         </span>
-        <span className="flex items-center gap-1.5">
-          {labelIndex >= 0 ? (
-            <span
-              className={`text-[11px] font-medium transition-colors ${
-                labelIndex === currentIndex ? 'text-tone-warn' : 'text-text-muted'
-              }`}
-            >
-              {formatEffort(levels[labelIndex]!)}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={isAuto}
-            onClick={() => onSelect('auto')}
-            className={`${MENU_FOCUS_RING} rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-              isAuto
-                ? 'bg-tone-warn/15 text-tone-warn'
-                : 'text-text-subtle hover:bg-text-primary/[0.06] hover:text-text-primary'
-            }`}
-          >
-            Auto
-          </button>
+        <span
+          className={`min-h-5 text-[15px] font-semibold leading-5 transition-colors ${
+            labelIndex === currentIndex ? 'text-accent' : 'text-text-muted'
+          }`}
+        >
+          {labelIndex >= 0 ? formatEffort(levels[labelIndex]!) : null}
         </span>
+        <button
+          type="button"
+          role="menuitemradio"
+          aria-checked={isAuto}
+          onClick={() => onSelect('auto')}
+          className={`${MENU_FOCUS_RING} justify-self-end rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+            isAuto
+              ? 'bg-accent/15 text-accent'
+              : 'text-text-subtle hover:bg-text-primary/[0.06] hover:text-text-primary'
+          }`}
+        >
+          Auto
+        </button>
       </div>
       <div
         ref={railRef}
@@ -703,24 +699,26 @@ function EffortSlider({
         onPointerCancel={() => setDrag(null)}
         className="relative h-7 cursor-pointer touch-none select-none"
       >
+        {/* The track and its fill share one clipped pill. The fill is a cap under
+          * the first tick plus one piece per gap, each scaling out from its left
+          * edge, so raising the level sweeps the fill along the track; its flat
+          * leading edge always ends under the thumb. */}
         <span
           aria-hidden
-          className="pointer-events-none absolute inset-x-3 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-text-primary/[0.12]"
-        />
-        {/* One fill piece per gap between ticks, each scaling out from its left
-          * edge, so raising the level sweeps the fill along the track. */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-3 top-1/2 flex h-1.5 -translate-y-1/2 overflow-hidden rounded-full"
+          className="pointer-events-none absolute inset-x-0 top-1/2 flex h-6 -translate-y-1/2 overflow-hidden rounded-full bg-text-primary/[0.1]"
         >
+          <span
+            className={`h-full w-3.5 shrink-0 bg-accent ${shownIndex >= 0 ? '' : 'opacity-0'}`}
+          />
           {levels.slice(1).map((level, index) => (
             <span
               key={level}
-              className={`h-full flex-1 origin-left bg-tone-warn transition-transform duration-[var(--motion-fast)] ease-[var(--ease-standard)] ${
+              className={`h-full flex-1 origin-left bg-accent transition-transform duration-[var(--motion-fast)] ease-[var(--ease-standard)] ${
                 index < shownIndex ? 'scale-x-100' : 'scale-x-0'
               }`}
             />
           ))}
+          <span className="w-3.5 shrink-0" />
         </span>
         <div className="absolute inset-0 flex items-center justify-between">
           {levels.map((level, index) => {
@@ -744,16 +742,16 @@ function EffortSlider({
                 onPointerLeave={() => setPeekIndex(null)}
                 onFocus={() => setPeekIndex(index)}
                 onBlur={() => setPeekIndex(null)}
-                className={`${MENU_FOCUS_RING} group relative grid h-7 w-6 place-items-center rounded-md`}
+                className={`${MENU_FOCUS_RING} group relative grid h-7 w-7 place-items-center rounded-full`}
               >
                 <span
                   aria-hidden
                   className={`block rounded-full transition-all duration-[var(--motion-fast)] ease-[var(--ease-standard)] ${
                     isThumb
-                      ? 'h-3.5 w-3.5 bg-tone-warn shadow-[0_1px_3px_rgb(0_0_0/0.35)] ring-2 ring-surface-raised group-hover:scale-110'
+                      ? 'h-7 w-7 bg-[#ffffff] shadow-[0_1px_4px_rgb(0_0_0/0.3)] group-hover:scale-105'
                       : filled
-                        ? 'h-1 w-1 bg-on-fill/50'
-                        : 'h-1 w-1 bg-text-ghost group-hover:h-2 group-hover:w-2 group-hover:bg-text-muted'
+                        ? 'h-1 w-1 bg-[rgb(255_255_255/0.55)]'
+                        : 'h-1 w-1 bg-text-primary/30 group-hover:h-1.5 group-hover:w-1.5 group-hover:bg-text-primary/60'
                   }`}
                 />
               </button>
@@ -814,7 +812,7 @@ function ReasoningChip({
             : 'Reasoning effort: auto'
         }
         onClick={() => setOpen(value => !value)}
-        className={`${RAIL_FACE} text-tone-warn hover:text-text-primary`}
+        className={`${RAIL_FACE} text-accent hover:text-text-primary`}
       >
         {current
           ? `${formatEffort(current)}${selected === null ? ' (Auto)' : ''}`
@@ -1823,7 +1821,7 @@ export function ComposerActionsBar({
         ) : reasoningEffort ? (
           <>
             <span
-              className={`${RAIL_FACE} text-tone-warn`}
+              className={`${RAIL_FACE} text-accent`}
               title={`Reasoning effort: ${reasoningEffort}`}
             >
               {formatEffort(reasoningEffort)}

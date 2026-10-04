@@ -597,18 +597,18 @@ test('dragging along the slider commits once, at the rung it is released on', as
   const tree = await mountBar(recorded)
   await openLadder(tree)
   const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
-  // 240px wide: the track runs from 12px to 228px, a rung every 72px.
+  // 240px wide: the ticks run from 14px to 226px, a rung about every 71px.
   sizeRail(rail, 240)
 
-  await pointer(rail, 'pointerdown', 12)
-  await pointer(rail, 'pointermove', 90)
-  await pointer(rail, 'pointermove', 228)
+  await pointer(rail, 'pointerdown', 14)
+  await pointer(rail, 'pointermove', 85)
+  await pointer(rail, 'pointermove', 226)
   // While held, the fill follows the pointer but nothing has been written.
   expect(recorded.efforts).toEqual([])
   expect(
     rungs(tree).filter(rung => rung.getAttribute('data-filled') === 'true'),
   ).toHaveLength(4)
-  await pointer(rail, 'pointerup', 228)
+  await pointer(rail, 'pointerup', 226)
 
   expect(recorded.efforts).toEqual(['max'])
 })
@@ -620,11 +620,11 @@ test('a drag that returns to the current level writes nothing and keeps the card
   const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
   sizeRail(rail, 240)
 
-  // `high` is the third rung, at 156px.
-  await pointer(rail, 'pointerdown', 156)
-  await pointer(rail, 'pointermove', 12)
-  await pointer(rail, 'pointermove', 156)
-  await pointer(rail, 'pointerup', 156)
+  // `high` is the third rung, at 155px.
+  await pointer(rail, 'pointerdown', 155)
+  await pointer(rail, 'pointermove', 14)
+  await pointer(rail, 'pointermove', 155)
+  await pointer(rail, 'pointerup', 155)
 
   expect(recorded.efforts).toEqual([])
   expect(menu(tree)).toBeTruthy()
