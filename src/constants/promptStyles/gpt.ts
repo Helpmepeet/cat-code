@@ -291,7 +291,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
         ]
       : []),
     hasAgentTool
-      ? `AGENT TYPES: When the ${AGENT_TOOL_NAME} tool's available-agent list includes implementor or verification, use those subagent types for bounded implementation slices or independent checks where delegation helps; keep the scope tight and report results yourself.`
+      ? `AGENT TYPES: When the ${AGENT_TOOL_NAME} tool's available-agent list includes implementor or verification, use implementor for bounded implementation slices where delegation helps, and verification only when the user asks for an independent check; keep the scope tight and report results yourself.`
       : null,
     taskToolName
       ? `TASK TRACKING: When task tracking helps, use ${taskToolName}.`
