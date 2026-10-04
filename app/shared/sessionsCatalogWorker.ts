@@ -8,7 +8,7 @@
  *
  * Both ends runtime-validate this boundary the way `transcriptBackfill.ts` does:
  * the worker emits exactly ONE bounded NDJSON result record (a `catalog`
- * snapshot or a `failure`), and main parses it fail-closed so a corrupt or
+ * snapshot, `unchanged` marker, or `failure`), and main parses it fail-closed so a corrupt or
  * compromised child can neither grow main's buffers without bound nor smuggle a
  * malformed snapshot past the display metadata contract. The payload reuses the
  * existing `SessionsCatalogSnapshot` protocol type (display metadata only — no
@@ -57,8 +57,14 @@ export type SessionsCatalogWorkerFailureResult = {
   reason: 'internal'
 }
 
+export type SessionsCatalogWorkerUnchangedResult = {
+  type: 'unchanged'
+  version: typeof SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION
+}
+
 export type SessionsCatalogWorkerResult =
   | SessionsCatalogWorkerCatalogResult
+  | SessionsCatalogWorkerUnchangedResult
   | SessionsCatalogWorkerFailureResult
 
 /**
@@ -81,6 +87,12 @@ export function parseSessionsCatalogWorkerResult(
       reason: oneOf(['internal'] as const),
     })
     return failure
+  }
+  if (value.type === 'unchanged') {
+    return narrowExact(value, {
+      type: oneOf(['unchanged'] as const),
+      version: oneOf([SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION] as const),
+    })
   }
   if (value.type !== 'catalog') return null
   const record = narrowExact(value, {

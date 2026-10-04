@@ -27,6 +27,7 @@ import {
 } from './serverFrameBatch.js'
 import { reduceLiveTranscriptState } from './previewTranscriptState.js'
 import { TranscriptView } from './TranscriptView.js'
+import { MAX_MOUNTED_COMPOSITE_CHILDREN } from './compositeChildWindow.js'
 
 const SID = 'replay-session'
 
@@ -197,16 +198,15 @@ test('transcript batch reducer matches sequential per-frame dispatch', () => {
   expect(batchedRows.map(r => r.id)).toEqual(seqRows.map(r => r.id))
 })
 
-test('one render covers the whole batched replay', () => {
+test('the replay tail mounts within the DOM bound while retaining the complete transcript model', () => {
   const state = foldBatched()
-  let renders = 0
   const html = renderToStaticMarkup(
     <TranscriptView state={state} activeSessionId={SID} />,
   )
-  renders++
-  expect(renders).toBe(1)
-  expect(html).toContain('replay body 0')
+  expect(html).not.toContain('replay body 0')
   expect(html).toContain(`replay body ${FRAME_COUNT - 1}`)
+  expect((html.match(/data-transcript-entry=/g) ?? []).length).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+  expect(selectNestedTranscriptRows(state, SID)).toHaveLength(FRAME_COUNT)
 })
 
 test('selectNestedTranscriptRows is referentially stable per slice (memo)', () => {

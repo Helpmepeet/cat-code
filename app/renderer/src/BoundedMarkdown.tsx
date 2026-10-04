@@ -12,6 +12,7 @@ import {
   type MarkdownLeafWindow,
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
+import { REHYPE_PLUGINS, TRANSCRIPT_REHYPE_PLUGINS } from './markdownPlugins.js'
 import {
   observePaneScroll,
   reportPaneHeightCorrection,
@@ -50,6 +51,8 @@ export function BoundedMarkdown({
       if (plainText) return planPlainTextLeaves(sourceId, source, plainTextClasses)
       return planMarkdownLeaves(sourceId, source, {
         rehypePlugins,
+        allowPlainTextAppend: rehypePlugins === undefined ||
+          rehypePlugins === REHYPE_PLUGINS || rehypePlugins === TRANSCRIPT_REHYPE_PLUGINS,
         math,
         recognizeCallouts,
         cache: cacheRef.current,

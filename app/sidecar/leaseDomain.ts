@@ -66,6 +66,7 @@ import type {
   LeaseSnapshot,
 } from '../shared/protocol.js'
 import { NON_LEASE_SELECTION_KINDS } from '../shared/protocol.js'
+import { subscribeToProjection } from './projectedSubscription.js'
 
 /**
  * The owner id the engine registers for the main thread's lease
@@ -156,15 +157,27 @@ export function createSidecarLeaseDomain(
     // both and is idempotent: the sidecar can call it on teardown after an
     // earlier detach without double-detaching either source.
     subscribe(listener) {
-      const stopStore = appStateStore.subscribe(listener)
-      const stopLeases = subscribeToLeaseChanges(listener)
-      let stopped = false
-      return () => {
-        if (stopped) return
-        stopped = true
-        stopStore()
-        stopLeases()
-      }
+      return subscribeToProjection(
+        onChange => {
+          const stopStore = appStateStore.subscribe(onChange)
+          const stopLeases = subscribeToLeaseChanges(onChange)
+          let stopped = false
+          return () => {
+            if (stopped) return
+            stopped = true
+            stopStore()
+            stopLeases()
+          }
+        },
+        () => {
+          try {
+            return leaseSnapshot(reader, appStateStore.getState().tasks)
+          } catch {
+            return null
+          }
+        },
+        listener,
+      )
     },
   }
 }

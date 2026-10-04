@@ -373,3 +373,28 @@ this doc is the record of the choice.
   trigger `app/main/main.ts:246-333`.
 - `docs/migration/decisions/SECURITY-MINIMUM.md` — the outbound-secrets /
   read-only-snapshot posture the delivery seam must preserve (unchanged here).
+
+## Resource work avoidance, 2026-10-04
+
+The disposable owner remains unchanged. Main now uses the engine-free
+`sessionsCatalogFingerprint.ts` preflight before spawning; the worker repeats
+the check before importing the engine graph. The bounded validated cache carries
+a source fingerprint for transcript names/sizes/mtime/ctime, relocation records,
+and workspace existence. A missing, malformed, oversized, or mismatched cache
+causes a real enumeration. A race after the initial source check causes another
+refresh on a later check rather than marking unobserved content current.
+
+Unchanged sources neither boot the engine nor enumerate/rewrite/publish the
+catalog. `capturedAtMs` remains the time of the real enumeration, preserving its
+title-precedence meaning. Changed terminal transcripts and relocation records
+produce a fresh capture on the next 120-second visible-window cadence. Accounts
+retain their 60-second cadence and analytics retain five minutes. Main pauses
+scheduled starts only when all windows are hidden or minimized, catches up a
+skipped interval when a window becomes readable, and preserves immediate cold
+reads and explicit account/analytics refresh. Visible unfocused windows continue
+to refresh. Failed runs retain last-good results and existing single-flight and
+abort behavior. No persistent shared engine or new provider probing is added.
+
+The isolated fixture worker checks are in
+`app/sidecar/sessionsCatalogWorker.probe.test.ts`; startup avoidance is measured
+by `scripts/benchmarks/resourceWasteBackground.ts`.

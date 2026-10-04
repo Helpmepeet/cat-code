@@ -5084,6 +5084,26 @@ test('a live user turn renders exactly Copy, Edit, and Branch in the reserved ac
   expect(html.match(/focus-visible:outline-accent/g)).toHaveLength(3)
 })
 
+test('a long restored transcript mounts a bounded outer entry window', () => {
+  const rows = Array.from({ length: 240 }, (_, index) =>
+    userRow(`Historical message ${index}`, `history-${index}`),
+  )
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={rows} />)
+
+  expect((html.match(/data-transcript-entry=/g) ?? []).length).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+  expect(html).toContain('Historical message 239')
+  expect(html).not.toContain('Historical message 0')
+  const anchored = renderToStaticMarkup(
+    <TranscriptRowsView rows={rows} initialScrollRowKey={rows[179].id} />,
+  )
+  expect(anchored).toContain('Historical message 179')
+  expect((anchored.match(/data-transcript-entry=/g) ?? []).length).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+  const missingAnchor = renderToStaticMarkup(
+    <TranscriptRowsView rows={rows} initialScrollRowKey="removed-row" />,
+  )
+  expect(missingAnchor).toContain('Historical message 239')
+})
+
 test('message actions stay absent without a live callback', () => {
   const noEngine = renderToStaticMarkup(
     <TranscriptRowsView rows={[userRow('offline')]} />,

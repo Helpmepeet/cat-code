@@ -195,12 +195,18 @@ function findTopRowIndex(geometry: TranscriptRowGeometry, scrollTop: number): nu
  * message.
  */
 export function readTranscriptRowGeometry(scroller: HTMLElement): TranscriptRowGeometry {
-  const rows = scroller.firstElementChild?.children ?? null
-  const rowCount = rows?.length ?? 0
+  const children = scroller.firstElementChild?.children ?? null
+  const childElements = children === null ? [] : Array.from(children)
+  const virtualized = childElements.some(child =>
+    child.hasAttribute('data-transcript-child') || child.hasAttribute('data-transcript-entry'))
+  const rows = virtualized
+    ? childElements.filter(child => readDirectOrChildRowKey(child) !== null)
+    : childElements
+  const rowCount = rows.length
   // Reading an attribute costs no layout, which is what lets the key lookup be a
   // plain walk while the offset lookup stays a binary search.
   const readRowKey = (index: number): string | null =>
-    rows?.item(index)?.getAttribute(TRANSCRIPT_ROW_KEY_ATTRIBUTE) ?? null
+    rows[index] ? readDirectOrChildRowKey(rows[index]!) : null
   // Content origin in viewport coordinates, measured on the first row read and
   // reused, so every offset comes from one layout pass and a pane that needs no
   // row at all — one still following the end of its document, which is the case
@@ -209,7 +215,7 @@ export function readTranscriptRowGeometry(scroller: HTMLElement): TranscriptRowG
   return {
     rowCount,
     readRowOffset: index => {
-      const row = rows?.item(index)
+      const row = rows[index]
       if (!row) return 0
       originTop ??= scroller.getBoundingClientRect().top - scroller.scrollTop
       return row.getBoundingClientRect().top - originTop
@@ -222,6 +228,12 @@ export function readTranscriptRowGeometry(scroller: HTMLElement): TranscriptRowG
       return -1
     },
   }
+}
+
+function readDirectOrChildRowKey(element: Element): string | null {
+  return element.getAttribute(TRANSCRIPT_ROW_KEY_ATTRIBUTE) ??
+    element.querySelector(`[${TRANSCRIPT_ROW_KEY_ATTRIBUTE}]`)
+      ?.getAttribute(TRANSCRIPT_ROW_KEY_ATTRIBUTE) ?? null
 }
 
 /** The anchor to remember for the pane as it currently stands. */

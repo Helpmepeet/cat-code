@@ -3077,6 +3077,11 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
   expect(attachSnapshot?.goal?.objective).toBe('Ship goals panel')
   expect(attachSnapshot?.goal?.summary).toContain('Token budget: 10,000')
 
+  store.setState(prev => ({ ...prev, tasks: { ...prev.tasks } }))
+  expect(
+    received.filter(frame => frame.kind === 'thread-goal.snapshot'),
+  ).toHaveLength(1)
+
   store.setState(prev => ({
     ...prev,
     threadGoal: prev.threadGoal
@@ -3092,6 +3097,9 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
     .at(-1)
   expect(latest?.kind).toBe('thread-goal.snapshot')
   expect(latest?.goal?.status).toBe('paused')
+  expect(
+    received.filter(frame => frame.kind === 'thread-goal.snapshot'),
+  ).toHaveLength(2)
 })
 
 test('P4-12 — attach emits an extensions.snapshot after the goal snapshot, secretGuard-clean through send()', () => {
@@ -3266,6 +3274,12 @@ test('P4-9 — emits the live tasks snapshot on attach and store change', () => 
 
   store.setState(prev => ({
     ...prev,
+    tasks: { b1: { ...runningBash, lastReportedTotalLines: 100 } },
+  }))
+  expect(received.filter(frame => frame.kind === 'tasks.snapshot')).toHaveLength(1)
+
+  store.setState(prev => ({
+    ...prev,
     tasks: { b1: { ...runningBash, status: 'completed', isBackgrounded: true } },
   }))
 
@@ -3281,6 +3295,7 @@ test('P4-9 — emits the live tasks snapshot on attach and store change', () => 
   // — proving the store-driven re-emit carries fresh filtered state, not a
   // stale copy of the attach-time snapshot.
   expect(latest?.tasks.items).toHaveLength(0)
+  expect(received.filter(frame => frame.kind === 'tasks.snapshot')).toHaveLength(2)
 })
 
 test('workers.snapshot contains live worker state on attach and after a task change', () => {
@@ -3323,6 +3338,12 @@ test('workers.snapshot contains live worker state on attach and after a task cha
 
   store.setState(prev => ({
     ...prev,
+    tasks: { a1: { ...worker, lastReportedTokenCount: 4 } } as never,
+  }))
+  expect(received.filter(frame => frame.kind === 'workers.snapshot')).toHaveLength(1)
+
+  store.setState(prev => ({
+    ...prev,
     tasks: {
       a1: {
         ...worker,
@@ -3347,6 +3368,7 @@ test('workers.snapshot contains live worker state on attach and after a task cha
     resultSummary: 'Completed the auth flow.',
   })
   expect(latest && scanForSecrets(latest).ok).toBe(true)
+  expect(received.filter(frame => frame.kind === 'workers.snapshot')).toHaveLength(2)
 })
 
 test('worker result summaries are text-only, bounded, and omitted when the result has a secret key', () => {
@@ -8623,19 +8645,30 @@ test('P4-32b — a lease read that fails degrades to silence, never a stranded a
 
 test('P4-32b — a store change re-broadcasts the lease snapshot (a spawn moves leases)', () => {
   const store = createStore({ ...getDefaultAppState(), tasks: {} })
+  let strategy: 'spread' | 'follow-main' = 'spread'
   const server = leaseServerFixture(
-    createSidecarLeaseDomain(store, { reader: fakeLeaseReader() }),
+    createSidecarLeaseDomain(store, {
+      reader: fakeLeaseReader({
+        snapshot: () => ({
+          mainLease: null,
+          strategy,
+          accounts: [],
+        }),
+      }),
+    }),
   )
   const { socket, received } = makeSocket()
   server.addConnection(socket)
   const before = received.filter(f => f.kind === 'lease.snapshot').length
   expect(before).toBe(1)
 
-  store.setState(state => ({ ...state, tasks: {} }))
+  store.setState(state => ({ ...state, tasks: { ...state.tasks } }))
+  expect(received.filter(f => f.kind === 'lease.snapshot').length).toBe(before)
 
-  expect(received.filter(f => f.kind === 'lease.snapshot').length).toBeGreaterThan(
-    before,
-  )
+  strategy = 'follow-main'
+  store.setState(state => ({ ...state, tasks: { ...state.tasks } }))
+
+  expect(received.filter(f => f.kind === 'lease.snapshot').length).toBe(before + 1)
 })
 
 test('P4-32b — the inbound allowlist did NOT grow: a lease verb is rejected bad_request', () => {

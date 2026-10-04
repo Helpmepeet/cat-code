@@ -14,6 +14,7 @@
  */
 import type { Element, ElementContent, Root, RootContent } from 'hast'
 import type { Root as MdastRoot } from 'mdast'
+import type { Position } from 'unist'
 import type { ReactNode } from 'react'
 import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
@@ -148,14 +149,15 @@ export type MarkdownLeafWindow = {
 }
 
 /**
- * Holds the hast of the settled prefix while a fence is still open, so a
- * streamed token does not reparse blocks that can no longer change. Owned by
- * the mounted body, so nothing survives its unmount.
+ * Holds reusable settled Markdown while one body streams. The complete source
+ * is still parsed whenever syntax could change document-wide meaning.
  */
 export type MarkdownPlanCache = {
   current: {
     body: string
     tree: Root
+    rehypePlugins: PluggableList
+    allowPlainTextAppend: boolean
     recognizeCallouts: boolean
     math: boolean
   } | null
@@ -203,6 +205,8 @@ export function planMarkdownLeaves(
   source: string,
   options?: {
     rehypePlugins?: PluggableList
+    /** Caller confirms its rehype plugins leave syntax-free text paragraphs unchanged. */
+    allowPlainTextAppend?: boolean
     cache?: MarkdownPlanCache
     recognizeCallouts?: boolean
     math?: boolean
@@ -213,19 +217,71 @@ export function planMarkdownLeaves(
     ? normalizeLatexMathDelimiters(source)
     : source
   const processor = markdownProcessor(options?.rehypePlugins ?? NO_PLUGINS, math)
+  const rehypePlugins = options?.rehypePlugins ?? NO_PLUGINS
+  const allowPlainTextAppend = options?.allowPlainTextAppend ?? rehypePlugins.length === 0
   const recognizeCallouts = options?.recognizeCallouts ?? false
   const cached = options?.cache?.current
+  let tree: Root | undefined
+  let tailOffset: number | null = null
 
-  let tree: Root
-  let tailOffset: number | null
+  // A common streaming shape is one uninterrupted plain-text paragraph. It
+  // has no document-wide Markdown state (references, block boundaries, tables,
+  // math, or fences), so extend its already parsed HAST text leaf directly.
+  // Any syntax marker, newline, mode change, or non-prefix edit falls through
+  // to the full-document parser below. This is deliberately narrower than
+  // parsing arbitrary chunks: Markdown's reference definitions and block
+  // constructs can change how earlier source is interpreted.
+  const suffix = cached && markdownSource.startsWith(cached.body)
+    ? markdownSource.slice(cached.body.length)
+    : ''
+  if (
+    cached !== null && cached !== undefined &&
+    cached.rehypePlugins === rehypePlugins &&
+    cached.allowPlainTextAppend === allowPlainTextAppend &&
+    allowPlainTextAppend &&
+    cached.recognizeCallouts === recognizeCallouts &&
+    cached.math === math &&
+    markdownSource.length > cached.body.length && suffix.length > 0 &&
+    isPlainParagraphAppend(cached.body, suffix, cached.tree)
+  ) {
+    const children = [...cached.tree.children]
+    const lastIndex = children.length - 1
+    const paragraph = children[lastIndex]
+    if (paragraph?.type === 'element') {
+      const paragraphChildren = [...paragraph.children]
+      const textIndex = paragraphChildren.length - 1
+      const text = paragraphChildren[textIndex]
+      if (text?.type === 'text') {
+        paragraphChildren[textIndex] = {
+          ...text,
+          value: text.value + suffix,
+          position: extendNodePosition(text.position, suffix.length),
+        }
+        children[lastIndex] = {
+          ...paragraph,
+          children: paragraphChildren,
+          position: extendNodePosition(paragraph.position, suffix.length),
+        }
+        tree = {
+          ...cached.tree,
+          children,
+          position: extendNodePosition(cached.tree.position, suffix.length),
+        }
+        tailOffset = null
+        if (options?.cache && tree) options.cache.current = { ...cached, body: markdownSource, tree }
+      }
+    }
+  }
 
   // Fast path while a fence is open. The cached body ends exactly at that
   // fence, so the remainder can be read on its own: if it is still nothing but
   // an unterminated fence, no settled block can have changed and the parsed
   // prefix stands. Every other case reparses the whole document.
-  const appendedToOpenFence =
+  const appendedToOpenFence = tree === undefined &&
     cached !== null &&
     cached !== undefined &&
+    cached.rehypePlugins === rehypePlugins &&
+    cached.allowPlainTextAppend === allowPlainTextAppend &&
     cached.recognizeCallouts === recognizeCallouts &&
     cached.math === math &&
     markdownSource.length > cached.body.length &&
@@ -235,7 +291,9 @@ export function planMarkdownLeaves(
       markdownSource.slice(cached.body.length),
     )
 
-  if (appendedToOpenFence) {
+  if (tree !== undefined) {
+    // Plain paragraph fast path above already extended this settled tree.
+  } else if (appendedToOpenFence) {
     tree = cached.tree
     tailOffset = cached.body.length
   } else {
@@ -267,9 +325,9 @@ export function planMarkdownLeaves(
     // constant across tokens, and the entry is replaced outright on settlement.
     if (options?.cache !== undefined) {
       options.cache.current =
-        tailOffset === null
-          ? null
-          : { body, tree, recognizeCallouts, math }
+        tailOffset !== null || isPlainParagraphAppendable(markdownSource, tree)
+          ? { body: tailOffset !== null ? body : markdownSource, tree, rehypePlugins, allowPlainTextAppend, recognizeCallouts, math }
+          : null
     }
   }
 
@@ -1292,6 +1350,42 @@ function fenceRunLength(raw: string): number {
   let run = 0
   while (raw[index + run] === marker) run += 1
   return run >= 3 ? run : 0
+}
+
+const PLAIN_STREAM_TEXT = /^[\p{L}\p{N} ,.;:!?]+$/u
+
+function isPlainParagraphText(source: string): boolean {
+  if (!source || !/^[\p{L}]/u.test(source) || !PLAIN_STREAM_TEXT.test(source)) return false
+  if (/\bwww\.$/i.test(source)) return false
+  const withoutSentenceEnd = source.endsWith('.') ? source.slice(0, -1) : source
+  return !withoutSentenceEnd.includes('.') && source.trimEnd() === source
+}
+
+function isPlainParagraphAppend(body: string, suffix: string, tree: Root): boolean {
+  if (!/^ ?[\p{L}\p{N}]+(?: [\p{L}\p{N}]+)*(?:[.,!?])?$/u.test(suffix)) return false
+  const lastBlockStart = Math.max(body.lastIndexOf('\n\n'), body.lastIndexOf('\r\n\r\n'))
+  const lastBlock = body.slice(lastBlockStart < 0 ? 0 : lastBlockStart + (body.startsWith('\r\n\r\n', lastBlockStart) ? 4 : 2))
+  if (!isPlainParagraphText(lastBlock)) return false
+  const paragraph = [...tree.children].reverse().find(child => child.type === 'element')
+  return paragraph?.type === 'element' &&
+    paragraph.tagName === 'p' && paragraph.children.length === 1 &&
+    paragraph.children[0]?.type === 'text'
+}
+
+function isPlainParagraphAppendable(source: string, tree: Root): boolean {
+  return isPlainParagraphAppend(source, ' x', tree)
+}
+
+function extendNodePosition(position: Position | undefined, length: number): Position | undefined {
+  if (!position) return position
+  return {
+    ...position,
+    end: {
+      ...position.end,
+      column: position.end.column + length,
+      ...(position.end.offset === undefined ? {} : { offset: position.end.offset + length }),
+    },
+  }
 }
 
 /* ── measurement ───────────────────────────────────────────────────────────── */

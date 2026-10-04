@@ -1977,6 +1977,8 @@ html[data-glass='on'] [data-window-overlay] {
 
 /* Workspace moves share one quiet transcript seam. */
 .workspace-transcript-column { position: relative; }
+.transcript-virtual-column > [data-transcript-entry] { margin-block-end: 0.625rem; }
+.transcript-virtual-column > [data-transcript-entry]:last-child { margin-block-end: 0; }
 .chat-project-divider {
   display: flex;
   align-items: center;

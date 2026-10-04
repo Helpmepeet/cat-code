@@ -16,6 +16,7 @@ import type {
   LiveWorkerItem,
   LiveWorkersSnapshot,
 } from '../shared/protocol.js'
+import { subscribeToProjection } from './projectedSubscription.js'
 
 const MAX_RESULT_SUMMARY_CHARS = 2_048
 
@@ -32,7 +33,11 @@ export function createSidecarWorkersDomain(
       return workersSnapshot(appStateStore.getState().tasks)
     },
     subscribe(listener) {
-      return appStateStore.subscribe(listener)
+      return subscribeToProjection(
+        appStateStore.subscribe,
+        () => workersSnapshot(appStateStore.getState().tasks),
+        listener,
+      )
     },
   }
 }

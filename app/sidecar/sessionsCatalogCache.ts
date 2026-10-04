@@ -3,7 +3,7 @@
  *
  * After each successful enumeration the catalog owner (decision #4) — the
  * disposable `sessionsCatalogWorker` — drops the global `SessionsCatalogSnapshot`
- * to a single cache file so a launch that has not yet completed its first catalog
+ * to a single cache file with its source fingerprint so a launch that has not yet completed its first catalog
  * worker run still has the catalog available to the renderer at startup (and so
  * `openHistorySession` can resolve a terminal-created transcript's cwd).
  *
@@ -48,13 +48,14 @@ export function sessionsCatalogCacheDir(): string {
 export function writeSessionsCatalogCache(
   snapshot: SessionsCatalogSnapshot,
   dir: string = sessionsCatalogCacheDir(),
+  sourceFingerprint?: string,
 ): void {
   // The 0700 dir mode is deliberate and the engine helper does not set it, so the
   // directory is created here first; the helper's own mkdir then no-ops.
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   writeFileAtomicDurableSync(
     join(dir, SESSIONS_CATALOG_CACHE_FILENAME),
-    JSON.stringify(snapshot),
+    JSON.stringify(sourceFingerprint ? { ...snapshot, sourceFingerprint } : snapshot),
     { encoding: 'utf8', mode: 0o600 },
   )
 }

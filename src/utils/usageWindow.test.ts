@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { localDayHours, shiftLocalCalendarDays, usageTimestampEligible, usageWindow } from './usageWindow.js';
+import { localDateKey, localDayHours, localMidnight, shiftLocalCalendarDays, usageTimestampEligible, usageWindow } from './usageWindow.js';
 import { usageHourLabel } from '../../app/renderer/src/usageGraphState.js';
 test('local calendar windows preserve date count and instant bounds across zones', () => {
     for (const tz of ['UTC', 'America/New_York', 'Europe/Berlin', 'Asia/Kathmandu', 'Pacific/Auckland']) {
@@ -46,4 +46,79 @@ test('shifted comparison cutoffs preserve local wall time across DST', () => {
     expect(new Date(shiftLocalCalendarDays(Date.parse('2025-11-04T17:30:00.000Z'), -7, zone)).toISOString()).toBe('2025-10-28T16:30:00.000Z');
     // The missing 02:30 at spring-forward resolves to the first real 03:30.
     expect(new Date(shiftLocalCalendarDays(Date.parse('2025-03-16T06:30:00.000Z'), -7, zone)).toISOString()).toBe('2025-03-09T07:30:00.000Z');
+});
+
+test('timezone formatter work is reused across repeated date conversions', () => {
+    const NativeDateTimeFormat = Intl.DateTimeFormat;
+    let constructions = 0;
+    Intl.DateTimeFormat = new Proxy(NativeDateTimeFormat, {
+        construct(target, args, newTarget) {
+            constructions++;
+            return Reflect.construct(target, args, newTarget);
+        },
+    }) as typeof Intl.DateTimeFormat;
+    try {
+        const zone = 'Pacific/Chatham';
+        const timestamps = Array.from({ length: 30_000 }, (_, index) => Date.UTC(2025, 0, 1) + index * 3600000);
+        const expected = timestamps.map(timestamp => {
+            const parts = Object.fromEntries(new NativeDateTimeFormat('en-CA', {
+                timeZone: zone, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+            }).formatToParts(timestamp).map(part => [part.type, part.value]));
+            const year = Number(parts.year) + (parts.era === 'BC' ? -1 : 0);
+            return `${String(year).padStart(4, '0')}-${parts.month}-${parts.day}`;
+        });
+        const actual = timestamps.map(timestamp => localDateKey(timestamp, zone));
+        expect(actual).toEqual(expected);
+        expect(constructions).toBeLessThanOrEqual(1);
+    } finally {
+        Intl.DateTimeFormat = NativeDateTimeFormat;
+    }
+});
+
+test('timezone reuse evicts cold zones and retains the current zone', () => {
+    const NativeDateTimeFormat = Intl.DateTimeFormat;
+    let constructions = 0;
+    Intl.DateTimeFormat = new Proxy(NativeDateTimeFormat, {
+        construct(target, args, newTarget) {
+            constructions++;
+            return Reflect.construct(target, args, newTarget);
+        },
+    }) as typeof Intl.DateTimeFormat;
+    try {
+        const zones = Intl.supportedValuesOf('timeZone').slice(0, 32);
+        const timestamp = Date.UTC(2026, 0, 1);
+        for (const zone of zones) localDateKey(timestamp, zone);
+        constructions = 0;
+        for (const zone of zones) localDateKey(timestamp, zone);
+        // A permanently growing cache would retain all these cold zones.
+        expect(constructions).toBeGreaterThan(0);
+        constructions = 0;
+        for (let index = 0; index < 100; index++) localDateKey(timestamp, zones.at(-1)!);
+        expect(constructions).toBe(0);
+    } finally {
+        Intl.DateTimeFormat = NativeDateTimeFormat;
+    }
+});
+
+test('repeated calendar boundaries do no additional timezone conversions', () => {
+    const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
+    let conversions = 0;
+    Intl.DateTimeFormat.prototype.formatToParts = function (...args) {
+        conversions++;
+        return originalFormatToParts.apply(this, args);
+    };
+    try {
+        const zone = 'America/New_York';
+        const timestamp = Date.parse('2027-03-21T06:30:00.000Z');
+        expect(localMidnight('2027-03-14', zone)).toBe(Date.parse('2027-03-14T05:00:00.000Z'));
+        expect(shiftLocalCalendarDays(timestamp, -7, zone)).toBe(Date.parse('2027-03-14T07:30:00.000Z'));
+        conversions = 0;
+        for (let index = 0; index < 100; index++) {
+            localMidnight('2027-03-14', zone);
+            shiftLocalCalendarDays(timestamp, -7, zone);
+        }
+        expect(conversions).toBe(0);
+    } finally {
+        Intl.DateTimeFormat.prototype.formatToParts = originalFormatToParts;
+    }
 });

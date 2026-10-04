@@ -1,12 +1,32 @@
 import type { UsageHour } from '../../app/shared/usageDashboard.js';
 
-const dateFormatter = (timeZone: string) => new Intl.DateTimeFormat('en-CA', {
+const FORMATTER_CACHE_LIMIT = 16;
+const BOUNDARY_CACHE_LIMIT = 512;
+
+function cached<K, V>(cache: Map<K, V>, key: K, create: () => V, limit: number): V {
+    const existing = cache.get(key);
+    if (existing !== undefined) {
+        cache.delete(key);
+        cache.set(key, existing);
+        return existing;
+    }
+    const value = create();
+    cache.set(key, value);
+    if (cache.size > limit) cache.delete(cache.keys().next().value!);
+    return value;
+}
+
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+const dateFormatter = (timeZone: string) => cached(dateFormatters, timeZone, () => new Intl.DateTimeFormat('en-CA', {
     timeZone, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-const dateTimeFormatter = (timeZone: string) => new Intl.DateTimeFormat('en-CA', {
+}), FORMATTER_CACHE_LIMIT);
+const dateTimeFormatter = (timeZone: string) => cached(dateTimeFormatters, timeZone, () => new Intl.DateTimeFormat('en-CA', {
     timeZone, era: 'short', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
     minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'longOffset',
-});
+}), FORMATTER_CACHE_LIMIT);
+const midnightCache = new Map<string, number>();
+const shiftedCutoffCache = new Map<string, number>();
 
 export function localDateKey(timestamp: number, timeZone: string): string {
     const parts = Object.fromEntries(dateFormatter(timeZone).formatToParts(timestamp).map(part => [part.type, part.value]));
@@ -39,6 +59,13 @@ export function calendarDayDistance(start: string, end: string): number {
 
 /** Resolve local midnight to its UTC instant without assuming a fixed offset. */
 export function localMidnight(date: string, timeZone: string): number {
+    const key = `${timeZone}\0${date}`;
+    const existing = midnightCache.get(key);
+    if (existing !== undefined) {
+        midnightCache.delete(key);
+        midnightCache.set(key, existing);
+        return existing;
+    }
     const target = dateParts(date);
     const desired = utcMillis(target.year, target.month, target.day);
     let guess = desired;
@@ -62,10 +89,16 @@ export function localMidnight(date: string, timeZone: string): number {
             if (localDateKey(middle, timeZone) < date) low = middle + 1;
             else high = middle;
         }
-        if (localDateKey(low, timeZone) === date) return low;
+        if (localDateKey(low, timeZone) === date) return rememberMidnight(key, low);
         throw new Error(`Local midnight does not exist: ${date} ${timeZone}`);
     }
-    return guess;
+    return rememberMidnight(key, guess);
+}
+
+function rememberMidnight(key: string, value: number): number {
+    midnightCache.set(key, value);
+    if (midnightCache.size > BOUNDARY_CACHE_LIMIT) midnightCache.delete(midnightCache.keys().next().value!);
+    return value;
 }
 
 export function localHourParts(timestamp: number, timeZone: string): { hour: number; offsetMinutes: number } {
@@ -77,20 +110,33 @@ export function localHourParts(timestamp: number, timeZone: string): { hour: num
 
 /** Shift a cutoff by calendar days while keeping its local wall-clock time. */
 export function shiftLocalCalendarDays(timestamp: number, days: number, timeZone: string): number {
+    const key = `${timeZone}\0${timestamp}\0${days}`;
+    const existing = shiftedCutoffCache.get(key);
+    if (existing !== undefined) {
+        shiftedCutoffCache.delete(key);
+        shiftedCutoffCache.set(key, existing);
+        return existing;
+    }
     const base = timestamp + days * 86400000;
     const currentOffset = localHourParts(timestamp, timeZone).offsetMinutes;
     let guess = base, previous = Number.NaN;
     for (let attempt = 0; attempt < 6; attempt++) {
         const targetOffset = localHourParts(guess, timeZone).offsetMinutes;
         const next = base + (currentOffset - targetOffset) * 60000;
-        if (next === guess) return next;
+        if (next === guess) return rememberShiftedCutoff(key, next);
         // A target wall time in a spring-forward gap has no exact instant.
         // Choose the first real time after the gap instead of oscillating.
-        if (next === previous) return Math.max(guess, next);
+        if (next === previous) return rememberShiftedCutoff(key, Math.max(guess, next));
         previous = guess;
         guess = next;
     }
-    return guess;
+    return rememberShiftedCutoff(key, guess);
+}
+
+function rememberShiftedCutoff(key: string, value: number): number {
+    shiftedCutoffCache.set(key, value);
+    if (shiftedCutoffCache.size > BOUNDARY_CACHE_LIMIT) shiftedCutoffCache.delete(shiftedCutoffCache.keys().next().value!);
+    return value;
 }
 
 export function localDayHours(date: string, timeZone: string, withTokens: boolean): UsageHour[] {

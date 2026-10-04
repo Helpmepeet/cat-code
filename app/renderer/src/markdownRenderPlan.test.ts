@@ -11,13 +11,17 @@
  * bounded window actually mounts.
  */
 import { describe, expect, test } from 'bun:test'
+import rehypeHighlight from 'rehype-highlight'
 import type { ElementContent } from 'hast'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { PluggableList } from 'unified'
 import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import {
   MAX_MARKDOWN_LEAF_CHARACTERS,
   MAX_MOUNTED_MARKDOWN_LEAVES,
   markdownMeasurementKey,
+  createMarkdownPlanCache,
+  type MarkdownPlanCache,
   mergeMountedMarkdownLeaves,
   normalizeLatexMathDelimiters,
   planMarkdownLeaves,
@@ -112,6 +116,142 @@ describe('LaTeX delimiter normalization', () => {
 })
 
 describe('semantic leaves keep their document context', () => {
+  test('plain prose streaming extends the settled tree without reparsing', () => {
+    const cache = createMarkdownPlanCache()
+    const initial = 'A settled answer with ordinary words'
+    planMarkdownLeaves('streaming-row', initial, { cache })
+    const settledTree = cache.current?.tree
+    const leaves = planMarkdownLeaves('streaming-row', `${initial} and more words`, { cache })
+
+    expect(cache.current?.tree).not.toBe(settledTree)
+    expect(settledTree?.children[0]?.type === 'element' && settledTree.children[0].children[0]?.type === 'text'
+      ? settledTree.children[0].children[0].value
+      : '').toBe(initial)
+    expect(mount(leaves, 0, leaves.length)).toContain('A settled answer with ordinary words and more words')
+  })
+
+  test('plain appends skip settled rehype work and syntax changes resume full-document transformation', () => {
+    let transforms = 0
+    const countTransform = () => () => { transforms += 1 }
+    const plugins: PluggableList = [countTransform]
+    const cache = createMarkdownPlanCache()
+    let source = 'A settled answer with ordinary words'
+    planMarkdownLeaves('streaming-count', source, {
+      cache,
+      rehypePlugins: plugins,
+      allowPlainTextAppend: true,
+    })
+    expect(transforms).toBe(1)
+
+    for (let index = 0; index < 10; index += 1) {
+      source += ' and more words'
+      planMarkdownLeaves('streaming-count', source, {
+        cache,
+        rehypePlugins: plugins,
+        allowPlainTextAppend: true,
+      })
+    }
+    expect(transforms).toBe(1)
+
+    source += '\n\n[guide]: https://example.com/guide'
+    const actual = planMarkdownLeaves('streaming-count', source, {
+      cache,
+      rehypePlugins: plugins,
+      allowPlainTextAppend: true,
+    })
+    expect(transforms).toBe(2)
+    const expected = planMarkdownLeaves('streaming-count', source, {
+      rehypePlugins: plugins,
+      allowPlainTextAppend: true,
+    })
+    expect(transforms).toBe(3)
+    expect(mount(actual, 0, actual.length)).toBe(mount(expected, 0, expected.length))
+  })
+
+  test('assistant prose after a highlighted fence reuses the settled tree with math and callouts enabled', () => {
+    const cache = createMarkdownPlanCache()
+    const initial = '```ts\nconst answer = 42\n```\n\nA complete sentence'
+    planMarkdownLeaves('streaming-row', initial, {
+      cache,
+      rehypePlugins: REHYPE_PLUGINS,
+      allowPlainTextAppend: true,
+      math: true,
+      recognizeCallouts: true,
+    })
+    const previousTree = cache.current?.tree
+    const next = planMarkdownLeaves('streaming-row', `${initial} with more words`, {
+      cache,
+      rehypePlugins: REHYPE_PLUGINS,
+      allowPlainTextAppend: true,
+      math: true,
+      recognizeCallouts: true,
+    })
+
+    expect(cache.current?.tree).not.toBe(previousTree)
+    expect(mount(next, 0, next.length)).toContain('language-ts')
+    expect(mount(next, 0, next.length)).toContain('A complete sentence with more words')
+  })
+
+  test('syntax-changing appends still use whole-document reference resolution', () => {
+    const cache = createMarkdownPlanCache()
+    const source = 'See [the guide][guide].'
+    planMarkdownLeaves('reference-row', source, { cache })
+    const leaves = planMarkdownLeaves('reference-row', `${source}\n\n[guide]: https://example.com/guide`, { cache })
+
+    expect(cache.current).toBeNull()
+    expect(mount(leaves, 0, leaves.length)).toContain('href="https://example.com/guide"')
+  })
+
+  test('a plain trailing paragraph reuses resolved references elsewhere in the full document', () => {
+    const cache = createMarkdownPlanCache()
+    const source = 'See [the guide][guide].\n\n[guide]: https://example.com/guide\n\nThe settled ending'
+    const before = planMarkdownLeaves('reference-row', source, { cache })
+    const previousTree = cache.current?.tree
+    const after = planMarkdownLeaves('reference-row', `${source} grows`, { cache })
+
+    expect(cache.current?.tree).not.toBe(previousTree)
+    const html = mount(after, 0, after.length)
+    const fullyParsed = planMarkdownLeaves('reference-row', `${source} grows`)
+    expect(html).toBe(mount(fullyParsed, 0, fullyParsed.length))
+    expect(html).toContain('href="https://example.com/guide"')
+    expect(html).toContain('The settled ending grows')
+    expect(mount(before, 0, before.length)).toContain('The settled ending')
+  })
+
+  test('entity-shaped prose appends fall back to parsing', () => {
+    const cache = createMarkdownPlanCache()
+    for (const source of ['Text &amp', 'Visit www.example', 'Visit www.', 'trailing space ']) {
+      planMarkdownLeaves('sensitive-row', source, { cache })
+      expect(cache.current).toBeNull()
+    }
+  })
+
+  test('cached highlighting matches the original plugin for known and unknown languages', () => {
+    const directPlugins: PluggableList = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
+    for (const source of ['```ts\nconst answer = 42\n```', '```unknown-language\nplain words\n```']) {
+      const expected = planMarkdownLeaves('highlight-row', source, { rehypePlugins: directPlugins })
+      planMarkdownLeaves('highlight-row', source, { rehypePlugins: REHYPE_PLUGINS })
+      const actual = planMarkdownLeaves('highlight-row', source, { rehypePlugins: REHYPE_PLUGINS })
+      expect(mount(actual, 0, actual.length)).toBe(mount(expected, 0, expected.length))
+    }
+  })
+
+  test('www autolinks that form across an append boundary take the full parser path', () => {
+    const cache = createMarkdownPlanCache()
+    planMarkdownLeaves('www-row', 'Go to www.', { cache })
+    const actual = planMarkdownLeaves('www-row', 'Go to www.example', { cache })
+    const expected = planMarkdownLeaves('www-row', 'Go to www.example')
+    expect(cache.current).toBeNull()
+    expect(mount(actual, 0, actual.length)).toBe(mount(expected, 0, expected.length))
+  })
+
+  test('a single word boundary space is preserved by the fast path', () => {
+    const cache = createMarkdownPlanCache()
+    planMarkdownLeaves('space-row', 'hello', { cache })
+    const leaves = planMarkdownLeaves('space-row', 'hello world', { cache })
+    expect(mount(leaves, 0, leaves.length)).toContain('<p>hello world</p>')
+  })
+
   const table = [
     '| Alpha | Beta |',
     '| --- | --- |',
@@ -397,7 +537,7 @@ describe('code fences', () => {
   })
 
   test('a settled prefix is reused while the fence above it is still open', () => {
-    const cache = { current: null }
+    const cache: MarkdownPlanCache = { current: null }
     const prefix = 'Settled prose.\n\n```ts\n'
     const first = planMarkdownLeaves('row-1', `${prefix}const a = 1`, { cache })
     const cached = cache.current
@@ -409,14 +549,15 @@ describe('code fences', () => {
     expect(first[0].id).toBe(second[0].id)
     expect(mount(second, 0, second.length)).toContain('const b = 2')
 
-    // Settling replaces the entry outright rather than reusing it.
+    // A closing fence forces full parsing. With no trailing prose yet there is
+    // no appendable paragraph to retain.
     const settled = planMarkdownLeaves('row-1', `${prefix}const a = 1\n\`\`\``, { cache })
     expect(cache.current).toBeNull()
     expect(mount(settled, 0, settled.length)).toContain('<pre>')
   })
 
   test('the settled-prefix fast path releases as soon as the fence closes', () => {
-    const cache = { current: null }
+    const cache: MarkdownPlanCache = { current: null }
     const prefix = 'Settled prose.\n\n```ts\n'
     planMarkdownLeaves('row-1', `${prefix}const a = 1`, { cache })
 
@@ -427,11 +568,15 @@ describe('code fences', () => {
     })
     const html = mount(after, 0, after.length)
 
-    expect(cache.current).toBeNull()
+    expect(cache.current).not.toBeNull()
     expect(html).toContain('<pre>')
     expect(html).toContain('language-ts')
     expect(html).toContain('<p>And afterwards.</p>')
     expect(html).not.toContain('```')
+    const closedBody = cache.current?.body
+    const continued = planMarkdownLeaves('row-1', `${closedBody} More words.`, { cache })
+    expect(cache.current?.body).toBe(`${closedBody} More words.`)
+    expect(mount(continued, 0, continued.length)).toContain('<pre>')
   })
 })
 

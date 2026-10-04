@@ -15,6 +15,7 @@ import type {
   TasksSnapshot,
   TaskSubagentMetadata,
 } from '../shared/protocol.js'
+import { subscribeToProjection } from './projectedSubscription.js'
 
 export type SidecarTasksDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
@@ -56,7 +57,19 @@ export function createSidecarTasksDomain(
       )
     },
     subscribe(listener) {
-      return appStateStore.subscribe(listener)
+      return subscribeToProjection(
+        appStateStore.subscribe,
+        () => {
+          const state = appStateStore.getState()
+          return {
+            ...tasksSnapshot(state.tasks, state.foregroundedTaskId),
+            hasForegroundTask:
+              !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS) &&
+              hasForegroundTasks(state),
+          }
+        },
+        listener,
+      )
     },
   }
 }

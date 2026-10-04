@@ -109,6 +109,7 @@ import {
   LITE_READ_BUF_SIZE,
   readHeadAndTail,
   readTranscriptForLoad,
+  readDisplayTranscriptTail,
   SKIP_PRECOMPACT_THRESHOLD,
 } from './sessionStoragePortable.js'
 import { getSettings_DEPRECATED } from './settings/settings.js'
@@ -5020,6 +5021,7 @@ export async function loadTranscriptFile(
   queueOperations: SessionQueueOperation[]
   leafUuids: Set<UUID>
   sourceTruncated: boolean
+  sourceBytesRead: number
   activeConversationTip: ActiveConversationTipEntry | undefined
 }> {
   const relocationId = basename(filePath, '.jsonl')
@@ -5052,6 +5054,7 @@ export async function loadTranscriptFile(
   let contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
   const queueOperations: SessionQueueOperation[] = []
   let sourceTruncated = false
+  let sourceBytesRead = 0
   let activeConversationTip: ActiveConversationTipEntry | undefined
   let activeConversationRoot: UUID | null | undefined
   const activeConversationDescendants = new Set<UUID>()
@@ -5113,43 +5116,13 @@ export async function loadTranscriptFile(
     let metadataLines: string[] | null = null
     let hasPreservedSegment = false
     if (opts?.keepCompactedHistory) {
-      const { size } = await stat(filePath)
-      const maxReadBytes = Math.max(1, opts.maxReadBytes ?? size)
-      const start = Math.max(0, size - maxReadBytes)
-      const length = size - start
-      const tail = Buffer.allocUnsafe(length)
-      const fd = await fsOpen(filePath, 'r')
-      let offset = 0
-      let startsAtLineBoundary = start === 0
-      try {
-        if (start > 0) {
-          const precedingByte = Buffer.allocUnsafe(1)
-          const { bytesRead } = await fd.read(precedingByte, 0, 1, start - 1)
-          startsAtLineBoundary = bytesRead === 1 && precedingByte[0] === 0x0a
-        }
-        while (offset < length) {
-          const { bytesRead } = await fd.read(
-            tail,
-            offset,
-            length - offset,
-            start + offset,
-          )
-          if (bytesRead === 0) break
-          offset += bytesRead
-        }
-      } finally {
-        await fd.close()
-      }
-      buf = tail.subarray(0, offset)
-      if (start > 0) {
-        sourceTruncated = true
-        if (!startsAtLineBoundary) {
-          const firstNewline = buf.indexOf(0x0a)
-          buf = firstNewline >= 0
-            ? buf.subarray(firstNewline + 1)
-            : Buffer.alloc(0)
-        }
-      }
+      const tail = await readDisplayTranscriptTail(
+        filePath,
+        opts.maxReadBytes ?? Number.MAX_SAFE_INTEGER,
+      )
+      buf = tail.buffer
+      sourceTruncated = tail.truncated
+      sourceBytesRead = tail.bytesRead
     } else if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP)) {
       const { size } = await stat(filePath)
       if (size > SKIP_PRECOMPACT_THRESHOLD) {
@@ -5481,6 +5454,7 @@ export async function loadTranscriptFile(
     queueOperations,
     leafUuids,
     sourceTruncated,
+    sourceBytesRead,
     activeConversationTip,
   }
 }
@@ -6011,6 +5985,45 @@ export async function getAgentTranscriptForSession(
     agentId,
     getAgentTranscriptPathForSession(sessionId, agentId),
   )
+}
+
+/**
+ * Desktop display read with explicit work accounting. Agent resume continues to
+ * use getAgentTranscriptForSession and never inherits these display limits.
+ */
+export async function getDisplayAgentTranscriptForSession(
+  sessionId: string,
+  agentId: AgentId,
+  options: { maxBytes: number; maxMessages: number },
+): Promise<{ messages: Message[]; bytesRead: number; truncated: boolean } | null> {
+  try {
+    const loaded = await loadTranscriptFile(
+      getAgentTranscriptPathForSession(sessionId, agentId),
+      { keepCompactedHistory: true, maxReadBytes: options.maxBytes },
+    )
+    const own = [...loaded.messages.values()].filter(
+      message => message.agentId === agentId && message.isSidechain,
+    )
+    const parents = new Set<string | null>(own.map(message => message.parentUuid))
+    const tip = findLatestMessage(own, message => !parents.has(message.uuid))
+    const chain = tip
+      ? buildDisplayConversationChain(loaded.messages, tip).filter(message => message.agentId === agentId)
+      : []
+    const capped = chain.length > options.maxMessages
+    return {
+      messages: (capped ? chain.slice(-options.maxMessages) : chain).map(
+        ({ isSidechain, parentUuid, ...message }) => message,
+      ),
+      bytesRead: loaded.sourceBytesRead,
+      // A partial branch has no independent truncation row on the wire. Keep
+      // its card in the existing unavailable-history state rather than present
+      // a suffix as though it were a complete worker conversation.
+      truncated: loaded.sourceTruncated || capped,
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
 }
 
 async function getAgentTranscriptFromPath(

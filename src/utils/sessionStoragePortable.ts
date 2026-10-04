@@ -16,6 +16,48 @@ import { djb2Hash } from './hash.js'
 /** Size of the head/tail buffer for lite metadata reads. */
 export const LITE_READ_BUF_SIZE = 65536
 
+/**
+ * Bounded display-only tail. The optional line-alignment probe is included in
+ * bytesRead so a caller can account for work across several transcript files.
+ */
+export async function readDisplayTranscriptTail(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ buffer: Buffer; truncated: boolean; bytesRead: number }> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error('Display transcript byte limit must be a positive safe integer')
+  }
+  const fd = await fsOpen(filePath, 'r')
+  try {
+    const { size } = await fd.stat()
+    const start = Math.max(0, size - maxBytes)
+    const tail = Buffer.allocUnsafe(size - start)
+    let bytesRead = 0
+    let offset = 0
+    let aligned = start === 0
+    if (start > 0) {
+      const probe = Buffer.allocUnsafe(1)
+      const read = await fd.read(probe, 0, 1, start - 1)
+      bytesRead += read.bytesRead
+      aligned = read.bytesRead === 1 && probe[0] === 0x0a
+    }
+    while (offset < tail.length) {
+      const read = await fd.read(tail, offset, tail.length - offset, start + offset)
+      if (read.bytesRead === 0) break
+      offset += read.bytesRead
+      bytesRead += read.bytesRead
+    }
+    let buffer = tail.subarray(0, offset)
+    if (!aligned) {
+      const newline = buffer.indexOf(0x0a)
+      buffer = newline < 0 ? Buffer.alloc(0) : buffer.subarray(newline + 1)
+    }
+    return { buffer, truncated: start > 0, bytesRead }
+  } finally {
+    await fd.close()
+  }
+}
+
 // ---------------------------------------------------------------------------
 // UUID validation
 // ---------------------------------------------------------------------------

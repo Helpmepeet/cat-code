@@ -62,8 +62,14 @@ The worker reuses the EXISTING redaction: it calls the already-exported pure
 projection `buildAccountsSnapshot` (`app/sidecar/accountsDomain.ts:430`) rather
 than re-deriving the shape (CLAUDE.md §8 rule 10).
 
-**Cadence: 60 s.** Longer than the catalog's 30 s because usage headroom is
+**Cadence: 60 s.** Longer than the catalog's original 30 s because usage headroom is
 coarser (percent buckets on a 5-hour window).
+
+**Visibility policy (2026-10-04).** Visible unfocused windows retain this cadence.
+Main suppresses scheduled worker starts only when every window is hidden or
+minimized, and catches up a skipped tick on return. Cold reads and explicit
+post-mutation refreshes still run. See the resource-work amendment in
+`CATALOG-OWNERSHIP.md` for the common disposable-driver policy.
 
 **Correction (2026-08-22).** This paragraph originally also argued that the
 underlying engine fetch is 1-minute-cached (`fetchPoolUsage`), so a shorter

@@ -33,6 +33,9 @@ export type ToolCardExpansionStore = {
   /** Number of inline output lines the user has revealed for this card. */
   getInlineOutputHead(toolUseId: string): number | undefined
   setInlineOutputHead(toolUseId: string, headShown: number): void
+  /** Small user-controlled reveals whose row may leave a virtual window. */
+  getDisclosureState(key: string): boolean | undefined
+  setDisclosureState(key: string, open: boolean): void
 }
 
 /**
@@ -52,6 +55,7 @@ export const ToolCardExpansionContext =
 export function createToolCardExpansionStore(): ToolCardExpansionStore {
   const opened = new Map<string, boolean>()
   const inlineOutputHeads = new Map<string, number>()
+  const disclosureStates = new Map<string, boolean>()
   return {
     get: toolUseId => opened.get(toolUseId),
     set: (toolUseId, expanded) => {
@@ -61,6 +65,8 @@ export function createToolCardExpansionStore(): ToolCardExpansionStore {
     setInlineOutputHead: (toolUseId, headShown) => {
       inlineOutputHeads.set(toolUseId, headShown)
     },
+    getDisclosureState: key => disclosureStates.get(key),
+    setDisclosureState: (key, open) => { disclosureStates.set(key, open) },
   }
 }
 

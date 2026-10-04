@@ -68,10 +68,9 @@ export const readEarlierDisplayHistory: HistoryLoadEarlierReader = async (
     maxBytes: MAX_HISTORY_LOAD_EARLIER_BYTES,
   })
   const history = projectResumedHistory(display.messages)
-  // Same splice restore performs, for the same reason: a recovered Agent card
-  // with no child rows is a card the operator cannot read. Its own frame budget
-  // is unchanged, so a transcript already at the replay cap recovers its parent
-  // rows without their branches rather than growing an unbounded second read.
+  // The child join shares restore's aggregate source-byte, message, and output
+  // budgets. A deeper parent read never buys a fresh budget for each branch;
+  // omitted children retain the existing unavailable-history card state.
   const messages = await withRestoredSubagentHistory(
     getSessionId(),
     history,

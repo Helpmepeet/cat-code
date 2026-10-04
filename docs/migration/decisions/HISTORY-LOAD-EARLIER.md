@@ -254,13 +254,14 @@ overwritten when main has one and REMOVED when it does not.
 
 ## Known cost, accepted
 
-The projector is uncapped and `TranscriptView` mounts every row (no
-virtualization; CC-59 Stage Two is deferred to a measured gate). Each recovered
-page therefore stays mounted for the life of the pane. This is accepted because
-the action is user-initiated, bounded by the ceiling above, and released on
-close/park like all other per-session renderer state. It is the same axis CC-59
-burned us on, so the implementer must not raise the ceiling without re-opening
-that gate.
+The projector retains the recovered model, bounded by the read ceiling above.
+The 2026-10-04 resource-improvement request authorizes outer transcript windowing:
+`TranscriptView` mounts a viewport range and represents the rest with measured
+spacers. Recovered rows remain available to the projector and anchor restoration;
+the ceiling is unchanged. Child joining shares restoration's aggregate source
+byte, selected-message, and projected-output budgets, including rejected reads.
+The existing unavailable-history card represents omitted child branches. Raising
+the read ceiling still requires reopening the original gate.
 
 ## Verification bar
 

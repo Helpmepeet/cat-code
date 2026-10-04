@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-10-03 against `src/app-runtime/`,
+Last refreshed: 2026-10-04 against `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `app/`, and related tests.
 
 Use this map for the Electron runtime-backed app-session path. It covers the
@@ -149,6 +149,24 @@ active desktop app stack, not older dedicated-app design docs.
 - The sessions catalog is no longer refreshed independently by each sidecar.
   Keep its one main-supervised worker serialized and fail closed on malformed or
   secret-bearing output; a failed run must retain the last good catalog.
+  `app/shared/sessionsCatalogFingerprint.ts` checks bounded cache data and source
+  metadata before a worker starts. Unchanged sources retain the original capture
+  time; changed transcripts, relocation records, or workspace existence refresh it.
+  `app/main/refreshActivityGate.ts` pauses recurring catalog/accounts/usage starts
+  only while all windows are hidden or minimized. Visible unfocused windows keep
+  their cadence; returning windows catch up a skipped interval.
+- `app/sidecar/projectedSubscription.ts` compares display projections structurally
+  before task, worker, goal, or lease notifications. Initial attachment snapshots
+  and raw engine events remain independent of this suppression.
+- `TranscriptView.tsx` windows outer rows as well as inner Markdown/tool content.
+  Route restoration through `transcriptScrollMemory.ts`; spacer rows are not
+  transcript anchors. `markdownRenderPlan.ts` permits conservative plain-text
+  suffix reuse, and `markdownPlugins.ts` bounds settled-fence highlighting reuse.
+  Syntax or document-wide context changes still use the full Markdown parser.
+- Child display restoration uses `getDisplayAgentTranscriptForSession` in
+  `src/utils/sessionStorage.ts` with shared byte/message/output budgets in
+  `app/sidecar/subagentHistory.ts`. Oversized rejected branches consume source
+  work budget; the engine's full agent-resume reader remains separate.
 - `app.park` is host-originated policy input. No renderer or preload path may
   ORIGINATE a park: only the sidecar can approve one, and the host must preserve
   its tab for restore. A preload channel may only ever SUPPRESS a park, which is

@@ -24,3 +24,9 @@ export const SESSIONS_CATALOG_CACHE_SUBDIR = 'desktop'
 
 /** The single global baseline cache filename (beside `registry.json`). */
 export const SESSIONS_CATALOG_CACHE_FILENAME = 'sessions-catalog.json'
+
+/**
+ * Reject cache files larger than this before parsing (parse-DoS defense). The
+ * enriched 600-session catalog measured ~100KB; this remains a generous bound.
+ */
+export const MAX_SESSIONS_CATALOG_CACHE_BYTES = 4 * 1024 * 1024

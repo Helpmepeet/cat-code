@@ -25,15 +25,13 @@ import type {
   SessionsCatalogSnapshot,
 } from '../shared/protocol.js'
 import { isRecord } from '../shared/narrow.js'
-import { SESSIONS_CATALOG_CACHE_FILENAME } from '../shared/sessionsCatalogCache.js'
+import {
+  MAX_SESSIONS_CATALOG_CACHE_BYTES,
+  SESSIONS_CATALOG_CACHE_FILENAME,
+} from '../shared/sessionsCatalogCache.js'
 import { parseSessionCatalogEntry } from '../shared/sessionsCatalogWorker.js'
 
-/**
- * Reject any cache file larger than this BEFORE parsing (parse-DoS defense). The
- * enriched 600-session catalog measured ~100KB (`sessionsCatalogDomain.ts:59`);
- * this is a generous multiple, still bounded.
- */
-export const MAX_SESSIONS_CATALOG_CACHE_BYTES = 4 * 1024 * 1024
+export { MAX_SESSIONS_CATALOG_CACHE_BYTES } from '../shared/sessionsCatalogCache.js'
 
 /** `<registryDir>/sessions-catalog.json` — main passes its real registry dir. */
 export function sessionsCatalogCacheFile(registryDir: string): string {

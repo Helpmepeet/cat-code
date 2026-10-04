@@ -64,6 +64,7 @@ import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { detectCodeIndexingFromMcpServerName } from '../../utils/codeIndexing.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
+import { captureMcpStartupStderr } from './mcpStderrCapture.js'
 import {
   errorMessage,
   TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1240,22 +1241,12 @@ export const connectToServer = memoize(
       // Set up stderr logging for stdio transport before connecting in case there are any stderr
       // outputs emitted during the connection start (this can be useful for debugging failed connections).
       // Store handler reference for cleanup to prevent memory leaks
-      let stderrHandler: ((data: Buffer) => void) | undefined
-      let stderrOutput = ''
+      let stderrCapture: ReturnType<typeof captureMcpStartupStderr> | undefined
       if (serverRef.type === 'stdio' || !serverRef.type) {
         const stdioTransport = transport as StdioClientTransport
         if (stdioTransport.stderr) {
-          stderrHandler = (data: Buffer) => {
-            // Cap stderr accumulation to prevent unbounded memory growth
-            if (stderrOutput.length < 64 * 1024 * 1024) {
-              try {
-                stderrOutput += data.toString()
-              } catch {
-                // Ignore errors from exceeding max string length
-              }
-            }
-          }
-          stdioTransport.stderr.on('data', stderrHandler)
+          stderrCapture = captureMcpStartupStderr(stdioTransport.stderr)
+          acquisition.own(async () => stderrCapture?.dispose())
         }
       }
 
@@ -1352,9 +1343,12 @@ export const connectToServer = memoize(
 
       try {
         await Promise.race([connectPromise, timeoutPromise])
-        if (stderrOutput) {
-          logMCPError(name, `Server stderr: ${stderrOutput}`)
-          stderrOutput = '' // Release accumulated string to prevent memory growth
+        const startupStderr = stderrCapture?.take()
+        // Stop retaining before calling diagnostics code; the listener stays to
+        // drain the pipe for the lifetime of the connected child.
+        stderrCapture?.stopCapturing()
+        if (startupStderr) {
+          logMCPError(name, `Server stderr: ${startupStderr}`)
         }
         const elapsed = Date.now() - connectStartTime
         logMCPDebug(
@@ -1428,8 +1422,9 @@ export const connectToServer = memoize(
             connectionDurationMs: elapsed,
           })
         }
-        if (stderrOutput) {
-          logMCPError(name, `Server stderr: ${stderrOutput}`)
+        const startupStderr = stderrCapture?.take()
+        if (startupStderr) {
+          logMCPError(name, `Server stderr: ${startupStderr}`)
         }
         throw error
       }
@@ -1700,10 +1695,7 @@ export const connectToServer = memoize(
         }
 
         // Remove stderr event listener to prevent memory leaks
-        if (stderrHandler && (serverRef.type === 'stdio' || !serverRef.type)) {
-          const stdioTransport = transport as StdioClientTransport
-          stdioTransport.stderr?.off('data', stderrHandler)
-        }
+        stderrCapture?.dispose()
 
         // For stdio transports, explicitly terminate the child process with proper signals.
         if (serverRef.type === 'stdio') {

@@ -27,6 +27,10 @@ import {
 } from '../shared/sessionsCatalogWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  catalogFingerprintForSnapshot,
+  inspectSessionsCatalogSources,
+} from '../shared/sessionsCatalogFingerprint.js'
+import {
   bootstrapWorkerEngine,
   emitWorkerRecord,
   errorText,
@@ -40,6 +44,19 @@ import {
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
+  let sourceFingerprint: string | undefined
+  try {
+    const sources = await inspectSessionsCatalogSources()
+    sourceFingerprint = sources.fingerprint
+    if (sources.unchanged) {
+      await emit({ type: 'unchanged', version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION })
+      process.exit(0)
+    }
+  } catch (error) {
+    // A preflight problem must not make a good catalog unavailable. Continue
+    // through the normal engine-owned read and let that path recover the cache.
+    process.stderr.write(`[catalog-worker] source preflight skipped: ${errorText(error)}\n`)
+  }
   // Engine imports happen only after SIMPLE is fixed for the process. All three
   // are engine-graph modules; the top-level static imports above are engine-free
   // (shared boundary + secretGuard), so the ~189 MB engine import is paid only
@@ -69,7 +86,11 @@ async function main(): Promise<void> {
   // a failed cache write must never fail the run (the live host-event path still
   // delivers, and the last good cache survives).
   try {
-    writeSessionsCatalogCache(catalog)
+    writeSessionsCatalogCache(
+      catalog,
+      undefined,
+      sourceFingerprint ? catalogFingerprintForSnapshot(sourceFingerprint, catalog) : undefined,
+    )
   } catch (error) {
     process.stderr.write(
       `[catalog-worker] baseline cache write skipped: ${errorText(error)}\n`,

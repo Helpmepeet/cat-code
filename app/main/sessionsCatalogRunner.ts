@@ -51,14 +51,12 @@ import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
  *   113,635-byte file, only `capturedAtMs` differing.
  *
  * That was a continuous ~3.3% of one core plus 320 MB/day of writes and 2,880
- * fsync+rename pairs/day to republish an unchanged catalog; 120 s makes it
- * ~0.8% of a core. The driver ticks for the entire life of the app regardless of
- * window focus or idle (started at `ready-to-show`, `main.ts` — stopped only on
- * the quit path), which is what makes the steady-state cadence, not the run
- * cost, the thing worth cutting. The immediate first run at `start()` is
- * untouched, so cold-launch freshness does not regress; only the steady-state
- * staleness window widens, which §4 explicitly sanctions as this knob's
- * trade-off.
+ * fsync+rename pairs/day to republish an unchanged catalog. The engine-free
+ * fingerprint now suppresses both the worker spawn and cache rewrite when
+ * transcript metadata and workspace existence are unchanged. Main also skips
+ * timer-driven worker launches while no app window is focused, then refreshes
+ * immediately if a cadence tick was skipped. The cold first run remains
+ * immediate, and changed terminal files are still picked up on the next tick.
  */
 export const SESSIONS_CATALOG_REFRESH_INTERVAL_MS = 120_000
 export const SESSIONS_CATALOG_WORKER_TIMEOUT_MS = 5 * 60 * 1000
@@ -71,6 +69,8 @@ export type SessionsCatalogRunOptions = {
   signal?: AbortSignal
   timeoutMs?: number
   spawnWorker?: typeof spawn
+  /** Engine-free source check used to avoid starting a disposable worker on idle ticks. */
+  shouldSkip?: () => boolean | Promise<boolean>
   /** Called at most ONCE, only for an accepted + secret-clean catalog record. */
   onCatalog: (catalog: SessionsCatalogSnapshot) => void
   /** Metadata-only process lifecycle hook; it never receives worker output. */
@@ -78,10 +78,11 @@ export type SessionsCatalogRunOptions = {
   log?: (line: string) => void
 }
 
-export type SessionsCatalogRunOutcome = 'delivered' | 'failure' | 'empty'
+export type SessionsCatalogRunOutcome = 'delivered' | 'failure' | 'empty' | 'unchanged'
 
 /**
- * Spawn one worker, deliver the single catalog record. Resolves with the
+ * Check source freshness and, when needed, spawn one worker to deliver its
+ * single catalog record. Resolves with the
  * outcome; rejects only on a protocol/transport violation (bad NDJSON, oversize
  * record, timeout, abort, non-zero exit, a callback that threw), never on a
  * clean worker-reported `failure` (that resolves `'failure'` so the driver just
@@ -90,6 +91,7 @@ export type SessionsCatalogRunOutcome = 'delivered' | 'failure' | 'empty'
 export async function runSessionsCatalogWorker(
   options: SessionsCatalogRunOptions,
 ): Promise<SessionsCatalogRunOutcome> {
+  if (await options.shouldSkip?.()) return 'unchanged'
   let outcome: SessionsCatalogRunOutcome = 'empty'
   let recordSeen = false
   let protocolError: string | null = null
@@ -135,6 +137,10 @@ export async function runSessionsCatalogWorker(
         recordSeen = true
         if (result.type === 'failure') {
           outcome = 'failure'
+          return 'continue'
+        }
+        if (result.type === 'unchanged') {
+          outcome = 'unchanged'
           return 'continue'
         }
         accepted.value = result.catalog
