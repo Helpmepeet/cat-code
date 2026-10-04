@@ -33,3 +33,6 @@ fixtures/auto-mode-corpus-probe/
 
 # Local review and test evidence
 /tmp/
+
+# Local API replay recordings
+/.vcr/
