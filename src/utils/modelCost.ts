@@ -20,6 +20,8 @@ import {
 } from './modelCostRates.js'
 export {
   COST_FABLE_10_50,
+  COST_SONNET_55,
+  COST_OPUS_55,
   COST_HAIKU_35,
   COST_HAIKU_45,
   COST_TIER_15_75,

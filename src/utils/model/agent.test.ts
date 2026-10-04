@@ -108,28 +108,28 @@ describe('subagent Opus resolution per session provider', () => {
     resetModelStringsForTestingOnly()
   })
 
-  test('a Codex session resolves the opus alias to Opus 5, not Opus 4.6', () => {
+  test('a Codex session resolves the opus alias to Opus 5.5, not Opus 4.6', () => {
     // The operator's real shape: settings model gpt-5.6-sol, session provider
     // openai. `getAPIProvider() !== 'firstParty'` used to sweep openai into the
     // lagging-3P branch and hand every subagent Opus 4.6.
     const resolved = withProvider('openai', () =>
       getAgentModel(undefined, 'gpt-5.6-sol', 'opus', 'default'),
     )
-    expect(resolved).toBe('claude-opus-5')
+    expect(resolved).toBe('claude-opus-5-5')
   })
 
-  test('an agent-file opus pin in a Codex session also resolves to Opus 5', () => {
+  test('an agent-file opus pin in a Codex session also resolves to Opus 5.5', () => {
     const resolved = withProvider('openai', () =>
       getAgentModel('opus', 'gpt-5.6-sol', undefined, 'default'),
     )
-    expect(resolved).toBe('claude-opus-5')
+    expect(resolved).toBe('claude-opus-5-5')
   })
 
   test('first-party sessions are unchanged', () => {
     const resolved = withProvider('firstParty', () =>
       getAgentModel(undefined, 'gpt-5.6-sol', 'opus', 'default'),
     )
-    expect(resolved).toBe('claude-opus-5')
+    expect(resolved).toBe('claude-opus-5-5')
   })
 
   for (const provider of ['bedrock', 'vertex', 'foundry'] as const) {
@@ -144,7 +144,7 @@ describe('subagent Opus resolution per session provider', () => {
   }
 })
 
-describe('explicit Opus 5 subagent pin', () => {
+describe('explicit Opus 5.5 subagent pin', () => {
   const originalProvider = getSessionProvider()
 
   beforeAll(() => {
@@ -157,19 +157,19 @@ describe('explicit Opus 5 subagent pin', () => {
   })
 
   test('is offered as a selectable subagent model', () => {
-    expect(AGENT_MODEL_OPTIONS).toContain('claude-opus-5')
+    expect(AGENT_MODEL_OPTIONS).toContain('claude-opus-5-5')
     expect(
-      getAgentModelOptions().find(option => option.value === 'claude-opus-5')
+      getAgentModelOptions().find(option => option.value === 'claude-opus-5-5')
         ?.label,
-    ).toBe('Opus 5')
+    ).toBe('Opus 5.5')
   })
 
   test('survives an Opus 4.6 parent, which the bare opus alias does not', () => {
     // aliasMatchesParentTier() hands a bare `opus` request the parent's own
     // string. A version pin carries more than "same tier as parent", so it must
     // not be swallowed the same way.
-    expect(getAgentModel('claude-opus-5', 'claude-opus-4-6', undefined, 'default')).toBe(
-      'claude-opus-5',
+    expect(getAgentModel('claude-opus-5-5', 'claude-opus-4-6', undefined, 'default')).toBe(
+      'claude-opus-5-5',
     )
     expect(getAgentModel('opus', 'claude-opus-4-6', undefined, 'default')).toBe(
       'claude-opus-4-6',
@@ -180,10 +180,10 @@ describe('explicit Opus 5 subagent pin', () => {
     setSessionProvider('openai')
     resetModelStringsForTestingOnly()
     expect(
-      getAgentModel(undefined, 'gpt-5.6-sol', 'claude-opus-5' as never, 'default'),
-    ).toBe('claude-opus-5')
-    expect(getAgentModel('claude-opus-5', 'gpt-5.6-sol', undefined, 'default')).toBe(
-      'claude-opus-5',
+      getAgentModel(undefined, 'gpt-5.6-sol', 'claude-opus-5-5' as never, 'default'),
+    ).toBe('claude-opus-5-5')
+    expect(getAgentModel('claude-opus-5-5', 'gpt-5.6-sol', undefined, 'default')).toBe(
+      'claude-opus-5-5',
     )
   })
 })

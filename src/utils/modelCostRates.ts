@@ -9,10 +9,12 @@ import {
   CLAUDE_OPUS_4_6_CONFIG,
   CLAUDE_OPUS_4_CONFIG,
   CLAUDE_OPUS_5_CONFIG,
+  CLAUDE_OPUS_5_5_CONFIG,
   CLAUDE_SONNET_4_5_CONFIG,
   CLAUDE_SONNET_4_6_CONFIG,
   CLAUDE_SONNET_4_CONFIG,
   CLAUDE_SONNET_5_CONFIG,
+  CLAUDE_SONNET_5_5_CONFIG,
   type ModelConfig,
 } from './model/configs.js'
 
@@ -33,6 +35,9 @@ export const COST_HAIKU_35 = { inputTokens: 0.8, outputTokens: 4, promptCacheWri
 export const COST_HAIKU_45 = { inputTokens: 1, outputTokens: 5, promptCacheWriteTokens: 1.25, promptCacheReadTokens: 0.1, webSearchRequests: 0.01 } as const satisfies ModelCosts
 export const COST_FABLE_10_50 = { inputTokens: 10, outputTokens: 50, promptCacheWriteTokens: 12.5, promptCacheReadTokens: 1, webSearchRequests: 0.01 } as const satisfies ModelCosts
 
+export const COST_SONNET_55 = { inputTokens: 2, outputTokens: 10, promptCacheWriteTokens: 2.5, promptCacheReadTokens: 0.2, webSearchRequests: 0.01 } as const satisfies ModelCosts
+export const COST_OPUS_55 = { inputTokens: 4, outputTokens: 20, promptCacheWriteTokens: 5, promptCacheReadTokens: 0.4, webSearchRequests: 0.01 } as const satisfies ModelCosts
+
 // @[MODEL LAUNCH]: Update this table for new priced models. Any rate or matching
 // change used by retained history also requires a USAGE_PRICING_VERSION bump.
 const STANDARD_CONFIG_COSTS = [
@@ -49,6 +54,8 @@ const STANDARD_CONFIG_COSTS = [
   [CLAUDE_OPUS_4_6_CONFIG, COST_TIER_5_25],
   [CLAUDE_SONNET_5_CONFIG, COST_TIER_3_15],
   [CLAUDE_OPUS_5_CONFIG, COST_TIER_5_25],
+  [CLAUDE_SONNET_5_5_CONFIG, COST_SONNET_55],
+  [CLAUDE_OPUS_5_5_CONFIG, COST_OPUS_55],
   [CLAUDE_FABLE_5_CONFIG, COST_FABLE_10_50],
 ] as const satisfies readonly (readonly [ModelConfig, ModelCosts])[]
 

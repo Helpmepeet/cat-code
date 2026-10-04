@@ -112,9 +112,9 @@ function snapshotWithTerraAndSonnet(state: AppState) {
         ...snapshot.model.options,
         {
           value: 'sonnet',
-          label: 'Sonnet',
+          label: 'Sonnet 5.5',
           provider: 'anthropic' as const,
-          effortOptions: ['low', 'medium', 'high'],
+          effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
         },
       ],
     },
@@ -590,8 +590,7 @@ test('LIVE: the real executor wires the engine setters — model override flips,
     domain.setFast(true)
     expect(store.getState().fastMode).toBe(true)
 
-    // A raw selection unsupported by the next model must return to Auto rather
-    // than leaving a clamped effective face with no checked picker row.
+    // Sonnet 5.5 supports xhigh, so switching preserves the selected effort.
     const sonnetDomain = createSidecarRunControlsDomain(store, {
       buildSnapshot: snapshotWithTerraAndSonnet,
     })
@@ -599,7 +598,7 @@ test('LIVE: the real executor wires the engine setters — model override flips,
       ok: true,
       changed: true,
     })
-    expect(store.getState().effortValue).toBeUndefined()
+    expect(store.getState().effortValue).toBe('xhigh')
 
     // Selecting a Claude alias from an OpenAI session must cross the provider
     // boundary too. Merely changing the model string leaves the request routed

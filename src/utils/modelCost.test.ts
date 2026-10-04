@@ -36,3 +36,15 @@ test('retained-history pricing recognizes configured IDs without guessing aliase
   expect(getConfiguredStandardModelCosts('claude-sonnet-4-99')).toBeUndefined()
   expect(getConfiguredStandardModelCosts('gpt-6-astra')).toBeUndefined()
 })
+
+// Prices are the independent API contract, including matching 5.5 before 5.
+test.each([
+  ['claude-opus-5-5', 4, 20],
+  ['claude-sonnet-5-5', 2, 10],
+  ['claude-opus-5', 5, 25],
+  ['claude-sonnet-5', 3, 15],
+] as const)('%s uses its own live and retained-history price', (model, input, output) => {
+  expect(calculateUSDCost(model, { input_tokens: 1_000_000, output_tokens: 1_000_000 } as never)).toBe(input + output)
+  expect(getConfiguredStandardModelCosts(model)?.inputTokens).toBe(input)
+  expect(getConfiguredStandardModelCosts(model)?.outputTokens).toBe(output)
+})

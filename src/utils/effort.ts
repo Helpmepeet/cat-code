@@ -82,7 +82,7 @@ export function modelSupportsMaxEffort(model: string): boolean {
     return supported3P
   }
   const m = model.toLowerCase()
-  if (m.includes('fable-5') || m.includes('opus-5')) {
+  if (m.includes('fable-5') || m.includes('opus-5') || m.includes('sonnet-5-5')) {
     return true
   }
   if (m.includes('opus-4-6')) {
@@ -116,6 +116,9 @@ export function getSupportedEffortLevels(model: string): readonly EffortLevel[] 
   }
   if (m.includes('codex')) {
     return ['low', 'medium', 'high', 'xhigh']
+  }
+  if (m.includes('opus-5-5') || m.includes('sonnet-5-5')) {
+    return ['low', 'medium', 'high', 'xhigh', 'max']
   }
   if (modelSupportsMaxEffort(model)) {
     return ['low', 'medium', 'high', 'max']

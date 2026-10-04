@@ -226,6 +226,7 @@ import { validateBoundedIntEnvVar } from '../../utils/envValidation.js'
 import { safeParseJSON } from '../../utils/json.js'
 import { getInferenceProfileBackingModel } from '../../utils/model/bedrock.js'
 import {
+  getCanonicalName,
   normalizeModelStringForAPI,
   parseUserSpecifiedModel,
 } from '../../utils/model/model.js'
@@ -1865,23 +1866,31 @@ async function* queryModel(
       options.maxOutputTokensOverride ||
       getMaxOutputTokensForModel(options.model)
 
-    const hasThinking =
+    const canonicalModel = getCanonicalName(options.model)
+    const isClaude55 = requestProvider !== 'openai' && (
+      canonicalModel === 'claude-opus-5-5' ||
+      canonicalModel === 'claude-sonnet-5-5'
+    )
+    const hasThinking = isClaude55 || (
       thinkingConfig.type !== 'disabled' &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
+    )
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
 
-    // IMPORTANT: Do not change the adaptive-vs-budget thinking selection below
-    // without notifying the model launch DRI and research. This is a sensitive
-    // setting that can greatly affect model quality and bashing.
-    if (hasThinking && modelSupportsThinking(options.model)) {
+    // Claude 5.5 rejects manual thinking budgets. Opus requires thinking on
+    // every request; summarized display preserves visible progress updates.
+    if (hasThinking && (isClaude55 || modelSupportsThinking(options.model))) {
       if (
-        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING) &&
-        modelSupportsAdaptiveThinking(options.model)
+        isClaude55 || (
+          !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING) &&
+          modelSupportsAdaptiveThinking(options.model)
+        )
       ) {
         // For models that support adaptive thinking, always use adaptive
         // thinking without a budget.
         thinking = {
           type: 'adaptive',
+          ...(isClaude55 && { display: 'summarized' as const }),
         } satisfies BetaMessageStreamParams['thinking']
       } else {
         // For models that do not support adaptive thinking, use the default
@@ -1982,7 +1991,10 @@ async function* queryModel(
       system,
       tools: allTools,
       ...openAIInstructionAssemblyPayload,
-      tool_choice: options.toolChoice,
+      tool_choice:
+        isClaude55 && options.toolChoice?.type === 'tool'
+          ? { type: 'auto' as const }
+          : options.toolChoice,
       ...(useBetas && { betas: betasParams }),
       metadata: getAPIMetadata(),
       max_tokens: maxOutputTokens,

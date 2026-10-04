@@ -15,6 +15,8 @@ describe('statsState', () => {
     // different names for one model in one window is the bug this prevents.
     expect(formatModelDisplayName('claude-sonnet-5-20260115')).toBe('Sonnet 5')
     expect(formatModelDisplayName('claude-opus-5')).toBe('Opus 5')
+    expect(formatModelDisplayName('claude-opus-5-5')).toBe('Opus 5.5')
+    expect(formatModelDisplayName('claude-sonnet-5-5')).toBe('Sonnet 5.5')
     expect(formatModelDisplayName('claude-fable-5')).toBe('Fable 5')
     expect(formatModelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
     expect(formatModelDisplayName('gpt-5.6-luna')).toBe('GPT-5.6 Luna')

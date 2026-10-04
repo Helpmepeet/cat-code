@@ -28,7 +28,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-10-01 |
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-09-29 |
 | [`docs/maps/codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-09-30 |
-| [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-01 |
+| [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-04 |
 | [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, config files, transcripts, memory, migrations, and persistence scope. | 2026-09-21 |
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-09-21 |
 | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-09-29 |

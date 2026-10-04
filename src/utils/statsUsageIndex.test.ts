@@ -476,7 +476,7 @@ test('pricing-rate revisions invalidate saved summaries without rereading unchan
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.pricingVersion).toBe(1);
+    expect(rebuilt.pricingVersion).toBe(2);
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
 
