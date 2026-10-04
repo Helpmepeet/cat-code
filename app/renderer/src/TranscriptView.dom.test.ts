@@ -195,6 +195,65 @@ function thinkingRow(index: number, content: string): NestedTranscriptRow {
   return { ...blockSource, id: `s:m:${index}:thinking`, kind: 'thinking', content }
 }
 
+test('reasoning folds from its body but preserves link clicks and keyboard activation', async () => {
+  const content = 'This reasoning paragraph explains the decision in enough detail to appear as prose rather than a short heading, including a [reference](https://example.com) that must remain usable.'
+  const tree = await harness.mount(createElement(TranscriptRowsView, {
+    rows: [thinkingRow(0, content)],
+  }))
+  const prose = tree.container.querySelector<HTMLElement>('.md-prose[role="button"]')!
+  const link = prose.querySelector<HTMLAnchorElement>('a')!
+  expect(link).not.toBeNull()
+  await act(async () => { link.click() })
+  expect(prose.getAttribute('aria-expanded')).toBe('true')
+
+  for (const key of ['Enter', ' ']) {
+    const event = new globalThis.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    await act(async () => { link.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(false)
+    expect(prose.getAttribute('aria-expanded')).toBe('true')
+  }
+
+  await act(async () => { prose.querySelector('p')!.click() })
+  expect(prose.getAttribute('aria-expanded')).toBe('false')
+  for (const [key, expanded] of [['Enter', 'true'], [' ', 'false']]) {
+    const event = new globalThis.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    await act(async () => { prose.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+    expect(prose.getAttribute('aria-expanded')).toBe(expanded)
+  }
+})
+
+test('copying long reasoning text does not fold its body or intercept the copy button keys', async () => {
+  const content = 'x'.repeat(16_000)
+  const writes: string[] = []
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (value: string) => { writes.push(value) } },
+  })
+  try {
+    const tree = await harness.mount(createElement(TranscriptRowsView, {
+      rows: [thinkingRow(0, content)],
+    }))
+    const prose = tree.container.querySelector<HTMLElement>('.md-prose[role="button"]')!
+    const copy = prose.querySelector<HTMLButtonElement>('button')!
+    expect(copy.textContent).toBe('Copy full text')
+    await act(async () => { copy.click() })
+    expect(writes).toEqual([content])
+    expect(prose.getAttribute('aria-expanded')).toBe('true')
+    expect(copy.textContent).toBe('Copied')
+    for (const key of ['Enter', ' ']) {
+      const event = new globalThis.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      await act(async () => { copy.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(false)
+      expect(prose.getAttribute('aria-expanded')).toBe('true')
+    }
+  } finally {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  }
+})
+
 function userImageRow(): NestedTranscriptRow {
   return {
     ...blockSource,
