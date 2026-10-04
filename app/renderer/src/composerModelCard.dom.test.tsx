@@ -564,6 +564,63 @@ test('the rail effort picker is the same slider as the model card', async () => 
   expect(rows(tree).find(row => row.textContent === 'Auto')).toBeTruthy()
 })
 
+test('the effort slider flow tracks filled levels and skips the lowest and Auto', async () => {
+  const tree = await mountBar(recorder())
+  await openEffort(tree)
+
+  const flowBand = () => tree.container.querySelector('.effort-flow-light-band')
+  expect(flowBand()).toBeTruthy()
+
+  await act(async () => {
+    await tree.render(
+      bar(recorder(), {
+        reasoningEffort: 'low',
+        runControls: {
+          ...runControls(),
+          effort: { current: 'low', selected: 'low', supported: true, options: GPT_LEVELS },
+        },
+      }),
+    )
+  })
+  expect(flowBand()).toBeNull()
+
+  await act(async () => {
+    await tree.render(
+      bar(recorder(), {
+        reasoningEffort: null,
+        runControls: {
+          ...runControls(),
+          effort: { current: 'high', selected: null, supported: true, options: GPT_LEVELS },
+        },
+      }),
+    )
+  })
+  expect(flowBand()).toBeNull()
+})
+
+test('the effort slider flow pass gets shorter at a higher level', async () => {
+  const tree = await mountBar(recorder())
+  await openEffort(tree)
+
+  const duration = () => {
+    const rail = tree.container.querySelector('.effort-flow-clip')?.parentElement
+    return Number.parseFloat(rail?.style.getPropertyValue('--effort-flow-duration') ?? '')
+  }
+  const highDuration = duration()
+  await act(async () => {
+    await tree.render(
+      bar(recorder(), {
+        reasoningEffort: 'medium',
+        runControls: {
+          ...runControls(),
+          effort: { current: 'medium', selected: 'medium', supported: true, options: GPT_LEVELS },
+        },
+      }),
+    )
+  })
+  expect(duration()).toBeGreaterThan(highDuration)
+})
+
 test('the rail effort picker stays open on a change and closes on a re-pick', async () => {
   const recorded = recorder()
   const tree = await mountBar(recorded)

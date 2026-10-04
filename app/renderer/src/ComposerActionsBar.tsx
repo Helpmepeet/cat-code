@@ -622,6 +622,29 @@ function EffortSlider({
   const shownIndex = drag ? drag.index : currentIndex
   const labelIndex = drag?.index ?? peekIndex ?? currentIndex
 
+  useEffect(() => {
+    const rail = railRef.current
+    if (!rail || levels.length < 2) return
+
+    const updateFlowGeometry = () => {
+      const gapWidth = Math.max(0, rail.clientWidth - 28) / (levels.length - 1)
+      rail.style.setProperty(
+        '--effort-flow-width',
+        `${14 + Math.max(0, shownIndex) * gapWidth}px`,
+      )
+      const progress = Math.max(0, shownIndex) / (levels.length - 1)
+      rail.style.setProperty(
+        '--effort-flow-duration',
+        `${2.4 - 1.6 * progress}s`,
+      )
+    }
+
+    updateFlowGeometry()
+    const observer = new ResizeObserver(updateFlowGeometry)
+    observer.observe(rail)
+    return () => observer.disconnect()
+  }, [levels.length, shownIndex])
+
   function rungButtons(): HTMLButtonElement[] {
     return Array.from(
       railRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [],
@@ -720,6 +743,14 @@ function EffortSlider({
           ))}
           <span className="w-3.5 shrink-0" />
         </span>
+        {shownIndex > 0 && levels.length > 1 ? (
+          <span
+            aria-hidden
+            className="effort-flow-clip animate-effort-flow pointer-events-none absolute left-0 top-1/2 h-6 -translate-y-1/2 overflow-hidden rounded-l-full"
+          >
+            <span className="effort-flow-light-band" />
+          </span>
+        ) : null}
         <div className="absolute inset-0 flex items-center justify-between">
           {levels.map((level, index) => {
             const isThumb = index === shownIndex

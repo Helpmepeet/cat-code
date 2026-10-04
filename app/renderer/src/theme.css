@@ -1156,6 +1156,10 @@ html[data-glass='on'] [data-window-overlay] {
   to { opacity: 0; transform: translateY(-12px); }
 }
 
+@keyframes effort-flow {
+  to { left: 100%; }
+}
+
 @layer components {
   /* The design source's own opt-out class (`no-scrollbar`, "CatCode Web App.html":49-50)
    * for a scroller that should not advertise itself: a short inline list, a tab
@@ -1180,6 +1184,20 @@ html[data-glass='on'] [data-window-overlay] {
 
   .animate-token-warn-in {
     animation: catcode-token-warn-in 0.18s ease both;
+  }
+
+  .animate-effort-flow {
+    width: var(--effort-flow-width, 0px);
+  }
+
+  .animate-effort-flow .effort-flow-light-band {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -40px;
+    width: 40px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent);
+    animation: effort-flow var(--effort-flow-duration, 2.4s) linear infinite;
   }
 
   .animate-arrive {
@@ -1592,6 +1610,7 @@ html[data-glass='on'] [data-window-overlay] {
   .animate-land,
   .animate-tab-in,
   .animate-face-pulse,
+  .animate-effort-flow,
   .animate-compact-ingest,
   .animate-compact-absorb,
   .animate-compact-star,
