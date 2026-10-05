@@ -124,6 +124,47 @@ test('unchanged catalogs skip engine startup while external transcript changes r
   expect(relocated?.type).toBe('catalog')
   if (relocated?.type === 'catalog') expect(relocated.catalog.entries[0]?.cwd).toBe(targetCwd)
 
+  // One unreadable relocation must not poison unrelated history or leave the
+  // cache perpetually stale. Preserve the record and its transcript for repair.
+  const healthySessionId = '77838f57-3b52-4e49-8c89-2e3d7266a2b6'
+  const movedTranscriptPath = join(projects, '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883.jsonl')
+  const movedTranscript = readFileSync(movedTranscriptPath, 'utf8')
+  writeFileSync(join(projects, `${healthySessionId}.jsonl`), JSON.stringify({
+    parentUuid: null,
+    sessionId: healthySessionId,
+    cwd: cwdPath,
+    type: 'user',
+    uuid: 'cb77da59-e1d9-4056-aa0e-e6d336ff73e2',
+    timestamp: '2026-10-05T00:00:00.000Z',
+    message: { role: 'user', content: 'healthy conversation' },
+  }) + '\n')
+  const recordPath = join(relocationDir, '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883.json')
+  const validRecord = readFileSync(recordPath, 'utf8')
+  const { controls: _controls, ...withoutControls } = JSON.parse(validRecord)
+  for (const text of [JSON.stringify(withoutControls), '{']) {
+    writeFileSync(recordPath, text)
+    const filtered = await run()
+    expect(filtered.code).toBe(0)
+    const catalog = filtered.records.find(record => record?.type === 'catalog')
+    expect(catalog?.type).toBe('catalog')
+    if (catalog?.type === 'catalog') {
+      expect(catalog.catalog.entries.map(entry => entry.sessionId)).toEqual([healthySessionId])
+      expect(catalog.catalog.truncated).toBe(false)
+    }
+    expect(readFileSync(recordPath, 'utf8')).toBe(text)
+    expect(readFileSync(movedTranscriptPath, 'utf8')).toBe(movedTranscript)
+    expect((await run()).records).toEqual([{ type: 'unchanged', version: 1 }])
+  }
+  writeFileSync(recordPath, validRecord)
+  const repaired = (await run()).records.find(record => record?.type === 'catalog')
+  expect(repaired?.type).toBe('catalog')
+  if (repaired?.type === 'catalog') {
+    expect(repaired.catalog.entries).toHaveLength(2)
+    expect(repaired.catalog.entries.find(entry =>
+      entry.sessionId === '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883',
+    )?.cwd).toBe(targetCwd)
+  }
+
   // `init()` writes the global config (`recordFirstStartTime`) and materializes
   // the plans directory. Neither exists after an observation-only bootstrap, so
   // their absence is the proof that the account-pool machinery never started.

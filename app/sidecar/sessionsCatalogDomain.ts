@@ -77,6 +77,7 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
     const result = await loadAllProjectsMessageLogsProgressive(
       SESSIONS_CATALOG_STAT_LIMIT,
       SESSIONS_CATALOG_ENRICH_LIMIT,
+      { skipUnreadableRelocations: true },
     )
     // The pure builder is fs-free (so it stays unit-testable); the existence
     // stat is the async second pass, done here in the engine-graph worker plane
