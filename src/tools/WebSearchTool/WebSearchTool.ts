@@ -44,6 +44,12 @@ const inputSchema = lazySchema(() =>
       .enum(['day', 'week', 'month', 'year', 'any'])
       .optional()
       .describe('Published-date freshness filter. Defaults to any.'),
+    mode: z
+      .enum(['standard', 'extended'])
+      .optional()
+      .describe(
+        '"standard" (default): one quick search. "extended": a multi-step deep search, slower and about twice the cost; finds sources a single query misses.',
+      ),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>

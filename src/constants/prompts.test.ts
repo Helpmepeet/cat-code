@@ -133,7 +133,7 @@ describe('GPT web research guidance', () => {
 
     const searchOnly = getGPTUsingToolsSection(new Set(['WebSearch']))
     expect(searchOnly).toContain('WEB RESEARCH: Search with WebSearch instead of answering from memory')
-    expect(searchOnly).toContain('rephrase and search again')
+    expect(searchOnly).toContain('search again in extended mode')
     expect(searchOnly).toContain('when the user asks what people recommend or think about something')
     expect(searchOnly).not.toContain('WebFetch')
 

@@ -1,6 +1,7 @@
 import { AbortError, isAbortError } from '../../utils/errors.js'
 
 export type WebSearchFreshness = 'day' | 'week' | 'month' | 'year' | 'any'
+export type WebSearchMode = 'standard' | 'extended'
 
 export type WebSearchInput = {
   query: string
@@ -8,6 +9,7 @@ export type WebSearchInput = {
   include_domains?: string[]
   exclude_domains?: string[]
   freshness?: WebSearchFreshness
+  mode?: WebSearchMode
 }
 
 export type WebSearchResult = {
@@ -27,7 +29,7 @@ export type WebSearchOutput = {
 type ExaSearchRequest = {
   query: string
   numResults: number
-  type: 'auto'
+  type: 'auto' | 'deep'
   contents: { highlights: { maxCharacters: number } }
   includeDomains?: string[]
   excludeDomains?: string[]
@@ -36,6 +38,10 @@ type ExaSearchRequest = {
 
 const EXA_SEARCH_URL = 'https://api.exa.ai/search'
 const EXA_SEARCH_TIMEOUT_MS = 20_000
+// Deep search runs several searches server-side; a probe on 2026-10-05 took
+// 11s against 3.6s for auto.
+const EXA_DEEP_SEARCH_TIMEOUT_MS = 60_000
+const EXA_TIMEOUT_MESSAGE = 'Exa search timed out.'
 const DEFAULT_MAX_RESULTS = 10
 const MAX_RESULTS = 10
 const MAX_HIGHLIGHT_CHARACTERS = 2000
@@ -80,7 +86,7 @@ function buildExaSearchRequest(
   return withoutUndefined({
     query: input.query.trim(),
     numResults: clampMaxResults(input.max_results),
-    type: 'auto',
+    type: input.mode === 'extended' ? 'deep' : 'auto',
     contents: { highlights: { maxCharacters: MAX_HIGHLIGHT_CHARACTERS } },
     includeDomains: compactDomains(input.include_domains),
     excludeDomains: compactDomains(input.exclude_domains),
@@ -203,11 +209,15 @@ function getExaApiKey(): string {
   return apiKey
 }
 
+function timeoutMsForMode(mode: WebSearchMode | undefined): number {
+  return mode === 'extended' ? EXA_DEEP_SEARCH_TIMEOUT_MS : EXA_SEARCH_TIMEOUT_MS
+}
+
 export async function searchExa(
   input: WebSearchInput,
   signal: AbortSignal,
 ): Promise<WebSearchOutput> {
-  return searchExaWithTimeoutMs(input, signal, EXA_SEARCH_TIMEOUT_MS)
+  return searchExaWithTimeoutMs(input, signal, timeoutMsForMode(input.mode))
 }
 
 async function searchExaWithTimeoutMs(
@@ -229,7 +239,7 @@ async function searchExaWithTimeoutMs(
   const timeout = setTimeout(() => {
     timedOut = true
     abortController.abort()
-    rejectCancellation(new Error('Exa search timed out after 20s.'))
+    rejectCancellation(new Error(EXA_TIMEOUT_MESSAGE))
   }, timeoutMs)
 
   const onAbort = () => {
@@ -270,7 +280,7 @@ async function searchExaWithTimeoutMs(
         error instanceof AbortError ||
         isAbortError(error) ||
         (error instanceof Error &&
-          error.message === 'Exa search timed out after 20s.')
+          error.message === EXA_TIMEOUT_MESSAGE)
       ) {
         throw error
       }
@@ -288,7 +298,7 @@ async function searchExaWithTimeoutMs(
       throw new AbortError('WebSearch was cancelled.')
     }
     if (timedOut && isAbortError(error)) {
-      throw new Error('Exa search timed out after 20s.')
+      throw new Error(EXA_TIMEOUT_MESSAGE)
     }
     if (error instanceof Error && error.message.startsWith('Exa ')) {
       throw error
@@ -311,4 +321,5 @@ export const _forTest = {
   formatExaStatusError,
   parseExaSearchResponse,
   searchExaWithTimeoutMs,
+  timeoutMsForMode,
 }
