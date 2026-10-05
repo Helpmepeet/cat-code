@@ -20,6 +20,8 @@ export function formatModelDisplayName(modelName: string): string {
   const wide = (label: string): string =>
     long ? `${label} (with 1M context)` : label
   if (modelName.includes('claude-fable-5')) return wide('Fable 5')
+  if (modelName.includes('claude-opus-5-5')) return wide('Opus 5.5')
+  if (modelName.includes('claude-sonnet-5-5')) return wide('Sonnet 5.5')
   if (modelName.includes('claude-opus-5')) return wide('Opus 5')
   if (modelName.includes('claude-sonnet-5')) return wide('Sonnet 5')
   if (modelName.includes('claude-opus-4-6')) return wide('Opus 4.6')

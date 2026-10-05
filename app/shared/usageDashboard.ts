@@ -1,7 +1,7 @@
 /** Read-only desktop usage contract. See docs/migration/decisions/USAGE-DASHBOARD.md. */
 export const USAGE_DASHBOARD_VERSION = 1 as const;
 /** Bump whenever configured rates or retained-history pricing semantics change. */
-export const USAGE_PRICING_VERSION = 1 as const;
+export const USAGE_PRICING_VERSION = 2 as const;
 export const MAX_USAGE_RECORD_BYTES = 256 * 1024;
 export const MAX_USAGE_LABEL_BYTES = 160;
 export const MAX_USAGE_MODELS = 8;
@@ -261,7 +261,7 @@ export type UsageDashboardSnapshot = {
     version: 2;
     metricVersion: 1;
     countingVersion: 19;
-    pricingVersion: 1;
+    pricingVersion: typeof USAGE_PRICING_VERSION;
     snapshotId: string;
     scope: 'retained-transcripts';
     timezone: string;

@@ -141,6 +141,44 @@ test('a scroller reports its rows in content coordinates', () => {
   ).toEqual({ kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 })
 })
 
+test('virtual spacers are skipped when finding the mounted row under the viewport', () => {
+  const pane = createFakePane({
+    rowOffsets: [400, 900, 1_500],
+    viewportHeight: 600,
+    contentHeight: 2_400,
+    rowKeys: ['row-1', 'row-2', 'row-3'],
+  })
+  const spacer = harness.document.createElement('div')
+  spacer.setAttribute('data-transcript-entry', 'top-spacer')
+  pane.scroller.firstElementChild?.prepend(spacer)
+  pane.scroller.scrollTop = 950
+
+  expect(captureTranscriptScrollAnchor(pane.scroller, { atBottom: false })).toEqual({
+    kind: 'row',
+    rowKey: 'row-2',
+    offsetIntoRow: 50,
+  })
+})
+
+test('virtual spacers are skipped when finding the mounted row under the viewport', () => {
+  const pane = createFakePane({
+    rowOffsets: [400, 900, 1_500],
+    viewportHeight: 600,
+    contentHeight: 2_400,
+    rowKeys: ['row-1', 'row-2', 'row-3'],
+  })
+  const spacer = harness.document.createElement('div')
+  spacer.setAttribute('data-transcript-entry-spacer', 'top')
+  pane.scroller.firstElementChild?.prepend(spacer)
+  pane.scroller.scrollTop = 950
+
+  expect(captureTranscriptScrollAnchor(pane.scroller, { atBottom: false })).toEqual({
+    kind: 'row',
+    rowKey: 'row-2',
+    offsetIntoRow: 50,
+  })
+})
+
 test('a pane the reader left scrolled up comes back to the same row', () => {
   const away = createFakePane({
     rowOffsets: [0, 400, 900, 1_500],

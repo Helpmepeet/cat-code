@@ -29,6 +29,8 @@ import type { ProjectRouteSnapshot } from './projectRouting.js'
 
 import type {
   AccountsSnapshot,
+  AccountLoginProvider,
+  OAuthLoginProgress,
   SessionId,
   SessionsCatalogSnapshot,
 } from './protocol.js'
@@ -406,6 +408,7 @@ export type HostEvent =
   | { type: 'session-removed'; appSessionId: SessionId }
   | { type: 'sessions-catalog'; catalog: SessionsCatalogSnapshot }
   | { type: 'accounts-pool'; pool: AccountsSnapshot }
+  | { type: 'account-oauth'; provider: AccountLoginProvider; progress: OAuthLoginProgress | null }
   | { type: 'usage-dashboard'; result: UsageCollectionResult }
   | { type: 'usage-dashboard-loading' }
   | { type: 'project-routing'; appSessionId: SessionId; snapshot: ProjectRouteSnapshot | null }

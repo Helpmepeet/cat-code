@@ -47,6 +47,8 @@ import { fileURLToPath } from 'node:url'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { createAccountControlRunner } from './accountControlRunner.js'
+import { parseAccountControlVerb } from '../shared/accountControlWorker.js'
 import { spawn } from 'node:child_process'
 import {
   closeSync,
@@ -102,6 +104,7 @@ import {
   CH_ANSWER_QUESTIONS,
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
+  CH_HOST_MANAGE_ACCOUNT,
   CH_WORKSPACE_TRUST_VERB,
   CH_TASK_CONTROL_VERB,
   CH_RUN_CONTROL_VERB,
@@ -225,6 +228,7 @@ import {
 } from './transcriptCache.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
+import { inspectSessionsCatalogSources } from '../shared/sessionsCatalogFingerprint.js'
 import {
   resolveOpenHistorySession,
   type TrustedOpenHistorySeed,
@@ -243,6 +247,7 @@ import {
   createSingleFlightDriver,
   type SingleFlightDriver,
 } from './singleFlightDriver.js'
+import { createVisibilityGatedRefresh } from './refreshActivityGate.js'
 import {
   accountProfileSignedOutNoticeForReceipt,
   createAccountInvalidationDispatcher,
@@ -747,6 +752,7 @@ const startupTimers = createStartupTimers({
  * until armed; re-armable after a window-all-closed/reactivate cycle.
  */
 let sessionsCatalogDriver: SingleFlightDriver | null = null
+let sessionsCatalogActivityGate: ReturnType<typeof createVisibilityGatedRefresh> | null = null
 
 /**
  * Accounts owner (`decisions/ACCOUNTS-OWNERSHIP.md`): the account pool is
@@ -757,10 +763,13 @@ let sessionsCatalogDriver: SingleFlightDriver | null = null
  */
 const usagePublication = createUsagePublication()
 let usageDriver: SingleFlightDriver | null = null
+let usageActivityGate: ReturnType<typeof createVisibilityGatedRefresh> | null = null
 let usageAbort: AbortController | null = null
 let usagePending = false
 const usageEnabled = isUsageDashboardEnabled()
 let accountsPoolDriver: SingleFlightDriver | null = null
+let accountsPoolActivityGate: ReturnType<typeof createVisibilityGatedRefresh> | null = null
+let accountControl: ReturnType<typeof createAccountControlRunner> | null = null
 let accountProfileMutationInFlight = false
 let accountProfileMutationAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
@@ -1048,35 +1057,38 @@ async function backfillTranscriptCaches(): Promise<void> {
 /**
  * Catalog owner (decision #4 shape (b), `docs/migration/decisions/CATALOG-OWNERSHIP.md`)
  * — arm the single-flight, self-rescheduling catalog refresh after first paint,
- * alongside the PL-B transcript backfill. Each run spawns ONE disposable
- * engine-graph worker (`--bare`); on an accepted, secret-clean snapshot main
- * emits a read-only `sessions-catalog` host event to the renderer (C3 precedent,
- * no inbound verb). A failed run keeps the last good catalog (no event emitted).
+ * alongside the PL-B transcript backfill. Main checks the engine-free source
+ * fingerprint first; unchanged ticks do not spawn the disposable engine-graph
+ * worker. A changed catalog is validated before main emits the read-only
+ * `sessions-catalog` host event (C3 precedent, no inbound verb). A failed run
+ * keeps the last good catalog (no event emitted).
  * The immediate first run means the sidebar is not empty at cold launch; the
- * per-run engine-graph import (the CATALOG-OWNERSHIP §4 boot cost) is paid off
- * the launch critical path because this fires from `ready-to-show`.
+ * immediate cold run is paid off the launch critical path because this fires
+ * from `ready-to-show`.
  */
 function startSessionsCatalogRefresh(): void {
   if (sessionsCatalogDriver) return
   const abort = new AbortController()
   sessionsCatalogAbort = abort
+  sessionsCatalogActivityGate = createVisibilityGatedRefresh(() => {
+    const onWorkerLifecycle = createWorkerLifecycleLogger('sessions-catalog')
+    return runSessionsCatalogWorker({
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('catalog', ['--bare']),
+      cwd: process.cwd(),
+      signal: abort.signal,
+      shouldSkip: async () => (await inspectSessionsCatalogSources()).unchanged,
+      onWorkerLifecycle,
+      onCatalog: catalog => {
+        sendHostEvent({ type: 'sessions-catalog', catalog })
+      },
+      log: line => process.stderr.write(`${line}\n`),
+    })
+  }, hasReadableWindow)
   sessionsCatalogDriver = createSingleFlightDriver({
     intervalMs: SESSIONS_CATALOG_REFRESH_INTERVAL_MS,
     logLabel: 'catalog-runner',
-    run: () => {
-      const onWorkerLifecycle = createWorkerLifecycleLogger('sessions-catalog')
-      return runSessionsCatalogWorker({
-        command: sidecarLaunch().command,
-        args: sidecarLaunch().argsFor('catalog', ['--bare']),
-        cwd: process.cwd(),
-        signal: abort.signal,
-        onWorkerLifecycle,
-        onCatalog: catalog => {
-          sendHostEvent({ type: 'sessions-catalog', catalog })
-        },
-        log: line => process.stderr.write(`${line}\n`),
-      })
-    },
+    run: () => sessionsCatalogActivityGate!.run(),
     log: line => process.stderr.write(`${line}\n`),
   })
   sessionsCatalogDriver.start()
@@ -1103,33 +1115,34 @@ function startUsageRefresh(): void {
   const abort = new AbortController()
   usageAbort = abort
   let restoreSaved = true
+  usageActivityGate = createVisibilityGatedRefresh(async () => {
+    usagePending = true
+    sendHostEvent({ type: 'usage-dashboard-loading' })
+    const generation = usagePublication.begin()
+    if (restoreSaved) {
+      restoreSaved = false
+      const saved = await runUsageStatsWorker({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('usage-stats', ['--bare', '--cached']),
+        cwd: process.cwd(), signal: abort.signal, timeoutMs: 5000,
+      })
+      if (!abort.signal.aborted && saved.type === 'usage' && usagePublication.accept(generation, saved)) {
+        sendHostEvent({ type: 'usage-dashboard', result: saved })
+        sendHostEvent({ type: 'usage-dashboard-loading' })
+      }
+    }
+    const result = await runUsageStatsWorker({
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('usage-stats', ['--bare']),
+      cwd: process.cwd(), signal: abort.signal,
+    })
+    usagePending = false
+    if (!abort.signal.aborted && usagePublication.accept(generation, result)) sendHostEvent({ type: 'usage-dashboard', result })
+  }, hasReadableWindow)
   usageDriver = createSingleFlightDriver({
     intervalMs: USAGE_REFRESH_INTERVAL_MS,
     logLabel: 'usage-runner',
-    run: async () => {
-      usagePending = true
-      sendHostEvent({ type: 'usage-dashboard-loading' })
-      const generation = usagePublication.begin()
-      if (restoreSaved) {
-        restoreSaved = false
-        const saved = await runUsageStatsWorker({
-          command: sidecarLaunch().command,
-          args: sidecarLaunch().argsFor('usage-stats', ['--bare', '--cached']),
-          cwd: process.cwd(), signal: abort.signal, timeoutMs: 5000,
-        })
-        if (!abort.signal.aborted && saved.type === 'usage' && usagePublication.accept(generation, saved)) {
-          sendHostEvent({ type: 'usage-dashboard', result: saved })
-          sendHostEvent({ type: 'usage-dashboard-loading' })
-        }
-      }
-      const result = await runUsageStatsWorker({
-        command: sidecarLaunch().command,
-        args: sidecarLaunch().argsFor('usage-stats', ['--bare']),
-        cwd: process.cwd(), signal: abort.signal,
-      })
-      usagePending = false
-      if (!abort.signal.aborted && usagePublication.accept(generation, result)) sendHostEvent({ type: 'usage-dashboard', result })
-    },
+    run: () => usageActivityGate!.run(),
   })
   usageDriver.start()
 }
@@ -1138,28 +1151,25 @@ function startAccountsPoolRefresh(): void {
   if (accountsPoolDriver) return
   const abort = new AbortController()
   accountsPoolAbort = abort
+  accountsPoolActivityGate = createVisibilityGatedRefresh(() => {
+    if (accountProfileMutationInFlight) return Promise.resolve()
+    const generation = accountsPoolPublicationGate.beginRead()
+    const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
+    return runAccountsPoolWorker({
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('accounts-pool', ['--bare']),
+      cwd: process.cwd(), signal: abort.signal, onWorkerLifecycle,
+      onPool: pool => {
+        if (!accountsPoolPublicationGate.canPublish(generation)) return
+        sendHostEvent({ type: 'accounts-pool', pool })
+      },
+      log: line => process.stderr.write(`${line}\n`),
+    })
+  }, hasReadableWindow)
   accountsPoolDriver = createSingleFlightDriver({
     intervalMs: ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
     logLabel: 'accounts-runner',
-    run: () => {
-      if (accountProfileMutationInFlight) return Promise.resolve()
-      const generation = accountsPoolPublicationGate.beginRead()
-      const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
-      return runAccountsPoolWorker({
-        command: sidecarLaunch().command,
-        args: sidecarLaunch().argsFor('accounts-pool', [
-          '--bare',
-        ]),
-        cwd: process.cwd(),
-        signal: abort.signal,
-        onWorkerLifecycle,
-        onPool: pool => {
-          if (!accountsPoolPublicationGate.canPublish(generation)) return
-          sendHostEvent({ type: 'accounts-pool', pool })
-        },
-        log: line => process.stderr.write(`${line}\n`),
-      })
-    },
+    run: () => accountsPoolActivityGate!.run(),
     // Teardown cancels this read intentionally; keep real runtime failures visible.
     log: line => { if (!abort.signal.aborted) process.stderr.write(`${line}\n`) },
   })
@@ -1181,11 +1191,19 @@ function startAccountsPoolRefresh(): void {
  * cadence into a per-interaction engine boot.
  */
 function refreshAccountsPoolNow(): void {
+  accountsPoolActivityGate?.allowNextRun()
   accountsPoolDriver?.refreshNow()
 }
 
 function refreshUsageDashboardNow(): void {
+  usageActivityGate?.allowNextRun()
   usageDriver?.refreshNow()
+}
+
+function hasReadableWindow(): boolean {
+  return BrowserWindow.getAllWindows().some(
+    window => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+  )
 }
 
 function isMainWindowSender(event: Pick<IpcMainEvent, 'sender'>): boolean {
@@ -1634,6 +1652,14 @@ function createWindow(): void {
   startRendererHealthTimer()
   window.once('closed', stopRendererHealthTimer)
   mainWindow = window
+  const catchUpSkippedRefreshes = () => {
+    // Resume only work whose scheduled tick was skipped while no window was
+    // visible. Focus changes alone never affect an already-visible window's cadence.
+    if (sessionsCatalogActivityGate?.takeSkippedInterval()) sessionsCatalogDriver?.refreshNow()
+    if (accountsPoolActivityGate?.takeSkippedInterval()) accountsPoolDriver?.refreshNow()
+    if (usageActivityGate?.takeSkippedInterval()) usageDriver?.refreshNow()
+  }
+  window.on('focus', catchUpSkippedRefreshes)
 
   // The pid a macOS crash report names. The renderer process does not exist
   // until a document loads, and it is already gone by `render-process-gone`, so
@@ -1658,10 +1684,16 @@ function createWindow(): void {
       reason: transition.reason,
     })
   }
-  window.on('show', () => logWindowVisibility('show'))
+  window.on('show', () => {
+    logWindowVisibility('show')
+    catchUpSkippedRefreshes()
+  })
   window.on('hide', () => logWindowVisibility('hide'))
   window.on('minimize', () => logWindowVisibility('minimize'))
-  window.on('restore', () => logWindowVisibility('restore'))
+  window.on('restore', () => {
+    logWindowVisibility('restore')
+    catchUpSkippedRefreshes()
+  })
 
   // CC-84 — remember the geometry. `getNormalBounds` is the restored rectangle,
   // so a maximized or full-screen window saves the size it will return to rather
@@ -2425,6 +2457,8 @@ function registerIpcHandlers(): void {
       sendHostEvent({ type: 'usage-dashboard', result })
     }
     if (usagePending) sendHostEvent({ type: 'usage-dashboard-loading' })
+    const oauth = accountControl?.replay()
+    if (oauth) sendHostEvent({ type: 'account-oauth', provider: oauth.provider, progress: oauth.progress })
   })
 
   ipcMain.on(CH_DELIVERY_ACK, (_e, payload: unknown) => {
@@ -3542,6 +3576,31 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(CH_HOST_MANAGE_ACCOUNT, async (event, raw: unknown): Promise<AccountResultFrame> => {
+    const verb = parseAccountControlVerb(raw)
+    const failure = (): AccountResultFrame => ({
+      kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '',
+      requestId: verb?.requestId ?? '', verb: verb?.type ?? 'account.login',
+      ok: false, message: 'Could not complete this account action. Try again.',
+    })
+    if (!isMainWindowSender(event) || !verb) return failure()
+    accountControl ??= createAccountControlRunner({
+      launch: () => ({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('account-control'),
+        cwd: app.getPath('home'),
+        onWorkerLifecycle: createWorkerLifecycleLogger('account-control'),
+        log: line => process.stderr.write(`${line}\n`),
+      }),
+      onProgress: update => sendHostEvent({ type: 'account-oauth', provider: update.provider, progress: update.progress }),
+      onPoolChanged: () => {
+        accountsPoolPublicationGate.invalidate()
+        refreshAccountsPoolNow()
+      },
+    })
+    try { return await accountControl.run(verb) } catch { return failure() }
+  })
+
   ipcMain.handle(
     CH_HOST_ACCOUNT_DELETE,
     async (
@@ -4509,20 +4568,25 @@ function shutdownRuntime(): void {
  * covers the window where a driver has not been armed yet.
  */
 function stopBackgroundDrivers(): void {
+  accountControl?.dispose()
+  accountControl = null
   startupTimers.cancelAll()
   transcriptBackfillAbort?.abort()
   transcriptBackfillAbort = null
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
+  sessionsCatalogActivityGate = null
   sessionsCatalogAbort?.abort()
   sessionsCatalogAbort = null
   usagePublication.invalidate()
   usageDriver?.stop()
   usageDriver = null
+  usageActivityGate = null
   usageAbort?.abort()
   usageAbort = null
   accountsPoolDriver?.stop()
   accountsPoolDriver = null
+  accountsPoolActivityGate = null
   accountsPoolAbort?.abort()
   accountsPoolAbort = null
   for (const read of settingsInventoryReads) read.abort()

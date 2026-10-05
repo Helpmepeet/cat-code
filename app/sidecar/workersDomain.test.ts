@@ -121,5 +121,17 @@ test('the domain reads and subscribes to the same app-state store', () => {
   expect(changes).toBe(1)
   expect(domain.getSnapshot().workers[0]?.agentId).toBe('agent-1')
 
+  store.setState(previous => ({
+    ...previous,
+    tasks: { one: worker({ lastReportedTokenCount: 4 }) },
+  }))
+  expect(changes).toBe(1)
+
+  store.setState(previous => ({
+    ...previous,
+    tasks: { one: worker({ status: 'completed' }) },
+  }))
+  expect(changes).toBe(2)
+
   unsubscribe()
 })

@@ -4,16 +4,21 @@ import { applyBedrockRegionPrefix, getBedrockRegionPrefix } from './bedrock.js'
 import {
   getCanonicalName,
   getDefaultOpusModel,
+  getDefaultSonnetModel,
   getPublicModelDisplayName,
   getRuntimeMainLoopModel,
   parseUserSpecifiedModel,
 } from './model.js'
-import { getModelStrings } from './modelStrings.js'
-import { getAPIProvider, resolveRequestProvider, type APIProvider } from './providers.js'
+import {
+  getAPIProvider,
+  resolveModelSelectionProvider,
+  resolveRequestProvider,
+  type APIProvider,
+} from './providers.js'
 
-// @[MODEL LAUNCH]: 'claude-opus-5' is a deliberate version pin, not an alias.
+// @[MODEL LAUNCH]: 'claude-opus-5-5' is a deliberate version pin, not an alias.
 // Re-point it (or add the successor beside it) when a newer Opus ships.
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-terra', 'gpt-6-luna', 'inherit'] as const
+export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-terra', 'gpt-6-luna', 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 export type AgentModelSelection = Exclude<AgentModelAlias, 'inherit'>
 
@@ -29,6 +34,29 @@ export type AgentModelOption = {
  */
 export function getDefaultSubagentModel(): string {
   return 'inherit'
+}
+
+export type AgentModelRoute = { model: string; provider: APIProvider }
+
+/** A new worker's explicit selection may cross providers without changing its parent. */
+export function resolveAgentModel(
+  agentModel: string | undefined,
+  parentModel: string,
+  toolSpecifiedModel?: AgentModelSelection,
+  permissionMode?: PermissionMode,
+  parentProvider?: APIProvider,
+): AgentModelRoute {
+  const provider = resolveRequestProvider(parentModel, parentProvider)
+  const model = getAgentModel(
+    agentModel, parentModel, toolSpecifiedModel, permissionMode, provider,
+  )
+  const selection = process.env.CLAUDE_CODE_SUBAGENT_MODEL || toolSpecifiedModel || agentModel
+  return {
+    model,
+    provider: selection && selection !== 'inherit'
+      ? resolveModelSelectionProvider(model, provider)
+      : resolveRequestProvider(model, provider),
+  }
 }
 
 /**
@@ -79,7 +107,7 @@ export function getAgentModel(
 
   const resolveSubagentModel = (modelSpec: string): string => {
     if (modelSpec.toLowerCase() === 'sonnet') {
-      return getModelStrings().sonnet46
+      return getDefaultSonnetModel()
     }
     if (modelSpec.toLowerCase() === 'opus') {
       return getDefaultOpusModel()
@@ -163,9 +191,9 @@ export function getAgentModelOptions(): AgentModelOption[] {
       description: 'Most capable for complex reasoning tasks',
     },
     {
-      value: 'claude-opus-5',
-      label: 'Opus 5',
-      description: 'Pinned to Opus 5, even when the parent runs something else',
+      value: 'claude-opus-5-5',
+      label: 'Opus 5.5',
+      description: 'Pinned to Opus 5.5, even when the parent runs something else',
     },
     {
       value: 'gpt-6-astra',

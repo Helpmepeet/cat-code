@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-10-01.
+Last refreshed: 2026-10-04.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -44,6 +44,7 @@ Start with `src/tools/AgentTool/AgentTool.tsx` for launch decisions:
 
 - `run_in_background=true` creates an async local-agent task immediately.
 - Synchronous subagents can register a foreground local-agent task, show a background hint after `PROGRESS_THRESHOLD_MS`, and then background via `backgroundAgentTask()` or `backgroundAll()`.
+- Explicit model selections resolve a worker's model and provider together through `src/utils/model/agent.ts:resolveAgentModel()`. Prompt identity, edit tools, and account leases follow that route; metadata preserves it for resume. Completion results name the actual response model. The Codex adapter rejects the exact Opus 5.5 pin rather than substituting a GPT model.
 - `name` plus team context routes to teammate spawn instead of a local async agent.
 - In-process teammates are blocked from spawning background agents.
 - Coordinator worker state is recorded through the neutral worker-state tracking helpers used by `src/tools/AgentTool/`.

@@ -54,6 +54,7 @@ import {
 import type { SessionDescriptor, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   PEER_BUBBLE_CLASS,
   PEER_TONE_CLASS,
@@ -81,6 +82,7 @@ import {
   selectInitialCompositeChildWindow,
   INITIAL_CHILD_VIEWPORT_HEIGHT,
   type CompositeChildMeasurement,
+  type CompositeChildEntry,
   type CompositeChildWindow,
 } from './compositeChildWindow.js'
 import {
@@ -341,6 +343,16 @@ const CreatedPeerNavigationContext = createContext<CreatedPeerNavigation | null>
 // frame) skips the whole subtree. `state`/`activeSessionId` are referentially
 // stable across those, and `selectNestedTranscriptRows` is slice-cached, so the
 // `rows` handed to TranscriptRowsView keep identity when nothing changed.
+function useTranscriptDisclosure(key: string): [boolean, (next: boolean) => void] {
+  const store = useToolCardExpansionStore()
+  const [open, setOpen] = useState(() => store?.getDisclosureState(key) ?? false)
+  const setAndRemember = useCallback((next: boolean) => {
+    setOpen(next)
+    store?.setDisclosureState(key, next)
+  }, [key, store])
+  return [open, setAndRemember]
+}
+
 export const TranscriptView = memo(function TranscriptView({
   state,
   compacting,
@@ -367,6 +379,7 @@ export const TranscriptView = memo(function TranscriptView({
   createdPeerNavigation,
   toolCardExpansionStore = null,
   columnRef,
+  initialScrollRowKey,
   welcomeExiting = false,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
   workspaceMove: workspaceMoveInput = null,
@@ -430,6 +443,8 @@ export const TranscriptView = memo(function TranscriptView({
    * (`readTranscriptRowGeometry` reads the scroller's first element child AS
    * the row list). Unused while `WelcomeScreen` renders instead. */
   columnRef?: Ref<HTMLDivElement>
+  /** Row identity retained by SessionPane when this pane is rebound. */
+  initialScrollRowKey?: string | null
   /** Send-message motion (behavior 3): keep `WelcomeScreen` mounted, exiting,
    * for one more render after `state` already has this session's first row. */
   welcomeExiting?: boolean
@@ -469,6 +484,7 @@ export const TranscriptView = memo(function TranscriptView({
       agentBackground={agentBackground}
       createdPeerNavigation={createdPeerNavigation}
       toolCardExpansionStore={toolCardExpansionStore}
+      initialScrollRowKey={initialScrollRowKey}
       columnRef={columnRef}
       welcomeExiting={welcomeExiting}
       contextTransitions={contextTransitions}
@@ -481,6 +497,7 @@ export const TranscriptView = memo(function TranscriptView({
 
 function ContextTransitionRow({
   transition,
+  transcriptEntryKey,
   move,
   arriving = false,
   onArrivalMount,
@@ -488,6 +505,7 @@ function ContextTransitionRow({
   moveBackDisabled,
 }: {
   transition: ContextTransition
+  transcriptEntryKey?: string
   move?: WorkspaceMoveDisplay | null
   arriving?: boolean
   onArrivalMount?: (element: HTMLElement) => void
@@ -522,6 +540,7 @@ function ContextTransitionRow({
       className={`chat-project-divider${arriving ? ' chat-project-divider-arriving' : ''}`}
       data-context-transition={transition.id}
       data-workspace-move={move?.id}
+      data-transcript-entry={transcriptEntryKey}
       data-row-key={`context-transition:${move?.id ?? transition.id}`}
       role="status"
     >
@@ -581,6 +600,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   createdPeerNavigation = null,
   toolCardExpansionStore = null,
   columnRef,
+  initialScrollRowKey = null,
   welcomeExiting = false,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
   workspaceMove: workspaceMoveInput = null,
@@ -615,6 +635,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   createdPeerNavigation?: CreatedPeerNavigation | null
   toolCardExpansionStore?: ToolCardExpansionStore | null
   columnRef?: Ref<HTMLDivElement>
+  initialScrollRowKey?: string | null
   welcomeExiting?: boolean
   contextTransitions?: SessionDescriptor['contextTransitions']
   workspaceMove?: WorkspaceMoveDisplay | null
@@ -701,13 +722,14 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [displayRows, boundaryRows, reasoningMode, displayTransitions],
   )
 
-  const renderTransition = (transition: ContextTransition) => {
+  const renderTransition = (transition: ContextTransition, entryKey?: string) => {
     const currentMove = workspaceMove?.id === transition.id ? workspaceMove : null
     const isCurrentProject = (currentMove?.phase === 'arrived' || transition.id === contextTransitions.at(-1)?.id) &&
       transition.binding.kind === 'project' && transition.cwd === cwd
     return <ContextTransitionRow
       key={`context-transition:${transition.id}`}
       transition={transition}
+      transcriptEntryKey={entryKey}
       move={currentMove}
       arriving={currentMove !== null && moveView.arriving}
       onArrivalMount={moveView.claimArrival}
@@ -715,6 +737,44 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       moveBackDisabled={moveBackDisabled}
     />
   }
+
+  const renderEntry = (index: number) => {
+    const entry = entries[index]
+    if (!entry) return null
+    if (entry.kind === 'transition') return renderTransition(entry.transition, entryKeys[index])
+    const item = entry.item
+    const key = displayItemKey(item)
+    const firstRowId = displayItemFirstRowId(item)
+    const arriving = motion.rows.active.has(firstRowId)
+    return (
+      <div
+        data-row-key={key}
+        data-transcript-entry={entryKeys[index]}
+        data-tool-row={isContainerlessToolItem(item) ? '' : undefined}
+        key={firstRowId}
+        className={`${isRevealedHiddenItem(item) ? 'opacity-55 ' : ''}${arriving ? 'animate-arrive' : ''}`}
+        ref={arriving ? motion.rows.refFor(firstRowId, 'animate-arrive') : undefined}
+        onAnimationEnd={event => motion.rows.onAnimationEnd(firstRowId, event)}
+      >
+        {isHistoryBoundaryItem(item) ? (
+          <HistoryBoundaryRow
+            pending={loadEarlierPending}
+            failure={loadEarlierFailure}
+            onLoad={onLoadEarlier}
+          />
+        ) : (
+          <DisplayItemView
+            item={item}
+            narration={narration.has(key)}
+            onMessageAction={onMessageAction}
+          />
+        )}
+      </div>
+    )
+  }
+  const entryKeys = entries.map(entry => entry.kind === 'transition'
+    ? `context-transition:${entry.transition.id}`
+    : displayItemKey(entry.item))
 
   let content: ReactNode
   if (rows.length === 0) {
@@ -787,53 +847,17 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // Prose weight also moved (light to medium) at `AssistantProse` below,
       // for legibility on this near-black background. It stays scoped to
       // assistant prose, NOT the whole column.
-      <div
-        ref={columnRef}
-        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6 transcript-col-slide workspace-transcript-column"
-        data-card-style={cardStyle}
-      >
-        {entries.map(entry => {
-          if (entry.kind === 'transition') return renderTransition(entry.transition)
-          const item = entry.item
-          // The wrapper publishes the row's identity to the pane's scroll memory
-          // (`transcriptScrollMemory.ts`): the reading position is remembered as
-          // a row rather than a place in the list, so recovering earlier
-          // messages above the reader moves nothing they were looking at.
-          //
-          // P4-36 — a revealed hidden row reads dimmed (`Chat.jsx:1285`
-          // `opacity: 0.55`), so transcript mode never passes engine bookkeeping
-          // off as ordinary conversation. `isHidden` is only ever present when
-          // the caller asked for the revealed view.
-          const key = displayItemKey(item)
-          const firstRowId = displayItemFirstRowId(item)
-          const arriving = motion.rows.active.has(firstRowId)
-          return (
-            <div
-              data-row-key={key}
-              data-tool-row={isContainerlessToolItem(item) ? '' : undefined}
-              key={firstRowId}
-              className={`${isRevealedHiddenItem(item) ? 'opacity-55 ' : ''}${arriving ? 'animate-arrive' : ''}`}
-              ref={arriving ? motion.rows.refFor(firstRowId, 'animate-arrive') : undefined}
-              onAnimationEnd={event => motion.rows.onAnimationEnd(firstRowId, event)}
-            >
-              {isHistoryBoundaryItem(item) ? (
-                <HistoryBoundaryRow
-                  pending={loadEarlierPending}
-                  failure={loadEarlierFailure}
-                  onLoad={onLoadEarlier}
-                />
-              ) : (
-                <DisplayItemView
-                  item={item}
-                  narration={narration.has(key)}
-                  onMessageAction={onMessageAction}
-                />
-              )}
-            </div>
-          )
-        })}
-        {compacting ? <CompactingSeam /> : null}
-      </div>
+      <BoundedChildList
+        keys={entryKeys}
+        estimatedChildHeight={82}
+        initialAnchorKey={initialScrollRowKey}
+        renderChild={renderEntry}
+        containerRef={columnRef}
+        dataCardStyle={cardStyle}
+        transcriptEntries
+        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-0 px-8 pt-6 transcript-col-slide workspace-transcript-column transcript-virtual-column"
+        footer={compacting ? <CompactingSeam /> : null}
+      />
     )
     // Send-message motion (behavior 3): the row above already committed —
     // `content` is the rows column, in its final place — so `WelcomeScreen`
@@ -1183,6 +1207,11 @@ function BoundedChildList({
   estimatedChildHeight,
   renderChild,
   className,
+  initialAnchorKey,
+  containerRef,
+  dataCardStyle,
+  transcriptEntries = false,
+  footer,
 }: {
   /** One stable identity per child, in order. Length is the true child count. */
   keys: readonly string[]
@@ -1191,6 +1220,11 @@ function BoundedChildList({
   renderChild: (index: number) => ReactNode
   /** Layout classes the replaced wrapper carried, so spacing is unchanged. */
   className?: string
+  initialAnchorKey?: string | null
+  containerRef?: Ref<HTMLDivElement>
+  dataCardStyle?: string
+  transcriptEntries?: boolean
+  footer?: ReactNode
 }) {
   const [state, dispatch] = useReducer(
     reduceCompositeChildState,
@@ -1202,18 +1236,77 @@ function BoundedChildList({
     [keys, estimatedChildHeight, state],
   )
   const [childWindow, setChildWindow] = useState<CompositeChildWindow>(() =>
-    selectInitialCompositeChildWindow(entries),
+    initialAnchorKey
+      ? selectCompositeChildWindow(
+          entries,
+          entries.slice(0, keys.indexOf(initialAnchorKey) < 0
+            ? Math.max(0, entries.length - 1)
+            : keys.indexOf(initialAnchorKey)).reduce((total, entry) => total + entry.height, 0),
+          INITIAL_CHILD_VIEWPORT_HEIGHT,
+        )
+      : transcriptEntries
+        ? selectCompositeChildWindow(
+            entries,
+            Math.max(0, entries.reduce((sum, entry) => sum + entry.height, 0) - INITIAL_CHILD_VIEWPORT_HEIGHT),
+            INITIAL_CHILD_VIEWPORT_HEIGHT,
+          )
+        : selectInitialCompositeChildWindow(entries),
   )
   const rootRef = useRef<HTMLDivElement | null>(null)
   const entriesRef = useRef(entries)
+  const previousEntriesRef = useRef(entries)
+  const entriesChangedRef = useRef(false)
+  const childWindowRef = useRef(childWindow)
   const scheduleRef = useRef<() => void>(() => {})
   const paneScrollerRef = useRef<HTMLElement | null>(null)
-  const boxRef = useRef<{ height: number; topSpacer: number } | null>(null)
+  const focusedEntryKeyRef = useRef<string | null>(null)
+  const boxRef = useRef<{
+    height: number
+    topSpacer: number
+    entries: readonly CompositeChildEntry[]
+    nestedHeights: ReadonlyMap<Element, number>
+  } | null>(null)
+  const compensatedPrefixDeltaRef = useRef(0)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const previousEntries = previousEntriesRef.current
+    if (previousEntries !== entries) entriesChangedRef.current = true
+    const previousWindow = childWindowRef.current
+    const retainedKey = previousEntries[previousWindow.start]?.key
+    const retainedIndex = retainedKey === undefined
+      ? -1
+      : entries.findIndex(entry => entry.key === retainedKey)
+    if (retainedIndex >= 0 && retainedIndex !== previousWindow.start && paneScrollerRef.current) {
+      const oldPrefix = previousEntries.slice(0, previousWindow.start).reduce((sum, entry) => sum + entry.height, 0)
+      const newPrefix = entries.slice(0, retainedIndex).reduce((sum, entry) => sum + entry.height, 0)
+      const delta = newPrefix - oldPrefix
+      if (delta !== 0) {
+        paneScrollerRef.current.scrollTop += delta
+        compensatedPrefixDeltaRef.current += delta
+      }
+      const root = rootRef.current
+      const scroller = paneScrollerRef.current
+      if (root && scroller) {
+        const offset = scroller.getBoundingClientRect().top - root.getBoundingClientRect().top
+        setChildWindow(current => {
+          const next = selectCompositeChildWindow(
+            entries,
+            offset,
+            scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
+          )
+          return sameCompositeChildWindow(current, next) ? current : next
+        })
+      }
+    }
+    previousEntriesRef.current = entries
     entriesRef.current = entries
+    childWindowRef.current = childWindow
     scheduleRef.current()
   }, [entries])
+
+  useEffect(() => {
+    childWindowRef.current = childWindow
+  }, [childWindow])
 
   // Attaches once for the lifetime of the container. Streamed child arrivals
   // reach the window through the ref above, so a growing run never detaches and
@@ -1224,8 +1317,10 @@ function BoundedChildList({
     const scroller = findPaneScroller(root)
     paneScrollerRef.current = scroller
     let frame = 0
+    let hasObservedScroll = false
     const update = () => {
       frame = 0
+      if (!hasObservedScroll && initialAnchorKey === null && scroller.clientHeight <= 0 && !entriesChangedRef.current) return
       const rootRect = root.getBoundingClientRect()
       const scrollerRect = scroller.getBoundingClientRect()
       setChildWindow(current => {
@@ -1236,6 +1331,7 @@ function BoundedChildList({
         )
         return sameCompositeChildWindow(current, next) ? current : next
       })
+      entriesChangedRef.current = false
     }
     const schedule = () => {
       if (frame === 0) frame = window.requestAnimationFrame(update)
@@ -1244,7 +1340,10 @@ function BoundedChildList({
     const rootObserver =
       typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
     rootObserver?.observe(root)
-    const releasePane = observePaneScroll(scroller, schedule)
+    const releasePane = observePaneScroll(scroller, () => {
+      hasObservedScroll = true
+      schedule()
+    })
     schedule()
     return () => {
       scheduleRef.current = () => {}
@@ -1265,11 +1364,30 @@ function BoundedChildList({
     if (root === null || scroller === null) return
     const rect = root.getBoundingClientRect()
     const previous = boxRef.current
-    boxRef.current = { height: rect.height, topSpacer: childWindow.topSpacerHeight }
+    const nestedHeights = readNestedPaneHeights(root)
+    boxRef.current = { height: rect.height, topSpacer: childWindow.topSpacerHeight, entries, nestedHeights }
+    const compensatedPrefixDelta = compensatedPrefixDeltaRef.current
+    compensatedPrefixDeltaRef.current = 0
     if (previous === null) return
-    const delta = rect.height - previous.height
+    // Exclude only the prefix movement the keyed anchor already compensated.
+    // Scrolling changes the spacer partition without changing document height.
+    const delta = ownPaneHeightDelta(
+      rect.height - previous.height,
+      previous.nestedHeights,
+      nestedHeights,
+    ) - compensatedPrefixDelta
     if (delta === 0) return
-    const unchangedPrefix = Math.min(previous.topSpacer, childWindow.topSpacerHeight)
+    let commonPrefix = 0
+    while (
+      commonPrefix < previous.entries.length && commonPrefix < entries.length &&
+      previous.entries[commonPrefix].key === entries[commonPrefix].key &&
+      previous.entries[commonPrefix].height === entries[commonPrefix].height
+    ) commonPrefix += 1
+    // An append changes the document below the viewport, not at the current
+    // window's leading spacer. Locate list edits at their first changed entry.
+    const unchangedPrefix = commonPrefix < Math.max(previous.entries.length, entries.length)
+      ? entries.slice(0, commonPrefix).reduce((sum, entry) => sum + entry.height, 0)
+      : Math.min(previous.topSpacer, childWindow.topSpacerHeight)
     const offset =
       rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop + unchangedPrefix
     reportPaneHeightCorrection(scroller, { offset, delta })
@@ -1279,7 +1397,36 @@ function BoundedChildList({
     () => entries.slice(childWindow.start, childWindow.end),
     [entries, childWindow.start, childWindow.end],
   )
-  const mountedSignature = mounted.map(entry => entry.key).join('|')
+  const pinnedFocusKey = transcriptEntries ? focusedEntryKeyRef.current : null
+  const pinnedFocusIndex = pinnedFocusKey === null ? -1 : entries.findIndex(entry => entry.key === pinnedFocusKey)
+  const pinnedFocusEntry = transcriptEntries && pinnedFocusIndex >= 0 ? entries[pinnedFocusIndex] : undefined
+  const mountedSignature = `${mounted.map(entry => entry.key).join('|')}|${pinnedFocusEntry?.key ?? ''}|${footer ? 'footer' : ''}`
+  const sumEntryHeights = (from: number, to: number): number => {
+    let total = 0
+    for (let index = from; index < to; index += 1) total += entries[index]?.height ?? 0
+    return total
+  }
+  const renderTranscriptWindow = (): ReactNode[] => {
+    const indices = Array.from({ length: childWindow.end - childWindow.start },
+      (_unused, offset) => childWindow.start + offset)
+    if (pinnedFocusEntry && (pinnedFocusIndex < childWindow.start || pinnedFocusIndex >= childWindow.end)) {
+      indices.push(pinnedFocusIndex)
+      indices.sort((left, right) => left - right)
+    }
+    const children: ReactNode[] = []
+    let cursor = 0
+    for (const index of indices) {
+      if (index > cursor) {
+        children.push(<div aria-hidden key={`spacer:${cursor}:${index}`} style={{ height: `${sumEntryHeights(cursor, index)}px` }} />)
+      }
+      children.push(renderChild(index))
+      cursor = index + 1
+    }
+    if (cursor < entries.length) {
+      children.push(<div aria-hidden key={`spacer:${cursor}:${entries.length}`} style={{ height: `${sumEntryHeights(cursor, entries.length)}px` }} />)
+    }
+    return children
+  }
 
   // Keyed on the mounted identities rather than the numeric range, so a child
   // replaced inside an unchanged window is observed immediately.
@@ -1289,9 +1436,11 @@ function BoundedChildList({
     const observer = new ResizeObserver(records => {
       const measurements: CompositeChildMeasurement[] = []
       for (const record of records) {
-        const key = record.target.getAttribute('data-transcript-child')
+        const key = record.target.getAttribute('data-transcript-child') ??
+          record.target.getAttribute('data-transcript-entry')
         if (key === null) continue
-        const height = record.borderBoxSize[0]?.blockSize ?? record.contentRect.height
+        const height = (record.borderBoxSize[0]?.blockSize ?? record.contentRect.height) +
+          (Number.parseFloat(getComputedStyle(record.target).marginBlockEnd) || 0)
         measurements.push({ key, height })
       }
       if (measurements.length > 0) dispatch({ kind: 'measured', measurements })
@@ -1300,25 +1449,44 @@ function BoundedChildList({
     // container's children and file their heights under this container's cache.
     for (const element of root.children) {
       if (!(element instanceof HTMLElement)) continue
-      if (element.getAttribute('data-transcript-child') === null) continue
+      if (
+        element.getAttribute('data-transcript-child') === null &&
+        element.getAttribute('data-transcript-entry') === null
+      ) continue
       observer.observe(element)
     }
     return () => observer.disconnect()
   }, [mountedSignature])
 
   return (
-    <div className={className} ref={rootRef}>
-      {childWindow.topSpacerHeight > 0 ? (
-        <div aria-hidden style={{ height: `${childWindow.topSpacerHeight}px` }} />
-      ) : null}
-      {mounted.map((entry, offset) => (
-        <div data-transcript-child={entry.key} key={entry.key}>
-          {renderChild(childWindow.start + offset)}
-        </div>
-      ))}
-      {childWindow.bottomSpacerHeight > 0 ? (
-        <div aria-hidden style={{ height: `${childWindow.bottomSpacerHeight}px` }} />
-      ) : null}
+    <div className={className} data-card-style={dataCardStyle} data-pane-height-owner="" onFocusCapture={event => {
+      if (!transcriptEntries || !(event.target instanceof Element)) return
+      focusedEntryKeyRef.current = event.target.closest('[data-transcript-entry]')
+        ?.getAttribute('data-transcript-entry') ?? null
+    }} onBlurCapture={event => {
+      if (!transcriptEntries) return
+      if (event.relatedTarget instanceof Node && rootRef.current?.contains(event.relatedTarget)) return
+      focusedEntryKeyRef.current = null
+      scheduleRef.current()
+    }} ref={node => {
+      rootRef.current = node
+      if (typeof containerRef === 'function') containerRef(node)
+      else if (containerRef) containerRef.current = node
+    }}>
+      {transcriptEntries ? renderTranscriptWindow() : <>
+        {childWindow.topSpacerHeight > 0 ? (
+          <div aria-hidden style={{ height: `${childWindow.topSpacerHeight}px` }} />
+        ) : null}
+        {mounted.map((entry, offset) => (
+          <div data-transcript-child={entry.key} key={entry.key}>
+            {renderChild(childWindow.start + offset)}
+          </div>
+        ))}
+        {childWindow.bottomSpacerHeight > 0 ? (
+          <div aria-hidden style={{ height: `${childWindow.bottomSpacerHeight}px` }} />
+        ) : null}
+      </>}
+      {footer}
     </div>
   )
 }
@@ -1492,7 +1660,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       )
 
     case 'user-image':
-      return <UserImageRowView source={row.source} />
+      return <UserImageRowView source={row.source} disclosureKey={row.id} />
 
     case 'thinking':
       // In `trail` a reasoning row always arrives here already grouped into a
@@ -5332,8 +5500,8 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
   const resolving = resultEntrance.active.has(row.id)
   const toast = useToast()
   const [copied, setCopied] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const closePreview = useCallback(() => setPreviewOpen(false), [])
+  const [previewOpen, setPreviewOpen] = useTranscriptDisclosure(`generated-image:${row.id}`)
+  const closePreview = useCallback(() => setPreviewOpen(false), [setPreviewOpen])
   const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
     () => () => {
@@ -5845,9 +6013,9 @@ function CommandEchoBubble({
  * shows only `[Image]`). Malformed or empty sources degrade to a placeholder
  * label rather than a broken `<img>`.
  */
-function UserImageRowView({ source }: { source: UserImageSource }) {
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const closePreview = useCallback(() => setPreviewOpen(false), [])
+function UserImageRowView({ source, disclosureKey }: { source: UserImageSource; disclosureKey: string }) {
+  const [previewOpen, setPreviewOpen] = useTranscriptDisclosure(`user-image:${disclosureKey}`)
+  const closePreview = useCallback(() => setPreviewOpen(false), [setPreviewOpen])
   const src =
     source.type === 'base64'
       ? `data:${source.mediaType};base64,${source.data}`
@@ -6152,11 +6320,11 @@ function ReasoningNode({
  * this folds just this step). A click that ends a text selection or lands on an
  * interactive descendant is not a fold. */
 function ReasoningProse({ content, sourceId }: { content: string; sourceId: string }) {
-  const [folded, setFolded] = useState(false)
+  const [folded, setFolded] = useTranscriptDisclosure(`reasoning:${sourceId}`)
   const toggle = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (window.getSelection()?.toString()) return
     if ((event.target as Element).closest('a, button, input, select, textarea, [contenteditable="true"]')) return
-    setFolded(value => !value)
+    setFolded(!folded)
   }
   return (
     <div
@@ -6168,7 +6336,7 @@ function ReasoningProse({ content, sourceId }: { content: string; sourceId: stri
         if (event.target !== event.currentTarget) return
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
-        setFolded(value => !value)
+        setFolded(!folded)
       }}
       className={`md-prose mb-1.5 mt-1 cursor-pointer border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle transition-colors duration-100 ease-out hover:text-text-muted focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-accent/40${
         folded ? ' line-clamp-1' : ''

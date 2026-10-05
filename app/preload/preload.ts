@@ -70,6 +70,7 @@ import {
   CH_ANSWER_QUESTIONS,
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
+  CH_HOST_MANAGE_ACCOUNT,
   CH_WORKSPACE_TRUST_VERB,
   CH_TASK_CONTROL_VERB,
   CH_RUN_CONTROL_VERB,
@@ -300,6 +301,10 @@ const bridge: CatCodeBridge = {
   deleteAccount(verb: AccountDeleteMessage) {
     sendGuard.assertAllowed(verb)
     return ipcRenderer.invoke(CH_HOST_ACCOUNT_DELETE, verb)
+  },
+  manageAccount(verb) {
+    sendGuard.assertAllowed(verb)
+    return ipcRenderer.invoke(CH_HOST_MANAGE_ACCOUNT, verb)
   },
   signOutAccount(verb: AccountLogoutMessage): Promise<AccountResultFrame> {
     sendGuard.assertAllowed(verb)

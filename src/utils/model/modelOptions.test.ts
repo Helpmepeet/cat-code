@@ -8,9 +8,9 @@ import {
   setSessionProvider,
 } from '../../bootstrap/state.js'
 
-// The desktop picker rendered TWO identical "Sonnet 5" rows. The Max/Team
-// Premium list offers Sonnet under the family alias `sonnet` (MaxSonnet5Option),
-// but a Codex session persists the canonical `claude-sonnet-5` (getSonnet5Option's
+// The desktop picker rendered TWO identical "Sonnet 5.5" rows. The Max/Team
+// Premium list offers Sonnet under the family alias `sonnet` (MaxSonnet55Option),
+// but a Codex session persists the canonical `claude-sonnet-5-5` (getSonnet55Option's
 // value is provider-dependent). getModelOptions()'s "current model is not offered,
 // append it" fallback compared RAW strings, so the same model was appended a
 // second time with a byte-identical label.
@@ -99,13 +99,13 @@ function labelCount(options: { label: string }[], label: string): number {
 describe('getModelOptions duplicate-row fallback', () => {
   test('a canonical model id already offered under its alias does not add a second row', async () => {
     const { getModelOptions } = await import('./modelOptions.js')
-    setMainLoopModelOverride('claude-sonnet-5')
+    setMainLoopModelOverride('claude-sonnet-5-5')
 
     const options = getModelOptions(false)
 
-    expect(labelCount(options, 'Sonnet 5')).toBe(1)
+    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
     expect(options.some(option => option.value === 'sonnet')).toBe(true)
-    expect(options.some(option => option.value === 'claude-sonnet-5')).toBe(
+    expect(options.some(option => option.value === 'claude-sonnet-5-5')).toBe(
       false,
     )
   })
@@ -115,9 +115,9 @@ describe('getModelOptions duplicate-row fallback', () => {
     // Selecting "Default (recommended)" writes a null override, so the fallback
     // reads getInitialMainLoopModel() instead — a ghost row must not appear there.
     setMainLoopModelOverride(null)
-    setInitialMainLoopModel('claude-sonnet-5')
+    setInitialMainLoopModel('claude-sonnet-5-5')
 
-    expect(labelCount(getModelOptions(false), 'Sonnet 5')).toBe(1)
+    expect(labelCount(getModelOptions(false), 'Sonnet 5.5')).toBe(1)
   })
 
   test('opusplan keeps its own row even though it resolves to the Sonnet default', async () => {
@@ -132,7 +132,7 @@ describe('getModelOptions duplicate-row fallback', () => {
 
     const options = getModelOptions(false)
     expect(options.some(option => option.value === 'opusplan')).toBe(true)
-    expect(labelCount(options, 'Sonnet 5')).toBe(1)
+    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
   })
 
   test('best keeps its own row even though it resolves to Fable', async () => {
@@ -154,17 +154,17 @@ describe('getModelOptions duplicate-row fallback', () => {
       './modelOptions.js'
     )
 
-    expect(optionCoversModelSetting('sonnet', 'claude-sonnet-5[1m]')).toBe(false)
-    expect(optionCoversModelSetting('sonnet[1m]', 'claude-sonnet-5[1m]')).toBe(
+    expect(optionCoversModelSetting('sonnet', 'claude-sonnet-5-5[1m]')).toBe(false)
+    expect(optionCoversModelSetting('sonnet[1m]', 'claude-sonnet-5-5[1m]')).toBe(
       true,
     )
 
-    setMainLoopModelOverride('claude-sonnet-5[1m]')
+    setMainLoopModelOverride('claude-sonnet-5-5[1m]')
     const options = getModelOptions(false)
     // Not swallowed by the plain Sonnet row: the 1M setting still gets a row.
-    expect(labelCount(options, 'Sonnet 5')).toBe(1)
+    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
     expect(
-      options.some(option => option.value === 'claude-sonnet-5[1m]'),
+      options.some(option => option.value === 'claude-sonnet-5-5[1m]'),
     ).toBe(true)
   })
 
@@ -172,11 +172,11 @@ describe('getModelOptions duplicate-row fallback', () => {
     const { optionCoversModelSetting } = await import('./modelOptions.js')
 
     expect(optionCoversModelSetting('sonnet', 'opusplan')).toBe(false)
-    expect(optionCoversModelSetting('opusplan', 'claude-sonnet-5')).toBe(false)
+    expect(optionCoversModelSetting('opusplan', 'claude-sonnet-5-5')).toBe(false)
     expect(optionCoversModelSetting('fable', 'best')).toBe(false)
     expect(optionCoversModelSetting('opusplan', 'opusplan')).toBe(true)
     // The Default row (null) never covers a concrete setting.
-    expect(optionCoversModelSetting(null, 'claude-sonnet-5')).toBe(false)
+    expect(optionCoversModelSetting(null, 'claude-sonnet-5-5')).toBe(false)
   })
 })
 
@@ -184,7 +184,7 @@ describe('1M-context rows and Sonnet 4.6', () => {
   test('no roster row advertises "(1M context)" on first-party', async () => {
     // Claude 5 frontier models already use the 1M window with no suffix
     // (`modelUses1MContextByDefault`), so the suffix named a window identical to
-    // the plain row beside it and read as arbitrary next to Opus 5 and Fable 5,
+    // the plain row beside it and read as arbitrary next to Opus 5.5 and Fable 5,
     // which are equally 1M and never carried it.
     const { getModelOptions } = await import('./modelOptions.js')
 
@@ -218,8 +218,8 @@ describe('1M-context rows and Sonnet 4.6', () => {
     const options = getModelOptions(false)
     const labels = options.map(option => option.label)
 
-    expect(labels).toContain('Sonnet 5')
-    expect(labels).toContain('Opus 5')
+    expect(labels).toContain('Sonnet 5.5')
+    expect(labels).toContain('Opus 5.5')
     expect(labels).toContain('Fable 5')
     expect(labels).toContain('GPT-6.1 Sol')
     expect(labels).toContain('GPT-6 Astra')

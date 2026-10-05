@@ -1772,6 +1772,7 @@ export function SessionPane({
             onMessageAction={activeDescriptor?.moving ? undefined : onMessageAction}
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}
+            initialScrollRowKey={scrollAnchor?.kind === 'row' ? scrollAnchor.rowKey : null}
             contextTransitions={activeDescriptor?.contextTransitions}
             workspaceMove={activeDescriptor?.workspaceMove}
             onMoveBack={activeDescriptor?.canMoveBack && activeDescriptor.binding?.kind === 'project'

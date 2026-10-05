@@ -275,11 +275,17 @@ test('the rail fills up to the chosen level, not just at it', async () => {
   await openCard(tree)
   await click(rowNamed(tree, 'Opus 5'))
 
-  // Session effort is `high`, the third of Opus's four rungs: three bars carry
-  // the tone, and exactly one rung is the checked radio. A fill that stopped
+  // Session effort is `high`, the third of Opus's four rungs: three rungs sit
+  // under the fill, and exactly one rung is the checked radio. A fill that stopped
   // marking the lower rungs would read as a position marker instead of a level.
-  const filled = tree.container.querySelectorAll('span.bg-tone-warn')
-  expect(filled).toHaveLength(3)
+  const filled = rungs(tree).filter(
+    rung => rung.getAttribute('data-filled') === 'true',
+  )
+  expect(filled.map(rung => rung.getAttribute('aria-label'))).toEqual([
+    'Low',
+    'Medium',
+    'High',
+  ])
   const checked = rows(tree).filter(
     row => row.getAttribute('aria-checked') === 'true',
   )
@@ -538,8 +544,147 @@ test('opening the effort picker focuses the selected effort instead of Auto', as
   const selected = tree.container.querySelector(
     '[role="menuitemradio"][aria-checked="true"]',
   )
-  expect(selected?.textContent).toBe('Max')
+  expect(selected?.getAttribute('aria-label')).toBe('Max')
   expect(focused()).toBe(selected)
+})
+
+test('the rail effort picker is the same slider as the model card', async () => {
+  const tree = await mountBar(recorder())
+  await openEffort(tree)
+
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Reasoning effort')
+  expect(rungs(tree).map(rung => rung.getAttribute('aria-label'))).toEqual([
+    'Low',
+    'Medium',
+    'High',
+    'Extra high',
+    'Max',
+    'Ultra',
+  ])
+  expect(rows(tree).find(row => row.textContent === 'Auto')).toBeTruthy()
+})
+
+test('the effort slider flow tracks filled levels and skips the lowest and Auto', async () => {
+  const tree = await mountBar(recorder())
+  await openEffort(tree)
+
+  const flowBand = () => tree.container.querySelector('.effort-flow-light-band')
+  expect(flowBand()).toBeTruthy()
+
+  await act(async () => {
+    await tree.render(
+      bar(recorder(), {
+        reasoningEffort: 'low',
+        runControls: {
+          ...runControls(),
+          effort: { current: 'low', selected: 'low', supported: true, options: GPT_LEVELS },
+        },
+      }),
+    )
+  })
+  expect(flowBand()).toBeNull()
+
+  await act(async () => {
+    await tree.render(
+      bar(recorder(), {
+        reasoningEffort: null,
+        runControls: {
+          ...runControls(),
+          effort: { current: 'high', selected: null, supported: true, options: GPT_LEVELS },
+        },
+      }),
+    )
+  })
+  expect(flowBand()).toBeNull()
+})
+
+test('the effort slider flow pass gets shorter at a higher level', async () => {
+  const tree = await mountBar(recorder())
+  await openEffort(tree)
+
+  const duration = () => {
+    const rail = tree.container.querySelector('.effort-flow-clip')?.parentElement
+    return Number.parseFloat(rail?.style.getPropertyValue('--effort-flow-duration') ?? '')
+  }
+  const highDuration = duration()
+  await act(async () => {
+    await tree.render(
+      bar(recorder(), {
+        reasoningEffort: 'medium',
+        runControls: {
+          ...runControls(),
+          effort: { current: 'medium', selected: 'medium', supported: true, options: GPT_LEVELS },
+        },
+      }),
+    )
+  })
+  expect(duration()).toBeGreaterThan(highDuration)
+})
+
+test('the rail effort picker stays open on a change and closes on a re-pick', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openEffort(tree)
+
+  await click(tree.container.querySelector('[aria-label="Max"]'))
+  expect(recorded.efforts).toEqual(['max'])
+  expect(menu(tree)).toBeTruthy()
+
+  await click(tree.container.querySelector('[aria-label="High"]'))
+  expect(recorded.efforts).toEqual(['max', 'high'])
+  expect(menu(tree)).toBeNull()
+})
+
+/** Give the rail a real width so pointer positions map to rungs. */
+function sizeRail(rail: HTMLElement, width: number): void {
+  rail.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, right: width, bottom: 28, width, height: 28, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+}
+
+async function pointer(target: Element, type: string, clientX: number): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(
+      new PointerEvent(type, { bubbles: true, button: 0, pointerId: 1, clientX }),
+    )
+  })
+}
+
+test('dragging along the slider commits once, at the rung it is released on', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openLadder(tree)
+  const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
+  // 240px wide: the ticks run from 14px to 226px, a rung about every 71px.
+  sizeRail(rail, 240)
+
+  await pointer(rail, 'pointerdown', 14)
+  await pointer(rail, 'pointermove', 85)
+  await pointer(rail, 'pointermove', 226)
+  // While held, the fill follows the pointer but nothing has been written.
+  expect(recorded.efforts).toEqual([])
+  expect(
+    rungs(tree).filter(rung => rung.getAttribute('data-filled') === 'true'),
+  ).toHaveLength(4)
+  await pointer(rail, 'pointerup', 226)
+
+  expect(recorded.efforts).toEqual(['max'])
+})
+
+test('a drag that returns to the current level writes nothing and keeps the card', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openLadder(tree)
+  const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
+  sizeRail(rail, 240)
+
+  // `high` is the third rung, at 155px.
+  await pointer(rail, 'pointerdown', 155)
+  await pointer(rail, 'pointermove', 14)
+  await pointer(rail, 'pointermove', 155)
+  await pointer(rail, 'pointerup', 155)
+
+  expect(recorded.efforts).toEqual([])
+  expect(menu(tree)).toBeTruthy()
 })
 
 test('opening the account picker focuses the active account row', async () => {

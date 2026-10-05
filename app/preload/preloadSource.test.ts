@@ -133,7 +133,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(59)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(60)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -181,7 +181,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(61)
+  expect(names.length).toBe(62)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -277,7 +277,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(30)
+  expect(invokeChannels.length).toBe(31)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_MANAGED',
@@ -304,6 +304,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_OPEN_WORKSPACE_FILE',
     'CH_HOST_ACCOUNT_DELETE',
     'CH_HOST_ACCOUNT_SIGN_OUT',
+    'CH_HOST_MANAGE_ACCOUNT',
     'CH_SAVE_DIAGNOSTICS',
     'CH_RESTART',
     'CH_READ_SETTINGS_INVENTORY',

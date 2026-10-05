@@ -283,27 +283,3 @@ function isDescriptor(
 ): value is SessionDescriptor {
   return value !== undefined
 }
-
-/* ------------------------------------------------------------------------- *
- * Active-tab selection helpers (renderer UI state — lives in App). Active
- * selection is driven imperatively off the frame + host-event streams (a
- * background frame never steals focus; only the ACTIVE tab's removal moves
- * focus), so the fallback policy is in App, not a roster-snapshot resolver.
- * ------------------------------------------------------------------------- */
-
-/**
- * The tab a ⌘<n> jump targets: 1-based index into the visible TAB order (the
- * run-local `tabs` projection the TabBar renders and numbers its ⌘n hints by),
- * or null if that slot is empty. Indexing the full roster instead would let a
- * hydrated restorable-only row (a Sidebar offer, not a tab) absorb a slot and
- * shift every hint off by one. ⌘1..9 map to slots 1..9 (slot 9 is the LAST tab
- * in the prototype's convention when there are ≥9; here we keep the literal
- * 1..9 → index 0..8 mapping, matching a plain tab-order jump).
- */
-export function sessionAtSlot(
-  state: ShellState,
-  slot: number,
-): SessionId | null {
-  if (slot < 1 || slot > 9) return null
-  return selectPaneSessions(state)[slot - 1]?.appSessionId ?? null
-}

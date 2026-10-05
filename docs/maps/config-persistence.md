@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-10-03
+Last refreshed: 2026-10-04
 
 ## Purpose
 
@@ -137,6 +137,13 @@ Use this order when debugging missing, stale, or malformed resumed state:
    and CLI entry behavior.
 
 Do not treat `src/history.ts` or prompt input history as transcript truth.
+
+Desktop child display loading uses `getDisplayAgentTranscriptForSession` and
+`readDisplayTranscriptTail` in `src/utils/{sessionStorage,sessionStoragePortable}.ts`.
+The reader reports actual source bytes, including its line-alignment probe, so
+`app/sidecar/subagentHistory.ts` charges rejected branches against a shared work
+budget. Partial branches retain the unavailable-history card state.
+`getAgentTranscriptForSession` continues to load full agent-resume history.
 
 ## Traps And Stale Assumptions
 

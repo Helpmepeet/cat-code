@@ -12,6 +12,8 @@ import {
   type MarkdownLeafWindow,
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
+import { REHYPE_PLUGINS, TRANSCRIPT_REHYPE_PLUGINS } from './markdownPlugins.js'
+import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   observePaneScroll,
   reportPaneHeightCorrection,
@@ -50,6 +52,8 @@ export function BoundedMarkdown({
       if (plainText) return planPlainTextLeaves(sourceId, source, plainTextClasses)
       return planMarkdownLeaves(sourceId, source, {
         rehypePlugins,
+        allowPlainTextAppend: rehypePlugins === undefined ||
+          rehypePlugins === REHYPE_PLUGINS || rehypePlugins === TRANSCRIPT_REHYPE_PLUGINS,
         math,
         recognizeCallouts,
         cache: cacheRef.current,
@@ -82,7 +86,11 @@ export function BoundedMarkdown({
   const measuredLeavesRef = useRef<readonly MarkdownRenderLeaf[]>(measuredLeaves)
   const scheduleRef = useRef<() => void>(() => {})
   const scrollerRef = useRef<HTMLElement | null>(null)
-  const geometryRef = useRef<{ height: number; topSpacer: number } | null>(null)
+  const geometryRef = useRef<{
+    height: number
+    topSpacer: number
+    nestedHeights: ReadonlyMap<Element, number>
+  } | null>(null)
 
   const mounted = useMemo(
     () => mergeMountedMarkdownLeaves(measuredLeaves, leafWindow.start, leafWindow.end),
@@ -149,11 +157,12 @@ export function BoundedMarkdown({
     if (root === null || scroller === null) return
     const rect = root.getBoundingClientRect()
     const previous = geometryRef.current
-    geometryRef.current = { height: rect.height, topSpacer: leafWindow.topSpacerHeight }
+    const nestedHeights = readNestedPaneHeights(root)
+    geometryRef.current = { height: rect.height, topSpacer: leafWindow.topSpacerHeight, nestedHeights }
     // The first commit is where this body's box came into existence, which is
     // layout rather than a correction of anything.
     if (previous === null) return
-    const delta = rect.height - previous.height
+    const delta = ownPaneHeightDelta(rect.height - previous.height, previous.nestedHeights, nestedHeights)
     if (delta === 0) return
     // The change cannot be above the shorter of the two top spacers: that band
     // is blank in both layouts, so everything before it kept its position.
@@ -219,7 +228,7 @@ export function BoundedMarkdown({
   }, [measurement])
 
   return (
-    <div ref={rootRef}>
+    <div ref={rootRef} data-pane-height-owner="">
       {leafWindow.topSpacerHeight > 0 ? (
         <div aria-hidden style={{ height: `${leafWindow.topSpacerHeight}px` }} />
       ) : null}

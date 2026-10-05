@@ -264,15 +264,28 @@ function userImageRow(): NestedTranscriptRow {
   }
 }
 
+function historyTextRow(index: number): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: `history:${index}`,
+    kind: 'user-text',
+    role: 'user',
+    content: index === 239 ? '[focused message](https://example.com)' : `history message ${index}`,
+    isReplay: true,
+  }
+}
+
 /** A scroll parent `findPaneScroller` accepts, holding one transcript. */
 function Pane({
   rows,
   store,
   restorePhase = null,
+  initialScrollRowKey = null,
 }: {
   rows: NestedTranscriptRow[]
   store: ToolCardExpansionStore
   restorePhase?: RestorePhase | null
+  initialScrollRowKey?: string | null
 }): ReactNode {
   const [scroller, setScroller] = useState<HTMLElement | null>(null)
   const attach = (element: HTMLElement | null): void => {
@@ -287,7 +300,7 @@ function Pane({
       : createElement(
           ToolCardExpansionContext.Provider,
           { value: store },
-          createElement(TranscriptRowsView, { rows, restorePhase }),
+          createElement(TranscriptRowsView, { rows, restorePhase, initialScrollRowKey }),
         ),
   )
 }
@@ -659,6 +672,165 @@ describe('bounded composite containers', () => {
 })
 
 describe('state survives a child leaving and re-entering the mounted range', () => {
+  test('the outer transcript window keeps the focused row mounted during scroll', async () => {
+    const rows = Array.from({ length: 240 }, (_, index) => historyTextRow(index))
+    const tree = await harness.mount(createElement(Pane, { rows, store: createToolCardExpansionStore() }))
+    const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]') as HTMLElement
+    const outer = pane.querySelector<HTMLElement>('.transcript-virtual-column')
+    expect(outer).not.toBeNull()
+    placeAt(pane, 0)
+    placeAt(outer as HTMLElement, -100_000)
+    await harness.nextFrame()
+    const row = pane.querySelector<HTMLElement>('[data-transcript-entry="history:239"]')
+    expect(row).not.toBeNull()
+    ;(row as HTMLElement).tabIndex = 0
+    await act(async () => (row as HTMLElement).focus())
+    expect(pane.ownerDocument.activeElement).toBe(row)
+
+    placeAt(outer as HTMLElement, 100_000)
+    await scrollPane(pane)
+
+    expect(pane.querySelector('[data-transcript-entry="history:239"]')).not.toBeNull()
+    expect(pane.querySelector('[data-transcript-entry="history:0"]')).not.toBeNull()
+    expect(pane.ownerDocument.activeElement).toBe(row)
+    expect(pane.querySelectorAll('[data-transcript-entry]').length).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN + 1)
+  })
+
+  test('an open image preview survives its outer transcript entry leaving and re-entering the window', async () => {
+    const rows = [userImageRow(), ...Array.from({ length: 239 }, (_, index) => historyTextRow(index + 1))]
+    const { pane } = await mountPane(rows)
+    const outer = pane.querySelector<HTMLElement>('.transcript-virtual-column') as HTMLElement
+    placeAt(pane, 0)
+    placeAt(outer, 0)
+    await scrollPane(pane)
+    const entry = pane.querySelector<HTMLElement>('[data-transcript-entry="s:m:0:user-image"]')
+    expect(entry).toBeTruthy()
+    await click(entry?.querySelector('button[aria-label="Expand sent image"]'))
+    expect(harness.document.querySelector('[aria-label="Sent image preview"]')).not.toBeNull()
+
+    placeAt(outer, -100_000)
+    await scrollPane(pane)
+    expect(pane.querySelector('[data-transcript-entry="s:m:0:user-image"]')).toBeNull()
+    expect(harness.document.querySelector('[aria-label="Sent image preview"]')).toBeNull()
+
+    placeAt(outer, 0)
+    await scrollPane(pane)
+    expect(pane.querySelector('[data-transcript-entry="s:m:0:user-image"]')).not.toBeNull()
+    expect(harness.document.querySelector('[aria-label="Sent image preview"]')).not.toBeNull()
+  })
+
+  test('prepending outer rows keeps a mounted row identity in the window', async () => {
+    const rows = Array.from({ length: 240 }, (_, index) => historyTextRow(index))
+    const store = createToolCardExpansionStore()
+    const tree = await harness.mount(createElement(Pane, { rows, store }))
+    const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]') as HTMLElement
+    const outer = pane.querySelector<HTMLElement>('.transcript-virtual-column') as HTMLElement
+    let outerTop = -9_000
+    placeAt(pane, 0)
+    Object.defineProperty(outer, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ top: outerTop, bottom: outerTop, left: 0, right: 0, width: 0, height: 0 }),
+    })
+    await scrollPane(pane)
+    const anchorEntry = pane.querySelector<HTMLElement>('[data-transcript-entry]')
+    expect(anchorEntry).toBeTruthy()
+    const anchorKey = anchorEntry?.getAttribute('data-transcript-entry') ?? null
+
+    const earlier = Array.from({ length: 10 }, (_, index) => historyTextRow(index - 10))
+    outerTop -= 820
+    await tree.render(createElement(Pane, {
+      rows: [...earlier, ...rows],
+      store,
+    }))
+    await scrollPane(pane)
+
+    expect(pane.querySelector(`[data-transcript-entry="${anchorKey}"]`)).not.toBeNull()
+  })
+
+  test('outer anchoring counts height changes once and ignores lower appends', async () => {
+    let rows = Array.from({ length: 240 }, (_, index) => historyTextRow(index))
+    let documentHeight = rows.length * 82
+    let bodyGrowth = 0
+    let prependCount = 0
+    const growingIndex = 104
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.classList.contains('transcript-virtual-column')) {
+        const pane = this.closest<HTMLElement>('[data-testid="pane"]')!
+        return {
+          top: -pane.scrollTop, bottom: documentHeight - pane.scrollTop,
+          left: 0, right: 1000, width: 1000, height: documentHeight,
+        } as DOMRect
+      }
+      if (this.firstElementChild?.hasAttribute('data-markdown-leaf')) {
+        const entry = this.closest<HTMLElement>('[data-transcript-entry]')!
+        const pane = this.closest<HTMLElement>('[data-testid="pane"]')!
+        const index = Number(entry.getAttribute('data-transcript-entry')!.split(':')[1])
+        const height = 72 + (index === growingIndex ? bodyGrowth : 0)
+        const top = (index + prependCount) * 82 +
+          (index > growingIndex ? bodyGrowth : 0) - pane.scrollTop
+        return { top, bottom: top + height, left: 0, right: 1000, width: 1000, height } as DOMRect
+      }
+      return originalRect.call(this)
+    }
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute('data-testid') === 'pane' ? 800 : 0 },
+    })
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.getAttribute('data-testid') === 'pane' ? documentHeight : 0 },
+    })
+    try {
+      const { tree, pane, store } = await mountPane(rows)
+      const writes: number[] = []
+      let position = 0
+      Object.defineProperty(pane, 'scrollTop', {
+        configurable: true,
+        get: () => position,
+        set: (next: number) => { position = next; writes.push(next) },
+      })
+      const settle = async () => {
+        await scrollPane(pane)
+        await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+      }
+      pane.scrollTop = 9000
+      await settle()
+      // Endpoint equality misses an intermediate counter-scroll and return.
+      expect(writes).toEqual([9000])
+
+      bodyGrowth = 40
+      documentHeight += bodyGrowth
+      rows = rows.map((row, index) => index === growingIndex
+        ? { ...row, content: 'A taller body above the viewport' }
+        : row)
+      await tree.render(createElement(Pane, { rows, store }))
+      await settle()
+      expect(writes).toEqual([9000, 9040])
+
+      rows = [...rows, historyTextRow(240)]
+      documentHeight += 82
+      await tree.render(createElement(Pane, { rows, store }))
+      await settle()
+      expect(writes).toEqual([9000, 9040])
+
+      const earlier = Array.from({ length: 10 }, (_, index) => historyTextRow(index - 10))
+      prependCount = earlier.length
+      documentHeight += 820
+      await tree.render(createElement(Pane, { rows: [...earlier, ...rows], store }))
+      await settle()
+      expect(writes).toEqual([9000, 9040, 9860])
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+      if (originalHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalHeight)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      if (originalScrollHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', originalScrollHeight)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight')
+    }
+  })
+
   test('a member scrolled out and back returns expanded', async () => {
     const store = createToolCardExpansionStore()
     store.set('run:toolu_read_0', true)

@@ -70,6 +70,7 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus41 ||
     model === getModelStrings().opus45 ||
     model === getModelStrings().opus46 ||
+    model === getModelStrings().opus55 ||
     model === getModelStrings().opus5
   )
 }
@@ -238,7 +239,7 @@ export function getDefaultOpusModel(): ModelName {
   if (isAnthropicCloudProvider()) {
     return getModelStrings().opus46
   }
-  return getModelStrings().opus5
+  return getModelStrings().opus55
 }
 
 // @[MODEL LAUNCH]: Update the default Sonnet model (3P providers may lag so keep defaults unchanged).
@@ -247,10 +248,10 @@ export function getDefaultSonnetModel(): ModelName {
     return remapRetiredClaude46Model(process.env.ANTHROPIC_DEFAULT_SONNET_MODEL)
   }
   // Default to Sonnet 4.5 for 3P since they may not have 4.6 yet
-  if (getAPIProvider() !== 'firstParty') {
+  if (isAnthropicCloudProvider()) {
     return getModelStrings().sonnet45
   }
-  return getModelStrings().sonnet5
+  return getModelStrings().sonnet55
 }
 
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
@@ -320,7 +321,7 @@ export function getDefaultCodexModel(): ModelName {
  *
  * This handles the built-in default:
  * - Opus for Max and Team Premium users
- * - Sonnet 4.6 for all other users (including Team Standard, Pro, Enterprise)
+ * - Sonnet 5.5 for all other users (including Team Standard, Pro, Enterprise)
  *
  * @returns The default model setting to use
  */
@@ -369,6 +370,8 @@ export function getDefaultMainLoopModel(): ModelName {
  */
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
+  if (name.includes('claude-opus-5-5')) return 'claude-opus-5-5'
+  if (name.includes('claude-sonnet-5-5')) return 'claude-sonnet-5-5'
   // Special cases for Claude 5+ models — check before 4.x to avoid false matches
   if (name.includes('claude-fable-5')) {
     return 'claude-fable-5'
@@ -476,11 +479,11 @@ export function getClaudeAiUserDefaultModelDescription(
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {
-      return `Opus 5 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+      return `Opus 5.5 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
     }
-    return `Opus 5 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    return `Opus 5.5 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
-  return 'Sonnet 5 · Best for everyday tasks'
+  return 'Sonnet 5.5 · Best for everyday tasks'
 }
 
 export function renderDefaultModelSetting(
@@ -556,6 +559,14 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Fable 5'
     case getModelStrings().fable5 + '[1m]':
       return 'Fable 5 (1M context)'
+    case getModelStrings().opus55:
+      return 'Opus 5.5'
+    case getModelStrings().opus55 + '[1m]':
+      return 'Opus 5.5 (1M context)'
+    case getModelStrings().sonnet55:
+      return 'Sonnet 5.5'
+    case getModelStrings().sonnet55 + '[1m]':
+      return 'Sonnet 5.5 (1M context)'
     case getModelStrings().opus5:
       return 'Opus 5'
     case getModelStrings().opus5 + '[1m]':
@@ -819,6 +830,12 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
 
   if (canonical.includes('claude-fable-5')) {
     return has1m ? 'Fable 5 (with 1M context)' : 'Fable 5'
+  }
+  if (canonical.includes('claude-opus-5-5')) {
+    return has1m ? 'Opus 5.5 (with 1M context)' : 'Opus 5.5'
+  }
+  if (canonical.includes('claude-sonnet-5-5')) {
+    return has1m ? 'Sonnet 5.5 (with 1M context)' : 'Sonnet 5.5'
   }
   if (canonical.includes('claude-opus-5')) {
     return has1m ? 'Opus 5 (with 1M context)' : 'Opus 5'

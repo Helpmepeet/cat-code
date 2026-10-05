@@ -4631,6 +4631,11 @@ describe('codex request-start diagnostic', () => {
 // provider), which makes it the thing that decides which GPT actually serves a
 // subagent pinned to a Claude tier.
 describe('mapClaudeModelToCodex', () => {
+  test('rejects an exact Opus 5.5 pin instead of substituting a GPT model', () => {
+    for (const model of ['claude-opus-5-5', 'claude-opus-5-5[1m]']) {
+      expect(() => mapClaudeModelToCodex(model)).toThrow('cannot run through OpenAI')
+    }
+  })
   test('maps the top Claude tier to the top Codex tier', () => {
     // The regression this locks: `opus` used to land on Terra, the MIDDLE rung,
     // so naming the most capable model got you less than naming nothing (which

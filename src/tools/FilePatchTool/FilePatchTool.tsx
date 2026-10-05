@@ -72,6 +72,16 @@ export const FilePatchTool = buildTool({
   searchHint: 'apply unified diff patches',
   maxResultSizeChars: 100_000,
   strict: false,
+  // Advertise the canonical envelope. The Zod union also accepts historical
+  // structured inputs, but exports anyOf without the object type Claude needs.
+  inputJSONSchema: {
+    type: 'object',
+    properties: {
+      input: { type: 'string', description: 'The full apply_patch envelope text' },
+    },
+    required: ['input'],
+    additionalProperties: false,
+  },
   async description() {
     return 'Apply one or more file patches.'
   },

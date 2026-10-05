@@ -12,7 +12,7 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,37 +33,96 @@ function temp(prefix: string): string {
   return dir
 }
 
-test('the catalog worker emits a catalog and never runs the full engine bootstrap', async () => {
+test('unchanged catalogs skip engine startup while external transcript changes refresh them', async () => {
   const configHome = temp('catcode-catalog-worker-')
   const cwd = temp('catcode-catalog-cwd-')
 
-  const proc = Bun.spawn(['bun', 'run', worker, '--bare'], {
-    cwd,
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      CLAUDE_CONFIG_DIR: configHome,
-    },
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  proc.stdin.end()
-  const [code, stdout] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-  ])
+  const run = async () => {
+    const proc = Bun.spawn(['bun', 'run', worker, '--bare'], {
+      cwd,
+      env: { ...process.env, NODE_ENV: 'development', CLAUDE_CONFIG_DIR: configHome },
+      stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
+    })
+    proc.stdin.end()
+    const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
+    return { code, records: stdout.trim().split('\n').filter(Boolean).map(line => parseSessionsCatalogWorkerResult(JSON.parse(line))) }
+  }
+  const first = await run()
 
   // Still functional: the enumeration itself does not depend on `init()`.
-  expect(code).toBe(0)
-  const records = stdout
-    .trim()
-    .split('\n')
-    .filter(line => line.length > 0)
-    .map(line => parseSessionsCatalogWorkerResult(JSON.parse(line)))
-  expect(records.length).toBeGreaterThan(0)
-  expect(records.every(Boolean)).toBe(true)
-  expect(records.some(record => record?.type === 'catalog')).toBe(true)
+  expect(first.code).toBe(0)
+  expect(first.records.length).toBeGreaterThan(0)
+  expect(first.records.every(Boolean)).toBe(true)
+  expect(first.records.some(record => record?.type === 'catalog')).toBe(true)
+  const cache = join(configHome, 'desktop', 'sessions-catalog.json')
+  const initialCacheInode = statSync(cache, { bigint: true }).ino
+  const firstCapturedAtMs = JSON.parse(readFileSync(cache, 'utf8')).capturedAtMs
+
+  // This worker used to import the full engine graph and rewrite/fsync the
+  // cache on every timer tick even when the catalog content was unchanged.
+  const second = await run()
+  expect(second.code).toBe(0)
+  expect(second.records).toEqual([{ type: 'unchanged', version: 1 }])
+  expect(statSync(cache, { bigint: true }).ino).toBe(initialCacheInode)
+  expect(JSON.parse(readFileSync(cache, 'utf8')).capturedAtMs).toBe(firstCapturedAtMs)
+
+  // A terminal-created transcript changes the source fingerprint and must take
+  // the ordinary engine enumeration path again.
+  const projects = join(configHome, 'projects', '-tmp-catalog-probe')
+  mkdirSync(projects, { recursive: true })
+  const cwdPath = join(cwd, 'workspace')
+  mkdirSync(cwdPath)
+  writeFileSync(join(projects, '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883.jsonl'), JSON.stringify({
+    parentUuid: null,
+    sessionId: '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883',
+    cwd: cwdPath,
+    version: 'test',
+    type: 'user',
+    uuid: 'c1dd8834-840d-4516-9e4c-e02b0f35f24a',
+    userType: 'external',
+    timestamp: '2026-10-04T00:00:00.000Z',
+    message: { role: 'user', content: 'probe prompt' },
+  }) + '\n')
+  const third = await run()
+  expect(third.code).toBe(0)
+  expect(third.records.find(record => record?.type === 'catalog')?.catalog.entries).toHaveLength(1)
+  const changedCacheInode = statSync(cache, { bigint: true }).ino
+  expect(changedCacheInode).not.toBe(initialCacheInode)
+  const fourth = await run()
+  expect(fourth.records).toEqual([{ type: 'unchanged', version: 1 }])
+  expect(statSync(cache, { bigint: true }).ino).toBe(changedCacheInode)
+
+  // Relocation state affects the catalog's cwd/binding projection independently
+  // from transcript bytes, so it participates in source invalidation as well.
+  const targetCwd = join(cwd, 'relocated-workspace')
+  mkdirSync(targetCwd)
+  const managed = {
+    cwd: cwdPath,
+    binding: {
+      kind: 'managed',
+      storageRootId: '4fc474a0-38ba-4ed7-806a-a7ee9fd4cf86',
+      storageId: '02bb2e86-a34b-4ec8-8a79-dbdad33db54a',
+    },
+  }
+  const target = { cwd: targetCwd, binding: { kind: 'project' } }
+  const relocationDir = join(configHome, 'session-relocations')
+  mkdirSync(relocationDir, { recursive: true })
+  writeFileSync(join(relocationDir, '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883.json'), JSON.stringify({
+    version: 1,
+    engineSessionId: '9b4b3ac5-ef6e-45f4-a111-a7e789d4f883',
+    appSessionId: '3f4ef76c-4b2a-41e4-990a-11aa5d8fa034',
+    phase: 'complete',
+    original: managed,
+    source: managed,
+    target,
+    controls: { mode: 'default' },
+    backup: join(configHome, 'backup.jsonl'),
+    movedAt: Date.now(),
+  }))
+  const fifth = await run()
+  const relocated = fifth.records.find(record => record?.type === 'catalog')
+  expect(relocated?.type).toBe('catalog')
+  if (relocated?.type === 'catalog') expect(relocated.catalog.entries[0]?.cwd).toBe(targetCwd)
 
   // `init()` writes the global config (`recordFirstStartTime`) and materializes
   // the plans directory. Neither exists after an observation-only bootstrap, so

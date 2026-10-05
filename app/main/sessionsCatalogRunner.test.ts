@@ -123,6 +123,29 @@ describe('runSessionsCatalogWorker — accept + deliver', () => {
     ])
   })
 
+  test('accepts the unchanged marker without republishing an old snapshot', async () => {
+    let published = false
+    const outcome = await runSessionsCatalogWorker({
+      command: 'bun', args: [], cwd: process.cwd(),
+      spawnWorker: fakeSpawn({ stdout: ndjson({ type: 'unchanged', version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION }) }),
+      onCatalog: () => { published = true },
+    })
+    expect(outcome).toBe('unchanged')
+    expect(published).toBe(false)
+  })
+
+  test('engine-free freshness check skips starting a worker on an unchanged tick', async () => {
+    let spawned = false
+    const outcome = await runSessionsCatalogWorker({
+      command: 'bun', args: [], cwd: process.cwd(),
+      shouldSkip: () => true,
+      spawnWorker: (() => { spawned = true; throw new Error('worker should stay cold') }) as unknown as typeof spawn,
+      onCatalog: () => { throw new Error('unchanged catalogs are not republished') },
+    })
+    expect(outcome).toBe('unchanged')
+    expect(spawned).toBe(false)
+  })
+
   test('a clean worker-reported failure resolves "failure" and never calls onCatalog (keeps last good)', async () => {
     let called = false
     const outcome = await runSessionsCatalogWorker({
@@ -142,6 +165,24 @@ describe('runSessionsCatalogWorker — accept + deliver', () => {
     })
     expect(outcome).toBe('failure')
     expect(called).toBe(false)
+  })
+
+  test('a failed source preflight still permits worker recovery and publication', async () => {
+    const delivered: SessionsCatalogSnapshot[] = []
+    const outcome = await runSessionsCatalogWorker({
+      command: 'bun', args: [], cwd: process.cwd(),
+      shouldSkip: async () => { throw new Error('source metadata unavailable') },
+      spawnWorker: fakeSpawn({
+        stdout: ndjson({
+          type: 'catalog',
+          version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
+          catalog: catalog(['recovered']),
+        }),
+      }),
+      onCatalog: snapshot => delivered.push(snapshot),
+    })
+    expect(outcome).toBe('delivered')
+    expect(delivered[0]?.entries.map(entry => entry.sessionId)).toEqual(['recovered'])
   })
 })
 

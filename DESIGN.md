@@ -19,11 +19,12 @@ attention. The cat artwork and bright accent make entry points recognizable;
 they do not decorate every working surface. Dense controls are acceptable when
 they let a person follow several sessions without losing context.
 
-The desktop shell has a tab strip, a compact left rail, and a central session
-area. A session is a readable stream of user text, agent text, reasoning, tool
-activity, and results above a persistent composer. Visual hierarchy comes from
-type, alignment, small color cues, seams, and restrained elevation. The welcome
-screen has more room for the brand and project/account overview than an active
+The desktop shell has a tab strip, a compact left rail, and a central workspace.
+The strip can show session tabs alongside renderer-only page tabs. A session is
+a readable stream of user text, agent text, reasoning, tool activity, and
+results above a persistent composer. Visual hierarchy comes from type,
+alignment, small color cues, seams, and restrained elevation. The welcome screen
+has more room for the brand and project/account overview than an active
 transcript. See [`WelcomeScreen.tsx`](app/renderer/src/WelcomeScreen.tsx),
 [`SessionPane.tsx`](app/renderer/src/SessionPane.tsx), and
 [`TranscriptView.tsx`](app/renderer/src/TranscriptView.tsx).
@@ -106,9 +107,14 @@ large pill treatments within one control group.
 
 ## Components
 
-- **Shell navigation:** Keep the rail and tab strip quiet. Show the active
-  session with the accent and a small marker. Preserve meaningful status cues
-  without filling every row with badges.
+- **Shell navigation:** Keep the rail and tab strip quiet. The strip's single
+  visible order covers session and page tabs; selecting a session shows its
+  conversation, while selecting a page shows that page in the main workspace.
+  Page tabs are unique, closable renderer navigation, not synthetic sessions or
+  split panels, and do not survive renderer reload or app restart. Switching
+  away unmounts the page, so page-local state follows the page's existing
+  mount/unmount behavior. Show the selected tab clearly and preserve meaningful
+  session status cues without filling every row with badges.
 - **Conversation:** Agent prose reads as a continuous column. User messages
   receive a restrained accent tinted bubble. Tool activity is compact and
   scannable; expand detail on demand. Code and command output use mono text and

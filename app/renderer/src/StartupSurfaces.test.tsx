@@ -136,71 +136,158 @@ test('trust gate says the scope is unresolved rather than implying folder-only t
   expect(html).not.toContain('this folder and everything under it')
 })
 
-/* ── first-run OAuth sub-states (P4-15 — each is REACHABLE + prototype-faithful) ── */
+/* ── sign-in sub-states (P4-15 — each is REACHABLE) ─────────────────────────── */
 
-test('OAuth ready phase offers both Anthropic and Codex subscription sign-in', () => {
+test('OAuth ready phase offers Claude and ChatGPT as whole-row choices', () => {
   const html = oauthHtml({ phase: 'ready' })
-  expect(html).toContain('Choose your provider')
-  expect(html).toContain('Anthropic · Claude subscription')
-  expect(html).toContain('Codex · ChatGPT subscription')
-  expect(html.match(/Open browser to sign in/g)?.length).toBe(2)
+  expect(html).toContain('Sign in to get started')
+  expect(html).toContain('Claude subscription')
+  expect(html).toContain('ChatGPT subscription for Codex models')
+  // One action per provider, not a repeated primary button per row.
+  expect(html).not.toContain('Open browser to sign in')
 })
 
-test('OAuth waiting phase (no url yet) shows the wait + cancel, no paste-code block', () => {
+test('OAuth waiting phase (no url yet) shows a disabled copy action + cancel, no paste route', () => {
   const html = oauthHtml({ phase: 'waiting', url: null })
-  expect(html).toContain('Continue in your browser')
-  expect(html).toContain('Waiting for browser authorization')
+  expect(html).toContain('Sign in with ChatGPT')
+  expect(html).toContain('Preparing link')
+  expect(html).toContain('disabled=""')
   expect(html).toContain('Cancel')
-  // The paste-code fallback only appears once the engine mints the url.
-  expect(html).not.toContain('Paste authorization code')
+  expect(html).not.toContain('Open in browser')
+  expect(html).not.toContain('Paste the')
 })
 
-test('OAuth waiting phase WITH url shows the engine-minted paste-code fallback', () => {
-  const html = oauthHtml({
-    phase: 'waiting',
-    url: 'https://auth.openai.com/authorize?code_challenge=abc&state=xyz',
-  })
-  expect(html).toContain('Browser didn')
-  expect(html).toContain('https://auth.openai.com/authorize?code_challenge=abc&amp;state=xyz')
-  expect(html).toContain('Paste authorization code')
-  // The url is DISPLAY only — no token rides the renderer surface.
+test('OAuth waiting phase WITH url leads with Copy sign-in link and never prints the url', () => {
+  const url = 'https://auth.openai.com/authorize?code_challenge=abc&state=xyz'
+  const html = oauthHtml({ phase: 'waiting', url })
+  expect(html).toContain('Copy sign-in link')
+  expect(html).toContain('Open in browser')
+  expect(html).toContain('Waiting for approval')
+  // Copy is the first control and the focused one.
+  expect(html.indexOf('Copy sign-in link')).toBeLessThan(html.indexOf('Open in browser'))
+  expect(html).toMatch(/<button[^>]*autofocus=""[^>]*>(?:(?!<\/button>).)*Copy sign-in link/)
+  // The url is an href only: the wall of query string is not printed.
+  expect(html).toContain('href="https://auth.openai.com/authorize?code_challenge=abc&amp;state=xyz"')
+  expect(html.split('code_challenge=abc').length - 1).toBe(1)
   expect(html).not.toContain('access_token')
 })
 
-test('OAuth waiting phase names the selected Anthropic provider', () => {
+test('ChatGPT keeps the paste route folded: its redirect normally lands on its own', () => {
+  const html = oauthHtml({ phase: 'waiting', url: 'https://auth.openai.com/authorize' })
+  expect(html).toContain('<details')
+  expect(html).toContain('the page didn')
+  expect(html).toContain('Paste the page address')
+})
+
+test('Claude shows the paste field up front: a copied Claude link always ends on a code', () => {
   const html = oauthHtml(
     { phase: 'waiting', url: 'https://claude.ai/oauth/authorize' },
     'anthropic',
   )
-  expect(html).toContain('Your Anthropic account appears')
-  expect(html).toContain('after you finish in the browser')
-  expect(html).not.toContain('Your Codex account appears')
-  expect(html).not.toContain('engine captures the callback')
+  expect(html).toContain('Sign in with Claude')
+  expect(html).toContain('Paste the code')
+  expect(html).not.toContain('<details')
+  expect(html).not.toContain('Sign in with ChatGPT')
 })
 
-test('OAuth alias phase shows the Authorized pill + naming step (Codex waiting_for_alias)', () => {
+test('OAuth waiting phase shows a refused code inline', () => {
+  const html = renderToStaticMarkup(
+    <StartupOAuth
+      view={{ phase: 'waiting', url: 'https://claude.ai/oauth/authorize' }}
+      provider="anthropic"
+      codeStatus={{ state: 'rejected', message: 'Could not parse input.' }}
+      onBegin={() => {}}
+      onCancel={() => {}}
+      onPasteCode={() => {}}
+      onSubmitAlias={() => {}}
+      onRetry={() => {}}
+    />,
+  )
+  expect(html).toContain('role="alert"')
+  expect(html).toContain('Could not parse input.')
+  expect(html).toContain('aria-invalid="true"')
+})
+
+test('OAuth waiting phase drops the link and paste actions once a code is accepted', () => {
+  const html = renderToStaticMarkup(
+    <StartupOAuth
+      view={{ phase: 'waiting', url: 'https://auth.openai.com/authorize' }}
+      provider="openai"
+      codeStatus={{ state: 'accepted' }}
+      onBegin={() => {}}
+      onCancel={() => {}}
+      onPasteCode={() => {}}
+      onSubmitAlias={() => {}}
+      onRetry={() => {}}
+    />,
+  )
+  expect(html).toContain('Finishing sign-in')
+  expect(html).not.toContain('Copy sign-in link')
+  expect(html).not.toContain('Paste the')
+})
+
+test('OAuth alias phase offers Save and Skip, and no cancel that would drop the login', () => {
   const html = oauthHtml({ phase: 'alias' })
-  expect(html).toContain('Authorized')
   expect(html).toContain('Name this account')
-  expect(html).toContain('use the account email')
-  expect(html).toContain('work · personal · team-a')
-  expect(html).toContain('Continue')
+  expect(html).toContain('aria-label="Account name"')
+  expect(html).toContain('Save')
+  expect(html).toContain('Skip')
+  expect(html).not.toContain('Cancel')
+  // The old copy promised an email fallback Codex rows never show.
+  expect(html).not.toContain('account email')
 })
 
-test('OAuth success phase shows "Signed in" + the authorized check', () => {
+test('OAuth alias phase shows a refused alias inline', () => {
+  const html = renderToStaticMarkup(
+    <StartupOAuth
+      view={{ phase: 'alias' }}
+      provider="openai"
+      aliasStatus={{ state: 'rejected', message: 'Alias "work" is already in use.' }}
+      onBegin={() => {}}
+      onCancel={() => {}}
+      onPasteCode={() => {}}
+      onSubmitAlias={() => {}}
+      onRetry={() => {}}
+    />,
+  )
+  expect(html).toContain('role="alert"')
+  expect(html).toContain('is already in use.')
+})
+
+test('OAuth success phase says Signed in without narrating setup', () => {
   const html = oauthHtml({ phase: 'success' })
   expect(html).toContain('Signed in')
-  expect(html).toContain('Setting up your workspace')
-  expect(html).toContain('Authorized')
+  expect(html).not.toContain('Setting up your workspace')
 })
 
-test('OAuth error phase binds the REAL engine message + offers retry/back', () => {
+test('OAuth error phase shows the REAL engine message once + try again/cancel', () => {
   const html = oauthHtml({ phase: 'error', message: 'authorization_request_timed_out' })
-  expect(html).toContain('OAuth error')
-  expect(html).toContain("Sign-in didn")
-  expect(html).toContain('authorization_request_timed_out')
-  expect(html).toContain('Retry')
-  expect(html).toContain('Back')
+  expect(html).toContain('Sign-in didn')
+  expect(html.split('authorization_request_timed_out').length - 1).toBe(1)
+  expect(html).not.toContain('OAuth error')
+  expect(html).toContain('Try again')
+  expect(html).toContain('Cancel')
+})
+
+test('modal presentation drops the startup brand and steps; page keeps them', () => {
+  const modal = renderToStaticMarkup(
+    <StartupOAuth
+      view={{ phase: 'waiting', url: null }}
+      provider="openai"
+      presentation="modal"
+      onBegin={() => {}}
+      onCancel={() => {}}
+      onPasteCode={() => {}}
+      onSubmitAlias={() => {}}
+      onRetry={() => {}}
+    />,
+  )
+  expect(modal).toContain('bg-scrim')
+  expect(modal).not.toContain('cat code')
+  expect(modal).not.toContain('>Trust<')
+  const page = oauthHtml({ phase: 'waiting', url: null })
+  expect(page).toContain('cat code')
+  expect(page).toContain('>Trust<')
 })
 
 test('OAuth surface has no "Simulate failure" demo control (prototype DEMO CUT)', () => {

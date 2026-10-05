@@ -110,6 +110,25 @@ the existing `subscribe`); T4/T5a/T6/T6b/T7 + HC1–HC4 unaffected.
 
 ## Tests (desktop suite plus focused engine tests)
 
+### Display child work budget, 2026-10-04
+
+Child restoration uses an engine-owned bounded display reader rather than the
+full agent-resume reader. One join shares a 4 MiB source-read budget (including
+alignment probes), a 4,000 selected-message budget, and the remaining projected
+output budget across siblings and nested waves. Rejected oversized branches
+consume the read budget. Partial branches are omitted because the wire has no
+independent child truncation marker; their existing unavailable-history card
+remains truthful. Reachability, parent splicing, compaction projection, accepted
+UUID deduplication, and the engine's full resume semantics stay in their existing
+owners. Load-earlier uses the same join budget rather than renewing it per child.
+
+`src/utils/agentDisplayHistory.test.ts` exercises real bounded JSONL reads and
+full resume independence. `app/sidecar/subagentHistory.test.ts` covers rejected
+source-byte/message/output budgets. The isolated twelve-file probe in
+`scripts/benchmarks/resourceWasteHistory.ts` observes actual fd-read bytes.
+
+### Existing restoration checks
+
 `src/utils/conversationRecovery.test.ts` (manual-compact fixture, API validity, interruption
 control, terminal visibility) · `src/utils/queryHelpers.test.ts` (live SDK suppression and
 genuine-text control) · `src/utils/messages/mappers.test.ts` (general SDK projection suppresses

@@ -4076,6 +4076,8 @@ export type CatCodeBridge = {
    * `accounts.snapshot` when the pool changed.
    */
   accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void
+  /** App-level account management; no chat session is needed. */
+  manageAccount(verb: import('./accountControlWorker.js').AccountControlVerb): Promise<AccountResultFrame>
   /**
    * Delete a global Codex vault profile without borrowing a chat session as the
    * command carrier. Main validates the exact destructive verb and delegates the

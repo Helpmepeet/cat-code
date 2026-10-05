@@ -362,9 +362,10 @@ describe('domain wiring', () => {
 
   test('subscribe rides the app-state store (a worker spawn moves leases)', () => {
     const listeners: Array<() => void> = []
+    let tasks: Record<string, TaskState> = {}
     let unsubscribed = 0
     const store = {
-      getState: () => ({ tasks: {} }),
+      getState: () => ({ tasks }),
       subscribe: (fn: () => void) => {
         listeners.push(fn)
         return () => {
@@ -373,13 +374,15 @@ describe('domain wiring', () => {
       },
     } as unknown as AppStateStore
     let notified = 0
+    const liveLease = lease({ ownerId: 'agent_abc', leaseId: 'agent_abc' })
     const stop = createSidecarLeaseDomain(store, {
-      reader: fakeReader(),
+      reader: fakeReader({ leases: [liveLease] }),
       subscribeToLeaseChanges: () => () => {},
     }).subscribe(() => {
       notified += 1
     })
     expect(listeners).toHaveLength(1)
+    tasks = { agent_abc: localAgentTask() }
     listeners[0]!()
     expect(notified).toBe(1)
     stop()
@@ -395,13 +398,18 @@ describe('domain wiring', () => {
    */
   test('subscribe also rides the lease manager, with no app-state mutation', () => {
     const leaseListeners: Array<() => void> = []
+    let strategy: 'spread' | 'follow-main' = 'spread'
     const store = {
       getState: () => ({ tasks: {} }),
       subscribe: () => () => {},
     } as unknown as AppStateStore
     let notified = 0
+    const reader: LeaseReader = {
+      ...fakeReader(),
+      snapshot: () => ({ mainLease: null, strategy, accounts: [] }),
+    }
     createSidecarLeaseDomain(store, {
-      reader: fakeReader(),
+      reader,
       subscribeToLeaseChanges: fn => {
         leaseListeners.push(fn)
         return () => {}
@@ -411,9 +419,10 @@ describe('domain wiring', () => {
     })
 
     expect(leaseListeners).toHaveLength(1)
+    strategy = 'follow-main'
     leaseListeners[0]!()
     leaseListeners[0]!()
-    expect(notified).toBe(2)
+    expect(notified).toBe(1)
   })
 
   test('the returned unsubscribe detaches BOTH sources, and twice is a no-op', () => {

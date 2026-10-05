@@ -36,6 +36,7 @@ import {
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
+  settleOAuthSubmitStatus,
   shouldShowAnthropicPoolAccount,
   shouldShowFirstRunOAuth,
 } from './appModel.js'
@@ -173,6 +174,32 @@ test('generic account login claims an add-account OAuth owner without stealing a
   expect(claimOAuthContextForAccountLogin('first-run')).toBe('first-run')
 })
 
+test('an OAuth paste/alias submission settles only from its own account.result', () => {
+  const result = (requestId: string, ok: boolean) => ({
+    kind: 'account.result' as const,
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: 's1',
+    requestId,
+    verb: 'account.oauthPasteCode' as const,
+    ok,
+    message: ok ? 'Code submitted.' : 'Could not parse input.',
+  })
+  const pending = { state: 'pending', requestId: 'r1' } as const
+  // Another verb's result leaves it pending; so does no result yet.
+  expect(settleOAuthSubmitStatus(pending, null)).toBe(pending)
+  expect(settleOAuthSubmitStatus(pending, result('r2', false))).toBe(pending)
+  expect(settleOAuthSubmitStatus(pending, result('r1', true))).toEqual({
+    state: 'accepted',
+  })
+  expect(settleOAuthSubmitStatus(pending, result('r1', false))).toEqual({
+    state: 'rejected',
+    message: 'Could not parse input.',
+  })
+  // A settled or idle status never re-settles from a stale frame.
+  const idle = { state: 'idle' } as const
+  expect(settleOAuthSubmitStatus(idle, result('r1', false))).toBe(idle)
+})
+
 test('composer attributes a Claude subscription account only to the active subscription route', () => {
   const subscription = {
     ...emptyAccountsSnapshotForTest(),
@@ -199,7 +226,7 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   const html = renderToStaticMarkup(<App />)
 
   expect(html).toContain('role="tablist"')
-  expect(html).toContain('aria-label="Sessions"')
+  expect(html).toContain('aria-label="Workspace tabs"')
   expect(html).toContain('aria-label="New session"')
   expect(html).toContain('Welcome back')
   expect(html).toContain('Open a project')
@@ -289,7 +316,7 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   expect(admissionBody).toContain('maxProjectedBytes: remainingBytes')
 
   expect(restoreBody).toContain('openPreloadedPreview(')
-  expect(restoreBody).toContain('openPreviewPane(sessionId)')
+  expect(restoreBody).toContain('openPreviewPane(sessionId, selectionClaim)')
   expect(restoreBody).toContain('await bridge.previewSession(sessionId)')
   expect(restoreBody).toContain('removedIdsRef.current.has(sessionId)')
   expect(restoreBody).toContain('!descriptor?.restorable')
@@ -297,7 +324,7 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
     restoreBody.indexOf('bridge.previewSession(sessionId)'),
   )
   expect(restoreBody.indexOf('bridge.previewSession(sessionId)')).toBeLessThan(
-    restoreBody.indexOf('await restoreLiveSession(sessionId)'),
+    restoreBody.indexOf('await restoreLiveSession(sessionId, { focus: true, selectionClaim })'),
   )
   expect(source).toContain('event.session.restorable')
   expect(source).toContain(
@@ -2800,27 +2827,6 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(inspectorBody).toContain('selectSettingsSnapshot(settings, activeSessionId)')
   expect(inspectorBody).toContain('selectWorkspaceTrustSnapshot(')
   expect(inspectorBody).toContain('selectDiagnosticsSnapshot(diagnostics, activeSessionId)')
-
-  // Global profile mutations are durable state, so both must take the
-  // session-independent host path before the fallback that rejects other
-  // account verbs when no chat session is open.
-  const verbStart = source.indexOf('const sendAccountVerb = useCallback(')
-  const verbBody = source.slice(
-    verbStart,
-    source.indexOf('\n  // Flipping 7d/30d', verbStart),
-  )
-  expect(verbBody.indexOf("verb.type === 'account.delete'")).toBeLessThan(
-    verbBody.indexOf('if (!activeSessionId)'),
-  )
-  expect(verbBody.indexOf("verb.type === 'account.logout'")).toBeLessThan(
-    verbBody.indexOf('if (!activeSessionId)'),
-  )
-  expect(verbBody).toContain('.deleteAccount(verb)')
-  expect(verbBody).toContain('.signOutAccount(verb)')
-  expect(verbBody).toContain('if (!activeSessionId) {')
-  expect(verbBody).toContain("kind: 'account.result'")
-  expect(verbBody).toContain('requestId: verb.requestId')
-  expect(verbBody).toContain('ok: false')
 
   // Main owns the global pool refresh. A session snapshot stays session-scoped
   // and must never be promoted over a fresher host snapshot.

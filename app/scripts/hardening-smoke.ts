@@ -211,6 +211,7 @@ async function runProductionHardeningSmoke(
       // Frame plane (engine commands + attachment).
       'abort',
       'accountVerb',
+      'manageAccount',
       'answerQuestions',
       'deleteAccount',
       'signOutAccount',

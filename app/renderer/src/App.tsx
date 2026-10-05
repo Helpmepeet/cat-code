@@ -40,7 +40,6 @@ import {
   createShellState,
   reduceShellState,
   selectPaneSessions,
-  sessionAtSlot,
   type ShellState,
 } from './shellState.js'
 import {
@@ -51,7 +50,20 @@ import {
 } from './rosterBootstrap.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
-import { TabBar, type TabModel } from './TabBar.js'
+import { TabBar, type TabBarEntry, type TabModel } from './TabBar.js'
+import {
+  createTabNavigation,
+  applyForegroundSelectionIfCurrent,
+  claimForegroundSelection,
+  createForegroundSelectionClaim,
+  isForegroundSelectionCurrent,
+  isSessionSelected,
+  reduceTabNavigation,
+  selectedPage,
+  selectedSessionId,
+  supersedeForegroundSelection,
+  type PageTab,
+} from './pageTabNavigation.js'
 import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
@@ -223,7 +235,6 @@ import {
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectGlobalAccountsSnapshot,
-  selectOAuthProgress,
   selectWelcomeAccountsSnapshot,
   useAccountsPoolPresentationState,
 } from './accountsState.js'
@@ -395,8 +406,10 @@ import {
   selectPromptDraft,
   sendPermissionResponse,
   shouldShowAnthropicPoolAccount,
+  settleOAuthSubmitStatus,
   shouldShowFirstRunOAuth,
   type OAuthContext,
+  type OAuthSubmitStatus,
   type PromptDraftState,
 } from './appModel.js'
 import {
@@ -850,6 +863,8 @@ export function App() {
     undefined,
     createSessionsCatalogState,
   )
+  const sessionsCatalogRef = useRef(sessionsCatalog)
+  sessionsCatalogRef.current = sessionsCatalog
   // P4-6b — the WRITE half of the ⋯ menu: the sidecar's `session-action.result`
   // per session (A's reducer, previously unwired). Read by the outcome toast below.
   const [sessionActionRuntime, dispatchSessionActionRuntime] = useReducer(
@@ -905,12 +920,37 @@ export function App() {
   // begin click and the first progress frame.
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
   const [oauthStarting, setOauthStarting] = useState(false)
+  const [appOAuthProgress, setAppOAuthProgress] = useState<import('../../shared/protocol.js').OAuthLoginProgress | null>(null)
   const [oauthProvider, setOauthProvider] = useState<'anthropic' | 'openai'>(
     'anthropic',
   )
-  const [activeView, setActiveView] = useState<
-    'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
-  >('chat')
+  const [oauthCodeStatus, setOauthCodeStatus] = useState<OAuthSubmitStatus>({
+    state: 'idle',
+  })
+  const [oauthAliasStatus, setOauthAliasStatus] = useState<OAuthSubmitStatus>({
+    state: 'idle',
+  })
+  const [tabNavigation, dispatchTabNavigation] = useReducer(
+    reduceTabNavigation,
+    undefined,
+    createTabNavigation,
+  )
+  const activeView = selectedPage(tabNavigation)
+  const selectedNavigationSessionId = selectedSessionId(tabNavigation)
+  const tabNavigationRef = useRef(tabNavigation)
+  tabNavigationRef.current = tabNavigation
+  const foregroundSelectionClaimRef = useRef(createForegroundSelectionClaim())
+  const openPage = useCallback((page: PageTab) => {
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({ type: 'open-page', page })
+  }, [])
+  const closePage = useCallback((page: PageTab) => {
+    const selected = tabNavigationRef.current.selected
+    if (selected?.kind === 'page' && selected.page === page) {
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    }
+    dispatchTabNavigation({ type: 'close', target: { kind: 'page', page } })
+  }, [])
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
   // listSessions() below, then kept live off subscribeHost.
@@ -1303,6 +1343,11 @@ export function App() {
         dispatchAccounts({ type: 'pool', pool: event.pool })
         return
       }
+      if (event.type === 'account-oauth') {
+        setOauthProvider(event.provider)
+        setAppOAuthProgress(event.progress)
+        return
+      }
       // The independent usage worker publishes a session-free dashboard.
       if (event.type === 'usage-dashboard-loading') {
         dispatchUsageDashboard({ type: 'loading' })
@@ -1462,9 +1507,10 @@ export function App() {
   const focusActivePaneAfterRosterChange = useCallback(() => {
     const current = activeSessionIdRef.current
     const currentShell = shellRef.current
-    const paneOrder = selectPaneSessions(currentShell).map(
-      descriptor => descriptor.appSessionId,
-    )
+    const paneOrder = filterInteractiveSessionDescriptors(
+      selectPaneSessions(currentShell),
+      selectSessionsCatalog(sessionsCatalogRef.current),
+    ).map(descriptor => descriptor.appSessionId)
     const pendingClose =
       current === null
         ? undefined
@@ -1487,7 +1533,7 @@ export function App() {
 
   useEffect(() => {
     focusActivePaneAfterRosterChange()
-  }, [focusActivePaneAfterRosterChange, shell])
+  }, [focusActivePaneAfterRosterChange, shell, sessionsCatalog])
 
   useEffect(() => {
     for (const sessionId in shell.previews) {
@@ -1552,12 +1598,29 @@ export function App() {
                   permissions,
                   sessionId,
                 ),
-                isActive: sessionId === activeSessionId,
+                isActive: isSessionSelected(tabNavigation, sessionId),
               }),
         }
       }),
-    [shell, connection, permissions, activeSessionId, sessionCatalogSnapshot],
+    [shell, connection, permissions, tabNavigation, sessionCatalogSnapshot],
   )
+  const tabBarEntries: TabBarEntry[] = useMemo(() => {
+    const sessionEntries = new Map(
+      tabs.map(model => [
+        model.descriptor.appSessionId,
+        { kind: 'session', model } as const,
+      ]),
+    )
+    const entries: TabBarEntry[] = []
+    for (const target of tabNavigation.tabs) {
+      if (target.kind === 'page') entries.push({ kind: 'page', page: target.page })
+      else {
+        const session = sessionEntries.get(target.sessionId)
+        if (session) entries.push(session)
+      }
+    }
+    return entries
+  }, [tabs, tabNavigation.tabs])
   // The active session's worker snapshot, read once for the docked roster and
   // footer strip so both read one truth.
   const activeLiveWorkersSnapshot = selectLiveWorkersSnapshot(
@@ -1569,6 +1632,21 @@ export function App() {
     [tabs],
   )
   const paneSessionKey = paneSessionIds.join('\u0000')
+  useEffect(() => {
+    dispatchTabNavigation({ type: 'reconcile-sessions', sessionIds: paneSessionIds })
+  }, [paneSessionKey])
+
+  // Visible selection owns pane focus. Roster repairs may retain another session
+  // as project context while a page is selected, but never redirect navigation.
+  useEffect(() => {
+    if (!selectedNavigationSessionId) return
+    setActiveSessionId(selectedNavigationSessionId)
+    setWorkspaceLayoutState(current => {
+      const next = focusOrAssignWorkspaceSession(current, selectedNavigationSessionId).state
+      return workspaceLayoutsEqual(current, next) ? current : next
+    })
+  }, [selectedNavigationSessionId])
+
   const tabDescriptorsById = useMemo(
     () =>
       new Map(
@@ -1669,8 +1747,7 @@ export function App() {
 
   // Re-apply-on-restore (P3-6): the held `pendingRestore` split snaps back once
   // EVERY session it references owns a live or preview pane — order-independent,
-  // overriding
-  // whatever the operator clicked while restoring. Abandoned if a referenced
+  // preserving the current visible session's focus. Abandoned if a referenced
   // session is unrecoverable (neither live nor restorable), which unblocks the
   // disk write below so the operator's actual layout can persist instead.
   const restorableIds = useMemo(
@@ -1715,7 +1792,10 @@ export function App() {
     if (!pendingRestore || !hostSnapshotReady) return
     const ready = readyToRestoreLayout(pendingRestore, paneSessionIds)
     if (ready) {
-      setWorkspaceLayoutState(ready)
+      const selected = tabNavigationRef.current.selected
+      setWorkspaceLayoutState(selected?.kind === 'session'
+        ? focusOrAssignWorkspaceSession(ready, selected.sessionId).state
+        : ready)
       setPendingRestore(null)
       return
     }
@@ -1733,13 +1813,20 @@ export function App() {
     writeWorkspaceLayoutToStorage(getWorkspaceStorage(), workspaceLayout)
   }, [hostSnapshotReady, pendingRestore, workspaceLayout])
 
-  const focusCreatedSession = useCallback((sessionId: SessionId) => {
-    pendingExplicitSessionRef.current = sessionId
-    setWorkspaceLayoutState(current =>
-      focusOrAssignWorkspaceSession(current, sessionId).state,
+  const focusCreatedSession = useCallback((sessionId: SessionId, claim: number) => {
+    applyForegroundSelectionIfCurrent(
+      foregroundSelectionClaimRef.current,
+      claim,
+      () => {
+        pendingExplicitSessionRef.current = sessionId
+        setWorkspaceLayoutState(current =>
+          focusOrAssignWorkspaceSession(current, sessionId).state,
+        )
+        setActiveSessionId(sessionId)
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
+      },
     )
-    setActiveSessionId(sessionId)
-    setActiveView('chat')
   }, [])
 
   type FreshSessionOutcome =
@@ -1785,20 +1872,22 @@ export function App() {
         return next
       })
       setActiveSessionId(createdSessionId)
-      setActiveView('chat')
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId: createdSessionId } })
     },
     [],
   )
 
   const newSession = useCallback(async () => {
     const bridge = getBridge()
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     try {
       // HC1 — the renderer never authors a path: pick → one-time token → create.
       const token = await bridge.pickDirectory(activeSessionId)
       if (!token) return // cancelled
       const result = await bridge.createSession({ cwdToken: token })
       if (result.ok) {
-        focusCreatedSession(result.value.appSessionId)
+        focusCreatedSession(result.value.appSessionId, selectionClaim)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
@@ -1810,9 +1899,10 @@ export function App() {
   const newManagedChat = useCallback(async () => {
     if (newManagedChatInFlightRef.current) return
     newManagedChatInFlightRef.current = true
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     try {
       const result = await createFreshSession({ kind: 'managed' })
-      if (result.status === 'created') focusCreatedSession(result.sessionId)
+      if (result.status === 'created') focusCreatedSession(result.sessionId, selectionClaim)
     } catch (error) {
       setShellError(errorMessage(error))
     } finally {
@@ -1821,6 +1911,7 @@ export function App() {
   }, [createFreshSession, focusCreatedSession])
 
   const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     try {
       // #15 — the per-workspace "+": the renderer names an EXISTING registry id
       // (a representative session in that workspace), NEVER a path. The host
@@ -1830,7 +1921,7 @@ export function App() {
         kind: 'workspace',
         representativeSessionId: repId,
       })
-      if (result.status === 'created') focusCreatedSession(result.sessionId)
+      if (result.status === 'created') focusCreatedSession(result.sessionId, selectionClaim)
     } catch (error) {
       setShellError(errorMessage(error))
     }
@@ -1876,16 +1967,19 @@ export function App() {
     // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
     // in-flight streaming into a background session is lost on switch.
     pendingExplicitSessionRef.current = null
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({
+      type: 'select',
+      target: { kind: 'session', sessionId },
+    })
     const result = focusOrAssignWorkspaceSession(workspaceLayout, sessionId)
     setWorkspaceLayoutState(result.state)
     setLayoutNotice(null)
     setActiveSessionId(sessionId)
-    setActiveView('chat')
   }, [workspaceLayout])
 
-  // Session-local account controls still address their pane's sidecar. Deleting
-  // a saved profile is global durable state instead, so the Accounts page sends
-  // those global mutations to main's session-independent engine worker.
+  // Account management belongs to the app. Composer switches still address
+  // their own pane's sidecar in renderSessionPane.
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
       if (verb.type === 'account.delete' || verb.type === 'account.logout') {
@@ -1918,27 +2012,8 @@ export function App() {
           })
         return
       }
-      if (!activeSessionId) {
-        // The Accounts page is reachable with no session open, but a verb needs
-        // an engine process to carry it. Answer with a real outcome instead of
-        // dropping the click: the page waits for one before it closes its
-        // confirmation dialog, so returning silently leaves that dialog up
-        // forever. Renderer-local — this result never crosses the wire.
-        dispatchAccounts({
-          type: 'frame',
-          frame: {
-            kind: 'account.result',
-            protocolVersion: PROTOCOL_VERSION,
-            sessionId: '',
-            requestId: verb.requestId,
-            verb: verb.type,
-            ok: false,
-            message: 'Open a session first, then change accounts from there.',
-          },
-        })
-        return
-      }
       if (verb.type === 'account.login') {
+        setAppOAuthProgress(null)
         setOauthProvider(verb.provider ?? 'openai')
         // AccountsPage starts login through this generic verb callback rather
         // than `beginOAuth`. Claim the attempt here so waiting/manual-code/
@@ -1947,10 +2022,24 @@ export function App() {
         // functional update preserves it.
         setOauthContext(claimOAuthContextForAccountLogin)
         setOauthStarting(true)
+        setOauthCodeStatus({ state: 'idle' })
+        setOauthAliasStatus({ state: 'idle' })
       }
-      getBridge().accountVerb(activeSessionId, verb)
+      void getBridge().manageAccount(verb).then(frame => {
+        dispatchAccounts({ type: 'frame', frame })
+        if (verb.type === 'account.login' && !frame.ok) {
+          setAppOAuthProgress({ state: 'error', message: frame.message })
+        }
+      }).catch(() => {
+        const message = 'Could not complete this account action. Try again.'
+        dispatchAccounts({ type: 'frame', frame: {
+          kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '',
+          requestId: verb.requestId, verb: verb.type, ok: false, message,
+        } })
+        if (verb.type === 'account.login') setAppOAuthProgress({ state: 'error', message })
+      })
     },
-    [activeSessionId],
+    [],
   )
 
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
@@ -1979,12 +2068,7 @@ export function App() {
       ? [accountHealthBanner]
       : EMPTY_BANNERS
 
-  // P4-15 — the first-run surface and the add-account dialog both begin the SAME
-  // engine OAuth flow (the `account.login` verb; browser handoff, the engine owns
-  // the token write). Progress flows back on the `oauth.login.progress` frame,
-  // driving the sub-states below; the account lands on the `accounts.snapshot`
-  // re-broadcast the sidecar fires on `success` — no renderer token path.
-  // `context` tags which surface owns the flow.
+  // First-run and Accounts share one app-owned OAuth flow across tab changes.
   const beginOAuth = useCallback(
     (
       context: Exclude<OAuthContext, null>,
@@ -1993,33 +2077,48 @@ export function App() {
       setOauthContext(context)
       setOauthStarting(true)
       setOauthProvider(provider)
-      if (activeSessionId) {
-        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-      }
+      setOauthCodeStatus({ state: 'idle' })
+      setOauthAliasStatus({ state: 'idle' })
+      setAppOAuthProgress(null)
       sendAccountVerb(loginVerb(provider))
     },
-    [sendAccountVerb, activeSessionId],
+    [sendAccountVerb],
   )
 
-  // Clear the OAuth surface locally (cancel / back / dwell timeout) AND tell the
-  // sidecar to abandon the in-flight attempt (drops its late progress).
+  // Clear the surface and cancel the app-owned attempt, including late progress.
   const clearOAuth = useCallback(() => {
     setOauthStarting(false)
     setOauthContext(null)
-    if (activeSessionId) {
-      dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-    }
+    setOauthCodeStatus({ state: 'idle' })
+    setOauthAliasStatus({ state: 'idle' })
+    setAppOAuthProgress(null)
     sendAccountVerb(oauthCancelVerb())
-  }, [sendAccountVerb, activeSessionId])
+  }, [sendAccountVerb])
 
   const submitOAuthPasteCode = useCallback(
-    (code: string) => sendAccountVerb(oauthPasteCodeVerb(code)),
+    (code: string) => {
+      const verb = oauthPasteCodeVerb(code)
+      setOauthCodeStatus({ state: 'pending', requestId: verb.requestId })
+      sendAccountVerb(verb)
+    },
     [sendAccountVerb],
   )
   const submitOAuthAlias = useCallback(
-    (alias: string) => sendAccountVerb(oauthAliasVerb(alias)),
+    (alias: string) => {
+      const verb = oauthAliasVerb(alias)
+      setOauthAliasStatus({ state: 'pending', requestId: verb.requestId })
+      sendAccountVerb(verb)
+    },
     [sendAccountVerb],
   )
+  // Both verbs can be refused while the flow stays put (an unparseable code, a
+  // taken alias); settle each from its own `account.result` so the surface can
+  // say why nothing moved instead of sitting silent.
+  const accountsLastResult = accounts.lastResult
+  useEffect(() => {
+    setOauthCodeStatus(current => settleOAuthSubmitStatus(current, accountsLastResult))
+    setOauthAliasStatus(current => settleOAuthSubmitStatus(current, accountsLastResult))
+  }, [accountsLastResult])
 
   // P4-15 — accept trust for the active session's cwd (the trust-gate's primary
   // action). The renderer NAMES no path (HC1): the sidecar persists trust for
@@ -2387,6 +2486,11 @@ export function App() {
     (index: number, sessionId: SessionId) => {
       setWorkspaceLayoutState(current => focusWorkspacePanel(current, index))
       setActiveSessionId(sessionId)
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
     },
     [],
   )
@@ -2405,6 +2509,13 @@ export function App() {
       setActiveSessionId(
         result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
       )
+      const focusedSessionId =
+        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId: focusedSessionId },
+      })
       setLayoutNotice(
         result.blocked === 'duplicate'
           ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
@@ -2422,6 +2533,13 @@ export function App() {
       setActiveSessionId(
         result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
       )
+      const focusedSessionId =
+        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId: focusedSessionId },
+      })
       setLayoutNotice(
         result.blocked === 'duplicate'
           ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
@@ -2441,6 +2559,15 @@ export function App() {
       setActiveSessionId(
         next.panels[next.activeIndex]?.sessionId ?? activeSessionId,
       )
+      const focusedSessionId =
+        next.panels[next.activeIndex]?.sessionId ?? activeSessionId
+      if (focusedSessionId) {
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        dispatchTabNavigation({
+          type: 'select',
+          target: { kind: 'session', sessionId: focusedSessionId },
+        })
+      }
       setLayoutNotice(null)
     },
     [activeSessionId, workspaceLayout],
@@ -2582,11 +2709,13 @@ export function App() {
       if (pendingExplicitSessionRef.current === sessionId) {
         pendingExplicitSessionRef.current = null
       }
+      dispatchTabNavigation({ type: 'close', target: { kind: 'session', sessionId } })
       if (activeSessionIdRef.current !== sessionId) return
 
-      const currentPaneOrder = selectPaneSessions(shellRef.current).map(
-        descriptor => descriptor.appSessionId,
-      )
+      const currentPaneOrder = filterInteractiveSessionDescriptors(
+        selectPaneSessions(shellRef.current),
+        selectSessionsCatalog(sessionsCatalogRef.current),
+      ).map(descriptor => descriptor.appSessionId)
       const paneOrder = currentPaneOrder.filter(
         candidate => candidate !== sessionId,
       )
@@ -2608,10 +2737,15 @@ export function App() {
   )
 
   const closeTab = useCallback(async (sessionId: SessionId) => {
+    const selectedTarget = tabNavigationRef.current.selected
+    if (selectedTarget?.kind === 'session' && selectedTarget.sessionId === sessionId) {
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    }
     const shell = shellRef.current
-    const openOrder = selectPaneSessions(shell).map(
-      descriptor => descriptor.appSessionId,
-    )
+    const openOrder = filterInteractiveSessionDescriptors(
+      selectPaneSessions(shell),
+      selectSessionsCatalog(sessionsCatalogRef.current),
+    ).map(descriptor => descriptor.appSessionId)
     if (openOrder.includes(sessionId)) {
       pendingCloseRequestsRef.current.set(sessionId, {
         openOrder,
@@ -2680,6 +2814,7 @@ export function App() {
     sessionId: SessionId,
     branch: string,
   ): Promise<string | null> => {
+    const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
     if (selectPendingSubmit(pendingSubmitsRef.current, sessionId) !== null) {
       return 'This chat has a pending prompt. Start a new chat to choose another branch.'
     }
@@ -2703,7 +2838,7 @@ export function App() {
       }
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
-      focusCreatedSession(result.value.appSessionId)
+      focusCreatedSession(result.value.appSessionId, selectionClaim)
       return null
     } catch (error) {
       return errorMessage(error)
@@ -2746,8 +2881,11 @@ export function App() {
   }, [])
 
   const restoreLiveSession = useCallback(
-    async (sessionId: SessionId, options: { focus?: boolean } = {}) => {
+    async (sessionId: SessionId, options: { focus?: boolean; selectionClaim?: number } = {}) => {
       const bridge = getBridge()
+      const selectionClaim = options.selectionClaim ?? (options.focus === false
+        ? null
+        : claimForegroundSelection(foregroundSelectionClaimRef.current))
       try {
         const result = await bridge.restoreSession(sessionId)
         if (result.ok) {
@@ -2764,9 +2902,20 @@ export function App() {
           // they were already reading, and by the time a ~seconds-long engine
           // boot finishes they may have moved on. Every OTHER caller is a click
           // on the session, where taking focus is the point.
-          if (options.focus !== false) {
-            setActiveSessionId(result.value.appSessionId)
-            setActiveView('chat')
+          if (options.focus !== false && selectionClaim !== null) {
+            const completeFocus = () => {
+              setActiveSessionId(result.value.appSessionId)
+              supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+              dispatchTabNavigation({
+                type: 'select',
+                target: { kind: 'session', sessionId: result.value.appSessionId },
+              })
+            }
+            applyForegroundSelectionIfCurrent(
+              foregroundSelectionClaimRef.current,
+              selectionClaim,
+              completeFocus,
+            )
           }
         } else {
           lazyRestoreClaimsRef.current.delete(sessionId)
@@ -2787,7 +2936,9 @@ export function App() {
   const engagePreview = useCallback(
     (sessionId: SessionId) => {
       if (!claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) return
-      void restoreLiveSession(sessionId)
+      void restoreLiveSession(sessionId, {
+        selectionClaim: claimForegroundSelection(foregroundSelectionClaimRef.current),
+      })
     },
     [restoreLiveSession],
   )
@@ -2821,28 +2972,34 @@ export function App() {
     [releasePendingSubmit, restoreLiveSession],
   )
 
-  const openPreviewPane = useCallback((sessionId: SessionId) => {
+  const openPreviewPane = useCallback((sessionId: SessionId, selectionClaim: number) => {
     swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
+    if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
     setWorkspaceLayoutState(current =>
       focusOrAssignWorkspaceSession(current, sessionId).state,
     )
     setActiveSessionId(sessionId)
-    setActiveView('chat')
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({
+      type: 'select',
+      target: { kind: 'session', sessionId },
+    })
   }, [])
 
   // PL-A store-first path: a startup-preloaded transcript opens synchronously
   // with zero click-time IPC. A not-preloaded/cache-miss row retains IS-B's
   // existing fetch then eager-restore fallback.
   const performRestore = useCallback(
-    (sessionId: SessionId) => {
+    (sessionId: SessionId, requestedClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)) => {
+      const selectionClaim = requestedClaim
       const descriptor = shellRef.current.byId[sessionId]
       if (removedIdsRef.current.has(sessionId) || !descriptor?.restorable) return
       if (
         openPreloadedPreview(
           previewTranscriptRef.current,
           sessionId,
-          () => openPreviewPane(sessionId),
+          () => openPreviewPane(sessionId, selectionClaim),
         )
       ) {
         return
@@ -2861,11 +3018,11 @@ export function App() {
           }
           if (cache) {
             dispatchPreviewTranscript({ type: 'preview-load', cache })
-            openPreviewPane(sessionId)
+            openPreviewPane(sessionId, selectionClaim)
             return
           }
           if (claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) {
-            await restoreLiveSession(sessionId)
+            await restoreLiveSession(sessionId, { focus: true, selectionClaim })
           }
         } catch (error) {
           setShellError(errorMessage(error))
@@ -2889,6 +3046,7 @@ export function App() {
   // unresolvable id returns a typed error rendered honestly.
   const openHistorySession = useCallback(
     async (engineSessionId: string): Promise<SessionDescriptor | null> => {
+      const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
       const bridge = getBridge()
       try {
         const result = await bridge.openHistorySession(engineSessionId)
@@ -2898,11 +3056,17 @@ export function App() {
         }
         const descriptor = result.value
         if (descriptor.restorable) {
-          void performRestore(descriptor.appSessionId)
+          void performRestore(descriptor.appSessionId, selectionClaim)
           return descriptor
         }
-        setActiveSessionId(descriptor.appSessionId)
-        setActiveView('chat')
+        if (isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) {
+          setActiveSessionId(descriptor.appSessionId)
+          supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+          dispatchTabNavigation({
+            type: 'select',
+            target: { kind: 'session', sessionId: descriptor.appSessionId },
+          })
+        }
         return descriptor
       } catch (error) {
         setShellError(errorMessage(error))
@@ -3450,8 +3614,8 @@ export function App() {
   // between the two: exactly one card is ever handed it, so exactly one
   // listener exists, and it is never registered beside a dedicated flow's.
 
-  // Shell keyboard: keyboard-first tab switching + create/close, matching the
-  // prototype's chords (⌘T new · ⌘W close · ⌘1..9 jump-to-tab). Only fires on a
+  // Shell keyboard: keyboard-first mixed-tab switching + create/close (⌘T new,
+  // ⌘W close selected tab, ⌘1..9 by visible strip order). Only fires on a
   // meta/ctrl chord, and the permission card's own list claims Ctrl for exactly
   // ⌃P/⌃N (`permissionKeyIntent`), which this handler does not use — so the two
   // key maps stay disjoint even where both accept Ctrl.
@@ -3472,21 +3636,24 @@ export function App() {
         return
       }
       if (event.key === 'w' || event.key === 'W') {
-        if (!activeSessionId) return
+        const selected = tabNavigationRef.current.selected
+        if (!selected) return
         event.preventDefault()
-        void closeTab(activeSessionId)
+        if (selected.kind === 'session') void closeTab(selected.sessionId)
+        else closePage(selected.page)
         return
       }
       if (event.key >= '1' && event.key <= '9') {
-        const target = sessionAtSlot(shell, Number(event.key))
+        const target = tabBarEntries[Number(event.key) - 1]
         if (!target) return
         event.preventDefault()
-        selectTab(target)
+        if (target.kind === 'session') selectTab(target.model.descriptor.appSessionId)
+        else openPage(target.page)
       }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [shell, activeSessionId, newChat, closeTab, selectTab])
+  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries])
 
   function copyForLlm(sessionId: SessionId): void {
     const text = buildDebugExport(
@@ -3671,7 +3838,7 @@ export function App() {
                 )
               }
             } : undefined}
-            onManageAccounts={() => setActiveView('accounts')}
+            onManageAccounts={() => openPage('accounts')}
             onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
@@ -4094,55 +4261,54 @@ export function App() {
   const paletteItems = paletteOpen
     ? buildPaletteItems({
         rows: visibleShellDescriptors,
-        activeSessionId,
-        hasPanels: workspacePanels.length > 0,
+        activeSessionId: selectedNavigationSessionId,
+        hasPanels: activeView === 'chat' && workspacePanels.length > 0,
         slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
         recentItemIds: recentPaletteItemIds,
         handlers: {
           // Labelled ⌘T in the palette, so it must match the chord exactly.
           newSession: () => void newChat(),
           closeActiveSession: () => {
-            if (activeSessionId) void closeTab(activeSessionId)
+            if (selectedNavigationSessionId) void closeTab(selectedNavigationSessionId)
           },
           restartActiveSession: () => {
-            if (activeSessionId) restartTab(activeSessionId)
+            if (selectedNavigationSessionId) restartTab(selectedNavigationSessionId)
           },
           copyActiveTranscript: () => {
-            if (activeSessionId) copyForLlm(activeSessionId)
+            if (selectedNavigationSessionId) copyForLlm(selectedNavigationSessionId)
           },
           closeCurrentPanel: () =>
             closeWorkspacePanelAt(workspaceLayout.activeIndex),
           selectLiveSession: selectTab,
           restoreSession: sessionId => void performRestore(sessionId),
           openTasks: () => openTasksDialog(),
-          navigatePage: page => setActiveView(page),
+          navigatePage: page => {
+            if (page === 'chat') {
+              if (activeSessionId) selectTab(activeSessionId)
+            } else openPage(page)
+          },
         },
       })
     : EMPTY_PALETTE_ITEMS
 
-  // P4-15 — the active session's per-domain startup facts. Trust gate (per
-  // session-create, `workspace-trust.snapshot` P4-14) takes precedence over
-  // first-run OAuth (no credentialed account → pool initialized but empty),
-  // mirroring the engine's trust→auth startup order (`init.ts`).
-  const activeAccountsSnapshot = selectAccountsSnapshot(accounts, activeSessionId)
+  // Chat startup checks its workspace trust before global account availability.
+  // App destinations remain accessible while those chat gates are showing.
   const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)
   const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
     workspaceTrust,
     activeSessionId,
   )
   const showTrustGate =
-    !!activeSessionId && activeTrustSnapshot?.trusted === false
-  const showFirstRunOAuth = shouldShowFirstRunOAuth(
-    activeAccountsSnapshot,
-    showTrustGate,
+    activeView === 'chat' && !!activeSessionId && activeTrustSnapshot?.trusted === false
+  const firstRunAuthRequired = shouldShowFirstRunOAuth(
+    // Login writes the global pool, including before a chat exists.
+    selectGlobalAccountsSnapshot(accounts),
+    false,
   )
+  const showFirstRunOAuth = activeView === 'chat' && !showTrustGate && firstRunAuthRequired
 
-  // P4-15 — the live OAuth progress (the back-channel) + the sub-state VIEWS
-  // derived from it. One view now: the first-run surface (and the add-account
-  // overlay, which reuses it) owns starting/waiting_for_login/waiting_for_alias/
-  // success/error. The reauth card that used to own waiting/error is deleted
-  // (P4-34); the blocking modal was already CUT.
-  const oauthProgress = selectOAuthProgress(accounts, activeSessionId)
+  // First-run and the Accounts overlay render the same app-owned attempt.
+  const oauthProgress = appOAuthProgress
   const firstRunOAuthView: StartupOAuthView = oauthProgress
     ? oauthProgress.state === 'waiting_for_login'
       ? { phase: 'waiting', url: oauthProgress.url }
@@ -4160,11 +4326,13 @@ export function App() {
   // Keep the first-run surface mounted through its `success` dwell even once the
   // account has landed (pool no longer empty), so the "Signed in" beat is seen.
   const showFirstRunOAuthSurface =
-    showFirstRunOAuth ||
-    (oauthContext === 'first-run' && oauthProgress?.state === 'success')
+    activeView === 'chat' && (
+      (showFirstRunOAuth && oauthContext !== 'add-account') ||
+      (oauthContext === 'first-run' && oauthProgress?.state === 'success')
+    )
 
   // An OAuth flow with NO owning context, on a non-empty pool, was started by the
-  // P4-5 AddAccountDialog ("add account"). Adopt it into the SAME shared OAuth
+  // Accounts page. Adopt it into the SAME shared OAuth
   // surface (as a top-level overlay) so its sub-states — crucially the alias step
   // a new account needs — are reachable, rather than stranding the flow with no
   // UI. Reuses `account.login`'s back-channel; no second login path.
@@ -4195,23 +4363,20 @@ export function App() {
     }
   }, [showFirstRunOAuthSurface, oauthContext, oauthProgress])
 
-  // First-run `success`: brief dwell on the "Signed in" card, then clear so the
-  // now-populated pool advances to the normal UI (the real flow completes on the
-  // token write; this is a short presentation beat, not a scripted auth timer).
+  // Wait for the independent pool read before clearing first-run completion;
+  // otherwise a slow read would show the sign-in choices again after success.
   useEffect(() => {
-    if (oauthContext !== 'first-run' || oauthProgress?.state !== 'success') return
+    if (oauthContext !== 'first-run' || oauthProgress?.state !== 'success' || firstRunAuthRequired) return
     const timer = window.setTimeout(() => {
       setOauthStarting(false)
       setOauthContext(null)
-      if (activeSessionId) {
-        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-      }
+      setAppOAuthProgress(null)
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [oauthContext, oauthProgress, activeSessionId])
+  }, [oauthContext, oauthProgress, firstRunAuthRequired])
 
   // Add-account `success`: keep the shared surface mounted long enough to
-  // acknowledge completion, then clear its session-scoped progress. Unlike the
+  // acknowledge completion, then clear its app-owned progress. Unlike the
   // old orphan adoption path, retry retains the add-account owner throughout.
   useEffect(() => {
     if (oauthContext !== 'add-account' || oauthProgress?.state !== 'success') {
@@ -4220,12 +4385,10 @@ export function App() {
     const timer = window.setTimeout(() => {
       setOauthStarting(false)
       setOauthContext(null)
-      if (activeSessionId) {
-        dispatchAccounts({ type: 'oauthReset', sessionId: activeSessionId })
-      }
+      setAppOAuthProgress(null)
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [oauthContext, oauthProgress, activeSessionId])
+  }, [oauthContext, oauthProgress])
 
   return (
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
@@ -4245,10 +4408,19 @@ export function App() {
          * cannot yield while it is also a full-height column. */}
         <TabBar
           tabs={tabs}
-          activeSessionId={activeSessionId}
+          navigationTabs={tabBarEntries}
+          selectedTarget={tabNavigation.selected}
           rosterReady={hostSnapshotReady}
           onSelect={selectTab}
-          onClose={closeTab}
+          onSelectTarget={target => {
+            if (target.kind === 'session') selectTab(target.sessionId)
+            else openPage(target.page)
+          }}
+          onClose={sessionId => void closeTab(sessionId)}
+          onCloseTarget={target => {
+            if (target.kind === 'session') void closeTab(target.sessionId)
+            else closePage(target.page)
+          }}
           onRestart={restartTab}
           onNewTab={newChat}
           onOpenActions={(sessionId, anchor) =>
@@ -4267,7 +4439,11 @@ export function App() {
           rows={sessionCatalogRows}
           activeSessionId={activeSessionId}
           activeView={activeView}
-          onSelectView={setActiveView}
+          onSelectView={view => {
+            if (view === 'chat') {
+              if (activeSessionId) selectTab(activeSessionId)
+            } else openPage(view)
+          }}
           onSelectLive={selectTab}
           onRestore={sessionId => void performRestore(sessionId)}
           onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
@@ -4572,20 +4748,23 @@ export function App() {
            * through the same `StartupOAuth`/add-account surfaces as any other
            * sign-in. */}
 
-          {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
-           * owning surface: adopt it into the shared OAuth surface as a top-level
+          {/* P4-15 — an Accounts-page OAuth flow started with no owning
+           * surface: adopt it into the shared OAuth surface as a modal
            * overlay so it can complete (incl. the alias step), regardless of the
            * active view. First-run owns its own surface above. */}
           {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
             <div className="absolute inset-0 z-50">
-                <StartupOAuth
-                  view={firstRunOAuthView}
-                  provider={oauthProvider}
-                  onBegin={provider => beginOAuth('add-account', provider)}
-                  onCancel={clearOAuth}
+              <StartupOAuth
+                view={firstRunOAuthView}
+                provider={oauthProvider}
+                presentation="modal"
+                codeStatus={oauthCodeStatus}
+                aliasStatus={oauthAliasStatus}
+                onBegin={provider => beginOAuth('add-account', provider)}
+                onCancel={clearOAuth}
                 onPasteCode={submitOAuthPasteCode}
                 onSubmitAlias={submitOAuthAlias}
-                  onRetry={() => beginOAuth('add-account', oauthProvider)}
+                onRetry={() => beginOAuth('add-account', oauthProvider)}
               />
             </div>
           ) : null}
@@ -4730,6 +4909,8 @@ export function App() {
               <StartupOAuth
                 view={firstRunOAuthView}
                 provider={oauthProvider}
+                codeStatus={oauthCodeStatus}
+                aliasStatus={oauthAliasStatus}
                 onBegin={provider => beginOAuth('first-run', provider)}
                 onCancel={clearOAuth}
                 onPasteCode={submitOAuthPasteCode}
@@ -4769,7 +4950,7 @@ export function App() {
             <div className="flex min-h-0 flex-1 flex-col">
               <BannerStack
                 banners={accountHealthBanners}
-                onAction={() => setActiveView('accounts')}
+                onAction={() => openPage('accounts')}
                 onDismiss={banner => setDismissedAccountHealthId(banner.id)}
               />
   	          <WorkspaceLayout

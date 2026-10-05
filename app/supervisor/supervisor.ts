@@ -749,6 +749,7 @@ export class SidecarSupervisor {
         return
       }
       record.socket = null
+      record.decoder.reset()
       this.reportSocketLoss(record)
       socket.destroy()
     })
@@ -758,6 +759,7 @@ export class SidecarSupervisor {
         return // a newer socket already replaced this one
       }
       record.socket = null
+      record.decoder.reset()
       this.reportSocketLoss(record)
     })
   }

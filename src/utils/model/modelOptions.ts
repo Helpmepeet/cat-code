@@ -16,6 +16,8 @@ import {
 import { getModelStrings } from './modelStrings.js'
 import {
   COST_TIER_3_15,
+  COST_SONNET_55,
+  COST_OPUS_55,
   COST_TIER_5_25,
   COST_FABLE_10_50,
   COST_HAIKU_35,
@@ -169,24 +171,24 @@ export function getOpus46_1MOption(fastMode = false): ModelOption {
   }
 }
 
-function getSonnet5Option(): ModelOption {
+function getSonnet55Option(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   return {
-    value: is3P ? getModelStrings().sonnet5 : 'sonnet',
-    label: 'Sonnet 5',
-    description: `Sonnet 5 · Best for everyday tasks${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    value: is3P ? getModelStrings().sonnet55 : 'sonnet',
+    label: 'Sonnet 5.5',
+    description: `Sonnet 5.5 · Best for everyday tasks${is3P ? '' : ` · ${formatModelPricing(COST_SONNET_55)}`}`,
     descriptionForModel:
-      'Sonnet 5 - best for everyday tasks. Generally recommended for most coding tasks',
+      'Sonnet 5.5 - best for everyday tasks. Generally recommended for most coding tasks',
   }
 }
 
-function getOpus5Option(): ModelOption {
+function getOpus55Option(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   return {
-    value: is3P ? getModelStrings().opus5 : 'opus',
-    label: 'Opus 5',
-    description: `Opus 5 · Most capable for complex work${is3P ? '' : ` · ${formatModelPricing(COST_TIER_5_25)}`}`,
-    descriptionForModel: 'Opus 5 - most capable for complex work',
+    value: is3P ? getModelStrings().opus55 : 'opus',
+    label: 'Opus 5.5',
+    description: `Opus 5.5 · Most capable for complex work${is3P ? '' : ` · ${formatModelPricing(COST_OPUS_55)}`}`,
+    descriptionForModel: 'Opus 5.5 - most capable for complex work',
   }
 }
 
@@ -288,15 +290,15 @@ function getGpt6LunaOption(): ModelOption {
 function getMaxOpusOption(fastMode = false): ModelOption {
   return {
     value: 'opus',
-    label: 'Opus 5',
-    description: `Opus 5 · Most capable for complex work`,
+    label: 'Opus 5.5',
+    description: `Opus 5.5 · Most capable for complex work`,
   }
 }
 
 export function getMaxOpus46_1MOption(fastMode = false): ModelOption {
   const billingInfo = isClaudeAISubscriber() ? ' · Billed as extra usage' : ''
   const is3P = getAPIProvider() !== 'firstParty'
-  const modelName = is3P ? 'Opus 4.6' : 'Opus 5'
+  const modelName = is3P ? 'Opus 4.6' : 'Opus 5.5'
   return {
     value: 'opus[1m]',
     label: `${modelName}${oneMContextSuffix()}`,
@@ -306,7 +308,7 @@ export function getMaxOpus46_1MOption(fastMode = false): ModelOption {
 
 function getMergedOpus1MOption(fastMode = false): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
-  const modelName = is3P ? 'Opus 4.6' : 'Opus 5'
+  const modelName = is3P ? 'Opus 4.6' : 'Opus 5.5'
   return {
     value: is3P ? getModelStrings().opus46 + '[1m]' : 'opus[1m]',
     label: `${modelName}${oneMContextSuffix()}`,
@@ -316,10 +318,10 @@ function getMergedOpus1MOption(fastMode = false): ModelOption {
   }
 }
 
-const MaxSonnet5Option: ModelOption = {
+const MaxSonnet55Option: ModelOption = {
   value: 'sonnet',
-  label: 'Sonnet 5',
-  description: 'Sonnet 5 · Best for everyday tasks',
+  label: 'Sonnet 5.5',
+  description: 'Sonnet 5.5 · Best for everyday tasks',
 }
 
 const MaxHaiku45Option: ModelOption = {
@@ -331,8 +333,8 @@ const MaxHaiku45Option: ModelOption = {
 function getOpusPlanOption(): ModelOption {
   return {
     value: 'opusplan',
-    label: 'Opus 5 Plan Mode',
-    description: 'Use Opus 5 in plan mode, Sonnet 5 otherwise',
+    label: 'Opus 5.5 Plan Mode',
+    description: 'Use Opus 5.5 in plan mode, Sonnet 5.5 otherwise',
   }
 }
 
@@ -372,8 +374,8 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     ) {
       codexOptions.push(
         getFable5Option(),
-        getOpus5Option(),
-        getSonnet5Option(),
+        getOpus55Option(),
+        getSonnet55Option(),
         getHaiku45Option(),
       )
     }
@@ -385,7 +387,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       // Keep the default model selectable alongside the Default row.
       const premiumOptions = [getDefaultOptionForUser(fastMode)]
       premiumOptions.push(getFable5Option())
-      premiumOptions.push(getOpus5Option())
+      premiumOptions.push(getOpus55Option())
       if (
         !isOpus1mMergeEnabled() &&
         checkOpus1mAccess() &&
@@ -393,7 +395,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       ) {
         premiumOptions.push(getMaxOpus46_1MOption(fastMode))
       }
-      premiumOptions.push(MaxSonnet5Option)
+      premiumOptions.push(MaxSonnet55Option)
       premiumOptions.push(MaxHaiku45Option)
       return premiumOptions
     }
@@ -413,14 +415,14 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return standardOptions
   }
 
-  // PAYG 1P API: Default (Sonnet) + Fable 5 + Opus 5 + Opus 1M + Haiku
+  // PAYG 1P API: Default (Sonnet) + Fable 5 + Opus 5.5 + Opus 1M + Haiku
   if (getAPIProvider() === 'firstParty') {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
     payg1POptions.push(getFable5Option())
     if (isOpus1mMergeEnabled()) {
       payg1POptions.push(getMergedOpus1MOption(fastMode))
     } else {
-      payg1POptions.push(getOpus5Option())
+      payg1POptions.push(getOpus55Option())
       if (checkOpus1mAccess() && offersDistinctOpus1m()) {
         payg1POptions.push(getOpus46_1MOption(fastMode))
       }
@@ -575,8 +577,8 @@ function resolveSettingOrNull(setting: string): string | null {
  * Whether an option already offers `setting`. The raw string is the fast path;
  * the resolved comparison catches the alias-vs-canonical split that otherwise
  * appends a second, byte-identical row — the picker offers Sonnet as the alias
- * `sonnet`, while a Codex session persists the canonical `claude-sonnet-5`
- * (`getSonnet5Option` is provider-dependent). The `[1m]` suffix survives
+ * `sonnet`, while a Codex session persists the canonical `claude-sonnet-5-5`
+ * (`getSonnet55Option` is provider-dependent). The `[1m]` suffix survives
  * resolution, so a 1M variant stays distinct from its base model.
  */
 export function optionCoversModelSetting(

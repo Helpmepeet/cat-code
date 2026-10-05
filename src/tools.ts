@@ -97,7 +97,7 @@ import { TaskListTool } from './tools/TaskListTool/TaskListTool.js'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { isToolSearchEnabledOptimistic } from './utils/toolSearch.js'
 import { isTodoV2Enabled } from './utils/tasks.js'
-import { getAPIProvider } from './utils/model/providers.js'
+import { getAPIProvider, type APIProvider } from './utils/model/providers.js'
 // Dead code elimination: conditional import for CLAUDE_CODE_VERIFY_PLAN
 /* eslint-disable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 const VerifyPlanExecutionTool =
@@ -203,8 +203,35 @@ export function getToolsForDefaultPreset(): string[] {
 /**
  * NOTE: This MUST stay in sync with https://console.statsig.com/4aF3Ewatb6xPVpCwxb5nA3/dynamic_configs/claude_code_global_system_caching, in order to cache the system prompt across users.
  */
-function getProviderFileEditTool(): Tool {
-  return getAPIProvider() === 'openai' ? FilePatchTool : FileEditTool
+function getProviderFileEditTool(provider: APIProvider = getAPIProvider()): Tool {
+  return provider === 'openai' ? FilePatchTool : FileEditTool
+}
+
+/**
+ * A session's base tool list is frozen at construction, but a model switch can
+ * change the provider mid-session, and the system prompt names the edit tool
+ * for the current provider. Swap the provider edit tool in place so the tool
+ * the model receives is the one its prompt names. A list carrying neither (or
+ * both) is returned unchanged.
+ */
+export function alignProviderFileEditTool(
+  tools: Tools,
+  permissionContext: ToolPermissionContext,
+  provider: APIProvider = getAPIProvider(),
+): Tools {
+  const wanted = getProviderFileEditTool(provider)
+  const unwantedName =
+    wanted === FilePatchTool ? FileEditTool.name : FilePatchTool.name
+  if (
+    !tools.some(tool => tool.name === unwantedName) ||
+    tools.some(tool => tool.name === wanted.name)
+  ) {
+    return tools
+  }
+  const allowed = filterToolsByDenyRules([wanted], permissionContext).length > 0
+  return tools.flatMap(tool =>
+    tool.name !== unwantedName ? [tool] : allowed ? [wanted] : [],
+  )
 }
 
 export function getAllBaseTools(): Tools {

@@ -512,6 +512,19 @@ describe('finalizeAgentTool max-turn exhaustion', () => {
     isAsync: false,
   }
 
+  test('reports the model that answered even when the run ends with a synthetic error', () => {
+    const response = createAssistantMessage({ content: 'partial review' })
+    response.message.model = 'gpt-6.1-sol'
+    const failure = createAssistantMessage({ content: 'request failed' })
+    failure.isApiErrorMessage = true
+    const result = finalizeAgentTool(
+      [response, failure],
+      'agent-actual-model',
+      { ...metadata, resolvedAgentModel: 'claude-opus-5-5' },
+    )
+    expect(result.model).toBe('gpt-6.1-sol')
+  })
+
   test('leaves error unset when the agent stopped on its own', () => {
     const result = finalizeAgentTool(
       [createAssistantMessage({ content: 'all done' })],

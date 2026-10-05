@@ -36,7 +36,7 @@ import { AbortError, errorMessage, toError } from '../../utils/errors.js';
 import type { CacheSafeParams } from '../../utils/forkedAgent.js';
 import { lazySchema } from '../../utils/lazySchema.js';
 import { createUserMessage, extractTextContent, isSyntheticMessage, normalizeMessages } from '../../utils/messages.js';
-import { getAgentModel } from '../../utils/model/agent.js';
+import { resolveAgentModel } from '../../utils/model/agent.js';
 import type { EffortLevel } from '../../utils/effort.js';
 import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js';
 import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js';
@@ -518,7 +518,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['sonnet', 'opus', 'claude-opus-5', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-terra', 'gpt-6-luna']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it. When present, this choice is authoritative, including lower-tier models."),
+  model: z.enum(['sonnet', 'opus', 'claude-opus-5-5', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-terra', 'gpt-6-luna']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it. When present, this choice is authoritative, including lower-tier models."),
   effort: z.enum(effortLevels).optional().describe("Optional reasoning effort override. OMIT this — leave it unset and the subagent inherits your effort level (or its own pin). Set it only when the user explicitly named an effort level for this work. Do not reason about how much effort a task deserves; that is not your call to make. Levels the subagent's model does not support fall back to high."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));
@@ -824,9 +824,9 @@ export const AgentTool = buildTool({
 
     // Fork subagent experiment routing:
     // - subagent_type set: use it (explicit wins)
-    // - subagent_type omitted, gate on: fork path (undefined)
+    // - subagent_type omitted, gate on, no model override: fork path (undefined)
     // - subagent_type omitted, gate off: default general-purpose
-    const effectiveType = subagent_type ?? (isForkSubagentEnabled() ? undefined : GENERAL_PURPOSE_AGENT.agentType);
+    const effectiveType = subagent_type ?? (isForkSubagentEnabled() && !model ? undefined : GENERAL_PURPOSE_AGENT.agentType);
     const isForkPath = effectiveType === undefined;
     let selectedAgent: AgentDefinition;
     if (isForkPath) {
@@ -921,8 +921,13 @@ export const AgentTool = buildTool({
       setAgentColor(selectedAgent.agentType, selectedAgent.color);
     }
 
-    // Resolve agent params for logging (these are already resolved in runAgent)
-    const resolvedAgentModel = getAgentModel(selectedAgent.model, toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
+    // Freeze one child route for prompt assembly, dispatch, leases, and results.
+    const modelRoute = resolveAgentModel(selectedAgent.model, toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode, toolUseContext.options.mainLoopProvider);
+    const { model: resolvedAgentModel, provider: resolvedAgentProvider } = modelRoute;
+    const workerToolUseContext = {
+      ...toolUseContext,
+      options: { ...toolUseContext.options, mainLoopModel: resolvedAgentModel, mainLoopProvider: resolvedAgentProvider },
+    };
     logEvent('tengu_agent_tool_selected', {
       agent_type: selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       model: resolvedAgentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1048,6 +1053,7 @@ export const AgentTool = buildTool({
     const metadata = {
       prompt,
       resolvedAgentModel,
+      resolvedAgentProvider,
       isBuiltInAgent: isBuiltInAgent(selectedAgent),
       startTime,
       agentType: selectedAgent.agentType,
@@ -1075,8 +1081,7 @@ export const AgentTool = buildTool({
     // Assemble the worker's tool pool independently of the parent's.
     // Workers always get their tools from assembleToolPool with their own
     // permission mode, so they aren't affected by the parent's tool
-    // restrictions. This is computed here so that runAgent doesn't need to
-    // import from tools.ts (which would create a circular dependency).
+    // restrictions. runAgent aligns the edit tool to the worker's provider.
     const workerPermissionContext = {
       ...appState.toolPermissionContext,
       mode: selectedAgent.permissionMode ?? 'acceptEdits'
@@ -1137,7 +1142,7 @@ export const AgentTool = buildTool({
 
           // All agents have getSystemPrompt - pass toolUseContext to all
           const agentPrompt = selectedAgent.getSystemPrompt({
-            toolUseContext
+            toolUseContext: workerToolUseContext
           });
 
           // Log agent memory loaded event for subagents
@@ -1152,7 +1157,7 @@ export const AgentTool = buildTool({
           }
 
           // Apply environment details enhancement
-          enhancedSystemPrompt = await enhanceSystemPromptWithEnvDetails([agentPrompt], resolvedAgentModel, additionalWorkingDirectories, undefined, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
+          enhancedSystemPrompt = await enhanceSystemPromptWithEnvDetails([agentPrompt], resolvedAgentModel, additionalWorkingDirectories, undefined, resolvedAgentProvider);
         } catch (error) {
           logForDebugging(`Failed to get system prompt for agent ${selectedAgent.agentType}: ${errorMessage(error)}`);
         }
@@ -1184,6 +1189,7 @@ export const AgentTool = buildTool({
       isAsync: shouldRunAsync,
       querySource: toolUseContext.options.querySource ?? getQuerySourceForAgent(selectedAgent.agentType, isBuiltInAgent(selectedAgent)),
       model: isForkPath ? undefined : model,
+      modelRoute,
       // No isForkPath branch needed: runAgent drops a per-call effort on
       // cache-identical runs (keyed on useExactTools, set below for forks),
       // because effort is part of the billing prompt cache key.
@@ -1377,12 +1383,12 @@ export const AgentTool = buildTool({
         ownerId: asyncAgentId,
         ownerLabel: description,
         model: resolvedAgentModel,
-        baseProvider: toolUseContext.options.mainLoopProvider,
+        baseProvider: resolvedAgentProvider,
       });
       const asyncLeaseAccount = reportableLeaseAccount(
         asyncAgentId,
         resolvedAgentModel,
-        toolUseContext.options.mainLoopProvider,
+        resolvedAgentProvider,
       );
 
       // Wrap async agent execution in agent context for analytics attribution
@@ -1531,12 +1537,12 @@ export const AgentTool = buildTool({
             ownerId: syncAgentId,
             ownerLabel: description,
             model: resolvedAgentModel,
-            baseProvider: toolUseContext.options.mainLoopProvider,
+            baseProvider: resolvedAgentProvider,
           });
           syncLeaseAccount = reportableLeaseAccount(
             syncAgentId,
             resolvedAgentModel,
-            toolUseContext.options.mainLoopProvider,
+            resolvedAgentProvider,
           );
           foregroundTaskId = registration.taskId;
           foregroundAbortController = registration.abortController;
@@ -1679,7 +1685,7 @@ export const AgentTool = buildTool({
                     const terminalLeaseAccount = reportableLeaseAccount(
                       backgroundedTaskId,
                       resolvedAgentModel,
-                      toolUseContext.options.mainLoopProvider,
+                      resolvedAgentProvider,
                     );
                     const agentResult = finalizeAgentTool(agentMessages, backgroundedTaskId, {
                       ...metadata,
@@ -1900,7 +1906,7 @@ export const AgentTool = buildTool({
                 const backgroundedLeaseAccount = reportableLeaseAccount(
                   backgroundedTaskId,
                   resolvedAgentModel,
-                  toolUseContext.options.mainLoopProvider,
+                  resolvedAgentProvider,
                 );
                 return {
                   data: {
@@ -2078,7 +2084,7 @@ export const AgentTool = buildTool({
                 foregroundTerminalStatus,
               ),
               resolvedAgentModel,
-              toolUseContext.options.mainLoopProvider,
+              resolvedAgentProvider,
             ) ?? syncLeaseAccount;
             if (!wasBackgrounded) {
               enqueueAgentMessageDeliveryReportsToOrigins({
@@ -2395,7 +2401,7 @@ The agent is now running and will receive instructions via mailbox.`
       const continuationHint = oneShotAsync
         ? 'internal ID - do not mention to user.'
         : `internal ID - do not mention to user.${runningHint}${stoppedHint}`
-      const prefix = `Async agent launched successfully.\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
+      const prefix = `Async agent launched successfully.\nmodel: ${data.model ?? 'unknown'}\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const instructions = data.canCheckProgress
         ? `Do not duplicate this agent's work — avoid reading, grepping, editing, or investigating the same files or topics while it is running. Work on non-overlapping tasks.
 For background launches, normally briefly tell the user what you launched, end your response, and yield the turn; the result will arrive via automatic completion notification. Do not predict or fabricate results.
@@ -2432,7 +2438,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          content: contentOrMarker
+          content: [...contentOrMarker, { type: 'text', text: `model: ${data.model ?? 'unknown'}` }]
         };
       }
       // Historical results persisted before this field existed render
@@ -2459,7 +2465,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
         ...(data.status === 'completed_with_error' ? { is_error: true } : {}),
         content: [...contentOrMarker, {
           type: 'text',
-          text: `${continuationText}${errorText}${worktreeInfoText}${changedFilesText}
+          text: `${continuationText}\nmodel: ${data.model ?? 'unknown'}${errorText}${worktreeInfoText}${changedFilesText}
 <usage>total_tokens: ${data.totalTokens}
 input_tokens: ${usage.input_tokens}
 cached_input_tokens: ${usage.cache_read_input_tokens ?? 0}

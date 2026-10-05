@@ -37,46 +37,142 @@ export type FrameDecodeResult =
  */
 export class FrameDecoder {
   private buffer: Buffer = Buffer.alloc(0)
+  private readOffset = 0
+  private writeOffset = 0
 
   constructor(private readonly maxFrameBytes: number) {}
 
+  reset(): void {
+    this.releaseBuffer()
+  }
+
   push(chunk: Buffer): FrameDecodeResult[] {
-    this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk])
+    if (chunk.length === 0) return []
     const results: FrameDecodeResult[] = []
+    let cursor = 0
 
-    while (this.buffer.length >= LENGTH_PREFIX_BYTES) {
-      const declaredLength = this.buffer.readUInt32BE(0)
+    while (cursor < chunk.length) {
+      let pendingBytes = this.writeOffset - this.readOffset
+      const availableBytes = chunk.length - cursor
 
+      if (pendingBytes === 0) {
+        if (availableBytes < LENGTH_PREFIX_BYTES) {
+          this.append(chunk, cursor, chunk.length)
+          break
+        }
+
+        const declaredLength = chunk.readUInt32BE(cursor)
+        if (declaredLength > this.maxFrameBytes) {
+          results.push(this.oversizedFrameError(declaredLength))
+          return results
+        }
+
+        const totalLength = LENGTH_PREFIX_BYTES + declaredLength
+        if (availableBytes >= totalLength) {
+          const bodyStart = cursor + LENGTH_PREFIX_BYTES
+          if (!this.decodeBody(chunk.subarray(bodyStart, cursor + totalLength), results)) return results
+          cursor += totalLength
+          continue
+        }
+
+        // Retain only the unfinished frame. In particular, never copy bytes
+        // after an incomplete frame into the decoder's backing allocation.
+        this.append(chunk, cursor, chunk.length)
+        break
+      }
+
+      if (pendingBytes < LENGTH_PREFIX_BYTES) {
+        const headerBytes = Math.min(
+          LENGTH_PREFIX_BYTES - pendingBytes,
+          availableBytes,
+        )
+        this.append(chunk, cursor, cursor + headerBytes)
+        cursor += headerBytes
+        pendingBytes += headerBytes
+        if (pendingBytes < LENGTH_PREFIX_BYTES) break
+      }
+
+      const declaredLength = this.buffer.readUInt32BE(this.readOffset)
       if (declaredLength > this.maxFrameBytes) {
-        results.push({
-          kind: 'error',
-          reason: `frame length ${declaredLength} exceeds max ${this.maxFrameBytes}`,
-        })
-        // Unrecoverable: we cannot trust where the next boundary is.
-        this.buffer = Buffer.alloc(0)
+        results.push(this.oversizedFrameError(declaredLength))
         return results
       }
-
       const totalLength = LENGTH_PREFIX_BYTES + declaredLength
-      if (this.buffer.length < totalLength) {
-        break // wait for more bytes
-      }
+      const bytesNeeded = totalLength - pendingBytes
+      const bodyBytes = Math.min(bytesNeeded, chunk.length - cursor)
+      this.append(chunk, cursor, cursor + bodyBytes)
+      cursor += bodyBytes
+      if (bodyBytes < bytesNeeded) break
 
-      const body = this.buffer.subarray(LENGTH_PREFIX_BYTES, totalLength)
-      this.buffer = this.buffer.subarray(totalLength)
-
-      try {
-        // F14 — decode UTF-8 in FATAL mode so malformed bytes (e.g. a lone 0xff)
-        // throw a protocol error instead of being silently replaced with U+FFFD.
-        const text = FATAL_UTF8.decode(body)
-        results.push({ kind: 'frame', payload: JSON.parse(text) })
-      } catch {
-        results.push({ kind: 'error', reason: 'frame body is not valid UTF-8 JSON' })
-        this.buffer = Buffer.alloc(0)
-        return results
-      }
+      const body = this.buffer.subarray(
+        this.readOffset + LENGTH_PREFIX_BYTES,
+        this.readOffset + totalLength,
+      )
+      if (!this.decodeBody(body, results)) return results
+      this.releaseBuffer()
     }
 
     return results
+  }
+
+  private append(source: Buffer, start: number, end: number): void {
+    const additionalBytes = end - start
+    if (additionalBytes === 0) return
+    const pendingBytes = this.writeOffset - this.readOffset
+    if (this.buffer.length - this.writeOffset >= additionalBytes) {
+      source.copy(this.buffer, this.writeOffset, start, end)
+      this.writeOffset += additionalBytes
+      return
+    }
+
+    if (this.readOffset > 0 && this.buffer.length - pendingBytes >= additionalBytes) {
+      this.buffer.copy(this.buffer, 0, this.readOffset, this.writeOffset)
+      this.readOffset = 0
+      this.writeOffset = pendingBytes
+      source.copy(this.buffer, this.writeOffset, start, end)
+      this.writeOffset += additionalBytes
+      return
+    }
+
+    let capacity = Math.max(1024, this.buffer.length)
+    while (capacity < pendingBytes + additionalBytes) capacity *= 2
+    // A valid body plus its header may straddle a power-of-two boundary. Keep
+    // that last growth within the configured frame allocation ceiling.
+    capacity = Math.min(capacity, this.maxFrameBytes + LENGTH_PREFIX_BYTES)
+    const grown = Buffer.allocUnsafe(capacity)
+    if (pendingBytes > 0) this.buffer.copy(grown, 0, this.readOffset, this.writeOffset)
+    this.buffer = grown
+    this.readOffset = 0
+    this.writeOffset = pendingBytes
+    source.copy(this.buffer, this.writeOffset, start, end)
+    this.writeOffset += additionalBytes
+    return
+  }
+
+  private decodeBody(body: Buffer, results: FrameDecodeResult[]): boolean {
+    try {
+      // F14 — fatal UTF-8 rejects malformed bytes instead of replacing them.
+      const text = FATAL_UTF8.decode(body)
+      results.push({ kind: 'frame', payload: JSON.parse(text) })
+      return true
+    } catch {
+      results.push({ kind: 'error', reason: 'frame body is not valid UTF-8 JSON' })
+      this.releaseBuffer()
+      return false
+    }
+  }
+
+  private oversizedFrameError(declaredLength: number): FrameDecodeResult {
+    this.releaseBuffer()
+    return {
+      kind: 'error',
+      reason: `frame length ${declaredLength} exceeds max ${this.maxFrameBytes}`,
+    }
+  }
+
+  private releaseBuffer(): void {
+    this.buffer = Buffer.alloc(0)
+    this.readOffset = 0
+    this.writeOffset = 0
   }
 }

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
+import { MAX_HISTORY_REPLAY_BYTES, MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
+
 import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import {
   createAssistantMessage,
@@ -191,7 +193,7 @@ describe('restored subagent branches', () => {
       new Set(),
       async (_sessionId, agentId) => {
         calls.push(agentId as string)
-        return { messages: [createAssistantMessage({ content: 'one frame' })] } as never
+        return { messages: [createAssistantMessage({ content: 'one frame' })], bytesRead: 100, truncated: false } as never
       },
     )
 
@@ -212,6 +214,8 @@ describe('restored subagent branches', () => {
       async (_sessionId, agentId) => {
         calls.push(agentId as string)
         return {
+          bytesRead: 100,
+          truncated: false,
           messages: agentId === ('oversized' as never)
             ? [
                 createAssistantMessage({ content: 'too much 1' }),
@@ -224,6 +228,67 @@ describe('restored subagent branches', () => {
 
     expect(calls).toEqual(['oversized', 'small'])
     expect(branches.map(branch => branch.parentToolUseId)).toEqual(['tu-small'])
+  })
+
+  test('rejected branches spend the aggregate source byte budget', async () => {
+    const calls: string[] = []
+    const branches = await loadBranchesWithinBudget(
+      'session',
+      [
+        { agentId: 'oversized' as never, parentToolUseId: 'large', agentName: undefined },
+        { agentId: 'never-read' as never, parentToolUseId: 'small', agentName: undefined },
+      ],
+      1,
+      new Set(),
+      async (_sessionId, agentId) => {
+        calls.push(String(agentId))
+        return {
+          messages: [createAssistantMessage({ content: 'a' }), createAssistantMessage({ content: 'b' })],
+          bytesRead: MAX_HISTORY_REPLAY_BYTES,
+          truncated: false,
+        } as never
+      },
+    )
+    expect(calls).toEqual(['oversized'])
+    expect(branches).toEqual([])
+  })
+
+  test('rejected branches also spend the aggregate message work budget', async () => {
+    const calls: string[] = []
+    const branches = await loadBranchesWithinBudget(
+      'session',
+      [
+        { agentId: 'many' as never, parentToolUseId: 'many', agentName: undefined },
+        { agentId: 'never-read' as never, parentToolUseId: 'small', agentName: undefined },
+      ],
+      1,
+      new Set(),
+      async (_sessionId, agentId) => {
+        calls.push(String(agentId))
+        return {
+          messages: Array.from({ length: MAX_HISTORY_REPLAY_FRAMES }, () => createAssistantMessage({ content: 'a' })),
+          bytesRead: 100,
+          truncated: false,
+        } as never
+      },
+    )
+    expect(calls).toEqual(['many'])
+    expect(branches).toEqual([])
+  })
+
+  test('a branch cannot spend more than the projected byte budget', async () => {
+    const branches = await loadBranchesWithinBudget(
+      'session',
+      [{ agentId: 'large' as never, parentToolUseId: 'large', agentName: undefined }],
+      2,
+      new Set(),
+      async () => ({
+        messages: [createAssistantMessage({ content: 'x'.repeat(MAX_HISTORY_REPLAY_BYTES) })],
+        bytesRead: 100,
+        truncated: false,
+      }) as never,
+    )
+    expect(branches).toEqual([])
   })
 
   test('ignores non-tool_use content when looking for a parent', () => {

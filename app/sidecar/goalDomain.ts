@@ -5,6 +5,7 @@ import {
   type ThreadGoal,
 } from '../../src/utils/threadGoal.js'
 import type { ThreadGoalSnapshot } from '../shared/protocol.js'
+import { subscribeToProjection } from './projectedSubscription.js'
 
 export type SidecarGoalDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
@@ -20,7 +21,11 @@ export function createSidecarGoalDomain(
       return threadGoalSnapshot(appStateStore.getState().threadGoal)
     },
     subscribe(listener) {
-      return appStateStore.subscribe(listener)
+      return subscribeToProjection(
+        appStateStore.subscribe,
+        () => threadGoalSnapshot(appStateStore.getState().threadGoal),
+        listener,
+      )
     },
   }
 }

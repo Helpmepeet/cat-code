@@ -132,6 +132,13 @@ active local features.
 
 ## Refresh Checklist
 
+`src/utils/usageWindow.ts` owns bounded timezone formatter caches (16 keys per
+formatter kind) and calendar-boundary caches (512 keys each). Dates, timezones,
+and rolling cutoff inputs participate in their keys; aggregation, source-prefix
+verification, identity deduplication, and privacy projection keep their existing
+owners. The reproducible conversion probe is
+`scripts/benchmarks/resourceWasteBackground.ts`.
+
 1. Re-read `CLAUDE.md` and `docs/maps/WORKSPACE_MAP.md`.
 2. Check whether telemetry stubs changed in `src/services/analytics/` and `src/utils/telemetry/`.
 3. Re-check GrowthBook enablement, config override paths, and Settings Gates visibility.

@@ -1349,6 +1349,7 @@ export class SidecarServer {
   removeConnection(connection: Connection): void {
     if (connection.closed) return
     connection.closed = true
+    connection.decoder.reset()
     this.connections.delete(connection)
     // CC-3: the last supervisor connection just dropped (e.g. a host crash left
     // this sidecar orphaned). Start the idle countdown; a reconnect within the

@@ -16,7 +16,7 @@
  * it rebuilds the tree with no renderer change.
  *
  * Read-only, engine-owned readers only: `listAgentMetadataForSession` and
- * `getAgentTranscriptForSession` are the engine's own accessors (§8 rule 10 —
+ * `getDisplayAgentTranscriptForSession` are the engine's own accessors (§8 rule 10 —
  * never re-walk the transcript directory here).
  *
  * Eager at restore rather than lazy on card expand: a lazy fetch needs a new
@@ -27,11 +27,11 @@
  */
 import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import {
-  getAgentTranscriptForSession,
+  getDisplayAgentTranscriptForSession,
   listAgentMetadataForSession,
 } from '../../src/utils/sessionStorage.js'
 
-import { MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
+import { MAX_HISTORY_REPLAY_BYTES, MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
 import { projectResumedHistory } from './historyProjection.js'
 
 /** One subagent's restored frames, already stamped with their parent id. */
@@ -42,7 +42,7 @@ export type SubagentBranch = {
 
 /** A subagent worth reading: metadata that actually carries the join key. */
 export type BranchCandidate = {
-  agentId: Parameters<typeof getAgentTranscriptForSession>[1]
+  agentId: Parameters<typeof getDisplayAgentTranscriptForSession>[1]
   parentToolUseId: string
   agentName: string | undefined
 }
@@ -197,25 +197,37 @@ async function loadBranchCandidates(
 }
 
 /**
- * Load only branches that can fit in the remaining replay budget. This is
- * deliberately sequential: agent transcript reads deserialize entire
- * sidechains, so reaching the frame cap must prevent reads of every later
- * candidate rather than merely dropping their already-loaded result.
+ * One shared budget across reachable branches, including rejected reads. A
+ * bounded display read never changes the engine's full agent-resume history.
  */
+type BranchWorkBudget = { readBytes: number; readMessages: number; frameBytes: number }
+
 export async function loadBranchesWithinBudget(
   sessionId: string,
   candidates: readonly BranchCandidate[],
   budget: number,
   seenUuids: Set<string>,
-  loadTranscript: typeof getAgentTranscriptForSession =
-    getAgentTranscriptForSession,
+  loadTranscript: typeof getDisplayAgentTranscriptForSession =
+    getDisplayAgentTranscriptForSession,
+  work: BranchWorkBudget = {
+    readBytes: MAX_HISTORY_REPLAY_BYTES,
+    readMessages: MAX_HISTORY_REPLAY_FRAMES,
+    frameBytes: MAX_HISTORY_REPLAY_BYTES,
+  },
 ): Promise<SubagentBranch[]> {
   const branches: SubagentBranch[] = []
   let remaining = budget
   for (const candidate of candidates) {
-    if (remaining <= 0) break
-    const transcript = await loadTranscript(sessionId, candidate.agentId)
+    // Reserve the optional one-byte alignment probe inside the shared budget.
+    if (remaining <= 0 || work.readBytes <= 1 || work.readMessages <= 0 || work.frameBytes <= 0) break
+    const transcript = await loadTranscript(sessionId, candidate.agentId, {
+      maxBytes: work.readBytes - 1,
+      maxMessages: work.readMessages,
+    })
     if (transcript === null) continue
+    work.readBytes -= transcript.bytesRead
+    work.readMessages -= transcript.messages.length
+    if (transcript.truncated) continue
     const frames = projectBranchFrames(
       transcript.messages,
       candidate.parentToolUseId,
@@ -223,13 +235,17 @@ export async function loadBranchesWithinBudget(
       seenUuids,
     )
     if (frames.length === 0 || frames.length > remaining) continue
+    let frameBytes = 0
+    for (const frame of frames) {
+      frameBytes += Buffer.byteLength(JSON.stringify(frame), 'utf8')
+      if (frameBytes > work.frameBytes) break
+    }
+    if (frameBytes > work.frameBytes) continue
     const branch = { parentToolUseId: candidate.parentToolUseId, frames }
     branches.push(branch)
-    remaining -= branch.frames.length
-    // Sibling fork-agent transcripts can inherit the same UUIDs. Fold
-    // accepted frames into the working set before loading the next branch so
-    // duplicates cannot consume the remaining replay budget.
-    for (const frame of branch.frames) {
+    remaining -= frames.length
+    work.frameBytes -= frameBytes
+    for (const frame of frames) {
       if (typeof frame.uuid === 'string') seenUuids.add(frame.uuid)
     }
   }
@@ -266,7 +282,12 @@ export async function withRestoredSubagentHistory(
     // pushes the total past the cap and `sendHistoryReplay` drops the OLDEST
     // main-transcript frames to make room for subagent chatter.
     let budget = MAX_HISTORY_REPLAY_FRAMES - assembled.length
-    while (pending.length > 0 && budget > 0) {
+    const work: BranchWorkBudget = {
+      readBytes: MAX_HISTORY_REPLAY_BYTES,
+      readMessages: MAX_HISTORY_REPLAY_FRAMES,
+      frameBytes: Math.max(0, MAX_HISTORY_REPLAY_BYTES - Buffer.byteLength(JSON.stringify(assembled), 'utf8')),
+    }
+    while (pending.length > 0 && budget > 0 && work.readBytes > 1 && work.readMessages > 0 && work.frameBytes > 0) {
       const reachable = collectToolUseIds(assembled)
       const matched = pending.filter(candidate =>
         reachable.has(candidate.parentToolUseId),
@@ -281,6 +302,8 @@ export async function withRestoredSubagentHistory(
         matched,
         budget,
         seenUuids,
+        getDisplayAgentTranscriptForSession,
+        work,
       )
       for (const branch of branches) {
         budget -= branch.frames.length

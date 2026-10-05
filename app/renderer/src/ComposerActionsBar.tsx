@@ -5,6 +5,7 @@ import {
   type AnimationEventHandler,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type Ref,
   type RefCallback,
 } from 'react'
@@ -459,22 +460,6 @@ function StepChevron() {
 }
 
 /**
- * The model card's SECOND face: one model's effort ladder.
- *
- * The levels are ordinal, so they are drawn as one divided rail filled up to the
- * chosen level rather than as a list of equal rows — the same reason the rail's
- * own effort face shows a word and not a number. Two things fall out of that for
- * free: the fill says how far up you are, and a rail that runs out sooner says
- * the model tops out sooner. Levels
- * come from the option the user picked, so this face is correct in the same
- * frame the pick happens, before the sidecar's re-broadcast lands.
- *
- * `selected` is the RAW session selection, not the applied tier, for the reason
- * `ReasoningChip` gives: an env or provider default must not read back as a
- * level the user chose. Auto is therefore an empty rail, and it is a control of
- * its own rather than a rung, because it is not a point on the scale.
- */
-/**
  * Where a key lands inside the rail, as an index into the rungs. The rail is a
  * horizontal control living inside a vertical menu, so it answers Left/Right
  * itself and leaves Up/Down to the menu's own roving, which walks the face's
@@ -520,9 +505,6 @@ function ModelEffortFace({
   onSelect: (effort: string) => void
   onBack: () => void
 }) {
-  const levels = option.effortOptions
-  const currentIndex = selected === null ? -1 : levels.indexOf(selected)
-  const isAuto = selected === null
   const faceRef = useRef<HTMLDivElement>(null)
   // Arriving here is a KEYBOARD move as often as a click: the pick that opened
   // this face unmounted the row that had focus. Land on whatever is currently
@@ -551,18 +533,6 @@ function ModelEffortFace({
     onBack()
   }
 
-  function onRailKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-    if (event.defaultPrevented) return
-    const rungs = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('button'),
-    )
-    const active = rungs.indexOf(document.activeElement as HTMLButtonElement)
-    const target = nextRungIndex(event.key, active, rungs.length)
-    if (target === null) return
-    event.preventDefault()
-    rungs[target]?.focus()
-  }
-
   return (
     <div ref={faceRef} onKeyDown={onFaceKeyDown}>
       <button
@@ -587,60 +557,238 @@ function ModelEffortFace({
         </svg>
         <span className="min-w-0 truncate">{option.label}</span>
       </button>
-      <div className="flex items-center justify-between px-2 pb-1">
+      <EffortSlider
+        levels={option.effortOptions}
+        selected={selected}
+        onSelect={onSelect}
+      />
+    </div>
+  )
+}
+
+/**
+ * Where the first and last tick sit, in pixels from the track's ends: half the
+ * thumb's width, so a thumb at either end sits flush inside the pill. Shared by
+ * the `w-7` tick buttons, the `w-3.5` fill caps, and `rungIndexAt`.
+ */
+const RAIL_EDGE_PX = 14
+
+/** The rung nearest a pointer's x position on the rail, clamped to its ends. */
+function rungIndexAt(rail: HTMLElement, clientX: number, count: number): number {
+  if (count <= 1) return 0
+  const rect = rail.getBoundingClientRect()
+  const span = rect.width - RAIL_EDGE_PX * 2
+  if (span <= 0) return 0
+  const ratio = (clientX - rect.left - RAIL_EDGE_PX) / span
+  return Math.min(count - 1, Math.max(0, Math.round(ratio * (count - 1))))
+}
+
+/**
+ * The effort slider, shared by the model card's second face and the rail's own
+ * reasoning popover so the two read and behave as one control.
+ *
+ * The levels are ordinal, so they are drawn as one track filled up to the chosen
+ * level rather than as a list of equal rows: the fill says how far up you are,
+ * and a track that runs out sooner says the model tops out sooner.
+ *
+ * `selected` is the RAW session selection, not the applied tier, for the reason
+ * `ReasoningChip` gives: an env or provider default must not read back as a
+ * level the user chose. Auto is therefore an empty track, and it is a control of
+ * its own rather than a rung, because it is not a point on the scale.
+ *
+ * Each rung stays a real `menuitemradio` button so the menu's Up/Down roving and
+ * Enter/Space activation reach it; the track around the buttons adds pointer
+ * dragging and click-anywhere snapping. A drag commits once, on release, so
+ * crossing four rungs does not fire four effort writes.
+ */
+function EffortSlider({
+  levels,
+  selected,
+  onSelect,
+}: {
+  levels: string[]
+  selected: string | null
+  onSelect: (effort: string) => void
+}) {
+  const currentIndex = selected === null ? -1 : levels.indexOf(selected)
+  const isAuto = selected === null
+  const railRef = useRef<HTMLDivElement>(null)
+  // The rung under the pointer while a press is held; it drives the fill and
+  // thumb so a drag shows where it will land before it commits.
+  const [drag, setDrag] = useState<{ index: number; moved: boolean } | null>(null)
+  // The rung being looked at (hovered or keyboard-focused), named in the header
+  // because the ticks themselves carry no text.
+  const [peekIndex, setPeekIndex] = useState<number | null>(null)
+  const shownIndex = drag ? drag.index : currentIndex
+  const labelIndex = drag?.index ?? peekIndex ?? currentIndex
+
+  useEffect(() => {
+    const rail = railRef.current
+    if (!rail || levels.length < 2) return
+
+    const updateFlowGeometry = () => {
+      const gapWidth = Math.max(0, rail.clientWidth - 28) / (levels.length - 1)
+      rail.style.setProperty(
+        '--effort-flow-width',
+        `${14 + Math.max(0, shownIndex) * gapWidth}px`,
+      )
+      const progress = Math.max(0, shownIndex) / (levels.length - 1)
+      rail.style.setProperty(
+        '--effort-flow-duration',
+        `${2.4 - 1.6 * progress}s`,
+      )
+    }
+
+    updateFlowGeometry()
+    const observer = new ResizeObserver(updateFlowGeometry)
+    observer.observe(rail)
+    return () => observer.disconnect()
+  }, [levels.length, shownIndex])
+
+  function rungButtons(): HTMLButtonElement[] {
+    return Array.from(
+      railRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [],
+    )
+  }
+
+  function onRailKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.defaultPrevented) return
+    const rungs = rungButtons()
+    const active = rungs.indexOf(document.activeElement as HTMLButtonElement)
+    const target = nextRungIndex(event.key, active, rungs.length)
+    if (target === null) return
+    event.preventDefault()
+    rungs[target]?.focus()
+  }
+
+  function onRailPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0 || levels.length === 0) return
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    setDrag({
+      index: rungIndexAt(event.currentTarget, event.clientX, levels.length),
+      moved: false,
+    })
+  }
+
+  function onRailPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!drag) return
+    const index = rungIndexAt(event.currentTarget, event.clientX, levels.length)
+    if (index !== drag.index) setDrag({ index, moved: true })
+  }
+
+  function onRailPointerUp(): void {
+    if (!drag) return
+    setDrag(null)
+    rungButtons()[drag.index]?.focus()
+    // A drag that wandered and came back to where it started changed nothing,
+    // and must not read as re-picking the current level (which closes the card).
+    if (drag.moved && drag.index === currentIndex) return
+    onSelect(levels[drag.index]!)
+  }
+
+  return (
+    <div className="px-2 pb-2">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center pb-2">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
           Effort
         </span>
-        <span className="flex items-center gap-1.5">
-          {currentIndex >= 0 ? (
-            <span className="text-[11px] text-tone-warn">
-              {formatEffort(levels[currentIndex]!)}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={isAuto}
-            onClick={() => onSelect('auto')}
-            className={`${MENU_FOCUS_RING} rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-              isAuto
-                ? 'bg-white/[0.06] text-tone-warn'
-                : 'text-text-subtle hover:text-text-primary'
-            }`}
-          >
-            Auto
-          </button>
+        <span
+          className={`min-h-5 text-[15px] font-semibold leading-5 transition-colors ${
+            labelIndex === currentIndex ? 'text-accent' : 'text-text-muted'
+          }`}
+        >
+          {labelIndex >= 0 ? formatEffort(levels[labelIndex]!) : null}
         </span>
+        <button
+          type="button"
+          role="menuitemradio"
+          aria-checked={isAuto}
+          onClick={() => onSelect('auto')}
+          className={`${MENU_FOCUS_RING} justify-self-end rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+            isAuto
+              ? 'bg-accent/15 text-accent'
+              : 'text-text-subtle hover:bg-text-primary/[0.06] hover:text-text-primary'
+          }`}
+        >
+          Auto
+        </button>
       </div>
-      {/* One divided rail, not six buttons: hairline dividers in the panel's own
-        * colour keep the rungs separable while the bar still reads as a single
-        * meter, so a full bar means "this model's ceiling" rather than "six of
-        * six things are on". The buttons carry the vertical padding, so the hit
-        * target is the row height and not the 6px bar. */}
-      <div className="flex px-2 pb-1" onKeyDown={onRailKeyDown}>
-        {levels.map((level, index) => {
-          const on = currentIndex >= 0 && index <= currentIndex
-          return (
-            <button
+      <div
+        ref={railRef}
+        onKeyDown={onRailKeyDown}
+        onPointerDown={onRailPointerDown}
+        onPointerMove={onRailPointerMove}
+        onPointerUp={onRailPointerUp}
+        onPointerCancel={() => setDrag(null)}
+        className="relative h-7 cursor-pointer touch-none select-none"
+      >
+        {/* The track and its fill share one clipped pill. The fill is a cap under
+          * the first tick plus one piece per gap, each scaling out from its left
+          * edge, so raising the level sweeps the fill along the track; its flat
+          * leading edge always ends under the thumb. */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-1/2 flex h-6 -translate-y-1/2 overflow-hidden rounded-full bg-text-primary/[0.1]"
+        >
+          <span
+            className={`h-full w-3.5 shrink-0 bg-accent ${shownIndex >= 0 ? '' : 'opacity-0'}`}
+          />
+          {levels.slice(1).map((level, index) => (
+            <span
               key={level}
-              type="button"
-              role="menuitemradio"
-              aria-checked={index === currentIndex}
-              aria-label={formatEffort(level)}
-              title={formatEffort(level)}
-              onClick={() => onSelect(level)}
-              className={`${MENU_FOCUS_RING} flex-1 rounded-sm py-1.5`}
-            >
-              <span
-                className={`block h-1.5 border-r border-surface-raised transition-colors ${
-                  index === 0 ? 'rounded-l-full' : ''
-                } ${index === levels.length - 1 ? 'rounded-r-full border-r-0' : ''} ${
-                  on ? 'bg-tone-warn' : 'bg-white/15'
-                }`}
-              />
-            </button>
-          )
-        })}
+              className={`h-full flex-1 origin-left bg-accent transition-transform duration-[var(--motion-fast)] ease-[var(--ease-standard)] ${
+                index < shownIndex ? 'scale-x-100' : 'scale-x-0'
+              }`}
+            />
+          ))}
+          <span className="w-3.5 shrink-0" />
+        </span>
+        {shownIndex > 0 && levels.length > 1 ? (
+          <span
+            aria-hidden
+            className="effort-flow-clip animate-effort-flow pointer-events-none absolute left-0 top-1/2 h-6 -translate-y-1/2 overflow-hidden rounded-l-full"
+          >
+            <span className="effort-flow-light-band" />
+          </span>
+        ) : null}
+        <div className="absolute inset-0 flex items-center justify-between">
+          {levels.map((level, index) => {
+            const isThumb = index === shownIndex
+            const filled = shownIndex >= 0 && index <= shownIndex
+            return (
+              <button
+                key={level}
+                type="button"
+                role="menuitemradio"
+                aria-checked={index === currentIndex}
+                aria-label={formatEffort(level)}
+                title={formatEffort(level)}
+                data-filled={filled}
+                // A pointer press already committed on release; this path is
+                // the keyboard's (Enter/Space) and a synthetic click's.
+                onClick={event => {
+                  if (event.detail === 0) onSelect(level)
+                }}
+                onPointerEnter={() => setPeekIndex(index)}
+                onPointerLeave={() => setPeekIndex(null)}
+                onFocus={() => setPeekIndex(index)}
+                onBlur={() => setPeekIndex(null)}
+                className={`${MENU_FOCUS_RING} group relative grid h-7 w-7 place-items-center rounded-full`}
+              >
+                <span
+                  aria-hidden
+                  className={`block rounded-full transition-all duration-[var(--motion-fast)] ease-[var(--ease-standard)] ${
+                    isThumb
+                      ? 'h-7 w-7 bg-[#ffffff] shadow-[0_1px_4px_rgb(0_0_0/0.3)] group-hover:scale-105'
+                      : filled
+                        ? 'h-1 w-1 bg-[rgb(255_255_255/0.55)]'
+                        : 'h-1 w-1 bg-text-primary/30 group-hover:h-1.5 group-hover:w-1.5 group-hover:bg-text-primary/60'
+                  }`}
+                />
+              </button>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
@@ -679,12 +827,8 @@ function ReasoningChip({
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
   // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
-  // The face shows the effective tier, while the checkmark reflects the raw
+  // The face shows the effective tier, while the slider reflects the raw
   // selection so an env/default override never lies about what the API receives.
-  const items = [
-    { value: 'auto', label: 'Auto' },
-    ...options.map(level => ({ value: level, label: formatEffort(level) })),
-  ]
   return (
     <div ref={ref} className="relative shrink-0">
       <button
@@ -699,7 +843,7 @@ function ReasoningChip({
             : 'Reasoning effort: auto'
         }
         onClick={() => setOpen(value => !value)}
-        className={`${RAIL_FACE} text-tone-warn hover:text-text-primary`}
+        className={`${RAIL_FACE} text-accent hover:text-text-primary`}
       >
         {current
           ? `${formatEffort(current)}${selected === null ? ' (Auto)' : ''}`
@@ -710,32 +854,19 @@ function ReasoningChip({
           role="menu"
           aria-label="Reasoning effort"
           onKeyDown={handleMenuRovingKeyDown}
-          className={`${POPOVER_PANEL} w-48`}
+          className={`${POPOVER_PANEL} w-64 pt-2`}
         >
-          <div className={POPOVER_HEADING}>Reasoning effort</div>
-          {items.map(item => {
-            const active =
-              item.value === 'auto'
-                ? selected === null
-                : selected === item.value
-            return (
-              <button
-                key={item.value}
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                onClick={() => {
-                  onSelect(item.value)
-                  close()
-                }}
-                className={`flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/5 ${
-                  active ? 'bg-white/[0.06] text-tone-warn' : 'text-text-primary'
-                }`}
-              >
-                {item.label}
-              </button>
-            )
-          })}
+          {/* The same slider as the model card's second face, with the same
+            * rule: a change leaves the panel open because the fill is the
+            * confirmation, and re-picking the current level dismisses it. */}
+          <EffortSlider
+            levels={options}
+            selected={selected}
+            onSelect={effort => {
+              onSelect(effort)
+              if ((effort === 'auto' ? null : effort) === selected) close()
+            }}
+          />
         </div>
       ) : null}
     </div>
@@ -1721,7 +1852,7 @@ export function ComposerActionsBar({
         ) : reasoningEffort ? (
           <>
             <span
-              className={`${RAIL_FACE} text-tone-warn`}
+              className={`${RAIL_FACE} text-accent`}
               title={`Reasoning effort: ${reasoningEffort}`}
             >
               {formatEffort(reasoningEffort)}

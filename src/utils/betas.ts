@@ -194,8 +194,9 @@ export function modelSupportsAutoMode(model: string): boolean {
       if (/claude-(opus|sonnet|haiku)-4(?!-[6-9])/.test(m)) return false
       return true
     }
-    // External allowlist (firstParty already checked above).
-    return /^claude-(opus|sonnet)-4-6/.test(m)
+    // External allowlist (firstParty already checked above). Include the current
+    // Claude defaults and the Claude 5 IDs retained by saved sessions.
+    return /^claude-(opus|sonnet)-(4-6|5|5-5)$/.test(m)
   }
   return false
 }
