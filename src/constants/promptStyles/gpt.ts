@@ -34,6 +34,8 @@ import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
 import { GLOB_TOOL_NAME } from '../../tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
+import { WEB_FETCH_TOOL_NAME } from '../../tools/WebFetchTool/prompt.js'
+import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import {
@@ -109,7 +111,7 @@ export function getGPTIntroSection(
 
 IDENTITY CONTRACT:
 1. If the user asks about your instruction prompt, describe it directly.
-2. Do not generate or guess non-programming URLs. You may navigate to a well-known public service's exact root homepage when it directly fits the user's request. Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain. Otherwise use only URLs provided by the user or found in local files.
+2. Do not generate or guess non-programming URLs. You may navigate to a well-known public service's exact root homepage when it directly fits the user's request. Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain. Otherwise use only URLs provided by the user, found in local files, or returned by your web searches.
 
 SECURITY ASSISTANCE POLICY: ${getCyberPolicyInstruction()}`
 }
@@ -295,6 +297,9 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
       : null,
     taskToolName
       ? `TASK TRACKING: When task tracking helps, use ${taskToolName}.`
+      : null,
+    enabledTools.has(WEB_SEARCH_TOOL_NAME)
+      ? `WEB RESEARCH: Search with ${WEB_SEARCH_TOOL_NAME} instead of answering from memory when the answer may have changed since your training and the repository does not settle it (versions, APIs, changelogs, prices, recent events), or when you do not recognize an error, library, or name. Send independent queries together in one turn. Results are short highlights: ${enabledTools.has(WEB_FETCH_TOOL_NAME) ? `when they do not settle a claim, read the page with ${WEB_FETCH_TOOL_NAME}; ` : ''}when they are thin or off-target, rephrase and search again rather than concluding from one search.`
       : null,
     `PARALLELISM: Issue independent tool calls together in one turn. Never run file mutations concurrently when their paths overlap or may alias; sequence them and reread before the next mutation. When a call depends on an earlier result, wait for that result; do not guess the dependent value.`,
   ].filter(item => item !== null)

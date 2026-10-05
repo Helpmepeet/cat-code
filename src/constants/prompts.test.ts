@@ -127,6 +127,38 @@ describe('GPT read discipline guidance', () => {
   })
 })
 
+describe('GPT web research guidance', () => {
+  test('appears only when WebSearch is enabled and names WebFetch only when present', () => {
+    expect(getGPTUsingToolsSection(new Set(['Read']))).not.toContain('WEB RESEARCH:')
+
+    const searchOnly = getGPTUsingToolsSection(new Set(['WebSearch']))
+    expect(searchOnly).toContain('WEB RESEARCH: Search with WebSearch instead of answering from memory')
+    expect(searchOnly).toContain('rephrase and search again')
+    expect(searchOnly).not.toContain('WebFetch')
+
+    expect(
+      getGPTUsingToolsSection(new Set(['WebSearch', 'WebFetch'])),
+    ).toContain('read the page with WebFetch')
+  })
+
+  test('reaches the assembled GPT prompt from the session tool pool', async () => {
+    clearSystemPromptSections()
+    try {
+      const tools = [{ name: 'WebSearch' }, { name: 'WebFetch' }] as Parameters<
+        typeof getSystemPrompt
+      >[0]
+      const prompt = (await getSystemPrompt(tools, 'gpt-6-sol')).join('\n')
+      expect(prompt).toContain('WEB RESEARCH: Search with WebSearch')
+    } finally {
+      clearSystemPromptSections()
+    }
+  })
+
+  test('lets GPT open URLs its own web searches returned', () => {
+    expect(getGPTIntroSection(null)).toContain('or returned by your web searches.')
+  })
+})
+
 describe('GPT section boundaries', () => {
   const GPT_TOOLS = [
     { name: 'Agent' },
