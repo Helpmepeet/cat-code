@@ -14,6 +14,7 @@ import * as engineConfig from '../../src/utils/config.js'
 import * as sessionStorage from '../../src/utils/sessionStorage.js'
 import type { SDKResultMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import { SDKResultSuccessSchema } from '../../src/entrypoints/sdk/coreSchemas.js'
+import { getCommandQueueSnapshot, resetCommandQueue } from '../../src/utils/messageQueueManager.js'
 
 test('closed handoff control settles the reserved engine, then only genuine admission reconciles it', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-handoff-boundary-'))
@@ -122,7 +123,18 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     modelUsage: {}, permission_denials: [], uuid: randomUUID(), ...(subtype === 'success' ? { result: 'Done.' } : {}),
   } satisfies SDKResultMessage
   expect(SDKResultSuccessSchema().safeParse(result).success).toBe(true)
-  const controller = new AppSessionController({ async *runTurn() { yield result } })
+  let started!: () => void, release!: () => void
+  const active = new Promise<void>(resolve => { started = resolve })
+  const prompts: unknown[] = []
+  const controller = new AppSessionController({ async *runTurn({ prompt, options }) {
+    prompts.push(prompt)
+    options?.onInputPersisted?.()
+    if (prompts.length === 1) {
+      started()
+      await new Promise<void>(resolve => { release = resolve })
+    }
+    yield result
+  } })
   const received: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
   const server = new SidecarServer({ sessionId, engineSessionId, controller, log: () => {} })
   const attach = () => server.addConnection({ write(data) { for (const value of decoder.push(Buffer.from(data))) if (value.kind === 'frame') received.push(value.payload as ServerFrame) }, end() {} })
@@ -138,12 +150,37 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     await Bun.sleep(0)
     expect(received.filter(frame => frame.kind === 'host.request')).toEqual([])
     server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+      message: { type: 'app.submit', requestId: 'before', prompt: 'before continuation', options: { submitId: 'before' } } }))
+    expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'before')).toMatchObject({ accepted: false })
+    server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
       message: { type: 'workspace.handoff', requestId: 'continue', operationId, action: 'continue' } }))
+    await active
+    if (subtype === 'success') {
+      const admitted = readWorkspaceJump(sessionId)!
+      writeWorkspaceJump({ ...admitted, cancelled: true, requiresUserReconciliation: true })
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'app.submit', requestId: 'cancelled', prompt: 'after cancellation', options: { submitId: 'cancelled' } } }))
+      expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'cancelled')).toMatchObject({ accepted: false })
+      expect(getCommandQueueSnapshot()).toHaveLength(0)
+      writeWorkspaceJump(admitted)
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'app.submit', requestId: 'during', prompt: 'also check the logs', options: { submitId: 'during' } } }))
+      expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'during')).toMatchObject({ accepted: true })
+      expect(getCommandQueueSnapshot()).toMatchObject([{ value: 'also check the logs', priority: 'next' }])
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'app.submit', requestId: 'meta', prompt: 'automatic work', options: { submitId: 'meta', isMeta: true } } }))
+      expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'meta')).toMatchObject({ accepted: false })
+    }
+    release()
     await Bun.sleep(0)
     expect(received.find(frame => frame.kind === 'workspace.handoff.result')).toMatchObject({ operationId, ok: subtype === 'success' })
     expect(received.some(frame => frame.kind === 'event' && frame.event.type === 'message' && frame.event.message.type === 'result' && frame.event.message.subtype === subtype)).toBe(true)
     expect(controller.getHandoffReservation()).toBe(operationId)
     expect(controller.canStartAutomaticTurn()).toBe(false)
+    expect(prompts).toHaveLength(1)
+    server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+      message: { type: 'app.submit', requestId: 'after', prompt: 'before settlement', options: { submitId: 'after' } } }))
+    expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'after')).toMatchObject({ accepted: false })
     attach()
     await Bun.sleep(0)
     expect(received.filter(frame => frame.kind === 'host.request')).toEqual([])
@@ -156,9 +193,12 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'release')).toMatchObject({ ok: true })
       expect(controller.getHandoffReservation()).toBeNull()
       expect(controller.canStartAutomaticTurn()).toBe(true)
+      expect(prompts).toHaveLength(2)
+      expect(prompts[1]).toBe('also check the logs')
+      expect(getCommandQueueSnapshot()).toHaveLength(0)
     }
   } finally {
-    server.close(); trust.mockRestore()
+    release?.(); server.close(); resetCommandQueue(); trust.mockRestore()
     if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = oldConfig
     rmSync(root, { recursive: true, force: true })

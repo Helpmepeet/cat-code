@@ -1,4 +1,4 @@
-import { readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { isPathTrusted } from '../../src/utils/config.js'
@@ -621,6 +621,7 @@ export class SidecarServer {
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
   private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
+  private destinationHandoffOperation: string | null = null
   private sourceHandoffOperation: string | null = null
   private handoffResult: { operationId: string; tipUuid: string; toolUseId: string } | null = null
   private handoffReadySent = false
@@ -1902,9 +1903,14 @@ export class SidecarServer {
             this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') throw new Error('Continuation unavailable')
         if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
         this.activeTurn = true
+        this.destinationHandoffOperation = message.operationId
         this.beginTurnObservation()
         try { await this.controller.continueHandoff(message.operationId, { uuid: state.continuation.id }) }
-        finally { this.activeTurn = false; this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok') }
+        finally {
+          this.destinationHandoffOperation = null
+          this.activeTurn = false
+          this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
+        }
         if (!this.turnResultSucceeded || this.turnResultFailed || this.handoffResult) throw new Error('Continuation did not settle successfully')
       } else if (message.action === 'settle_failed' || message.action === 'settle_cancelled' || message.action === 'settle_uncertain') {
         // Cancellation may arrive while the source tool exchange is settling.
@@ -2808,9 +2814,21 @@ export class SidecarServer {
     // `session_disconnected` is an existing ErrorFrame code the renderer already
     // folds to disconnected/inputEnabled:false — no new error code, no renderer
     // change. Retryable: the user unparks (restore-on-click) and re-sends.
-    if (this.controller.getHandoffReservation()) {
-      refuseSubmit('session_not_ready', 'Workspace change is awaiting settlement.', true)
-      return
+    const reservation = this.controller.getHandoffReservation()
+    if (reservation) {
+      let canQueue = false
+      if (this.activeTurn && this.controller.isTurnActive() &&
+          this.destinationHandoffOperation === reservation && !message.options?.isMeta) {
+        try {
+          const state = readWorkspaceJump(this.sessionId)
+          canQueue = !!state && state.engineSessionId === this.engineSessionId &&
+            state.operationId === reservation && workspaceJumpAllowsQueuedInput(state)
+        } catch { /* An unreadable move ledger keeps admission closed. */ }
+      }
+      if (!canQueue) {
+        refuseSubmit('session_not_ready', 'Workspace change is awaiting settlement.', true)
+        return
+      }
     }
     if (this.parking) {
       refuseSubmit('session_disconnected', 'session parking', true)

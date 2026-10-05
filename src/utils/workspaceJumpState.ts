@@ -116,6 +116,12 @@ export function workspaceJumpRequiresRetention(state: WorkspaceJumpState): boole
   return state.phase !== 'settled' || state.requiresUserReconciliation ||
     state.continuation.state === 'admitted' || state.continuation.state === 'uncertain'
 }
+/** Queueing into the admitted destination turn does not release the move hold. */
+export function workspaceJumpAllowsQueuedInput(state: WorkspaceJumpState): boolean {
+  return state.phase === 'settled' && state.location === 'destination' &&
+    state.outcome === 'completed' && state.continuation.state === 'admitted' &&
+    !state.cancelled && !state.requiresUserReconciliation
+}
 /** Call before registry.launch. Unreadable named records retain their own rows;
  * a directory read failure retains all rows until explicit recovery.
  */

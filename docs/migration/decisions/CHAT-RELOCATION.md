@@ -107,6 +107,13 @@ its process. Attachment or idle may infer failure only for an operation locally
 reserved by that source sidecar. Restored holds continue to gate turn admission;
 explicit Stop and host-owned recovery remain authoritative.
 
+Once the admitted destination continuation is actively running, genuine user
+messages may enter its ordinary bounded command queue. The sidecar verifies the
+live continuation owner and the matching completed destination ledger before
+accepting them. This does not release the move reservation or admit another
+turn; any undrained message waits for host settlement and release. Source,
+cancelled, uncertain, automatic, and peer input remain fenced by the hold.
+
 Observation-only preview loading uses the completed relocation record's target
 cwd, app identity, and canonical transcript path. It does not consume interruption
 recovery state. Incomplete, unreadable, or mismatched records remain refused;

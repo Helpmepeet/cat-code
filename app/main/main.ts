@@ -2,7 +2,7 @@ import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
-import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, type WorkspaceJumpState } from './workspaceJumpCoordinator.js'
+import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput, type WorkspaceJumpState } from './workspaceJumpCoordinator.js'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
 import {
   parseProjectRouteCommand,
@@ -4038,7 +4038,8 @@ function handOff(
   if ((message.type === 'app.submit' || message.type === 'peer.deliver') && workspaceJump?.isReserved(sessionId)) {
     let state: WorkspaceJumpState | null = null
     try { state = workspaceJump.snapshot(sessionId) } catch { return 'session_not_ready' }
-    if (!state || state.phase !== 'settled' || state.continuation.state === 'admitted' || message.type === 'peer.deliver' || message.options?.isMeta) return 'session_not_ready'
+    if (!state || state.phase !== 'settled' || message.type === 'peer.deliver' || message.options?.isMeta ||
+        (state.continuation.state === 'admitted' && !workspaceJumpAllowsQueuedInput(state))) return 'session_not_ready'
   }
   if (switchingSessionIds.has(sessionId) && (message.type === 'app.submit' || message.type === 'peer.deliver')) {
     return 'session_not_ready'
