@@ -28,7 +28,7 @@ const inputSchema = lazySchema(() =>
       .max(10)
       .optional()
       .describe(
-        'Maximum number of results. Defaults to 5. Must be between 1 and 10.',
+        'Maximum number of results. Defaults to 10. Must be between 1 and 10.',
       ),
     include_domains: z
       .array(z.string().trim().min(1))

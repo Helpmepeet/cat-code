@@ -36,9 +36,9 @@ type ExaSearchRequest = {
 
 const EXA_SEARCH_URL = 'https://api.exa.ai/search'
 const EXA_SEARCH_TIMEOUT_MS = 20_000
-const DEFAULT_MAX_RESULTS = 5
+const DEFAULT_MAX_RESULTS = 10
 const MAX_RESULTS = 10
-const MAX_HIGHLIGHT_CHARACTERS = 500
+const MAX_HIGHLIGHT_CHARACTERS = 2000
 const FRESHNESS_DAYS: Record<Exclude<WebSearchFreshness, 'any'>, number> = {
   day: 1,
   week: 7,

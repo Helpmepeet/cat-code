@@ -34,9 +34,9 @@ describe('Exa WebSearch request mapping', () => {
       ),
     ).toEqual({
       query: 'bun fetch timeout docs',
-      numResults: 5,
+      numResults: 10,
       type: 'auto',
-      contents: { highlights: { maxCharacters: 500 } },
+      contents: { highlights: { maxCharacters: 2000 } },
     })
   })
 
@@ -140,7 +140,7 @@ describe('Exa WebSearch response parsing', () => {
 
   test('caps returned highlight text to the compact request bound', async () => {
     const { _forTest } = await import('./exa.js')
-    const oversizedHighlight = 'x'.repeat(1200)
+    const oversizedHighlight = 'x'.repeat(2500)
 
     expect(
       _forTest.parseExaSearchResponse(
@@ -157,7 +157,7 @@ describe('Exa WebSearch response parsing', () => {
         0.1,
         1,
       ).results[0]?.highlights,
-    ).toEqual(['x'.repeat(500)])
+    ).toEqual(['x'.repeat(2000)])
   })
 
   test('drops non-http result URLs', async () => {
