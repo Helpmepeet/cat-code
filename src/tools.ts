@@ -411,6 +411,51 @@ export function assembleToolPool(
 
   // Filter out MCP tools that are in the deny list
   const allowedMcpTools = filterToolsByDenyRules(mcpTools, permissionContext)
+  const mcpNameCounts = new Map<string, number>()
+  for (const tool of allowedMcpTools) {
+    mcpNameCounts.set(tool.name, (mcpNameCounts.get(tool.name) ?? 0) + 1)
+  }
+  const occupiedNames = new Set([
+    ...builtInTools.map(tool => tool.name),
+    ...allowedMcpTools
+      .filter(tool => mcpNameCounts.get(tool.name) === 1)
+      .map(tool => tool.name),
+  ])
+  const builtInNames = new Set(builtInTools.map(tool => tool.name))
+  const seenLegacyNames = new Map<string, number>()
+  const uniquelyNamedMcpTools = [...allowedMcpTools]
+    .sort((a, b) => {
+      const aIdentity = `${a.mcpInfo?.serverName ?? ''}\0${a.mcpInfo?.toolName ?? ''}`
+      const bIdentity = `${b.mcpInfo?.serverName ?? ''}\0${b.mcpInfo?.toolName ?? ''}`
+      return aIdentity.localeCompare(bIdentity)
+    })
+    .map(tool => {
+      if (
+        mcpNameCounts.get(tool.name) === 1 &&
+        !builtInNames.has(tool.name)
+      ) {
+        return tool
+      }
+      const duplicateIndex = (seenLegacyNames.get(tool.name) ?? 0) + 1
+      seenLegacyNames.set(tool.name, duplicateIndex)
+      if (duplicateIndex === 1 && !builtInNames.has(tool.name)) {
+        occupiedNames.add(tool.name)
+        return tool
+      }
+      if (!tool.mcpInfo) return tool
+
+      const buildCollisionName = (suffix: string) => {
+        const discriminator = `__identity_${duplicateIndex}${suffix}`
+        return `${tool.name.slice(0, 64 - discriminator.length)}${discriminator}`
+      }
+      let name = buildCollisionName('')
+      let suffix = 2
+      while (occupiedNames.has(name)) {
+        name = buildCollisionName(`_${suffix++}`)
+      }
+      occupiedNames.add(name)
+      return { ...tool, name }
+    })
 
   // Sort each partition for prompt-cache stability, keeping built-ins as a
   // contiguous prefix. The server's claude_code_system_cache_policy places a
@@ -422,7 +467,9 @@ export function assembleToolPool(
   // readonly so copy-then-sort; allowedMcpTools is a fresh .filter() result.
   const byName = (a: Tool, b: Tool) => a.name.localeCompare(b.name)
   return uniqBy(
-    [...builtInTools].sort(byName).concat(allowedMcpTools.sort(byName)),
+    [...builtInTools]
+      .sort(byName)
+      .concat(uniquelyNamedMcpTools.sort(byName)),
     'name',
   )
 }

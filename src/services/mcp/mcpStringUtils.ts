@@ -6,15 +6,11 @@
 
 import { normalizeNameForMCP } from './normalization.js'
 
-/*
- * Extracts MCP server information from a tool name string
+/**
+ * Best-effort parser for legacy/model-facing MCP tool names. The delimiter
+ * format is ambiguous, so this must not be used as an authorization identity.
  * @param toolString The string to parse. Expected format: "mcp__serverName__toolName"
  * @returns An object containing server name and optional tool name, or null if not a valid MCP rule
- *
- * Known limitation: If a server name contains "__", parsing will be incorrect.
- * For example, "mcp__my__server__tool" would parse as server="my" and tool="server__tool"
- * instead of server="my__server" and tool="tool". This is rare in practice since server
- * names typically don't contain double underscores.
  */
 export function mcpInfoFromString(toolString: string): {
   serverName: string
@@ -41,8 +37,8 @@ export function getMcpPrefix(serverName: string): string {
 }
 
 /**
- * Builds a fully qualified MCP tool name from server and tool names.
- * Inverse of mcpInfoFromString().
+ * Builds the historical model-facing MCP tool name. This delimiter format is
+ * lossy for some server/tool names; use structured mcpInfo for authorization.
  * @param serverName Name of the MCP server (unnormalized)
  * @param toolName Name of the tool (unnormalized)
  * @returns The fully qualified name, e.g., "mcp__server__tool"
@@ -51,18 +47,94 @@ export function buildMcpToolName(serverName: string, toolName: string): string {
   return `${getMcpPrefix(serverName)}${normalizeNameForMCP(toolName)}`
 }
 
+const MCP_PERMISSION_ID_PREFIX = 'mcpid:v1:'
+
+export type McpPermissionIdentity =
+  | { scope: 'tool'; serverName: string; toolName: string }
+  | { scope: 'server' | 'wildcard'; serverName: string }
+
+function encodeMcpPermissionPart(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, char =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  )
+}
+
+export function buildMcpPermissionRuleName(
+  serverName: string,
+  toolName: string,
+): string {
+  return `${MCP_PERMISSION_ID_PREFIX}tool:${encodeMcpPermissionPart(serverName)}:${encodeMcpPermissionPart(toolName)}`
+}
+
+export function buildMcpServerPermissionRuleName(
+  serverName: string,
+  scope: 'server' | 'wildcard' = 'server',
+): string {
+  return `${MCP_PERMISSION_ID_PREFIX}${scope}:${encodeMcpPermissionPart(serverName)}`
+}
+
+export function mcpPermissionIdentityFromRuleName(
+  ruleName: string,
+): McpPermissionIdentity | null {
+  if (!ruleName.startsWith(MCP_PERMISSION_ID_PREFIX)) return null
+  const parts = ruleName.split(':')
+  if (parts[0] !== 'mcpid' || parts[1] !== 'v1') return null
+  try {
+    if (
+      (parts[2] === 'server' || parts[2] === 'wildcard') &&
+      parts.length === 4
+    ) {
+      const serverName = decodeURIComponent(parts[3]!)
+      if (encodeMcpPermissionPart(serverName) !== parts[3]) return null
+      return { scope: parts[2], serverName }
+    }
+    if (parts[2] !== 'tool' || parts.length !== 5) return null
+    const serverName = decodeURIComponent(parts[3]!)
+    const toolName = decodeURIComponent(parts[4]!)
+    if (
+      encodeMcpPermissionPart(serverName) !== parts[3] ||
+      encodeMcpPermissionPart(toolName) !== parts[4]
+    ) {
+      return null
+    }
+    return {
+      scope: 'tool',
+      serverName,
+      toolName,
+    }
+  } catch {
+    return null
+  }
+}
+
+export function isUnambiguousLegacyMcpIdentity(
+  serverName: string,
+  toolName?: string,
+): boolean {
+  return (
+    !serverName.includes('_') &&
+    normalizeNameForMCP(serverName) === serverName &&
+    (toolName === undefined ||
+      toolName === '*' ||
+      (!toolName.includes('_') &&
+        normalizeNameForMCP(toolName) === toolName))
+  )
+}
+
 /**
  * Returns the name to use for permission rule matching.
- * For MCP tools, uses the fully qualified mcp__server__tool name so that
- * deny rules targeting builtins (e.g., "Write") don't match unprefixed MCP
- * replacements that share the same display name. Falls back to `tool.name`.
+ * MCP permission identity is reversible and does not share a namespace with
+ * built-in tool names or the lossy model-facing MCP name.
  */
 export function getToolNameForPermissionCheck(tool: {
   name: string
   mcpInfo?: { serverName: string; toolName: string }
 }): string {
   return tool.mcpInfo
-    ? buildMcpToolName(tool.mcpInfo.serverName, tool.mcpInfo.toolName)
+    ? buildMcpPermissionRuleName(
+        tool.mcpInfo.serverName,
+        tool.mcpInfo.toolName,
+      )
     : tool.name
 }
 

@@ -2,8 +2,12 @@ import { feature } from 'bun:bundle'
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import {
+  buildMcpToolName,
+  getMcpPrefix,
   getToolNameForPermissionCheck,
   mcpInfoFromString,
+  mcpPermissionIdentityFromRuleName,
+  isUnambiguousLegacyMcpIdentity,
 } from '../../services/mcp/mcpStringUtils.js'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
@@ -303,28 +307,69 @@ function toolMatchesRule(
     return false
   }
 
-  // MCP tools are matched by their fully qualified mcp__server__tool name. In
-  // skip-prefix mode (CLAUDE_AGENT_SDK_MCP_NO_PREFIX), MCP tools have unprefixed
-  // display names (e.g., "Write") that collide with builtin names; rules targeting
-  // builtins should not match their MCP replacements.
-  const nameForRuleMatch = getToolNameForPermissionCheck(tool)
+  const ruleMcpInfo = mcpPermissionIdentityFromRuleName(
+    rule.ruleValue.toolName,
+  )
+  if (tool.mcpInfo) {
+    if (ruleMcpInfo) {
+      return (
+        ruleMcpInfo.serverName === tool.mcpInfo.serverName &&
+        (ruleMcpInfo.scope !== 'tool' ||
+          ruleMcpInfo.toolName === tool.mcpInfo.toolName)
+      )
+    }
 
-  // Direct tool name match
-  if (rule.ruleValue.toolName === nameForRuleMatch) {
-    return true
+    // Legacy allows are honored only when the old delimiter representation is
+    // one-to-one. Legacy denies also check the live server prefix, since a
+    // server name containing "__" may have been split as a tool name.
+    const ruleInfo = mcpInfoFromString(rule.ruleValue.toolName)
+    if (rule.ruleBehavior !== 'deny') {
+      if (!ruleInfo) return false
+      if (
+        !isUnambiguousLegacyMcpIdentity(ruleInfo.serverName) ||
+        !isUnambiguousLegacyMcpIdentity(tool.mcpInfo.serverName)
+      ) {
+        return false
+      }
+      if (
+        ruleInfo.serverName !== tool.mcpInfo.serverName ||
+        ruleInfo.toolName === undefined ||
+        ruleInfo.toolName === '*'
+      ) {
+        return (
+          ruleInfo.serverName === tool.mcpInfo.serverName &&
+          (ruleInfo.toolName === undefined || ruleInfo.toolName === '*')
+        )
+      }
+      return (
+        isUnambiguousLegacyMcpIdentity(
+          tool.mcpInfo.serverName,
+          tool.mcpInfo.toolName,
+        ) && ruleInfo.toolName === tool.mcpInfo.toolName
+      )
+    }
+
+    const legacyToolName = buildMcpToolName(
+      tool.mcpInfo.serverName,
+      tool.mcpInfo.toolName,
+    )
+    const legacyRuleName = rule.ruleValue.toolName
+    const serverPrefix = getMcpPrefix(tool.mcpInfo.serverName)
+    return (
+      legacyToolName === legacyRuleName ||
+      legacyRuleName === serverPrefix.slice(0, -2) ||
+      legacyRuleName === `${serverPrefix}*`
+    )
   }
 
-  // MCP server-level permission: rule "mcp__server1" matches tool "mcp__server1__tool1"
-  // Also supports wildcard: rule "mcp__server1__*" matches all tools from server1
-  const ruleInfo = mcpInfoFromString(rule.ruleValue.toolName)
-  const toolInfo = mcpInfoFromString(nameForRuleMatch)
-
-  return (
-    ruleInfo !== null &&
-    toolInfo !== null &&
-    (ruleInfo.toolName === undefined || ruleInfo.toolName === '*') &&
-    ruleInfo.serverName === toolInfo.serverName
-  )
+  // MCP rules never match unprefixed MCP display names or built-in tools.
+  if (
+    ruleMcpInfo ||
+    rule.ruleValue.toolName.startsWith('mcp__')
+  ) {
+    return false
+  }
+  return rule.ruleValue.toolName === getToolNameForPermissionCheck(tool)
 }
 
 /**
