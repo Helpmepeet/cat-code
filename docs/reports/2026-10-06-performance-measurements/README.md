@@ -100,6 +100,31 @@ Live tracing cost 0.023 to 0.045 ms per frame.
 
 Still unmeasured: key-press scope and every native interaction latency (tier C, in Cat Code Dev), real provider delta boundaries and rates, cold disk reads, and launch time.
 
+## After trailing-block reuse
+
+`planMarkdownLeaves` now keeps every top-level block that ended before a blank line and cannot take in a later block, and re-reads only the rest as its own document. It refuses the shortcut when a definition or footnote appears, when the block above can absorb what follows (a list or indented code), or when an open fence is in the re-read text. Before landing, a differential check streamed the operator's real assistant replies (1,845 medium and 216 long, in word, 4-word and two random chunkings) and 38 adversarial sources through the change. It compared every step with a fresh full parse: 836,857 steps, no difference. That check found and fixed two defects on the way, a duplicated KaTeX block and a list item that split from its list while its marker was still arriving.
+
+The probes below file the new path under `plain-append`, since they classify by outcome: the settled tree survives and the cached body becomes the whole source. Machine load was 21 to 30 during these runs, so treat absolute times as upper bounds.
+
+| Case (`results-after-trailing-block/`) | Before | After |
+|---|---:|---:|
+| Space-ending, multi-sentence, soft break and Thai appends after 33,600 characters | 13.0 to 13.6 ms | 0.76 to 0.86 ms |
+| Formatted append after a settled 64,000-character code block | 24.3 ms | 1.4 ms |
+| Open fence append at 256,000 characters | 11.0 ms | 11.5 ms (unchanged path) |
+| 12,000-character synthetic reply, 1-word pieces, total | 1,201 ms | 279 ms |
+| Tab return cold plan, 28,822 characters | 6.5 ms | 6.6 ms (unchanged path) |
+
+Real long replies (`results-after-trailing-block-real/`; the cache store had changed slightly, so the 20-reply sample differs from tier B):
+
+| Pieces | Full transforms | Per update p50 / p90 / p99 / max | Updates over 16.7 ms |
+|---|---:|---|---:|
+| 1 word, before | 74% | 1.0 / 10.6 / 18.5 / 34.8 ms | 486 |
+| 1 word, after | 5% | 0.26 / 1.0 / 2.8 / 22.9 ms | 4 |
+| 4 words, before | 79% | 1.1 / 11.6 / 18.7 / 23.5 ms | 187 |
+| 4 words, after | 6% | 0.26 / 1.0 / 2.8 / 22.7 ms | 1 |
+
+In a breakdown of the remaining 1-word full transforms by the shape of the reply's tail, most are cheap multi-line paragraph updates, and the only ones over 16.7 ms were around large code fences. Native interaction latency is still unmeasured.
+
 ## Run rules
 
 The runner refuses to overwrite an output directory, records the environment, source revision and SHA-256 of every production source and harness file, keeps every raw sample, and rejects the run if any of those files change while it runs. It cannot detect unrelated CPU load; `environment.json` records the load average before and each probe file after. Run while builds and tests are idle.
