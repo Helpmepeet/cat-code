@@ -892,6 +892,7 @@ export function enqueueAgentNotification({
     enqueueNotification({
       value: formatTaskNotificationText(details),
       mode: 'task-notification',
+      priority: 'next',
       origin: toTaskNotificationOrigin(details)
     });
   } catch (enqueueError) {

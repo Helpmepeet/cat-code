@@ -164,7 +164,7 @@ function enqueueShellNotification(taskId: string, description: string, status: '
   enqueuePendingNotification({
     value: formatTaskNotificationText(details),
     mode: 'task-notification',
-    priority: feature('MONITOR_TOOL') ? 'next' : 'later',
+    priority: 'next',
     agentId,
     origin: toTaskNotificationOrigin(details)
   });

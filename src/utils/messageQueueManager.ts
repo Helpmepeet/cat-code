@@ -209,7 +209,7 @@ export function recheckCommandQueue(): void {
 /**
  * Add a command to the queue.
  * Used for user-initiated commands (prompt, bash, orphaned-permission).
- * Defaults priority to 'next' (processed before task notifications).
+ * Defaults priority to 'next' for delivery at the next safe query boundary.
  */
 export function enqueue(command: QueuedCommand): void {
   commandQueue.push({ ...command, priority: command.priority ?? 'next' })
