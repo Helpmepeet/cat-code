@@ -17,7 +17,10 @@ import { isEnvTruthy } from '../envUtils.js'
 import { toError } from '../errors.js'
 import { logError } from '../log.js'
 import { checkGitAvailable, markGitUnavailable } from './gitAvailability.js'
-import { isSourceAllowedByPolicy } from './marketplaceHelpers.js'
+import {
+  assertMarketplaceSourceAllowed,
+  isSourceAllowedByPolicy,
+} from './marketplaceHelpers.js'
 import {
   addMarketplaceSource,
   getMarketplacesCacheDir,
@@ -223,9 +226,16 @@ export async function checkAndInstallOfficialMarketplace(): Promise<OfficialMark
     const gcsSha = await fetchOfficialMarketplaceFromGcs(
       installLocation,
       cacheDir,
+      () => assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE),
     )
     if (gcsSha !== null) {
+      if (!isSourceAllowedByPolicy(OFFICIAL_MARKETPLACE_SOURCE)) {
+        return { installed: false, skipped: true, reason: 'policy_blocked' }
+      }
       const known = await loadKnownMarketplacesConfig()
+      if (!isSourceAllowedByPolicy(OFFICIAL_MARKETPLACE_SOURCE)) {
+        return { installed: false, skipped: true, reason: 'policy_blocked' }
+      }
       known[OFFICIAL_MARKETPLACE_NAME] = {
         source: OFFICIAL_MARKETPLACE_SOURCE,
         installLocation,

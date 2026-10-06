@@ -19,10 +19,11 @@
  */
 
 import axios from 'axios'
-import { writeFile } from 'fs/promises'
+import { cp, writeFile } from 'fs/promises'
 import isEqual from 'lodash-es/isEqual.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
+import { randomUUID } from 'crypto'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { logForDebugging } from '../debug.js'
 import { isEnvTruthy } from '../envUtils.js'
@@ -33,6 +34,10 @@ import {
   isENOENT,
   toError,
 } from '../errors.js'
+import {
+  acquireFileMutationLock,
+  writeFileAtomicDurable,
+} from '../atomicFile.js'
 import { execFileNoThrow, execFileNoThrowWithCwd } from '../execFileNoThrow.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { gitExe } from '../git.js'
@@ -57,6 +62,7 @@ import { classifyFetchError, logPluginFetch } from './fetchTelemetry.js'
 import { removeAllPluginsForMarketplace } from './installedPluginsManager.js'
 import {
   extractHostFromSource,
+  assertMarketplaceSourceAllowed,
   formatSourceForDisplay,
   getHostPatternsFromAllowlist,
   getStrictKnownMarketplaces,
@@ -84,6 +90,7 @@ import {
   type PluginMarketplace,
   type PluginMarketplaceEntry,
   PluginMarketplaceSchema,
+  isValidGitHubRepositoryPath,
   validateOfficialNameSource,
 } from './schemas.js'
 
@@ -109,6 +116,59 @@ function getKnownMarketplacesFile(): string {
  */
 export function getMarketplacesCacheDir(): string {
   return join(getPluginsDirectory(), 'marketplaces')
+}
+
+/**
+ * Reject cache mutation targets unless they are strict children of the
+ * canonical marketplace cache directory and contain no linked target.
+ */
+export function assertMarketplaceCachePath(cachePath: string): string {
+  const fs = getFsImplementation()
+  const cacheDir = resolve(getMarketplacesCacheDir())
+  const targetPath = resolve(cachePath)
+  const targetName = basename(targetPath)
+  if (
+    !targetName ||
+    targetName === '.' ||
+    targetName === '..' ||
+    dirname(targetPath) !== cacheDir
+  ) {
+    throw new Error(
+      `Marketplace cache target must be a strict child of ${cacheDir}`,
+    )
+  }
+
+  let canonicalCacheDir: string
+  try {
+    canonicalCacheDir = fs.realpathSync(cacheDir)
+  } catch (error) {
+    throw new Error(`Cannot resolve marketplace cache directory ${cacheDir}`, {
+      cause: error,
+    })
+  }
+  if (fs.realpathSync(dirname(targetPath)) !== canonicalCacheDir) {
+    throw new Error(
+      `Marketplace cache target is not contained in ${canonicalCacheDir}`,
+    )
+  }
+
+  try {
+    const stats = fs.lstatSync(targetPath)
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Marketplace cache target cannot be a symbolic link`)
+    }
+    if (fs.realpathSync(targetPath) !== join(canonicalCacheDir, targetName)) {
+      throw new Error(
+        `Marketplace cache target is not contained in ${canonicalCacheDir}`,
+      )
+    }
+  } catch (error) {
+    if (getErrnoCode(error) !== 'ENOENT') {
+      throw error
+    }
+  }
+
+  return targetPath
 }
 
 /**
@@ -339,14 +399,7 @@ export async function saveKnownMarketplacesConfig(
     )
   }
 
-  const fs = getFsImplementation()
-  // Get directory from config file path to ensure consistency
-  const dir = join(configFile, '..')
-  await fs.mkdir(dir)
-  writeFileSync_DEPRECATED(configFile, jsonStringify(parsed.data, null, 2), {
-    encoding: 'utf-8',
-    flush: true,
-  })
+  await writeFileAtomicDurable(configFile, jsonStringify(parsed.data, null, 2))
 }
 
 /**
@@ -397,7 +450,11 @@ export async function registerSeedMarketplaces(): Promise<boolean> {
       // Compute installLocation relative to THIS seedDir, not the build-time
       // path baked into the seed's JSON. Handles multi-stage Docker builds
       // where the seed is mounted at a different path than where it was built.
-      const resolvedLocation = await findSeedMarketplaceLocation(seedDir, name)
+      const resolvedLocation = await findSeedMarketplaceLocation(
+        seedDir,
+        name,
+        seedEntry.source,
+      )
       if (!resolvedLocation) {
         // Seed content missing (incomplete build) — leave primary alone, but
         // don't claim the name either: a later seed may have working content.
@@ -461,6 +518,61 @@ async function readSeedKnownMarketplaces(
   }
 }
 
+async function isTrustedSeedMarketplaceCache(
+  installLocation: string,
+  expectedName: string,
+  source: MarketplaceSource,
+): Promise<boolean> {
+  const fs = getFsImplementation()
+  for (const seedDir of getPluginSeedDirs()) {
+    const seedConfig = await readSeedKnownMarketplaces(seedDir)
+    if (!isEqual(seedConfig?.[expectedName]?.source, source)) continue
+
+    const marketplaceRoot = join(seedDir, 'marketplaces')
+    const resolvedLocation = resolve(installLocation)
+    const candidates = [
+      join(marketplaceRoot, expectedName),
+      join(marketplaceRoot, `${expectedName}.json`),
+    ]
+    const matchingCandidate = candidates.find(
+      candidate => resolve(candidate) === resolvedLocation,
+    )
+    if (!matchingCandidate) {
+      continue
+    }
+
+    try {
+      const canonicalSeedRoot = fs.realpathSync(seedDir)
+      const expectedMarketplaceRoot = join(canonicalSeedRoot, 'marketplaces')
+      const canonicalMarketplaceRoot = fs.realpathSync(marketplaceRoot)
+      if (canonicalMarketplaceRoot !== expectedMarketplaceRoot) continue
+      if (fs.lstatSync(resolvedLocation).isSymbolicLink()) continue
+      const expectedCanonicalLocation = join(
+        canonicalMarketplaceRoot,
+        basename(resolvedLocation),
+      )
+      if (fs.realpathSync(resolvedLocation) !== expectedCanonicalLocation) {
+        continue
+      }
+      const isManifestFile =
+        resolve(matchingCandidate) ===
+        resolve(join(marketplaceRoot, `${expectedName}.json`))
+      const manifestPath = isManifestFile
+        ? resolvedLocation
+        : join(resolvedLocation, '.claude-plugin', 'marketplace.json')
+      const expectedManifestPath = isManifestFile
+        ? expectedCanonicalLocation
+        : join(expectedCanonicalLocation, '.claude-plugin', 'marketplace.json')
+      if (fs.lstatSync(manifestPath).isSymbolicLink()) continue
+      if (fs.realpathSync(manifestPath) !== expectedManifestPath) continue
+      return true
+    } catch {
+      continue
+    }
+  }
+  return false
+}
+
 /**
  * Locate a marketplace in the seed directory by name.
  *
@@ -473,12 +585,13 @@ async function readSeedKnownMarketplaces(
 async function findSeedMarketplaceLocation(
   seedDir: string,
   name: string,
+  source: MarketplaceSource,
 ): Promise<string | null> {
   const dirCandidate = join(seedDir, 'marketplaces', name)
   const jsonCandidate = join(seedDir, 'marketplaces', `${name}.json`)
   for (const candidate of [dirCandidate, jsonCandidate]) {
     try {
-      await readCachedMarketplace(candidate)
+      await readCachedMarketplace(candidate, name, source)
       return candidate
     } catch {
       // Try next candidate
@@ -527,9 +640,12 @@ function getPluginGitTimeoutMs(): number {
 
 export async function gitPull(
   cwd: string,
+  policySource: MarketplaceSource,
   ref?: string,
   options?: { disableCredentialHelper?: boolean; sparsePaths?: string[] },
 ): Promise<{ code: number; stderr: string }> {
+  cwd = assertMarketplaceCachePath(cwd)
+  assertMarketplaceSourceAllowed(policySource)
   logForDebugging(`git pull: cwd=${cwd} ref=${ref ?? 'default'}`)
   const env = { ...process.env, ...GIT_NO_PROMPT_ENV }
   const credentialArgs = options?.disableCredentialHelper
@@ -537,6 +653,7 @@ export async function gitPull(
     : []
 
   if (ref) {
+    assertMarketplaceSourceAllowed(policySource)
     const fetchResult = await execFileNoThrowWithCwd(
       gitExe(),
       [...credentialArgs, 'fetch', 'origin', ref],
@@ -547,6 +664,7 @@ export async function gitPull(
       return enhanceGitPullErrorMessages(fetchResult)
     }
 
+    assertMarketplaceSourceAllowed(policySource)
     const checkoutResult = await execFileNoThrowWithCwd(
       gitExe(),
       [...credentialArgs, 'checkout', ref],
@@ -557,6 +675,7 @@ export async function gitPull(
       return enhanceGitPullErrorMessages(checkoutResult)
     }
 
+    assertMarketplaceSourceAllowed(policySource)
     const pullResult = await execFileNoThrowWithCwd(
       gitExe(),
       [...credentialArgs, 'pull', 'origin', ref],
@@ -565,10 +684,17 @@ export async function gitPull(
     if (pullResult.code !== 0) {
       return enhanceGitPullErrorMessages(pullResult)
     }
-    await gitSubmoduleUpdate(cwd, credentialArgs, env, options?.sparsePaths)
+    await gitSubmoduleUpdate(
+      cwd,
+      credentialArgs,
+      env,
+      options?.sparsePaths,
+      policySource,
+    )
     return pullResult
   }
 
+  assertMarketplaceSourceAllowed(policySource)
   const result = await execFileNoThrowWithCwd(
     gitExe(),
     [...credentialArgs, 'pull', 'origin', 'HEAD'],
@@ -577,22 +703,27 @@ export async function gitPull(
   if (result.code !== 0) {
     return enhanceGitPullErrorMessages(result)
   }
-  await gitSubmoduleUpdate(cwd, credentialArgs, env, options?.sparsePaths)
+  await gitSubmoduleUpdate(
+    cwd,
+    credentialArgs,
+    env,
+    options?.sparsePaths,
+    policySource,
+  )
   return result
 }
 
 /**
- * Sync submodule working dirs after a successful pull. gitClone() uses
- * --recurse-submodules, but gitPull() didn't — the parent repo's submodule
- * pointer would advance while the working dir stayed at the old commit,
- * making plugin sources in submodules unresolvable after marketplace update.
+ * Sync submodule working dirs after a successful pull or clone. The parent
+ * repo's submodule pointer can advance while the working dir stays at the old
+ * commit, making plugin sources in submodules unresolvable after marketplace
+ * update.
  * Non-fatal: a failed submodule update logs a warning; most marketplaces
  * don't use submodules at all. (gh-30696)
  *
- * Skipped for sparse clones — gitClone's sparse path intentionally omits
- * --recurse-submodules to preserve partial-clone bandwidth savings, and
- * .gitmodules is a root file that cone-mode sparse-checkout always
- * materializes, so the .gitmodules gate alone can't distinguish sparse repos.
+ * Skipped for sparse clones to preserve partial-clone bandwidth savings.
+ * .gitmodules is a root file that cone-mode sparse-checkout always materializes,
+ * so the .gitmodules gate alone can't distinguish sparse repos.
  *
  * Perf: git-submodule is a bash script that spawns ~20 subprocesses (~35ms+)
  * even when no submodules exist. .gitmodules is a tracked file — pull
@@ -611,7 +742,9 @@ async function gitSubmoduleUpdate(
   credentialArgs: string[],
   env: NodeJS.ProcessEnv,
   sparsePaths: string[] | undefined,
+  policySource: MarketplaceSource,
 ): Promise<void> {
+  assertMarketplaceSourceAllowed(policySource)
   if (sparsePaths && sparsePaths.length > 0) return
   const hasGitmodules = await getFsImplementation()
     .stat(join(cwd, '.gitmodules'))
@@ -620,6 +753,7 @@ async function gitSubmoduleUpdate(
       () => false,
     )
   if (!hasGitmodules) return
+  assertMarketplaceSourceAllowed(policySource)
   const result = await execFileNoThrowWithCwd(
     gitExe(),
     [
@@ -803,9 +937,12 @@ function extractSshHost(gitUrl: string): string | null {
 export async function gitClone(
   gitUrl: string,
   targetPath: string,
+  policySource: MarketplaceSource,
   ref?: string,
   sparsePaths?: string[],
 ): Promise<{ code: number; stderr: string }> {
+  targetPath = assertMarketplaceCachePath(targetPath)
+  assertMarketplaceSourceAllowed(policySource)
   const useSparse = sparsePaths && sparsePaths.length > 0
   const args = [
     '-c',
@@ -821,8 +958,6 @@ export async function gitClone(
     // for sparse clones — sparse monorepos rarely need them, and recursing
     // submodules would defeat the partial-clone bandwidth savings.
     args.push('--filter=blob:none', '--no-checkout')
-  } else {
-    args.push('--recurse-submodules', '--shallow-submodules')
   }
 
   if (ref) {
@@ -836,6 +971,7 @@ export async function gitClone(
     `git clone: url=${redactUrlCredentials(gitUrl)} ref=${ref ?? 'default'} timeout=${timeoutMs}ms`,
   )
 
+  assertMarketplaceSourceAllowed(policySource)
   const result = await execFileNoThrowWithCwd(gitExe(), args, {
     timeout: timeoutMs,
     stdin: 'ignore',
@@ -854,10 +990,20 @@ export async function gitClone(
   }
 
   if (result.code === 0) {
+    if (!useSparse) {
+      await gitSubmoduleUpdate(
+        targetPath,
+        [],
+        { ...process.env, ...GIT_NO_PROMPT_ENV },
+        undefined,
+        policySource,
+      )
+    }
     if (useSparse) {
       // Configure the sparse cone, then materialize only those paths.
       // `sparse-checkout set --cone` handles both init and path selection
       // in a single step on git >= 2.25.
+      assertMarketplaceSourceAllowed(policySource)
       const sparseResult = await execFileNoThrowWithCwd(
         gitExe(),
         ['sparse-checkout', 'set', '--cone', '--', ...sparsePaths],
@@ -875,6 +1021,7 @@ export async function gitClone(
         }
       }
 
+      assertMarketplaceSourceAllowed(policySource)
       const checkoutResult = await execFileNoThrowWithCwd(
         gitExe(),
         // ref was already passed to clone via --branch, so HEAD points to it;
@@ -1034,10 +1181,14 @@ function safeCallProgress(
 export async function reconcileSparseCheckout(
   cwd: string,
   sparsePaths: string[] | undefined,
+  policySource: MarketplaceSource,
 ): Promise<{ code: number; stderr: string }> {
+  cwd = assertMarketplaceCachePath(cwd)
+  assertMarketplaceSourceAllowed(policySource)
   const env = { ...process.env, ...GIT_NO_PROMPT_ENV }
 
   if (sparsePaths && sparsePaths.length > 0) {
+    assertMarketplaceSourceAllowed(policySource)
     return execFileNoThrowWithCwd(
       gitExe(),
       ['sparse-checkout', 'set', '--cone', '--', ...sparsePaths],
@@ -1045,6 +1196,7 @@ export async function reconcileSparseCheckout(
     )
   }
 
+  assertMarketplaceSourceAllowed(policySource)
   const check = await execFileNoThrowWithCwd(
     gitExe(),
     ['config', '--get', 'core.sparseCheckout'],
@@ -1084,12 +1236,15 @@ export async function reconcileSparseCheckout(
 async function cacheMarketplaceFromGit(
   gitUrl: string,
   cachePath: string,
+  policySource: MarketplaceSource,
   ref?: string,
   sparsePaths?: string[],
   onProgress?: MarketplaceProgressCallback,
   options?: { disableCredentialHelper?: boolean },
 ): Promise<void> {
   const fs = getFsImplementation()
+  cachePath = assertMarketplaceCachePath(cachePath)
+  assertMarketplaceSourceAllowed(policySource)
 
   // Attempt incremental update; fall back to re-clone if the repo is absent,
   // stale, or otherwise not updatable. Using pull-first avoids a stat-before-operate
@@ -1103,10 +1258,15 @@ async function cacheMarketplaceFromGit(
   // Reconcile sparse-checkout config before pulling. If this requires a re-clone
   // (Sparse→Full transition) or fails (missing dir, not a repo), skip straight
   // to the rm+clone fallback.
-  const reconcileResult = await reconcileSparseCheckout(cachePath, sparsePaths)
+  const reconcileResult = await reconcileSparseCheckout(
+    cachePath,
+    sparsePaths,
+    policySource,
+  )
   if (reconcileResult.code === 0) {
+    assertMarketplaceSourceAllowed(policySource)
     const pullStarted = performance.now()
-    const pullResult = await gitPull(cachePath, ref, {
+    const pullResult = await gitPull(cachePath, policySource, ref, {
       disableCredentialHelper: options?.disableCredentialHelper,
       sparsePaths,
     })
@@ -1128,6 +1288,8 @@ async function cacheMarketplaceFromGit(
   }
 
   try {
+    assertMarketplaceSourceAllowed(policySource)
+    assertMarketplaceCachePath(cachePath)
     await fs.rm(cachePath, { recursive: true })
     // rm succeeded — a stale or partially-cloned directory existed; log for diagnostics
     logForDebugging(
@@ -1155,7 +1317,14 @@ async function cacheMarketplaceFromGit(
     `Cloning repository (timeout: ${timeoutSec}s): ${redactUrlCredentials(gitUrl)}${refMessage}`,
   )
   const cloneStarted = performance.now()
-  const result = await gitClone(gitUrl, cachePath, ref, sparsePaths)
+  assertMarketplaceSourceAllowed(policySource)
+  const result = await gitClone(
+    gitUrl,
+    cachePath,
+    policySource,
+    ref,
+    sparsePaths,
+  )
   logPluginFetch(
     'marketplace_clone',
     gitUrl,
@@ -1168,6 +1337,8 @@ async function cacheMarketplaceFromGit(
     // attempt starts fresh. Best-effort: if this fails, the stale dir will be
     // auto-detected and removed at the top of the next call.
     try {
+      assertMarketplaceSourceAllowed(policySource)
+      assertMarketplaceCachePath(cachePath)
       await fs.rm(cachePath, { recursive: true, force: true })
     } catch {
       // ignore
@@ -1256,10 +1427,13 @@ function redactUrlCredentials(urlString: string): string {
 async function cacheMarketplaceFromUrl(
   url: string,
   cachePath: string,
+  policySource: MarketplaceSource,
   customHeaders?: Record<string, string>,
   onProgress?: MarketplaceProgressCallback,
 ): Promise<void> {
   const fs = getFsImplementation()
+  cachePath = assertMarketplaceCachePath(cachePath)
+  assertMarketplaceSourceAllowed(policySource)
 
   const redactedUrl = redactUrlCredentials(url)
   safeCallProgress(onProgress, `Downloading marketplace from ${redactedUrl}`)
@@ -1279,6 +1453,7 @@ async function cacheMarketplaceFromUrl(
   let response
   const fetchStarted = performance.now()
   try {
+    assertMarketplaceSourceAllowed(policySource)
     response = await axios.get(url, {
       timeout: 10000,
       headers,
@@ -1330,6 +1505,13 @@ async function cacheMarketplaceFromUrl(
       response.data,
     )
   }
+  const sourceValidationError = validateOfficialNameSource(
+    result.data.name,
+    policySource,
+  )
+  if (sourceValidationError) {
+    throw new Error(sourceValidationError)
+  }
   logPluginFetch(
     'marketplace_url',
     url,
@@ -1339,10 +1521,12 @@ async function cacheMarketplaceFromUrl(
 
   safeCallProgress(onProgress, 'Saving marketplace to cache')
   // Ensure cache directory exists
+  assertMarketplaceSourceAllowed(policySource)
   const cacheDir = join(cachePath, '..')
   await fs.mkdir(cacheDir)
 
   // Write the validated marketplace file
+  assertMarketplaceSourceAllowed(policySource)
   writeFileSync_DEPRECATED(cachePath, jsonStringify(result.data, null, 2), {
     encoding: 'utf-8',
     flush: true,
@@ -1352,18 +1536,8 @@ async function cacheMarketplaceFromUrl(
 /**
  * Generate a cache path for a marketplace source
  */
-function getCachePathForSource(source: MarketplaceSource): string {
-  const tempName =
-    source.source === 'github'
-      ? source.repo.replace('/', '-')
-      : source.source === 'npm'
-        ? source.package.replace('@', '').replace('/', '-')
-        : source.source === 'file'
-          ? basename(source.path).replace('.json', '')
-          : source.source === 'directory'
-            ? basename(source.path)
-            : 'temp_' + Date.now()
-  return tempName
+function getCachePathForSource(): string {
+  return `marketplace-tmp-${randomUUID()}`
 }
 
 /**
@@ -1433,8 +1607,19 @@ async function parseFileWithSchema<T>(
 async function loadAndCacheMarketplace(
   source: MarketplaceSource,
   onProgress?: MarketplaceProgressCallback,
+  commitConfig?: (
+    config: KnownMarketplacesConfig,
+    marketplace: PluginMarketplace,
+    cachePath: string,
+  ) => Promise<void>,
+  expectedName?: string,
+  publishCacheAt?: string,
 ): Promise<LoadedPluginMarketplace> {
   const fs = getFsImplementation()
+  assertMarketplaceSourceAllowed(source)
+  if (publishCacheAt && source.source !== 'url') {
+    throw new Error('Only URL marketplace refreshes may reuse a cache path')
+  }
   const cacheDir = getMarketplacesCacheDir()
 
   // Ensure cache directory exists
@@ -1445,17 +1630,20 @@ async function loadAndCacheMarketplace(
   let cleanupNeeded = false
 
   // Generate a temp name for the cache path
-  const tempName = getCachePathForSource(source)
+  const tempName = getCachePathForSource()
 
   try {
     switch (source.source) {
       case 'url': {
         // Direct URL to marketplace.json
-        temporaryCachePath = join(cacheDir, `${tempName}.json`)
+        temporaryCachePath = assertMarketplaceCachePath(
+          join(cacheDir, `${tempName}.json`),
+        )
         cleanupNeeded = true
         await cacheMarketplaceFromUrl(
           source.url,
           temporaryCachePath,
+          source,
           source.headers,
           onProgress,
         )
@@ -1464,11 +1652,16 @@ async function loadAndCacheMarketplace(
       }
 
       case 'github': {
+        if (!isValidGitHubRepositoryPath(source.repo)) {
+          throw new Error(
+            'GitHub marketplace repository must be a valid owner/repository path',
+          )
+        }
         // Smart SSH/HTTPS selection: check if SSH is configured before trying it
         // This avoids waiting for timeout on SSH when it's not configured
         const sshUrl = `git@github.com:${source.repo}.git`
         const httpsUrl = `https://github.com/${source.repo}.git`
-        temporaryCachePath = join(cacheDir, tempName)
+        temporaryCachePath = assertMarketplaceCachePath(join(cacheDir, tempName))
         cleanupNeeded = true
 
         let lastError: Error | null = null
@@ -1483,6 +1676,7 @@ async function loadAndCacheMarketplace(
             await cacheMarketplaceFromGit(
               sshUrl,
               temporaryCachePath,
+              source,
               source.ref,
               source.sparsePaths,
               onProgress,
@@ -1505,13 +1699,18 @@ async function loadAndCacheMarketplace(
             )
 
             // Clean up failed SSH attempt if it created anything
-            await fs.rm(temporaryCachePath, { recursive: true, force: true })
+            assertMarketplaceSourceAllowed(source)
+            await fs.rm(
+              assertMarketplaceCachePath(temporaryCachePath),
+              { recursive: true, force: true },
+            )
 
             // Try HTTPS
             try {
               await cacheMarketplaceFromGit(
                 httpsUrl,
                 temporaryCachePath,
+                source,
                 source.ref,
                 source.sparsePaths,
                 onProgress,
@@ -1541,6 +1740,7 @@ async function loadAndCacheMarketplace(
             await cacheMarketplaceFromGit(
               httpsUrl,
               temporaryCachePath,
+              source,
               source.ref,
               source.sparsePaths,
               onProgress,
@@ -1564,13 +1764,18 @@ async function loadAndCacheMarketplace(
             )
 
             // Clean up failed HTTPS attempt if it created anything
-            await fs.rm(temporaryCachePath, { recursive: true, force: true })
+            assertMarketplaceSourceAllowed(source)
+            await fs.rm(
+              assertMarketplaceCachePath(temporaryCachePath),
+              { recursive: true, force: true },
+            )
 
             // Try SSH
             try {
               await cacheMarketplaceFromGit(
                 sshUrl,
                 temporaryCachePath,
+                source,
                 source.ref,
                 source.sparsePaths,
                 onProgress,
@@ -1599,11 +1804,12 @@ async function loadAndCacheMarketplace(
       }
 
       case 'git': {
-        temporaryCachePath = join(cacheDir, tempName)
+        temporaryCachePath = assertMarketplaceCachePath(join(cacheDir, tempName))
         cleanupNeeded = true
         await cacheMarketplaceFromGit(
           source.url,
           temporaryCachePath,
+          source,
           source.ref,
           source.sparsePaths,
           onProgress,
@@ -1652,18 +1858,15 @@ async function loadAndCacheMarketplace(
         // the post-switch parseFileWithSchema re-validates the full
         // PluginMarketplaceSchema (catches schema drift between the two).
         //
-        // Writing to source.name up front means the rename below is a no-op
-        // (temporaryCachePath === finalCachePath). known_marketplaces.json
-        // stores this source object including the plugins array, so
-        // diffMarketplaces detects settings edits via isEqual — no special
-        // dirty-tracking needed.
-        temporaryCachePath = join(cacheDir, source.name)
+        temporaryCachePath = assertMarketplaceCachePath(
+          join(cacheDir, tempName),
+        )
+        cleanupNeeded = true
         marketplacePath = join(
           temporaryCachePath,
           '.claude-plugin',
           'marketplace.json',
         )
-        cleanupNeeded = false
         await fs.mkdir(dirname(marketplacePath))
         // No `satisfies PluginMarketplace` here: source.plugins is the narrow
         // SettingsMarketplacePlugin type (no strict/.default(), no manifest
@@ -1705,48 +1908,112 @@ async function loadAndCacheMarketplace(
       )
     }
 
-    // Now rename the cache path to use the marketplace's actual name
-    const finalCachePath = join(cacheDir, marketplace.name)
+    const sourceValidationError = validateOfficialNameSource(
+      marketplace.name,
+      source,
+    )
+    if (sourceValidationError) {
+      throw new Error(sourceValidationError)
+    }
+    if (expectedName && marketplace.name !== expectedName) {
+      throw new Error(
+        `Marketplace source for '${expectedName}' returned manifest identity '${marketplace.name}'`,
+      )
+    }
+
+    const finalCachePath = publishCacheAt
+      ? assertMarketplaceCachePath(publishCacheAt)
+      : join(cacheDir, marketplace.name)
     // Defense-in-depth: the schema rejects path separators, .., and . in marketplace.name,
     // but verify the computed path is a strict subdirectory of cacheDir before fs.rm.
     // A malicious marketplace.json with a crafted name must never cause us to rm outside
     // cacheDir, nor rm cacheDir itself (e.g. name "." → join normalizes to cacheDir).
-    const resolvedFinal = resolve(finalCachePath)
-    const resolvedCacheDir = resolve(cacheDir)
-    if (!resolvedFinal.startsWith(resolvedCacheDir + sep)) {
-      throw new Error(
-        `Marketplace name '${marketplace.name}' resolves to a path outside the cache directory`,
-      )
-    }
-    // Don't rename if it's a local file or directory, or already has the right name
-    if (
-      temporaryCachePath !== finalCachePath &&
-      !isLocalMarketplaceSource(source)
-    ) {
-      try {
-        // Remove the destination if it already exists, then rename
-        try {
-          onProgress?.('Cleaning up old marketplace cache…')
-        } catch (callbackError) {
-          logForDebugging(
-            `Progress callback error: ${errorMessage(callbackError)}`,
-            { level: 'warn' },
+    assertMarketplaceCachePath(finalCachePath)
+    const releaseLock = await acquireFileMutationLock(
+      getKnownMarketplacesFile(),
+    )
+    try {
+      const config = await loadKnownMarketplacesConfig()
+      assertMarketplaceSourceAllowed(source)
+      const oldEntry = config[marketplace.name]
+      if (oldEntry && !isEqual(oldEntry.source, source)) {
+        const seedDir = seedDirFor(oldEntry.installLocation)
+        if (seedDir) {
+          throw new Error(
+            `Marketplace '${marketplace.name}' is seed-managed (${seedDir}). ` +
+              `To use a different source, ask your admin to update the seed, ` +
+              `or use a different marketplace name.`,
           )
         }
-        await fs.rm(finalCachePath, { recursive: true, force: true })
-        // Rename temp cache to final name
-        await fs.rename(temporaryCachePath, finalCachePath)
-        temporaryCachePath = finalCachePath
-        cleanupNeeded = false // Successfully renamed, no cleanup needed
-      } catch (error) {
-        const errorMsg = errorMessage(error)
-        throw new Error(
-          `Failed to finalize marketplace cache. Please manually delete the directory at ${finalCachePath} if it exists and try again.\n\nTechnical details: ${errorMsg}`,
-        )
       }
-    }
 
-    return { marketplace, cachePath: temporaryCachePath }
+      const publishesCache =
+        temporaryCachePath !== finalCachePath &&
+        !isLocalMarketplaceSource(source)
+      const backupCachePath = assertMarketplaceCachePath(
+        join(cacheDir, `marketplace-backup-${randomUUID()}`),
+      )
+      let backedUp = false
+      let published = false
+      try {
+        if (publishesCache) {
+          assertMarketplaceSourceAllowed(source)
+          if (fs.existsSync(finalCachePath)) {
+            await fs.rename(
+              assertMarketplaceCachePath(finalCachePath),
+              assertMarketplaceCachePath(backupCachePath),
+            )
+            backedUp = true
+          }
+          assertMarketplaceSourceAllowed(source)
+          await fs.rename(
+            assertMarketplaceCachePath(temporaryCachePath),
+            assertMarketplaceCachePath(finalCachePath),
+          )
+          temporaryCachePath = finalCachePath
+          cleanupNeeded = false
+          published = true
+        }
+
+        assertMarketplaceSourceAllowed(source)
+        await commitConfig?.(config, marketplace, temporaryCachePath)
+
+        if (backedUp) {
+          try {
+            await fs.rm(
+              assertMarketplaceCachePath(backupCachePath),
+              { recursive: true, force: true },
+            )
+          } catch (cleanupError) {
+            logForDebugging(
+              `Failed to remove previous marketplace cache at ${backupCachePath}: ${errorMessage(cleanupError)}`,
+              { level: 'warn' },
+            )
+          }
+        }
+        return { marketplace, cachePath: temporaryCachePath }
+      } catch (error) {
+        if (published) {
+          await fs.rm(
+            assertMarketplaceCachePath(finalCachePath),
+            { recursive: true, force: true },
+          )
+          cleanupNeeded = true
+        }
+        if (backedUp) {
+          await fs.rename(
+            assertMarketplaceCachePath(backupCachePath),
+            assertMarketplaceCachePath(finalCachePath),
+          )
+        }
+        if (published) {
+          cleanupNeeded = false
+        }
+        throw error
+      }
+    } finally {
+      await releaseLock()
+    }
   } catch (error) {
     // Clean up any temporary files/directories on error
     if (
@@ -1755,7 +2022,11 @@ async function loadAndCacheMarketplace(
       !isLocalMarketplaceSource(source)
     ) {
       try {
-        await fs.rm(temporaryCachePath!, { recursive: true, force: true })
+        assertMarketplaceSourceAllowed(source)
+        await fs.rm(
+          assertMarketplaceCachePath(temporaryCachePath!),
+          { recursive: true, force: true },
+        )
       } catch (cleanupError) {
         logForDebugging(
           `Warning: Failed to clean up temporary marketplace cache at ${temporaryCachePath}: ${errorMessage(cleanupError)}`,
@@ -1841,86 +2112,58 @@ export async function addMarketplaceSource(
     }
   }
 
-  // Load and cache the marketplace to validate it and get its name
+  let committedName: string | undefined
   const { marketplace, cachePath } = await loadAndCacheMarketplace(
     resolvedSource,
     onProgress,
-  )
-
-  // Validate that reserved names come from official sources
-  const sourceValidationError = validateOfficialNameSource(
-    marketplace.name,
-    resolvedSource,
-  )
-  if (sourceValidationError) {
-    throw new Error(sourceValidationError)
-  }
-
-  // Name collision with different source: overwrite (settings intent wins).
-  // Seed-managed entries are admin-controlled and cannot be overwritten.
-  // Re-read config after clone (may take a while; another process may have written).
-  const config = await loadKnownMarketplacesConfig()
-  const oldEntry = config[marketplace.name]
-  if (oldEntry) {
-    const seedDir = seedDirFor(oldEntry.installLocation)
-    if (seedDir) {
-      throw new Error(
-        `Marketplace '${marketplace.name}' is seed-managed (${seedDir}). ` +
-          `To use a different source, ask your admin to update the seed, ` +
-          `or use a different marketplace name.`,
-      )
-    }
-    logForDebugging(
-      `Marketplace '${marketplace.name}' exists with different source — overwriting`,
-    )
-    // Clean up the old cache if it's not a user-owned local path AND it
-    // actually differs from the new cachePath. loadAndCacheMarketplace writes
-    // to cachePath BEFORE we get here — rm-ing the same dir deletes the fresh
-    // write. Settings sources always land on the same dir (name → path);
-    // git sources hit this latently when the source repo changes but the
-    // fetched marketplace.json declares the same name. Only rm when locations
-    // genuinely differ (the only case where there's a stale dir to clean).
-    //
-    // Defensively validate the stored path before rm: a corrupted
-    // installLocation (gh-32793, gh-32661) could point at the user's project
-    // dir. If it's outside the cache dir, skip cleanup — the stale dir (if
-    // any) is harmless, and blocking the re-add would prevent the user from
-    // fixing the corruption.
-    if (!isLocalMarketplaceSource(oldEntry.source)) {
-      const cacheDir = resolve(getMarketplacesCacheDir())
-      const resolvedOld = resolve(oldEntry.installLocation)
-      const resolvedNew = resolve(cachePath)
-      if (resolvedOld === resolvedNew) {
-        // Same dir — loadAndCacheMarketplace already overwrote in place.
-        // Nothing to clean.
-      } else if (
-        resolvedOld === cacheDir ||
-        resolvedOld.startsWith(cacheDir + sep)
-      ) {
-        const fs = getFsImplementation()
-        await fs.rm(oldEntry.installLocation, { recursive: true, force: true })
-      } else {
+    async (config, validatedMarketplace, publishedCachePath) => {
+      const name = validatedMarketplace.name
+      const oldEntry = config[name]
+      if (oldEntry) {
         logForDebugging(
-          `Skipping cleanup of old installLocation (${oldEntry.installLocation}) — ` +
-            `outside ${cacheDir}. The path is corrupted; leaving it alone and ` +
-            `overwriting the config entry.`,
-          { level: 'warn' },
+          `Marketplace '${name}' exists with different source — overwriting`,
         )
       }
-    }
-  }
+      config[name] = {
+        source: resolvedSource,
+        installLocation: publishedCachePath,
+        lastUpdated: new Date().toISOString(),
+      }
+      await saveKnownMarketplacesConfig(config)
+      committedName = name
 
-  // Update config using the marketplace's actual name
-  config[marketplace.name] = {
-    source: resolvedSource,
-    installLocation: cachePath,
-    lastUpdated: new Date().toISOString(),
-  }
-  await saveKnownMarketplacesConfig(config)
+      if (oldEntry && !isLocalMarketplaceSource(oldEntry.source)) {
+        const cacheDir = resolve(getMarketplacesCacheDir())
+        let oldCachePath: string | undefined
+        try {
+          oldCachePath = assertMarketplaceCachePath(oldEntry.installLocation)
+        } catch {
+          logForDebugging(
+            `Skipping cleanup of old installLocation (${oldEntry.installLocation}) — ` +
+              `it is not a safe marketplace cache child of ${cacheDir}.`,
+            { level: 'warn' },
+          )
+        }
+        if (oldCachePath && oldCachePath !== resolve(publishedCachePath)) {
+          try {
+            await getFsImplementation().rm(
+              assertMarketplaceCachePath(oldCachePath),
+              { recursive: true, force: true },
+            )
+          } catch (cleanupError) {
+            logForDebugging(
+              `Failed to remove previous marketplace cache at ${oldCachePath}: ${errorMessage(cleanupError)}`,
+              { level: 'warn' },
+            )
+          }
+        }
+      }
+    },
+  )
 
-  logForDebugging(`Added marketplace source: ${marketplace.name}`)
-
-  return { name: marketplace.name, alreadyMaterialized: false, resolvedSource }
+  const name = committedName ?? marketplace.name
+  logForDebugging(`Added marketplace source: ${name}`)
+  return { name, alreadyMaterialized: false, resolvedSource }
 }
 
 /**
@@ -1954,17 +2197,29 @@ export async function removeMarketplaceSource(name: string): Promise<void> {
     )
   }
 
+  const fs = getFsImplementation()
+  const cacheDir = getMarketplacesCacheDir()
+  const cachePath = fs.existsSync(cacheDir)
+    ? assertMarketplaceCachePath(join(cacheDir, name))
+    : undefined
+  const jsonCachePath = fs.existsSync(cacheDir)
+    ? assertMarketplaceCachePath(join(cacheDir, `${name}.json`))
+    : undefined
+
   // Remove from config
   delete config[name]
   await saveKnownMarketplacesConfig(config)
 
   // Clean up cached files (both directory and JSON formats)
-  const fs = getFsImplementation()
-  const cacheDir = getMarketplacesCacheDir()
-  const cachePath = join(cacheDir, name)
-  await fs.rm(cachePath, { recursive: true, force: true })
-  const jsonCachePath = join(cacheDir, `${name}.json`)
-  await fs.rm(jsonCachePath, { force: true })
+  if (cachePath) {
+    await fs.rm(assertMarketplaceCachePath(cachePath), {
+      recursive: true,
+      force: true,
+    })
+  }
+  if (jsonCachePath) {
+    await fs.rm(assertMarketplaceCachePath(jsonCachePath), { force: true })
+  }
 
   // Clean up settings.json - remove marketplace from extraKnownMarketplaces
   // and remove related plugin entries from enabledPlugins
@@ -2057,6 +2312,8 @@ export async function removeMarketplaceSource(name: string): Promise<void> {
  */
 async function readCachedMarketplace(
   installLocation: string,
+  expectedName: string,
+  source: MarketplaceSource,
 ): Promise<PluginMarketplace> {
   // For git-sourced directories, the manifest lives at .claude-plugin/marketplace.json.
   // For url/file/directory sources it is the installLocation itself.
@@ -2064,13 +2321,56 @@ async function readCachedMarketplace(
   // (ENOTDIR) or the nested file is simply missing (ENOENT).
   const nestedPath = join(installLocation, '.claude-plugin', 'marketplace.json')
   try {
-    return await parseFileWithSchema(nestedPath, PluginMarketplaceSchema())
+    const marketplace = await parseFileWithSchema(
+      nestedPath,
+      PluginMarketplaceSchema(),
+    )
+    return validateCachedMarketplace(
+      installLocation,
+      marketplace,
+      expectedName,
+      source,
+    )
   } catch (e) {
     if (e instanceof ConfigParseError) throw e
     const code = getErrnoCode(e)
     if (code !== 'ENOENT' && code !== 'ENOTDIR') throw e
   }
-  return await parseFileWithSchema(installLocation, PluginMarketplaceSchema())
+  const marketplace = await parseFileWithSchema(
+    installLocation,
+    PluginMarketplaceSchema(),
+  )
+  return validateCachedMarketplace(
+    installLocation,
+    marketplace,
+    expectedName,
+    source,
+  )
+}
+
+async function validateCachedMarketplace(
+  installLocation: string,
+  marketplace: PluginMarketplace,
+  expectedName: string,
+  source: MarketplaceSource,
+): Promise<PluginMarketplace> {
+  const provenanceError = validateOfficialNameSource(marketplace.name, source)
+  if (
+    provenanceError &&
+    !(await isTrustedSeedMarketplaceCache(
+      installLocation,
+      expectedName,
+      source,
+    ))
+  ) {
+    throw new Error(provenanceError)
+  }
+  if (marketplace.name !== expectedName) {
+    throw new Error(
+      `Cached marketplace for '${expectedName}' has manifest identity '${marketplace.name}'`,
+    )
+  }
+  return marketplace
 }
 
 /**
@@ -2081,19 +2381,15 @@ async function readCachedMarketplace(
 export async function getMarketplaceCacheOnly(
   name: string,
 ): Promise<PluginMarketplace | null> {
-  const fs = getFsImplementation()
-  const configFile = getKnownMarketplacesFile()
-
   try {
-    const content = await fs.readFile(configFile, { encoding: 'utf-8' })
-    const config = jsonParse(content) as KnownMarketplacesConfig
+    const config = await loadKnownMarketplacesConfig()
     const entry = config[name]
 
     if (!entry) {
       return null
     }
 
-    return await readCachedMarketplace(entry.installLocation)
+    return await readCachedMarketplace(entry.installLocation, name, entry.source)
   } catch (error) {
     if (isENOENT(error)) {
       return null
@@ -2148,7 +2444,11 @@ export const getMarketplace = memoize(
 
     // Try to read from disk cache
     try {
-      return await readCachedMarketplace(entry.installLocation)
+      return await readCachedMarketplace(
+        entry.installLocation,
+        name,
+        entry.source,
+      )
     } catch (error) {
       // Log cache corruption before re-fetching
       logForDebugging(
@@ -2162,7 +2462,12 @@ export const getMarketplace = memoize(
     // Cache doesn't exist or is invalid, fetch from source
     let marketplace: PluginMarketplace
     try {
-      ;({ marketplace } = await loadAndCacheMarketplace(entry.source))
+      ;({ marketplace } = await loadAndCacheMarketplace(
+        entry.source,
+        undefined,
+        undefined,
+        name,
+      ))
     } catch (error) {
       throw new Error(
         `Failed to load marketplace "${name}" from source (${entry.source.source}): ${errorMessage(error)}`,
@@ -2170,6 +2475,7 @@ export const getMarketplace = memoize(
     }
 
     // Update lastUpdated only when we actually fetch
+    assertMarketplaceSourceAllowed(entry.source)
     config[name]!.lastUpdated = new Date().toISOString()
     await saveKnownMarketplacesConfig(config)
 
@@ -2195,12 +2501,8 @@ export async function getPluginByIdCacheOnly(pluginId: string): Promise<{
     return null
   }
 
-  const fs = getFsImplementation()
-  const configFile = getKnownMarketplacesFile()
-
   try {
-    const content = await fs.readFile(configFile, { encoding: 'utf-8' })
-    const config = jsonParse(content) as KnownMarketplacesConfig
+    const config = await loadKnownMarketplacesConfig()
     const marketplaceConfig = config[marketplaceName]
 
     if (!marketplaceConfig) {
@@ -2295,8 +2597,26 @@ export async function getPluginById(pluginId: string): Promise<{
  */
 export async function refreshAllMarketplaces(): Promise<void> {
   const config = await loadKnownMarketplacesConfig()
+  let refreshedAny = false
 
   for (const [name, entry] of Object.entries(config)) {
+    const sourceValidationError = validateOfficialNameSource(
+      name,
+      entry.source,
+    )
+    if (sourceValidationError) {
+      logForDebugging(
+        `Skipping marketplace '${name}' in bulk refresh: ${sourceValidationError}`,
+        { level: 'warn' },
+      )
+      continue
+    }
+    if (!isSourceAllowedByPolicy(entry.source)) {
+      logForDebugging(
+        `Skipping marketplace '${name}' in bulk refresh because its source is blocked by enterprise policy`,
+      )
+      continue
+    }
     // Seed-managed marketplaces are controlled by the seed image — refreshing
     // them is pointless (registerSeedMarketplaces overwrites on next startup).
     if (seedDirFor(entry.installLocation)) {
@@ -2315,9 +2635,14 @@ export async function refreshAllMarketplaces(): Promise<void> {
       const sha = await fetchOfficialMarketplaceFromGcs(
         entry.installLocation,
         getMarketplacesCacheDir(),
+        () => assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE),
       )
       if (sha !== null) {
+        if (!isSourceAllowedByPolicy(OFFICIAL_MARKETPLACE_SOURCE)) {
+          continue
+        }
         config[name]!.lastUpdated = new Date().toISOString()
+        refreshedAny = true
         continue
       }
       if (
@@ -2334,9 +2659,19 @@ export async function refreshAllMarketplaces(): Promise<void> {
       // fall through to git
     }
     try {
-      const { cachePath } = await loadAndCacheMarketplace(entry.source)
+      if (name === OFFICIAL_MARKETPLACE_NAME) {
+        assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE)
+      }
+      const { cachePath } = await loadAndCacheMarketplace(
+        entry.source,
+        undefined,
+        undefined,
+        name,
+      )
+      assertMarketplaceSourceAllowed(entry.source)
       config[name]!.lastUpdated = new Date().toISOString()
       config[name]!.installLocation = cachePath
+      refreshedAny = true
     } catch (error) {
       logForDebugging(
         `Failed to refresh marketplace ${name}: ${errorMessage(error)}`,
@@ -2347,16 +2682,185 @@ export async function refreshAllMarketplaces(): Promise<void> {
     }
   }
 
-  await saveKnownMarketplacesConfig(config)
+  if (refreshedAny) {
+    await saveKnownMarketplacesConfig(config)
+  }
+}
+
+async function refreshGitMarketplaceSafely(
+  name: string,
+  entry: KnownMarketplace,
+  source: Extract<MarketplaceSource, { source: 'github' | 'git' }>,
+  gitUrl: string,
+  fallbackGitUrl: string | undefined,
+  onProgress?: MarketplaceProgressCallback,
+  options?: { disableCredentialHelper?: boolean },
+): Promise<void> {
+  const fs = getFsImplementation()
+  const cacheDir = getMarketplacesCacheDir()
+  const installLocation = assertMarketplaceCachePath(entry.installLocation)
+  const stagingPath = assertMarketplaceCachePath(
+    join(cacheDir, `marketplace-refresh-${randomUUID()}`),
+  )
+  const backupPath = assertMarketplaceCachePath(
+    join(cacheDir, `marketplace-backup-${randomUUID()}`),
+  )
+  let stagingExists = false
+  let backedUp = false
+  let published = false
+
+  try {
+    stagingExists = true
+    const gitMetadataPath = join(installLocation, '.git')
+    const hasIndependentGitMetadata = fs.existsSync(gitMetadataPath)
+      ? fs.lstatSync(gitMetadataPath).isDirectory()
+      : false
+    assertMarketplaceSourceAllowed(source)
+    await cp(installLocation, stagingPath, {
+      recursive: true,
+      dereference: false,
+      filter: sourcePath =>
+        sourcePath !== gitMetadataPath || hasIndependentGitMetadata,
+    })
+    try {
+      await cacheMarketplaceFromGit(
+        gitUrl,
+        stagingPath,
+        source,
+        source.ref,
+        source.sparsePaths,
+        onProgress,
+        options,
+      )
+    } catch (refreshError) {
+      if (!fallbackGitUrl) throw refreshError
+      logForDebugging(
+        `Marketplace refresh failed with ${gitUrl.startsWith('git@') ? 'SSH' : 'HTTPS'} for ${source.source === 'github' ? source.repo : redactUrlCredentials(source.url)}, falling back`,
+        { level: 'info' },
+      )
+      await cacheMarketplaceFromGit(
+        fallbackGitUrl,
+        stagingPath,
+        source,
+        source.ref,
+        source.sparsePaths,
+        onProgress,
+        options,
+      )
+    }
+
+    assertMarketplaceSourceAllowed(source)
+    await readCachedMarketplace(stagingPath, name, source)
+
+    const releaseLock = await acquireFileMutationLock(
+      getKnownMarketplacesFile(),
+    )
+    try {
+      const config = await loadKnownMarketplacesConfig()
+      const currentEntry = config[name]
+      if (
+        !currentEntry ||
+        !isEqual(currentEntry.source, source) ||
+        resolve(currentEntry.installLocation) !== resolve(installLocation)
+      ) {
+        throw new Error(
+          `Marketplace '${name}' changed while refresh was in progress; retry the refresh`,
+        )
+      }
+      const seedDir = seedDirFor(currentEntry.installLocation)
+      if (seedDir) {
+        throw new Error(
+          `Marketplace '${name}' is seed-managed (${seedDir}) and cannot be refreshed`,
+        )
+      }
+
+      assertMarketplaceSourceAllowed(source)
+      await fs.rename(
+        assertMarketplaceCachePath(installLocation),
+        assertMarketplaceCachePath(backupPath),
+      )
+      backedUp = true
+      assertMarketplaceSourceAllowed(source)
+      await fs.rename(
+        assertMarketplaceCachePath(stagingPath),
+        assertMarketplaceCachePath(installLocation),
+      )
+      stagingExists = false
+      published = true
+      assertMarketplaceSourceAllowed(source)
+      config[name] = {
+        ...currentEntry,
+        lastUpdated: new Date().toISOString(),
+      }
+      await saveKnownMarketplacesConfig(config)
+
+      try {
+        await fs.rm(assertMarketplaceCachePath(backupPath), {
+          recursive: true,
+          force: true,
+        })
+        backedUp = false
+      } catch (cleanupError) {
+        logForDebugging(
+          `Failed to remove previous marketplace cache at ${backupPath}: ${errorMessage(cleanupError)}`,
+          { level: 'warn' },
+        )
+      }
+    } catch (error) {
+      try {
+        if (published) {
+          await fs.rm(assertMarketplaceCachePath(installLocation), {
+            recursive: true,
+            force: true,
+          })
+          published = false
+        }
+        if (backedUp) {
+          await fs.rename(
+            assertMarketplaceCachePath(backupPath),
+            assertMarketplaceCachePath(installLocation),
+          )
+          backedUp = false
+        }
+      } catch (rollbackError) {
+        throw new Error(
+          `Marketplace refresh failed and rollback could not restore '${name}': ${errorMessage(rollbackError)}`,
+          { cause: error },
+        )
+      }
+      throw error
+    } finally {
+      await releaseLock()
+    }
+  } finally {
+    if (stagingExists) {
+      try {
+        await fs.rm(assertMarketplaceCachePath(stagingPath), {
+          recursive: true,
+          force: true,
+        })
+      } catch (cleanupError) {
+        logForDebugging(
+          `Failed to remove marketplace refresh staging at ${stagingPath}: ${errorMessage(cleanupError)}`,
+          { level: 'warn' },
+        )
+      }
+    }
+    if (backedUp) {
+      logForDebugging(
+        `Previous marketplace cache remains at ${backupPath}`,
+        { level: 'warn' },
+      )
+    }
+  }
 }
 
 /**
  * Refresh a single marketplace cache
  *
- * Updates a specific marketplace from its source by doing an in-place update.
- * For git sources, runs git pull in the existing directory.
- * For URL sources, re-downloads to the existing file.
- * Clears the memoization cache and updates the lastUpdated timestamp.
+ * Refreshes remote sources in staging, validates the new manifest, then
+ * replaces the cache and metadata together. Local sources are validated in
+ * place without moving or rewriting user-owned files.
  *
  * @param name - The name of the marketplace to refresh
  * @param onProgress - Optional callback to report progress
@@ -2375,6 +2879,12 @@ export async function refreshMarketplace(
       `Marketplace '${name}' not found. Available marketplaces: ${Object.keys(config).join(', ')}`,
     )
   }
+
+  const sourceValidationError = validateOfficialNameSource(name, entry.source)
+  if (sourceValidationError) {
+    throw new Error(sourceValidationError)
+  }
+  assertMarketplaceSourceAllowed(entry.source)
 
   // Clear the memoization cache for this specific marketplace
   getMarketplace.cache?.delete?.(name)
@@ -2412,9 +2922,10 @@ export async function refreshMarketplace(
     // cwd (git walks up to the user's .git) and fs.rm it on pull failure.
     // Refuse instead of auto-fixing so the user knows their state is corrupted.
     if (!isLocalMarketplaceSource(source)) {
-      const cacheDir = resolve(getMarketplacesCacheDir())
-      const resolvedLoc = resolve(installLocation)
-      if (resolvedLoc !== cacheDir && !resolvedLoc.startsWith(cacheDir + sep)) {
+      try {
+        assertMarketplaceCachePath(installLocation)
+      } catch {
+        const cacheDir = resolve(getMarketplacesCacheDir())
         throw new Error(
           `Marketplace '${name}' has a corrupted installLocation ` +
             `(${installLocation}) — expected a path inside ${cacheDir}. ` +
@@ -2430,11 +2941,15 @@ export async function refreshMarketplace(
     // no data migration is needed — existing known_marketplaces.json entries
     // still say source:'github', which is true (GCS is a mirror).
     if (name === OFFICIAL_MARKETPLACE_NAME) {
+      assertMarketplaceSourceAllowed(source)
       const sha = await fetchOfficialMarketplaceFromGcs(
         installLocation,
         getMarketplacesCacheDir(),
+        () => assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE),
       )
       if (sha !== null) {
+        assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE)
+        assertMarketplaceSourceAllowed(source)
         config[name] = { ...entry, lastUpdated: new Date().toISOString() }
         await saveKnownMarketplacesConfig(config)
         return
@@ -2457,112 +2972,102 @@ export async function refreshMarketplace(
           'Official marketplace GCS fetch failed and git fallback is disabled',
         )
       }
+      assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE)
       logForDebugging('Official marketplace GCS failed; falling back to git', {
         level: 'warn',
       })
       // ...falls through to source.source === 'github' branch below
     }
 
+    let configCommitted = false
+
     // Update based on source type
     if (source.source === 'github' || source.source === 'git') {
-      // Git sources: do in-place git pull
+      // Refresh a copy of the existing repository so pull and fallback clone
+      // never mutate the trusted installLocation before manifest validation.
+      let primaryUrl: string
+      let fallbackUrl: string | undefined
       if (source.source === 'github') {
-        // Same SSH/HTTPS fallback as loadAndCacheMarketplace: if the pull
-        // succeeds the remote URL in .git/config is used, but a re-clone
-        // needs a URL — pick the right protocol up-front and fall back.
         const sshUrl = `git@github.com:${source.repo}.git`
         const httpsUrl = `https://github.com/${source.repo}.git`
 
         if (isEnvTruthy(process.env.CLAUDE_CODE_REMOTE)) {
-          // CCR: always HTTPS (no SSH keys available)
-          await cacheMarketplaceFromGit(
-            httpsUrl,
-            installLocation,
-            source.ref,
-            source.sparsePaths,
-            onProgress,
-            options,
-          )
+          primaryUrl = httpsUrl
         } else {
           const sshConfigured = await isGitHubSshLikelyConfigured()
-          const primaryUrl = sshConfigured ? sshUrl : httpsUrl
-          const fallbackUrl = sshConfigured ? httpsUrl : sshUrl
-
-          try {
-            await cacheMarketplaceFromGit(
-              primaryUrl,
-              installLocation,
-              source.ref,
-              source.sparsePaths,
-              onProgress,
-              options,
-            )
-          } catch {
-            logForDebugging(
-              `Marketplace refresh failed with ${sshConfigured ? 'SSH' : 'HTTPS'} for ${source.repo}, falling back to ${sshConfigured ? 'HTTPS' : 'SSH'}`,
-              { level: 'info' },
-            )
-            await cacheMarketplaceFromGit(
-              fallbackUrl,
-              installLocation,
-              source.ref,
-              source.sparsePaths,
-              onProgress,
-              options,
-            )
-          }
+          primaryUrl = sshConfigured ? sshUrl : httpsUrl
+          fallbackUrl = sshConfigured ? httpsUrl : sshUrl
         }
       } else {
-        // Explicit git URL: use as-is (no fallback available)
-        await cacheMarketplaceFromGit(
-          source.url,
-          installLocation,
-          source.ref,
-          source.sparsePaths,
-          onProgress,
-          options,
-        )
+        primaryUrl = source.url
       }
-      // Validate that marketplace.json still exists after update
-      // The repo may have been restructured or deprecated
-      try {
-        await readCachedMarketplace(installLocation)
-      } catch {
-        const sourceDisplay =
-          source.source === 'github'
-            ? source.repo
-            : redactUrlCredentials(source.url)
-        const reason =
-          name === 'claude-code-plugins'
-            ? `We've deprecated "claude-code-plugins" in favor of "claude-plugins-official".`
-            : `This marketplace may have been deprecated or moved to a new location.`
-        throw new Error(
-          `The marketplace.json file is no longer present in this repository.\n\n` +
-            `${reason}\n` +
-            `Source: ${sourceDisplay}\n\n` +
-            `You can remove this marketplace with: claude plugin marketplace remove "${name}"`,
-        )
-      }
-    } else if (source.source === 'url') {
-      // URL sources: re-download to existing file
-      await cacheMarketplaceFromUrl(
-        source.url,
-        installLocation,
-        source.headers,
+      await refreshGitMarketplaceSafely(
+        name,
+        entry,
+        source,
+        primaryUrl,
+        fallbackUrl,
         onProgress,
+        options,
+      )
+      logForDebugging(`Successfully refreshed marketplace: ${name}`)
+      return
+    } else if (source.source === 'url') {
+      await loadAndCacheMarketplace(
+        source,
+        onProgress,
+        async (currentConfig, marketplace, cachePath) => {
+          const currentEntry = currentConfig[name]
+          if (
+            marketplace.name !== name ||
+            !currentEntry ||
+            !isEqual(currentEntry.source, source) ||
+            resolve(currentEntry.installLocation) !== resolve(installLocation)
+          ) {
+            throw new Error(
+              `Marketplace '${name}' changed identity or source while refresh was in progress`,
+            )
+          }
+          assertMarketplaceSourceAllowed(source)
+          currentConfig[name] = {
+            ...currentEntry,
+            installLocation: cachePath,
+            lastUpdated: new Date().toISOString(),
+          }
+          await saveKnownMarketplacesConfig(currentConfig)
+          configCommitted = true
+          if (resolve(installLocation) !== resolve(cachePath)) {
+            try {
+              await getFsImplementation().rm(
+                assertMarketplaceCachePath(installLocation),
+                { recursive: true, force: true },
+              )
+            } catch (cleanupError) {
+              logForDebugging(
+                `Failed to remove previous marketplace cache at ${installLocation}: ${errorMessage(cleanupError)}`,
+                { level: 'warn' },
+              )
+            }
+          }
+        },
+        name,
+        installLocation,
       )
     } else if (isLocalMarketplaceSource(source)) {
       // Local sources: no remote to update from, but validate the file still exists and is valid
       safeCallProgress(onProgress, 'Validating local marketplace')
       // Read and validate to ensure the marketplace file is still valid
-      await readCachedMarketplace(installLocation)
+      await readCachedMarketplace(installLocation, name, source)
     } else {
       throw new Error(`Unsupported marketplace source type for refresh`)
     }
 
     // Update lastUpdated timestamp
-    config[name]!.lastUpdated = new Date().toISOString()
-    await saveKnownMarketplacesConfig(config)
+    assertMarketplaceSourceAllowed(source)
+    if (!configCommitted) {
+      config[name]!.lastUpdated = new Date().toISOString()
+      await saveKnownMarketplacesConfig(config)
+    }
 
     logForDebugging(`Successfully refreshed marketplace: ${name}`)
   } catch (error) {

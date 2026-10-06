@@ -106,6 +106,118 @@ export function isBlockedOfficialName(name: string): boolean {
  */
 export const OFFICIAL_GITHUB_ORG = 'anthropics'
 
+export function isValidGitHubRepositoryPath(value: string): boolean {
+  const match = value.match(
+    /^([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9_.-]+)(?![\s\S])/,
+  )
+  return Boolean(match?.[2] && match[2] !== '.' && match[2] !== '..')
+}
+
+function isOfficialRepositoryPath(path: string): boolean {
+  const match = path.match(/^([^/]+)\/([^/]+)$/)
+  if (!match?.[1] || !match[2]) {
+    return false
+  }
+  const [, organization, repository] = match
+  return (
+    organization.toLowerCase() === OFFICIAL_GITHUB_ORG &&
+    /^[a-zA-Z0-9_.-]+$/.test(repository) &&
+    repository !== '.' &&
+    repository !== '..'
+  )
+}
+
+function isOfficialUrlRepositoryPath(path: string): boolean {
+  if (!path.startsWith('/')) {
+    return false
+  }
+
+  const components = path.slice(1).replace(/\/$/, '').split('/')
+  if (components.length !== 2 || !components[0] || !components[1]) {
+    return false
+  }
+
+  try {
+    const organization = decodeURIComponent(components[0])
+    const repository = decodeURIComponent(
+      components[1].replace(/\.git$/, ''),
+    )
+    return (
+      organization.toLowerCase() === OFFICIAL_GITHUB_ORG &&
+      /^[A-Za-z0-9_.-]+$/.test(repository) &&
+      repository !== '.' &&
+      repository !== '..'
+    )
+  } catch {
+    return false
+  }
+}
+
+function isOfficialHttpsGitUrl(value: string): boolean {
+  const match = value.match(/^https:\/\/([^/?#]+)(\/[^?#]*)$/i)
+  if (!match?.[1] || !match[2]) {
+    return false
+  }
+
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+
+  const authority = match[1].toLowerCase()
+  const path = match[2]
+  return (
+    url.protocol === 'https:' &&
+    ['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) &&
+    /^(?:github\.com|www\.github\.com)(?::[0-9]+)?$/.test(authority) &&
+    !url.username &&
+    !url.password &&
+    !url.port &&
+    url.pathname === path &&
+    isOfficialUrlRepositoryPath(path)
+  )
+}
+
+function isOfficialSshGitUrl(value: string): boolean {
+  const match = value.match(
+    /^[a-zA-Z0-9._-]+@github\.com:(\/?[^?#]+)$/i,
+  )
+  return Boolean(
+    match?.[1] &&
+      isOfficialRepositoryPath(match[1].replace(/\.git$/, '')),
+  )
+}
+
+function isOfficialSshUri(value: string): boolean {
+  const match = value.match(
+    /^ssh:\/\/([A-Za-z0-9._-]+)@([^/?#]+)(\/[^?#]+)$/i,
+  )
+  if (!match?.[1] || !match[2] || !match[3]) {
+    return false
+  }
+
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+
+  const authority = match[2].toLowerCase()
+  return (
+    url.protocol === 'ssh:' &&
+    url.hostname.toLowerCase() === 'github.com' &&
+    /^github\.com(?::[0-9]+)?$/.test(authority) &&
+    (url.port === '' || url.port === '22') &&
+    !url.password &&
+    url.username === match[1] &&
+    url.pathname === match[3] &&
+    isOfficialUrlRepositoryPath(match[3])
+  )
+}
+
 /**
  * Validate that a marketplace with a reserved name comes from the official source.
  *
@@ -131,7 +243,7 @@ export function validateOfficialNameSource(
   if (source.source === 'github') {
     // Verify the repo is from the official org
     const repo = source.repo || ''
-    if (!repo.toLowerCase().startsWith(`${OFFICIAL_GITHUB_ORG}/`)) {
+    if (!isOfficialRepositoryPath(repo)) {
       return `The name '${name}' is reserved for official Anthropic marketplaces. Only repositories from 'github.com/${OFFICIAL_GITHUB_ORG}/' can use this name.`
     }
     return null // Valid: reserved name from official GitHub source
@@ -139,13 +251,11 @@ export function validateOfficialNameSource(
 
   // Check for git URL source type
   if (source.source === 'git' && source.url) {
-    const url = source.url.toLowerCase()
-    // Check for HTTPS URL format: https://github.com/anthropics/...
-    // or SSH format: git@github.com:anthropics/...
-    const isHttpsAnthropics = url.includes('github.com/anthropics/')
-    const isSshAnthropics = url.includes('git@github.com:anthropics/')
-
-    if (isHttpsAnthropics || isSshAnthropics) {
+    if (
+      isOfficialHttpsGitUrl(source.url) ||
+      isOfficialSshGitUrl(source.url) ||
+      isOfficialSshUri(source.url)
+    ) {
       return null // Valid: reserved name from official git URL
     }
 
@@ -208,10 +318,9 @@ const RelativeCommandPath = lazySchema(() =>
  * MarketplaceSourceSchema (validates inline names in settings.json).
  *
  * The two must stay in sync: loadAndCacheMarketplace's case 'settings' writes
- * to join(cacheDir, source.name) BEFORE the post-write PluginMarketplaceSchema
- * validation runs. Any name that passes the settings arm but fails
- * PluginMarketplaceSchema leaves orphaned files in the cache (cleanupNeeded=false).
- * A single shared schema makes drift impossible.
+ * a synthetic manifest into staging, then validates it with
+ * PluginMarketplaceSchema before publication. A single shared schema makes
+ * drift between the settings input and published manifest less likely.
  */
 const MarketplaceNameSchema = lazySchema(() =>
   z
@@ -915,7 +1024,12 @@ export const MarketplaceSourceSchema = lazySchema(() =>
     }),
     z.object({
       source: z.literal('github'),
-      repo: z.string().describe('GitHub repository in owner/repo format'),
+      repo: z
+        .string()
+        .refine(isValidGitHubRepositoryPath, {
+          message: 'GitHub repository must be a valid owner/repository path',
+        })
+        .describe('GitHub repository in owner/repo format'),
       ref: z
         .string()
         .optional()
@@ -1019,15 +1133,13 @@ export const MarketplaceSourceSchema = lazySchema(() =>
               message:
                 'Reserved official marketplace names cannot be used with settings sources. ' +
                 'validateOfficialNameSource only accepts github/git sources from anthropics/* ' +
-                'for these names; a settings source would be rejected after ' +
-                'loadAndCacheMarketplace has already written to disk with cleanupNeeded=false.',
+                'for these names; settings sources fail provenance validation before publication.',
             },
           )
           .describe(
             'Marketplace name. Must match the extraKnownMarketplaces key (enforced); ' +
               'the synthetic manifest is written under this name. Same validation ' +
-              'as PluginMarketplaceSchema plus reserved-name rejection \u2014 ' +
-              'validateOfficialNameSource runs after the disk write, too late to clean up.',
+              'as PluginMarketplaceSchema plus reserved-name rejection.',
           ),
         plugins: z
           .array(SettingsMarketplacePluginSchema())

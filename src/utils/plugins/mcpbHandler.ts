@@ -3,9 +3,19 @@ import type {
   McpbUserConfigurationOption,
 } from '@anthropic-ai/mcpb'
 import axios from 'axios'
-import { createHash } from 'crypto'
-import { chmod, writeFile } from 'fs/promises'
-import { dirname, join } from 'path'
+import { createHash, randomUUID } from 'crypto'
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'fs/promises'
+import { dirname, isAbsolute, join, relative, sep } from 'path'
 import type { McpServerConfig } from '../../services/mcp/types.js'
 import { logForDebugging } from '../debug.js'
 import { parseAndValidateManifestFromBytes } from '../dxt/helpers.js'
@@ -19,6 +29,7 @@ import {
   updateSettingsForSource,
 } from '../settings/settings.js'
 import { jsonParse, jsonStringify } from '../slowOperations.js'
+import { getClaudeConfigHomeDir } from '../envUtils.js'
 import { getSystemDirectories } from '../systemDirectories.js'
 import { classifyFetchError, logPluginFetch } from './fetchTelemetry.js'
 /**
@@ -97,8 +108,45 @@ function generateContentHash(data: Uint8Array): string {
 /**
  * Get cache directory for MCPB files
  */
-function getMcpbCacheDir(pluginPath: string): string {
-  return join(pluginPath, '.mcpb-cache')
+function hashKey(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+async function ensurePrivateCacheDirectory(path: string): Promise<string> {
+  let created = false
+  try {
+    await mkdir(path, { mode: 0o700 })
+    created = true
+  } catch (error) {
+    if (getErrnoCode(error) !== 'EEXIST') throw error
+  }
+  const details = await lstat(path)
+  if (!details.isDirectory() || details.isSymbolicLink()) {
+    throw new Error(`Unsafe MCPB cache directory: ${path}`)
+  }
+  if (created && process.platform !== 'win32') {
+    await chmod(path, 0o700)
+  } else if (process.platform !== 'win32' && (details.mode & 0o077) !== 0) {
+    throw new Error(`MCPB cache directory is not private: ${path}`)
+  }
+  return realpath(path)
+}
+
+async function getMcpbCacheDir(
+  pluginPath: string,
+  source: string,
+): Promise<string> {
+  const configuredConfigHome = getClaudeConfigHomeDir()
+  await mkdir(configuredConfigHome, { recursive: true })
+  const canonicalConfigHome = await realpath(configuredConfigHome)
+  const root = await ensurePrivateCacheDirectory(
+    join(canonicalConfigHome, 'mcpb-cache'),
+  )
+  const canonicalPluginPath = await realpath(pluginPath)
+  const pluginKey = hashKey(canonicalPluginPath)
+  const sourceKey = hashKey(source)
+  const pluginCache = await ensurePrivateCacheDirectory(join(root, pluginKey))
+  return ensurePrivateCacheDirectory(join(pluginCache, sourceKey))
 }
 
 /**
@@ -472,8 +520,22 @@ async function saveCacheMetadata(
 ): Promise<void> {
   const metadataPath = getMetadataPath(cacheDir, source)
 
-  await getFsImplementation().mkdir(cacheDir)
-  await writeFile(metadataPath, jsonStringify(metadata, null, 2), 'utf-8')
+  const temporaryPath = join(cacheDir, `.metadata-${randomUUID()}.tmp`)
+  let temporaryFileCreated = false
+  try {
+    const file = await open(temporaryPath, 'wx', 0o600)
+    temporaryFileCreated = true
+    try {
+      await file.writeFile(jsonStringify(metadata, null, 2), 'utf-8')
+    } finally {
+      await file.close()
+    }
+    await rename(temporaryPath, metadataPath)
+  } finally {
+    if (temporaryFileCreated) {
+      await rm(temporaryPath, { force: true })
+    }
+  }
 }
 
 /**
@@ -481,7 +543,6 @@ async function saveCacheMetadata(
  */
 async function downloadMcpb(
   url: string,
-  destPath: string,
   onProgress?: ProgressCallback,
 ): Promise<Uint8Array> {
   logForDebugging(`Downloading MCPB from ${url}`)
@@ -513,10 +574,7 @@ async function downloadMcpb(
     logPluginFetch('mcpb', url, 'success', performance.now() - started)
     fetchTelemetryFired = true
 
-    // Save to disk (binary data)
-    await writeFile(destPath, Buffer.from(data))
-
-    logForDebugging(`Downloaded ${data.length} bytes to ${destPath}`)
+    logForDebugging(`Downloaded ${data.length} bytes`)
     if (onProgress) {
       onProgress('Download complete')
     }
@@ -557,13 +615,31 @@ async function extractMcpbContents(
     onProgress('Extracting files...')
   }
 
-  // Create extraction directory
-  await getFsImplementation().mkdir(extractPath)
-
   // Write all files. Filter directory entries from the count so progress
   // messages use the same denominator as filesWritten (which skips them).
   let filesWritten = 0
   const entries = Object.entries(unzipped).filter(([k]) => !k.endsWith('/'))
+  for (const [filePath] of entries) {
+    if (
+      !filePath ||
+      filePath === '.' ||
+      filePath.includes('\\') ||
+      isAbsolute(filePath) ||
+      /^[a-zA-Z]:/.test(filePath) ||
+      filePath.split('/').some(part => part === '..' || part === '')
+    ) {
+      throw new Error(`Unsafe file path in MCPB archive: "${filePath}"`)
+    }
+    const destination = join(extractPath, filePath)
+    const pathFromRoot = relative(extractPath, destination)
+    if (
+      pathFromRoot === '..' ||
+      pathFromRoot.startsWith(`..${sep}`) ||
+      isAbsolute(pathFromRoot)
+    ) {
+      throw new Error(`Unsafe file path in MCPB archive: "${filePath}"`)
+    }
+  }
   const totalFiles = entries.length
 
   for (const [filePath, fileData] of entries) {
@@ -577,7 +653,7 @@ async function extractMcpbContents(
 
     // Ensure directory exists (recursive handles already-existing)
     if (dir !== extractPath) {
-      await getFsImplementation().mkdir(dir)
+      await mkdir(dir, { recursive: true, mode: 0o700 })
     }
 
     // Determine if text or binary
@@ -592,9 +668,13 @@ async function extractMcpbContents(
 
     if (isTextFile) {
       const content = new TextDecoder().decode(fileData)
-      await writeFile(fullPath, content, 'utf-8')
+      await writeFile(fullPath, content, {
+        encoding: 'utf-8',
+        mode: 0o600,
+        flag: 'wx',
+      })
     } else {
-      await writeFile(fullPath, Buffer.from(fileData))
+      await writeFile(fullPath, Buffer.from(fileData), { mode: 0o600, flag: 'wx' })
     }
 
     const mode = modes[filePath]
@@ -624,7 +704,7 @@ export async function checkMcpbChanged(
   pluginPath: string,
 ): Promise<boolean> {
   const fs = getFsImplementation()
-  const cacheDir = getMcpbCacheDir(pluginPath)
+  const cacheDir = await getMcpbCacheDir(pluginPath, source)
   const metadata = await loadCacheMetadata(cacheDir, source)
 
   if (!metadata) {
@@ -632,9 +712,27 @@ export async function checkMcpbChanged(
     return true
   }
 
+  if (
+    metadata.source !== source ||
+    typeof metadata.contentHash !== 'string' ||
+    !/^[a-f0-9]{16}$/.test(metadata.contentHash) ||
+    typeof metadata.extractedPath !== 'string'
+  ) {
+    return true
+  }
+  const expectedExtractionPath = join(cacheDir, metadata.contentHash)
+  if (
+    metadata.extractedPath !== expectedExtractionPath
+  ) {
+    return true
+  }
+
   // Check if extraction directory still exists
   try {
-    await fs.stat(metadata.extractedPath)
+    const extractionInfo = await lstat(expectedExtractionPath)
+    if (!extractionInfo.isDirectory() || extractionInfo.isSymbolicLink()) {
+      return true
+    }
   } catch (error) {
     const code = getErrnoCode(error)
     if (code === 'ENOENT') {
@@ -704,8 +802,7 @@ export async function loadMcpbFile(
   forceConfigDialog?: boolean,
 ): Promise<McpbLoadResult | McpbNeedsConfigResult> {
   const fs = getFsImplementation()
-  const cacheDir = getMcpbCacheDir(pluginPath)
-  await fs.mkdir(cacheDir)
+  const cacheDir = await getMcpbCacheDir(pluginPath, source)
 
   logForDebugging(`Loading MCPB from source: ${source}`)
 
@@ -717,7 +814,8 @@ export async function loadMcpbFile(
     )
 
     // Load manifest from cache
-    const manifestPath = join(metadata.extractedPath, 'manifest.json')
+    const extractedPath = join(cacheDir, metadata.contentHash)
+    const manifestPath = join(extractedPath, 'manifest.json')
     let manifestContent: string
     try {
       manifestContent = await fs.readFile(manifestPath, { encoding: 'utf-8' })
@@ -750,7 +848,7 @@ export async function loadMcpbFile(
         return {
           status: 'needs-config',
           manifest,
-          extractedPath: metadata.extractedPath,
+          extractedPath,
           contentHash: metadata.contentHash,
           configSchema: manifest.user_config,
           existingConfig: savedConfig || {},
@@ -771,41 +869,34 @@ export async function loadMcpbFile(
       // Generate MCP config WITH user config
       const mcpConfig = await generateMcpConfig(
         manifest,
-        metadata.extractedPath,
+        extractedPath,
         userConfig,
       )
 
       return {
         manifest,
         mcpConfig,
-        extractedPath: metadata.extractedPath,
+        extractedPath,
         contentHash: metadata.contentHash,
       }
     }
 
     // No user_config required - generate config without it
-    const mcpConfig = await generateMcpConfig(manifest, metadata.extractedPath)
+    const mcpConfig = await generateMcpConfig(manifest, extractedPath)
 
     return {
       manifest,
       mcpConfig,
-      extractedPath: metadata.extractedPath,
+      extractedPath,
       contentHash: metadata.contentHash,
     }
   }
 
   // Not cached or changed - need to download/load and extract
   let mcpbData: Uint8Array
-  let mcpbFilePath: string
 
   if (isUrl(source)) {
-    // Download from URL
-    const sourceHash = createHash('md5')
-      .update(source)
-      .digest('hex')
-      .substring(0, 8)
-    mcpbFilePath = join(cacheDir, `${sourceHash}.mcpb`)
-    mcpbData = await downloadMcpb(source, mcpbFilePath, onProgress)
+    mcpbData = await downloadMcpb(source, onProgress)
   } else {
     // Load from local path
     const localPath = join(pluginPath, source)
@@ -816,7 +907,6 @@ export async function loadMcpbFile(
 
     try {
       mcpbData = await fs.readFileBytes(localPath)
-      mcpbFilePath = localPath
     } catch (error) {
       if (isENOENT(error)) {
         const err = new Error(`MCPB file not found: ${localPath}`)
@@ -866,7 +956,37 @@ export async function loadMcpbFile(
 
   // Extract to cache directory
   const extractPath = join(cacheDir, contentHash)
-  await extractMcpbContents(unzipped, extractPath, modes, onProgress)
+  let extractionToPublish: string | undefined
+  try {
+    const existing = await lstat(extractPath).catch(error => {
+      if (getErrnoCode(error) === 'ENOENT') return null
+      throw error
+    })
+    if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) {
+      throw new Error(`Unsafe MCPB extraction cache path: ${extractPath}`)
+    }
+    if (!existing) {
+      extractionToPublish = await mkdtemp(join(cacheDir, '.extract-'))
+      await chmod(extractionToPublish, 0o700).catch(() => {})
+      await extractMcpbContents(
+        unzipped,
+        extractionToPublish,
+        modes,
+        onProgress,
+      )
+      try {
+        await rename(extractionToPublish, extractPath)
+        extractionToPublish = undefined
+      } catch (error) {
+        const winner = await lstat(extractPath).catch(() => null)
+        if (!winner?.isDirectory() || winner.isSymbolicLink()) throw error
+      }
+    }
+  } finally {
+    if (extractionToPublish) {
+      await rm(extractionToPublish, { recursive: true, force: true })
+    }
+  }
 
   // Check for user_config requirement
   if (manifest.user_config && Object.keys(manifest.user_config).length > 0) {

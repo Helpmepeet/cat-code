@@ -13,8 +13,29 @@ import { jsonParse } from '../slowOperations.js'
 export async function validateManifest(
   manifestJson: unknown,
 ): Promise<McpbManifest> {
-  const { McpbManifestSchema } = await import('@anthropic-ai/mcpb')
-  const parseResult = McpbManifestSchema.safeParse(manifestJson)
+  const { MANIFEST_SCHEMAS } = await import('@anthropic-ai/mcpb')
+  const manifestData =
+    typeof manifestJson === 'object' &&
+    manifestJson !== null &&
+    !Array.isArray(manifestJson)
+      ? (manifestJson as Record<string, unknown>)
+      : null
+  const supportedVersions = Object.keys(MANIFEST_SCHEMAS)
+  const manifestVersion =
+    typeof manifestData?.manifest_version === 'string' &&
+    supportedVersions.includes(manifestData.manifest_version)
+      ? manifestData.manifest_version
+      : typeof manifestData?.dxt_version === 'string' &&
+          supportedVersions.includes(manifestData.dxt_version)
+        ? manifestData.dxt_version
+        : null
+  if (!manifestVersion) {
+    throw new Error('Invalid manifest: missing or unsupported manifest version')
+  }
+
+  const schema =
+    MANIFEST_SCHEMAS[manifestVersion as keyof typeof MANIFEST_SCHEMAS]
+  const parseResult = schema.safeParse(manifestJson)
 
   if (!parseResult.success) {
     const errors = parseResult.error.flatten()

@@ -26,6 +26,7 @@ import {
   loadKnownMarketplacesConfig,
   refreshMarketplace,
 } from './marketplaceManager.js'
+import { isSourceAllowedByPolicy } from './marketplaceHelpers.js'
 import { parsePluginIdentifier } from './pluginIdentifier.js'
 import { isMarketplaceAutoUpdate, type PluginScope } from './schemas.js'
 
@@ -87,6 +88,9 @@ async function getAutoUpdateEnabledMarketplaces(): Promise<Set<string>> {
   const enabled = new Set<string>()
 
   for (const [name, entry] of Object.entries(config)) {
+    if (!isSourceAllowedByPolicy(entry.source)) {
+      continue
+    }
     // Settings-declared autoUpdate takes precedence over JSON state
     const declaredAutoUpdate = declared[name]?.autoUpdate
     const autoUpdate =
@@ -224,8 +228,8 @@ async function updatePlugins(
  * This function runs silently without blocking user interaction.
  * Called from main.tsx during startup as a background job.
  */
-export function autoUpdateMarketplacesAndPluginsInBackground(): void {
-  void (async () => {
+export function autoUpdateMarketplacesAndPluginsInBackground(): Promise<void> {
+  return (async () => {
     if (shouldSkipPluginAutoupdate()) {
       logForDebugging('Plugin autoupdate: skipped (auto-updater disabled)')
       return
@@ -266,7 +270,14 @@ export function autoUpdateMarketplacesAndPluginsInBackground(): void {
       }
 
       logForDebugging('Plugin autoupdate: checking installed plugins')
-      const updatedPlugins = await updatePlugins(autoUpdateEnabledMarketplaces)
+      const currentConfig = await loadKnownMarketplacesConfig()
+      const currentlyAllowedMarketplaces = new Set(
+        [...autoUpdateEnabledMarketplaces].filter(name => {
+          const entry = currentConfig[name]
+          return entry !== undefined && isSourceAllowedByPolicy(entry.source)
+        }),
+      )
+      const updatedPlugins = await updatePlugins(currentlyAllowedMarketplaces)
 
       if (updatedPlugins.length > 0) {
         if (pluginUpdateCallback) {
