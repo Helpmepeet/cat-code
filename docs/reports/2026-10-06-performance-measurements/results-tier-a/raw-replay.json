@@ -1,0 +1,459 @@
+{
+  "probe": "raw-replay",
+  "runtime": "node v24.3.0",
+  "cases": [
+    {
+      "name": "fresh-replay/300-chars/500",
+      "params": {
+        "count": 500,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        2.007,
+        1.905,
+        1.865,
+        1.872,
+        1.862
+      ],
+      "medianMs": 1.872,
+      "minMs": 1.862,
+      "maxMs": 2.007,
+      "detail": {
+        "retainedMessages": 500
+      }
+    },
+    {
+      "name": "duplicate-replay/300-chars/500",
+      "params": {
+        "count": 500,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        1.033,
+        1.031,
+        1.058,
+        1.027,
+        1.027
+      ],
+      "medianMs": 1.031,
+      "minMs": 1.027,
+      "maxMs": 1.058
+    },
+    {
+      "name": "fresh-replay/300-chars/1000",
+      "params": {
+        "count": 1000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        6.332,
+        6.126,
+        6.136,
+        6.161,
+        6.081
+      ],
+      "medianMs": 6.136,
+      "minMs": 6.081,
+      "maxMs": 6.332,
+      "detail": {
+        "retainedMessages": 1000
+      }
+    },
+    {
+      "name": "duplicate-replay/300-chars/1000",
+      "params": {
+        "count": 1000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        4.094,
+        4.101,
+        4.096,
+        4.105,
+        3.706
+      ],
+      "medianMs": 4.096,
+      "minMs": 3.706,
+      "maxMs": 4.105
+    },
+    {
+      "name": "fresh-replay/300-chars/2000",
+      "params": {
+        "count": 2000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        18.563,
+        18.157,
+        17.231,
+        16.511,
+        16.508
+      ],
+      "medianMs": 17.231,
+      "minMs": 16.508,
+      "maxMs": 18.563,
+      "detail": {
+        "retainedMessages": 2000
+      }
+    },
+    {
+      "name": "duplicate-replay/300-chars/2000",
+      "params": {
+        "count": 2000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        11.498,
+        11.383,
+        11.388,
+        11.336,
+        11.408
+      ],
+      "medianMs": 11.388,
+      "minMs": 11.336,
+      "maxMs": 11.498
+    },
+    {
+      "name": "fresh-replay/300-chars/3000",
+      "params": {
+        "count": 3000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        35.334,
+        35.221,
+        35.205,
+        35.184,
+        35.191
+      ],
+      "medianMs": 35.205,
+      "minMs": 35.184,
+      "maxMs": 35.334,
+      "detail": {
+        "retainedMessages": 3000
+      }
+    },
+    {
+      "name": "duplicate-replay/300-chars/3000",
+      "params": {
+        "count": 3000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        24.421,
+        24.433,
+        24.481,
+        24.587,
+        24.433
+      ],
+      "medianMs": 24.433,
+      "minMs": 24.421,
+      "maxMs": 24.587
+    },
+    {
+      "name": "fresh-replay/300-chars/4000",
+      "params": {
+        "count": 4000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        61.455,
+        59.593,
+        59.398,
+        59.24,
+        59.324
+      ],
+      "medianMs": 59.398,
+      "minMs": 59.24,
+      "maxMs": 61.455,
+      "detail": {
+        "retainedMessages": 4000
+      }
+    },
+    {
+      "name": "duplicate-replay/300-chars/4000",
+      "params": {
+        "count": 4000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        42.638,
+        42.872,
+        42.722,
+        42.644,
+        42.588
+      ],
+      "medianMs": 42.644,
+      "minMs": 42.588,
+      "maxMs": 42.872
+    },
+    {
+      "name": "fresh-replay/300-chars/8000",
+      "params": {
+        "count": 8000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        260.38,
+        259.451,
+        258.424,
+        256.815,
+        256.153
+      ],
+      "medianMs": 258.424,
+      "minMs": 256.153,
+      "maxMs": 260.38,
+      "detail": {
+        "retainedMessages": 8000
+      }
+    },
+    {
+      "name": "duplicate-replay/300-chars/8000",
+      "params": {
+        "count": 8000,
+        "textCharacters": 300
+      },
+      "samplesMs": [
+        212.304,
+        206.044,
+        206.247,
+        214.884,
+        209.771
+      ],
+      "medianMs": 209.771,
+      "minMs": 206.044,
+      "maxMs": 214.884
+    },
+    {
+      "name": "fresh-replay/1300-chars/500",
+      "params": {
+        "count": 500,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        2.24,
+        2.223,
+        2.23,
+        2.294,
+        2.247
+      ],
+      "medianMs": 2.24,
+      "minMs": 2.223,
+      "maxMs": 2.294,
+      "detail": {
+        "retainedMessages": 500
+      }
+    },
+    {
+      "name": "duplicate-replay/1300-chars/500",
+      "params": {
+        "count": 500,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        0.642,
+        0.643,
+        0.645,
+        0.63,
+        0.63
+      ],
+      "medianMs": 0.642,
+      "minMs": 0.63,
+      "maxMs": 0.645
+    },
+    {
+      "name": "fresh-replay/1300-chars/1000",
+      "params": {
+        "count": 1000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        6.401,
+        6.446,
+        6.559,
+        6.202,
+        6.268
+      ],
+      "medianMs": 6.401,
+      "minMs": 6.202,
+      "maxMs": 6.559,
+      "detail": {
+        "retainedMessages": 1000
+      }
+    },
+    {
+      "name": "duplicate-replay/1300-chars/1000",
+      "params": {
+        "count": 1000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        2.462,
+        2.536,
+        2.572,
+        2.494,
+        2.449
+      ],
+      "medianMs": 2.494,
+      "minMs": 2.449,
+      "maxMs": 2.572
+    },
+    {
+      "name": "fresh-replay/1300-chars/2000",
+      "params": {
+        "count": 2000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        22.003,
+        21.561,
+        21.394,
+        21.416,
+        21.621
+      ],
+      "medianMs": 21.561,
+      "minMs": 21.394,
+      "maxMs": 22.003,
+      "detail": {
+        "retainedMessages": 2000
+      }
+    },
+    {
+      "name": "duplicate-replay/1300-chars/2000",
+      "params": {
+        "count": 2000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        11.748,
+        11.774,
+        11.635,
+        11.751,
+        11.875
+      ],
+      "medianMs": 11.751,
+      "minMs": 11.635,
+      "maxMs": 11.875
+    },
+    {
+      "name": "fresh-replay/1300-chars/3000",
+      "params": {
+        "count": 3000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        46.156,
+        46.282,
+        46.144,
+        46.124,
+        46.079
+      ],
+      "medianMs": 46.144,
+      "minMs": 46.079,
+      "maxMs": 46.282,
+      "detail": {
+        "retainedMessages": 3000
+      }
+    },
+    {
+      "name": "duplicate-replay/1300-chars/3000",
+      "params": {
+        "count": 3000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        29.479,
+        29.558,
+        29.604,
+        29.744,
+        29.626
+      ],
+      "medianMs": 29.604,
+      "minMs": 29.479,
+      "maxMs": 29.744
+    },
+    {
+      "name": "fresh-replay/1300-chars/4000",
+      "params": {
+        "count": 4000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        78.652,
+        80.857,
+        80.844,
+        79.467,
+        80.432
+      ],
+      "medianMs": 80.432,
+      "minMs": 78.652,
+      "maxMs": 80.857,
+      "detail": {
+        "retainedMessages": 4000
+      }
+    },
+    {
+      "name": "duplicate-replay/1300-chars/4000",
+      "params": {
+        "count": 4000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        56.235,
+        55.641,
+        55.661,
+        80.064,
+        57.23
+      ],
+      "medianMs": 56.235,
+      "minMs": 55.641,
+      "maxMs": 80.064
+    },
+    {
+      "name": "fresh-replay/1300-chars/8000",
+      "params": {
+        "count": 8000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        369.095,
+        290.881,
+        280.999,
+        271.998,
+        282.073
+      ],
+      "medianMs": 282.073,
+      "minMs": 271.998,
+      "maxMs": 369.095,
+      "detail": {
+        "retainedMessages": 5484
+      }
+    },
+    {
+      "name": "duplicate-replay/1300-chars/8000",
+      "params": {
+        "count": 8000,
+        "textCharacters": 1300
+      },
+      "samplesMs": [
+        396.415,
+        418.28,
+        392.829,
+        392.831,
+        395.708
+      ],
+      "medianMs": 395.708,
+      "minMs": 392.829,
+      "maxMs": 418.28
+    }
+  ],
+  "notes": [
+    "Reducer work only; transcript projection, React commits and IPC are not included."
+  ],
+  "wallSeconds": 10.8,
+  "loadAverageAfter": [
+    6.54296875,
+    8.7548828125,
+    9.22509765625
+  ]
+}

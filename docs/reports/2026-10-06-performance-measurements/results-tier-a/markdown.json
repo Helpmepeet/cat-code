@@ -1,0 +1,470 @@
+{
+  "probe": "markdown",
+  "runtime": "node v24.3.0",
+  "cases": [
+    {
+      "name": "append-shape/word-append",
+      "params": {
+        "prefixCharacters": 33633,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        0.676,
+        0.681,
+        0.653,
+        0.636,
+        0.649
+      ],
+      "medianMs": 0.653,
+      "minMs": 0.636,
+      "maxMs": 0.681,
+      "detail": {
+        "reusedAppendsPerRep": [
+          24,
+          24,
+          24,
+          24,
+          24,
+          24
+        ]
+      }
+    },
+    {
+      "name": "append-shape/chunk-ending-in-space",
+      "params": {
+        "prefixCharacters": 33633,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        13.583,
+        13.4,
+        13.341,
+        13.157,
+        13.134
+      ],
+      "medianMs": 13.341,
+      "minMs": 13.134,
+      "maxMs": 13.583,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "append-shape/multi-sentence-paragraph",
+      "params": {
+        "prefixCharacters": 33633,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        12.982,
+        12.954,
+        12.792,
+        12.697,
+        13.03
+      ],
+      "medianMs": 12.954,
+      "minMs": 12.697,
+      "maxMs": 13.03,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "append-shape/soft-line-break",
+      "params": {
+        "prefixCharacters": 33633,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        13.404,
+        13.302,
+        13.807,
+        13.505,
+        13.584
+      ],
+      "medianMs": 13.505,
+      "minMs": 13.302,
+      "maxMs": 13.807,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "append-shape/thai-combining-marks",
+      "params": {
+        "prefixCharacters": 33633,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        13.624,
+        13.578,
+        13.517,
+        13.499,
+        13.716
+      ],
+      "medianMs": 13.578,
+      "minMs": 13.499,
+      "maxMs": 13.716,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "settled-code/15500",
+      "params": {
+        "codeCharacters": 15500,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        2.287,
+        2.273,
+        2.303,
+        2.261,
+        2.253
+      ],
+      "medianMs": 2.273,
+      "minMs": 2.253,
+      "maxMs": 2.303,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "settled-code/16500",
+      "params": {
+        "codeCharacters": 16500,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        5.964,
+        5.766,
+        5.784,
+        5.772,
+        5.72
+      ],
+      "medianMs": 5.772,
+      "minMs": 5.72,
+      "maxMs": 5.964,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "settled-code/32000",
+      "params": {
+        "codeCharacters": 32000,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        11.614,
+        11.447,
+        11.644,
+        11.505,
+        11.5
+      ],
+      "medianMs": 11.505,
+      "minMs": 11.447,
+      "maxMs": 11.644,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "settled-code/64000",
+      "params": {
+        "codeCharacters": 64000,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        24.046,
+        24.277,
+        24.41,
+        24.291,
+        24.224
+      ],
+      "medianMs": 24.277,
+      "minMs": 24.046,
+      "maxMs": 24.41,
+      "detail": {
+        "reusedAppendsPerRep": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "open-fence/16000",
+      "params": {
+        "prefixCharacters": 33633,
+        "openCodeCharacters": 16000,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        1.37,
+        1.329,
+        1.322,
+        1.327,
+        1.317
+      ],
+      "medianMs": 1.327,
+      "minMs": 1.317,
+      "maxMs": 1.37,
+      "detail": {
+        "reusedAppendsPerRep": [
+          24,
+          24,
+          24,
+          24,
+          24,
+          24
+        ]
+      }
+    },
+    {
+      "name": "open-fence/64000",
+      "params": {
+        "prefixCharacters": 33633,
+        "openCodeCharacters": 64000,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        3.276,
+        3.301,
+        3.282,
+        3.214,
+        3.275
+      ],
+      "medianMs": 3.276,
+      "minMs": 3.214,
+      "maxMs": 3.301,
+      "detail": {
+        "reusedAppendsPerRep": [
+          24,
+          24,
+          24,
+          24,
+          24,
+          24
+        ]
+      }
+    },
+    {
+      "name": "open-fence/128000",
+      "params": {
+        "prefixCharacters": 33633,
+        "openCodeCharacters": 128000,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        5.77,
+        5.733,
+        5.817,
+        6.138,
+        6.029
+      ],
+      "medianMs": 5.817,
+      "minMs": 5.733,
+      "maxMs": 6.138,
+      "detail": {
+        "reusedAppendsPerRep": [
+          24,
+          24,
+          24,
+          24,
+          24,
+          24
+        ]
+      }
+    },
+    {
+      "name": "open-fence/256000",
+      "params": {
+        "prefixCharacters": 33633,
+        "openCodeCharacters": 256000,
+        "appendsPerRep": 24,
+        "scoredValue": "median ms per append"
+      },
+      "samplesMs": [
+        11.035,
+        11.031,
+        11.025,
+        11.067,
+        11.142
+      ],
+      "medianMs": 11.035,
+      "minMs": 11.025,
+      "maxMs": 11.142,
+      "detail": {
+        "reusedAppendsPerRep": [
+          24,
+          24,
+          24,
+          24,
+          24,
+          24
+        ]
+      }
+    },
+    {
+      "name": "stream-reply/1-word-pieces",
+      "params": {
+        "replyCharacters": 12000,
+        "updates": 1646,
+        "scoredValue": "total ms for the whole reply"
+      },
+      "samplesMs": [
+        1200.586,
+        1225.433,
+        1196.986
+      ],
+      "medianMs": 1200.586,
+      "minMs": 1196.986,
+      "maxMs": 1225.433,
+      "detail": {
+        "updatesByPath": {
+          "plain-append": 380,
+          "settled-body-reused": 459,
+          "full-transform": 807
+        },
+        "perUpdateP50Ms": 0.203,
+        "perUpdateP95Ms": 2.448,
+        "perUpdateMaxMs": 3.778,
+        "updatesOver16_7Ms": 0
+      }
+    },
+    {
+      "name": "stream-reply/4-word-pieces",
+      "params": {
+        "replyCharacters": 12000,
+        "updates": 412,
+        "scoredValue": "total ms for the whole reply"
+      },
+      "samplesMs": [
+        334.371,
+        332.348,
+        334.264
+      ],
+      "medianMs": 334.264,
+      "minMs": 332.348,
+      "maxMs": 334.371,
+      "detail": {
+        "updatesByPath": {
+          "plain-append": 78,
+          "settled-body-reused": 111,
+          "full-transform": 223
+        },
+        "perUpdateP50Ms": 0.225,
+        "perUpdateP95Ms": 2.594,
+        "perUpdateMaxMs": 3.762,
+        "updatesOver16_7Ms": 0
+      }
+    },
+    {
+      "name": "tab-return/cold-plan",
+      "params": {
+        "replyCharacters": 28822
+      },
+      "samplesMs": [
+        6.463,
+        6.717,
+        6.367,
+        6.4,
+        6.982
+      ],
+      "medianMs": 6.463,
+      "minMs": 6.367,
+      "maxMs": 6.982
+    },
+    {
+      "name": "tab-return/primed-cache-same-source",
+      "params": {
+        "replyCharacters": 28822
+      },
+      "samplesMs": [
+        5.66,
+        5.292,
+        5.379,
+        5.568,
+        5.34
+      ],
+      "medianMs": 5.379,
+      "minMs": 5.292,
+      "maxMs": 5.66
+    }
+  ],
+  "notes": [
+    "Planner calls only; React reconciliation, layout and paint are not included.",
+    "Stream pieces are synthetic word groups with leading whitespace, not sampled provider deltas."
+  ],
+  "wallSeconds": 25.3,
+  "loadAverageAfter": [
+    6.5400390625,
+    8.83203125,
+    9.2578125
+  ]
+}

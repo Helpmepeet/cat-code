@@ -1,0 +1,359 @@
+{
+  "probe": "tracing",
+  "runtime": "node v24.3.0",
+  "cases": [
+    {
+      "name": "buffered-initial/2048",
+      "params": {
+        "frames": 2048,
+        "scoredValue": "three passes, ms"
+      },
+      "samplesMs": [
+        13.99,
+        14.113,
+        13.495
+      ],
+      "medianMs": 13.99,
+      "minMs": 13.495,
+      "maxMs": 14.113,
+      "detail": {
+        "replayedPassMedianMs": 4.598,
+        "queuedPassMedianMs": 4.021,
+        "sentPassMedianMs": 5.486,
+        "acknowledgementMedianMs": 30.734,
+        "evictedAfterPasses": 0,
+        "rejectedAcknowledgements": 0,
+        "traceRecordsWritten": 2048,
+        "traceBytesWritten": 1597352,
+        "traceRecordsByKind": {
+          "delivery.trace": 2048
+        }
+      }
+    },
+    {
+      "name": "buffered-initial/3000",
+      "params": {
+        "frames": 3000,
+        "scoredValue": "three passes, ms"
+      },
+      "samplesMs": [
+        116.944,
+        114.233,
+        115.658
+      ],
+      "medianMs": 115.658,
+      "minMs": 114.233,
+      "maxMs": 116.944,
+      "detail": {
+        "replayedPassMedianMs": 33.824,
+        "queuedPassMedianMs": 40.828,
+        "sentPassMedianMs": 41.809,
+        "acknowledgementMedianMs": 38.435,
+        "evictedAfterPasses": 952,
+        "rejectedAcknowledgements": 3808,
+        "traceRecordsWritten": 8712,
+        "traceBytesWritten": 4886351,
+        "traceRecordsByKind": {
+          "delivery.trace": 4904,
+          "trace.ack.rejected": 3808
+        }
+      }
+    },
+    {
+      "name": "buffered-initial/4000",
+      "params": {
+        "frames": 4000,
+        "scoredValue": "three passes, ms"
+      },
+      "samplesMs": [
+        222.195,
+        225.358,
+        224.863
+      ],
+      "medianMs": 224.863,
+      "minMs": 222.195,
+      "maxMs": 225.358,
+      "detail": {
+        "replayedPassMedianMs": 64.647,
+        "queuedPassMedianMs": 79.272,
+        "sentPassMedianMs": 81.036,
+        "acknowledgementMedianMs": 56.732,
+        "evictedAfterPasses": 1952,
+        "rejectedAcknowledgements": 7808,
+        "traceRecordsWritten": 15712,
+        "traceBytesWritten": 8343283,
+        "traceRecordsByKind": {
+          "delivery.trace": 7904,
+          "trace.ack.rejected": 7808
+        }
+      }
+    },
+    {
+      "name": "buffered-initial/8000",
+      "params": {
+        "frames": 8000,
+        "scoredValue": "three passes, ms"
+      },
+      "samplesMs": [
+        675.151,
+        665.729,
+        667.048
+      ],
+      "medianMs": 667.048,
+      "minMs": 665.729,
+      "maxMs": 675.151,
+      "detail": {
+        "replayedPassMedianMs": 190.263,
+        "queuedPassMedianMs": 238.615,
+        "sentPassMedianMs": 240.942,
+        "acknowledgementMedianMs": 127.235,
+        "evictedAfterPasses": 5952,
+        "rejectedAcknowledgements": 23808,
+        "traceRecordsWritten": 43712,
+        "traceBytesWritten": 22151214,
+        "traceRecordsByKind": {
+          "delivery.trace": 19904,
+          "trace.ack.rejected": 23808
+        }
+      }
+    },
+    {
+      "name": "reload-after-live/300-messages/0-partials",
+      "params": {
+        "finishedMessages": 300,
+        "partialsPerMessage": 0,
+        "liveFrames": 300,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        14.29,
+        13.738,
+        14.147
+      ],
+      "medianMs": 14.147,
+      "minMs": 13.738,
+      "maxMs": 14.29,
+      "detail": {
+        "replayedPassMedianMs": 0.467,
+        "queuedPassMedianMs": 1.982,
+        "sentPassMedianMs": 1.952,
+        "acknowledgementMedianMs": 9.647,
+        "evictedAfterPasses": 0,
+        "rejectedAcknowledgements": 0,
+        "traceRecordsWritten": 2094,
+        "traceBytesWritten": 1114520,
+        "traceRecordsByKind": {
+          "delivery.trace": 300,
+          "trace.sequence.out_of_order": 1794
+        },
+        "liveTracingMedianMsPerFrame": 0.0252
+      }
+    },
+    {
+      "name": "reload-after-live/1000-messages/0-partials",
+      "params": {
+        "finishedMessages": 1000,
+        "partialsPerMessage": 0,
+        "liveFrames": 1000,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        46.459,
+        45.392,
+        50.987
+      ],
+      "medianMs": 46.459,
+      "minMs": 45.392,
+      "maxMs": 50.987,
+      "detail": {
+        "replayedPassMedianMs": 1.591,
+        "queuedPassMedianMs": 6.346,
+        "sentPassMedianMs": 6.151,
+        "acknowledgementMedianMs": 32.097,
+        "evictedAfterPasses": 0,
+        "rejectedAcknowledgements": 0,
+        "traceRecordsWritten": 6994,
+        "traceBytesWritten": 3733761,
+        "traceRecordsByKind": {
+          "delivery.trace": 1000,
+          "trace.sequence.out_of_order": 5994
+        },
+        "liveTracingMedianMsPerFrame": 0.0229
+      }
+    },
+    {
+      "name": "reload-after-live/3000-messages/0-partials",
+      "params": {
+        "finishedMessages": 3000,
+        "partialsPerMessage": 0,
+        "liveFrames": 3000,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        219.909,
+        237.903,
+        221.008
+      ],
+      "medianMs": 221.008,
+      "minMs": 219.909,
+      "maxMs": 237.903,
+      "detail": {
+        "replayedPassMedianMs": 33.972,
+        "queuedPassMedianMs": 54.527,
+        "sentPassMedianMs": 54.425,
+        "acknowledgementMedianMs": 78.591,
+        "evictedAfterPasses": 952,
+        "rejectedAcknowledgements": 3808,
+        "traceRecordsWritten": 22898,
+        "traceBytesWritten": 11879098,
+        "traceRecordsByKind": {
+          "delivery.trace": 4904,
+          "trace.sequence.out_of_order": 14186,
+          "trace.ack.rejected": 3808
+        },
+        "liveTracingMedianMsPerFrame": 0.0303
+      }
+    },
+    {
+      "name": "reload-after-live/100-messages/19-partials",
+      "params": {
+        "finishedMessages": 100,
+        "partialsPerMessage": 19,
+        "liveFrames": 2000,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        4.567,
+        4.558,
+        4.539
+      ],
+      "medianMs": 4.558,
+      "minMs": 4.539,
+      "maxMs": 4.567,
+      "detail": {
+        "replayedPassMedianMs": 0.228,
+        "queuedPassMedianMs": 0.637,
+        "sentPassMedianMs": 0.609,
+        "acknowledgementMedianMs": 3.096,
+        "evictedAfterPasses": 0,
+        "rejectedAcknowledgements": 0,
+        "traceRecordsWritten": 694,
+        "traceBytesWritten": 370608,
+        "traceRecordsByKind": {
+          "delivery.trace": 100,
+          "trace.sequence.out_of_order": 594
+        },
+        "liveTracingMedianMsPerFrame": 0.0226
+      }
+    },
+    {
+      "name": "reload-after-live/300-messages/19-partials",
+      "params": {
+        "finishedMessages": 300,
+        "partialsPerMessage": 19,
+        "liveFrames": 6000,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        28.291,
+        28.551,
+        29.266
+      ],
+      "medianMs": 28.551,
+      "minMs": 28.291,
+      "maxMs": 29.266,
+      "detail": {
+        "replayedPassMedianMs": 6.941,
+        "queuedPassMedianMs": 7.731,
+        "sentPassMedianMs": 7.749,
+        "acknowledgementMedianMs": 6.453,
+        "evictedAfterPasses": 197,
+        "rejectedAcknowledgements": 788,
+        "traceRecordsWritten": 2488,
+        "traceBytesWritten": 1256207,
+        "traceRecordsByKind": {
+          "delivery.trace": 694,
+          "trace.sequence.out_of_order": 1006,
+          "trace.ack.rejected": 788
+        },
+        "liveTracingMedianMsPerFrame": 0.0381
+      }
+    },
+    {
+      "name": "reload-after-live/1000-messages/19-partials",
+      "params": {
+        "finishedMessages": 1000,
+        "partialsPerMessage": 19,
+        "liveFrames": 20000,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        116.526,
+        115.231,
+        113.903
+      ],
+      "medianMs": 115.231,
+      "minMs": 113.903,
+      "maxMs": 116.526,
+      "detail": {
+        "replayedPassMedianMs": 29.469,
+        "queuedPassMedianMs": 33.316,
+        "sentPassMedianMs": 33.506,
+        "acknowledgementMedianMs": 18.646,
+        "evictedAfterPasses": 897,
+        "rejectedAcknowledgements": 3588,
+        "traceRecordsWritten": 8788,
+        "traceBytesWritten": 4366032,
+        "traceRecordsByKind": {
+          "delivery.trace": 2794,
+          "trace.sequence.out_of_order": 2406,
+          "trace.ack.rejected": 3588
+        },
+        "liveTracingMedianMsPerFrame": 0.0437
+      }
+    },
+    {
+      "name": "reload-after-live/3000-messages/19-partials",
+      "params": {
+        "finishedMessages": 3000,
+        "partialsPerMessage": 19,
+        "liveFrames": 60000,
+        "scoredValue": "three passes plus acknowledgements, ms"
+      },
+      "samplesMs": [
+        363.645,
+        360.551,
+        374.611
+      ],
+      "medianMs": 363.645,
+      "minMs": 360.551,
+      "maxMs": 374.611,
+      "detail": {
+        "replayedPassMedianMs": 94.575,
+        "queuedPassMedianMs": 109.276,
+        "sentPassMedianMs": 109.459,
+        "acknowledgementMedianMs": 53.956,
+        "evictedAfterPasses": 2897,
+        "rejectedAcknowledgements": 11588,
+        "traceRecordsWritten": 26788,
+        "traceBytesWritten": 13254321,
+        "traceRecordsByKind": {
+          "delivery.trace": 8794,
+          "trace.sequence.out_of_order": 6406,
+          "trace.ack.rejected": 11588
+        },
+        "liveTracingMedianMsPerFrame": 0.0453
+      }
+    }
+  ],
+  "notes": [
+    "Synchronous main-process work only; IPC transfer and renderer execution are not included.",
+    "Partials per message (19) follows the 95% partial share quoted in app/main/replayBuffer.ts; tier B samples the real share."
+  ],
+  "wallSeconds": 28.4,
+  "loadAverageAfter": [
+    6.09326171875,
+    8.4404296875,
+    9.09423828125
+  ]
+}
