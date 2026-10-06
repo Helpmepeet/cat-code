@@ -23,7 +23,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 
 | Sub-map | Scope | Last refreshed |
 |---|---|---|
-| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-09-27 |
+| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-10-07 |
 | [`docs/maps/tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. | 2026-10-07 |
 | [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-10-04 |
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-09-29 |
