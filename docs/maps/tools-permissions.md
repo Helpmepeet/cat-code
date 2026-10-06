@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-10-06.
+Last refreshed: 2026-10-07.
 
 ## Purpose
 
@@ -63,6 +63,7 @@ The live tool system is assembled in layers:
 | Permission-context construction | `src/utils/permissions/permissionSetup.ts` | `src/utils/permissions/permissionsLoader.ts`, `src/utils/settings/settings.ts`, `src/commands/add-dir/validation.ts` | This is where session mode, additional working dirs, auto-mode safety stripping, and on-disk rule loading are assembled into `ToolPermissionContext`. |
 | File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.cat-code` plus legacy `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
 | Filesystem object capabilities | `src/utils/fileAuthorization.ts` | `src/utils/containedFs.ts`, `src/utils/windowsContainedFs.ts`, file-tool `prepareExecution()` implementations | POSIX descriptor-relative and Windows HANDLE-relative operations share the prepared lifecycle. Follow platform tests and publication conflict handling, not pathname checks alone. |
+| Private temporary files | `src/utils/privateTemp.ts` | Call sites that create transient file artifacts | Creates an exclusive UUID-named file in a fresh temporary directory; POSIX modes are `0700` for the directory and `0600` for the file. Check current callers before attributing this helper to a runtime flow. |
 | Bash SedEdit preview authority | `src/tools/BashTool/sedEditCapability.ts` | `src/tools/BashTool/BashTool.tsx`, `src/components/permissions/SedEditPermissionRequest/`, `src/utils/swarm/permissionSync.ts`, `src/utils/teammateMailbox.ts` | One-use engine approval binds the command, tool-use ID, preview ID, and retained file identity. Ordinary Bash approvals do not acquire preview authority. |
 | Sandbox integration | `src/utils/permissions/pathValidation.ts` | `src/utils/sandbox/sandbox-adapter.ts`, `src/tools/BashTool/shouldUseSandbox.ts`, `src/utils/permissions/permissions.ts` | The path validator treats sandbox write allowlists as an extra write scope for out-of-working-dir paths. Bash sandbox auto-allow is decided higher up in permissions. |
 | Tool execution lifecycle | `src/services/tools/toolExecution.ts` | `src/services/tools/toolInputSecurity.ts`, `src/services/tools/toolHooks.ts`, `src/hooks/useCanUseTool.tsx`, `src/utils/toolResultStorage.ts` | Canonical input, preparation, validation, hooks, permission, final executable-input authorization, and cleanup. Equivalent parsed input clones retain the original preparation; changed inputs invalidate prior authorization. Failures preserve already-produced PreToolUse context. |
@@ -272,7 +273,7 @@ When debugging MCP behavior, separate these concerns:
 | Concern | Owner | Notes |
 |---|---|---|
 | Server config parse and validation | `src/services/mcp/config.ts` | Uses MCP config schemas and rejects invalid server config before connection. |
-| Runtime connection and tool list fetch | `src/services/mcp/client.ts` | Converts server tool metadata into local `Tool` objects. |
+| Runtime connection and tool list fetch | `src/services/mcp/client.ts`, `src/services/mcp/mcpStderrCapture.ts` | Converts server tool metadata into local `Tool` objects. Stdio startup diagnostics retain at most 8,192 characters; collection stops after connection while the listener continues draining the pipe. |
 | Tool name normalization | `src/services/mcp/mcpStringUtils.ts`, `src/services/mcp/normalization.ts` | MCP names can be prefixed or unprefixed depending on SDK mode and env. |
 | Permission identity for MCP tools | `src/services/mcp/mcpStringUtils.ts`, `src/utils/permissions/permissions.ts` | Permission matching uses structured live `mcpInfo` and reversible, scoped `mcpid:v1:` rules. Unambiguous legacy rules remain supported; ambiguous legacy allows fail closed and denies match conservatively. |
 | Result transformation and truncation | `src/services/mcp/client.ts`, `src/utils/mcpValidation.ts`, `src/utils/mcpOutputStorage.ts` | Structured content, content arrays, large output files, and images have separate handling. |
@@ -304,6 +305,8 @@ Use focused checks first, then the documented build:
 | Tool failure hook context | `bun test src/services/tools/toolExecution.test.ts` |
 | File read/write bounds and replacement safety | `bun test src/tools/FileReadTool/FileReadTool.test.ts src/tools/FileWriteTool/FileWriteTool.test.ts src/utils/fileWriteSafety.test.ts` |
 | Prepared filesystem and native ABI | `bun test src/utils/fileAuthorization.test.ts src/utils/containedFs.test.ts src/utils/windowsContainedFs.test.ts`; Windows runtime tests require Windows |
+| Private temp-file permissions and cleanup | `bun test src/utils/privateTemp.test.ts` |
+| MCP startup stderr capture | `bun test src/services/mcp/mcpStderrCapture.test.ts` |
 | Final executable input and SedEdit authority | Run `src/services/tools/toolInputSecurity.test.ts`, `src/services/tools/toolExecution.test.ts`, and `src/tools/BashTool/sedEditCapability.test.ts` in separate Bun test processes |
 | GPT image generation backend and model limits | `bun test src/tools/GenerateImageTool/GenerateImageTool.test.ts` |
 | Mailbox control authority (closed union, authority matrix, request correlation) | `bun test src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` |

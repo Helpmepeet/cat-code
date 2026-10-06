@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-10-04
+Last refreshed: 2026-10-07
 
 ## Purpose
 
@@ -144,6 +144,9 @@ The reader reports actual source bytes, including its line-alignment probe, so
 `app/sidecar/subagentHistory.ts` charges rejected branches against a shared work
 budget. Partial branches retain the unavailable-history card state.
 `getAgentTranscriptForSession` continues to load full agent-resume history.
+The synthetic source-byte accounting probe is
+`scripts/benchmarks/resourceWasteHistory.ts`; it builds its transcript fixture
+under an isolated temporary config home.
 
 ## Traps And Stale Assumptions
 

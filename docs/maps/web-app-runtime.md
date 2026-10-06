@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-10-05 against `src/app-runtime/`,
+Last refreshed: 2026-10-07 against `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `app/`, and related tests.
 
 Use this map for the Electron runtime-backed app-session path. It covers the
@@ -160,9 +160,14 @@ active desktop app stack, not older dedicated-app design docs.
   `app/main/refreshActivityGate.ts` pauses recurring catalog/accounts/usage starts
   only while all windows are hidden or minimized. Visible unfocused windows keep
   their cadence; returning windows catch up a skipped interval.
+  `scripts/benchmarks/resourceWasteBackground.ts` exercises catalog and refresh
+  mechanisms with synthetic fixtures, not operator transcript data.
 - `app/sidecar/projectedSubscription.ts` compares display projections structurally
   before task, worker, goal, or lease notifications. Initial attachment snapshots
   and raw engine events remain independent of this suppression.
+  `scripts/benchmarks/resourceWasteTransport.ts` probes frame copying and
+  projection/diagnostic mechanisms with synthetic inputs; it measures no socket
+  latency.
 - `TranscriptView.tsx` windows outer rows as well as inner Markdown/tool content.
   Route restoration through `transcriptScrollMemory.ts`; spacer rows are not
   transcript anchors. `markdownRenderPlan.ts` permits conservative plain-text
@@ -171,6 +176,9 @@ active desktop app stack, not older dedicated-app design docs.
   `paneHeightOwnership.ts` subtracts retained nested bodies' height changes from
   their parents' corrections. List edits use the first changed entry as their
   correction offset, so a lower append does not move a reader of older rows.
+  `scripts/benchmarks/resourceWasteRenderer.ts` wraps
+  `app/scripts/resourceWasteRenderer.ts` for synthetic renderer probes; it does
+  not measure browser layout or native interaction latency.
 - Child display restoration uses `getDisplayAgentTranscriptForSession` in
   `src/utils/sessionStorage.ts` with shared byte/message/output budgets in
   `app/sidecar/subagentHistory.ts`. Oversized rejected branches consume source

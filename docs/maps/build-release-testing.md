@@ -1,7 +1,8 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-09-29 against `CLAUDE.md`,
+Last refreshed: 2026-10-07 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
+`scripts/workspace-map-eval/`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
 `app/package.json`, `app/scripts/`, `src/migrations/`,
@@ -20,7 +21,7 @@ files, then verify current source before changing code.
 | Engine build and feature selection | `scripts/build.ts` |
 | Desktop build, checks, and packaging | `app/package.json`, `app/scripts/` |
 | Persisted-state migrations | `src/migrations/runEngineMigrations.ts` |
-| Workspace map refresh and commit lifecycle | `scripts/workspaceMapRefreshState.ts` |
+| Workspace map refresh and task inventory | `scripts/workspaceMapRefreshState.ts`, `scripts/workspace-map-eval/taskInventory.ts` |
 | Map references, index, and section validation | `scripts/workspaceMapLint.ts` |
 
 ## Refresh Checklist
@@ -80,6 +81,14 @@ Use `block` to record incomplete work without invoking the validator.
 
 Check this boundary with
 `bun test scripts/workspaceMapRefreshState.test.ts scripts/workspaceMapLint.test.ts`.
+
+The offline study inventory in `scripts/workspace-map-eval/taskInventory.ts`
+selects first substantive user prompts from Cat Code, Claude Code, and Codex
+sessions rooted in this repository. Its output contains raw prompts, so
+`--out` must point outside the repo. Prefix deduplication and keyword `kind`
+labels only generate candidates; verify authorship, eligibility, and category
+manually. The study reconstruction and selection protocol lives in
+`docs/reports/2026-10-06-workspace-map-evaluation-plan.md`.
 
 ## Build Script Details
 
