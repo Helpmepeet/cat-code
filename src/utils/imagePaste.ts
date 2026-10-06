@@ -13,6 +13,10 @@ import { logForDebugging } from './debug.js'
 import { execFileNoThrowWithCwd } from './execFileNoThrow.js'
 import { getFsImplementation } from './fsOperations.js'
 import {
+  createPrivateTempFile,
+  removePrivateTempFile,
+} from './privateTemp.js'
+import {
   detectImageFormatFromBase64,
   type ImageDimensions,
   maybeResizeAndDownsampleImageBuffer,
@@ -28,22 +32,13 @@ type SupportedPlatform = 'darwin' | 'linux' | 'win32'
 
 // Threshold in characters for when to consider text a "large paste"
 export const PASTE_THRESHOLD = 800
-function getClipboardCommands() {
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function getClipboardCommands(screenshotPath: string) {
   const platform = process.platform as SupportedPlatform
-
-  // Platform-specific temporary file paths
-  // Use CLAUDE_CODE_TMPDIR if set, otherwise fall back to platform defaults
-  const baseTmpDir =
-    process.env.CLAUDE_CODE_TMPDIR ||
-    (platform === 'win32' ? process.env.TEMP || 'C:\\Temp' : '/tmp')
-  const screenshotFilename = 'claude_cli_latest_screenshot.png'
-  const tempPaths: Record<SupportedPlatform, string> = {
-    darwin: join(baseTmpDir, screenshotFilename),
-    linux: join(baseTmpDir, screenshotFilename),
-    win32: join(baseTmpDir, screenshotFilename),
-  }
-
-  const screenshotPath = tempPaths[platform] || tempPaths.linux
 
   // Platform-specific clipboard commands
   const commands: Record<
@@ -52,29 +47,44 @@ function getClipboardCommands() {
       checkImage: string
       saveImage: string
       getPath: string
-      deleteFile: string
     }
   > = {
     darwin: {
       checkImage: `osascript -e 'the clipboard as «class PNGf»'`,
-      saveImage: `osascript -e 'set png_data to (the clipboard as «class PNGf»)' -e 'set fp to open for access POSIX file "${screenshotPath}" with write permission' -e 'write png_data to fp' -e 'close access fp'`,
+      saveImage: [
+        'osascript',
+        '-e',
+        shellQuote('set png_data to (the clipboard as «class PNGf»)'),
+        '-e',
+        shellQuote(
+          `set fp to open for access POSIX file "${screenshotPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with write permission`,
+        ),
+        '-e',
+        shellQuote('write png_data to fp'),
+        '-e',
+        shellQuote('close access fp'),
+      ].join(' '),
       getPath: `osascript -e 'get POSIX path of (the clipboard as «class furl»)'`,
-      deleteFile: `rm -f "${screenshotPath}"`,
     },
     linux: {
       checkImage:
         'xclip -selection clipboard -t TARGETS -o 2>/dev/null | grep -E "image/(png|jpeg|jpg|gif|webp|bmp)" || wl-paste -l 2>/dev/null | grep -E "image/(png|jpeg|jpg|gif|webp|bmp)"',
-      saveImage: `xclip -selection clipboard -t image/png -o > "${screenshotPath}" 2>/dev/null || wl-paste --type image/png > "${screenshotPath}" 2>/dev/null || xclip -selection clipboard -t image/bmp -o > "${screenshotPath}" 2>/dev/null || wl-paste --type image/bmp > "${screenshotPath}"`,
+      saveImage: `xclip -selection clipboard -t image/png -o > ${shellQuote(screenshotPath)} 2>/dev/null || wl-paste --type image/png > ${shellQuote(screenshotPath)} 2>/dev/null || xclip -selection clipboard -t image/bmp -o > ${shellQuote(screenshotPath)} 2>/dev/null || wl-paste --type image/bmp > ${shellQuote(screenshotPath)}`,
       getPath:
         'xclip -selection clipboard -t text/plain -o 2>/dev/null || wl-paste 2>/dev/null',
-      deleteFile: `rm -f "${screenshotPath}"`,
     },
     win32: {
       checkImage:
         'powershell -NoProfile -Command "(Get-Clipboard -Format Image) -ne $null"',
-      saveImage: `powershell -NoProfile -Command "$img = Get-Clipboard -Format Image; if ($img) { $img.Save('${screenshotPath.replace(/\\/g, '\\\\')}', [System.Drawing.Imaging.ImageFormat]::Png) }"`,
+      saveImage: (() => {
+        const pathBase64 = Buffer.from(screenshotPath).toString('base64')
+        const script = `$p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${pathBase64}')); $img = Get-Clipboard -Format Image; if ($img) { $m = New-Object IO.MemoryStream; $img.Save($m, [System.Drawing.Imaging.ImageFormat]::Png); [IO.File]::WriteAllBytes($p, $m.ToArray()); $m.Dispose() }`
+        return `powershell -NoProfile -EncodedCommand ${Buffer.from(
+          script,
+          'utf16le',
+        ).toString('base64')}`
+      })(),
       getPath: 'powershell -NoProfile -Command "Get-Clipboard"',
-      deleteFile: `del /f "${screenshotPath}"`,
     },
   }
 
@@ -197,8 +207,18 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
     }
   }
 
-  const { commands, screenshotPath } = getClipboardCommands()
+  const baseTmpDir =
+    process.env.CLAUDE_CODE_TMPDIR ||
+    (process.platform === 'win32' ? process.env.TEMP || 'C:\\Temp' : undefined)
+  let screenshotPath: string | undefined
   try {
+    const privateScreenshotPath = await createPrivateTempFile(
+      'cat-code-image-paste-',
+      '.png',
+      baseTmpDir,
+    )
+    screenshotPath = privateScreenshotPath
+    const { commands } = getClipboardCommands(privateScreenshotPath)
     // Check if clipboard has image
     const checkResult = await execa(commands.checkImage, {
       shell: true,
@@ -242,9 +262,6 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
     // Detect format from magic bytes
     const mediaType = detectImageFormatFromBase64(base64Image)
 
-    // Cleanup (fire-and-forget, don't await)
-    void execa(commands.deleteFile, { shell: true, reject: false })
-
     return {
       base64: base64Image,
       mediaType,
@@ -252,11 +269,15 @@ export async function getImageFromClipboard(): Promise<ImageWithDimensions | nul
     }
   } catch {
     return null
+  } finally {
+    if (screenshotPath) {
+      await removePrivateTempFile(screenshotPath).catch(() => {})
+    }
   }
 }
 
 export async function getImagePathFromClipboard(): Promise<string | null> {
-  const { commands } = getClipboardCommands()
+  const { commands } = getClipboardCommands('')
 
   try {
     // Try to get text from clipboard

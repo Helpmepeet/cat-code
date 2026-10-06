@@ -1,8 +1,5 @@
 import { c as _c } from "react/compiler-runtime";
-import { mkdir, writeFile } from 'fs/promises';
 import { marked, type Tokens } from 'marked';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import React, { useRef } from 'react';
 import type { CommandResultDisplay } from '../../commands.js';
 import type { OptionWithDescription } from '../../components/CustomSelect/select.js';
@@ -19,8 +16,8 @@ import type { LocalJSXCommandCall } from '../../types/command.js';
 import type { AssistantMessage, Message } from '../../types/message.js';
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js';
 import { extractTextContent, stripPromptXMLTags } from '../../utils/messages.js';
+import { writePrivateTempFile } from '../../utils/privateTemp.js';
 import { countCharInString } from '../../utils/stringUtils.js';
-const COPY_DIR = join(tmpdir(), 'claude');
 const RESPONSE_FILENAME = 'response.md';
 const MAX_LOOKBACK = 20;
 type CodeBlock = {
@@ -70,16 +67,19 @@ export function fileExtension(lang: string | undefined): string {
   }
   return '.txt';
 }
-async function writeToFile(text: string, filename: string): Promise<string> {
-  const filePath = join(COPY_DIR, filename);
-  await mkdir(COPY_DIR, {
-    recursive: true
-  });
-  await writeFile(filePath, text, 'utf-8');
-  return filePath;
+async function writeToFile(
+  text: string,
+  filename: string,
+): Promise<string> {
+  const extension = filename.slice(filename.lastIndexOf('.'));
+  return writePrivateTempFile(text, 'cat-code-copy-', extension);
 }
-async function copyOrWriteToFile(text: string, filename: string): Promise<string> {
-  const raw = await setClipboard(text);
+export async function copyOrWriteToFile(
+  text: string,
+  filename: string,
+  clipboardWriter: typeof setClipboard = setClipboard,
+): Promise<string> {
+  const raw = await clipboardWriter(text);
   if (raw) process.stdout.write(raw);
   const lineCount = countCharInString(text, '\n') + 1;
   const charCount = text.length;
