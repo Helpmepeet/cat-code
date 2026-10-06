@@ -15,7 +15,7 @@ import rehypeHighlight from 'rehype-highlight'
 import type { ElementContent } from 'hast'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { PluggableList } from 'unified'
-import { REHYPE_PLUGINS } from './markdownPlugins.js'
+import { REHYPE_PLUGINS, TRANSCRIPT_REHYPE_PLUGINS } from './markdownPlugins.js'
 import {
   MAX_MARKDOWN_LEAF_CHARACTERS,
   MAX_MOUNTED_MARKDOWN_LEAVES,
@@ -67,6 +67,27 @@ function wideTable(columns: number): string {
   const rule = `|${Array.from({ length: columns }, () => '---').join('|')}|`
   const body = `|${Array.from({ length: columns }, () => '').join('|')}|`
   return `${header}\n${rule}\n${body}`
+}
+
+/** The options a transcript row passes, so cached plans meet KaTeX, highlighting and callouts. */
+const TRANSCRIPT_OPTIONS = {
+  rehypePlugins: TRANSCRIPT_REHYPE_PLUGINS,
+  allowPlainTextAppend: true,
+  math: true,
+  recognizeCallouts: true,
+}
+
+/** Streams `pieces` through one cache; true when every step plans exactly what a fresh full parse plans. */
+function streamedPlansMatchFullParse(pieces: readonly string[]): boolean {
+  const cache = createMarkdownPlanCache()
+  let source = ''
+  for (const piece of pieces) {
+    source += piece
+    const streamed = planMarkdownLeaves('stream-row', source, { ...TRANSCRIPT_OPTIONS, cache })
+    const full = planMarkdownLeaves('stream-row', source, TRANSCRIPT_OPTIONS)
+    if (JSON.stringify(streamed) !== JSON.stringify(full)) return false
+  }
+  return true
 }
 
 function headerCellCount(source: string): number {
@@ -266,6 +287,45 @@ describe('semantic leaves keep their document context', () => {
     planMarkdownLeaves('space-row', 'hello', { cache })
     const leaves = planMarkdownLeaves('space-row', 'hello world', { cache })
     expect(mount(leaves, 0, leaves.length)).toContain('<p>hello world</p>')
+  })
+
+  test('appends to a trailing list, quote or paragraph keep every earlier block', () => {
+    const cache = createMarkdownPlanCache()
+    let source = '## Plan\n\nThe first paragraph. It has two sentences.\n\n- one'
+    planMarkdownLeaves('trailing-row', source, { ...TRANSCRIPT_OPTIONS, cache })
+    const settledHeading = cache.current?.tree.children[0]
+    expect(settledHeading).toBeDefined()
+
+    for (const piece of [' item', '\n- two', '\n\n> a quote', ' grows', '\n\nA closing paragraph.', ' Another sentence.']) {
+      source += piece
+      const leaves = planMarkdownLeaves('trailing-row', source, { ...TRANSCRIPT_OPTIONS, cache })
+      expect(cache.current?.tree.children[0]).toBe(settledHeading)
+      expect(JSON.stringify(leaves)).toBe(JSON.stringify(planMarkdownLeaves('trailing-row', source, TRANSCRIPT_OPTIONS)))
+    }
+  })
+
+  test('re-reading the trailing block plans exactly what a full parse plans when later text changes earlier meaning', () => {
+    const sources = [
+      'Intro.\n\n- a\n- b\n\n- c\n\nAfter the list.',
+      'Intro.\n\n5. one\n   - sub item\n\n6. **two** item\n\nAfter. More.',
+      'Intro.\n\n- a\n\n  continued paragraph\n\nAfter.',
+      'Intro.\n\n    code a\n\n    code b\n\nAfter.',
+      '[r]: /manual\n\nFirst paragraph.\n\nSee [r] in the tail.',
+      'See [r].\n\nTail words.\n\n[r]: /manual\n\nAfter it.',
+      'Intro.\n\nSee [r].\n\n[r]: /abc more',
+      'One[^n].\n\n[^n]: note\n\nAgain[^n] and more.',
+      'Intro.\n\na | b\n--- | ---\n1 | 2\n\nAfter the table.',
+      'Intro.\n\nTitle\n===\n\nOther\n---\n\nEnd.',
+      'Intro.\n\nAn \\[x\n\ny\\] formula.\n\nAnd \\(a+b\\) inline.',
+      'Intro.\n\n<div>\n*one*\n*two*\n\nAfter the HTML.',
+      'Intro.\n\n> [!NOTE]\n> body\n\nAfter the callout.',
+      'Let:\n\n- \\(P\\): a\n\nThe rule:\n\n\\[\nP \\rightarrow Q\n\\]\n\\[\nQ\n\\]\n\nAfter. More text.',
+    ]
+    for (const source of sources) expect(streamedPlansMatchFullParse([...source])).toBe(true)
+  })
+
+  test('a fence marker appended mid-line stays paragraph text', () => {
+    expect(streamedPlansMatchFullParse(['Intro.\n\nText', '```ts\nconst answer = 42'])).toBe(true)
   })
 
   const table = [
@@ -565,10 +625,11 @@ describe('code fences', () => {
     expect(first[0].id).toBe(second[0].id)
     expect(mount(second, 0, second.length)).toContain('const b = 2')
 
-    // A closing fence forces full parsing. With no trailing prose yet there is
-    // no appendable paragraph to retain.
+    // A closing fence forces full parsing. The closed fence then becomes the
+    // re-readable trailing block, with the prose above it settled.
     const settled = planMarkdownLeaves('row-1', `${prefix}const a = 1\n\`\`\``, { cache })
-    expect(cache.current).toBeNull()
+    expect(cache.current?.body).toBe(`${prefix}const a = 1\n\`\`\``)
+    expect(cache.current?.trailingBlock?.settledChildren).toBe(2)
     expect(mount(settled, 0, settled.length)).toContain('<pre>')
   })
 

@@ -160,8 +160,17 @@ export type MarkdownPlanCache = {
     allowPlainTextAppend: boolean
     recognizeCallouts: boolean
     math: boolean
+    /** Set when the source from this boundary to the end may be re-read alone. */
+    trailingBlock: TrailingBlock | null
   } | null
 }
+
+/**
+ * Start of the line holding the first top-level block that may still change,
+ * its 1-based line number, and how many root children of the transformed tree
+ * come before it.
+ */
+type TrailingBlock = { lineStart: number; line: number; settledChildren: number }
 
 export function createMarkdownPlanCache(): MarkdownPlanCache {
   return { current: null }
@@ -273,10 +282,44 @@ export function planMarkdownLeaves(
     }
   }
 
+  // A streamed reply grows at its tail. Blocks that ended before a blank line
+  // stay settled when nothing after them can join them: not a list or indented
+  // code block, which can take in a later block, and no definition or footnote,
+  // which links blocks across the document. Re-read from the first unsettled
+  // block to the end as its own document and keep every block before it. A
+  // whole list is re-read, so a list turning loose stays correct. A definition,
+  // footnote or open fence in the re-read text takes the full parse below.
+  if (
+    tree === undefined &&
+    cached !== null && cached !== undefined &&
+    cached.trailingBlock !== null &&
+    cached.rehypePlugins === rehypePlugins &&
+    cached.allowPlainTextAppend === allowPlainTextAppend &&
+    cached.recognizeCallouts === recognizeCallouts &&
+    cached.math === math &&
+    markdownSource.length > cached.body.length &&
+    markdownSource.startsWith(cached.body)
+  ) {
+    const reparsed = reparseTrailingBlocks(
+      processor, markdownSource, source, cached.trailingBlock, math, recognizeCallouts,
+    )
+    if (reparsed !== null) {
+      tree = {
+        ...cached.tree,
+        children: [...cached.tree.children.slice(0, cached.trailingBlock.settledChildren), ...reparsed.tree.children],
+        position: reparsed.tree.position,
+      }
+      if (options?.cache) {
+        options.cache.current = { ...cached, body: markdownSource, tree, trailingBlock: reparsed.trailingBlock }
+      }
+    }
+  }
+
   // Fast path while a fence is open. The cached body ends exactly at that
   // fence, so the remainder can be read on its own: if it is still nothing but
   // an unterminated fence, no settled block can have changed and the parsed
-  // prefix stands. Every other case reparses the whole document.
+  // prefix stands. Every other case reparses the whole document. The remainder
+  // must start a line: a fence marker appended mid-line is paragraph text.
   const appendedToOpenFence = tree === undefined &&
     cached !== null &&
     cached !== undefined &&
@@ -286,6 +329,7 @@ export function planMarkdownLeaves(
     cached.math === math &&
     markdownSource.length > cached.body.length &&
     markdownSource.startsWith(cached.body) &&
+    (cached.body.length === 0 || cached.body.endsWith('\n')) &&
     isWholeUnterminatedFence(
       processor,
       markdownSource.slice(cached.body.length),
@@ -326,9 +370,13 @@ export function planMarkdownLeaves(
     // Only a settled prefix is worth holding: while a fence is open the body is
     // constant across tokens, and the entry is replaced outright on settlement.
     if (options?.cache !== undefined) {
+      const trailingBlock = tailOffset === null ? findTrailingBlock(mdast, markdownSource, tree) : null
       options.cache.current =
-        tailOffset !== null || isPlainParagraphAppendable(markdownSource, tree)
-          ? { body: tailOffset !== null ? body : markdownSource, tree, rehypePlugins, allowPlainTextAppend, recognizeCallouts, math }
+        tailOffset !== null || trailingBlock !== null || isPlainParagraphAppendable(markdownSource, tree)
+          ? {
+            body: tailOffset !== null ? body : markdownSource,
+            tree, rehypePlugins, allowPlainTextAppend, recognizeCallouts, math, trailingBlock,
+          }
           : null
     }
   }
@@ -1323,6 +1371,127 @@ function isWholeUnterminatedFence(
 ): boolean {
   const mdast = processor.parse(tail)
   return mdast.children.length === 1 && findUnterminatedFence(mdast, tail) === 0
+}
+
+type PositionedNode = {
+  type: string
+  position?: { start: { line: number; offset?: number }; end: { line: number; offset?: number } }
+  children?: PositionedNode[]
+}
+
+/**
+ * Definitions resolve uses anywhere in the document, in either direction, and
+ * footnote references renumber and rewrite the generated footnote section. A
+ * document holding any of them never re-reads one block alone.
+ */
+function hasCrossBlockReference(node: PositionedNode): boolean {
+  if (node.type === 'definition' || node.type === 'footnoteDefinition' || node.type === 'footnoteReference') return true
+  return node.children?.some(hasCrossBlockReference) ?? false
+}
+
+/** Whether the line before `lineStart` is blank. */
+function followsBlankLine(source: string, lineStart: number): boolean {
+  if (lineStart === 0) return false
+  const previousLineStart = source.lastIndexOf('\n', lineStart - 2) + 1
+  return /^[ \t\r]*$/.test(source.slice(previousLineStart, lineStart - 1))
+}
+
+/**
+ * Whether each top-level block became exactly one root child, newline-separated.
+ * Plugins may replace a block's element (KaTeX does, without positions), so the
+ * settled prefix is cut by this count rather than by source positions.
+ */
+function hasOneChildPerBlock(tree: Root, blocks: number): boolean {
+  return tree.children.length === blocks * 2 - 1 &&
+    tree.children.every((child, index) =>
+      index % 2 === 0 || (child.type === 'text' && child.value === '\n'))
+}
+
+/**
+ * A list item or indented code block can take in a later block across a blank
+ * line. While the first line of the block after it is still arriving, `6` can
+ * become `6. item` and join the list above, so that list is not settled yet.
+ */
+function canAbsorbFollowingBlock(node: MdastRoot['children'][number], source: string): boolean {
+  if (node.type === 'list') return true
+  if (node.type !== 'code') return false
+  const start = node.position?.start.offset
+  return start === undefined || fenceRunLength(source.slice(start)) === 0
+}
+
+/**
+ * The latest top-level block that starts after a blank line and whose previous
+ * block cannot take it in, as an index into `blocks`; null when there is none.
+ */
+function latestSettledBoundary(blocks: MdastRoot['children'], source: string): { index: number; lineStart: number } | null {
+  for (let index = blocks.length - 1; index > 0; index -= 1) {
+    const start = blocks[index]!.position?.start.offset
+    if (start === undefined) return null
+    const lineStart = source.lastIndexOf('\n', start - 1) + 1
+    if (followsBlankLine(source, lineStart) && !canAbsorbFollowingBlock(blocks[index - 1]!, source)) {
+      return { index, lineStart }
+    }
+  }
+  return null
+}
+
+/** Where the full document's re-readable tail starts, when no reference ties blocks together. */
+function findTrailingBlock(mdast: MdastRoot, source: string, tree: Root): TrailingBlock | null {
+  const blocks = mdast.children.length
+  if (hasCrossBlockReference(mdast as PositionedNode) || !hasOneChildPerBlock(tree, blocks)) return null
+  const boundary = latestSettledBoundary(mdast.children, source)
+  if (boundary === null) return null
+  return {
+    lineStart: boundary.lineStart,
+    line: mdast.children[boundary.index]!.position!.start.line,
+    settledChildren: boundary.index * 2,
+  }
+}
+
+/**
+ * Parses from `block` to the end as its own document, positioned as in the
+ * whole source, and finds the boundary for the next update. Null when the
+ * re-read text needs the whole document: a reference, or an open fence, which
+ * the full path plans separately.
+ */
+function reparseTrailingBlocks(
+  processor: ReturnType<typeof markdownProcessor>,
+  markdownSource: string,
+  source: string,
+  block: TrailingBlock,
+  math: boolean,
+  recognizeCallouts: boolean,
+): { tree: Root; trailingBlock: TrailingBlock } | null {
+  const slice = markdownSource.slice(block.lineStart)
+  const mdast = processor.parse(slice)
+  const blocks = mdast.children.length
+  if (blocks === 0) return null
+  if (hasCrossBlockReference(mdast as PositionedNode) || findUnterminatedFence(mdast, slice) !== null) return null
+  if (math) markBracketDisplayMath(mdast, source.slice(block.lineStart))
+  const boundary = latestSettledBoundary(mdast.children, slice)
+  const trailingBlock = boundary === null
+    ? block
+    : {
+      lineStart: block.lineStart + boundary.lineStart,
+      line: block.line + mdast.children[boundary.index]!.position!.start.line - 1,
+      settledChildren: block.settledChildren + boundary.index * 2,
+    }
+  shiftPositions(mdast as PositionedNode, block.line - 1, block.lineStart)
+  const tree = processor.runSync(mdast)
+  normalizeTree(tree, recognizeCallouts)
+  if (!hasOneChildPerBlock(tree, blocks)) return null
+  return { tree, trailingBlock }
+}
+
+/** The line starts at column 1 in both parses, so only lines and offsets move. */
+function shiftPositions(node: PositionedNode, lines: number, offset: number): void {
+  if (node.position) {
+    for (const point of [node.position.start, node.position.end]) {
+      point.line += lines
+      if (point.offset !== undefined) point.offset += offset
+    }
+  }
+  for (const child of node.children ?? []) shiftPositions(child, lines, offset)
 }
 
 /**
