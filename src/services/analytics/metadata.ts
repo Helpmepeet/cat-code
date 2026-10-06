@@ -268,8 +268,7 @@ function truncateToolInputValue(value: unknown, depth = 0): unknown {
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
-      // Skip internal marker keys (e.g. _simulatedSedEdit re-introduced by
-      // SedEditPermissionRequest) so they don't leak into telemetry.
+      // Skip internal marker keys so they don't leak into telemetry.
       .filter(([k]) => !k.startsWith('_'))
     const mapped = entries
       .slice(0, TOOL_INPUT_MAX_COLLECTION_ITEMS)

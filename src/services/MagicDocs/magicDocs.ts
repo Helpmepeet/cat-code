@@ -12,7 +12,7 @@ import { runAgent } from '../../tools/AgentTool/runAgent.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import {
-  FileReadTool,
+  callFileReadToolWithPreparedCapability,
   type Output as FileReadToolOutput,
   registerFileReadListener,
 } from '../../tools/FileReadTool/FileReadTool.js'
@@ -136,7 +136,7 @@ async function updateMagicDoc(
   // Read the document; if deleted or unreadable, remove from tracking
   let currentDoc = ''
   try {
-    const result = await FileReadTool.call(
+    const result = await callFileReadToolWithPreparedCapability(
       { file_path: docInfo.path },
       clonedToolUseContext,
     )

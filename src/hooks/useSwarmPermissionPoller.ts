@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import { useInterval } from 'usehooks-ts'
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { logForDebugging } from '../utils/debug.js'
 import { errorMessage } from '../utils/errors.js'
 import {
@@ -23,6 +24,12 @@ import {
   pollForResponse,
   removeWorkerResponse,
 } from '../utils/swarm/permissionSync.js'
+import {
+  registerTransferredTrustedSedEditApproval,
+  type TrustedSedEditPreviewChallenge,
+  type TrustedSedEditApprovalPayload,
+} from '../tools/BashTool/sedEditCapability.js'
+import { issueUserApprovalReceipt } from '../services/tools/toolInputSecurity.js'
 import { getAgentName, getTeamName } from '../utils/teammate.js'
 
 const POLL_INTERVAL_MS = 500
@@ -57,11 +64,16 @@ function parsePermissionUpdates(raw: unknown): PermissionUpdate[] {
  */
 export type PermissionResponseCallback = {
   requestId: string
+  toolName: string
   toolUseId: string
+  sedEditPreview?: TrustedSedEditPreviewChallenge
+  expectSedEditApproval?(): boolean
   onAllow: (
     updatedInput: Record<string, unknown> | undefined,
     permissionUpdates: PermissionUpdate[],
     feedback?: string,
+    contentBlocks?: ContentBlockParam[],
+    trustedSedEditApproval?: TrustedSedEditApprovalPayload,
   ) => void
   onReject: (feedback?: string) => void
 }
@@ -127,6 +139,8 @@ export function processMailboxPermissionResponse(params: {
   feedback?: string
   updatedInput?: Record<string, unknown>
   permissionUpdates?: unknown
+  trustedSedEditApproval?: TrustedSedEditApprovalPayload
+  sedEditPreviewApproved?: boolean
 }): boolean {
   const callback = pendingCallbacks.get(params.requestId)
 
@@ -147,7 +161,43 @@ export function processMailboxPermissionResponse(params: {
   if (params.decision === 'approved') {
     const permissionUpdates = parsePermissionUpdates(params.permissionUpdates)
     const updatedInput = params.updatedInput
-    callback.onAllow(updatedInput, permissionUpdates)
+    const explicitSedEditApproval =
+      params.sedEditPreviewApproved === true ||
+      params.trustedSedEditApproval !== undefined
+    if (explicitSedEditApproval) {
+      if (
+        !updatedInput ||
+        !params.trustedSedEditApproval ||
+        !callback.expectSedEditApproval?.()
+      ) {
+        callback.onReject(
+          'The approved SedEdit preview no longer matches the prepared file.',
+        )
+        return true
+      }
+      const registered = registerTransferredTrustedSedEditApproval(
+        updatedInput,
+        callback.toolUseId,
+        params.trustedSedEditApproval,
+        callback.sedEditPreview,
+      )
+      if (!registered) {
+        callback.onReject(
+          'The approved SedEdit preview no longer matches the prepared file.',
+        )
+        return true
+      }
+    }
+    if (updatedInput) {
+      issueUserApprovalReceipt(callback.toolName, updatedInput, callback.toolUseId)
+    }
+    callback.onAllow(
+      updatedInput,
+      permissionUpdates,
+      undefined,
+      undefined,
+      params.trustedSedEditApproval,
+    )
   } else {
     callback.onReject(params.feedback)
   }

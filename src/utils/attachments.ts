@@ -11,6 +11,7 @@ import {
 } from '../Tool.js'
 import {
   FileReadTool,
+  callFileReadToolWithPreparedCapability,
   MaxFileReadTokenExceededError,
   type Output as FileReadToolOutput,
   readImageWithTokenBudget,
@@ -2161,7 +2162,10 @@ export async function getChangedFiles(
           return null
         }
 
-        const result = await FileReadTool.call(fileInput, toolUseContext)
+        const result = await callFileReadToolWithPreparedCapability(
+          fileInput,
+          toolUseContext,
+        )
         // Extract only the changed section
         if (result.data.type === 'text') {
           const snippet = getSnippetForTwoFileDiff(
@@ -3216,7 +3220,10 @@ export async function generateFileAttachment(
           offset: offset ?? 1,
           limit: MAX_LINES_TO_READ,
         }
-        const result = await FileReadTool.call(truncatedInput, toolUseContext)
+        const result = await callFileReadToolWithPreparedCapability(
+          truncatedInput,
+          toolUseContext,
+        )
         logEvent(successEventName, {})
 
         return {
@@ -3239,7 +3246,10 @@ export async function generateFileAttachment(
     }
 
     try {
-      const result = await FileReadTool.call(fileInput, toolUseContext)
+      const result = await callFileReadToolWithPreparedCapability(
+        fileInput,
+        toolUseContext,
+      )
       logEvent(successEventName, {})
       return {
         type: 'file',

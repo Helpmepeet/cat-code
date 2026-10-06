@@ -20,6 +20,7 @@ import {
 } from '../../utils/diff.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { isENOENT } from '../../utils/errors.js'
+import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
 import {
   fileIdentitiesEqual,
   getFileIdentity,
@@ -30,7 +31,13 @@ import {
   fileHistoryTrackEdit,
 } from '../../utils/fileHistory.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
-import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
+import {
+  bindPreparedFileInput,
+  getPreparedFileMutation,
+  prepareApprovedUncFileMutation,
+  prepareFileMutationAuthorization,
+  readPreparedFileMetadata,
+} from '../../utils/fileAuthorization.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 import {
   fetchSingleFileGitDiff,
@@ -45,7 +52,10 @@ import {
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
-import { writeFileWithSideEffects } from '../FileEditTool/shared.js'
+import {
+  fileHistorySourceForPreparedMutation,
+  writeFileWithSideEffects,
+} from '../FileEditTool/shared.js'
 import { gitDiffSchema, hunkSchema } from '../FileEditTool/types.js'
 import { FILE_WRITE_TOOL_NAME, getWriteToolDescription } from './prompt.js'
 import {
@@ -143,11 +153,60 @@ export const FileWriteTool = buildTool({
   },
   async checkPermissions(input, context): Promise<PermissionDecision> {
     const appState = context.getAppState()
-    return checkWritePermissionForTool(
+    const originalDecision = checkWritePermissionForTool(
       FileWriteTool,
       input,
       appState.toolPermissionContext,
     )
+    if (originalDecision.behavior !== 'allow') return originalDecision
+    const prepared = getPreparedFileMutation(
+      context,
+      FILE_WRITE_TOOL_NAME,
+      input,
+    )
+    if (!prepared) return originalDecision
+    const actualPaths = [
+      ...new Set([prepared.canonicalPath, prepared.actualPath ?? prepared.canonicalPath]),
+    ]
+    for (const filePath of actualPaths) {
+      const actualDecision = checkWritePermissionForTool(
+        FileWriteTool,
+        { ...input, file_path: filePath },
+        appState.toolPermissionContext,
+        [filePath],
+      )
+      if (actualDecision.behavior !== 'allow') return actualDecision
+    }
+    return {
+      ...originalDecision,
+      updatedInput:
+        context.preparedExecution?.toolName === FILE_WRITE_TOOL_NAME
+          ? context.preparedExecution.input
+          : input,
+    }
+  },
+  async prepareExecution(input) {
+    const filePath = expandPath(input.file_path)
+    if (filePath.startsWith('\\\\') || filePath.startsWith('//')) {
+      const state = bindPreparedFileInput(
+        {
+          originalPath: filePath,
+          canonicalPath: filePath,
+          relativePath: filePath,
+          pathnameLimited: true,
+          async cleanup() {},
+        },
+        input,
+        value => inputSchema().parse(value),
+      )
+      return {
+        state,
+        cleanup() {},
+      }
+    }
+    const prepared = await prepareFileMutationAuthorization(input.file_path)
+    bindPreparedFileInput(prepared, input, value => inputSchema().parse(value))
+    return { state: prepared, cleanup: prepared.cleanup }
   },
   renderToolUseRejectedMessage,
   renderToolUseErrorMessage,
@@ -159,7 +218,8 @@ export const FileWriteTool = buildTool({
     // shown — phantom. Under-count: tool_use already indexes file_path.
     return ''
   },
-  async validateInput({ file_path, content }, toolUseContext: ToolUseContext) {
+  async validateInput(input, toolUseContext: ToolUseContext) {
+    const { file_path, content } = input
     const fullFilePath = expandPath(file_path)
 
     // Reject writes to team memory files that contain secrets
@@ -192,15 +252,46 @@ export const FileWriteTool = buildTool({
       return { result: true }
     }
 
-    let currentIdentity: ReturnType<typeof getFileIdentity>
-    try {
-      currentIdentity = getFileIdentity(fullFilePath)
-    } catch (e) {
-      if (isENOENT(e)) {
-        return { result: true }
+    const prepared = getPreparedFileMutation(
+      toolUseContext,
+      FILE_WRITE_TOOL_NAME,
+      input,
+    )
+    if (
+      prepared &&
+      [prepared.canonicalPath, prepared.actualPath]
+        .filter((path): path is string => path !== undefined)
+        .some(
+          path =>
+            matchingRuleForInput(
+              path,
+              appState.toolPermissionContext,
+              'edit',
+              'deny',
+            ) !== null,
+        )
+    ) {
+      return {
+        result: false,
+        message:
+          'File is in a directory that is denied by your permission settings.',
+        errorCode: 1,
       }
-      throw e
     }
+    if (!prepared) {
+      return {
+        result: false,
+        message: 'FileWrite requires a prepared filesystem capability.',
+        errorCode: 4,
+      }
+    }
+    const currentIdentity = prepared.existing
+      ? {
+          canonicalPath: prepared.canonicalPath,
+          ...prepared.existing.identity,
+        }
+      : undefined
+    if (currentIdentity === undefined) return { result: true }
 
     const readTimestamp = toolUseContext.readFileState.get(fullFilePath)
     if (!isCompleteUnboundedRead(readTimestamp)) {
@@ -212,10 +303,8 @@ export const FileWriteTool = buildTool({
       }
     }
 
-    if (
-      readTimestamp.fileIdentity === undefined ||
-      !fileIdentitiesEqual(readTimestamp.fileIdentity, currentIdentity)
-    ) {
+    if (readTimestamp.fileIdentity === undefined ||
+      !fileIdentitiesEqual(readTimestamp.fileIdentity, currentIdentity)) {
       return {
         result: false,
         message:
@@ -237,55 +326,98 @@ export const FileWriteTool = buildTool({
     return { result: true }
   },
   async call(
-    { file_path, content },
-    { readFileState, updateFileHistoryState, dynamicSkillDirTriggers },
+    input,
+    context,
     _,
     parentMessage,
   ) {
-    const fullFilePath = expandPath(file_path)
-    const dir = dirname(fullFilePath)
-
-    // Discover skills from this file's path (fire-and-forget, non-blocking)
-    const cwd = getCwd()
-    const newSkillDirs = await discoverSkillDirsForPaths([fullFilePath], cwd)
-    if (newSkillDirs.length > 0) {
-      // Store discovered dirs for attachment display
-      for (const dir of newSkillDirs) {
-        dynamicSkillDirTriggers?.add(dir)
-      }
-      // Don't await - let skill loading happen in the background
-      addSkillDirectories(newSkillDirs).catch(() => {})
+    const { file_path, content } = input
+    const { readFileState, updateFileHistoryState, dynamicSkillDirTriggers } =
+      context
+    let prepared = getPreparedFileMutation(
+      context,
+      FILE_WRITE_TOOL_NAME,
+      input,
+    )
+    if (!prepared) {
+      throw new Error('FileWrite requires a prepared filesystem capability')
     }
+    const fullFilePath = expandPath(file_path)
+    const materializedUnc = prepared.pathnameLimited && process.platform === 'win32'
+    if (materializedUnc) {
+      prepared = await prepareApprovedUncFileMutation(fullFilePath)
+      const permissions = context.getAppState().toolPermissionContext
+      for (const path of [
+        prepared.canonicalPath,
+        ...(prepared.actualPath ? [prepared.actualPath] : []),
+      ]) {
+        if (matchingRuleForInput(path, permissions, 'edit', 'deny') !== null) {
+          await prepared.cleanup()
+          throw new Error('Permission to edit this UNC target is denied.')
+        }
+      }
+    }
+    const boundPath = prepared.canonicalPath
 
-    // Activate conditional skills whose path patterns match this file
-    activateConditionalSkillsForPaths([fullFilePath], cwd)
-
-    const releaseMutationLock = await acquireFileMutationLock(fullFilePath)
+    let releaseMutationLock: (() => Promise<void>) | undefined
     try {
-      await diagnosticTracker.beforeFileEdited(fullFilePath)
+      // Discover skills from this file's path (fire-and-forget, non-blocking)
+      const cwd = getCwd()
+      const newSkillDirs = await discoverSkillDirsForPaths([boundPath], cwd)
+      if (newSkillDirs.length > 0) {
+        // Store discovered dirs for attachment display
+        for (const dir of newSkillDirs) {
+          dynamicSkillDirTriggers?.add(dir)
+        }
+        // Don't await - let skill loading happen in the background
+        addSkillDirectories(newSkillDirs).catch(() => {})
+      }
+
+      // Activate conditional skills whose path patterns match this file
+      activateConditionalSkillsForPaths([boundPath], cwd)
+
+      releaseMutationLock = await acquireFileMutationLock(fullFilePath)
+    } catch (error) {
+      if (materializedUnc) await prepared.cleanup()
+      throw error
+    }
+    try {
+      await diagnosticTracker.beforeFileEdited(boundPath)
+
+    if (prepared.pathnameLimited) {
+      await getFsImplementation().mkdir(dirname(fullFilePath))
+    }
 
     // Ensure parent directory exists before the atomic read-modify-write section.
     // Must stay OUTSIDE the critical section below (a yield between the staleness
     // check and writeTextContent lets concurrent edits interleave), and BEFORE the
     // write (lazy-mkdir-on-ENOENT would fire a spurious tengu_atomic_write_error
     // inside writeFileSyncAndFlush_DEPRECATED before ENOENT propagates back).
-    await getFsImplementation().mkdir(dir)
     if (fileHistoryEnabled()) {
       // Backup captures pre-edit content — safe to call before the staleness
       // check (idempotent v1 backup keyed on content hash; if staleness fails
       // later we just have an unused backup, not corrupt state).
       await fileHistoryTrackEdit(
         updateFileHistoryState,
-        fullFilePath,
-        parentMessage.uuid,
+        boundPath,
+        parentMessage.uuid as Parameters<typeof fileHistoryTrackEdit>[2],
+        await fileHistorySourceForPreparedMutation(prepared),
       )
     }
 
     // Load current state and confirm no changes since last read.
     // Please avoid async operations between here and writing to disk to preserve atomicity.
-    let meta: ReturnType<typeof readFileSyncWithMetadata> | null
+    let meta: Awaited<ReturnType<typeof readPreparedFileMetadata>> | null
     try {
-      meta = readFileSyncWithMetadata(fullFilePath)
+      meta =
+        prepared.pathnameLimited
+          ? {
+              ...readFileSyncWithMetadata(fullFilePath),
+              identity: getFileIdentity(fullFilePath),
+            }
+          : prepared.existing === undefined
+            ? null
+            : await readPreparedFileMetadata(prepared)
     } catch (e) {
       if (isENOENT(e)) {
         meta = null
@@ -306,7 +438,12 @@ export const FileWriteTool = buildTool({
         lastRead.fileIdentity === undefined ||
         !fileIdentitiesEqual(
           lastRead.fileIdentity,
-          getFileIdentity(fullFilePath),
+          prepared.pathnameLimited
+            ? getFileIdentity(fullFilePath)
+            : {
+                canonicalPath: prepared.canonicalPath,
+                ...prepared.existing!.identity,
+              },
         )
       ) {
         throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
@@ -322,7 +459,7 @@ export const FileWriteTool = buildTool({
     // the old file's line endings (or sampled the repo via ripgrep for new
     // files), which silently corrupted e.g. bash scripts with \r on Linux when
     // overwriting a CRLF file or when binaries in cwd poisoned the repo sample.
-    writeFileWithSideEffects({
+    await writeFileWithSideEffects({
       absoluteFilePath: fullFilePath,
       originalFileContents: oldContent,
       updatedFile: content,
@@ -330,6 +467,7 @@ export const FileWriteTool = buildTool({
       lineEndings: 'LF',
       readFileState,
       expectedIdentity,
+      preparedMutation: prepared.parent === undefined ? undefined : prepared,
     })
 
     // Log when writing to CLAUDE.md
@@ -413,7 +551,11 @@ export const FileWriteTool = buildTool({
       data,
     }
     } finally {
-      await releaseMutationLock()
+      try {
+        await releaseMutationLock?.()
+      } finally {
+        if (materializedUnc) await prepared.cleanup()
+      }
     }
   },
   mapToolResultToToolResultBlockParam({ filePath, type }, toolUseID) {

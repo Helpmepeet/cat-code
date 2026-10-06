@@ -1,118 +1,77 @@
 import { c as _c } from "react/compiler-runtime";
 import { basename, relative } from 'path';
-import React, { Suspense, use, useMemo } from 'react';
+import React, { Suspense, use } from 'react';
 import { FileEditToolDiff } from 'src/components/FileEditToolDiff.js';
 import { getCwd } from 'src/utils/cwd.js';
-import { isENOENT } from 'src/utils/errors.js';
-import { detectEncodingForResolvedPath } from 'src/utils/fileRead.js';
-import { getFsImplementation } from 'src/utils/fsOperations.js';
 import { Text } from '../../../ink.js';
 import { BashTool } from '../../../tools/BashTool/BashTool.js';
-import { applySedSubstitution, type SedEditInfo } from '../../../tools/BashTool/sedEditParser.js';
+import type { SedEditInfo } from '../../../tools/BashTool/sedEditParser.js';
+import {
+  isPreparedSedEditPreview,
+  markSedEditApprovalExpected,
+  registerTrustedSedEditApproval,
+} from '../../../tools/BashTool/sedEditCapability.js';
+import type { SedEditPreviewForUI } from '../../../tools/BashTool/sedEditCapability.js';
 import { FilePermissionDialog } from '../FilePermissionDialog/FilePermissionDialog.js';
 import type { PermissionRequestProps } from '../PermissionRequest.js';
 type SedEditPermissionRequestProps = PermissionRequestProps & {
   sedInfo: SedEditInfo;
+  preview: SedEditPreviewForUI | Promise<SedEditPreviewForUI>;
 };
-type FileReadResult = {
-  oldContent: string;
-  fileExists: boolean;
-};
-export function SedEditPermissionRequest(t0) {
-  const $ = _c(9);
-  let props;
-  let sedInfo;
-  if ($[0] !== t0) {
-    ({
-      sedInfo,
-      ...props
-    } = t0);
-    $[0] = t0;
-    $[1] = props;
-    $[2] = sedInfo;
-  } else {
-    props = $[1];
-    sedInfo = $[2];
-  }
-  const {
-    filePath
-  } = sedInfo;
-  let t1;
-  if ($[3] !== filePath) {
-    t1 = (async () => {
-      const encoding = detectEncodingForResolvedPath(filePath);
-      const raw = await getFsImplementation().readFile(filePath, {
-        encoding
-      });
-      return {
-        oldContent: raw.replaceAll("\r\n", "\n"),
-        fileExists: true
-      };
-    })().catch(_temp);
-    $[3] = filePath;
-    $[4] = t1;
-  } else {
-    t1 = $[4];
-  }
-  const contentPromise = t1;
-  let t2;
-  if ($[5] !== contentPromise || $[6] !== props || $[7] !== sedInfo) {
-    t2 = <Suspense fallback={null}><SedEditPermissionRequestInner sedInfo={sedInfo} contentPromise={contentPromise} {...props} /></Suspense>;
-    $[5] = contentPromise;
-    $[6] = props;
-    $[7] = sedInfo;
-    $[8] = t2;
-  } else {
-    t2 = $[8];
-  }
-  return t2;
+const remotePreviewPromises = new WeakMap<object, Promise<SedEditPreviewForUI>>();
+
+export function SedEditPermissionRequest(
+  props: SedEditPermissionRequestProps,
+): React.ReactNode {
+  const preview =
+    props.preview instanceof Promise
+      ? props.preview
+      : getRemotePreviewPromise(props.preview);
+  return (
+    <Suspense fallback={null}>
+      <SedEditPermissionRequestInner {...props} preview={preview} />
+    </Suspense>
+  );
 }
-function _temp(e) {
-  if (!isENOENT(e)) {
-    throw e;
+
+function getRemotePreviewPromise(
+  preview: SedEditPreviewForUI,
+): Promise<SedEditPreviewForUI> {
+  let promise = remotePreviewPromises.get(preview)
+  if (!promise) {
+    promise = Promise.resolve(preview)
+    remotePreviewPromises.set(preview, promise)
   }
-  return {
-    oldContent: "",
-    fileExists: false
-  };
+  return promise
 }
+
 function SedEditPermissionRequestInner(t0) {
   const $ = _c(35);
-  let contentPromise;
   let props;
   let sedInfo;
+  let previewPromise;
   if ($[0] !== t0) {
     ({
       sedInfo,
-      contentPromise,
+      preview: previewPromise,
       ...props
     } = t0);
     $[0] = t0;
-    $[1] = contentPromise;
+    $[1] = previewPromise;
     $[2] = props;
     $[3] = sedInfo;
   } else {
-    contentPromise = $[1];
+    previewPromise = $[1];
     props = $[2];
     sedInfo = $[3];
   }
+  const preview = use(previewPromise);
   const {
-    filePath
-  } = sedInfo;
-  const {
-    oldContent,
-    fileExists
-  } = use(contentPromise);
-  let t1;
-  if ($[4] !== oldContent || $[5] !== sedInfo) {
-    t1 = applySedSubstitution(oldContent, sedInfo);
-    $[4] = oldContent;
-    $[5] = sedInfo;
-    $[6] = t1;
-  } else {
-    t1 = $[6];
-  }
-  const newContent = t1;
+    filePath,
+    originalContent: oldContent,
+    newContent,
+    fileExists,
+  } = preview;
   let t2;
   bb0: {
     if (oldContent === newContent) {
@@ -154,14 +113,7 @@ function SedEditPermissionRequestInner(t0) {
   let t4;
   if ($[11] !== filePath || $[12] !== newContent) {
     t4 = input => {
-      const parsed = BashTool.inputSchema.parse(input);
-      return {
-        ...parsed,
-        _simulatedSedEdit: {
-          filePath,
-          newContent
-        }
-      };
+      return BashTool.inputSchema.parse(input);
     };
     $[11] = filePath;
     $[12] = newContent;
@@ -170,7 +122,36 @@ function SedEditPermissionRequestInner(t0) {
     t4 = $[13];
   }
   const parseInput = t4;
-  const t5 = props.toolUseConfirm;
+  const t5 = {
+    ...props.toolUseConfirm,
+    onAllow(input, permissionUpdates, feedback, contentBlocks) {
+      const preparedState = props.toolUseContext.preparedExecution?.state;
+      if (
+        isPreparedSedEditPreview(preparedState) &&
+        preparedState.toolUseID === preview.toolUseID &&
+        preparedState.previewId === preview.previewId
+      ) {
+        markSedEditApprovalExpected(preparedState);
+      }
+      registerTrustedSedEditApproval(
+        input,
+        props.toolUseConfirm.toolUseID,
+        {
+          toolUseID: preview.toolUseID,
+          command: preview.command,
+          filePath: preview.filePath,
+          previewId: preview.previewId,
+          identity: preview.identity,
+        }
+      );
+      return props.toolUseConfirm.onAllow(
+        input,
+        permissionUpdates,
+        feedback,
+        contentBlocks
+      );
+    }
+  };
   const t6 = props.toolUseContext;
   const t7 = props.onDone;
   const t8 = props.onReject;

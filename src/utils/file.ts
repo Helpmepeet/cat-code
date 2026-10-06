@@ -24,6 +24,7 @@ import {
 } from './fileRead.js'
 import { fileReadCache } from './fileReadCache.js'
 import { getFsImplementation, safeResolvePath } from './fsOperations.js'
+import { getWindowsFileIdentityForPath } from './windowsContainedFs.js'
 import { logError } from './log.js'
 import { expandPath } from './path.js'
 import { getPlatform } from './platform.js'
@@ -46,9 +47,13 @@ export type FileIdentity = {
   size: number
   modifiedAtMs: number
   changedAtMs: number
+  nativeFileId?: string
 }
 
 export function getFileIdentity(filePath: string): FileIdentity {
+  if (process.platform === 'win32') {
+    return getWindowsFileIdentityForPath(filePath)
+  }
   const fs = getFsImplementation()
   const canonicalPath = fs.realpathSync(filePath)
   const stats = fs.statSync(canonicalPath)
@@ -72,7 +77,8 @@ export function fileIdentitiesEqual(
     first.inode === second.inode &&
     first.size === second.size &&
     first.modifiedAtMs === second.modifiedAtMs &&
-    first.changedAtMs === second.changedAtMs
+    first.changedAtMs === second.changedAtMs &&
+    first.nativeFileId === second.nativeFileId
   )
 }
 

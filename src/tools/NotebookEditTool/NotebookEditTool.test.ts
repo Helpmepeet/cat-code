@@ -12,7 +12,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { acquireFileMutationLock } from '../../utils/atomicFile.js'
 import { getFileIdentity } from '../../utils/file.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
-import { FileReadTool } from '../FileReadTool/FileReadTool.js'
+import { callFileReadToolWithPreparedCapability } from '../FileReadTool/FileReadTool.js'
 import { NotebookEditTool, outputSchema } from './NotebookEditTool.js'
 
 const tempDirs: string[] = []
@@ -333,7 +333,10 @@ describe('NotebookEditTool mutation safety', () => {
     const priorSimple = process.env.CLAUDE_CODE_SIMPLE
     process.env.CLAUDE_CODE_SIMPLE = '1'
     try {
-      await FileReadTool.call({ file_path: notebookPath }, readContext as never)
+      await callFileReadToolWithPreparedCapability(
+        { file_path: notebookPath },
+        readContext as never,
+      )
       expect(
         (await NotebookEditTool.validateInput(input, context as never)).result,
       ).toBe(true)
@@ -351,7 +354,7 @@ describe('NotebookEditTool mutation safety', () => {
         )
       }
 
-      const result = await FileReadTool.call(
+      const result = await callFileReadToolWithPreparedCapability(
         { file_path: notebookPath },
         readContext as never,
       )

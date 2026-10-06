@@ -12,6 +12,7 @@ import { BashTool } from '../../../tools/BashTool/BashTool.js';
 import { getFirstWordPrefix, getSimpleCommandPrefix } from '../../../tools/BashTool/bashPermissions.js';
 import { getDestructiveCommandWarning } from '../../../tools/BashTool/destructiveCommandWarning.js';
 import { parseSedEditCommand } from '../../../tools/BashTool/sedEditParser.js';
+import { getSedEditPreviewChallenge, getSedEditPreviewForUI, isPreparedSedEditPreview } from '../../../tools/BashTool/sedEditCapability.js';
 import { shouldUseSandbox } from '../../../tools/BashTool/shouldUseSandbox.js';
 import { getCompoundCommandPrefixesStatic } from '../../../utils/bash/prefix.js';
 import { createPromptRuleContent, generateGenericDescription, getBashPromptAllowDescriptions, isClassifierPermissionsEnabled } from '../../../utils/permissions/bashClassifier.js';
@@ -97,13 +98,35 @@ export function BashPermissionRequest(props) {
     t0 = $[3];
   }
   const sedInfo = t0;
-  if (sedInfo) {
+  const preparedSedState = toolUseContext.preparedExecution?.state;
+  const localPreparedPreview = isPreparedSedEditPreview(preparedSedState) &&
+    preparedSedState.toolUseID === toolUseConfirm.toolUseID &&
+    preparedSedState.command === command
+      ? preparedSedState
+      : undefined;
+  const previewChallenge =
+    toolUseConfirm.sedEditPreview ??
+    (localPreparedPreview
+      ? getSedEditPreviewChallenge(localPreparedPreview)
+      : undefined);
+  const preview = toolUseConfirm.sedEditPreview ??
+    (localPreparedPreview
+      ? getSedEditPreviewForUI(localPreparedPreview)
+      : undefined);
+  if (
+    sedInfo &&
+    previewChallenge &&
+    preview &&
+    previewChallenge.toolUseID === toolUseConfirm.toolUseID &&
+    previewChallenge.command === command &&
+    previewChallenge.identity.canonicalPath === previewChallenge.filePath
+  ) {
     let t1;
-    if ($[4] !== onDone || $[5] !== onReject || $[6] !== sedInfo || $[7] !== toolUseConfirm || $[8] !== toolUseContext || $[9] !== verbose || $[10] !== workerBadge) {
-      t1 = <SedEditPermissionRequest toolUseConfirm={toolUseConfirm} toolUseContext={toolUseContext} onDone={onDone} onReject={onReject} verbose={verbose} workerBadge={workerBadge} sedInfo={sedInfo} />;
+    if ($[4] !== onDone || $[5] !== onReject || $[6] !== preview || $[7] !== toolUseConfirm || $[8] !== toolUseContext || $[9] !== verbose || $[10] !== workerBadge) {
+      t1 = <SedEditPermissionRequest toolUseConfirm={toolUseConfirm} toolUseContext={toolUseContext} onDone={onDone} onReject={onReject} verbose={verbose} workerBadge={workerBadge} sedInfo={previewChallenge ? parseSedEditCommand(command)! : sedInfo} preview={preview} />;
       $[4] = onDone;
       $[5] = onReject;
-      $[6] = sedInfo;
+      $[6] = preview;
       $[7] = toolUseConfirm;
       $[8] = toolUseContext;
       $[9] = verbose;

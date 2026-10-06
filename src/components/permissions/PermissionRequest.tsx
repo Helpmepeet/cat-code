@@ -44,6 +44,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs
 import type { z } from 'zod/v4';
 import type { PermissionUpdate } from '../../utils/permissions/PermissionUpdateSchema.js';
 import type { WorkerBadgeProps } from './WorkerBadge.js';
+import type { SedEditPreviewForUI } from '../../tools/BashTool/sedEditCapability.js';
 function permissionComponentForTool(tool: Tool): React.ComponentType<PermissionRequestProps> {
   switch (tool) {
     case FileEditTool:
@@ -118,6 +119,8 @@ export type ToolUseConfirm<Input extends AnyObject = AnyObject> = {
   classifierAutoApproved?: boolean;
   classifierMatchedRule?: string;
   workerBadge?: WorkerBadgeProps;
+  /** Data for an authenticated SedEdit preview; never model-visible. */
+  sedEditPreview?: SedEditPreviewForUI;
   onUserInteraction(): void;
   onAbort(): void;
   onDismissCheckmark?(): void;

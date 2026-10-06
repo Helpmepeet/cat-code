@@ -18,6 +18,12 @@ import {
   registerPermissionCallback,
   unregisterPermissionCallback,
 } from '../../hooks/useSwarmPermissionPoller.js'
+import { issueUserApprovalReceipt } from '../../services/tools/toolInputSecurity.js'
+import {
+  getSedEditPreviewChallenge,
+  isPreparedSedEditPreview,
+  markSedEditApprovalExpected,
+} from '../../tools/BashTool/sedEditCapability.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -298,6 +304,11 @@ function createInProcessCanUseTool(
             ) {
               if (decisionMade) return
               decisionMade = true
+              issueUserApprovalReceipt(
+                (tool as Tool).name,
+                updatedInput,
+                toolUseID,
+              )
               abortController.signal.removeEventListener(
                 'abort',
                 onAbortListener,
@@ -389,12 +400,21 @@ function createInProcessCanUseTool(
         resolve(decision)
       }
 
+      const preparedSedState = toolUseContext.preparedExecution?.state
+      const preparedSedPreview = isPreparedSedEditPreview(preparedSedState)
+        ? preparedSedState
+        : undefined
+      const sedEditPreview = preparedSedPreview
+        ? getSedEditPreviewChallenge(preparedSedPreview)
+        : undefined
+
       const request = createPermissionRequest({
         toolName: (tool as Tool).name,
         toolUseId: toolUseID,
         input,
         description,
         permissionSuggestions: result.suggestions,
+        trustedSedEditPreview: sedEditPreview,
         workerId: identity.agentId,
         workerName: identity.agentName,
         workerColor: identity.color,
@@ -404,7 +424,14 @@ function createInProcessCanUseTool(
       // Register callback to be invoked when the leader responds
       registerPermissionCallback({
         requestId: request.id,
+        toolName: (tool as Tool).name,
         toolUseId: toolUseID,
+        sedEditPreview,
+        expectSedEditApproval() {
+          if (!preparedSedPreview) return false
+          markSedEditApprovalExpected(preparedSedPreview)
+          return true
+        },
         onAllow(
           updatedInput: Record<string, unknown> | undefined,
           permissionUpdates: PermissionUpdate[],
@@ -444,9 +471,32 @@ function createInProcessCanUseTool(
           identity.agentName,
           identity.teamName,
         )
+        const snapshot = await readTeamSnapshot(identity.teamName)
+        const receiver = resolveTeamPrincipalByName(
+          snapshot,
+          identity.agentName,
+        )
+        if (!receiver) return
         for (let i = 0; i < allMessages.length; i++) {
           const msg = allMessages[i]
-          if (msg && !msg.read) {
+          const sender = msg
+            ? resolveTeamPrincipalByName(snapshot, msg.from)
+            : null
+          const classified =
+            msg && sender
+              ? classifyMailboxMessage({
+                  message: msg,
+                  sender,
+                  receiver,
+                  pendingControls: snapshot.pendingControls ?? [],
+                })
+              : null
+          if (
+            msg &&
+            !msg.read &&
+            classified?.kind === 'control' &&
+            classified.control.type === 'permission_response'
+          ) {
             const parsed = isPermissionResponse(msg.text)
             if (parsed && parsed.request_id === request.id) {
               await markMessageAsReadByIndex(
@@ -460,6 +510,10 @@ function createInProcessCanUseTool(
                   decision: 'approved',
                   updatedInput: parsed.response?.updated_input,
                   permissionUpdates: parsed.response?.permission_updates,
+                  trustedSedEditApproval:
+                    parsed.response?.trusted_sed_edit_approval,
+                  sedEditPreviewApproved:
+                    parsed.response?.sed_edit_preview_approved,
                 })
               } else {
                 processMailboxPermissionResponse({

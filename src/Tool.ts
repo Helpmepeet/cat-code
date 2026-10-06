@@ -196,6 +196,13 @@ export type McpRuntimeInputs = {
 }
 
 export type ToolUseContext = {
+  /** Engine-issued, per-input execution preparation. The input reference must
+   * match the canonical candidate for which the state was prepared. */
+  preparedExecution?: {
+    toolName: string
+    input: Record<string, unknown>
+    state: unknown
+  }
   /** Engine-owned, main-turn-only transfer fence; workers cannot accept it. */
   turnHandoff?: import('./app-runtime/handoff.js').TurnHandoff
   options: {
@@ -562,6 +569,14 @@ export type Tool<
    * hook/permission returns a fresh updatedInput — those own their shape.
    */
   backfillObservableInput?(input: Record<string, unknown>): void
+
+  prepareExecution?(
+    input: z.infer<Input>,
+    context: ToolUseContext,
+  ): Promise<{
+    state: unknown
+    cleanup(): Promise<void> | void
+  }>
 
   /**
    * Determines if this tool is allowed to run with this input in the current context.

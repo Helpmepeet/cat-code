@@ -28,12 +28,18 @@ import {
   type ToolUseDiff,
 } from '../../utils/gitDiff.js'
 import { expandPath } from '../../utils/path.js'
+import {
+  bindPreparedFileInput,
+  getPreparedFileMutation,
+  prepareApprovedUncFileMutation,
+  prepareFileMutationAuthorization,
+} from '../../utils/fileAuthorization.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from './constants.js'
 import { getEditToolDescription } from './prompt.js'
 import {
-  assertFileUnchangedSinceRead,
+  assertPreparedFileUnchangedSinceRead,
   backfillObservableFilePath,
   checkSingleFileWritePermissions,
   isUncPath,
@@ -105,7 +111,63 @@ export const FileEditTool = buildTool({
     return prepareFilePermissionMatcher(file_path)
   },
   async checkPermissions(input, context) {
-    return checkSingleFileWritePermissions(FileEditTool, input, context)
+    const originalDecision = checkSingleFileWritePermissions(
+      FileEditTool,
+      input,
+      context,
+    )
+    if (originalDecision.behavior !== 'allow') return originalDecision
+    const prepared = getPreparedFileMutation(
+      context,
+      FILE_EDIT_TOOL_NAME,
+      input,
+    )
+    if (!prepared) return originalDecision
+    const actualPaths = [
+      ...new Set([
+        prepared.canonicalPath,
+        prepared.actualPath ?? prepared.canonicalPath,
+      ]),
+    ]
+    for (const filePath of actualPaths) {
+      const actualDecision = checkSingleFileWritePermissions(
+        FileEditTool,
+        { ...input, file_path: filePath },
+        context,
+        [filePath],
+      )
+      if (actualDecision.behavior !== 'allow') return actualDecision
+    }
+    return {
+      ...originalDecision,
+      updatedInput:
+        context.preparedExecution?.toolName === FILE_EDIT_TOOL_NAME
+          ? context.preparedExecution.input
+          : input,
+    }
+  },
+  async prepareExecution(input) {
+    const filePath = expandPath(input.file_path)
+    if (isUncPath(filePath)) {
+      const state = bindPreparedFileInput(
+        {
+          originalPath: filePath,
+          canonicalPath: filePath,
+          relativePath: filePath,
+          pathnameLimited: true,
+          async cleanup() {},
+        },
+        input,
+        value => inputSchema().parse(value),
+      )
+      return {
+        state,
+        cleanup() {},
+      }
+    }
+    const prepared = await prepareFileMutationAuthorization(input.file_path)
+    bindPreparedFileInput(prepared, input, value => inputSchema().parse(value))
+    return { state: prepared, cleanup: prepared.cleanup }
   },
   renderToolUseMessage,
   renderToolResultMessage,
@@ -116,6 +178,18 @@ export const FileEditTool = buildTool({
     // Use expandPath for consistent path normalization (especially on Windows
     // where "/" vs "\" can cause readFileState lookup mismatches)
     const fullFilePath = expandPath(file_path)
+    const prepared = getPreparedFileMutation(
+      toolUseContext,
+      FILE_EDIT_TOOL_NAME,
+      input,
+    )
+    if (!prepared) {
+      return {
+        result: false,
+        message: 'FileEdit requires a prepared filesystem capability.',
+        errorCode: 4,
+      }
+    }
 
     const secretValidation = validateTeamMemorySecrets(fullFilePath, new_string)
     if (secretValidation) {
@@ -135,17 +209,32 @@ export const FileEditTool = buildTool({
     if (denyValidation) {
       return denyValidation
     }
+    for (const actualPath of [
+      prepared.canonicalPath,
+      ...(prepared.actualPath ? [prepared.actualPath] : []),
+    ]) {
+      const actualDenyValidation = validateEditDenyRule(
+        actualPath,
+        toolUseContext,
+        2,
+      )
+      if (actualDenyValidation) return actualDenyValidation
+    }
 
     if (isUncPath(fullFilePath)) {
       return { result: true }
     }
 
-    const sizeValidation = await validateEditableFileSize(fullFilePath)
+    const sizeValidation = prepared.existing
+      ? await validateEditableFileSize(prepared.existing)
+      : null
     if (sizeValidation) {
       return sizeValidation
     }
 
-    const fileContent = await readFileContentForValidation(fullFilePath)
+    const fileContent = prepared.existing
+      ? await readFileContentForValidation(prepared.existing)
+      : null
 
     // File doesn't exist
     if (fileContent === null) {
@@ -295,25 +384,51 @@ export const FileEditTool = buildTool({
   },
   async call(
     input: FileEditInput,
-    {
+    context,
+    _,
+    parentMessage,
+  ) {
+    const {
       readFileState,
       userModified,
       updateFileHistoryState,
       dynamicSkillDirTriggers,
-    },
-    _,
-    parentMessage,
-  ) {
+    } = context
+    let prepared = getPreparedFileMutation(
+      context,
+      FILE_EDIT_TOOL_NAME,
+      input,
+    )
+    if (!prepared) {
+      throw new Error('FileEdit requires a prepared filesystem capability')
+    }
     const { file_path, old_string, new_string, replace_all = false } = input
 
     const absoluteFilePath = expandPath(file_path)
+    const materializedUnc =
+      prepared.pathnameLimited && process.platform === 'win32'
+    if (materializedUnc) {
+      prepared = await prepareApprovedUncFileMutation(absoluteFilePath)
+      for (const actualPath of [
+        prepared.canonicalPath,
+        ...(prepared.actualPath ? [prepared.actualPath] : []),
+      ]) {
+        const actualDeny = validateEditDenyRule(actualPath, context, 2)
+        if (actualDeny) {
+          await prepared.cleanup()
+          throw new Error(actualDeny.message)
+        }
+      }
+    }
 
+    let releaseMutationLock: (() => Promise<void>) | undefined
+    try {
     // Discover skills from this file's path (fire-and-forget, non-blocking)
     // Skip in simple mode - no skills available
     const cwd = getCwd()
     if (!isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
       const newSkillDirs = await discoverSkillDirsForPaths(
-        [absoluteFilePath],
+        [prepared.canonicalPath],
         cwd,
       )
       if (newSkillDirs.length > 0) {
@@ -326,15 +441,20 @@ export const FileEditTool = buildTool({
       }
 
       // Activate conditional skills whose path patterns match this file
-      activateConditionalSkillsForPaths([absoluteFilePath], cwd)
+      activateConditionalSkillsForPaths([prepared.canonicalPath], cwd)
     }
 
-    const releaseMutationLock = await acquireFileMutationLock(absoluteFilePath)
+    releaseMutationLock = await acquireFileMutationLock(absoluteFilePath)
+    } catch (error) {
+      if (materializedUnc) await prepared.cleanup()
+      throw error
+    }
     try {
       await prepareFileMutation(
-        absoluteFilePath,
+        prepared.canonicalPath,
         updateFileHistoryState,
-        parentMessage.uuid,
+        parentMessage.uuid as never,
+        prepared,
       )
 
     // 2. Load current state and confirm no changes since last read
@@ -345,13 +465,14 @@ export const FileEditTool = buildTool({
       encoding,
       lineEndings: endings,
         identity,
-    } = readFileForEdit(absoluteFilePath)
+    } = await readFileForEdit(absoluteFilePath, prepared)
 
     if (fileExists) {
-      assertFileUnchangedSinceRead(
+      await assertPreparedFileUnchangedSinceRead(
         absoluteFilePath,
         originalFileContents,
         readFileState,
+        prepared,
       )
     }
 
@@ -375,7 +496,7 @@ export const FileEditTool = buildTool({
       replaceAll: replace_all,
     })
 
-    writeFileWithSideEffects({
+    await writeFileWithSideEffects({
       absoluteFilePath,
       originalFileContents,
       updatedFile,
@@ -383,6 +504,7 @@ export const FileEditTool = buildTool({
       lineEndings: endings,
       readFileState,
       expectedIdentity: fileExists ? identity : undefined,
+      preparedMutation: prepared.parent === undefined ? undefined : prepared,
     })
 
     // 7. Log events
@@ -438,7 +560,11 @@ export const FileEditTool = buildTool({
       data,
       }
     } finally {
-      await releaseMutationLock()
+      try {
+        await releaseMutationLock?.()
+      } finally {
+        if (materializedUnc) await prepared.cleanup()
+      }
     }
   },
   mapToolResultToToolResultBlockParam(data: FileEditOutput, toolUseID) {

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { PNG } from 'pngjs'
-import { dirname, join } from 'path'
+import { dirname, join, relative } from 'path'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
   getCodexLeaseForOwner,
@@ -17,6 +17,7 @@ import {
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { getCwd } from '../../utils/cwd.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import {
   clearCodexOAuthTokens,
@@ -180,6 +181,88 @@ describe('GenerateImageTool', () => {
     expect(input.output_path).toMatch(
       /\/\.cat-code\/generated-images\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-a-watercolor-cat-[a-f0-9]{8}\.png$/,
     )
+  })
+
+  test('normalizes defaults and reference paths before frozen permission and call phases', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tempDir!
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'prepared-image-account',
+      accounts: [buildPoolAccount('prepared-image-account')],
+    })
+
+    const referencePath = join(tempDir!, 'reference.png')
+    await writeFile(referencePath, 'mock reference image')
+    const input = GenerateImageTool.inputSchema.parse({
+      prompt: 'a watercolor cat',
+      reference_image_path: relative(getCwd(), referencePath),
+    })
+    const context = imageToolContext({
+      abortController: new AbortController(),
+      options: { mainLoopModel: 'gpt-5.6-terra' },
+      getAppState: () => ({
+        toolPermissionContext: basePermissionContext(),
+      }),
+    })
+
+    let requestBody: Record<string, unknown> | undefined
+    const generatedBytes = PNG.sync.write(new PNG({ width: 1, height: 1 }))
+    globalThis.fetch = (async (_request, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as unknown as typeof fetch
+
+    try {
+      await GenerateImageTool.prepareExecution!(input, context)
+      const outputPath = input.output_path
+      expect(outputPath).toContain(join(tempDir!, 'generated-images'))
+      expect(input.reference_image_path).toBe(referencePath)
+
+      Object.freeze(input)
+      expect(GenerateImageTool.getPath?.(input)).toBe(outputPath)
+      expect(
+        await GenerateImageTool.checkPermissions?.(input, context),
+      ).toMatchObject({ behavior: 'allow', updatedInput: input })
+      expect(await GenerateImageTool.validateInput?.(input, context)).toEqual({
+        result: true,
+      })
+
+      const result = await GenerateImageTool.call(
+        input,
+        context,
+        async () => ({ behavior: 'allow' as const }),
+        {} as never,
+      )
+      expect(result.data.filePath).toBe(outputPath)
+      expect((await readFile(outputPath!)).equals(generatedBytes)).toBe(true)
+      expect(
+        (
+          (requestBody?.input as { content: { image_url?: string }[] }[])[0]
+            ?.content[1]
+        )?.image_url,
+      ).toBe(
+        `data:image/png;base64,${Buffer.from('mock reference image').toString('base64')}`,
+      )
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+    }
   })
 
   test('allows writes to the config generated-images artifact directory', async () => {

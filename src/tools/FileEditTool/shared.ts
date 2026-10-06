@@ -8,14 +8,21 @@ import type { Tool, ToolUseContext } from '../../Tool.js'
 import { isENOENT } from '../../utils/errors.js'
 import {
   deleteFileWithVerifiedIdentity,
+  fileIdentitiesEqual,
   getFileIdentity,
   getFileModificationTime,
   type FileIdentity,
   writeTextContentWithVerifiedIdentity,
 } from '../../utils/file.js'
 import {
+  readPreparedFileMetadata,
+  type PreparedFileMutation,
+} from '../../utils/fileAuthorization.js'
+export { readPreparedFileMetadata } from '../../utils/fileAuthorization.js'
+import {
   fileHistoryEnabled,
   fileHistoryTrackEdit,
+  type FileHistoryTrackSource,
 } from '../../utils/fileHistory.js'
 import {
   type LineEndingType,
@@ -23,6 +30,7 @@ import {
 } from '../../utils/fileRead.js'
 import { formatFileSize } from '../../utils/format.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
+import type { ContainedFileCapability } from '../../utils/containedFs.js'
 import { logError } from '../../utils/log.js'
 import { expandPath } from '../../utils/path.js'
 import {
@@ -45,6 +53,8 @@ export type FileMutationPublication = {
   existedBefore: boolean
   expectedIdentity?: FileIdentity
   publishedIdentity?: FileIdentity
+  preparedMutation?: PreparedFileMutation
+  publicationConflict?: true
 }
 
 export type FileMutationRestoration = 'restored' | 'conflict'
@@ -67,9 +77,15 @@ export function checkSingleFileWritePermissions(
   tool: Tool,
   input: Record<string, unknown>,
   context: ToolUseContext,
+  precomputedPathsToCheck?: readonly string[],
 ): PermissionDecision {
   const appState = context.getAppState()
-  return checkWritePermissionForTool(tool, input, appState.toolPermissionContext)
+  return checkWritePermissionForTool(
+    tool,
+    input,
+    appState.toolPermissionContext,
+    precomputedPathsToCheck,
+  )
 }
 
 export function validateTeamMemorySecrets(
@@ -111,22 +127,21 @@ export function isUncPath(filePath: string): boolean {
 }
 
 export async function validateEditableFileSize(
-  fullFilePath: string,
+  fullFilePath: string | ContainedFileCapability,
   maxSizeBytes: number = MAX_EDIT_FILE_SIZE,
   errorCode: number = 10,
 ): Promise<ValidationFailure | null> {
+  if (typeof fullFilePath !== 'string') {
+    return validateEditableFileSizeValue(
+      fullFilePath.identity.size,
+      maxSizeBytes,
+      errorCode,
+    )
+  }
   const fs = getFsImplementation()
   try {
     const { size } = await fs.stat(fullFilePath)
-    if (size <= maxSizeBytes) {
-      return null
-    }
-    return {
-      result: false,
-      behavior: 'ask',
-      message: `File is too large to edit (${formatFileSize(size)}). Maximum editable file size is ${formatFileSize(maxSizeBytes)}.`,
-      errorCode,
-    }
+    return validateEditableFileSizeValue(size, maxSizeBytes, errorCode)
   } catch (e) {
     if (!isENOENT(e)) {
       throw e
@@ -136,23 +151,43 @@ export async function validateEditableFileSize(
 }
 
 export async function readFileContentForValidation(
-  fullFilePath: string,
+  fullFilePath: string | ContainedFileCapability,
 ): Promise<string | null> {
+  if (typeof fullFilePath !== 'string') {
+    return decodeFileContentForValidation(await fullFilePath.readFile())
+  }
   const fs = getFsImplementation()
   try {
-    const fileBuffer = await fs.readFileBytes(fullFilePath)
-    const encoding: BufferEncoding =
-      fileBuffer.length >= 2 &&
-      fileBuffer[0] === 0xff &&
-      fileBuffer[1] === 0xfe
-        ? 'utf16le'
-        : 'utf8'
-    return fileBuffer.toString(encoding).replaceAll('\r\n', '\n')
+    return decodeFileContentForValidation(await fs.readFileBytes(fullFilePath))
   } catch (e) {
     if (isENOENT(e)) {
       return null
     }
     throw e
+  }
+}
+
+function decodeFileContentForValidation(fileBuffer: Buffer): string {
+  const encoding: BufferEncoding =
+    fileBuffer.length >= 2 &&
+    fileBuffer[0] === 0xff &&
+    fileBuffer[1] === 0xfe
+      ? 'utf16le'
+      : 'utf8'
+  return fileBuffer.toString(encoding).replaceAll('\r\n', '\n')
+}
+
+function validateEditableFileSizeValue(
+  size: number,
+  maxSizeBytes: number,
+  errorCode: number,
+): ValidationFailure | null {
+  if (size <= maxSizeBytes) return null
+  return {
+    result: false,
+    behavior: 'ask',
+    message: `File is too large to edit (${formatFileSize(size)}). Maximum editable file size is ${formatFileSize(maxSizeBytes)}.`,
+    errorCode,
   }
 }
 
@@ -208,13 +243,37 @@ export function validateFileNotModifiedSinceRead(
   }
 }
 
-export function readFileForEdit(absoluteFilePath: string): {
+export async function readFileForEdit(
+  absoluteFilePath: string,
+  prepared?: PreparedFileMutation,
+): Promise<{
   content: string
   fileExists: boolean
   encoding: BufferEncoding
   lineEndings: LineEndingType
   identity?: FileIdentity
-} {
+}> {
+  if (prepared?.pathnameLimited) {
+    return readFileForEdit(absoluteFilePath)
+  }
+  if (prepared !== undefined) {
+    if (prepared.existing === undefined) {
+      return {
+        content: '',
+        fileExists: false,
+        encoding: 'utf8',
+        lineEndings: 'LF',
+      }
+    }
+    const meta = await readPreparedFileMetadata(prepared)
+    return {
+      content: meta.content,
+      fileExists: true,
+      encoding: meta.encoding,
+      lineEndings: meta.lineEndings,
+      identity: meta.identity,
+    }
+  }
   try {
     const meta = readFileSyncWithMetadata(absoluteFilePath)
     const identity = getFileIdentity(absoluteFilePath)
@@ -258,30 +317,75 @@ export function assertFileUnchangedSinceRead(
   }
 }
 
+export async function assertPreparedFileUnchangedSinceRead(
+  absoluteFilePath: string,
+  originalFileContents: string,
+  readFileState: ToolUseContext['readFileState'],
+  prepared: PreparedFileMutation,
+): Promise<void> {
+  if (prepared.pathnameLimited) {
+    assertFileUnchangedSinceRead(
+      absoluteFilePath,
+      originalFileContents,
+      readFileState,
+    )
+    return
+  }
+  const lastRead = readFileState.get(absoluteFilePath)
+  if (!lastRead || prepared.existing === undefined) return
+  const identity = await prepared.existing.currentIdentity()
+  const lastWriteTime = Math.floor(identity.modifiedAtMs)
+  if (lastWriteTime <= lastRead.timestamp) return
+  const isFullRead =
+    lastRead.offset === undefined && lastRead.limit === undefined
+  if (isFullRead && originalFileContents === lastRead.content) return
+  throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+}
+
+export async function fileHistorySourceForPreparedMutation(
+  prepared?: PreparedFileMutation,
+): Promise<FileHistoryTrackSource | undefined> {
+  if (prepared?.parent === undefined) return undefined
+  if (prepared.existing === undefined) {
+    return { sourcePath: null }
+  }
+  const identity = await prepared.existing.currentIdentity()
+  return {
+    sourcePath: prepared.existing.path,
+    copyTo: destinationPath => prepared.existing!.copyTo(destinationPath),
+    stats: { size: identity.size, mode: identity.mode },
+  }
+}
+
 export async function prepareFileMutation(
   absoluteFilePath: string,
   updateFileHistoryState: ToolUseContext['updateFileHistoryState'],
-  parentMessageUUID: string,
+  parentMessageUUID: Parameters<typeof fileHistoryTrackEdit>[2],
+  prepared?: PreparedFileMutation,
 ): Promise<void> {
   const fs = getFsImplementation()
   await diagnosticTracker.beforeFileEdited(absoluteFilePath)
-  await fs.mkdir(dirname(absoluteFilePath))
+  if (prepared?.parent === undefined) {
+    await fs.mkdir(dirname(absoluteFilePath))
+  }
   if (fileHistoryEnabled()) {
     await fileHistoryTrackEdit(
       updateFileHistoryState,
       absoluteFilePath,
       parentMessageUUID,
+      await fileHistorySourceForPreparedMutation(prepared),
     )
   }
 }
 
-export function writeFileMutation({
+export async function writeFileMutation({
   absoluteFilePath,
   originalFileContents,
   updatedFile,
   encoding,
   lineEndings,
   expectedIdentity,
+  preparedMutation,
 }: {
   absoluteFilePath: string
   originalFileContents: string | null
@@ -289,14 +393,38 @@ export function writeFileMutation({
   encoding: BufferEncoding
   lineEndings: LineEndingType
   expectedIdentity?: FileIdentity
-}): FileMutationPublication {
-  const didWrite = writeTextContentWithVerifiedIdentity(
-    absoluteFilePath,
-    updatedFile,
-    encoding,
-    lineEndings,
-    expectedIdentity,
-  )
+  preparedMutation?: PreparedFileMutation
+}): Promise<FileMutationPublication> {
+  let didWrite: boolean
+  let publishedIdentity: FileIdentity | undefined
+  let publicationConflict = false
+  if (preparedMutation?.parent !== undefined) {
+    let toWrite = updatedFile
+    if (lineEndings === 'CRLF') {
+      toWrite = updatedFile.replaceAll('\r\n', '\n').split('\n').join('\r\n')
+    }
+    const expectedDigest = await preparedMutation.existing?.digest()
+    const identity = await preparedMutation.parent.publishFileWithIdentity(
+      preparedMutation.relativePath,
+      Buffer.from(toWrite, encoding),
+      preparedMutation.existing?.identity,
+      undefined,
+      expectedDigest,
+    )
+    didWrite = identity !== null
+    if (identity !== null) {
+      publishedIdentity = identity
+      publicationConflict = identity.publicationConflict === true
+    }
+  } else {
+    didWrite = writeTextContentWithVerifiedIdentity(
+      absoluteFilePath,
+      updatedFile,
+      encoding,
+      lineEndings,
+      expectedIdentity,
+    )
+  }
   if (!didWrite) {
     throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
   }
@@ -304,7 +432,9 @@ export function writeFileMutation({
   // Capture the exact object published by the filesystem before any cache,
   // LSP, VS Code, or logging observer can fail. This is optimistic conflict
   // detection plus cooperative locking, not crash-atomic multi-file state.
-  const publishedIdentity = getFileIdentity(absoluteFilePath)
+  if (publishedIdentity === undefined) {
+    publishedIdentity = getFileIdentity(absoluteFilePath)
+  }
   return {
     absoluteFilePath,
     beforeContent: originalFileContents,
@@ -314,6 +444,8 @@ export function writeFileMutation({
     existedBefore: expectedIdentity !== undefined,
     expectedIdentity,
     publishedIdentity,
+    ...(preparedMutation ? { preparedMutation } : {}),
+    ...(publicationConflict ? { publicationConflict: true as const } : {}),
   }
 }
 
@@ -323,14 +455,42 @@ export async function deleteFileMutation({
   encoding,
   lineEndings,
   expectedIdentity,
+  preparedMutation,
 }: {
   absoluteFilePath: string
   originalFileContents: string
   encoding: BufferEncoding
   lineEndings: LineEndingType
   expectedIdentity: FileIdentity
+  preparedMutation?: PreparedFileMutation
 }): Promise<FileMutationPublication> {
-  if (!(await deleteFileWithVerifiedIdentity(absoluteFilePath, expectedIdentity))) {
+  const deleted =
+    preparedMutation?.parent === undefined
+      ? await deleteFileWithVerifiedIdentity(
+          absoluteFilePath,
+          expectedIdentity,
+        )
+      : preparedMutation.existing !== undefined &&
+        fileIdentitiesEqual(expectedIdentity, {
+          canonicalPath: preparedMutation.canonicalPath,
+          device: preparedMutation.existing.identity.device,
+          inode: preparedMutation.existing.identity.inode,
+          size: preparedMutation.existing.identity.size,
+          modifiedAtMs: preparedMutation.existing.identity.modifiedAtMs,
+          changedAtMs: preparedMutation.existing.identity.changedAtMs,
+          ...(preparedMutation.existing.identity.nativeFileId === undefined
+            ? {}
+            : {
+                nativeFileId:
+                  preparedMutation.existing.identity.nativeFileId,
+              }),
+        }) &&
+        (await preparedMutation.parent.removeFile(
+          preparedMutation.relativePath,
+          preparedMutation.existing.identity,
+          await preparedMutation.existing.digest(),
+        ))
+  if (!deleted) {
     throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
   }
 
@@ -342,6 +502,7 @@ export async function deleteFileMutation({
     lineEndings,
     existedBefore: true,
     expectedIdentity,
+    ...(preparedMutation ? { preparedMutation } : {}),
   }
 }
 
@@ -353,6 +514,72 @@ export async function deleteFileMutation({
 export async function restoreFileMutation(
   publication: FileMutationPublication,
 ): Promise<FileMutationRestoration> {
+  const prepared = publication.preparedMutation?.parent
+    ? publication.preparedMutation
+    : undefined
+  if (prepared !== undefined) {
+    if (publication.afterContent === null) {
+      if (publication.beforeContent === null) return 'conflict'
+      return (await prepared.parent.publishFile(
+        prepared.relativePath,
+        encodeFileContent(
+          publication.beforeContent,
+          publication.encoding,
+          publication.lineEndings,
+        ),
+        undefined,
+        prepared.existing?.identity.mode,
+      ))
+        ? 'restored'
+        : 'conflict'
+    }
+
+    if (publication.publishedIdentity === undefined) return 'conflict'
+    let current
+    try {
+      current = await prepared.parent.openFileCapability(prepared.relativePath)
+    } catch (error) {
+      if (isENOENT(error)) {
+        return publication.existedBefore ? 'conflict' : 'restored'
+      }
+      throw error
+    }
+    try {
+      const identity = {
+        canonicalPath: prepared.canonicalPath,
+        ...current.identity,
+      }
+      if (!fileIdentitiesEqual(publication.publishedIdentity, identity)) {
+        return 'conflict'
+      }
+      if (!publication.existedBefore) {
+        return (await prepared.parent.removeFile(
+          prepared.relativePath,
+          current.identity,
+          await current.digest(),
+        ))
+          ? 'restored'
+          : 'conflict'
+      }
+      if (publication.beforeContent === null) return 'conflict'
+      return (await prepared.parent.publishFile(
+        prepared.relativePath,
+        encodeFileContent(
+          publication.beforeContent,
+          publication.encoding,
+          publication.lineEndings,
+        ),
+        current.identity,
+        undefined,
+        await current.digest(),
+      ))
+        ? 'restored'
+        : 'conflict'
+    } finally {
+      await current.close()
+    }
+  }
+
   if (publication.afterContent === null) {
     if (publication.beforeContent === null) return 'conflict'
     return writeTextContentWithVerifiedIdentity(
@@ -396,6 +623,18 @@ export async function restoreFileMutation(
   )
     ? 'restored'
     : 'conflict'
+}
+
+function encodeFileContent(
+  content: string,
+  encoding: BufferEncoding,
+  endings: LineEndingType,
+): Buffer {
+  const normalized =
+    endings === 'CRLF'
+      ? content.replaceAll('\r\n', '\n').split('\n').join('\r\n')
+      : content
+  return Buffer.from(normalized, encoding)
 }
 
 function updateReadFileStateAfterPublication(
@@ -468,7 +707,7 @@ export function applyFileMutationSideEffects({
   )
 }
 
-export function writeFileWithSideEffects({
+export async function writeFileWithSideEffects({
   absoluteFilePath,
   originalFileContents,
   updatedFile,
@@ -476,6 +715,7 @@ export function writeFileWithSideEffects({
   lineEndings,
   readFileState,
   expectedIdentity,
+  preparedMutation,
   onPublished,
 }: {
   absoluteFilePath: string
@@ -485,17 +725,30 @@ export function writeFileWithSideEffects({
   lineEndings: LineEndingType
   readFileState: ToolUseContext['readFileState']
   expectedIdentity?: FileIdentity
+  preparedMutation?: PreparedFileMutation
   onPublished?: (publication: FileMutationPublication) => void
-}): FileMutationPublication {
-  const publication = writeFileMutation({
+}): Promise<FileMutationPublication> {
+  const publication = await writeFileMutation({
     absoluteFilePath,
     originalFileContents,
     updatedFile,
     encoding,
     lineEndings,
     expectedIdentity,
+    preparedMutation,
   })
   onPublished?.(publication)
+  if (publication.publicationConflict) {
+    if (!onPublished) {
+      const restoration = await restoreFileMutation(publication)
+      if (restoration !== 'restored') {
+        throw new Error(
+          `${FILE_UNEXPECTEDLY_MODIFIED_ERROR} Recovery could not restore the published file.`,
+        )
+      }
+    }
+    throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+  }
   applyFileMutationSideEffects({ publication, readFileState })
   return publication
 }
@@ -507,6 +760,7 @@ export async function deleteFileWithSideEffects({
   encoding,
   lineEndings,
   expectedIdentity,
+  preparedMutation,
   onPublished,
 }: {
   absoluteFilePath: string
@@ -515,6 +769,7 @@ export async function deleteFileWithSideEffects({
   lineEndings: LineEndingType
   expectedIdentity: FileIdentity
   readFileState: ToolUseContext['readFileState']
+  preparedMutation?: PreparedFileMutation
   onPublished?: (publication: FileMutationPublication) => void
 }): Promise<FileMutationPublication> {
   const publication = await deleteFileMutation({
@@ -523,6 +778,7 @@ export async function deleteFileWithSideEffects({
     encoding,
     lineEndings,
     expectedIdentity,
+    preparedMutation,
   })
   onPublished?.(publication)
   applyFileMutationSideEffects({ publication, readFileState })

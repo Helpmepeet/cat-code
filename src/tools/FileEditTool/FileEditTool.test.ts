@@ -7,6 +7,11 @@ import {
   MAX_PERSISTED_PATCH_LINE_LENGTH,
 } from '../../utils/diff.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
+import { getPreparedFileMutation } from '../../utils/fileAuthorization.js'
+import {
+  readFileContentForValidation,
+  validateEditableFileSize,
+} from './shared.js'
 import { FileEditTool } from './FileEditTool.js'
 import { outputSchema } from './types.js'
 
@@ -23,18 +28,107 @@ function callEdit(input: {
   old_string: string
   new_string: string
 }) {
-  return FileEditTool.call(
-    { ...input, replace_all: false },
-    {
+  const toolInput = { ...input, replace_all: false }
+  const context = {
       readFileState: createFileStateCacheWithSizeLimit(10),
       updateFileHistoryState: () => undefined,
-    } as never,
-    undefined as never,
-    { uuid: 'test-parent' } as never,
+  }
+  return FileEditTool.prepareExecution!(toolInput as never).then(
+    prepared => {
+      Object.assign(context, {
+        preparedExecution: {
+          toolName: FileEditTool.name,
+          input: toolInput,
+          state: prepared.state,
+        },
+      })
+      return FileEditTool.call(
+        toolInput as never,
+        context as never,
+        undefined as never,
+        { uuid: 'test-parent' } as never,
+      ).finally(prepared.cleanup)
+    },
   )
 }
 
 describe('FileEditTool persisted result size', () => {
+  test('validates content and size from the retained capability without pathname access', async () => {
+    const capability = {
+      identity: { size: 4 },
+      get descriptorPath(): never {
+        throw new Error('pathname validation is forbidden')
+      },
+      readFile: async () => Buffer.from('data'),
+    }
+
+    expect(await readFileContentForValidation(capability as never)).toBe('data')
+    const tooLarge = await validateEditableFileSize(capability as never, 3)
+    expect(tooLarge?.message).toContain('File is too large to edit')
+    expect(await validateEditableFileSize(capability as never, 4)).toBeNull()
+  })
+
+  test('schema-parsed permission input reuses only its prepared path binding', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-tool-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'canonical-input.txt')
+    writeFileSync(filePath, 'before\n')
+    const input = {
+      file_path: filePath,
+      old_string: 'before',
+      new_string: 'after',
+    }
+    const context = {
+      readFileState: createFileStateCacheWithSizeLimit(10),
+      updateFileHistoryState: () => undefined,
+      getAppState: () => ({
+        toolPermissionContext: {
+          mode: 'acceptEdits',
+          additionalWorkingDirectories: new Map([[tempDir, tempDir]]),
+          alwaysAllowRules: {},
+          alwaysDenyRules: {},
+          alwaysAskRules: {},
+          isBypassPermissionsModeAvailable: true,
+        },
+      }),
+    }
+    const prepared = await FileEditTool.prepareExecution!(input as never)
+    Object.assign(context, {
+      preparedExecution: {
+        toolName: FileEditTool.name,
+        input,
+        state: prepared.state,
+      },
+    })
+    try {
+      const parsed = FileEditTool.inputSchema.parse(input)
+      expect(
+        getPreparedFileMutation(
+          context as never,
+          FileEditTool.name,
+          parsed,
+        ),
+      ).toBe(prepared.state)
+      expect(
+        getPreparedFileMutation(
+          context as never,
+          FileEditTool.name,
+          { ...parsed, file_path: join(tempDir, 'other.txt') },
+        ),
+      ).toBeUndefined()
+      const decision = await FileEditTool.checkPermissions(
+        parsed as never,
+        context as never,
+      )
+      expect(decision.behavior).toBe('allow')
+      if (decision.behavior === 'allow') {
+        expect(decision.updatedInput).toBe(input)
+      }
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
   test('does not put the edited file onto the transcript', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-tool-'))
     tempDirs.push(tempDir)

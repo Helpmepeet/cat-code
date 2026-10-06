@@ -1,7 +1,9 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -12,6 +14,7 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getAutoMemPath } from '../../memdir/paths.js'
+import { FileWriteTool } from '../FileWriteTool/FileWriteTool.js'
 import { getFileIdentity } from '../../utils/file.js'
 import {
   createFileStateCacheWithSizeLimit,
@@ -19,6 +22,7 @@ import {
 } from '../../utils/fileStateCache.js'
 import { createAssistantMessage } from '../../utils/messages.js'
 import {
+  checkApprovedUncReadTarget,
   FileReadTool,
   MaxFileReadTokenExceededError,
   type Output,
@@ -27,11 +31,88 @@ import {
 import { DEFAULT_MAX_OUTPUT_TOKENS } from './limits.js'
 import { MAX_LINES_TO_READ, OFFSET_INSTRUCTION_TARGETED } from './prompt.js'
 
+const realToolHooks = await import('../../services/tools/toolHooks.js')
+const realRunPreToolUseHooks = realToolHooks.runPreToolUseHooks
+let preToolUseTestHook: (() => void) | undefined
+mock.module('../../services/tools/toolHooks.js', () => ({
+  ...realToolHooks,
+  async *runPreToolUseHooks(
+    ...args: Parameters<typeof realRunPreToolUseHooks>
+  ) {
+    if (!preToolUseTestHook) {
+      yield* realRunPreToolUseHooks(...args)
+      return
+    }
+    preToolUseTestHook()
+    yield {
+      type: 'hookPermissionResult',
+      hookPermissionResult: {
+        behavior: 'allow',
+        updatedInput: args[2],
+      },
+    } as never
+  },
+}))
+const { runToolUse } = await import('../../services/tools/toolExecution.js')
+
 let tmpDir: string
 let priorSimple: string | undefined
 let priorFixturesRoot: string | undefined
+const macroState = globalThis as typeof globalThis & {
+  MACRO?: { VERSION: string }
+}
+const priorMacro = macroState.MACRO
+
+describe('approved deferred UNC reads', () => {
+  const input = { file_path: '//server/share/approved.txt' }
+  const permissions = {
+    mode: 'default' as const,
+    additionalWorkingDirectories: new Map(),
+    alwaysAllowRules: {},
+    alwaysDenyRules: {},
+    alwaysAskRules: { session: ['Read'] },
+    isBypassPermissionsModeAvailable: false,
+  }
+
+  test('honors a one-time approval for the unchanged resolved request', () => {
+    expect(
+      checkApprovedUncReadTarget(
+        input,
+        input,
+        input.file_path,
+        '\\\\SERVER\\share\\approved.txt',
+        permissions,
+      ).behavior,
+    ).toBe('allow')
+  })
+
+  test('does not extend the one-time approval to a changed resolved route', () => {
+    expect(
+      checkApprovedUncReadTarget(
+        input,
+        input,
+        input.file_path,
+        '//server/share/different.txt',
+        permissions,
+      ).behavior,
+    ).toBe('ask')
+  })
+
+  test('honors an explicit deny even for the unchanged approved route', () => {
+    expect(
+      checkApprovedUncReadTarget(
+        input,
+        input,
+        input.file_path,
+        input.file_path,
+        { ...permissions, alwaysDenyRules: { session: ['Read'] } },
+      ).behavior,
+    ).toBe('deny')
+  })
+})
 
 beforeAll(() => {
+  macroState.MACRO = { VERSION: 'test-version' }
   tmpDir = mkdtempSync(join(tmpdir(), 'file-read-tool-'))
   // Skips skill discovery in call(), which would hit the real filesystem.
   priorSimple = process.env.CLAUDE_CODE_SIMPLE
@@ -41,6 +122,8 @@ beforeAll(() => {
 })
 
 afterAll(() => {
+  if (priorMacro === undefined) delete macroState.MACRO
+  else macroState.MACRO = priorMacro
   rmSync(tmpDir, { recursive: true, force: true })
   if (priorSimple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
   else process.env.CLAUDE_CODE_SIMPLE = priorSimple
@@ -78,18 +161,107 @@ function createContext(maxTokens?: number) {
   }
 }
 
+function createLifecycleContext(tools: unknown[]) {
+  const appState = {
+    toolPermissionContext: {
+      mode: 'bypassPermissions',
+      additionalWorkingDirectories: new Map<string, string>(),
+      alwaysAllowRules: {},
+      alwaysDenyRules: {},
+      alwaysAskRules: {},
+      isBypassPermissionsModeAvailable: true,
+    },
+    mcp: { tools: [], clients: [] },
+    tasks: {},
+    sessionHooks: new Map(),
+  }
+  return {
+    options: {
+      commands: [],
+      debug: false,
+      mainLoopModel: 'gpt-5.6-terra',
+      tools,
+      verbose: false,
+      mcpClients: [],
+      mcpResources: {},
+      isNonInteractiveSession: true,
+    },
+    abortController: new AbortController(),
+    readFileState: createFileStateCacheWithSizeLimit(100),
+    getAppState: () => appState,
+    setAppState: (updater: (state: typeof appState) => typeof appState) => {
+      Object.assign(appState, updater(appState))
+    },
+    setInProgressToolUseIDs: () => {},
+    setResponseLength: () => {},
+    updateFileHistoryState: () => {},
+    updateAttributionState: () => {},
+    messages: [],
+  } as never
+}
+
+async function runRealToolUse(
+  tool: typeof FileReadTool | typeof FileWriteTool,
+  input: Record<string, unknown>,
+  context: ReturnType<typeof createLifecycleContext>,
+): Promise<unknown[]> {
+  const updates: unknown[] = []
+  for await (const _update of runToolUse(
+    {
+      type: 'tool_use',
+      id: `toolu-${tool.name}`,
+      name: tool.name,
+      input,
+      caller: { type: 'direct' },
+    },
+    createAssistantMessage({ content: [] }),
+    async (_tool, authorizedInput) => ({
+      behavior: 'allow',
+      updatedInput: authorizedInput,
+    }),
+    context,
+  )) {
+    updates.push(_update.message)
+    // Drain the real lifecycle to complete tool validation, permission, and call.
+  }
+  return updates
+}
+
 async function readWith(
   context: ReturnType<typeof createContext>,
   filePath: string,
   input: { offset?: number; limit?: number } = {},
 ): Promise<Extract<Output, { type: 'text' }>> {
-  const result = await FileReadTool.call(
-    { file_path: filePath, ...input },
-    context as never,
-  )
+  const toolInput = { file_path: filePath, ...input }
+  const result = await callPrepared(context, toolInput)
   const data = result.data as Output
   if (data.type !== 'text') throw new Error(`expected text, got ${data.type}`)
   return data
+}
+
+async function callPrepared(
+  context: ReturnType<typeof createContext>,
+  toolInput: { file_path: string; offset?: number; limit?: number },
+  parentMessage?: ReturnType<typeof createAssistantMessage>,
+) {
+  const prepared = await FileReadTool.prepareExecution!(toolInput as never)
+  Object.assign(context, {
+    preparedExecution: {
+      toolName: FileReadTool.name,
+      input: toolInput,
+      state: prepared.state,
+    },
+  })
+  try {
+    return await FileReadTool.call(
+      toolInput as never,
+      context as never,
+      undefined,
+      parentMessage,
+    )
+  } finally {
+    await prepared.cleanup()
+  }
 }
 
 async function readFile(
@@ -100,6 +272,178 @@ async function readFile(
 }
 
 describe('default line limit', () => {
+  test('PreToolUse allow cannot redirect a prepared Write through a changed symlink', async () => {
+    const allowed = join(tmpDir, 'hook-allowed.txt')
+    const outside = join(tmpDir, 'hook-outside.txt')
+    const alias = join(tmpDir, 'hook-write-link.txt')
+    const marker = join(tmpDir, 'hook-ran.txt')
+    writeFileSync(allowed, 'authorized target\n')
+    writeFileSync(outside, 'outside marker\n')
+    symlinkSync(allowed, alias)
+    const context = createLifecycleContext([FileReadTool, FileWriteTool])
+    const previousSimple = process.env.CLAUDE_CODE_SIMPLE
+    const previousHistory = process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
+    process.env.CLAUDE_CODE_SIMPLE = '1'
+    process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING = '1'
+    try {
+      await runRealToolUse(FileReadTool, { file_path: alias }, context)
+      preToolUseTestHook = () => {
+        unlinkSync(alias)
+        symlinkSync(outside, alias)
+        writeFileSync(marker, 'hook ran')
+      }
+      const updates = await runRealToolUse(
+        FileWriteTool,
+        { file_path: alias, content: 'write through prepared object\n' },
+        context,
+      )
+      expect(existsSync(marker), JSON.stringify(updates)).toBe(true)
+      expect(readFileSync(allowed, 'utf8')).toBe(
+        'write through prepared object\n',
+      )
+      expect(readFileSync(outside, 'utf8')).toBe('outside marker\n')
+    } finally {
+      preToolUseTestHook = undefined
+      if (previousSimple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
+      else process.env.CLAUDE_CODE_SIMPLE = previousSimple
+      if (previousHistory === undefined) {
+        delete process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
+      } else {
+        process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING = previousHistory
+      }
+    }
+  })
+
+  test('real Read then Write lifecycle rejects a retargeted symlink', async () => {
+    const allowed = join(tmpDir, 'lifecycle-read-target.txt')
+    const outside = join(tmpDir, 'lifecycle-outside-target.txt')
+    const alias = join(tmpDir, 'lifecycle-write-link.txt')
+    writeFileSync(allowed, 'read before swap\n')
+    writeFileSync(outside, 'outside marker\n')
+    symlinkSync(allowed, alias)
+    const context = createLifecycleContext([FileReadTool, FileWriteTool])
+    const previousSimple = process.env.CLAUDE_CODE_SIMPLE
+    const previousHistory = process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
+    process.env.CLAUDE_CODE_SIMPLE = '1'
+    process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING = '1'
+
+    try {
+      await runRealToolUse(FileReadTool, { file_path: alias }, context)
+      const readState = (
+        context as unknown as {
+          readFileState: ReturnType<typeof createFileStateCacheWithSizeLimit>
+        }
+      ).readFileState.get(alias)
+      expect(isCompleteUnboundedRead(readState)).toBe(true)
+      expect(readState?.fileIdentity?.canonicalPath).toBe(
+        getFileIdentity(allowed).canonicalPath,
+      )
+
+      unlinkSync(alias)
+      symlinkSync(outside, alias)
+      await runRealToolUse(
+        FileWriteTool,
+        { file_path: alias, content: 'must not reach outside\n' },
+        context,
+      )
+      expect(readFileSync(allowed, 'utf8')).toBe('read before swap\n')
+      expect(readFileSync(outside, 'utf8')).toBe('outside marker\n')
+    } finally {
+      if (previousSimple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
+      else process.env.CLAUDE_CODE_SIMPLE = previousSimple
+      if (previousHistory === undefined) {
+        delete process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
+      } else {
+        process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING = previousHistory
+      }
+    }
+  })
+
+  test('reads the intentionally safe null device as an empty file', async () => {
+    const result = await readWith(createContext(), '/dev/null')
+    expect(result.file.content).toBe('')
+  })
+
+  test('a missing prepared path keeps the similar-file suggestion', async () => {
+    writeLines('missing-neighbor.ts', 1)
+    await expect(
+      readWith(createContext(), join(tmpDir, 'missing-neighbor.js')),
+    ).rejects.toThrow('missing-neighbor.ts')
+  })
+
+  test('a missing screenshot path still reads its space-variant alternate', async () => {
+    const requested = join(tmpDir, 'Screenshot 1 PM.png')
+    const alternate = join(tmpDir, `Screenshot 1${String.fromCharCode(8239)}PM.png`)
+    writeFileSync(
+      alternate,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP9sAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    )
+
+    const input = { file_path: requested }
+    const context = createContext()
+    const prepared = await FileReadTool.prepareExecution!(input as never)
+    Object.assign(context, {
+      preparedExecution: {
+        toolName: FileReadTool.name,
+        input,
+        state: prepared.state,
+      },
+    })
+    try {
+      const result = await FileReadTool.call(input as never, context as never)
+      expect((result.data as Output).type).toBe('image')
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
+  test('prepared reads survive repeated ancestor symlink swaps', async () => {
+    const allowed = join(tmpDir, 'read-allowed')
+    const outside = join(tmpDir, 'read-outside')
+    const ancestor = join(tmpDir, 'read-parent-link')
+    mkdirSync(allowed)
+    mkdirSync(outside)
+    writeFileSync(join(allowed, 'target.txt'), 'authorized bytes\n')
+    writeFileSync(join(outside, 'target.txt'), 'outside marker\n')
+    symlinkSync('target.txt', join(allowed, 'target-link.txt'))
+    symlinkSync(allowed, ancestor)
+
+    for (let index = 0; index < 16; index++) {
+      const context = createContext()
+      const input = { file_path: join(ancestor, 'target-link.txt') }
+      const prepared = await FileReadTool.prepareExecution!(input as never)
+      Object.assign(context, {
+        preparedExecution: {
+          toolName: FileReadTool.name,
+          input,
+          state: prepared.state,
+        },
+      })
+      try {
+        unlinkSync(ancestor)
+        symlinkSync(outside, ancestor)
+        unlinkSync(join(allowed, 'target-link.txt'))
+        symlinkSync(join(outside, 'target.txt'), join(allowed, 'target-link.txt'))
+        const result = await FileReadTool.call(input as never, context as never)
+        expect((result.data as Extract<Output, { type: 'text' }>).file.content).toBe(
+          'authorized bytes\n',
+        )
+      } finally {
+        await prepared.cleanup()
+      }
+      unlinkSync(ancestor)
+      symlinkSync(allowed, ancestor)
+      unlinkSync(join(allowed, 'target-link.txt'))
+      symlinkSync('target.txt', join(allowed, 'target-link.txt'))
+    }
+    expect(readFileSync(join(outside, 'target.txt'), 'utf8')).toBe(
+      'outside marker\n',
+    )
+  })
+
   test('a no-limit read stops at MAX_LINES_TO_READ', async () => {
     const filePath = writeLines('long.txt', MAX_LINES_TO_READ + 500, {
       compact: true,
@@ -417,10 +761,7 @@ describe('read deduplication follows file identity', () => {
     const context = createContext()
     await readWith(context, filePath)
 
-    const result = await FileReadTool.call(
-      { file_path: filePath },
-      context as never,
-    )
+    const result = await callPrepared(context, { file_path: filePath })
 
     expect(result.data.type).toBe('file_unchanged')
   })
@@ -484,10 +825,9 @@ describe('whole-file Write authorization provenance', () => {
     ).toBe(false)
 
     const visibleContext = createContext()
-    await FileReadTool.call(
+    await callPrepared(
+      visibleContext,
       { file_path: filePath },
-      visibleContext as never,
-      undefined,
       createAssistantMessage({ content: [] }),
     )
 

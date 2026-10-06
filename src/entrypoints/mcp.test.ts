@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { FileReadTool, type Output } from '../tools/FileReadTool/FileReadTool.js'
+import {
+  FileReadTool,
+  callFileReadToolWithPreparedCapability,
+  type Output,
+} from '../tools/FileReadTool/FileReadTool.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
 import { createFileStateCacheWithSizeLimit } from '../utils/fileStateCache.js'
 import { serializeMcpToolResult } from './mcp.js'
@@ -27,7 +31,7 @@ async function readText(
   input: { offset?: number; limit?: number } = {},
   maxTokens?: number,
 ): Promise<Extract<Output, { type: 'text' }>> {
-  const result = await FileReadTool.call(
+  const result = await callFileReadToolWithPreparedCapability(
     { file_path: filePath, ...input },
     {
       readFileState: createFileStateCacheWithSizeLimit(10),
