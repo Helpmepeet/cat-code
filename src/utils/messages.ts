@@ -147,7 +147,6 @@ import {
   type Output as FileReadToolOutput,
 } from '../tools/FileReadTool/FileReadTool.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
-import { TASK_CREATE_TOOL_NAME } from '../tools/TaskCreateTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../tools/TaskOutputTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../tools/TaskUpdateTool/constants.js'
 import type { PermissionMode } from '../types/permissions.js'
@@ -3870,7 +3869,7 @@ Read the team config to discover your teammates' names. Check the task list peri
         .map((todo, index) => `${index + 1}. [${todo.status}] ${todo.content}`)
         .join('\n')
 
-      let message = `The TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Also consider cleaning up the todo list if has become stale and no longer matches what you are working on. Only use it if it's relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user\n`
+      let message = `Existing tracked work may need a status update. Update it if the current task changed; do not create tasks merely because this reminder appeared. Do not mention this reminder to the user.\n`
       if (todoItems.length > 0) {
         message += `\n\nHere are the existing contents of your todo list:\n\n[${todoItems}]`
       }
@@ -3890,7 +3889,7 @@ Read the team config to discover your teammates' names. Check the task list peri
         .map(task => `#${task.id}. [${task.status}] ${task.subject}`)
         .join('\n')
 
-      let message = `The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using ${TASK_CREATE_TOOL_NAME} to add new tasks and ${TASK_UPDATE_TOOL_NAME} to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user\n`
+      let message = `Existing tracked work may need a status update. Use ${TASK_UPDATE_TOOL_NAME} when its status changed; do not create tasks merely because this reminder appeared. Do not mention this reminder to the user.\n`
       if (taskItems.length > 0) {
         message += `\n\nHere are the existing tasks:\n\n${taskItems}`
       }

@@ -3337,7 +3337,32 @@ function getTodoReminderTurnCounts(messages: Message[]): {
   }
 }
 
-async function getTodoReminderAttachments(
+function hasUnchangedReminder(
+  messages: Message[],
+  type: 'todo_reminder' | 'task_reminder',
+  content: unknown,
+): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.type !== 'attachment') continue
+    const attachment = message.attachment
+    if (
+      typeof attachment !== 'object' ||
+      attachment === null ||
+      !('type' in attachment) ||
+      attachment.type !== type
+    ) {
+      continue
+    }
+    return (
+      'content' in attachment &&
+      JSON.stringify(attachment.content) === JSON.stringify(content)
+    )
+  }
+  return false
+}
+
+export async function getTodoReminderAttachments(
   messages: Message[] | undefined,
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
@@ -3378,6 +3403,8 @@ async function getTodoReminderAttachments(
     const todoKey = toolUseContext.agentId ?? getSessionId()
     const appState = toolUseContext.getAppState()
     const todos = appState.todos[todoKey] ?? []
+    if (!todos.some(todo => todo.status !== 'completed')) return []
+    if (hasUnchangedReminder(messages, 'todo_reminder', todos)) return []
     return [
       {
         type: 'todo_reminder',
@@ -3446,7 +3473,7 @@ function getTaskReminderTurnCounts(messages: Message[]): {
   }
 }
 
-async function getTaskReminderAttachments(
+export async function getTaskReminderAttachments(
   messages: Message[] | undefined,
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
@@ -3493,6 +3520,8 @@ async function getTaskReminderAttachments(
     turnsSinceLastReminder >= TODO_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS
   ) {
     const tasks = await listTasks(getTaskListId())
+    if (!tasks.some(task => task.status !== 'completed')) return []
+    if (hasUnchangedReminder(messages, 'task_reminder', tasks)) return []
     return [
       {
         type: 'task_reminder',

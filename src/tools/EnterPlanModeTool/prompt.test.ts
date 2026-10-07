@@ -28,13 +28,15 @@ describe('EnterPlanMode tool prompt', () => {
         'Use this tool when a task has genuine ambiguity about the right approach',
       )
       expect(prompt).toContain(
-        'Skip plan mode when you can reasonably infer the right approach',
+        'Do not enter plan mode merely because a task is nontrivial or touches several files',
       )
       expect(prompt).toContain(
-        'The intent is clear and the next step is reversible',
+        'If the intent is clear and the next steps are reversible, proceed',
       )
       expect(prompt).not.toContain('err on the side of planning')
       expect(prompt).not.toContain('**Prefer using EnterPlanMode**')
+      expect(prompt).toContain('Research and explanation do not require plan mode or delegation')
+      expect(prompt).toContain('Entering plan mode requires user approval')
     }
   })
 })

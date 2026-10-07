@@ -1,5 +1,7 @@
-PROPOSED INSTRUCTION CLEANUP, 2026-10-07
-REVIEW ONLY. None of the changes below have been applied.
+APPROVED INSTRUCTION CLEANUP, 2026-10-07
+Implemented on 2026-10-07. This file preserves the approved proposal, not a patch
+to reapply. The implementation also aligns TaskCreate's trigger with TodoWrite,
+removes unused imports/constants, and adds the companion regression coverage.
 
 Scope: combines both instruction-cleanup answers, before and after the
 Codex/Claude comparison. This is not the earlier feature wishlist.
@@ -30,10 +32,9 @@ Not represented as instruction changes:
   current main prompt; no extra reminder is added for them.
 - Permission, ownership, security and required project checks are retained.
 
-This is a wording/behavior proposal, not an implementation-ready change set.
-Before implementation, complete focused prompt/reminder regression coverage, refresh
-prompt snapshots, update any remaining affected documentation,
-and run the relevant package checks. No behavior improvement is yet measured.
+This is the wording/behavior proposal that preceded implementation. Test and
+snapshot updates live with the implemented source. Structural and runtime
+checks do not establish improved model behavior; that remains unmeasured.
 
 diff --git a/src/tools/GrepTool/prompt.ts b/src/tools/GrepTool/prompt.ts
 index 0d1fc50..bc7aa6c 100644

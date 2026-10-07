@@ -66,8 +66,14 @@ describe('Normal mode static delegation guidance', () => {
     expect(promptsSource).toContain(delegationReasons)
 
     const gptGuidance = getGPTUsingToolsSection(new Set(['Agent']))
-    expect(gptGuidance).toContain(reviewRule)
-    expect(gptGuidance).toContain(delegationReasons)
+    expect(gptGuidance).toContain(
+      'Review, audit, and verification requests do not imply permission to spawn a reviewer',
+    )
+    expect(gptGuidance).toContain('an independent review agent requires an explicit request')
+    expect(gptGuidance).toContain(
+      'Work directly unless delegation has a concrete benefit from independent parallel work, isolating substantial intermediate output, or an explicit user request',
+    )
+    expect(gptGuidance).toContain('While a background agent owns a subtask, do not duplicate its investigation')
   })
 })
 

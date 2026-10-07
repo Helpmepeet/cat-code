@@ -31,6 +31,12 @@ import { getFilePatchToolDescription } from '../tools/FilePatchTool/prompt.js'
 import { getWriteToolDescription } from '../tools/FileWriteTool/prompt.js'
 import { GrepTool } from '../tools/GrepTool/GrepTool.js'
 import { getDescription as getGrepDescription } from '../tools/GrepTool/prompt.js'
+import { DESCRIPTION as globDescription } from '../tools/GlobTool/prompt.js'
+import { getBashPrompt } from '../tools/BashTool/prompt.js'
+import { areExplorePlanAgentsEnabled } from '../tools/AgentTool/builtInAgents.js'
+import { getPrompt as getSkillPrompt } from '../tools/SkillTool/prompt.js'
+import { getPrompt as getTodoPrompt } from '../tools/TodoWriteTool/prompt.js'
+import { getPrompt as getTaskCreatePrompt } from '../tools/TaskCreateTool/prompt.js'
 import { getPrompt as getPowerShellPrompt } from '../tools/PowerShellTool/prompt.js'
 import { getImplementorSystemPrompt } from '../tools/AgentTool/built-in/implementorAgent.js'
 import {
@@ -417,7 +423,7 @@ describe('provider and prompt regressions', () => {
     expect(withPatchTool).not.toContain('PATHS:')
   })
 
-  test('GPT tool rules carry the apply_patch mutation rule and the diff check', () => {
+  test('GPT retains mutation and diff rules when Bash cannot carry them', () => {
     const section = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
 
     expect(section).toContain('Use apply_patch for local file edits.')
@@ -440,6 +446,61 @@ describe('provider and prompt regressions', () => {
     expect(section).toContain('Never skip the check.')
 
     expect(section).not.toContain('no dedicated tool')
+  })
+
+  test('Bash owns mutation and diff rules without a duplicate GPT system block', () => {
+    const section = getGPTUsingToolsSection(new Set(['Bash', FILE_PATCH_TOOL_NAME]))
+    const bash = getBashPrompt('openai')
+    expect(section).not.toContain('RULE — File mutations:')
+    expect(section).not.toContain('RULE — Show the diff:')
+    expect(bash).toContain('Use apply_patch for local file edits')
+    expect(bash).toContain('show the resulting git diff before moving on')
+    expect(bash).toContain('Never skip the check')
+  })
+
+  test('search tools do not mandate delegation and enabled Explore guidance is benefit-based', () => {
+    expect(globDescription).not.toContain('Agent tool')
+    for (const provider of ['openai', 'firstParty'] as const) {
+      expect(getGrepDescription(provider)).not.toContain('Use Agent')
+    }
+    const guidance = getGPTUsingToolsSection(new Set(['Agent']))
+    expect(guidance.includes('EXPLORE AGENT:')).toBe(areExplorePlanAgentsEnabled())
+    expect(guidance).not.toContain('targeted lookups directly')
+    if (areExplorePlanAgentsEnabled()) {
+      expect(guidance).toContain('Multiple searches or files alone do not require delegation')
+    }
+  })
+
+  test('optional skill selection preserves explicit invocation and read-before-use across providers', async () => {
+    for (const provider of ['openai', 'firstParty'] as const) {
+      const prompt = await getSkillPrompt('/prompt-policy-test', provider)
+      expect(prompt).toContain('When the user asks you to use or run a skill, load it')
+      expect(prompt).toContain('use its advertised purpose and trigger conditions')
+      expect(prompt).toContain('If selected, read it before following its instructions')
+      expect(prompt).toContain('Do not infer unseen contents')
+      expect(prompt).toContain('Naming a skill for discussion, inspection, revision, removal, or exclusion is not an invocation')
+      expect(prompt).not.toContain('skip skills that would only repeat')
+    }
+  })
+
+  test('task tracking is optional without relaxing task completion or input contracts', () => {
+    for (const provider of ['openai', 'firstParty'] as const) {
+      const prompt = getTodoPrompt(provider)
+      expect(prompt).toContain('Use a task list when the user requests one')
+      expect(prompt).toContain('Step count and tool-call count alone do not require a list')
+      expect(prompt).not.toContain('3 or more distinct steps')
+      expect(prompt).not.toContain('When in doubt, use this tool')
+      expect(prompt).toContain('activeForm')
+      expect(prompt).toContain('in_progress')
+      expect(prompt).toMatch(/ONLY mark a task as completed when|completed.*ONLY when/)
+    }
+    const taskCreate = getTaskCreatePrompt()
+    expect(taskCreate).toContain('Use a task list when the user requests one')
+    expect(taskCreate).toContain('Step count and tool-call count alone do not require a list')
+    expect(taskCreate).not.toContain('3 or more distinct steps')
+    expect(taskCreate).not.toContain('When using plan mode, create a task list')
+    expect(taskCreate).toContain('All tasks are created with status `pending`')
+    expect(taskCreate).toContain('Check TaskList first to avoid creating duplicate tasks')
   })
 
   test('GPT read discipline permits shell reads and states why Read is the default', () => {
@@ -561,7 +622,8 @@ describe('provider and prompt regressions', () => {
     // on the dump measured a prompt no session runs.
     expect(withTools).toContain('AGENT TOOL:')
     expect(withTools).toContain('TASK TRACKING:')
-    expect(withTools).toContain(`Use ${FILE_PATCH_TOOL_NAME} for local file edits.`)
+    expect(withTools).toContain('READ DISCIPLINE:')
+    expect(withTools).not.toContain('RULE — File mutations:')
     expect(withoutTools).not.toContain('AGENT TOOL:')
     expect(withoutTools).not.toContain(
       `Use ${FILE_PATCH_TOOL_NAME} for local file edits.`,
@@ -587,7 +649,7 @@ describe('provider and prompt regressions', () => {
     expect(restrictedSection).not.toContain('AGENT TOOL:')
     expect(restrictedSection).not.toContain('AGENT FORK:')
     expect(restrictedSection).not.toContain('AGENT TYPES:')
-    expect(restrictedSection).not.toContain('EXPLORE RULE:')
+    expect(restrictedSection).not.toContain('EXPLORE AGENT:')
     expect(restrictedSection).not.toContain('TASK TRACKING:')
     // Deliberate tripwire: the `RULE — Tool routing` block that named a tool
     // per file operation was deleted, so no arrow routing line may return.
@@ -595,7 +657,7 @@ describe('provider and prompt regressions', () => {
     // The rules that hold for any tool set still ship.
     expect(restrictedSection).toContain('READ DISCIPLINE:')
     expect(restrictedSection).toContain('through the Bash tool')
-    expect(restrictedSection).toContain('RULE — Show the diff:')
+    expect(restrictedSection).not.toContain('RULE — Show the diff:')
     expect(restrictedSection).toContain('PARALLELISM:')
     expect(restrictedSection).toContain(
       'Never run file mutations concurrently when their paths overlap or may alias',

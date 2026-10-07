@@ -38,10 +38,7 @@ import { WEB_FETCH_TOOL_NAME } from '../../tools/WebFetchTool/prompt.js'
 import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
-import {
-  EXPLORE_AGENT,
-  EXPLORE_AGENT_MIN_QUERIES,
-} from '../../tools/AgentTool/built-in/exploreAgent.js'
+import { EXPLORE_AGENT } from '../../tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents.js'
 import { isReplModeEnabled } from '../../tools/REPLTool/constants.js'
 import { isForkSubagentEnabled } from '../../tools/AgentTool/forkSubagent.js'
@@ -270,18 +267,22 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()
       ? `AGENT FORK: Calling ${AGENT_TOOL_NAME} without a subagent_type creates a background fork. Use it when research or multi-step implementation would fill your context with output you won't need again. IF YOU ARE THE FORK: execute directly; do not re-delegate.`
-      : `AGENT TOOL: Use the ${AGENT_TOOL_NAME} tool with specialized agents when the task clearly benefits from delegation. Subagents are useful for parallelizing independent work or protecting the main context from large amounts of raw output, but should not be used when the work can reasonably be done in this thread. Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is your own or the task the user gave you. Use a review subagent only when the user explicitly asks for another agent; "adversarial", "cold" and "audit" name a method to apply, not a second agent. Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request. If none applies, do the work yourself. OWNERSHIP TRANSFER (background agents only): When you spawn an agent with run_in_background: true, do NOT read, grep, or investigate that same topic yourself while it is running — wait for the agent's result. If you need to act before results arrive, work on a different aspect of the task. This rule does not apply to foreground agents — once a foreground agent returns, you have its results and can act on them freely.`
+      : `AGENT TOOL: Work directly unless delegation has a concrete benefit from independent parallel work, isolating substantial intermediate output, or an explicit user request. Review, audit, and verification requests do not imply permission to spawn a reviewer; an independent review agent requires an explicit request. While a background agent owns a subtask, do not duplicate its investigation. Work on an independent part or wait for its result.`
     : null
 
   const items = [
-    ...(editToolName
+    ...(editToolName && !hasBashTool
       ? [
           `RULE — File mutations: Dedicated tools let the user review your work. Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
         ]
       : []),
-    isManagedSession()
-      ? `RULE — Inspect changes: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
-      : `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+    ...(hasBashTool
+      ? []
+      : [
+          isManagedSession()
+            ? `RULE — Inspect changes: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
+            : `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+        ]),
     readDiscipline,
     agentToolRule,
     ...(hasAgentTool &&
@@ -289,7 +290,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     !isForkSubagentEnabled()
       ? [
           `SEARCH RULE: For simple, directed codebase searches (a specific file/class/function) use ${searchTools} directly.`,
-          `EXPLORE RULE: Do up to ${EXPLORE_AGENT_MIN_QUERIES} targeted lookups directly. If after that you still do not have the answer, or the question spans multiple files or subsystems, delegate to the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType} rather than continuing inline — it fans out many searches and returns only conclusions, keeping your context small. Use it to locate and answer, not to read each file in full to characterize/audit/classify it or to produce per-file output another step consumes — send depth work like that to a general-purpose or coding worker, even across many files.`,
+          `EXPLORE AGENT: When delegation is justified, use ${EXPLORE_AGENT.agentType} for read-only discovery and concise answers. Use a general-purpose or coding worker for deep per-file analysis or implementation. Multiple searches or files alone do not require delegation.`,
         ]
       : []),
     hasAgentTool
