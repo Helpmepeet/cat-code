@@ -2,7 +2,7 @@
 
 Date: 2026-10-07. Workspace: `/Users/pt/cat-code`.
 
-This consolidates the session analysis, instrumented desktop reproduction, source investigation, native watcher probes, SQLite diagnostics, A/B comparison, rejected hypotheses, and HTML explainer follow-up. Runtime findings are measurements from this investigation, not fresh measurements made while saving this report. Instrumentation was committed; no behavioral fix or installed-app update was made.
+This consolidates the session analysis, instrumented desktop reproduction, source investigation, native watcher probes, SQLite diagnostics, A/B comparison, rejected hypotheses, and HTML explainer follow-up. The diagnostic sections preserve their original observation boundaries. The subsequently approved implementation and fresh Dev verification are recorded in the final section. Both source repairs are now implemented; the installed production app has not been updated.
 
 ## Conclusion
 
@@ -125,7 +125,7 @@ Recommended focused fix: use git -c core.fsmonitor=false --no-optional-locks sta
 
 ### Source anchors and repair constraints
 
-Source was reread when saving this report; the recorded instrumentation and problematic command/storage patterns remain present.
+The following table records the pre-fix source at investigation close (commit `b72d809c`). Its line numbers and faulty behaviors are historical; the final implementation section describes current source.
 
 | Owner | Relevant behavior |
 | --- | --- |
@@ -292,7 +292,7 @@ Existing macOS automatic resource reports supplied useful prior CPU/memory and w
 
 Further work could distinguish a backlog, leak or another internal service defect with privileged service samples and a controlled recovery experiment. That was not necessary to establish the application-level blocking path. A recovery-only result would also need care: a restart restoring events would demonstrate recovery, not prove which earlier writer created the bad state.
 
-## Concrete repair plan and verification still needed
+## Repair plan at investigation close
 
 ### First: contain optional Git context
 
@@ -316,7 +316,7 @@ Further work could distinguish a backlog, leak or another internal service defec
 
 A distinct project-context preparation state could make this wait understandable, but it would not remove the dependency. The reproduced case is both a blocking execution defect and poor progress feedback. Execution containment should come before polishing that label.
 
-No repair in this plan was implemented by the investigation. No Git upgrade, repository-wide fsmonitor disablement, macOS event-service restart, or installed Cat Code update was performed.
+At investigation close, these repairs were still proposed. The later approved implementation is recorded below. No Git upgrade, repository-wide fsmonitor disablement, macOS event-service restart, or installed Cat Code update was performed.
 
 ## HTML explainer and its rendering follow-up
 
@@ -663,3 +663,68 @@ storm-temp-deep.log
 - `git-source-v2.50.0/fsmonitor-ipc.c` and `compat/simple-ipc/ipc-unix-socket.c`: client/server IPC path.
 
 The isolated configuration intentionally coordinated the existing account credential lifecycle rather than duplicating tokens. No credential contents appear in this report.
+
+
+## Approved implementation and fresh Dev verification
+
+The user approved proceeding and explicitly requested parallel subagents. Two independent lanes implemented the startup and analytics repairs in the shared checkout. The parent reviewed their diffs, requested stronger analytics assertions, ran the combined build and sidecar check, and verified the actual workspace jump. Other sessions' edits were preserved.
+
+### Startup containment
+
+`src/context.ts` now runs the optional status snapshot with command-scoped `-c core.fsmonitor=false`. Status, recent log and user-name commands each have a 1,000 ms timeout and `SIGKILL` termination. `src/utils/execFileNoThrow.ts` passes through the optional termination signal; existing callers retain their previous defaults. Execa kills and awaits the actual child rather than abandoning a racing promise.
+
+A nonzero result or timeout omits the optional Git snapshot. Failed empty output can no longer appear as a clean working tree. Successful formatting, metadata discovery, memoization, diagnostics and existing skip guards remain unchanged. This intentionally conservative policy also omits the snapshot when user.name is unset or a new repository has no log; otherwise available fields are not published as a partial snapshot. The one-second deadline applies to each of the three concurrent subprocesses, not to filesystem metadata discovery or the complete desktop move.
+
+The new regression uses the public `getGitStatus` entry point in isolated subprocesses, a real repository and configured fsmonitor hook, and real faulting metadata children. The hanging children ignore SIGTERM. All three timeout cases verify their tracked child PIDs are gone before returning. It adds no production test seam.
+
+The unchanged baseline failed the intended checks: the fsmonitor hook ran, a failed status appeared clean, and a hung status exceeded the four-second fixture cutoff. Shared source was never reverted to perform that comparison. Fixed result: **8 tests passed, 19 assertions**, including successful dirty/clean snapshots, watcher bypass, each failed command and each resistant child.
+
+### Analytics scratch repair
+
+`src/utils/statsUsageIndex.ts` selects PERSIST and verifies SQLite actually returned `persist`. Both the initial memory-to-disk copy and subsequent disk writes commit in batches of at most 256 writes. The final partial batch commits before aggregate finalization and durable publication. Deadline checks, hashed identities, existing memory/disk page limits, accounting and temporary cleanup remain intact.
+
+The extended spill test observes actual transaction boundaries and retained journal presence, compares writer rows with independently visible committed rows, verifies digest keys and accounting equivalence, and checks scratch cleanup. It fails on the unchanged per-row baseline. Four failure cases cover real SQLITE_FULL during copy and subsequent writes, a failed final partial commit, and deadline expiration with an active batch. They preserve the last durable snapshot and allow a subsequent successful refresh. Final result: **62 tests passed, 1,074 assertions** across the index, retained accounting and sidecar usage-summary suites.
+
+This removes the confirmed journal pressure pattern. It does not establish that analytics triggered the original 155-second interval, nor that correcting writes immediately recovers an already unhealthy macOS event service.
+
+### Actual repaired workspace jump
+
+The owned isolated Cat Code Dev launch used the built Dev engine, GPT-6 Luna/low, the earlier isolated configuration and coordinated existing account lifecycle. Its analytics dashboard worker was disabled for this narrowly scoped GUI probe; the SQLite/accounting checks above provide the analytics evidence. No global or repository Git setting was changed. `core.fsmonitor=true` was confirmed before launching, and the GUI launch had no Git configuration override.
+
+The first sandboxed launcher failed to bind Vite with EPERM and exited before Electron launched. The authorized retry launched successfully. A fresh managed chat received: “Move this chat to /Users/pt/cat-code. After the move, reply only 'ready'. Do not edit files or run shell commands.” Live native accessibility observations showed the destination `/Users/pt/cat-code`, “Working in cat-code,” then the final answer **ready** with an idle composer. Debug state and the movement ledger independently agreed with that observed result.
+
+| Item | Fresh observation |
+| --- | --- |
+| App session | `82c96eb2-ee5e-4846-b334-7ca32ce1b2eb` |
+| Engine session | `13840a3d-32e6-49e5-8a39-108d355e6763` |
+| Replacement engine PID | 58920 |
+| Jump ledger | settled, destination, consumed, completed; no reconciliation required |
+| System prompt | 17 ms |
+| User context | 2 ms (8 ms enclosing prompt branch) |
+| Git status command | **20 ms**, exit 0 |
+| Git log / user-name command | 14 ms / 7 ms, both exit 0 |
+| Git context / total system context | **25 ms / 25 ms** |
+
+The corresponding pre-fix Dev reproduction took 33,743 ms for status and 33,747 ms for system context. These are separate runs in a shared environment, not a controlled performance benchmark. The fresh measurement proves the repaired application boundary reached the provider without the reproduced watcher wait.
+
+UTC sequence: destination prompt preparation started at 04:08:56.297; status started at 04:08:56.309 and completed at 04:08:56.329; system context completed at 04:08:56.330; the model request began at 04:08:56.403. The measured prompt-preparation-to-request interval was **106 ms**. Provider response time is separate from these local measurements.
+
+Git Trace2 recorded the actual prompt command:
+
+```text
+/opt/homebrew/bin/git -c core.fsmonitor=false --no-optional-locks status --short
+```
+
+The owned launcher was stopped with Ctrl-C after the final answer. A PID-specific process check confirmed the owned Electron PID 57865 and initial/replacement sidecar PIDs 58692/58920 had exited. No unowned process or macOS service was stopped.
+
+### Combined checks and remaining boundary
+
+- `bun run build:dev:full`: passed, including workspace-map lint and undefined-name gate.
+- `bun run --cwd app typecheck:sidecar`: passed; the wrapper excludes upstream engine diagnostics.
+- Explicit ESLint on the owned source/test paths and scoped whitespace checks: passed.
+- An additional unfiltered sidecar TypeScript invocation reported 5,592 diagnostics outside the changed production files and owned sidecar/shared boundary. It is not a clean full-project typecheck; the repository documents existing engine errors.
+- Regression baselines distinguish the faulty behavior; the fixed suites and live GUI check passed. No production analytics history benchmark was run.
+
+Evidence from this implementation is under `/private/tmp/cat-code-jump-fix-20261007/`: `git-context-baseline.log`, `git-context-fixed.log`, `git-context-evidence.md`, `baseline-analytics-regression.txt`, `fixed-analytics-regression.txt`, `analytics-focused-tests.txt`, `build-dev-full.txt`, `sidecar-typecheck.txt`, `typescript-full-diagnostics.txt`, `context-timing.jsonl`, `git-trace.jsonl`, `gui-session.json`, and `gui-jump-ledger.json`. These are temporary local evidence files; the key results are embedded here for durability.
+
+The startup repair was committed as `211c431d` (`fix(context): bound optional Git metadata waits`). The analytics repair and this evidence update are committed separately. Neither commit is pushed. The source repairs and Dev verification are complete. Production installation, a Git upgrade, macOS service recovery and a more descriptive progress indicator remain separate work. The installed Cat Code app does not receive these fixes until it is rebuilt and installed.

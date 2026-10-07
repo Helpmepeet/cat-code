@@ -1,6 +1,7 @@
 import { afterEach, expect, test, spyOn } from 'bun:test';
 import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir, rename } from 'node:fs/promises';
 import { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectIndexedUsage, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
@@ -15,25 +16,141 @@ const row = (id: string, timestamp = cutoff, tokens = 10) => ({ type: 'assistant
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'usage-index-')); roots.push(root); return { path: join(root, 'cache.sqlite'), file: join(root, 's.jsonl') }; }
 const opts = (path: string) => ({ path, deadline: Date.now() + 60000 });
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
-test('exhausted memory scratch spills without changing accounting or durable publication', async () => {
+test('exhausted memory scratch spills in bounded persistent-journal batches without changing accounting or durable publication', async () => {
     const { path, file } = await fixture();
     await writeFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
     const exec = Database.prototype.exec;
+    const close = Database.prototype.close;
     let bounded = false;
+    const batches: number[] = [];
+    let committedChanges = 0;
+    let diskChanges = 0;
+    let diskRows = 0;
+    let writerRows = 0;
+    let diskPath = '';
+    let journalRetained = false;
+    let transactionAtClose = false;
     const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        const wasInTransaction = this.inTransaction;
         const result = exec.call(this, sql);
         if (this.filename === ':memory:' && !bounded) {
             bounded = true;
-            exec.call(this, 'PRAGMA max_page_count=8');
+            exec.call(this, 'PRAGMA max_page_count=32');
+        }
+        if (this.filename.endsWith('/scratch.sqlite') && wasInTransaction && !this.inTransaction) {
+            const changes = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            batches.push(changes - committedChanges);
+            committedChanges = changes;
         }
         return result;
+    });
+    const observe = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        if (this.filename.endsWith('/scratch.sqlite')) {
+            diskPath = this.filename;
+            diskChanges = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            writerRows = this.query<{ count: number }, []>('SELECT count(*) AS count FROM identities').get()!.count;
+            journalRetained = existsSync(this.filename + '-journal');
+            transactionAtClose = this.inTransaction;
+            // A second connection only sees committed rows, including the final
+            // partial batch. The keys remain digests after the spill.
+            const reader = new Database(this.filename, { readonly: true });
+            try {
+                diskRows = reader.query<{ count: number }, []>('SELECT count(*) AS count FROM identities').get()!.count;
+                expect(reader.query('SELECT 1 FROM identities WHERE length(key) != 64 OR key GLOB \'*[^0-9a-f]*\' LIMIT 1').get()).toBeNull();
+            } finally { close.call(reader); }
+        }
+        return close.apply(this, args);
     });
     try {
         const indexed = await collectIndexedUsage([file], cutoff, opts(path));
         expect(bounded).toBe(true);
         expect(indexed.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
         expect(readSavedUsage(path)).toEqual(indexed);
-    } finally { limit.mockRestore(); }
+        expect(committedChanges).toBe(diskChanges);
+        expect(journalRetained).toBe(true);
+        expect(transactionAtClose).toBe(false);
+        expect(writerRows).toBeGreaterThan(0);
+        expect(diskRows).toBe(writerRows);
+        expect(batches.length).toBeGreaterThan(1);
+        expect(batches.every(count => count > 0 && count <= 256)).toBe(true);
+        expect(batches.at(-1)).toBeLessThan(256);
+        expect(existsSync(dirname(diskPath))).toBe(false);
+    } finally { observe.mockRestore(); limit.mockRestore(); }
+});
+for (const failure of ['copy-full', 'write-full', 'final-commit', 'deadline'] as const) test(`scratch ${failure} failure removes temporary state and preserves the last durable snapshot`, async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('saved')) + '\n');
+    const saved = await collectIndexedUsage([file], cutoff, opts(path));
+    await appendFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    const options = opts(path);
+    const exec = Database.prototype.exec;
+    const close = Database.prototype.close;
+    let injected = false;
+    let diskPath = '';
+    let fullRolledBack = false;
+    let pendingBatchAtClose = false;
+    let copyComplete = false;
+    let committedChanges = 0;
+    const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        if (this.filename === ':memory:') {
+            const result = exec.call(this, sql);
+            exec.call(this, 'PRAGMA max_page_count=8');
+            return result;
+        }
+        if (!this.filename.endsWith('/scratch.sqlite')) return exec.call(this, sql);
+        diskPath = this.filename;
+        const wasInTransaction = this.inTransaction;
+        // Fail only the last partial batch, after completed batches have really
+        // committed. Successful aggregation alone must not publish the snapshot.
+        if (failure === 'final-commit' && sql === 'COMMIT' && copyComplete) {
+            const changes = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            const batchChanges = changes - committedChanges;
+            if (batchChanges > 0 && batchChanges < 256) {
+                injected = true;
+                throw Object.assign(new Error('injected commit I/O error'), { code: 'SQLITE_IOERR' });
+            }
+        }
+        const result = exec.call(this, sql);
+        if (failure === 'copy-full' && !injected) {
+            exec.call(this, 'PRAGMA max_page_count=2');
+            injected = true;
+        }
+        if (wasInTransaction && !this.inTransaction) {
+            committedChanges = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            if (!injected && failure === 'write-full') {
+                const pages = this.query<{ page_count: number }, []>('PRAGMA page_count').get()!.page_count;
+                exec.call(this, `PRAGMA max_page_count=${pages}`);
+                injected = true;
+            }
+        }
+        if (!injected && failure === 'deadline' && copyComplete && !wasInTransaction && this.inTransaction) {
+            options.deadline = Date.now() - 1;
+            injected = true;
+        }
+        return result;
+    });
+    const observe = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        if (this.filename === ':memory:' && diskPath) copyComplete = true;
+        if (this.filename.endsWith('/scratch.sqlite')) {
+            if (failure.endsWith('full')) fullRolledBack = !this.inTransaction;
+            pendingBatchAtClose = this.inTransaction;
+        }
+        return close.apply(this, args);
+    });
+    try {
+        await expect(collectIndexedUsage([file], cutoff, options)).rejects.toThrow(failure === 'deadline' ? 'Usage collection timeout' : 'Usage identity storage limit or write failure');
+        expect(injected).toBe(true);
+        if (failure.endsWith('full')) expect(fullRolledBack).toBe(true);
+        else expect(pendingBatchAtClose).toBe(true);
+        expect(readSavedUsage(path)).toEqual(saved);
+        const reader = new Database(path, { readonly: true });
+        try { expect(reader.query<{ count: number }, []>('SELECT count(*) AS count FROM records').get()!.count).toBe(1); }
+        finally { reader.close(); }
+        expect(existsSync(dirname(diskPath))).toBe(false);
+    } finally { observe.mockRestore(); limit.mockRestore(); }
+    const recovered = await collectIndexedUsage([file], cutoff, opts(path));
+    expect(recovered.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+    expect(readSavedUsage(path)).toEqual(recovered);
 });
 test('append refresh retains existing rows, and interrupted tail publication rolls back atomically', async () => {
     const { path, file } = await fixture();
