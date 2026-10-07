@@ -20,6 +20,13 @@ import { logError } from './utils/log.js'
 import { isManagedSession } from './utils/managedSessionPolicy.js'
 
 const MAX_STATUS_CHARS = 2000
+// Optional prompt metadata must not hold up the first model request. Kill the
+// read-only child at the deadline even if it ignores SIGTERM.
+const GIT_CONTEXT_COMMAND_OPTIONS = {
+  timeout: 1000,
+  killSignal: 'SIGKILL' as const,
+  preserveOutputOnError: false,
+}
 
 // System prompt injection for cache breaking (ant-only, ephemeral debugging state)
 let systemPromptInjection: string | null = null
@@ -76,14 +83,17 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
       withDiagnosticsTiming(
         'git_status_short_command',
         () =>
-          execFileNoThrow(gitExe(), ['--no-optional-locks', 'status', '--short'], {
-            preserveOutputOnError: false,
-          }),
+          execFileNoThrow(
+            gitExe(),
+            ['-c', 'core.fsmonitor=false', '--no-optional-locks', 'status', '--short'],
+            GIT_CONTEXT_COMMAND_OPTIONS,
+          ),
         ({ code, error }) => ({
           exit_code: code,
           failed: code !== 0 || error !== undefined,
         }),
-      ).then(({ stdout }) => {
+      ).then(({ stdout, code, error }) => {
+        if (code !== 0 || error !== undefined) return null
         const trimmed = stdout.trim()
         logForDiagnosticsNoPII('info', 'git_status_short_completed', {
           duration_ms: Date.now() - gitCmdsStart,
@@ -97,13 +107,14 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
           execFileNoThrow(
             gitExe(),
             ['--no-optional-locks', 'log', '--oneline', '-n', '5'],
-            { preserveOutputOnError: false },
+            GIT_CONTEXT_COMMAND_OPTIONS,
           ),
         ({ code, error }) => ({
           exit_code: code,
           failed: code !== 0 || error !== undefined,
         }),
-      ).then(({ stdout }) => {
+      ).then(({ stdout, code, error }) => {
+        if (code !== 0 || error !== undefined) return null
         const trimmed = stdout.trim()
         logForDiagnosticsNoPII('info', 'git_log_completed', {
           duration_ms: Date.now() - gitCmdsStart,
@@ -114,14 +125,13 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
       withDiagnosticsTiming(
         'git_user_name_command',
         () =>
-          execFileNoThrow(gitExe(), ['config', 'user.name'], {
-            preserveOutputOnError: false,
-          }),
+          execFileNoThrow(gitExe(), ['config', 'user.name'], GIT_CONTEXT_COMMAND_OPTIONS),
         ({ code, error }) => ({
           exit_code: code,
           failed: code !== 0 || error !== undefined,
         }),
-      ).then(({ stdout }) => {
+      ).then(({ stdout, code, error }) => {
+        if (code !== 0 || error !== undefined) return null
         const trimmed = stdout.trim()
         logForDiagnosticsNoPII('info', 'git_user_name_completed', {
           duration_ms: Date.now() - gitCmdsStart,
@@ -130,6 +140,13 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
         return trimmed
       }),
     ])
+
+    if (status === null || log === null || userName === null) {
+      logForDiagnosticsNoPII('info', 'git_status_unavailable', {
+        duration_ms: Date.now() - startTime,
+      })
+      return null
+    }
 
     logForDiagnosticsNoPII('info', 'git_commands_completed', {
       duration_ms: Date.now() - gitCmdsStart,

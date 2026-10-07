@@ -2,7 +2,7 @@
 // These wrappers ease error handling and cross-platform compatbility
 // By using execa, Windows automatically gets shell escaping + BAT / CMD handling
 
-import { type ExecaError, execa } from 'execa'
+import { type ExecaError, type Options as ExecaOptions, execa } from 'execa'
 import { getCwd } from '../utils/cwd.js'
 import { logError } from './log.js'
 
@@ -14,6 +14,7 @@ const SECONDS_IN_MINUTE = 60
 type ExecFileOptions = {
   abortSignal?: AbortSignal
   timeout?: number
+  killSignal?: ExecaOptions['killSignal']
   preserveOutputOnError?: boolean
   // Setting useCwd=false avoids circular dependencies during initialization
   // getCwd() -> PersistentShell -> logEvent() -> execFileNoThrow
@@ -35,6 +36,7 @@ export function execFileNoThrow(
   return execFileNoThrowWithCwd(file, args, {
     abortSignal: options.abortSignal,
     timeout: options.timeout,
+    killSignal: options.killSignal,
     preserveOutputOnError: options.preserveOutputOnError,
     cwd: options.useCwd ? getCwd() : undefined,
     env: options.env,
@@ -46,6 +48,7 @@ export function execFileNoThrow(
 type ExecFileWithCwdOptions = {
   abortSignal?: AbortSignal
   timeout?: number
+  killSignal?: ExecaOptions['killSignal']
   preserveOutputOnError?: boolean
   maxBuffer?: number
   cwd?: string
@@ -92,6 +95,7 @@ export function execFileNoThrowWithCwd(
   {
     abortSignal,
     timeout: finalTimeout = 10 * SECONDS_IN_MINUTE * MS_IN_SECOND,
+    killSignal,
     preserveOutputOnError: finalPreserveOutput = true,
     cwd: finalCwd,
     env: finalEnv,
@@ -111,6 +115,7 @@ export function execFileNoThrowWithCwd(
       maxBuffer,
       signal: abortSignal,
       timeout: finalTimeout,
+      killSignal,
       cwd: finalCwd,
       env: finalEnv,
       shell,
