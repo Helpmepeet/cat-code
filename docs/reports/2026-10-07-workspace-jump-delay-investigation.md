@@ -17,14 +17,15 @@ The original session had a 155-second pre-request gap and Git context commands l
 | The reproduced stall is local, before the AI request | Confirmed | Actual desktop jump, application timing logs, Git Trace2 and process sample |
 | Optional project context blocks the request on Git status | Confirmed | Source and matching runtime timing |
 | Git waits for its fsmonitor IPC response | Confirmed | 33.715-second Trace2 span and 2,638 sampled stacks |
-| Native macOS event delivery is intermittently delayed or absent | Confirmed in isolated probes | Independent native observers and prompt kqueue delivery for the same created files |
+| Native FSEvents notifications are delayed or absent in the observation windows | Confirmed in later isolated probes | Independent native streams and known marker/cookie activity; the kqueue probe does not establish per-creation latency |
+| The reproduction daemon was waiting for cookie acknowledgement because native events were delayed | Inferred matching mechanism | Later daemon probes and Git source; the reproduction measured client IPC waiting and its daemon could not be sampled |
 | Git 2.50's cookie acknowledgement has no deadline | Confirmed source mechanism | Installed version and version-pinned Git source |
 | Analytics scratch storage generates unnecessary journal churn | Confirmed | Installed Bun runtime, native SQLite defensive-mode counterfactual and VFS operation counters |
 | Analytics caused the original 155-second stall | Unproven | No filesystem-event trace exists for that exact original interval |
-| Correcting analytics alone immediately recovers the watcher | Not supported | Both baseline trials and two of three corrected-pattern trials still exceeded the observation deadline |
+| Correcting all production analytics writes immediately recovers the watcher | Unproven system outcome | Two corrected-pattern probe trials stalled; the installed app remained running and its analytics writes were not excluded |
 | Exact macOS internal reason for the service's memory growth | Unproven | Root-owned internals were not available to the investigation |
 
-The latest A/B result narrows the diagnosis: fresh analytics writes are not necessary for the current watcher failure. Analytics is a confirmed pressure source and a plausible earlier contributor; the shared service can remain unhealthy without a new writer. The immediate application repair should remove the startup dependency on that watcher. Reducing analytics churn is a separate repair.
+The A/B trials stalled without a new synthetic probe writer. They did not establish an interval without production analytics writes: the installed app remained running, and the observer covered only the temporary subtree. Analytics is a confirmed pressure source and a plausible contributor; its necessity for those stalls remains unresolved. Containing optional Git context remains the immediate application repair, with analytics churn repaired separately.
 
 ### Investigation scope
 
@@ -194,7 +195,7 @@ Evidence: `sqlite-journal-probe.ts`, `sqlite-journal-results.jsonl`, `sqlite-def
 
 Six paired tests in a 400-file temporary repository produced five Git query timeouts and one 470 ms completion. Independent native FSEvents observers missed the same cookie events. In four trials neither observer received any events; in another, both received later ordinary file changes while the earlier cookie remained unacknowledged. Thus neither repository size nor Git's callback filtering alone explains the failure.
 
-A separate kernel kqueue observer acknowledged all 16 marker creations in 0–12 ms. Normal and explicitly flushed FSEvents streams observed only three/four corresponding path notifications during their 22-second lifetimes. Fifteen creations happened after both streams reported successful startup. Changing startup from SinceNow to an explicit current event ID or bounded recent replay did not consistently restore delivery. A cookie pathname from failed daemon 22861 appeared in a new native stream about 198 seconds after the original cookie-wait log; no probe recreated that pathname.
+A separate kqueue probe returned events in all 16 reads, with recorded read intervals of 0–12 ms. Those intervals cannot be attributed to individual marker creations: after each read, the probe deleted the marker and left that deletion notification pending before the next creation. A subsequent read could retrieve the earlier deletion or aggregated changes. The per-creation acknowledgement and latency claim is withdrawn pending a corrected probe that drains pending events before each creation. Normal and explicitly flushed FSEvents streams observed only three/four corresponding path notifications during their 22-second lifetimes. Fifteen creations happened after both streams reported successful startup. Changing startup from SinceNow to an explicit current event ID or bounded recent replay did not consistently restore delivery. A cookie pathname from failed daemon 22861 appeared in a new native stream about 198 seconds after the original cookie-wait log; no probe recreated that pathname.
 
 Direct Git status with fsmonitor disabled took 7–8 ms in the healthy six-query comparison; monitored status took 75–362 ms in that comparison. This complements the actual GUI reproduction's 33.7-second monitored wait.
 
@@ -212,7 +213,7 @@ Evidence: `storm-temp-deep.log`, `storm-root.log`, `flush-root.log`, and the two
 
 ### Conclusion and remaining limit
 
-Confirmed causal path for the reproduced application stall: prompt preparation waits on Git; Git waits for a filesystem-monitor cookie acknowledgement; native macOS event delivery is intermittently delayed or absent, and Git 2.50 has no acknowledgement deadline.
+Confirmed causal path for the desktop reproduction: prompt preparation waited on Git status, whose client waited 33.715 seconds for its filesystem-monitor IPC response and then reported an IPC-read failure. That daemon was unavailable for sampling. Cookie-acknowledgement waiting and delayed native events are an inferred explanation for its internal state, supported by later isolated daemon/native probes and the Git 2.50 source mechanism; they are not directly observed causes within that desktop interval.
 
 Confirmed upstream Cat Code defect: its disk-backed analytics identity store silently remains in DELETE mode and commits subsequent writes individually, generating a large journal event flood. The observed flood, event-service resource reports and native delivery failures make analytics-driven event pressure a strong upstream explanation. The precise original 155-second interval did not record filesystem events, so analytics as its specific trigger remains an inference. The exact reason for the macOS service's memory growth has not been proven.
 
@@ -220,15 +221,15 @@ The actionable repairs are to remove per-row scratch journal churn with bounded 
 
 ## Bounded A/B follow-up after choosing the next diagnostic step
 
-Eight alternating trials compared no writer, the installed analytics SQL pattern, and a candidate PERSIST journal with 256-row transactions. The writer used the exact installed Bun runtime in BUN_BE_BUN mode, a synthetic scratch database outside the temporary Git repository, 3,072 subsequent identity writes, and identical 40 ms pacing between twelve chunks. Every trial also ran a direct status command with fsmonitor disabled. This is a SQL-pattern diagnostic, not a production patch or end-to-end analytics benchmark.
+Eight alternating trials compared no synthetic probe writer, the installed analytics SQL pattern, and a candidate PERSIST journal with 256-row transactions. The writer used the exact installed Bun runtime in BUN_BE_BUN mode, a synthetic scratch database outside the temporary Git repository, 3,072 subsequent identity writes, and identical 40 ms pacing between twelve chunks. Every trial also ran a direct status command with fsmonitor disabled. This is a SQL-pattern diagnostic, not a production patch or end-to-end analytics benchmark.
 
 | Workload | Monitored Git exceeding the 2-second observation deadline | Completed monitored calls | Direct Git calls |
 | --- | --- | --- | --- |
-| No analytics writer | 2/2 | None | 13.63–13.89 ms |
+| No synthetic probe writer | 2/2 | None | 13.63–13.89 ms |
 | Current OFF request / autocommit | 2/3 | 28.10 ms | 7.78–19.73 ms |
 | PERSIST / 256-row transactions | 2/3 | 180.04 ms | 11.40–18.62 ms |
 
-Thus fresh analytics writes are not necessary for the current watcher failure, and correcting only the write pattern did not restore the already unhealthy shared OS service during this test. The small comparison does not establish whether the earlier analytics flood originally put that service into this state. Its results rule out claiming that the SQL change alone immediately cures Git stalls. Independent native observers again received ordinary repository marker events while some corresponding Git cookie notifications were absent.
+Stalls occurred without a new probe writer, and two corrected-pattern probe trials also stalled. The installed app remained running, and native observation covered only the temporary subtree, so these trials neither exclude concurrent production analytics writes nor show that the whole system had adopted the corrected pattern. They do not establish whether analytics was necessary for the observed failures, whether an earlier flood created the service state, or whether a production-wide SQL repair would recover it. They support no claim of an immediate cure from the corrected probe workload. Independent native observers again received ordinary repository marker events while some corresponding Git cookie notifications were absent.
 
 The exact runtime confirmed DELETE for the current OFF request and PERSIST for the candidate. Current writer durations were 1,122–1,311 ms; candidate durations were 504–521 ms. Those timings include the deliberate 480 ms pacing and must not be presented as an unpaced speedup benchmark.
 
@@ -256,7 +257,7 @@ Evidence: `ab-results.json`, `ab-native.log`, `ab-git.log`, `ab-writer.ts`, `ab-
 | Slow Git history or configuration lookup | Per-command timings | Git log 11 ms and user name 7 ms. Status alone took 33,743 ms. |
 | Repository size or normal traversal | Small temporary repositories and direct-status controls | Watcher stalls also occurred with 100/400 synthetic files, while direct checks remained fast. This does not benchmark every large-tree workload. |
 | Git's event filtering alone | Independent native FSEvents streams alongside Git | Native observers missed the same cookies; the failure exists below Git-specific callback handling. |
-| Missing underlying filesystem change | Independent kqueue observer | All 16 marker creations acknowledged in 0–12 ms, despite delayed/sparse FSEvents notifications. |
+| Missing underlying filesystem change | Marker operations and independent kqueue observer | The probe returned directory events, but pending deletion events prevent per-creation attribution. The 16 reads do not establish that each creation was promptly acknowledged. |
 | Only a stream-startup race | Events after successful startup; explicit current/recent event IDs | Fifteen marker creations happened after startup; alternative initial IDs did not consistently repair delivery. |
 | Unflushed client stream | `FSEventStreamFlushAsync` comparison | The flushed observer still saw only a small subset of corresponding notifications. |
 | Native stream failed to start | Native observers record successful startup | Streams could report success and still miss subsequent notifications. A successful start is insufficient health evidence. |
@@ -267,7 +268,7 @@ Evidence: `ab-results.json`, `ab-native.log`, `ab-git.log`, `ab-writer.ts`, `ab-
 | macOS no-bundle-id messages | Compare healthy and failed streams | Message occurs in both; not a discriminating explanation. |
 | Event-overflow proof from log wording | Inspect message producer and flags | CoreAnalytics drops are analytics records, not filesystem events. MustScanSubDirs alone is not proof of kernel/user overflow. |
 | Later VS Code extraction storm as original cause | Compare chronology | That burst occurred after the original session; it cannot explain the earlier interval. |
-| Fresh analytics writer required for every stall | Alternating A/B trials | Both no-writer trials exceeded two seconds. Corrected-pattern trials also stalled. |
+| Fresh analytics writer required for every stall | Alternating A/B trials | Both trials without a new synthetic probe writer exceeded two seconds. Live production analytics activity was not excluded, so its necessity remains unresolved. |
 | Current `fseventsd` RSS is 25 GB | Distinguish OS report footprint from later `ps` RSS | 25.01 GB is historical footprint in the October 5–6 report. Later RSS was about 324 MiB. |
 | Old scratch filename implies a current live writer | Check path after observing delivered notifications | Path had already disappeared. Late event delivery does not identify a still-running writer. |
 
@@ -277,7 +278,7 @@ These checks narrow the supported mechanism; they do not prove that every altern
 
 1. The later Git listener thread's `pthread_cond_wait` is a normal shutdown wait. The client threads' waits map to cookie acknowledgement. It would be incorrect to diagnose the listener as simply asleep and unable to handle callbacks from that stack alone.
 2. The vanished daemon PID 88265 could not be sampled. Later daemon samples establish a reproducible wait mechanism, not its exact historical disappearance reason.
-3. Five paired Git trials and six A/B Git trials were stopped at the experiment's two-second cutoff. Their true uninterrupted completion times are unknown; two seconds is a lower bound, not the actual stall duration.
+3. Five paired Git trials crossed the initial two-second observation threshold. Their orchestrator then applied a marker stimulus for 700 ms and waited another second before killing a still-pending query, approximately 3.7 seconds after launch plus overhead. The recorded 2,002–2,004 ms values capture the initial threshold crossing, not cancellation time; exact cancellation timestamps were not retained. Six A/B queries used a separate two-second subprocess timeout that killed and reaped them. Uninterrupted completion times are unknown in both sets.
 4. Native delivered-event counts can lag the writes that produced them. They must not be used as exact transaction counts or exact creation timestamps. The VFS counter measures SQLite operations independently.
 5. The PERSIST candidate had zero journal deletions and 24 journal opens for 3,072 writes. It did not have zero file I/O: the database and journal are still written, and the journal is reused.
 6. The A/B writer timings include 480 ms of deliberate pacing. They are not an unpaced end-to-end performance comparison.
@@ -358,7 +359,7 @@ The `sample` line records a historical observation command; PID 5692 is not a cu
 
 ### Native FSEvents probes
 
-The C observers use the same relevant native flags as Git: NoDefer, WatchRoot and FileEvents, with a 0.001-second latency. Variants exercised SinceNow, explicit current/recent event IDs, async flush, root/temp-root observation and deeper delivered-path counting. Python orchestrators used isolated repositories, explicit deadlines and tracked child cleanup. The independent kqueue probe observed marker-directory changes at the kernel notification boundary.
+The C observers use the same relevant native flags as Git: NoDefer, WatchRoot and FileEvents, with a 0.001-second latency. Variants exercised SinceNow, explicit current/recent event IDs, async flush, root/temp-root observation and deeper delivered-path counting. Python orchestrators used isolated repositories, explicit deadlines and tracked child cleanup. The independent kqueue probe retrieved marker-directory events, but did not drain notifications from marker deletion before the next creation; its read intervals cannot establish per-creation kernel-notification latency.
 
 ### Exact-runtime SQLite and independent operation counters
 
@@ -394,6 +395,7 @@ Instrumentation was committed as `78533e83` (`chore(context): trace prompt prepa
 - [SQLite defensive database configuration](https://www.sqlite.org/c3ref/c_dbconfig_defensive.html): defensive restrictions include disabling journal-mode OFF.
 - [SQLite journal-mode pragma](https://www.sqlite.org/pragma.html#pragma_journal_mode): the returned mode and supported journal behavior.
 - [Bun compiled executable mode](https://github.com/oven-sh/bun/blob/main/docs/bundler/executables.mdx): `BUN_BE_BUN=1` runtime use.
+- [Apple kqueue manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html): aggregated event delivery and EV_CLEAR reset on retrieval; limits attribution in the retained marker probe.
 - [Apple FSEvents programming guide](https://developer.apple.com/library/archive/documentation/Darwin/Conceptual/FSEvents_ProgGuide/Introduction/Introduction.html): native event-stream context.
 - [SVG use-element styling notes](https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Element/use#usage_notes): context for the likely HTML rendering issue.
 
@@ -401,7 +403,7 @@ External references explain mechanisms. The session diagnosis rests on local app
 
 ## Structured results retained in this Markdown
 
-These tables retain the probe results even if temporary files are later cleared. A timeout means the owned query was stopped at that experiment’s cutoff.
+These tables retain the probe results even if temporary files are later cleared. Timeout and elapsed fields must be interpreted using each orchestrator: paired trials record the initial threshold crossing and cancel later; A/B trials use a two-second subprocess cancellation timeout.
 
 ### Initial isolated Git matrix
 
@@ -414,9 +416,9 @@ These tables retain the probe results even if temporary files are later cleared.
 
 ### Paired native/Git observer trials
 
-Repository: 400 synthetic files. Query cutoff: two seconds.
+Repository: 400 synthetic files. Initial observation threshold: two seconds. For queries still pending, the orchestrator applies a 700 ms marker stimulus, then waits another second before cancellation (approximately 3.7 seconds plus overhead). The timeout rows below retain the initial threshold elapsed value; exact cancellation timestamps were not recorded.
 
-| Trial | Git daemon PID | Native PID | Outcome | Elapsed (ms) | Native cookie events | Native total events |
+| Trial | Git daemon PID | Native PID | Outcome | Initial threshold or completion (ms) | Native cookie events | Native total events |
 | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 22861 | 22862 | timed-out | 2002 | 0 | 0 |
 | 1 | 22933 | 22934 | timed-out | 2004 | 0 | 0 |
@@ -448,9 +450,9 @@ Delivered-event counts, not latency measurements.
 
 ### Kernel notification comparison
 
-All 16 marker creations had a kqueue acknowledgement.
+All 16 kqueue reads returned an event. The raw intervals below are retained for provenance, but are not valid per-creation acknowledgement or latency measurements. The probe did not drain events produced by the preceding marker deletion. Apple documents event aggregation and EV_CLEAR state reset on retrieval in its [kqueue manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html). A corrected probe must drain pending events before each creation before claiming per-creation latency.
 
-| Marker | kqueue events | kqueue latency (ms) |
+| Iteration / marker | Events retrieved (creation attribution unproven) | Recorded create-to-read interval (ms) |
 | --- | --- | --- |
 | 0 | 1 | 0 |
 | 1 | 1 | 12 |
@@ -471,7 +473,7 @@ All 16 marker creations had a kqueue acknowledgement.
 
 ### Eight-trial analytics/Git comparison
 
-Repository: 100 synthetic tracked files. Workload database outside the repository. Writer timings include 480 ms of pacing. Baseline means no probe writer; it does not mean a freshly recovered OS service.
+Repository: 100 synthetic tracked files. Workload database outside the repository. Writer timings include 480 ms of pacing. Baseline means no new synthetic probe writer; it excludes neither live production analytics writes nor prior event-service pressure. The installed app remained running, and the observer covered only the temporary subtree.
 
 | Trial | Workload | Actual journal mode | Monitored Git | Direct Git (ms) | Writer duration (ms) | Final synthetic DB rows |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -728,3 +730,15 @@ The owned launcher was stopped with Ctrl-C after the final answer. A PID-specifi
 Evidence from this implementation is under `/private/tmp/cat-code-jump-fix-20261007/`: `git-context-baseline.log`, `git-context-fixed.log`, `git-context-evidence.md`, `baseline-analytics-regression.txt`, `fixed-analytics-regression.txt`, `analytics-focused-tests.txt`, `build-dev-full.txt`, `sidecar-typecheck.txt`, `typescript-full-diagnostics.txt`, `context-timing.jsonl`, `git-trace.jsonl`, `gui-session.json`, and `gui-jump-ledger.json`. These are temporary local evidence files; the key results are embedded here for durability.
 
 The startup repair was committed as `211c431d` (`fix(context): bound optional Git metadata waits`). The analytics repair and this evidence update are committed separately. Neither commit is pushed. The source repairs and Dev verification are complete. Production installation, a Git upgrade, macOS service recovery and a more descriptive progress indicator remain separate work. The installed Cat Code app does not receive these fixes until it is rebuilt and installed.
+
+
+## Review corrections after implementation
+
+A review of the pre-implementation investigation identified four overstatements. They were checked against `kqueue-flush-probe.py`, `paired-stream-probe.py`, `paired-stream-results.json`, `ab-probe.py`, retained desktop traces, and Apple's kqueue documentation. All four were accepted and corrected throughout the narrative, evidence table, alternative explanations and retained result labels:
+
+1. Withdraw the 16-marker per-creation kqueue latency claim. The old readings can include pending deletion events; no corrected latency experiment was run for this report update.
+2. Limit A/B baseline conclusions to the absence of a new synthetic probe writer. Concurrent production analytics activity was not excluded.
+3. Keep the reproduced client IPC-response wait confirmed; label the reproduction daemon's cookie wait/native-event explanation inferred from later probes.
+4. Separate the paired trials' initial two-second threshold from cancellation after the 700 ms stimulus and additional one-second wait. Keep exact cancellation time unmeasured; distinguish the A/B subprocess deadline.
+
+These corrections narrow the upstream explanation. They do not change the measured startup dependency, the implemented Git-context containment, the analytics journal-churn defect, or the subsequent focused tests and actual repaired Dev jump. The implementation verification above remains a separate, later observation.
