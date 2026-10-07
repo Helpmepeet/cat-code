@@ -25,6 +25,8 @@ import {
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
+// Leave room for named tool outcomes and build observations in all three ranges.
+const ALL_DETAIL_BUCKETS = Math.min(MAX_USAGE_ALL_BUCKETS, 60);
 export class UsageResourceError extends Error {
 }
 export interface UsageIdentityStore {
@@ -1094,9 +1096,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     // daily data avoids allocating empty history; larger histories use explicit
     // local-calendar buckets while activeDays remains exact.
     const all = states[2]!;
-    if (all.summary.days.length > MAX_USAGE_ALL_BUCKETS || all.summary.autoMode.buckets.length > MAX_USAGE_ALL_BUCKETS) {
+    if (all.summary.days.length > ALL_DETAIL_BUCKETS || all.summary.autoMode.buckets.length > ALL_DETAIL_BUCKETS) {
         const span = calendarDayDistance(all.summary.startDate, all.summary.endDateExclusive);
-        const bucketDays = Math.ceil(span / MAX_USAGE_ALL_BUCKETS);
+        const bucketDays = Math.ceil(span / ALL_DETAIL_BUCKETS);
         const bucketDate = (date: string) => addCalendarDays(all.summary.startDate, Math.floor(calendarDayDistance(all.summary.startDate, date) / bucketDays) * bucketDays);
         const buckets = new Map<string, UsageDay>();
         const bucketSessions = new Map<string, Set<string>>();
@@ -1216,5 +1218,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 19, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 20, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

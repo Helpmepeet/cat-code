@@ -3,7 +3,7 @@ import type { UsageRangeSummary, UsageToolBuildObservation } from '../../shared/
 import { usageAxisCeiling, usageChartDate, usageChartTicks, usageGraphColors } from './usageGraphState.js';
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js';
 import { usageBucketLabel, usageDatePosition } from './usageTrendState.js';
-import { defaultUsageToolSelection, usageToolErrorSegments, usageToolErrorSeries, type UsageToolErrorPoint } from './usageToolErrorTrendState.js';
+import { defaultUsageToolSelection, usageBuildCoverage, usageToolErrorSegments, usageToolErrorSeries, type UsageToolErrorPoint } from './usageToolErrorTrendState.js';
 import './usageToolErrorTrend.css';
 import { UsageChartHoverContext } from './usageChartHover.js';
 
@@ -17,10 +17,11 @@ const markerKey = (marker: BuildMarker) => `${marker.date}:${marker.sha}:${marke
 export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRangeSummary; timezone?: string }) {
     const observedTime = (at: string) => new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(at));
     const defaults = defaultUsageToolSelection(summary);
-    const [chosen, setChosen] = useState<string[]>(defaults);
-    const valid = chosen.filter(id => summary.tools.some(tool => tool.id === id));
-    const selected = valid.length || chosen.length === 0 ? valid : defaults;
+    const [chosen, setChosen] = useState<string[] | null>(null);
+    const valid = (chosen ?? defaults).filter(id => summary.tools.some(tool => tool.id === id));
+    const selected = chosen?.length && valid.length === 0 ? defaults : valid;
     const series = usageToolErrorSeries(summary, selected);
+    const coverage = usageBuildCoverage(series);
     const markerMap = new Map<string, BuildMarker>();
     for (const item of series) for (const point of item.points) for (const build of point.builds) {
         const key = `${point.date}:${build.sha}:${build.dirty}`;
@@ -56,7 +57,8 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
     const includeYear = Date.parse(`${summary.endDateExclusive}T00:00:00.000Z`) - Date.parse(`${summary.startDate}T00:00:00.000Z`) > 365 * 86_400_000;
     const markerFocus = Math.min(focusedMarker, Math.max(0, buildMarkers.length - 1));
     const toggle = (id: string) => setChosen(current => {
-        const base = current.filter(item => summary.tools.some(tool => tool.id === item));
+        const valid = (current ?? defaults).filter(item => summary.tools.some(tool => tool.id === item));
+        const base = current?.length && valid.length === 0 ? defaults : valid;
         return base.includes(id) ? base.filter(item => item !== id) : [...base, id];
     });
     const pinnedPoint = pinned?.kind === 'point' ? series.find(item => item.id === pinned.toolId)?.points.find(point => point.date === pinned.point.date) : null;
@@ -68,8 +70,9 @@ export function UsageToolErrorTrend({ summary, timezone }: { summary: UsageRange
     return <section className="usage-tool-error-trend" aria-labelledby="usage-tool-error-title">
         <header><div><h3 id="usage-tool-error-title">Error rate over time</h3><p>Recorded errors / matched results</p></div>{buildMarkers.length > 0 && <button type="button" className="usage-tool-build-toggle" aria-pressed={showBuilds} onClick={() => setShowBuilds(value => !value)}><i aria-hidden="true"/>Commits</button>}</header>
         <div className="usage-tool-picker" role="group" aria-label="Tools shown in error rate graph">
-            {summary.tools.map(tool => <button key={tool.id} type="button" aria-pressed={selected.includes(tool.id)} onClick={() => toggle(tool.id)}><svg width="7" height="7" aria-hidden="true"><circle cx="3.5" cy="3.5" r="3.5" fill={colors[tool.id]}/></svg>{tool.label}</button>)}
+            {summary.tools.map(tool => <button key={tool.id} type="button" aria-pressed={selected.includes(tool.id)} onClick={() => toggle(tool.id)}><svg width="7" height="7" aria-hidden="true"><circle cx="3.5" cy="3.5" r="3.5" fill={colors[tool.id]}/></svg><span className="usage-tool-picker-name">{tool.label}</span>{selected.includes(tool.id) && <>{' '}<span className="usage-tool-picker-counts">{exactRate(tool.errors, tool.results)}, {countLabel(tool.errors, 'error')} / {countLabel(tool.results, 'matched result')}</span></>}</button>)}
         </div>
+        {coverage.omittedBuilds > 0 && <p className="usage-tool-version-notice">Incomplete version history: {countLabel(coverage.omittedBuilds, 'build observation')} omitted for selected tools.</p>}
         <svg ref={chart.ref} className="usage-tool-error-chart" viewBox={`0 0 ${chart.width} ${height}`} role="group" aria-label={`Recorded tool error rates from zero to ${ceiling} percent. Days without matched results are gaps.`}>
             {Array.from({ length: tickCount + 1 }, (_, index) => ceiling * index / tickCount).map(value => <g key={value}><text x={left - 7} y={y(value) + 4} textAnchor="end" className="usage-axis">{value}%</text><line x1={left} x2={right} y1={y(value)} y2={y(value)} className="usage-tool-error-grid"/></g>)}
             {series.map(item => <g key={item.id} className="usage-tool-error-series">

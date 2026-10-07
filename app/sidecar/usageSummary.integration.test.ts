@@ -7,6 +7,7 @@ import { collectIndexedUsage } from '../../src/utils/statsUsageIndex.js';
 import { fitUsageDashboardSnapshot, groupUsageSummary } from './usageSummary.js';
 import { parseUsageCollectionLine, parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { MAX_USAGE_RECORD_BYTES } from '../shared/usageDashboard.js';
+import { defaultUsageToolSelection, usageToolErrorSeries } from '../renderer/src/usageToolErrorTrendState.js';
 test('B1-B3/V1: populated three-range grouping retains exact totals and fits the byte envelope', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-size-'));
     try {
@@ -88,8 +89,8 @@ test('multi-year model usage stays named when tool detail exceeds the record bud
             expect(snapshot.ranges[range].models.filter(model => model.kind === 'named').map(model => model.label).sort()).toEqual([...names].sort());
             expect(snapshot.ranges[range].models.some(model => model.kind === 'other')).toBe(false);
         }
-        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named')).toHaveLength(1);
-        expect(snapshot.ranges.all.tools.find(tool => tool.kind === 'other')?.label).toBe('Other');
+        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named').map(tool => tool.label).sort()).toEqual(names.map((_, index) => `Tool-${index}`));
+        expect(snapshot.ranges.all.tools.some(tool => tool.kind === 'other')).toBe(false);
         expect(snapshot.ranges.all.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(snapshot.ranges.all.requests);
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -188,12 +189,69 @@ test('many daily build markers fall back to exact omitted totals within the enve
         expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
         expect(snapshot.ranges.all.requests).toBe(18_000);
         for (const day of snapshot.ranges.all.days) {
-            expect(day.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(100);
-            expect(day.tools.every(tool => tool.builds?.items.length === 0)).toBe(true);
-            expect(day.tools.reduce((sum, tool) => sum + (tool.builds?.omitted?.requests ?? 0), 0)).toBe(100);
+            expect(day.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(day.requests);
+            const attributed = day.tools.reduce((sum, tool) => sum + (tool.builds?.items.reduce((count, build) => count + build.requests, 0) ?? 0), 0);
+            const omitted = day.tools.reduce((sum, tool) => sum + (tool.builds?.omitted?.requests ?? 0), 0);
+            expect(attributed + omitted).toBe(day.requests);
         }
+        expect(snapshot.ranges.all.days.some(day => day.tools.some(tool => (tool.builds?.omitted?.count ?? 0) > 0))).toBe(true);
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('large history automatically exposes lower-volume edit errors and recent build markers through the production finalizer', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-edit-diagnostics-'));
+    try {
+        const path = join(dir, 'history.jsonl');
+        const rows = [];
+        const editNames = ['Edit', 'apply_patch', 'Apply_patch'];
+        const names = ['Bash', 'Read', 'Grep', 'Glob', 'Agent', 'ToolSearch', 'Write', 'Fetch', 'Search', 'Tasks', ...editNames];
+        for (let day = 0; day < 180; day++) for (const [tool, name] of names.entries()) {
+            const edit = editNames.indexOf(name);
+            for (let build = 0; build < (edit < 0 ? name === 'Bash' ? 10 : 8 : 4); build++) {
+                const id = `${day}-${tool}-${build}`;
+                const timestamp = new Date(Date.UTC(2026, 2, 18 + day, 10, build)).toISOString();
+                rows.push({
+                    type: 'assistant', sessionId: 's', uuid: id, timestamp,
+                    version: `2.1.87-desktop.sha${build.toString(16).padStart(7, 'a')}`,
+                    message: { id, model: 'gpt-6.1-sol', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id, name }] },
+                });
+                rows.push({
+                    type: 'user', sessionId: 's', uuid: `${id}-result`, timestamp,
+                    message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: edit >= 0 && build < 3 - edit }] },
+                });
+            }
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectIndexedUsage([path], '2026-09-13T12:00:00.000Z', {
+            path: join(dir, 'index.sqlite'), deadline: Date.now() + 60000, timezone: 'UTC',
+            finalize: fitUsageDashboardSnapshot,
+        });
+        const output = { type: 'usage' as const, version: 1 as const, snapshot };
+        expect(parseUsageCollectionResult(output)).toEqual(output);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(MAX_USAGE_RECORD_BYTES);
+        for (const range of ['7d', '30d'] as const) {
+            const summary = snapshot.ranges[range];
+            const selected = defaultUsageToolSelection(summary);
+            expect(selected.map(id => summary.tools.find(tool => tool.id === id)!.label)).toEqual(editNames);
+            const series = usageToolErrorSeries(summary, selected);
+            expect(series.every(tool => tool.points.some(point => point.rate !== null && point.rate > 0))).toBe(true);
+            expect(series.every(tool => tool.points.some(point => point.builds.length > 0))).toBe(true);
+            expect(series.every(tool => tool.points.some(point => point.omittedBuilds > 0))).toBe(true);
+            expect(summary.tools.find(tool => tool.label === 'Edit')!.requests).toBeLessThan(summary.tools.find(tool => tool.label === 'Bash')!.requests);
+            expect(summary.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(summary.requests);
+            expect(summary.days.reduce((sum, day) => sum + day.errors, 0)).toBe(summary.tools.reduce((sum, tool) => sum + tool.errors, 0));
+        }
+        expect(defaultUsageToolSelection(snapshot.ranges.all).map(id => snapshot.ranges.all.tools.find(tool => tool.id === id)!.label)).toEqual(editNames);
+        expect(snapshot.ranges.all.bucketDays).toBeGreaterThan(1);
+        expect(snapshot.ranges.all.days.length).toBeLessThanOrEqual(60);
+        const saved = await collectIndexedUsage([path], '2026-09-13T12:00:00.000Z', {
+            path: join(dir, 'index.sqlite'), deadline: Date.now() + 60000, timezone: 'UTC',
+            finalize: fitUsageDashboardSnapshot,
+            onReadSource() { throw new Error('Warm diagnostics must reuse the redacted index'); },
+        });
+        expect(saved.ranges).toEqual(snapshot.ranges);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+}, 30000);
 
 test('busy measured history keeps bounded session timelines after envelope fallback', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-timeline-fallback-'));

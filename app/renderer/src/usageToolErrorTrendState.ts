@@ -21,7 +21,8 @@ export type UsageToolErrorSeries = {
 };
 
 export function defaultUsageToolSelection(summary: UsageRangeSummary, limit = 3): string[] {
-    return [...summary.tools]
+    const named = summary.tools.filter(tool => tool.kind === 'named');
+    return [...(named.length ? named : summary.tools)]
         .sort((a, b) => b.errors - a.errors || b.results - a.results || b.requests - a.requests || a.id.localeCompare(b.id))
         .slice(0, limit)
         .map(tool => tool.id);
