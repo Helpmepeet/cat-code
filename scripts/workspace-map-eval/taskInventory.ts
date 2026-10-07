@@ -2,7 +2,7 @@
 /**
  * Build the candidate task inventory for the workspace map study: the first
  * substantive prompt of every Cat Code, Claude Code, and Codex session whose
- * working directory is this repository, deduplicated by prompt text.
+ * working directory is this repository, deduplicated by full prompt text.
  *
  * Output holds raw user prompts, so write it outside the repository.
  * Kind labels are keyword hints for screening, not validated categories.
@@ -20,6 +20,15 @@ type Entry = { ts: string; src: Source; id: string; text: string }
 
 const CLAUDE_SKIP = ['<local-command', '<system-reminder>', 'Caveat:', '<command-name>/clear', '<command-name>/model']
 const CODEX_SKIP = ['# AGENTS.md', '<environment_context', '<turn_aborted', '<user_instructions', '<permissions', '<INSTRUCTIONS', '<skill', '<user_shell_command']
+// Client-supplied context the Codex app prepends to a user message; the
+// request, if any, follows the block.
+const CODEX_CONTEXT_BLOCK = /^\s*<(recommended_plugins|external_codex_apps_\w+|in-app-browser-context|environment_context)\b[^>]*>[\s\S]*?<\/\1>/
+
+function stripCodexContext(text: string): string {
+  let rest = text
+  for (let match = CODEX_CONTEXT_BLOCK.exec(rest); match; match = CODEX_CONTEXT_BLOCK.exec(rest)) rest = rest.slice(match[0].length)
+  return rest.trim()
+}
 
 async function* lines(path: string): AsyncGenerator<Record<string, any>> {
   const reader = createInterface({ input: createReadStream(path), crlfDelay: Infinity })
@@ -49,8 +58,14 @@ async function claudeLike(src: Source, projectsDir: string): Promise<Entry[]> {
   for (const project of readdirSync(projectsDir)) {
     if (!project.startsWith('-Users-pt-cat-code')) continue
     for (const file of jsonlFiles(join(projectsDir, project), false)) {
+      // A local slash command (/compact, /login, ...) is recorded after a meta
+      // caveat record; it is not a request, so the next prompt is used instead.
+      let afterCaveat = false
       for await (const record of lines(file)) {
-        if (record.type !== 'user' || record.isSidechain || record.isMeta || record.isCompactSummary) continue
+        if (record.type !== 'user' || record.isSidechain) continue
+        const caveat = afterCaveat
+        afterCaveat = record.isMeta === true && JSON.stringify(record.message?.content ?? '').includes('<local-command-caveat>')
+        if (record.isMeta || record.isCompactSummary) continue
         let content = record.message?.content
         if (Array.isArray(content)) {
           if (content.some((part: any) => part?.type === 'tool_result')) continue
@@ -59,7 +74,8 @@ async function claudeLike(src: Source, projectsDir: string): Promise<Entry[]> {
         if (typeof content !== 'string') continue
         const text = content.trim()
         if (!text || CLAUDE_SKIP.some(prefix => text.startsWith(prefix))) continue
-        out.push({ ts: record.timestamp ?? '', src, id: basename(file).slice(0, 8), text })
+        if (caveat && text.startsWith('<command-name>')) continue
+        out.push({ ts: record.timestamp ?? '', src, id: basename(file, '.jsonl'), text })
         break
       }
     }
@@ -81,10 +97,14 @@ async function codex(codexHome: string): Promise<Entry[]> {
         continue
       }
       if (record.type !== 'response_item' || payload.type !== 'message' || payload.role !== 'user') continue
-      const text = (payload.content ?? []).map((part: any) => part?.text ?? '').join(' ').trim()
+      const text = (payload.content ?? [])
+        .map((part: any) => stripCodexContext(part?.text ?? ''))
+        .filter((part: string) => part && !CODEX_SKIP.some(prefix => part.startsWith(prefix)))
+        .join(' ')
+        .trim()
       if (!text || CODEX_SKIP.some(prefix => text.startsWith(prefix))) continue
       const inRepo = cwd.startsWith('/Users/pt/cat-code') || (cwd.startsWith('/Users/pt/.codex/worktrees') && cwd.includes('cat-code'))
-      if (inRepo && !subagent) out.push({ ts: record.timestamp ?? '', src: 'codex', id: basename(file).slice(-44, -36), text })
+      if (inRepo && !subagent) out.push({ ts: record.timestamp ?? '', src: 'codex', id: basename(file, '.jsonl').slice(-36), text })
       break
     }
   }
@@ -92,7 +112,7 @@ async function codex(codexHome: string): Promise<Entry[]> {
 }
 
 const OFF = /^(hi\b|hello|say hi|what is your (name|model)|what (is|are) (mcp|the mcp)|is there any mcp|remember the word|write a (ghost|long haiku)|print anything|show me the math|find the smallest|give me 10 dsa|debate|discuss with your friend|create peer session and talk|have a philosophical|open (youtube|and play)|this is stress test|try ask me|do you see the message|let.?s have a brief good-faith)|ghost story|leetcode|haiku|philoso/i
-const OPS = /^(push|we can push|let merge|merge|restart|install|in stall|reinstall|let reinstall|can we package|can you run caff|do we have anything uncommitted|what is the state of main|commit)|packaging-cat-code|\/compact|\/cache-stats|^<(external_codex|recommended_plugins|in-app-browser)/i
+const OPS = /^(push|we can push|let merge|merge|restart|install|in stall|reinstall|let reinstall|can we package|can you run caff|do we have anything uncommitted|what is the state of main|commit)|packaging-cat-code|\/compact|\/cache-stats/i
 const BRIEF = /^(you are|the user (asked|asks|wants|approved|saw)|work (in|only|from)|read-only|goal\b|role\b|implement (the|this|auto|agents)|# files pasted|# files mentioned|investigation|investigate and report|act as a|act as orchestrator|review (a|the|this) (proposed|change|plan|final)|adversarial(ly)? (review|critique) (a|of a|this proposed)|perform|apply an|rebuild|do not edit|automation:|explore only|continue (implementing|the)|cat code \(|retire agent mode|other session was|this was a instruction|<pasted_content|count the|create a session to|which session|test the mcp|fix a bash|title:|diagnose|root-cause|establish)/i
 
 function kind(text: string): string {
@@ -127,7 +147,7 @@ async function main(): Promise<void> {
   const tasks = []
   for (const entry of raw) {
     const text = entry.text.replace(/\s+/g, ' ').trim()
-    const key = text.slice(0, 150).toLowerCase()
+    const key = text.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
     if (text.length < 15) continue
