@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
-import { resolveOpenHistorySession } from './openHistorySession.js'
+import { resolveBranchOpenHistorySeed, resolveOpenHistorySession } from './openHistorySession.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type {
+  SessionActionResultFrame,
   SessionCatalogEntry,
   SessionsCatalogSnapshot,
 } from '../shared/protocol.js'
@@ -47,6 +49,44 @@ function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {
     ...over,
   })
 }
+
+test('whole-session and message forks open immediately from trusted source ownership, without catalog refresh', () => {
+  const source = descriptor({
+    binding: {
+      kind: 'managed',
+      storageRootId: ENGINE_ID,
+      storageId: OTHER_ID,
+    },
+  })
+  for (const verb of ['branch', 'branchFromMessage'] as const) {
+    const frame: SessionActionResultFrame = {
+      kind: 'session-action.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: source.appSessionId,
+      requestId: 'fork-request',
+      verb,
+      ok: true,
+      message: 'Forked',
+      branchEngineSessionId: OTHER_ID,
+      branchTitle: 'A fork',
+    }
+    const seed = resolveBranchOpenHistorySeed(frame, source)
+    expect(resolveOpenHistorySession(OTHER_ID, [], null, seed)).toEqual({
+      kind: 'spawn',
+      cwd: source.cwd,
+      resumeEngineSessionId: OTHER_ID,
+      title: 'A fork',
+      forked: true,
+      binding: source.binding,
+    })
+    expect(resolveBranchOpenHistorySeed({ ...frame, ok: false }, source)).toBeUndefined()
+    expect(resolveBranchOpenHistorySeed({ ...frame, verb: 'rename' }, source)).toBeUndefined()
+    expect(resolveBranchOpenHistorySeed({ ...frame, sessionId: 'other' }, source)).toBeUndefined()
+    expect(resolveBranchOpenHistorySeed({ ...frame, branchEngineSessionId: '../bad' }, source)).toBeUndefined()
+    expect(resolveBranchOpenHistorySeed(frame, undefined)).toBeUndefined()
+    expect(resolveBranchOpenHistorySeed(frame, { ...source, cwd: '' })).toBeUndefined()
+  }
+})
 
 describe('resolveOpenHistorySession (open-from-history boundary)', () => {
   test('rejects a non-string id (fail closed, no lookup)', () => {

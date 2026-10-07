@@ -30,6 +30,27 @@ function resultFrame(
 }
 
 describe('sessionActionRuntimeState', () => {
+  test('whole-session fork retains its engine ID without a selected prompt until consumed', () => {
+    const fork = resultFrame({
+      requestId: 'fork-1', verb: 'branch', branchEngineSessionId: 'engine-fork',
+    })
+    let state = reduceSessionActionRuntimeState(createSessionActionRuntimeState(), {
+      type: 'frame', frame: fork,
+    })
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'frame', frame: resultFrame({ requestId: 'rename-2' }),
+    })
+    expect(state.targetedByRequestId['fork-1']).toMatchObject({
+      verb: 'branch', branchEngineSessionId: 'engine-fork',
+    })
+    expect(state.targetedByRequestId['fork-1']?.selectedPrompt).toBeUndefined()
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'discard-result', sessionId: SESSION, requestId: 'fork-1',
+    })
+    expect(state.targetedByRequestId['fork-1']).toBeUndefined()
+    expect(state.lastBySession[SESSION]?.requestId).toBe('rename-2')
+  })
+
   test('records the latest result per session and selects it back', () => {
     let state = createSessionActionRuntimeState()
     state = reduceSessionActionRuntimeState(state, {

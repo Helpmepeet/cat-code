@@ -3369,6 +3369,13 @@ export type SessionCatalogEntry = {
   transcriptTitle: string | null
   /** Transcript file mtime (recency sort + date buckets). */
   modifiedAtMs: number
+  /**
+   * Latest genuine user/assistant transcript timestamp or engine-owned active
+   * lease acquisition (including no-prompt resume), never bookkeeping or unowned
+   * maintenance. Read-only outbound archive-return evidence, independent of
+   * recency ordering. Absent (older cache) or null means unknown.
+   */
+  sessionActivityAtMs?: number | null
   /** Session creation time. */
   createdAtMs: number
   /**

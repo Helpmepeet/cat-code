@@ -86,6 +86,28 @@ function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string
   }
 }
 
+test('conversation evidence propagates separately from existing ordering fields', () => {
+  const catalog = snapshot([
+    entry({ sessionId: 'registered', modifiedAtMs: 9000, sessionActivityAtMs: 100 }),
+    entry({ sessionId: 'history', modifiedAtMs: 8000, sessionActivityAtMs: 200 }),
+    entry({ sessionId: 'legacy', modifiedAtMs: 7000 }),
+  ])
+  const rows = selectMergedSessionRows([
+    descriptor({ appSessionId: 'app', engineSessionId: 'registered', lastMessageSentAt: 50 }),
+    descriptor({ appSessionId: 'only-registry' }),
+  ], catalog)
+  expect(rows.slice(0, 3).map(row => [
+    row.sessionId, row.modifiedAtMs, row.transcriptActivityAtMs, row.sessionActivityAtMs,
+  ])).toEqual([
+    ['registered', 9000, 9000, 100],
+    ['history', 8000, 8000, 200],
+    ['legacy', 7000, 7000, null],
+  ])
+  expect(rows.find(row => row.sessionId === 'registered')?.lastMessageSentAt).toBe(50)
+  expect(rows.find(row => row.sessionId === 'only-registry')?.sessionActivityAtMs).toBeNull()
+  expect(catalog.entries[2]?.sessionActivityAtMs).toBeUndefined()
+})
+
 describe('reduce / select (catalog owner decision #4 — single global source)', () => {
   test('a delivered catalog is stored as the latest good and select returns it', () => {
     let state = createSessionsCatalogState()

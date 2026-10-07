@@ -11,14 +11,12 @@ import {
 import { SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY } from './sidebarHiddenWorkspaces.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
 import {
-  PINNED_SESSION_DRAG_MIME,
   SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
 } from './sidebarPinnedSessions.js'
 import {
   WORKSPACE_ORDER_DRAG_MIME,
   type WorkspaceDropEdge,
 } from './sidebarWorkspaceOrder.js'
-/** A seeded storage stub, so a pin exists before the first render. */
 import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
@@ -170,9 +168,9 @@ test('no ⋮ kebab renders when the row is not wired for actions', () => {
   expect(html).not.toContain('title="Session actions"')
 })
 
-test('a history row never renders a ⋮ kebab (no desktop session to act on)', () => {
+test('a history row exposes a ⋮ kebab without a desktop session id', () => {
   const html = renderRow(historyRow('h', { displayLabel: 'Old terminal run' }), noop)
-  expect(html).not.toContain('Session actions for')
+  expect(html).toContain('Session actions for Old terminal run')
 })
 
 /**
@@ -600,13 +598,11 @@ test('the expanded sidebar exposes separate collapse and resize controls', () =>
 })
 
 /* --------------------------------------------------------------------------- *
- * Design source `components/sidebar/index.html` (2026-08-01): New chat, the
- * Pinned section, the Projects header, and the account/destinations footer.
+ * New chat, the Projects header, and the account/destinations footer.
  *
  * These render the WHOLE Sidebar with `menuActive` — the only SSR-reachable way
  * into the expanded branch (all four open sources are false under
- * `renderToStaticMarkup`). Ordering/pin LOGIC is proven in
- * `sidebarPinnedSessions.test.ts`; what follows is the DOM wiring over it.
+ * `renderToStaticMarkup`).
  * --------------------------------------------------------------------------- */
 
 function pinning(...sessionIds: string[]) {
@@ -661,7 +657,6 @@ test('the Projects section header is always present, empty roster included', () 
   const empty = renderSidebar({ menuActive: true, rows: [] })
   expect(empty).toContain('Projects')
   expect(empty).toContain('No sessions yet.')
-  // Nothing is pinned, so the section that would hold pins never renders.
   expect(empty).not.toContain('>Pinned<')
 })
 
@@ -741,9 +736,9 @@ test('nothing hidden means no restore line at all', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('hidden project')
 })
 
-// ── Pinned section ───────────────────────────────────────────────────────────
+// ── Session pins are no longer part of the rail ──────────────────────────────
 
-test('a pinned session is LIFTED into the Pinned section, not duplicated below', () => {
+test('stored session pins do not lift rows or add a Pinned section', () => {
   const html = renderSidebar({
     menuActive: true,
     rows: [
@@ -752,19 +747,19 @@ test('a pinned session is LIFTED into the Pinned section, not duplicated below',
     ],
     storage: pinning('engine-s1'),
   })
-  expect(html).toContain('>Pinned<')
-  // Exactly once on the page: the Pinned section owns it now.
+  expect(html).not.toContain('>Pinned<')
   expect(html.match(/>Alpha</g)).toHaveLength(1)
   expect(html.match(/>Beta</g)).toHaveLength(1)
-  // Its project group still renders, holding only what is left.
   expect(html).toContain('>proj<')
+  expect(html).not.toContain('aria-label="Pin Alpha"')
+  expect(html).not.toContain('aria-label="Unpin Alpha"')
 })
 
 test('the Pinned section is absent when nothing is pinned', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('>Pinned<')
 })
 
-test('a project row is NOT a drag handle; only a pinned row is', () => {
+test('session rows are not drag handles even with stored pins', () => {
   const rows = [
     registryRow('s1', { displayLabel: 'Alpha' }),
     registryRow('s2', { displayLabel: 'Beta' }),
@@ -779,8 +774,7 @@ test('a project row is NOT a drag handle; only a pinned row is', () => {
   expect(html).toContain('transition-colors cursor-pointer')
   expect(html).not.toContain('transition-colors cursor-grab')
 
-  // Pinning one lifts it into the Pinned section, which IS reorderable, so the
-  // handle count goes up by exactly one and that row becomes a grab handle.
+  // Old pin storage has no effect on row interaction or ordering.
   const withPin = renderSidebar({
     menuActive: true,
     rows,
@@ -788,15 +782,8 @@ test('a project row is NOT a drag handle; only a pinned row is', () => {
   })
   expect(
     withPin.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
-  ).toHaveLength(2)
-  expect(withPin).toContain('transition-colors cursor-grab')
-})
-
-test('the pinned drag type collides with no other list in the rail', () => {
-  // Pinned is the only reorderable row list, but its payload must still not be
-  // accepted by the workspace-header drag or the tab→panel split.
-  expect(PINNED_SESSION_DRAG_MIME).not.toBe(WORKSPACE_ORDER_DRAG_MIME)
-  expect(PINNED_SESSION_DRAG_MIME).not.toBe('text/sessionid')
+  ).toHaveLength(1)
+  expect(withPin).not.toContain('transition-colors cursor-grab')
 })
 
 test('a group ignores a stale hand-arrangement and stays in activity order', () => {
@@ -821,46 +808,7 @@ test('a group ignores a stale hand-arrangement and stays in activity order', () 
   expect(order).toEqual([...order].sort((a, b) => a - b))
 })
 
-// ── The row's pin button ─────────────────────────────────────────────────────
-
-test('the pin button renders only when a pin handler is wired', () => {
-  const wired = renderToStaticMarkup(
-    <SidebarRowItem
-      row={registryRow('a', { displayLabel: 'Alpha' })}
-      isActive={false}
-      onSelectLive={noop}
-      onRestore={noop}
-      onOpenHistory={noop}
-      onTogglePin={noop}
-    />,
-  )
-  expect(wired).toContain('aria-label="Pin Alpha"')
-  expect(wired).toContain('title="Pin to top"')
-  expect(wired).toContain('aria-pressed="false"')
-
-  expect(renderRow(registryRow('a', { displayLabel: 'Alpha' }))).not.toContain(
-    'aria-label="Pin Alpha"',
-  )
-})
-
-test('a pinned row reads pressed and offers the unpin', () => {
-  const html = renderToStaticMarkup(
-    <SidebarRowItem
-      row={registryRow('a', { displayLabel: 'Alpha' })}
-      isActive={false}
-      pinned
-      onSelectLive={noop}
-      onRestore={noop}
-      onOpenHistory={noop}
-      onTogglePin={noop}
-    />,
-  )
-  expect(html).toContain('aria-pressed="true"')
-  expect(html).toContain('aria-label="Unpin Alpha"')
-  expect(html).toContain('title="Unpin"')
-})
-
-test('a browse-only row offers no actions at all (nothing to act on)', () => {
+test('a browse-only row still offers actions but no session pin', () => {
   const html = renderToStaticMarkup(
     <SidebarRowItem
       row={historyRow('h', { displayLabel: 'Orphan', cwd: '' })}
@@ -869,11 +817,10 @@ test('a browse-only row offers no actions at all (nothing to act on)', () => {
       onRestore={noop}
       onOpenHistory={noop}
       onOpenRowActions={noop}
-      onTogglePin={noop}
     />,
   )
   expect(html).not.toContain('aria-label="Pin Orphan"')
-  expect(html).not.toContain('Session actions for')
+  expect(html).toContain('Session actions for Orphan')
 })
 
 // ── Footer: account + destinations ───────────────────────────────────────────

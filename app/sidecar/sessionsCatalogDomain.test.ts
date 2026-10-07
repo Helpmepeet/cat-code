@@ -1,12 +1,19 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { LogOption } from '../../src/types/logs.js'
 import type { SessionLogResult } from '../../src/utils/sessionStorage.js'
 import type { SessionsCatalogSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   annotateCwdExistence,
+  annotateSessionActivity,
   buildSessionsCatalogSnapshot,
+  MAX_CONVERSATION_ACTIVITY_READ_BYTES,
+  MAX_CONVERSATION_ACTIVITY_RECORD_BYTES,
   mapLogOptionToCatalogEntry,
+  readConversationActivityAtMs,
 } from './sessionsCatalogDomain.js'
 
 function makeLog(partial: Partial<LogOption>): LogOption {
@@ -30,6 +37,153 @@ function result(logs: LogOption[], allStatCount = logs.length): SessionLogResult
     nextIndex: logs.length,
   }
 }
+
+describe('conversation activity evidence', () => {
+  const sessionId = 'conversation'
+  const message = (type: 'user' | 'assistant', at: number, extra: object = {}) => ({
+    type, sessionId, timestamp: new Date(at).toISOString(),
+    message: { role: type, content: type === 'user' ? 'prompt' : [{ type: 'text', text: 'reply' }] },
+    ...extra,
+  })
+  async function withTranscript(
+    contents: string,
+    check: (fullPath: string) => Promise<void>,
+  ): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'catalog-activity-'))
+    try {
+      const fullPath = join(dir, 'conversation.jsonl')
+      await writeFile(fullPath, contents)
+      await check(fullPath)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  test('reads latest message timestamp, not shutdown metadata or nested timestamp lookalikes', async () => {
+    const records = [
+      message('user', 100),
+      message('assistant', 200),
+      { type: 'thread-goal', sessionId, timestamp: new Date(5000).toISOString() },
+      { type: 'pr-link', sessionId, timestamp: new Date(6000).toISOString() },
+      { type: 'file-history-snapshot', snapshot: message('assistant', 7000) },
+      { type: 'custom-title', sessionId, customTitle: 'Renamed', timestamp: new Date(8000).toISOString() },
+    ]
+    await withTranscript(records.map(record => JSON.stringify(record)).join('\n') + '\n', async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBe(200)
+      const logs = [makeLog({ sessionId, fullPath: path, modified: new Date(8000) })]
+      const original = buildSessionsCatalogSnapshot(result(logs), 9000)
+      const annotated = await annotateSessionActivity(original, logs)
+      expect(annotated.entries[0]?.sessionActivityAtMs).toBe(200)
+      expect(annotated.entries[0]?.modifiedAtMs).toBe(8000)
+      expect(original.entries[0]?.sessionActivityAtMs).toBeNull()
+      expect(scanForSecrets(annotated).ok).toBe(true)
+      expect(JSON.stringify(annotated)).not.toContain('"role"')
+    })
+  })
+
+  test('a terminal message after resume is detected for both roles and without a final newline', async () => {
+    for (const type of ['user', 'assistant'] as const) {
+      await withTranscript([
+        JSON.stringify(message('assistant', 100)),
+        JSON.stringify({ type: 'thread-goal', timestamp: new Date(5000).toISOString() }),
+        JSON.stringify(message(type, 201)),
+      ].join('\n'), async path => {
+        expect(await readConversationActivityAtMs(path, sessionId)).toBe(201)
+      })
+    }
+  })
+
+  test('huge UTF-8 messages span chunks; embedded message-looking text is not evidence', async () => {
+    const record = message('assistant', 201, {
+      message: { role: 'assistant', content: [{
+        type: 'text',
+        text: '漢字界'.repeat(180_000) + JSON.stringify(message('user', 9000)),
+      }] },
+    })
+    await withTranscript(JSON.stringify(record) + '\r\n' + JSON.stringify({
+      type: 'thread-goal', timestamp: new Date(5000).toISOString(),
+    }) + '\r\n', async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBe(201)
+    })
+  })
+
+  test('ignores synthetic, sidechain, foreign-session and internal message records', async () => {
+    const records = [
+      message('user', 100),
+      message('user', 5000, { isMeta: true }),
+      message('user', 6000, { isVirtual: true }),
+      message('user', 7000, { isCompactSummary: true }),
+      message('assistant', 8000, { isInternalNoResponseSentinel: true }),
+      message('assistant', 9000, { isSidechain: true }),
+      message('assistant', 10_000, { sessionId: 'other' }),
+    ]
+    await withTranscript(records.map(record => JSON.stringify(record)).join('\n'), async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBe(100)
+    })
+  })
+
+  test('peer-origin messages remain genuine conversation activity', async () => {
+    await withTranscript(JSON.stringify(message('user', 201, {
+      origin: { kind: 'peer', sessionId: 'sender' },
+    })), async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBe(201)
+    })
+  })
+
+  test('empty, malformed, metadata-only and invalid message timestamps are conservative', async () => {
+    for (const contents of [
+      '', '\n', '{broken\n', JSON.stringify({ type: 'thread-goal', timestamp: new Date(5000).toISOString() }),
+      JSON.stringify(message('user', 100)) + '\n' + JSON.stringify(message('assistant', 201, { timestamp: 'invalid' })),
+    ]) {
+      await withTranscript(contents, async path => {
+        expect(await readConversationActivityAtMs(path, sessionId)).toBeNull()
+        expect(await readConversationActivityAtMs(path + '.missing', sessionId)).toBeNull()
+      })
+    }
+  })
+
+  test('an oversized latest record returns unknown rather than guessing from its timestamp', async () => {
+    await withTranscript(JSON.stringify(message('user', 100)) + '\n' + JSON.stringify(
+      message('assistant', 9000, { message: { content: 'x'.repeat(MAX_CONVERSATION_ACTIVITY_RECORD_BYTES) } }),
+    ), async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBeNull()
+    })
+  })
+
+  test('read budget stops a metadata tail, but old huge history does not hide a recent message', async () => {
+    const metadata = JSON.stringify({ type: 'thread-goal', timestamp: new Date(5000).toISOString() }) + '\n'
+    const tail = metadata.repeat(Math.ceil(MAX_CONVERSATION_ACTIVITY_READ_BYTES / metadata.length) + 1)
+    await withTranscript(JSON.stringify(message('user', 100)) + '\n' + tail, async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBeNull()
+    })
+    await withTranscript('x'.repeat(MAX_CONVERSATION_ACTIVITY_READ_BYTES) + '\n' +
+      JSON.stringify(message('assistant', 201)), async path => {
+      expect(await readConversationActivityAtMs(path, sessionId)).toBe(201)
+    })
+  })
+
+  test('annotation populates null when a trusted source path is absent', async () => {
+    const logs = [makeLog({ sessionId })]
+    const annotated = await annotateSessionActivity(buildSessionsCatalogSnapshot(result(logs)), logs)
+    expect(annotated.entries[0]?.sessionActivityAtMs).toBeNull()
+  })
+
+  test('session evidence takes the maximum of genuine messages and active acquisition', async () => {
+    const logs = [makeLog({ sessionId, fullPath: '/trusted/transcript.jsonl' })]
+    const snapshot = buildSessionsCatalogSnapshot(result(logs))
+    for (const [conversationAt, activatedAt, expected] of [
+      [100, 201, 201], [300, 201, 300], [null, 201, 201],
+      [100, null, 100], [null, null, null],
+    ]) {
+      const annotated = await annotateSessionActivity(
+        snapshot, logs,
+        async () => conversationAt ?? null,
+        async () => activatedAt ?? null,
+      )
+      expect(annotated.entries[0]?.sessionActivityAtMs).toBe(expected)
+    }
+  })
+})
 
 describe('mapLogOptionToCatalogEntry', () => {
   test('maps the real LogOption metadata fields onto a catalog entry', () => {

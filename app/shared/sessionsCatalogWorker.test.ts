@@ -154,6 +154,37 @@ describe('parseSessionsCatalogWorkerResult — reject invalid (fail closed)', ()
   })
 })
 
+describe('sessionActivityAtMs (additive outbound evidence)', () => {
+  test('finite timestamp, zero, and null survive the JSON worker boundary', () => {
+    for (const sessionActivityAtMs of [1234, 0, null]) {
+      const parsed = parseSessionsCatalogWorkerResult(JSON.parse(JSON.stringify(
+        catalogResult([entry({ sessionId: 'a', sessionActivityAtMs })]),
+      )))
+      expect(parsed?.type).toBe('catalog')
+      if (parsed?.type === 'catalog') {
+        expect(parsed.catalog.entries[0]?.sessionActivityAtMs).toBe(sessionActivityAtMs)
+      }
+    }
+  })
+
+  test('older cached rows parse without inventing conversation evidence', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [entry({ sessionId: 'a', modifiedAtMs: 5000 })],
+      truncated: false,
+    })
+    expect(parsed?.entries[0]?.sessionActivityAtMs).toBeUndefined()
+  })
+
+  test('wrong types, negative and nonfinite timestamps fail the whole snapshot', () => {
+    for (const sessionActivityAtMs of ['1234', false, {}, [], -1, NaN, Infinity]) {
+      expect(parseSessionsCatalogSnapshot({
+        entries: [{ ...entry({ sessionId: 'a' }), sessionActivityAtMs }],
+        truncated: false,
+      })).toBeNull()
+    }
+  })
+})
+
 describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
   test('a present cwdExists:false round-trips (a dead workspace stays dead)', () => {
     const parsed = parseSessionsCatalogSnapshot({

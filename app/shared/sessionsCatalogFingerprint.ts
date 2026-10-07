@@ -52,7 +52,7 @@ async function readCachedCatalog(): Promise<CachedCatalog | null> {
 
 /**
  * Hash project transcript metadata, relocation records used by the catalog
- * projection, and workspace existence used by its final annotation pass. File
+ * projection, active lease acquisition markers, and workspace existence. File
  * ctime catches same-size rewrites whose mtime was restored by a caller.
  */
 async function currentFileFingerprint(projectsDir = join(configHome(), 'projects')): Promise<string> {
@@ -93,6 +93,23 @@ async function currentFileFingerprint(projectsDir = join(configHome(), 'projects
   for (const name of relocations.filter(row => row.isFile() && row.name.endsWith('.json')).map(row => row.name).sort()) {
     const fileStat = await stat(join(relocationDir, name), { bigint: true })
     hash.update(`r\0${name}\0${fileStat.size}\0${fileStat.mtimeNs}\0${fileStat.ctimeNs}\0`)
+  }
+  // Only durable active acquisitions (transcriptLease.readTranscriptActivationAtMs),
+  // never lease targets or lock directories whose heartbeat/maintenance changes.
+  const leaseDir = join(configHome(), 'transcript-leases')
+  let leases: Dirent[]
+  try {
+    leases = await readdir(leaseDir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') leases = []
+    else throw error
+  }
+  const activations = leases.filter(row => row.isFile() &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.activation\.json$/i.test(row.name))
+    .map(row => row.name).sort()
+  for (const name of activations) {
+    const fileStat = await stat(join(leaseDir, name), { bigint: true })
+    hash.update(`a\0${name}\0${fileStat.size}\0${fileStat.mtimeNs}\0${fileStat.ctimeNs}\0`)
   }
   return hash.digest('hex')
 }

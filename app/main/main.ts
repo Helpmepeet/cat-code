@@ -230,6 +230,7 @@ import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
 import { inspectSessionsCatalogSources } from '../shared/sessionsCatalogFingerprint.js'
 import {
+  resolveBranchOpenHistorySeed,
   resolveOpenHistorySession,
   type TrustedOpenHistorySeed,
 } from './openHistorySession.js'
@@ -356,42 +357,28 @@ function rememberBranchOpenSeed(
   appSessionId: SessionId,
   frame: Extract<ServerFrame, { kind: 'session-action.result' }>,
 ): void {
-  if (
-    !frame.ok ||
-    frame.verb !== 'branchFromMessage' ||
-    typeof frame.branchEngineSessionId !== 'string' ||
-    !SESSION_ID_RE.test(frame.branchEngineSessionId)
-  ) {
-    return
-  }
   const source = host
     ?.listSessions()
     .find(descriptor => descriptor.appSessionId === appSessionId)
-  if (!source || source.cwd.trim().length === 0) return
+  const seed = resolveBranchOpenHistorySeed(frame, source)
+  if (!seed || !source) return
   // The branch transcript exists as soon as this result arrives. Persist its
   // managed-storage ownership before forwarding the result makes it openable;
   // the bounded seed below only covers catalog lag in this process.
   if (
     source.binding?.kind === 'managed' &&
-    !host?.recordManagedBranch(appSessionId, frame.branchEngineSessionId)
+    !host?.recordManagedBranch(appSessionId, seed.engineSessionId)
   ) {
     logLegacyDiagnostic(
-      `could not durably record managed branch ${frame.branchEngineSessionId}`,
+      `could not durably record managed branch ${seed.engineSessionId}`,
       'host',
       'main',
     )
   }
   const now = Date.now()
-  branchOpenSeeds.delete(frame.branchEngineSessionId)
-  branchOpenSeeds.set(frame.branchEngineSessionId, {
-    engineSessionId: frame.branchEngineSessionId,
-    cwd: source.cwd,
-    forked: true,
-    ...(source.binding !== undefined ? { binding: source.binding } : {}),
-    ...(typeof frame.branchTitle === 'string' &&
-    frame.branchTitle.trim().length > 0
-      ? { title: frame.branchTitle }
-      : {}),
+  branchOpenSeeds.delete(seed.engineSessionId)
+  branchOpenSeeds.set(seed.engineSessionId, {
+    ...seed,
     expiresAt: now + BRANCH_OPEN_SEED_TTL_MS,
   })
   pruneBranchOpenSeeds(now)

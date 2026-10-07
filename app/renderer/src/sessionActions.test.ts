@@ -4,6 +4,7 @@ import {
   estimateSessionActionsMenuHeight,
   placeSessionActionsMenu,
   resolveSessionActions,
+  selectSidebarSessionActions,
   selectSessionsPageActions,
   SESSION_ACTION_SECTIONS,
   type SessionActionItem,
@@ -439,5 +440,65 @@ describe('selectSessionsPageActions (P4-35 — the Sessions-page entry point)', 
 
   test('an empty menu filters to an empty menu, never a throw', () => {
     expect(selectSessionsPageActions([])).toEqual([])
+  })
+})
+
+describe('sidebar session actions', () => {
+  function sidebar(r = row(), archived = false, hasEngine = true) {
+    return selectSidebarSessionActions(
+      resolveSessionActions(r, { isActiveOpen: true, hasHiddenRows: true, hasEngine }),
+      r,
+      archived,
+    )
+  }
+
+  test('live rows have the trimmed ordered menu and a neutral archive below one divider', () => {
+    const items = sidebar()
+    expect(items.map(item => item.kind)).toEqual([
+      'rename', 'fork', 'close', 'copy-session-id', 'archive',
+    ])
+    expect(items.map(item => item.section)).toEqual([
+      'primary', 'primary', 'primary', 'primary', 'transfer',
+    ])
+    expect(items.every(item => item.enabled && !item.danger && !item.flyout)).toBe(true)
+    expect(items[3]?.label).toBe('Copy session ID')
+  })
+
+  test('closed and terminal-history rows omit Close and keep live-engine reasons', () => {
+    for (const r of [
+      row({ live: false, restorable: true, status: 'exited' }),
+      row({ live: false, appSessionId: null, inRegistry: false, status: 'history' }),
+    ]) {
+      const items = sidebar(r)
+      expect(items.map(item => item.kind)).toEqual([
+        'rename', 'fork', 'copy-session-id', 'archive',
+      ])
+      expect(items.slice(0, 2).every(item => !item.enabled && item.reason)).toBe(true)
+      expect(items[0]?.reason).toBe(items[1]?.reason)
+      expect(items.slice(2).every(item => item.enabled)).toBe(true)
+    }
+    expect(sidebar(row(), false, false).slice(0, 2).every(item => !item.enabled)).toBe(true)
+  })
+
+  test('archived rows offer only Unarchive and the engine ID copy', () => {
+    expect(sidebar(row(), true).map(item => item.kind)).toEqual([
+      'unarchive', 'copy-session-id',
+    ])
+    expect(sidebar(row({ sessionId: 'app-1' }))[3]).toMatchObject({
+      kind: 'copy-session-id', enabled: false, reason: 'Wait for this session to connect.',
+    })
+  })
+
+  test('selecting sidebar actions leaves the tab full menu and its flyout untouched', () => {
+    const full = resolveSessionActions(row(), { isActiveOpen: true, hasHiddenRows: true })
+    const before = structuredClone(full)
+    selectSidebarSessionActions(full, row())
+    expect(full).toEqual(before)
+    expect(full.map(item => item.kind)).toEqual([
+      'open', 'rename', 'peer-wake-blocked', 'reveal-hidden', 'metadata',
+      'copy', 'copy-ids', 'export',
+    ])
+    expect(full.find(item => item.kind === 'copy')?.flyout?.map(item => item.kind))
+      .toEqual(['copy-md', 'copy-text'])
   })
 })

@@ -545,7 +545,7 @@ test('message actions use one stable App dispatcher and correlate targeted resul
     resultBody.indexOf('restorePromptIntoComposer(sessionId'),
   )
   expect(source).not.toContain('BranchDialog')
-  expect(source).not.toContain("type: 'session.branch'")
+  expect(source).toContain("sendSessionActionVerb(sessionId, { type: 'session.branch', requestId })")
 })
 
 test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history route', () => {

@@ -15,6 +15,10 @@
  * (undefined on the lite/enriched path) are NOT populated by this loader — the
  * catalog renders truth (0 / null) and the page flags those chips (C3
  * render-truth precedent).
+ * Archive-return evidence gets a separate bounded backwards JSONL read stopping
+ * at the latest genuine conversation entry, combined with the engine's durable
+ * active lease acquisition marker. Arbitrary metadata timestamps remain only
+ * in the existing ordering semantics.
  *
  * The enrich limit is the RETURNED count, so the pre-#16 default of 50 hid the
  * operator's real terminal history behind the newest ~day of dev/test sessions.
@@ -37,7 +41,7 @@
  * unit-testable without the filesystem.
  */
 
-import { stat } from 'node:fs/promises'
+import { open, stat, type FileHandle } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import {
   loadAllProjectsMessageLogsProgressive,
@@ -45,7 +49,9 @@ import {
 } from '../../src/utils/sessionStorage.js'
 import { normalizeSessionMode } from '../../src/types/logs.js'
 import type { LogOption } from '../../src/types/logs.js'
+import { readTranscriptActivationAtMs } from '../../src/utils/transcriptLease.js'
 import type { SessionCatalogEntry, SessionsCatalogSnapshot } from '../shared/protocol.js'
+import { isRecord } from '../shared/narrow.js'
 
 /**
  * Per-project stat cap (cheap readdir+stat). Raised for #16 so genuine history
@@ -61,6 +67,10 @@ export const SESSIONS_CATALOG_STAT_LIMIT = 1000
  * so an operator's real terminal history shows instead of only the newest ~day.
  */
 export const SESSIONS_CATALOG_ENRICH_LIMIT = 600
+
+export const MAX_CONVERSATION_ACTIVITY_READ_BYTES = 8 * 1024 * 1024
+export const MAX_CONVERSATION_ACTIVITY_RECORD_BYTES = 4 * 1024 * 1024
+const CONVERSATION_ACTIVITY_CHUNK_BYTES = 64 * 1024
 
 /**
  * Enumerate the global sessions catalog ONCE (the catalog owner's single-shot
@@ -79,12 +89,13 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
       SESSIONS_CATALOG_ENRICH_LIMIT,
       { skipUnreadableRelocations: true },
     )
-    // The pure builder is fs-free (so it stays unit-testable); the existence
-    // stat is the async second pass, done here in the engine-graph worker plane
-    // (the host plane could not — `registry.ts:19`).
-    return await annotateCwdExistence(
+    // The pure builder is fs-free; message evidence and cwd existence are
+    // annotated here in the disposable engine-graph worker.
+    const snapshot = await annotateSessionActivity(
       buildSessionsCatalogSnapshot(result, capturedAtMs),
+      result.logs,
     )
+    return await annotateCwdExistence(snapshot)
   } catch (error) {
     // A read failure degrades to "no catalog" — the page shows a load state,
     // never a crash (display = degrade gracefully). Keep the raw failure in
@@ -97,6 +108,112 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
     )
     return null
   }
+}
+
+/**
+ * Read backwards only to the latest genuine message. Complete JSONL records
+ * are parsed locally, never sent across the boundary. Large records can span
+ * chunks, but both record memory and total per-file I/O are capped. Unknown,
+ * unreadable, or over-limit evidence is null, never an mtime fallback.
+ */
+export async function readConversationActivityAtMs(
+  fullPath: string,
+  sessionId: string,
+): Promise<number | null> {
+  let file: FileHandle | undefined
+  try {
+    file = await open(fullPath, 'r')
+    const info = await file.stat()
+    if (!info.isFile()) return null
+    let position = info.size
+    let readBytes = 0
+    let lineBytes = 0
+    let fragments: Buffer[] = []
+    const addFragment = (fragment: Buffer): boolean => {
+      lineBytes += fragment.length
+      if (lineBytes > MAX_CONVERSATION_ACTIVITY_RECORD_BYTES) return false
+      if (fragment.length > 0) fragments.push(fragment)
+      return true
+    }
+    const finishLine = (): number | null | undefined => {
+      const line = Buffer.concat(fragments.reverse(), lineBytes).toString('utf8')
+      fragments = []
+      lineBytes = 0
+      if (line.trim().length === 0) return undefined
+      let record: unknown
+      try {
+        record = JSON.parse(line)
+      } catch {
+        return undefined
+      }
+      if (
+        !isRecord(record) ||
+        (record.type !== 'user' && record.type !== 'assistant') ||
+        record.sessionId !== sessionId ||
+        record.isSidechain === true ||
+        record.isMeta === true ||
+        record.isVirtual === true ||
+        record.isCompactSummary === true ||
+        record.isInternalNoResponseSentinel === true ||
+        !isRecord(record.message) ||
+        (typeof record.message.content !== 'string' && !Array.isArray(record.message.content))
+      ) return undefined
+      if (typeof record.timestamp !== 'string') return null
+      const timestamp = Date.parse(record.timestamp)
+      return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null
+    }
+    while (position > 0 && readBytes < MAX_CONVERSATION_ACTIVITY_READ_BYTES) {
+      const length = Math.min(
+        position,
+        CONVERSATION_ACTIVITY_CHUNK_BYTES,
+        MAX_CONVERSATION_ACTIVITY_READ_BYTES - readBytes,
+      )
+      position -= length
+      const chunk = Buffer.alloc(length)
+      const { bytesRead } = await file.read(chunk, 0, length, position)
+      // A concurrent truncate cannot supply a complete record.
+      if (bytesRead !== length) return null
+      readBytes += bytesRead
+      let end = length
+      for (let index = length - 1; index >= 0; index--) {
+        if (chunk[index] !== 10) continue
+        if (!addFragment(chunk.subarray(index + 1, end))) return null
+        const activity = finishLine()
+        if (activity !== undefined) return activity
+        end = index
+      }
+      if (!addFragment(chunk.subarray(0, end))) return null
+    }
+    return position === 0 ? finishLine() ?? null : null
+  } catch {
+    return null
+  } finally {
+    await file?.close().catch(() => {})
+  }
+}
+
+/** Sequential reads keep transcript buffers bounded across the entire catalog. */
+export async function annotateSessionActivity(
+  snapshot: SessionsCatalogSnapshot,
+  logs: readonly LogOption[],
+  readConversation: typeof readConversationActivityAtMs = readConversationActivityAtMs,
+  readActivation: typeof readTranscriptActivationAtMs = readTranscriptActivationAtMs,
+): Promise<SessionsCatalogSnapshot> {
+  const paths = new Map(logs.map(log => [log.sessionId, log.fullPath]))
+  const entries: SessionCatalogEntry[] = []
+  for (const entry of snapshot.entries) {
+    const fullPath = paths.get(entry.sessionId)
+    const conversationAt = fullPath
+      ? await readConversation(fullPath, entry.sessionId)
+      : null
+    const activatedAt = await readActivation(entry.sessionId)
+    entries.push({
+      ...entry,
+      sessionActivityAtMs: conversationAt === null ? activatedAt
+        : activatedAt === null ? conversationAt : Math.max(conversationAt, activatedAt),
+    })
+  }
+  return { ...snapshot, entries }
 }
 
 /**
@@ -211,6 +328,7 @@ export function mapLogOptionToCatalogEntry(
     // allowed to outrank the host registry's title (`protocol.ts` doc).
     transcriptTitle: nonEmpty(log.customTitle),
     modifiedAtMs: toMs(log.modified),
+    sessionActivityAtMs: null,
     createdAtMs: toMs(log.created),
     messageCount: log.messageCount ?? 0,
     gitBranch: nonEmpty(log.gitBranch),

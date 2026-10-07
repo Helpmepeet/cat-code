@@ -8324,13 +8324,38 @@ test('the existing session.branch verb remains accepted as additive v1 vocabular
   expect(received).toContainEqual(
     expect.objectContaining({
       kind: 'session-action.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
       requestId: 'sb1',
       verb: 'branch',
       ok: true,
+      branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+      branchTitle: 'Branch title',
     }),
   )
   expect(calls).toEqual(['branch'])
 })
+
+for (const message of [
+  { type: 'session.branch' },
+  { type: 'session.branch', requestId: '' },
+  { type: 'session.branch', requestId: 123 },
+  { type: 'session.branch', requestId: 'sb-invalid', userMessageId: TARGET_USER_MESSAGE_ID },
+  { type: 'session.branch', requestId: 'sb-invalid', engineSessionId: ENGINE_SESSION },
+]) {
+  test(`session.branch rejects invalid intent ${JSON.stringify(message)} before dispatch`, async () => {
+    const { server, calls } = makeSessionActionsServer()
+    const { socket, received } = makeSocket()
+    const conn = server.addConnection(socket)
+
+    server.handleData(conn, rawFrame(message))
+    await flush()
+
+    expect(calls).toEqual([])
+    expect(received.some(frame => frame.kind === 'session-action.result')).toBe(false)
+    expect(received.some(frame => frame.kind === 'error')).toBe(true)
+  })
+}
 
 test('P4-6b — rejects session.rename missing requestId at the schema boundary, no domain call', async () => {
   const { server, calls } = makeSessionActionsServer()

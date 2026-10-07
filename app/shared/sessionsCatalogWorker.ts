@@ -150,6 +150,11 @@ export function parseSessionCatalogEntry(
     cwd: isString,
     title: isStringOrNull,
     modifiedAtMs: isNumber,
+    sessionActivityAtMs: optional(
+      (value): value is number | null =>
+        value === null ||
+        (typeof value === 'number' && Number.isFinite(value) && value >= 0),
+    ),
     createdAtMs: isNumber,
     messageCount: isNumber,
     gitBranch: isStringOrNull,

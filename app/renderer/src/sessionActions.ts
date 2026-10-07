@@ -21,11 +21,9 @@
  *    Both run inside the session's OWN live engine, so they are enabled ONLY
  *    for a LIVE row (a running sidecar to receive the verb); a restorable/history
  *    row shows them DISABLED with the reason (open/restore it first).
- *  - **Cut, not disabled:** Archive / Delete have NO local engine backing
- *    (`archiveSession` is remote-bridge only; there is no `deleteSession` in
- *    `src/`). They are omitted from the menu entirely (a §0 CUT), never shown as
- *    dead controls. (Fidelity note: the prototype SHOWS these; a follow-on may
- *    prefer a visible-disabled row with a reason over an omission.)
+ *  - Archive is a sidebar-only view preference (`sidebarArchivedSessions.ts`),
+ *    not an engine write. `selectSidebarSessionActions` adds it without changing
+ *    the tab menu. Delete has no local backing and is not offered.
  *  - **Tag was wrongly listed as cut here** (corrected P4-29). `saveTag`
  *    (`src/utils/sessionStorage.ts:3257`) is a real per-session engine write —
  *    the `/tag` command's own — so tag was a missing SIDECAR verb, not an absent
@@ -39,7 +37,7 @@
  *    cross-session transcript needs a transcript-by-id read seam, not built).
  */
 
-import type { MergedSessionRow } from './sessionsCatalogState.js'
+import { selectRowEngineSessionId, type MergedSessionRow } from './sessionsCatalogState.js'
 
 export type SessionActionKind =
   | 'open'
@@ -58,6 +56,11 @@ export type SessionActionKind =
    * live in every build and for EVERY row, not just the attached tab.
    */
   | 'copy-ids'
+  | 'copy-session-id'
+  | 'fork'
+  | 'close'
+  | 'archive'
+  | 'unarchive'
   | 'export'
   /**
    * P4-36 — the transcript-mode hidden-row reveal (`Chat.jsx:1199-1203`). TWO
@@ -162,8 +165,8 @@ const DEFER = {
 } as const
 
 /**
- * Resolve the ordered, honest menu for one row. CUT verbs (tag/archive/delete)
- * are never returned. Deferred verbs are returned DISABLED with a reason so the
+ * Resolve the full tab menu for one row. Sidebar-only verbs are added by its
+ * selector. Deferred verbs are returned DISABLED with a reason so the
  * affordance is discoverable without lying about being functional.
  */
 export function resolveSessionActions(
@@ -356,6 +359,46 @@ export function selectSessionsPageActions(
   items: readonly SessionActionItem[],
 ): SessionActionItem[] {
   return items.filter(item => item.kind !== 'metadata')
+}
+
+/** Sidebar-only verbs and ordering. The tab and Sessions-page menus stay intact. */
+export function selectSidebarSessionActions(
+  items: readonly SessionActionItem[],
+  row: MergedSessionRow,
+  archived = false,
+): SessionActionItem[] {
+  const engineSessionId = selectRowEngineSessionId(row)
+  const copy: SessionActionItem = {
+    kind: 'copy-session-id',
+    label: 'Copy session ID',
+    section: 'primary',
+    enabled: engineSessionId !== null,
+    ...(engineSessionId === null
+      ? { reason: 'Wait for this session to connect.' }
+      : {}),
+  }
+  if (archived) {
+    return [
+      { kind: 'unarchive', label: 'Unarchive', section: 'primary', enabled: true },
+      copy,
+    ]
+  }
+  const rename = items.find(item => item.kind === 'rename')
+  return [
+    ...(rename ? [rename] : []),
+    {
+      kind: 'fork',
+      label: 'Fork',
+      section: 'primary',
+      enabled: rename?.enabled === true,
+      ...(rename?.enabled ? {} : { reason: rename?.reason ?? DEFER.notLive }),
+    },
+    ...(row.live
+      ? [{ kind: 'close' as const, label: 'Close', section: 'primary' as const, enabled: true }]
+      : []),
+    copy,
+    { kind: 'archive', label: 'Archive', section: 'transfer', enabled: true },
+  ]
 }
 
 /** The section order the menu renders, so dividers are stable + tested. */

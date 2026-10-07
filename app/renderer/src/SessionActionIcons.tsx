@@ -8,9 +8,7 @@
  * the menu, message actions and tab qualifier, which is why this is its own
  * module rather than a local helper. It carries a glyph for every verb the menu
  * actually renders plus the dialog chrome and targeted message actions.
- * The prototype's tag / archive / trash glyphs are deliberately absent: those
- * three verbs are a recorded §0 CUT (`sessionActions.ts:34-38`, no local engine
- * backing), so a glyph for them would be dead code for an unreachable row.
+ * Archive is a sidebar view preference, not an engine write.
  *
  * `Glyph` itself is exported for the same reason: it is the house stroke grammar,
  * and a surface that redeclares it drifts away from this set silently. Glyphs
@@ -53,7 +51,26 @@ export function SessionActionIcon({
     case 'copy-text':
       return <ActionFileIcon />
     case 'copy-ids':
+    case 'copy-session-id':
       return <ActionHashIcon />
+    case 'fork':
+      return <ActionBranchIcon />
+    case 'close':
+      return (
+        <Glyph>
+          <rect x="5" y="5" width="14" height="14" rx="2" />
+        </Glyph>
+      )
+    case 'archive':
+      return (
+        <Glyph>
+          <rect x="2" y="3" width="20" height="5" rx="1" />
+          <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+          <line x1="10" y1="12" x2="14" y2="12" />
+        </Glyph>
+      )
+    case 'unarchive':
+      return <ActionRewindIcon />
     case 'export':
       return <ActionExportIcon />
     case 'reveal-hidden':

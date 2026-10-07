@@ -68,6 +68,16 @@ import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { selectShellDescriptors } from './sidebarState.js'
 import {
+  createArchivedSessions,
+  readArchivedSessionsFromStorage,
+  reduceArchivedSessionsReconciled,
+  reduceSessionArchived,
+  reduceSessionUnarchived,
+  writeArchivedSessionsToStorage,
+  type ArchivedSessions,
+} from './sidebarArchivedSessions.js'
+import { defaultViewPreferenceStorage } from './viewPreference.js'
+import {
   canExecuteDesktopNewChat,
   isDesktopNewChatCommand,
 } from './desktopChatCommands.js'
@@ -347,6 +357,7 @@ import {
 } from './SessionActionsMenu.js'
 import {
   resolveSessionActions,
+  selectSidebarSessionActions,
   selectSessionsPageActions,
 } from './sessionActions.js'
 import { ExportDialog } from './SessionActionDialogs.js'
@@ -658,7 +669,15 @@ export function App() {
      * TabBar, so only a sidebar-anchored overlay may pin the rail open.
      */
     origin: SessionActionsOrigin
+    archived?: boolean
   } | null>(null)
+  const archiveStorage = useMemo(defaultViewPreferenceStorage, [])
+  const [archivedSessions, setArchivedSessions] = useState<ArchivedSessions>(
+    () => readArchivedSessionsFromStorage(archiveStorage) ?? createArchivedSessions(),
+  )
+  useEffect(() => {
+    writeArchivedSessionsToStorage(archiveStorage, archivedSessions)
+  }, [archiveStorage, archivedSessions])
   // P4-29 — the Sessions page's inline rename request + the confirmed-tag echo.
   const [sessionsRenameRequest, setSessionsRenameRequest] = useState<{
     sessionId: string
@@ -702,7 +721,7 @@ export function App() {
       SessionId,
       {
         requestId: string
-        action: 'edit' | 'branch'
+        action: 'edit' | 'branch' | 'fork'
         awaitingReconnect: boolean
       }
     >
@@ -1662,6 +1681,11 @@ export function App() {
     () => selectMergedSessionRows(visibleShellDescriptors, sessionCatalogSnapshot),
     [visibleShellDescriptors, sessionCatalogSnapshot],
   )
+  useEffect(() => {
+    setArchivedSessions(current =>
+      reduceArchivedSessionsReconciled(current, sessionCatalogRows),
+    )
+  }, [sessionCatalogRows])
 
   // The active session's merged catalog row — feeds the tab ⋯ actions menu and
   // the MetadataInspector. Matched by `appSessionId` (the live address that equals
@@ -2281,6 +2305,20 @@ export function App() {
     },
     [toast],
   )
+  const forkSession = (sessionId: SessionId) => {
+    if (pendingMessageActionsRef.current.has(sessionId)) return
+    const requestId = newRequestId()
+    pendingMessageActionsRef.current.set(sessionId, {
+      requestId, action: 'fork', awaitingReconnect: false,
+    })
+    rememberToastedActionRequest(toastedActionRequestsRef.current, requestId)
+    try {
+      sendSessionActionVerb(sessionId, { type: 'session.branch', requestId })
+    } catch (error) {
+      pendingMessageActionsRef.current.delete(sessionId)
+      toast(errorMessage(error), { tone: 'danger' })
+    }
+  }
 
   // P4-29 — tag results, which the effect below cannot handle: a Sessions-page
   // tag targets any LIVE row, not necessarily the active tab, so its result never
@@ -2780,7 +2818,7 @@ export function App() {
       }
       if (!plan.closeLive) {
         navigateAfterClosedSession(sessionId, openOrder)
-        return
+        return true
       }
     }
     // Non-destructive: closeSession keeps the registry row and emits
@@ -2796,7 +2834,7 @@ export function App() {
       if (!result.ok) {
         pendingCloseRequestsRef.current.delete(sessionId)
         setShellError(hostErrorMessage(result.error))
-        return
+        return false
       }
 
       const pendingClose = pendingCloseRequestsRef.current.get(sessionId)
@@ -2804,11 +2842,30 @@ export function App() {
         sessionId,
         pendingClose?.openOrder ?? openOrder,
       )
+      return true
     } catch (error) {
       pendingCloseRequestsRef.current.delete(sessionId)
       setShellError(errorMessage(error))
+      return false
     }
   }, [navigateAfterClosedSession, releasePendingSubmit])
+
+  const archiveSession = async (row: MergedSessionRow) => {
+    const archivedAt = Date.now()
+    setArchivedSessions(current => reduceSessionArchived(current, row, archivedAt))
+    if (row.live && row.appSessionId && !(await closeTab(row.appSessionId))) {
+      // A refused close must not hide a still-running session.
+      const currentRow = {
+        ...row,
+        sessionId: shellRef.current.byId[row.appSessionId]?.engineSessionId ?? row.sessionId,
+      }
+      setArchivedSessions(current =>
+        current.some(entry => entry.sessionId === currentRow.sessionId && entry.archivedAt === archivedAt)
+          ? reduceSessionUnarchived(current, currentRow)
+          : current,
+      )
+    }
+  }
 
   const switchBranchForSession = useCallback(async (
     sessionId: SessionId,
@@ -3103,7 +3160,9 @@ export function App() {
         continue
       }
       const expectedVerb =
-        pending.action === 'edit' ? 'editFromMessage' : 'branchFromMessage'
+        pending.action === 'edit'
+          ? 'editFromMessage'
+          : pending.action === 'fork' ? 'branch' : 'branchFromMessage'
       if (
         result.sessionId !== sessionId ||
         result.verb !== expectedVerb
@@ -3118,6 +3177,14 @@ export function App() {
       })
       if (!result.ok) {
         toast(result.message, { tone: 'danger' })
+        continue
+      }
+      if (pending.action === 'fork') {
+        if (result.branchEngineSessionId) {
+          void openHistorySession(result.branchEngineSessionId)
+        } else {
+          toast('Could not open the forked session.', { tone: 'danger' })
+        }
         continue
       }
       if (pending.action === 'edit') {
@@ -3679,6 +3746,13 @@ export function App() {
       .catch(() =>
         toast('Could not write to the clipboard', { tone: 'warn' }),
       )
+  }
+  function copySessionId(row: MergedSessionRow): void {
+    const engineSessionId = selectRowEngineSessionId(row)
+    if (!engineSessionId) return
+    void navigator.clipboard.writeText(engineSessionId)
+      .then(() => toast('Session ID copied to clipboard', { tone: 'success' }))
+      .catch(() => toast('Could not write to the clipboard', { tone: 'warn' }))
   }
 
   const workspacePanels: WorkspacePanelView[] = workspaceLayout.panels
@@ -4437,6 +4511,10 @@ export function App() {
          * restore-offer, alongside the TabBar's live ∪ preview view. */}
         <Sidebar
           rows={sessionCatalogRows}
+          archivedSessions={archivedSessions}
+          onUnarchiveSession={row =>
+            setArchivedSessions(current => reduceSessionUnarchived(current, row))
+          }
           activeSessionId={activeSessionId}
           activeView={activeView}
           onSelectView={view => {
@@ -4447,8 +4525,8 @@ export function App() {
           onSelectLive={selectTab}
           onRestore={sessionId => void performRestore(sessionId)}
           onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
-          onOpenRowActions={(sessionId, anchor) =>
-            setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' })
+          onOpenRowActions={(sessionId, anchor, archived) =>
+            setSessionActionsTarget({ sessionId, anchor, archived, origin: 'sidebar' })
           }
           /* P4-33 (Sidebar.jsx:80) — the row's ⋮ menu and rename editor are
            * App-level `fixed` overlays, so they float OUTSIDE the rail's hover box:
@@ -4488,10 +4566,11 @@ export function App() {
           {sessionActionsTarget
             ? (() => {
                 const targetRow = sessionCatalogRows.find(
-                  row => row.appSessionId === sessionActionsTarget.sessionId,
+                  row => row.appSessionId === sessionActionsTarget.sessionId ||
+                    row.sessionId === sessionActionsTarget.sessionId,
                 )
                 if (!targetRow) return null
-                const targetId = sessionActionsTarget.sessionId
+                const targetId = targetRow.appSessionId ?? targetRow.sessionId
                 return (
                   <SessionActionsMenu
                     items={(() => {
@@ -4513,7 +4592,9 @@ export function App() {
                         hasHiddenRows: selectHasHiddenRows(transcript, targetId),
                         hiddenRevealed: revealHiddenSessions[targetId] === true,
                       })
-                      return sessionActionsTarget.fromSessionsPage
+                      return sessionActionsTarget.origin === 'sidebar'
+                        ? selectSidebarSessionActions(items, targetRow, sessionActionsTarget.archived)
+                        : sessionActionsTarget.fromSessionsPage
                         ? selectSessionsPageActions(items)
                         : items
                     })()}
@@ -4527,6 +4608,12 @@ export function App() {
                       // including a closed or history one the renderer holds no
                       // transcript for.
                       else if (kind === 'copy-ids') copySessionIds(targetRow)
+                      else if (kind === 'copy-session-id') copySessionId(targetRow)
+                      else if (kind === 'close') void closeTab(targetId)
+                      else if (kind === 'fork') forkSession(targetId)
+                      else if (kind === 'archive') void archiveSession(targetRow)
+                      else if (kind === 'unarchive')
+                        setArchivedSessions(current => reduceSessionUnarchived(current, targetRow))
                       // P4-36 — transcript mode for THIS session. Purely a read
                       // preference; nothing is sent to the engine.
                       else if (kind === 'reveal-hidden')

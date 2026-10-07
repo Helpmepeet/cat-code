@@ -2,13 +2,38 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 import { MENU_ITEM_SELECTOR } from './overlayFocus.js'
-import { resolveSessionActions } from './sessionActions.js'
+import { resolveSessionActions, selectSidebarSessionActions } from './sessionActions.js'
 import {
   SessionActionsMenu,
   SessionRenamePopover,
 } from './SessionActionsMenu.js'
 
 const noop = () => {}
+
+test('sidebar menus render the proposed glyphs and only the archive divider, without View or danger styling', () => {
+  for (const archived of [false, true]) {
+    const target = row()
+    const items = selectSidebarSessionActions(
+      resolveSessionActions(target, { isActiveOpen: true }), target, archived,
+    )
+    const html = renderToStaticMarkup(
+      <SessionActionsMenu
+        items={items}
+        anchor={{ top: 40, bottom: 58, left: 80 }}
+        onAction={noop}
+        onClose={noop}
+      />,
+    )
+    expect(html.match(/<svg/g)?.length).toBe(items.length)
+    expect(html.match(/my-1 h-px/g)?.length ?? 0).toBe(archived ? 0 : 1)
+    expect(html).not.toContain('View')
+    expect(html).not.toContain('text-tone-danger')
+    expect(html).not.toContain('aria-haspopup')
+    const labels = items.map(item => html.indexOf(`>${item.label}</span>`))
+    expect(labels.every(index => index >= 0)).toBe(true)
+    expect(labels).toEqual([...labels].sort((a, b) => a - b))
+  }
+})
 
 function row(overrides: Partial<MergedSessionRow> = {}): MergedSessionRow {
   return {
