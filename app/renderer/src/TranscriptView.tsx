@@ -4800,7 +4800,6 @@ function ToolCardBody({
       return (
         <BashBody
           content={content}
-          isError={errorTone}
           onOpenFull={openFull}
           toolUseId={row.toolUseId}
         />
@@ -4918,19 +4917,17 @@ function stringifyInput(input: Record<string, unknown>): string {
  * drawer (`:423,491,525,550-554`), while the Grep/Web/Mcp/Skill bodies take flat
  * `FE_T.t2` plus `hl()` syntax coloring (`:695,715,734,788`) instead.
  *
- * An errored result overrides every line to the danger tint rather than tinting
- * per line: the outcome is already known, and running the heuristic over a stack
- * trace would paint most of it as ordinary output.
+ * Failure belongs to the card's status, not every line of merged output:
+ * earlier steps in a compound command may have succeeded.
  */
 function renderLogLine(
   line: string,
-  isError: boolean,
   lineNumber: number,
 ) {
   return (
     <div key={lineNumber} className="flex">
       <span className={LOG_GUTTER_CLASS}>{lineNumber}</span>
-      <span className={isError ? 'text-tone-danger' : logLineClass(line)}>
+      <span className={logLineClass(line)}>
         {line || ' '}
       </span>
     </div>
@@ -4939,12 +4936,10 @@ function renderLogLine(
 
 function BashBody({
   content,
-  isError,
   onOpenFull,
   toolUseId,
 }: {
   content: string
-  isError: boolean
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
@@ -4974,7 +4969,6 @@ function BashBody({
       renderLine={(line, index) =>
         renderLogLine(
           line,
-          isError,
           index < window.head.length
             ? index + 1
             : window.tailStartLine + index - window.head.length,

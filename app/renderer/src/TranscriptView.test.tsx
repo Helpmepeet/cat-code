@@ -1104,7 +1104,8 @@ test('P4-18b: a bash card tints an error line and expands failed results', () =>
 
   expect(html).toContain('aria-label="failed"')
   expect(html).toContain('ERROR: boom') // errored card is expanded by default
-  expect(html).toContain('text-tone-danger')
+  expect(html).toContain('<span class="text-[light-dark(#dc2626,#fca5a5)]">ERROR: boom</span>')
+  expect(html).toContain('<span class="text-text-muted">line two</span>')
 })
 
 // Quote-free slice of ResumeAgent's real ack: SSR escapes the `"@Ramanujan"`
@@ -4283,9 +4284,7 @@ test('output-line tint carries `not wrapped`, the one warn term the first port d
   expect(logLineClass('emitted a WARNING during the run')).toBe('text-[light-dark(#a35f00,#fcd34d)]')
 })
 
-test('a bash body tints each line by its own semantics, not one flat wash', () => {
-  // `status: 'error'` only EXPANDS the card; `isError: false` is what keeps the
-  // per-line tinting path (a known failure paints one danger tone instead).
+test('a failed bash body keeps each line’s own tint and its failure status', () => {
   const html = render(
     toolRow({
       toolName: 'Bash',
@@ -4293,7 +4292,7 @@ test('a bash body tints each line by its own semantics, not one flat wash', () =
       input: { command: 'bun test' },
       status: 'error',
       result: {
-        isError: false,
+        isError: true,
         content: 'bun test v1.3\nWARNING: slow suite\nERROR: probe refused\n✓ 1 pass',
         diff: null,
       },
@@ -4303,7 +4302,8 @@ test('a bash body tints each line by its own semantics, not one flat wash', () =
   expect(html).toContain('text-[light-dark(#a35f00,#fcd34d)]') // the warn line
   expect(html).toContain('text-[light-dark(#dc2626,#fca5a5)]') // the error line
   expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // the passing line
-  expect(html).toContain('text-text-muted') // the unclassified first line
+  expect(html).toContain('<span class="text-text-muted">bun test v1.3</span>')
+  expect(html).toContain('aria-label="failed"')
 })
 
 test('a bash body numbers its output lines', () => {
@@ -4344,7 +4344,7 @@ test('a truncated bash tail resumes at its TRUE line number, never restarting at
   expect(html).toContain('>900<') // last tail line
 })
 
-test('an errored bash body stays one danger tone rather than tinting its trace', () => {
+test('an errored bash body tints the diagnostic without painting its trace red', () => {
   const html = render(
     toolRow({
       toolName: 'Bash',
@@ -4355,8 +4355,30 @@ test('an errored bash body stays one danger tone rather than tinting its trace',
     }),
   )
 
-  expect(html).toContain('text-tone-danger')
-  expect(html).not.toContain('text-[light-dark(#dc2626,#fca5a5)]') // no per-line heuristic on a known failure
+  expect(html).toContain('<span class="text-[light-dark(#dc2626,#fca5a5)]">ERROR: refused</span>')
+  expect(html).toContain('<span class="text-text-faint">    at probe.ts:4</span>')
+  expect(html).toContain('aria-label="failed"')
+})
+
+test.each([1, 2])('a compound bash exit %i keeps earlier output neutral and the exit code visible', exitCode => {
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'git status -sb && rg needle missing.ts' },
+      status: 'error',
+      result: {
+        isError: true,
+        content: `## main...origin/main\nconst count = 1\nExit code ${exitCode}`,
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('<span class="text-text-muted">## main...origin/main</span>')
+  expect(html).toContain('<span class="text-text-muted">const count = 1</span>')
+  expect(html).toContain(`<span class="text-text-muted">Exit code ${exitCode}</span>`)
+  expect(html).toContain('aria-label="failed"')
 })
 
 test('a successful compound bash body is not washed in the danger tone', () => {
@@ -4431,7 +4453,8 @@ test('the preference is the WEAKEST expansion input: a failure still opens itsel
   )
 
   expect(html).toContain('ERROR: boom')
-  expect(html).toContain('text-tone-danger')
+  expect(html).toContain('aria-label="failed"')
+  expect(html).toContain('aria-expanded="true"')
 })
 
 // Verbatim `bun test` tail. The last-three rule showed the three least

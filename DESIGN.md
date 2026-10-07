@@ -118,7 +118,9 @@ large pill treatments within one control group.
 - **Conversation:** Agent prose reads as a continuous column. User messages
   receive a restrained accent tinted bubble. Tool activity is compact and
   scannable; expand detail on demand. Code and command output use mono text and
-  clear boundaries. See `TranscriptView.tsx` and `toolCardStyle.ts`.
+  clear boundaries. Bash failure is indicated by the card status; output keeps
+  its per-line styling rather than turning entirely red on a nonzero exit.
+  See `TranscriptView.tsx` and `toolCardStyle.ts`.
 - **Workspace moves:** Agent jumps and manual moves share one centered transcript
   divider with seam-coloured rules and muted text. Moving shows the running-tool
   pulse, destination name, and project path; arrival shows “Working in”, a project
