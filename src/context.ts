@@ -10,7 +10,7 @@ import {
   getClaudeMds,
   getMemoryFiles,
 } from './utils/claudemd.js'
-import { logForDiagnosticsNoPII } from './utils/diagLogs.js'
+import { logForDiagnosticsNoPII, withDiagnosticsTiming } from './utils/diagLogs.js'
 import { isBareMode, isEnvTruthy } from './utils/envUtils.js'
 import { execFileNoThrow } from './utils/execFileNoThrow.js'
 import { getBranch, getDefaultBranch, getIsGit, gitExe } from './utils/git.js'
@@ -73,9 +73,17 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
         })
         return value
       }),
-      execFileNoThrow(gitExe(), ['--no-optional-locks', 'status', '--short'], {
-        preserveOutputOnError: false,
-      }).then(({ stdout }) => {
+      withDiagnosticsTiming(
+        'git_status_short_command',
+        () =>
+          execFileNoThrow(gitExe(), ['--no-optional-locks', 'status', '--short'], {
+            preserveOutputOnError: false,
+          }),
+        ({ code, error }) => ({
+          exit_code: code,
+          failed: code !== 0 || error !== undefined,
+        }),
+      ).then(({ stdout }) => {
         const trimmed = stdout.trim()
         logForDiagnosticsNoPII('info', 'git_status_short_completed', {
           duration_ms: Date.now() - gitCmdsStart,
@@ -83,12 +91,18 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
         })
         return trimmed
       }),
-      execFileNoThrow(
-        gitExe(),
-        ['--no-optional-locks', 'log', '--oneline', '-n', '5'],
-        {
-          preserveOutputOnError: false,
-        },
+      withDiagnosticsTiming(
+        'git_log_command',
+        () =>
+          execFileNoThrow(
+            gitExe(),
+            ['--no-optional-locks', 'log', '--oneline', '-n', '5'],
+            { preserveOutputOnError: false },
+          ),
+        ({ code, error }) => ({
+          exit_code: code,
+          failed: code !== 0 || error !== undefined,
+        }),
       ).then(({ stdout }) => {
         const trimmed = stdout.trim()
         logForDiagnosticsNoPII('info', 'git_log_completed', {
@@ -97,9 +111,17 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
         })
         return trimmed
       }),
-      execFileNoThrow(gitExe(), ['config', 'user.name'], {
-        preserveOutputOnError: false,
-      }).then(({ stdout }) => {
+      withDiagnosticsTiming(
+        'git_user_name_command',
+        () =>
+          execFileNoThrow(gitExe(), ['config', 'user.name'], {
+            preserveOutputOnError: false,
+          }),
+        ({ code, error }) => ({
+          exit_code: code,
+          failed: code !== 0 || error !== undefined,
+        }),
+      ).then(({ stdout }) => {
         const trimmed = stdout.trim()
         logForDiagnosticsNoPII('info', 'git_user_name_completed', {
           duration_ms: Date.now() - gitCmdsStart,
