@@ -2,7 +2,7 @@
 
 Date: 2026-10-07. Workspace: `/Users/pt/cat-code`.
 
-This consolidates the session analysis, instrumented desktop reproduction, source investigation, native watcher probes, SQLite diagnostics, A/B comparison, rejected hypotheses, and HTML explainer follow-up. The diagnostic sections preserve their original observation boundaries. The subsequently approved implementation and fresh Dev verification are recorded in the final section. Both source repairs are now implemented; the installed production app has not been updated.
+This consolidates the session analysis, instrumented desktop reproduction, source investigation, native watcher probes, SQLite diagnostics, A/B comparison, rejected hypotheses, and HTML explainer follow-up. The diagnostic sections preserve their original observation boundaries. The subsequently approved implementation and fresh Dev verification are recorded in the final section. Both source repairs are implemented and installed in production build `b79a1dfb`; the final installation section records package, smoke, signature and process verification.
 
 ## Conclusion
 
@@ -729,7 +729,7 @@ The owned launcher was stopped with Ctrl-C after the final answer. A PID-specifi
 
 Evidence from this implementation is under `/private/tmp/cat-code-jump-fix-20261007/`: `git-context-baseline.log`, `git-context-fixed.log`, `git-context-evidence.md`, `baseline-analytics-regression.txt`, `fixed-analytics-regression.txt`, `analytics-focused-tests.txt`, `build-dev-full.txt`, `sidecar-typecheck.txt`, `typescript-full-diagnostics.txt`, `context-timing.jsonl`, `git-trace.jsonl`, `gui-session.json`, and `gui-jump-ledger.json`. These are temporary local evidence files; the key results are embedded here for durability.
 
-The startup repair was committed as `211c431d` (`fix(context): bound optional Git metadata waits`). The analytics repair and this evidence update are committed separately. Neither commit is pushed. The source repairs and Dev verification are complete. Production installation, a Git upgrade, macOS service recovery and a more descriptive progress indicator remain separate work. The installed Cat Code app does not receive these fixes until it is rebuilt and installed.
+The startup repair was committed as `211c431d` (`fix(context): bound optional Git metadata waits`); analytics was committed as `20a9e2e3`. Neither commit is pushed. At this verification boundary, the source repairs and Dev verification were complete and production installation remained pending. The subsequent installation is recorded below. A Git upgrade, macOS service recovery and a more descriptive progress indicator remain separate work.
 
 
 ## Review corrections after implementation
@@ -742,3 +742,22 @@ A review of the pre-implementation investigation identified four overstatements.
 4. Separate the paired trials' initial two-second threshold from cancellation after the 700 ms stimulus and additional one-second wait. Keep exact cancellation time unmeasured; distinguish the A/B subprocess deadline.
 
 These corrections narrow the upstream explanation. They do not change the measured startup dependency, the implemented Git-context containment, the analytics journal-churn defect, or the subsequent focused tests and actual repaired Dev jump. The implementation verification above remains a separate, later observation.
+
+
+## Installed application promotion
+
+The user explicitly requested building and installing the fixes, then confirmed that Cat Code was closed. Installation completed on 2026-10-07 11:23:54 UTC+07:00.
+
+- Installed bundle: `/Applications/Cat Code.app`.
+- Installed commit: `b79a1dfb936bfeccc2ab03eef6f9dcf468cb18b4` (build `b79a1dfb`). This committed snapshot contains both fixes and the report corrections.
+- Previous installed commit: `b5bee495c0fa07462e6690b2a76bbfe7452d4755`.
+- Retained rollback bundle: `/Applications/Cat Code.rollback-20261007111910-b1c3e4e0-0abd-4021-901b-afc9e19113c1.app`.
+- Source: a clean temporary shared clone of committed HEAD. Dependency symlinks were excluded locally; no dirty build suffix appeared. The two untracked HTML explainers in the shared checkout were excluded and left untouched.
+- `bun run --cwd app package`: passed, including renderer/main/preload, compiled sidecar, pinned ripgrep, ad-hoc signing and bundle scan.
+- `bun run --cwd app smoke:packaged:headless`: passed with isolated scratch state, no external Bun on PATH and execution outside the checkout.
+- Built, staged and installed bundles: `codesign --verify --deep --strict` passed; bundle identifier `com.catcode.desktop`, executable `Cat Code`, and exact embedded commit were verified.
+- The running old app was left untouched until the user closed it. The previous bundle was moved to the unique rollback path, the verified staging bundle replaced it, and `/usr/bin/open -a` reopened the installed app. A subsequent PID-specific executable check observed the installed app running as PID 63217. No process was forcibly stopped.
+
+This promotion verifies the package and that the installed application remains running. It does not claim a new live-account workspace-jump measurement in the installed app; the actual jump measurement remains the earlier Dev result. No account or credential probe was added by installation.
+
+Package/smoke logs and installation metadata are retained under `/private/tmp/cat-code-install-20261007.rpf2bbby/` (`package.log`, `smoke.log`, `commit.txt`, `installation.json`, `staging.txt`, `rollback.txt`). The build checkout and its duplicate output bundle were removed after successful installation; the installed bundle and rollback copy were preserved.
