@@ -186,4 +186,3 @@ function mcpServerTool(toolName: string): string {
   if (!server) return toolName
   return rest.length > 0 ? `${server} › ${rest.join('__')}` : server
 }
-
