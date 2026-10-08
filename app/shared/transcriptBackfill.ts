@@ -10,6 +10,7 @@
  */
 
 import { isAbsolute, basename } from 'node:path'
+import { isCacheExpiryTimestamp } from './promptCacheEstimate.js'
 
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
@@ -208,6 +209,7 @@ export function parseTranscriptRunFacts(
       'effort',
       'usedTokens',
       'contextWindow',
+      ...('cacheExpiresAt' in value ? ['cacheExpiresAt'] : []),
     ])
   ) {
     return null
@@ -226,7 +228,16 @@ export function parseTranscriptRunFacts(
   ) {
     return null
   }
-  return { model, permissionMode, effort, usedTokens, contextWindow }
+  let cacheExpiresAt: number | null | undefined
+  if ('cacheExpiresAt' in value) {
+    const candidate = value.cacheExpiresAt
+    if (candidate !== null && !isCacheExpiryTimestamp(candidate)) return null
+    cacheExpiresAt = candidate
+  }
+  return {
+    model, permissionMode, effort, usedTokens, contextWindow,
+    ...(cacheExpiresAt !== undefined ? { cacheExpiresAt } : {}),
+  }
 }
 
 /** `undefined` = invalid (reject the record); `null` = the source said nothing. */

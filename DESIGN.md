@@ -133,7 +133,7 @@ large pill treatments within one control group.
   reasoning, permission, and account controls in a compact action row. Reuse
   the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)
   before adding a new control style. Context pressure belongs on the ring, not
-  a separate triangle. A confirmed cache expiry uses a display-only amber clock
+  a separate triangle. Estimated cache expiry uses a display-only amber clock
   before the account face, with a small raised-surface hover label reading
   “Cache expired”. Unknown expiry shows nothing.
 - **Overlays and feedback:** Use a raised surface, a fine border, and the

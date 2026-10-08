@@ -91,8 +91,9 @@ export const TRANSCRIPT_CACHE_GUARD_VERSION = 1
  * of a separate stamp.
  *
  * 1: model, permissionMode, effort, usedTokens, contextWindow.
+ * 2: estimated prompt-cache expiry from the latest real API response.
  */
-export const TRANSCRIPT_CACHE_RUN_FACTS_VERSION = 1
+export const TRANSCRIPT_CACHE_RUN_FACTS_VERSION = 2
 
 /**
  * Stamped for diagnostics only — reads gate on `protocolVersion` + `guardVersion`,
@@ -110,12 +111,24 @@ export const MAX_TRANSCRIPT_CACHE_BYTES =
   DEFAULT_MAX_BUFFERED_BYTES + DEFAULT_MAX_BUFFERED_PREVIEW_BYTES + 256 * 1024
 
 /** Cache files live beside the registry in a versioned directory. */
-// The previous cache reader rejects unknown frame kinds and deletes the file.
-// Keep image-bearing caches away from installations that still run that reader.
-export const TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache-v2'
+// Older readers delete caches carrying fields or frames they do not recognize.
+// Isolate new run-facts writers while retaining the older generations for reads.
+export const TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache-v3'
+const IMAGE_TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache-v2'
 const LEGACY_TRANSCRIPT_CACHE_SUBDIR = 'transcript-cache'
 
 const CACHE_FILE_SUFFIX = '.json'
+
+function previousCacheDir(dir: string): string | null {
+  switch (basename(dir)) {
+    case TRANSCRIPT_CACHE_SUBDIR:
+      return join(dirname(dir), IMAGE_TRANSCRIPT_CACHE_SUBDIR)
+    case IMAGE_TRANSCRIPT_CACHE_SUBDIR:
+      return join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR)
+    default:
+      return null
+  }
+}
 
 /** UUID v1–v5 shape — same membership pre-check the host uses (`host.ts:88`). */
 const UUID_RE =
@@ -309,7 +322,7 @@ export function retainCachedImagePreviews(
  * ## Why a gate rather than "write whatever we derived"
  *
  * The renderer trusts a header WHOLESALE: `selectPreviewRunFacts` returns the
- * header's five fields and never consults the frames again
+ * header's fields and never consults the frames again
  * (`previewTranscriptState.ts`). That is correct — a header is one coherent
  * snapshot and merging a frame-derived value into it rebuilds the incoherence
  * the snapshot exists to remove — but it means a THIN header is worse than no
@@ -377,6 +390,11 @@ export function resolveCacheRunFacts(
     effort: derived.effort ?? prior?.effort ?? null,
     usedTokens: derived.usedTokens ?? prior?.usedTokens ?? null,
     contextWindow: derived.contextWindow ?? prior?.contextWindow ?? null,
+    // Never borrow this measurement: compaction or an unusable latest response
+    // invalidates it even when the model still matches the previous cache.
+    ...(derived.cacheExpiresAt !== undefined
+      ? { cacheExpiresAt: derived.cacheExpiresAt }
+      : {}),
   }
   const complete =
     merged.model !== null &&
@@ -652,7 +670,7 @@ function readHeaderPrefix(dir: string, id: SessionId): Buffer | null {
  * headers run ~330 bytes, so the whole object is always inside it. */
 const HEADER_PROBE_BYTES = 4096
 
-/** `<registryDir>/transcript-cache-v2` — main passes its real registry dir. */
+/** `<registryDir>/transcript-cache-v3` — main passes its real registry dir. */
 export function transcriptCacheDir(registryDir: string): string {
   return join(registryDir, TRANSCRIPT_CACHE_SUBDIR)
 }
@@ -666,6 +684,7 @@ function cacheFilePath(dir: string, id: SessionId): string | null {
  * Persist a cache atomically (temp + fsync + rename, 0700 dir / 0600 file).
  * Synchronous so the synchronous quit path can persist before the process exits.
  * A malformed / never-ready header id is skipped (nothing restorable to serve).
+ * Replacing a current-generation cache never removes its older read fallbacks.
  */
 export function writeCache(dir: string, cache: TranscriptCache): void {
   const filePath = cacheFilePath(dir, cache.header.appSessionId)
@@ -714,11 +733,8 @@ export function readCache(dir: string, id: SessionId): TranscriptCache | null {
   const filePath = cacheFilePath(dir, id)
   if (!filePath) return null
   if (!existsSync(filePath)) {
-    // Existing installations wrote transcript-only caches in the original
-    // directory. They remain readable until this build refreshes them in v2.
-    return basename(dir) === TRANSCRIPT_CACHE_SUBDIR
-      ? readCache(join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR), id)
-      : null
+    const previous = previousCacheDir(dir)
+    return previous === null ? null : readCache(previous, id)
   }
 
   try {
@@ -749,8 +765,16 @@ export function readCache(dir: string, id: SessionId): TranscriptCache | null {
   }
 }
 
-/** Delete a cache file by id (reap / GC). Tolerates a missing file. */
-export function deleteCache(dir: string, id: SessionId): void {
+/**
+ * Explicit removal deletes every readable generation so fallback cannot revive
+ * a removed transcript or image. Pruning passes `false` to affect only `dir`;
+ * routine current-generation maintenance must leave older installations' copies.
+ */
+export function deleteCache(
+  dir: string,
+  id: SessionId,
+  includeLegacy = true,
+): void {
   const filePath = cacheFilePath(dir, id)
   if (!filePath) return
   try {
@@ -758,8 +782,9 @@ export function deleteCache(dir: string, id: SessionId): void {
   } catch {
     // Already gone / never written — nothing to do.
   }
-  if (basename(dir) === TRANSCRIPT_CACHE_SUBDIR) {
-    deleteCache(join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR), id)
+  const previous = includeLegacy ? previousCacheDir(dir) : null
+  if (previous !== null) {
+    deleteCache(previous, id, true)
   }
 }
 
@@ -780,10 +805,9 @@ export function listCachedSessionIds(
     const id = name.slice(0, -CACHE_FILE_SUFFIX.length)
     if (isUuid(id)) ids.push(id)
   }
-  if (includeLegacy && basename(dir) === TRANSCRIPT_CACHE_SUBDIR) {
-    const legacy = listCachedSessionIds(
-      join(dirname(dir), LEGACY_TRANSCRIPT_CACHE_SUBDIR),
-    )
+  const previous = includeLegacy ? previousCacheDir(dir) : null
+  if (previous !== null) {
+    const legacy = listCachedSessionIds(previous, true)
     return [...new Set([...ids, ...legacy])]
   }
   return ids

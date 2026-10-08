@@ -7,6 +7,7 @@ import {
   type TranscriptCache,
 } from '../../shared/protocol.js'
 import type { SDKMessage } from '@cat-code/engine/sdk'
+import { isCacheExpiryTimestamp } from '../../shared/promptCacheEstimate.js'
 import { selectContextUsage, type ContextUsage } from './contextUsage.js'
 import {
   type BatchAction,
@@ -56,6 +57,8 @@ export type PreviewRunFacts = {
    * leaves this null.
    */
   effort: string | null
+  /** Estimated idle expiry from the latest recorded API response, when known. */
+  cacheExpiresAt?: number | null
 }
 
 export type PreviewTranscriptState = {
@@ -175,6 +178,10 @@ export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
         header.usedTokens === null
           ? null
           : previewContextUsage(header.usedTokens, header.contextWindow),
+      ...(header.cacheExpiresAt === null ||
+        isCacheExpiryTimestamp(header.cacheExpiresAt)
+        ? { cacheExpiresAt: header.cacheExpiresAt }
+        : {}),
     }
   }
   return selectRunFactsFromFrames(frames)

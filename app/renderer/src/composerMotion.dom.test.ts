@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, setSystemTime, spyOn, test } from 'bun:test'
 import { act, createElement } from 'react'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { RunControlsSnapshot } from '../../shared/protocol.js'
@@ -98,12 +98,12 @@ const COMPACT = {
   enabled: true, threshold: 187_000, warningThreshold: 167_000,
 } as RunControlsSnapshot['autoCompact']
 
-function rail(usedTokens: number, cacheExpired: boolean | null = null) {
+function rail(usedTokens: number, cacheExpired: boolean | null = null, cacheExpiresAt?: number) {
   return createElement(ComposerActionsBar, {
     attachDisabled: false, onAttach: () => {}, model: null, reasoningEffort: null,
     fastMode: null, permissionContext: null, onSetMode: () => {}, account: null,
     contextUsage: { usedTokens, contextWindow: 200_000, percentUsed: Math.round(usedTokens / 2_000) },
-    runControls: { autoCompact: COMPACT, cacheExpired } as RunControlsSnapshot,
+    runControls: { autoCompact: COMPACT, cacheExpired, cacheExpiresAt } as RunControlsSnapshot,
   })
 }
 
@@ -130,6 +130,67 @@ test('cache status changes do not add a toolbar action or open a popover', async
   expect(indicator()).not.toBeNull()
   await tree.render(rail(167_000, null))
   expect(indicator()).toBeNull()
+})
+
+test('an idle deadline shows the clock, a fresh response clears it, and focus catches elapsed time', async () => {
+  const start = Date.now()
+  setSystemTime(start)
+  const pending = new Map<number, () => void>()
+  let nextId = 1
+  const setTimer = spyOn(window, 'setTimeout').mockImplementation(((handler: TimerHandler) => {
+    if (typeof handler !== 'function') throw new Error('Expected timer callback')
+    const id = nextId++
+    pending.set(id, handler as () => void)
+    return id
+  }) as typeof window.setTimeout)
+  const clearTimer = spyOn(window, 'clearTimeout').mockImplementation(id => {
+    if (typeof id === 'number') pending.delete(id)
+  })
+  try {
+    const tree = await harness.mount(rail(40_000, false, start + 1_000))
+    const indicator = () => tree.container.querySelector('[aria-label="Cache expired"]')
+    expect(indicator()).toBeNull()
+    setSystemTime(start + 1_001)
+    await act(async () => {
+      const callbacks = [...pending.values()]
+      pending.clear()
+      for (const callback of callbacks) callback()
+    })
+    expect(indicator()).not.toBeNull()
+    await tree.render(rail(40_000, false, start + 2_000))
+    expect(indicator()).toBeNull()
+    setSystemTime(start + 2_001)
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    expect(indicator()).not.toBeNull()
+    await tree.unmount()
+    expect(pending.size).toBe(0)
+  } finally {
+    await harness.unmountAll()
+    setTimer.mockRestore()
+    clearTimer.mockRestore()
+    setSystemTime()
+  }
+})
+
+test('real preview and parked panes pass their deadline to the composer without a live engine', async () => {
+  const base = idleSessionPaneProps()
+  const facts = {
+    model: 'gpt-6.1-sol', contextUsage: null, permissionMode: 'default', effort: 'high',
+    cacheExpiresAt: Date.now() - 1,
+  }
+  const tree = await harness.mount(createElement(SessionPane, {
+    ...base, preview: true, previewRunFacts: facts, runControls: null,
+  }))
+  expect(tree.container.querySelector('[aria-label="Cache expired"]')).not.toBeNull()
+  await tree.render(createElement(SessionPane, {
+    ...base, preview: true, previewRunFacts: { ...facts, cacheExpiresAt: Date.now() + 60_000 }, runControls: null,
+  }))
+  expect(tree.container.querySelector('[aria-label="Cache expired"]')).toBeNull()
+  await tree.render(createElement(SessionPane, {
+    ...base, preview: false, activeConnection: { status: 'parked', inputEnabled: false },
+    model: facts.model, runControls: null, cacheExpiresAt: facts.cacheExpiresAt,
+  }))
+  expect(tree.container.querySelector('[aria-label="Cache expired"]')).not.toBeNull()
 })
 
 test('keyboard cursor rows switch without a colour transition', async () => {

@@ -856,6 +856,7 @@ export class SidecarServer {
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
+      this.runControls?.observeSessionEvent?.(event)
       // Before the broadcast: `broadcastEvent` returns early with no clients
       // attached, and a turn that hangs with the window closed is exactly the
       // case this needs to see.
@@ -3270,6 +3271,7 @@ export class SidecarServer {
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
     const verb = parsed as AccountVerbMessage
+    const activeAccountBefore = accounts.getSnapshot()?.activeAccountId ?? null
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
     void accounts
@@ -3288,6 +3290,9 @@ export class SidecarServer {
             : {}),
         })
         if (poolChanged) {
+          if ((accounts.getSnapshot()?.activeAccountId ?? null) !== activeAccountBefore) {
+            this.runControls?.clearCacheEstimate?.()
+          }
           this.broadcastAccountsSnapshot()
           // Account/credential changes can change getModelOptions() (notably
           // adding/removing Anthropic subscription access), even though no

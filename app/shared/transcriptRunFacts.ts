@@ -20,6 +20,10 @@ import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs'
 
 import type { TranscriptRunFacts } from './protocol.js'
 import { MAX_HISTORY_REPLAY_BYTES } from './limits.js'
+import {
+  estimatePromptCacheExpiry,
+  isCacheExpiryTimestamp,
+} from './promptCacheEstimate.js'
 
 // Match the display-history reader's bounded tail window. Run facts are a
 // best-effort preview enhancement, never a reason to materialize an arbitrary
@@ -115,6 +119,12 @@ export function readTranscriptRunFacts(
 
   const facts = { ...empty }
   let snapshot: RunFactsSnapshot | null = null
+  let response: {
+    model: string | null
+    expiresAt: number | null
+    canUseCodexSurface: boolean
+  } | null = null
+  const now = Date.now()
   // COMPACTION — usage is stale on BOTH sides of a boundary, and the newest
   // assistant record is on the wrong side of it more often than not.
   //
@@ -133,14 +143,15 @@ export function readTranscriptRunFacts(
     // Parse only what can still contribute.
     //
     // A `run_facts` snapshot is authoritative for model/mode/effort. Once it
-    // and the only independent measurement (used tokens) are known, no older
-    // record can improve the result. Legacy transcripts still scan the bounded
-    // tail for their independent newest facts.
+    // and the independent measurements (used tokens and latest API response)
+    // are known, no older record can improve the result. Legacy transcripts
+    // still scan the bounded tail for their independent newest facts.
     const needsByproducts =
       facts.model === null ||
       facts.permissionMode === null ||
       facts.effort === null ||
-      facts.usedTokens === null
+      facts.usedTokens === null ||
+      response === null
     if (!needsByproducts && !line.includes(RUN_FACTS_MARKER)) continue
     let record: unknown
     try {
@@ -170,14 +181,37 @@ export function readTranscriptRunFacts(
     }
     if (record.type === 'assistant' && isRecord(record.message)) {
       // The MODEL is safe to read from a preserved record — it is the model
-      // that turn ran on either way. Only the token count is invalidated by
-      // compaction, so only that read is range-gated.
+      // that turn ran on either way. Both usage-derived measurements below
+      // exclude the stale ranges.
       facts.model ??= readString(record.message.model)
       if (facts.usedTokens === null && !inPreservedRange(compaction, i)) {
         facts.usedTokens = readUsedTokens(record.message.usage)
       }
+      if (
+        response === null &&
+        !inPreservedRange(compaction, i) &&
+        record.isApiErrorMessage !== true &&
+        record.isSynthetic !== true &&
+        record.isInternalNoResponseSentinel !== true &&
+        record.message.model !== '<synthetic>'
+      ) {
+        // The newest real response is decisive even when its timestamp or usage
+        // is unusable. Falling back would attach an older request's estimate.
+        const model = readString(record.message.model)
+        const responseAt = readResponseTimestamp(record.timestamp, now)
+        response = {
+          model,
+          expiresAt: model !== null && responseAt !== null
+            ? estimatePromptCacheExpiry(model, responseAt, record.message.usage)
+            : null,
+          canUseCodexSurface:
+            responseAt !== null &&
+            model?.toLowerCase().startsWith('gpt-') === true &&
+            hasZeroInitialUsage(record.message.usage),
+        }
+      }
     }
-    if (snapshot !== null && facts.usedTokens !== null) {
+    if (snapshot !== null && facts.usedTokens !== null && response !== null) {
       break
     }
   }
@@ -207,6 +241,21 @@ export function readTranscriptRunFacts(
     (facts.model !== null
       ? readContextWindow(facts.model, resolveContextWindow)
       : null)
+  // The snapshot may describe a model switch after the latest response. Its
+  // pairing wins, but a deadline measured on the old model must not follow it.
+  if (
+    response !== null &&
+    response.model !== null &&
+    response.model === facts.model
+  ) {
+    // This conditional scan reuses the same bounded tail. Completion diagnostics
+    // can precede or follow assistant persistence, including the facts-loop exit.
+    const expiresAt = response.expiresAt ??
+      (response.canUseCodexSurface
+        ? readCompletedCodexExpiry(lines, compaction, response.model, now)
+        : null)
+    if (expiresAt !== null) facts.cacheExpiresAt = expiresAt
+  }
   return { facts, authoritative: snapshot !== null }
 }
 
@@ -303,15 +352,25 @@ function findCompactionRange(lines: readonly string[]): CompactionRange {
       continue
     }
     boundary = i
-    const metadata = isRecord(record.compact_metadata)
-      ? record.compact_metadata
-      : null
-    const segment =
-      metadata && isRecord(metadata.preserved_segment)
-        ? metadata.preserved_segment
+    // SessionStorage.appendMessages persists the engine's camel-case metadata;
+    // SDK-shaped historical records remain readable through the fallback.
+    const metadata = isRecord(record.compactMetadata)
+      ? record.compactMetadata
+      : isRecord(record.compact_metadata)
+        ? record.compact_metadata
         : null
-    head = segment ? readString(segment.head_uuid) : null
-    tail = segment ? readString(segment.tail_uuid) : null
+    const segment =
+      metadata && isRecord(metadata.preservedSegment)
+        ? metadata.preservedSegment
+        : metadata && isRecord(metadata.preserved_segment)
+          ? metadata.preserved_segment
+          : null
+    head = segment
+      ? readString(segment.headUuid) ?? readString(segment.head_uuid)
+      : null
+    tail = segment
+      ? readString(segment.tailUuid) ?? readString(segment.tail_uuid)
+      : null
     break
   }
   if (boundary === -1) return NO_COMPACTION
@@ -398,9 +457,9 @@ function readContextWindow(
  * previewed session and a live one cannot disagree. Dropping `output_tokens`
  * here undercounts by one response, since the next request carries it.
  *
- * Reading an ASSISTANT frame is correct on this path and only this path: the
- * transcript on disk was written after the engine's late usage write-back, so
- * these numbers are final. The live wire's assistant frames are not (S1 §4).
+ * Codex can persist initial zero usage before final write-back. Those rows cannot
+ * supply the gauge numerator; the expiry-only diagnostic fallback below must
+ * not promote matching-model activity into a main-thread context measurement.
  */
 function readUsedTokens(usage: unknown): number | null {
   if (!isRecord(usage)) return null
@@ -413,6 +472,77 @@ function readUsedTokens(usage: unknown): number | null {
   // 0-token reading would render as an empty donut on a session that plainly
   // used context. Keep scanning for a turn that actually reported.
   return total > 0 ? total : null
+}
+
+function hasZeroInitialUsage(usage: unknown): boolean {
+  return isRecord(usage) && [
+    'input_tokens',
+    'output_tokens',
+    'cache_creation_input_tokens',
+    'cache_read_input_tokens',
+  ].every(field => usage[field] === 0)
+}
+
+/**
+ * Prefix-only diagnostics cannot distinguish same-model subagents from the main
+ * thread. This is matching-model activity in the owning transcript, not proof
+ * that the newest response reused the main-thread cache.
+ */
+function readCompletedCodexExpiry(
+  lines: readonly string[],
+  compaction: CompactionRange,
+  model: string,
+  now: number,
+): number | null {
+  for (let i = lines.length - 1; i >= compaction.floor; i--) {
+    const line = lines[i]
+    if (!line?.includes('codex_stream_surface') || inPreservedRange(compaction, i)) continue
+    let record: unknown
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (
+      !isRecord(record) ||
+      record.type !== 'system' ||
+      record.subtype !== 'codex_stream_surface' ||
+      record.model !== model ||
+      record.completed !== true ||
+      record.error_name != null ||
+      record.isSidechain === true ||
+      readString(record.agentId) !== null ||
+      record.parent_tool_use_id != null
+    ) continue
+    const prefix = record.conversation_id_prefix
+    if (
+      (typeof prefix === 'string' && prefix.includes('/')) ||
+      (prefix != null && typeof prefix !== 'string')
+    ) continue
+    const at = readResponseTimestamp(record.timestamp, now)
+    if (
+      at === null ||
+      !isCacheExpiryTimestamp(record.input_tokens) ||
+      (record.cached_tokens !== undefined &&
+        (!isCacheExpiryTimestamp(record.cached_tokens) ||
+          record.cached_tokens > record.input_tokens)) ||
+      (record.output_tokens !== undefined &&
+        !isCacheExpiryTimestamp(record.output_tokens))
+    ) return null
+    // OpenAI input_tokens already includes cached_tokens. Adding that bucket
+    // again would admit requests below the cacheable input threshold.
+    return estimatePromptCacheExpiry(model, at, { input_tokens: record.input_tokens })
+  }
+  return null
+}
+
+function readResponseTimestamp(value: unknown, now: number): number | null {
+  if (typeof value !== 'string') return null
+  const timestamp = Date.parse(value)
+  if (!isCacheExpiryTimestamp(timestamp) || timestamp > now) return null
+  // Engine timestamps use Date#toISOString. Reject loose date strings and
+  // calendar values Date.parse silently normalizes, such as February 30.
+  return new Date(timestamp).toISOString() === value ? timestamp : null
 }
 
 function readString(value: unknown): string | null {

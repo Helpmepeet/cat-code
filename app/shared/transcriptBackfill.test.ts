@@ -19,12 +19,25 @@ import {
   TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
   parseTranscriptBackfillRequest,
   parseTranscriptBackfillResult,
+  parseTranscriptRunFacts,
   type TranscriptBackfillRequest,
   type TranscriptBackfillSessionResult,
 } from './transcriptBackfill.js'
 
 const APP_ID = '11111111-1111-4111-8111-111111111111'
 const ENGINE_ID = '22222222-2222-4222-8222-222222222222'
+
+test('run-facts boundary accepts optional estimated deadlines without opening extra keys', () => {
+  expect(parseTranscriptRunFacts(NO_RUN_FACTS)).toEqual(NO_RUN_FACTS)
+  for (const cacheExpiresAt of [0, Date.now(), null]) {
+    const facts = { ...NO_RUN_FACTS, cacheExpiresAt }
+    expect(parseTranscriptRunFacts(facts)).toEqual(facts)
+  }
+  for (const cacheExpiresAt of [undefined, '123', false, {}, -1, 1.5, Infinity, Number.NaN]) {
+    expect(parseTranscriptRunFacts({ ...NO_RUN_FACTS, cacheExpiresAt })).toBeNull()
+  }
+  expect(parseTranscriptRunFacts({ ...NO_RUN_FACTS, cacheExpiresAt: 1, extra: true })).toBeNull()
+})
 
 function eventFrame(
   appSessionId = APP_ID,

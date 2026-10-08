@@ -1113,6 +1113,16 @@ test('confirmed expiry renders the settled clock immediately before the account'
   expect(html).toContain('Context 21% used')
 })
 
+test('live and preview deadlines render an estimate without trusting stale snapshot booleans', () => {
+  const now = Date.now()
+  const live = { ...runControls(), cacheExpiresAt: now - 1, cacheExpired: false }
+  expect(render({ runControls: live })).toContain('Cache expired')
+  expect(render({ runControls: { ...live, cacheExpiresAt: now + 60_000, cacheExpired: true } }))
+    .not.toContain('Cache expired')
+  expect(render({ runControls: null, cacheExpiresAt: now - 1 })).toContain('Cache expired')
+  expect(render({ runControls: null, cacheExpiresAt: now + 60_000 })).not.toContain('Cache expired')
+})
+
 test('snapshot delivery isolates expiry by session and clears it on refresh or disconnect', () => {
   let state = createRunControlsState()
   const deliver = (sessionId: string, cacheExpired: boolean | null) => {

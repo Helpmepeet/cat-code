@@ -2232,12 +2232,13 @@ export type RunControlModelOption = {
 
 export type RunControlsSnapshot = {
   /**
-   * true only when the next request is known to miss the provider's prompt
-   * cache. null/absent means unknown, not warm. Display-only; never inferred
-   * from idle time or historical token usage in the renderer.
+   * Estimated expiry at snapshot time. null/absent means no usable observation.
+   * The renderer uses cacheExpiresAt to keep the display current while idle.
    * See COMPOSER-RUN-CONTROLS.md, "Cache-expired indicator".
    */
   cacheExpired?: boolean | null
+  /** Estimated deadline from engine-observed API activity, not a guarantee. */
+  cacheExpiresAt?: number | null
   model: {
     /**
      * The RESOLVED model this session runs (`getMainLoopModel()`); null if
@@ -3971,6 +3972,8 @@ export type TranscriptRunFacts = {
    * fallback keeps the exact window a cached `result` still states.
    */
   contextWindow: number | null
+  /** Rebuildable idle-time estimate from a real assistant response timestamp. */
+  cacheExpiresAt?: number | null
 }
 
 export type TranscriptCacheHeader = {

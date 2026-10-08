@@ -67,7 +67,9 @@ import {
   type LeaseReader,
   type SidecarLeaseDomain,
 } from './leaseDomain.js'
-import type { SidecarRunControlsDomain } from './runControlsDomain.js'
+import { createSidecarRunControlsDomain, type SidecarRunControlsDomain } from './runControlsDomain.js'
+import { CODEX_CACHE_IDLE_ESTIMATE_MS } from '../shared/promptCacheEstimate.js'
+import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
 import { createTaskStateBase } from '../../src/Task.js'
@@ -4044,6 +4046,42 @@ test('P4-24c — a valid model.set switches the model + re-broadcasts run-contro
   expect(latest?.currentLabel).toBe('Name for gpt-5.6-terra')
   expect(latest?.contextWindow).toBe(200_000)
   expect(snaps[snaps.length - 1]?.runControls.cacheExpired).toBeNull()
+})
+
+test('final Codex usage warms the estimate through controller events and outbound snapshots', async () => {
+  const model = 'gpt-6.1-sol'
+  const now = Date.now()
+  const base = fakeRunControlsDomain().domain.getSnapshot()
+  const domain = createSidecarRunControlsDomain(createStore(getDefaultAppState()), {
+    buildSnapshot: () => ({ ...base, model: { ...base.model, current: model, provider: 'openai' } }),
+    initialCacheObservation: { model, expiresAt: now - 1 },
+    now: () => now,
+  })
+  const stream = SDK_MESSAGE_FIXTURE.stream_event[0]!.message
+  const assistant = SDK_MESSAGE_FIXTURE.assistant[0]!.message
+  const messages = [
+    { ...stream, event: { type: 'message_start', message: { model, usage: { input_tokens: 0 } } } },
+    { ...assistant, message: { ...assistant.message, model, usage: { input_tokens: 0 } } },
+    { ...stream, event: { type: 'message_delta', delta: { stop_reason: 'end_turn' },
+      usage: { input_tokens: 200, cache_read_input_tokens: 2_000 } } },
+    { ...stream, event: { type: 'message_stop' } },
+  ]
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      for (const message of messages) yield message
+    },
+  })
+  const { received } = connect(controller, { runControls: domain })
+  const before = received.find(frame => frame.kind === 'run-controls.snapshot')
+  expect(before?.kind === 'run-controls.snapshot' && before.runControls.cacheExpired).toBe(true)
+  await controller.submit('go')
+  const snapshots = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> => frame.kind === 'run-controls.snapshot',
+  )
+  expect(snapshots.at(-1)?.runControls.cacheExpired).toBe(false)
+  expect(snapshots.at(-1)?.runControls.cacheExpiresAt).toBe(now + CODEX_CACHE_IDLE_ESTIMATE_MS)
+  expect(received.filter(frame => frame.kind === 'event' && frame.event.type === 'message')).toHaveLength(messages.length)
 })
 
 test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast', () => {

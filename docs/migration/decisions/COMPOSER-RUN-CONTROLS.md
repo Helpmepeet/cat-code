@@ -139,63 +139,80 @@ and shadow treatment. There is no native title, click action or popover.
 The separate context-low triangle and its popover are removed by explicit user
 decision; the context ring's pressure tones and usage panel remain.
 
-**Truth requirement:** expired means the next request will actually miss the
-provider cache, not that the local session has been idle for a typical retention
-period or that an earlier request reported zero cached tokens.
+**Operator amendment, 2026-10-08:** the original guaranteed-next-request-miss
+requirement left the first implementation inactive. The operator subsequently
+approved **estimation**. The clock now represents an idle-time estimate, not a
+provider-issued expiry deadline or a promise that the next request misses.
+Its settled visual and exact hover label remain unchanged.
 
-`RunControlsSnapshot.cacheExpired` is an additive, read-only nullable boolean.
-Only literal `true` renders the indicator. `false` clears it; null or an absent
-field means unknown and also hides it. The existing snapshot transport and
-per-session reducer carry the field unchanged. The composer reads only the live
-snapshot, so a retained snapshot cannot keep an expiry claim after disconnect,
-parking or restart. No inbound verb, renderer timer, persisted cache deadline,
-provider request, cache-key change or caching-policy change is added.
+### Provider estimates and evidence
 
-### Provider evidence and present limitation
-
-As inspected on 2026-10-08, **all current routes emit null**. This is a rendered
-indicator and conservative read seam, not an active expiry detector.
-
-| Actual request route | Established evidence | Why no expiry claim |
+| Actual request route | Idle estimate | Evidence and limit |
 | --- | --- | --- |
-| OpenAI/Codex, including GPT models selected in an Anthropic session | `resolveRequestProvider` routes `gpt-*` to OpenAI. `getAnthropicClient` uses `createCodexFetch`; HTTP and WebSocket requests use ChatGPT's Codex backend. The adapter sends `store:false` and a stable account/model/conversation-derived `prompt_cache_key`, with no explicit cache retention option. It maps `input_tokens_details.cached_tokens` to cache-read usage and reports cache creation as zero. | No backend expiry timestamp or maximum-retention guarantee is exposed. Public API retention rules cannot be assumed to govern ChatGPT OAuth traffic. A past cache read or miss does not predict the next request. |
-| First-party Anthropic API and Claude subscription traffic | Explicit ephemeral breakpoints use the default 5-minute TTL or the session-latched, query-source-gated 1-hour TTL in `getCacheControl` / `should1hCacheTTL`. Anthropic documents free refresh on cache use, TTL measured from request start, and organization/workspace isolation rather than session isolation. | Matching requests can refresh shared prefixes outside this process. Tools/system/message breakpoints are separate, so expiry of a conversation entry also does not establish a full-request miss. Subscription/internal `scope:global` behavior is not covered by a public next-request guarantee. |
-| Bedrock Claude | The SDK route uses the same explicit cache controls; `ENABLE_PROMPT_CACHING_1H_BEDROCK` can opt into 1 hour. AWS documents model-dependent 5-minute/1-hour TTLs, reset on successful cache hits, prefix lookback, and cross-region routing. | No session-exclusive cache or authoritative live expiry signal. Shared-prefix refresh and region selection prevent a local-idle guarantee. GPT Bedrock documentation does not describe this application's GPT route, which resolves to Codex. |
-| Vertex Claude | The engine uses `AnthropicVertex` and the Claude-shaped breakpoint/usage path. Anthropic's platform documentation lists 1-hour caching availability and organization-level isolation for Google Cloud. | The separate Google page did not expose usable article text to the documentation fetch. No provider-specific next-request guarantee was established, and shared-prefix refresh remains unobservable. |
-| Foundry Claude | The engine uses `AnthropicFoundry` and the same Claude-shaped controls. Anthropic documents 1-hour availability and workspace isolation for Foundry. | Workspace isolation is not session-exclusive. No authoritative next-request expiry signal or refresh visibility was established. |
-| Custom base URLs, deployment IDs and fetch overrides | Routing and model names alone do not establish the endpoint's cache contract. | Unknown contracts stay unknown. |
+| Codex/GPT, including GPT requests from an Anthropic-labelled session | 24 hours | Conservative retention-policy lead: the public SDK describes `prompt_cache_retention: "24h"` as a maximum policy, independently of the newer 30-minute minimum TTL. A captured Codex response also echoes `24h`. This is not a verified per-entry deadline for the current ChatGPT backend; it may evict much sooner. Eligible input is at least 1,024 tokens. |
+| First-party Claude | Configured 5 minutes or 1 hour | Live duration comes from the engine's own `getCacheControl({querySource:"sdk"})`, not the Codex policy. Cache-read/write usage must be observed. Reported one-hour writes take precedence over a shorter hint. Matching requests outside this session can refresh shared prefixes, so the display remains an estimate. |
+| Bedrock, Vertex and Foundry Claude | Same engine-selected 5-minute/1-hour duration when model identity and usage can be matched | Bedrock's one-hour environment opt-in is honored by the existing engine helper. Cloud isolation/routing can change reuse; no new cloud-provider usage probe was made. Canonical model names must match the actual response. Unknown deployment aliases remain unavailable. |
+| Historical Claude responses | Reported write TTL, otherwise conservative 1 hour | A cache-read count alone does not state its TTL. The longer fallback avoids inventing a five-minute expiry for an old one-hour entry. |
+| Custom endpoints, unmatched models and dynamic `opusplan` routing in Plan mode | Unknown | Model strings alone do not establish their current cache route. No clock until there is usable, correctly paired evidence. |
 
 Provider documentation:
 
 - [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
 - [OpenAI API prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
-  Current GPT-5.6-and-later documentation gives a **minimum** 30-minute
-  eligibility window and permits longer retention, not an expiry deadline.
-  Older API models distinguish typical inactivity windows from maximum
-  in-memory/extended retention. None establishes this Codex backend's deadline.
+  The newer 30-minute value is a **minimum**, not the point at which entries die.
+- [Pinned public SDK retention contract](https://github.com/openai/openai-python/blob/4e152cdefe1844c2d5d78653310e9b9c0195c44e/src/openai/types/responses/response_create_params.py#L169-L201)
+  distinguishes maximum retention from minimum lifetime.
+- openai/codex#32037 contains the historical `24h` response echo, including
+  `store:false`. It is a captured lead, not a reproduced current-server guarantee.
+- In openai/codex#18815, an OpenAI contributor said on 2026-04-21 that expiry
+  information was unavailable to clients. That older statement does not prove
+  it can never become available.
+- [Prompt-cache diagnostics](https://developers.openai.com/api/docs/guides/prompt-caching/diagnostics)
+  can compare requests after sending them. No preflight validity query was found;
+  applicability to this ChatGPT OAuth route remains unverified.
 - [AWS prompt caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
 - [Vertex Claude prompt caching](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/prompt-caching)
   was fetched, but only navigation was available. It is not treated as verified
   TTL evidence.
 
-Existing response data corroborates caching, not predictable expiry. A bounded
-2026-10-08 Codex transcript sample reports 296,320 cached tokens at 07:27:09 UTC,
-after its preceding cache diagnostic at 07:12:39 UTC. Those are completion
-diagnostics, not a controlled measurement of request-start inactivity, but they
-rule out deriving an expired indicator merely from the diagnostic gap. An
-existing 2026-07-28 Claude Opus 4.6 response reports 14,470 cache-write tokens,
-7,333 cache-read tokens, and a creation breakdown of 14,470 five-minute tokens
-and zero one-hour tokens. No sampled response supplies a live expiry deadline.
-No new credentialed request was made for this investigation, and cloud-provider
-usage was not observed.
+Existing response data showed a Codex cache read after a 14.5-minute diagnostic
+gap, ruling out a blind five-minute countdown. It also exposed an important
+serialization seam: saved Codex assistant frames can have zero initial usage.
+Final counts arrive in later stream events and completed
+`codex_stream_surface` diagnostics. No new credentialed request was made.
 
-Relevant engine owners: `src/utils/model/providers.ts`,
-`src/services/api/{client,claude,codex-fetch-adapter}.ts`,
-`src/utils/api.ts` (`splitSysPromptPrefix`) and
-`src/utils/forkedAgent.ts` (`CacheSafeParams`). Forks deliberately share the
-parent's prefix; the diagnostic TTL buckets in
-`promptCacheBreakDetection.ts` are described as likely causes, not provider
-expiry guarantees, and cannot drive this indicator.
+### Observation, transport and restoration
+
+The sidecar observes raw engine-originated main-thread assistant/stream events.
+It folds final usage rather than treating early zeros as a cache miss.
+Ordinary tool/user activity and subagent frames do not renew the live estimate.
+Model, effort, Fast or permission-mode changes, compaction, and account switches
+invalidate the old observation instead of carrying it to another request path.
+
+The existing read-only snapshot carries `cacheExpiresAt` plus `cacheExpired`
+at snapshot time. Both are optional additions; there is no new inbound command
+or protocol-version change. The renderer derives display state from the deadline,
+updates while idle, catches elapsed time on focus/visibility, and cleans up its
+timer/listeners. A fresh observed response clears the icon. Retained deadlines
+remain display-only after park/disconnect; they never arm a control.
+
+History uses the real API-response timestamp, not transcript length, file mtime,
+cache `writtenAt`, or session creation. The existing bounded run-facts reader
+excludes synthetic/error rows, invalid/future timestamps, model mismatches and
+compaction-preserved stale responses. For valid GPT rows with zero initial usage,
+it can use a completed matching-model stream-surface diagnostic from the same
+bounded tail. Prefix-only old diagnostics cannot distinguish same-model
+subagents, so that fallback is conservative matching-model activity in the owning
+transcript, not proof of main-thread reuse. Missing usable evidence stays unknown.
+
+Live resume seeds from these same facts; cached previews receive the optional
+deadline without a new model turn. The derived-facts stamp is 2. New cache writers
+use `transcript-cache-v3`, because older readers reject the extra field and can
+delete an artifact they cannot parse. Reads fall back through v2 then v1; normal
+writes and startup GC leave old-generation copies untouched. Explicit session
+removal still deletes all copies. Canonical transcripts, settings and credentials
+are not migrated. The worker boundary accepts only the optional bounded numeric
+deadline in addition to its existing exact key list.
 
 ### Operator check
 
@@ -206,17 +223,22 @@ live check, launch **Cat Code Dev** yourself:
 cd /Users/pt/cat-code && CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code CATCODE_DEBUG_STATE=1 bun run --cwd app dev
 ```
 
-Wait for `[main] renderer ready`, open a project or an existing session, and
-confirm there is no context-low triangle beside the context ring. A session
-whose existing context is high should retain its amber/red ring and usage
-panel. Do not send paid turns solely to make the context grow.
+Wait for `[main] renderer ready`. Open an existing GPT session whose last usable
+API activity is more than 24 hours old. Its live or cached composer should show
+the amber clock immediately before the account, without needing a new request.
+Hover it: the label must read exactly “Cache expired”. Clicking must do nothing.
+A recent eligible session should show no clock; session length alone is irrelevant.
 
-All present providers are unknown, so the live app must show no cache clock,
-including after more than five minutes idle. The mock's state switches show
-the settled warm/expired/hover/context-low visual for comparison. Expired and
-hover rendering are covered with synthetic snapshot tests only; they cannot
-be honestly triggered from a real provider with the current evidence. Live
-expired-state visual acceptance remains unverified.
+Confirm there is no context-low triangle. A high-context session should retain
+its amber/red ring and usage panel. If you choose to send an ordinary request,
+the clock should clear when its final usage arrives; no extra paid probe is needed.
+Older cache metadata may require the background enrichment pass before the
+preview deadline appears. An existing dev process/sidecar retains loaded code,
+so use a fresh dev launch to exercise this change.
+
+Native hover appearance and current-backend lifetime remain unverified. Headless
+checks prove the estimator and display plumbing, not that every cache actually
+dies at the estimated deadline.
 
 ## Parity (§0 flags)
 

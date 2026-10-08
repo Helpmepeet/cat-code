@@ -707,7 +707,7 @@ function cancelAllReplayFlushes(): void {
 
 /**
  * IS-A — where the at-rest transcript caches live: beside the durable registry
- * (`<config-home>/desktop/transcript-cache-v2`), same trust domain as the registry
+ * (`transcriptCacheDir()`), same trust domain as the registry
  * file and the engine transcript JSONL. Fixed at startup (env is stable per run),
  * matching the registry's own `defaultRegistryDir()` timing.
  */
@@ -890,14 +890,15 @@ function persistTranscriptCache(appSessionId: SessionId): void {
 /**
  * Startup cache GC (IS-A). The launch-time registry reap runs BEFORE main
  * subscribes to HostEvents, so reaped rows emit no `session-removed` — a cache
- * file whose row is gone would otherwise linger forever. Delete every cache file
- * whose id the host no longer vouches for as restorable. Runs once, after the
+ * file whose row is gone would otherwise linger forever. Delete current-generation
+ * files whose ids the host no longer vouches for. Older builds keep their copies.
+ * Runs once, after the
  * registry launch sweep settles.
  */
 function gcTranscriptCache(): void {
   try {
-    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR, true)) {
-      if (!host || !host.canPreview(id)) deleteCache(TRANSCRIPT_CACHE_DIR, id)
+    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR)) {
+      if (!host || !host.canPreview(id)) deleteCache(TRANSCRIPT_CACHE_DIR, id, false)
     }
   } catch (error) {
     process.stderr.write(`[main] transcript-cache GC failed: ${errText(error)}\n`)

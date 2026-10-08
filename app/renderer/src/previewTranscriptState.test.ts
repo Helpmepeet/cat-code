@@ -862,6 +862,76 @@ test('header run facts win over the frames, which cannot know mode or effort', (
   expect(entry.runFacts.contextUsage?.percentUsed).toBe(25)
 })
 
+test.each([
+  ['past estimate', Date.parse('2025-01-02T12:00:00.000Z')],
+  ['recent estimate', Date.now() + 60_000],
+  ['explicitly unknown', null],
+])('a %s cache deadline survives preview hydration and pane selection', (_label, cacheExpiresAt) => {
+  const cached: TranscriptCache = {
+    ...cache([assistantFrame('gpt-5.6-terra', 0)]),
+    header: {
+      ...cache([]).header,
+      writtenAt: Date.now(),
+      runFacts: {
+        model: 'gpt-5.6-terra',
+        permissionMode: 'auto',
+        effort: 'high',
+        usedTokens: 50_000,
+        contextWindow: 372_000,
+        cacheExpiresAt,
+      },
+    },
+  }
+  const projected = projectPreviewTranscriptCache(cached)
+  const preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
+    type: 'preview-load',
+    cache: cached,
+    projected,
+  })
+  const selected = selectPaneTranscript({
+    previewState: preview,
+    sessionId: SID,
+    previewOpen: true,
+    liveTranscript: createTranscriptState(),
+  })
+  expect(selected.runFacts?.cacheExpiresAt).toBe(cacheExpiresAt)
+  expect(selected.runFacts).toBe(projected.runFacts)
+  expect(selected.preview).toBe(true)
+  expect(selectTranscriptRows(selected.transcript, SID)).toEqual(
+    selectTranscriptRows(projected.transcript, SID),
+  )
+})
+
+test('legacy header and frame fallbacks leave an unknown cache estimate omitted', () => {
+  const cached = cache([assistantFrame('gpt-5.6-terra', 0)])
+  cached.header.writtenAt = Date.now()
+  expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+  cached.header.runFacts = {
+    model: 'gpt-5.6-terra',
+    permissionMode: 'auto',
+    effort: 'high',
+    usedTokens: 50_000,
+    contextWindow: 372_000,
+  }
+  expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+})
+
+test.each([-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '1735819200000'])(
+  'an invalid preview header deadline %s is not exposed to the pane',
+  cacheExpiresAt => {
+    const cached = cache([assistantFrame('gpt-5.6-terra', 0)])
+    cached.header.runFacts = {
+      model: 'gpt-5.6-terra',
+      permissionMode: 'auto',
+      effort: 'high',
+      usedTokens: 50_000,
+      contextWindow: 372_000,
+      cacheExpiresAt,
+    } as unknown as NonNullable<TranscriptCache['header']['runFacts']>
+    expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+  },
+)
+
 /**
  * The header's window used to be structurally null (the worker declared the
  * field and never assigned it), so every backfilled donut silently divided by

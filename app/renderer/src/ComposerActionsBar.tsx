@@ -30,6 +30,7 @@ import {
 import { PermissionModeChip } from './PermissionModeChip.js'
 import { ActionWarningIcon, Glyph } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
+import { useCacheExpiredEstimate } from './useCacheExpiredEstimate.js'
 import type {
   AccountStatus,
   AnthropicAccountStatus,
@@ -1491,6 +1492,7 @@ export function ComposerActionsBar({
   reasoningEffort,
   fastMode,
   runControls,
+  cacheExpiresAt,
   onSetModel,
   onSetEffort,
   onSetFast,
@@ -1532,6 +1534,8 @@ export function ComposerActionsBar({
    * an interactive picker; absent, it falls back to the P4-24 read-only face.
    */
   runControls?: RunControlsSnapshot | null
+  /** Read-only retained/preview estimate when there is no live snapshot. */
+  cacheExpiresAt?: number | null
   onSetModel?: (model: string | null) => void
   onSetEffort?: (effort: string) => void
   onSetFast?: (active: boolean) => void
@@ -1586,6 +1590,10 @@ export function ComposerActionsBar({
   // Interactive switcher when the active account AND a switch handler are both
   // present; otherwise the P4-24 read-only alias face (mirrors the ModelChip gate).
   const accountInteractive = account != null && onSwitchAccount != null
+  const cacheExpired = useCacheExpiredEstimate(
+    runControls ? runControls.cacheExpiresAt : cacheExpiresAt,
+    runControls?.cacheExpired,
+  )
 
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
   // follows the last-focused face; when nothing in the bar is focused it rests on
@@ -1795,7 +1803,7 @@ export function ComposerActionsBar({
         ) : null}
 
         <div className="ml-auto flex min-w-0 items-center gap-[7px]">
-          {runControls?.cacheExpired === true ? <CacheExpiredIndicator /> : null}
+          {cacheExpired ? <CacheExpiredIndicator /> : null}
           {accountInteractive && account && onSwitchAccount ? (
             <AccountChip
               active={account}

@@ -85,6 +85,8 @@ export type ComposerRailModel = {
   /** The pool view this pane should render. See `railAccounts` for the order. */
   accountsSnapshot: AccountsSnapshot | null
   provider: RunControlProvider | null
+  /** Idle-time estimate is display data and survives a parked engine. */
+  cacheExpiresAt: number | null
 
   /* ---- capability: dies with the engine ---- */
   /** Non-null only while a sidecar can take a run-control verb. */
@@ -153,6 +155,7 @@ export function selectComposerRail(
     lastPermissionMode: selectLastPermissionMode(permissions, sessionId),
     accountsSnapshot: railAccounts(accounts, sessionId, ready),
     provider: last?.model.provider ?? null,
+    cacheExpiresAt: last?.cacheExpiresAt ?? null,
     liveRunControls: live,
     canSwitchAccount: ready && last?.model.provider === 'openai',
   }
