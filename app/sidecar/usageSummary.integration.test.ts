@@ -120,6 +120,56 @@ test('multi-metric contributor leaders fit through the existing detail fallback 
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('all-history detail falls back before recent tool identities are grouped away', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-recent-tool-identities-'));
+    try {
+        const path = join(dir, 'history.jsonl');
+        const tools = Array.from({ length: 6 }, (_, index) => `Recent tool ${index}`);
+        const models = Array.from({ length: 8 }, (_, index) => `model-${index}`);
+        const rows = [];
+        for (let day = 0; day < 60; day++) for (let session = 0; session < 10; session++) for (const [toolIndex, name] of tools.entries()) for (let build = 0; build < 3; build++) {
+            const id = `${day}-${session}-${toolIndex}-${build}`;
+            const timestamp = new Date(Date.UTC(2026, 6, 15 + day, 10, build)).toISOString();
+            rows.push({
+                type: 'assistant', sessionId: `session-${day}-${session}`, uuid: id, timestamp,
+                version: `2.1.87-desktop.sha${build.toString(16).padStart(7, 'a')}`,
+                message: { id, model: models[(day + toolIndex + build) % models.length], usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id, name }] },
+            });
+            rows.push({
+                type: 'user', sessionId: `session-${day}-${session}`, uuid: `${id}-result`, timestamp,
+                message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: toolIndex < 2 && build === 0 }] },
+            });
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
+        fitUsageDashboardSnapshot(snapshot);
+        const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
+        expect(output?.type).toBe('usage');
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(MAX_USAGE_RECORD_BYTES);
+        expect(snapshot.ranges['7d'].tools.filter(tool => tool.kind === 'named').map(tool => tool.label).sort()).toEqual([...tools].sort());
+        expect(snapshot.ranges['30d'].tools.filter(tool => tool.kind === 'named').map(tool => tool.label).sort()).toEqual([...tools].sort());
+        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named').length).toBeGreaterThanOrEqual(1);
+        for (const range of [snapshot.ranges['7d'], snapshot.ranges['30d'], snapshot.ranges.all]) {
+            expect(range.tools.reduce((sum, tool) => sum + tool.errors, 0)).toBe(range.days.reduce((sum, day) => sum + day.errors, 0));
+        }
+        expect(snapshot.ranges['7d'].tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
+        expect(snapshot.ranges['30d'].tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
+        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual([tools[0]]);
+        expect(snapshot.ranges.all.requests).toBe(10_800);
+        expect(snapshot.ranges.all.days.reduce((sum, day) => sum + day.errors, 0)).toBe(1_200);
+        expect(snapshot.ranges['7d'].tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(snapshot.ranges['7d'].requests);
+        expect(snapshot.ranges['30d'].tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(snapshot.ranges['30d'].requests);
+        expect(snapshot.ranges.all.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(snapshot.ranges.all.requests);
+        for (const day of snapshot.ranges.all.days) {
+            expect(day.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(day.requests);
+            const retainedBuildRequests = day.tools.reduce((sum, tool) => sum + (tool.builds?.items.reduce((n, build) => n + build.requests, 0) ?? 0), 0);
+            const omittedBuildRequests = day.tools.reduce((sum, tool) => sum + (tool.builds?.omitted?.requests ?? 0), 0);
+            expect(retainedBuildRequests + omittedBuildRequests).toBe(day.requests);
+        }
+        expect(snapshot.ranges['7d'].days.some(day => day.tools.some(tool => (tool.builds?.items.length ?? 0) > 0))).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+}, 30000);
+
 test('ordinary untimed history keeps named models and tools through the production envelope finalizer', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-category-fallback-'));
     try {

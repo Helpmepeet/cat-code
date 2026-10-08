@@ -175,6 +175,11 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         const recent = { models: 8, tools: 10, contributors, builds, timeline: contributors ? 1 : 0 };
         for (const all of allTiers.filter(tier => tier.models === 8 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;
     }
+    const allBuildTiers = [...allTiers.filter(tier => tier.builds === 1), ...allTiers.filter(tier => tier.builds === 0)];
+    for (const tools of [10, 8, 6]) for (const builds of [2, 1, 0]) for (const contributors of [5, 0]) {
+        const recent = { models: 8, tools, contributors, builds, timeline: contributors ? 1 : 0 };
+        for (const all of allBuildTiers) if (fit(recent, all)) return snapshot;
+    }
     for (const models of [8, 4]) {
         const recent = { models, tools: 4, contributors: 0, builds: 1, timeline: 0 };
         for (const all of allTiers.filter(tier => tier.models >= 4 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;

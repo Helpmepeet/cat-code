@@ -314,7 +314,7 @@ test('v14 comparison snapshots rebuild from indexed records without rereading so
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(20);
+    expect(rebuilt.countingVersion).toBe(21);
     expect(rebuilt.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
@@ -578,7 +578,7 @@ test('v17 grouped snapshots rebuild named categories from indexed records withou
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(20);
+    expect(rebuilt.countingVersion).toBe(21);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);
@@ -615,12 +615,61 @@ test('v19 snapshots hiding edit tools rebuild diagnostics from unchanged indexed
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(20);
+    expect(rebuilt.countingVersion).toBe(21);
     for (const range of ['7d', '30d', 'all'] as const) {
         const edit = rebuilt.ranges[range].tools.find(tool => tool.label === 'Edit')!;
         expect(edit).toMatchObject({ requests: 4, results: 4, errors: 3 });
         expect(rebuilt.ranges[range].days.some(day => day.tools.find(tool => tool.id === edit.id)?.builds?.items[0]?.sha === '12345678')).toBe(true);
     }
+    const warm = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
+});
+
+test('v20 grouped snapshots restore recent tool identities from indexed records without rereading sources', async () => {
+    const { path, file } = await fixture();
+    const tools = Array.from({ length: 6 }, (_, index) => `Recent tool ${index}`);
+    const models = Array.from({ length: 8 }, (_, index) => `model-${index}`);
+    const rows = [];
+    for (let day = 0; day < 60; day++) for (const [toolIndex, name] of tools.entries()) for (let build = 0; build < 3; build++) {
+        const id = `${day}-${toolIndex}-${build}`;
+        const timestamp = new Date(Date.UTC(2026, 6, 15 + day, 10, build)).toISOString();
+        rows.push({
+            type: 'assistant', sessionId: 's', uuid: id, timestamp,
+            version: `2.1.87-desktop.sha${build.toString(16).padStart(7, 'a')}`,
+            message: { id, model: models[(day + toolIndex + build) % models.length], usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id, name }] },
+        });
+        rows.push({
+            type: 'user', sessionId: 's', uuid: `${id}-result`, timestamp,
+            message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: toolIndex < 2 && build === 0 }] },
+        });
+    }
+    await writeFile(file, rows.map(value => JSON.stringify(value)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const stale = structuredClone(original) as any;
+    stale.countingVersion = 20;
+    stale.ranges['7d'] = groupUsageSummary(stale.ranges['7d'], 8, 4, 0, 1);
+    stale.ranges['30d'] = groupUsageSummary(stale.ranges['30d'], 8, 4, 0, 1);
+    stale.ranges.all = groupUsageSummary(stale.ranges.all, 8, 4, 0, 1);
+    expect(stale.ranges['7d'].tools.filter((tool: { kind: string }) => tool.kind === 'named')).toHaveLength(4);
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(stale)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+
+    let reads = 0;
+    const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(rebuilt.countingVersion).toBe(21);
+    for (const range of ['7d', '30d'] as const) {
+        expect(rebuilt.ranges[range].tools.filter(tool => tool.kind === 'named').map(tool => tool.label).sort()).toEqual([...tools].sort());
+        expect(rebuilt.ranges[range].tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(rebuilt.ranges[range].requests);
+        expect(rebuilt.ranges[range].tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
+    }
+    expect(rebuilt.ranges.all.requests).toBe(1080);
+    expect(rebuilt.ranges.all.days.reduce((sum, day) => sum + day.errors, 0)).toBe(120);
+    expect(rebuilt.ranges['7d'].days.some(day => day.tools.some(tool => (tool.builds?.items.length ?? 0) > 0))).toBe(true);
     const warm = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
     expect(warm.ranges).toEqual(rebuilt.ranges);

@@ -449,6 +449,7 @@ The graph reports omitted build-observation counts even when no marker remains;
 these are observations, not a count of distinct missing commits. The 256 KiB
 record cap, 10-tool cap, and strict inbound/outbound validation are unchanged.
 
-Counting version 20 invalidates previously grouped saved summaries and rebuilds
-them from the existing redacted index-v11 records. It changes neither the index
-projection nor source transcripts, and needs no persisted engine migration.
+Counting version 21 invalidates version-20 summaries that had already grouped
+recent tool names, then rebuilds summaries from the existing redacted
+index-v11 records. The raw index projection, transcripts, sessions, and
+accounts are unchanged; no persisted engine migration is required.
