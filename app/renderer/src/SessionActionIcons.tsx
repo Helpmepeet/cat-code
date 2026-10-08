@@ -267,7 +267,7 @@ export function ActionCloseIcon(): ReactNode {
 }
 
 /**
- * The warning triangle the banner stack, the composer's auto-compact chip and the
+ * The warning triangle the banner stack, the context usage panel and the
  * destructive settings dialog all draw. `size` is required because those surfaces
  * ask for it at four different sizes and a default would hide the disagreement
  * behind a call site that looks like it accepted one.

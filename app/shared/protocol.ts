@@ -2231,6 +2231,13 @@ export type RunControlModelOption = {
 }
 
 export type RunControlsSnapshot = {
+  /**
+   * true only when the next request is known to miss the provider's prompt
+   * cache. null/absent means unknown, not warm. Display-only; never inferred
+   * from idle time or historical token usage in the renderer.
+   * See COMPOSER-RUN-CONTROLS.md, "Cache-expired indicator".
+   */
+  cacheExpired?: boolean | null
   model: {
     /**
      * The RESOLVED model this session runs (`getMainLoopModel()`); null if
@@ -2308,39 +2315,21 @@ export type RunControlsSnapshot = {
     /** `getFastModeUnavailableReason()` display string, or null when available. */
     unavailableReason: string | null
   }
-  /**
-   * P4-33 — the two token counts the composer's auto-compact warning glyph
-   * compares the live context against. Additive display facts about the CURRENT
-   * model, resolved at the sidecar by the engine's own
-   * `calculateTokenWarningState` inputs (`src/services/compact/autoCompact.ts:246`).
-   *
-   * They ship from the engine because the renderer CANNOT re-derive either one.
-     * The denominator is `getEffectiveContextWindowSize` (`autoCompact.ts:40`),
-     * the same basis as the gauge's `contextWindow`. The auto-compact buffer is
-     * model-dependent too
-   * (`getAutoCompactBufferTokens`, `autoCompact.ts:204`), not the flat 13k the
-   * prototype hard-codes. Mirroring either in the renderer would print a
-   * percentage that disagrees with the engine that actually compacts.
-   */
+  /** Engine-resolved capacity facts for the context usage panel. */
   autoCompact: {
     /**
-     * `isAutoCompactEnabled()` (`autoCompact.ts:288`) — env kill-switches plus
-     * the user's `autoCompactEnabled` setting. Selects which sentence the glyph
-     * shows, and (engine-side) which threshold the percentage runs against.
+     * `isAutoCompactEnabled()` including environment and user settings.
      */
     enabled: boolean
     /**
      * The engine's `threshold` (`autoCompact.ts:257-259`): the auto-compact
      * threshold when auto-compact is on, else the effective context window. The
-     * DENOMINATOR of `percentLeft`, so the readout hits 0% at the compact point
-     * rather than at the raw window. null when resolution failed.
+     * basis for the panel's remaining capacity. null when resolution failed.
      */
     threshold: number | null
     /**
-     * `threshold - WARNING_THRESHOLD_BUFFER_TOKENS` (`autoCompact.ts:266`) — the
-     * point at or above which the engine reports `isAboveWarningThreshold` and
-     * the glyph appears. Below it the glyph renders nothing at all. null when
-     * resolution failed, which keeps the glyph hidden.
+     * Legacy warning threshold, retained for wire compatibility. The separate
+     * context-low glyph was removed; the context ring carries pressure tone.
      */
     warningThreshold: number | null
   }

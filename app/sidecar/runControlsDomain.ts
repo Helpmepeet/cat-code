@@ -518,6 +518,11 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
     : safe(() => getFastModeUnavailableReason(), null)
 
   return {
+    // No current provider exposes a next-request cache-miss guarantee. Codex
+    // usage is retrospective; Claude TTLs can be refreshed by shared-prefix
+    // requests outside this process. Keep unknown distinct from warm.
+    // Evidence and provider coverage: COMPOSER-RUN-CONTROLS.md.
+    cacheExpired: null,
     model: {
       current,
       currentLabel,
@@ -546,23 +551,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
   }
 }
 
-/**
- * The composer warning glyph's two thresholds, mirrored off the ENGINE rather
- * than recomputed (§10). Both come from the same functions
- * `calculateTokenWarningState` uses (`src/services/compact/autoCompact.ts:256-269`).
- *
- * These are the engine's THRESHOLDS, not its verdict. The renderer compares them
- * against API-reported usage off the newest `result` frame, while the engine
- * compares `tokenCountWithEstimation(...) - preRequestTokensFreed`
- * (`autoCompact.ts:373-374`),
- * so the glyph approximates `isAboveWarningThreshold` and can lag it mid-turn.
- * The drift and why it is accepted are documented at the point of comparison,
- * `app/renderer/src/tokenWarning.ts`.
- *
- * Guarded like {@link readContextWindow}: a failed resolve costs the glyph (it
- * stays hidden, the honest state when we cannot say how close compaction is),
- * never the whole snapshot.
- */
+/** Engine capacity thresholds for the usage panel. Keep the legacy warning
+ * field on the wire even though the rail no longer renders a separate glyph. */
 function readAutoCompact(model: string | null): RunControlsSnapshot['autoCompact'] {
   const enabled = safe(() => isAutoCompactEnabled(), false)
   if (!model) return { enabled, threshold: null, warningThreshold: null }

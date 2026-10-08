@@ -9,6 +9,11 @@ import {
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown } from './composerPopover.js'
 import { toneClasses } from './tone.js'
+import {
+  createRunControlsState,
+  reduceRunControlsState,
+  selectRunControlsSnapshot,
+} from './runControlsState.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
@@ -19,6 +24,7 @@ import type {
 
 function runControls(
   over: {
+    cacheExpired?: boolean | null
     model?: Partial<RunControlsSnapshot['model']>
     effort?: Partial<RunControlsSnapshot['effort']>
     fast?: Partial<RunControlsSnapshot['fast']>
@@ -26,6 +32,7 @@ function runControls(
   } = {},
 ): RunControlsSnapshot {
   return {
+    cacheExpired: over.cacheExpired ?? null,
     model: {
       current: 'gpt-5.6-terra',
       currentLabel: 'GPT-5.6 Terra',
@@ -64,9 +71,6 @@ function runControls(
       ...over.fast,
     },
     autoCompact: {
-      // Default: thresholds absent, so the warning glyph stays hidden and the
-      // pre-existing rail assertions keep counting only the faces they were
-      // written for.
       enabled: true,
       threshold: null,
       warningThreshold: null,
@@ -1063,76 +1067,79 @@ test('AccountSwitcherPanel rows carry no native `disabled`, so roving includes t
   expect(countOccurrences(html, 'aria-disabled="true"')).toBe(2)
 })
 
-/* --------------------------------------------------------------------------- *
- * P4-33 — the auto-compact warning glyph (the prototype's `TokenWarning`,
- * Surfaces.jsx:415, in the rail at `:779`). The glyph is INVISIBLE below the
- * threshold, so a fresh-session render proves nothing on its own: every test
- * below names which side of the threshold it is on.
- * --------------------------------------------------------------------------- */
-
-/** Illustrative thresholds (see tokenWarning.test.ts) — the sidecar supplies the
- * real ones. Warning at 167k, auto-compact at 187k. */
-const WARN_THRESHOLDS = {
-  enabled: true,
-  threshold: 187_000,
-  warningThreshold: 167_000,
-} as const
-
-test('P4-33 — BELOW the threshold the warning glyph is absent entirely', () => {
-  const html = render({
-    contextUsage: { usedTokens: 120_000, contextWindow: 200_000, percentUsed: 60 },
-    runControls: runControls({ autoCompact: WARN_THRESHOLDS }),
-  })
-  expect(html).not.toContain('until auto-compact')
-  expect(html).not.toContain('Context low')
-  // The donut it rides beside is still there — absence of the glyph is not
-  // absence of the rail.
-  expect(html).toContain('Context 60% used')
+test('context pressure uses the ring, never a separate warning face', () => {
+  for (const enabled of [true, false]) {
+    const html = render({
+      contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
+      runControls: runControls({
+        autoCompact: { enabled, threshold: 187_000, warningThreshold: 167_000 },
+      }),
+    })
+    expect(html).toContain('Context 88% used')
+    expect(html).toContain('text-tone-warn')
+    expect(html).not.toContain('data-composer-face="token-warning"')
+    expect(html).not.toContain('Context low')
+    expect(html).not.toContain('until auto-compact')
+  }
 })
 
-test('P4-33 — ABOVE the threshold the amber glyph appears with the engine percentage', () => {
-  const html = render({
-    contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
-    runControls: runControls({ autoCompact: WARN_THRESHOLDS }),
-  })
-  // (187000-175000)/187000 = 6%.
-  expect(html).toContain('6% until auto-compact')
-  // Amber comes from the shared token (theme.css `--tone-warn` IS #fbbf24), never
-  // an inlined hex or an interpolated arbitrary class (Tailwind v4 would no-op it).
-  expect(html).toContain('text-tone-warn')
-  expect(html).not.toContain('#fbbf24')
+test('unknown, warm, and legacy snapshots show no cache-expired indicator', () => {
+  for (const cacheExpired of [null, false, undefined]) {
+    const snapshot = { ...runControls(), cacheExpired }
+    expect(render({ runControls: snapshot })).not.toContain('Cache expired')
+  }
+  expect(render({ runControls: null })).not.toContain('Cache expired')
 })
 
-test('P4-33 — with auto-compact OFF the glyph says the user must act', () => {
+test('confirmed expiry renders the settled clock immediately before the account', () => {
   const html = render({
-    contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
-    runControls: runControls({
-      autoCompact: { ...WARN_THRESHOLDS, enabled: false },
-    }),
+    account: account(),
+    runControls: runControls({ cacheExpired: true }),
+    contextUsage: USAGE,
   })
-  // The engine words this case differently because nothing recovers on its own
-  // (`TokenWarning.tsx:169`): the title states the headroom AND names the fix.
-  expect(html).toContain('Context low · 6% remaining')
-  expect(html).not.toContain('until auto-compact')
+  const clock = html.match(/<span role="status"[\s\S]*?<\/span><\/span>/)?.[0] ?? ''
+  expect(html.indexOf('<span role="status"')).toBeLessThan(html.indexOf('Active account:'))
+  expect(clock).toContain('aria-label="Cache expired"')
+  expect(clock).toContain('h-[22px] w-[22px]')
+  expect(clock).toContain('text-tone-warn')
+  expect(clock).toContain('width="14" height="14"')
+  expect(clock).toContain('stroke-width="2"')
+  expect(clock).toContain('<circle cx="12" cy="12" r="10"')
+  expect(clock).toContain('>Cache expired</span>')
+  expect(clock).not.toContain('button')
+  expect(clock).not.toContain('tabindex')
+  expect(clock).not.toContain('title=')
+  expect(clock).not.toContain('aria-haspopup')
+  expect(html).toContain('Context 21% used')
 })
 
-test('P4-33 — the glyph joins the toolbar roving order as its own face', () => {
-  const html = render({
-    contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
-    runControls: runControls({ autoCompact: WARN_THRESHOLDS }),
+test('snapshot delivery isolates expiry by session and clears it on refresh or disconnect', () => {
+  let state = createRunControlsState()
+  const deliver = (sessionId: string, cacheExpired: boolean | null) => {
+    state = reduceRunControlsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'run-controls.snapshot',
+        protocolVersion: 2,
+        sessionId,
+        runControls: runControls({ cacheExpired }),
+      },
+    })
+  }
+  const display = (sessionId: string) =>
+    render({ runControls: selectRunControlsSnapshot(state, sessionId) })
+  deliver('s1', true)
+  deliver('s2', null)
+  expect(display('s1')).toContain('Cache expired')
+  expect(display('s2')).not.toContain('Cache expired')
+  deliver('s1', false)
+  expect(display('s1')).not.toContain('Cache expired')
+  deliver('s1', true)
+  state = reduceRunControlsState(state, {
+    type: 'frame',
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
-  // Roving is a DOM query over [data-composer-face]; a glyph without one would be
-  // keyboard-unreachable while every neighbouring face is reachable.
-  expect(html).toContain('data-composer-face="token-warning"')
-})
-
-test('P4-33 — no thresholds on the wire keeps the glyph hidden at any usage', () => {
-  const html = render({
-    contextUsage: { usedTokens: 900_000, contextWindow: 200_000, percentUsed: 100 },
-    runControls: runControls(),
-  })
-  expect(html).not.toContain('until auto-compact')
-  expect(html).not.toContain('data-composer-face="token-warning"')
+  expect(display('s1')).not.toContain('Cache expired')
 })
 
 /* --------------------------------------------------------------------- *

@@ -1009,20 +1009,6 @@ html[data-glass='on'] [data-window-overlay] {
   }
 }
 
-/* P4-33 composer auto-compact glyph entrance (Surfaces.jsx:434 `tokenWarnIn`,
- * keyframe at `CatCode Web App.html:66`). The glyph appears mid-session when the
- * context crosses the warning threshold, so it pops in rather than blinking on. */
-@keyframes catcode-token-warn-in {
-  from {
-    opacity: 0;
-    transform: scale(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 /* The subagent face's breath (2026-08-19 subagent card) — the ONE animation on
  * an agent card, and it runs only on the face of a running worker. Distinct from
  * Tailwind's `animate-pulse` (2s, cubic-bezier easing) because the design source
@@ -1182,8 +1168,13 @@ html[data-glass='on'] [data-window-overlay] {
     animation: catcode-sa-pop 0.13s ease both;
   }
 
-  .animate-token-warn-in {
-    animation: catcode-token-warn-in 0.18s ease both;
+  .composer-cache-label {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .composer-cache-indicator:hover > .composer-cache-label {
+    visibility: visible;
   }
 
   .animate-effort-flow {
@@ -1601,7 +1592,6 @@ html[data-glass='on'] [data-window-overlay] {
   .animate-spin,
   .animate-toast-in,
   .animate-sa-pop,
-  .animate-token-warn-in,
   .animate-arrive,
   .animate-pop-up,
   .animate-drawer-in,

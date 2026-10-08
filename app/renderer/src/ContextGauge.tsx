@@ -24,8 +24,8 @@ import { toneClasses } from './tone.js'
  * A DEVIATION from the prototype, added deliberately (operator call,
  * 2026-08-17): the white reference tick at
  * {@link CONTEXT_REFERENCE_TOKENS}, on windows large enough for it to mean
- * something. It is a scale mark and nothing more — the tone ladder, the warning
- * glyph beside it and the compaction threshold are all unchanged, so crossing it
+ * something. It is a scale mark and nothing more. The tone ladder and compaction
+ * threshold are unchanged, so crossing it
  * changes exactly one thing on screen. Do not "restore parity" by removing it,
  * and do not grow it into a second warning.
  *

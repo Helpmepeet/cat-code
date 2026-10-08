@@ -132,7 +132,10 @@ large pill treatments within one control group.
 - **Composer:** Keep the input visually connected to the transcript. Put model,
   reasoning, permission, and account controls in a compact action row. Reuse
   the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)
-  before adding a new control style.
+  before adding a new control style. Context pressure belongs on the ring, not
+  a separate triangle. A confirmed cache expiry uses a display-only amber clock
+  before the account face, with a small raised-surface hover label reading
+  “Cache expired”. Unknown expiry shows nothing.
 - **Overlays and feedback:** Use a raised surface, a fine border, and the
   matching elevation token. Let tone indicate a real outcome or required
   action. Avoid decorative status text that repeats what the interface shows.

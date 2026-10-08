@@ -98,28 +98,36 @@ const COMPACT = {
   enabled: true, threshold: 187_000, warningThreshold: 167_000,
 } as RunControlsSnapshot['autoCompact']
 
-function rail(usedTokens: number) {
+function rail(usedTokens: number, cacheExpired: boolean | null = null) {
   return createElement(ComposerActionsBar, {
     attachDisabled: false, onAttach: () => {}, model: null, reasoningEffort: null,
     fastMode: null, permissionContext: null, onSetMode: () => {}, account: null,
     contextUsage: { usedTokens, contextWindow: 200_000, percentUsed: Math.round(usedTokens / 2_000) },
-    runControls: { autoCompact: COMPACT } as RunControlsSnapshot,
+    runControls: { autoCompact: COMPACT, cacheExpired } as RunControlsSnapshot,
   })
 }
 
-test('context warning pops only when it crosses the threshold within one mount', async () => {
+test('cache status changes do not add a toolbar action or open a popover', async () => {
   const tree = await harness.mount(rail(167_000))
-  const warning = () => tree.container.querySelector('[aria-label="11% until auto-compact"]')
-  expect(warning()?.classList.contains('animate-token-warn-in')).toBe(false)
-  await tree.render(rail(40_000))
-  await tree.render(rail(167_000))
-  expect(warning()?.classList.contains('animate-token-warn-in')).toBe(true)
-  await tree.render(rail(167_000))
-  expect(warning()?.classList.contains('animate-token-warn-in')).toBe(true)
-  await tree.unmount()
-  const remounted = await harness.mount(rail(167_000))
-  expect(remounted.container.querySelector('[aria-label="11% until auto-compact"]')
-    ?.classList.contains('animate-token-warn-in')).toBe(false)
+  const indicator = () => tree.container.querySelector<HTMLElement>('[aria-label="Cache expired"]')
+  const faces = () => [...tree.container.querySelectorAll('[data-composer-face]')]
+    .map(node => node.getAttribute('data-composer-face'))
+  const before = faces()
+  expect(indicator()).toBeNull()
+  await tree.render(rail(167_000, true))
+  expect(indicator()?.tagName).toBe('SPAN')
+  expect(indicator()?.getAttribute('role')).toBe('status')
+  expect(indicator()?.querySelector('.composer-cache-label')?.textContent).toBe('Cache expired')
+  indicator()?.click()
+  expect(tree.container.querySelector('[role="dialog"]')).toBeNull()
+  expect(faces()).toEqual(before)
+  expect(faces()).not.toContain('token-warning')
+  await tree.render(rail(167_000, false))
+  expect(indicator()).toBeNull()
+  await tree.render(rail(167_000, true))
+  expect(indicator()).not.toBeNull()
+  await tree.render(rail(167_000, null))
+  expect(indicator()).toBeNull()
 })
 
 test('keyboard cursor rows switch without a colour transition', async () => {

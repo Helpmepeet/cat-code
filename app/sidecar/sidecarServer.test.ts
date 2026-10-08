@@ -3883,6 +3883,7 @@ function fakeRunControlsDomain(): {
   let providerSwitchLocked = false
   let listener: (() => void) | null = null
   const snapshot = (): RunControlsSnapshot => ({
+    cacheExpired: null,
     model: {
       current: model,
       // The real builder resolves both from the engine (marketing name +
@@ -4042,6 +4043,7 @@ test('P4-24c — a valid model.set switches the model + re-broadcasts run-contro
   // + size cap on the outbound path must carry them, not drop them.
   expect(latest?.currentLabel).toBe('Name for gpt-5.6-terra')
   expect(latest?.contextWindow).toBe(200_000)
+  expect(snaps[snaps.length - 1]?.runControls.cacheExpired).toBeNull()
 })
 
 test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast', () => {
