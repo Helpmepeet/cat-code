@@ -10,7 +10,7 @@ The most important design distinction is between independent runs that create a 
 
 | Evidence | What it establishes | Limits |
 | --- | --- | --- |
-| Three user-supplied screenshots | Actual landing, creation, and Advanced layouts captured on this installation | No dropdown contents, transitions, or post-create behavior |
+| Four user-supplied screenshots | Actual landing, creation, Advanced, and saved-task action-menu layouts captured on this installation | No schedule-dropdown contents, action outcomes, or post-create transitions |
 | Installed desktop JavaScript | Scheduler, storage, notification, and UI implementation paths | Bundles contain conditional and potentially inactive variants |
 | Automation TOML and SQLite records | Saved definitions, dispatch timestamps, run metadata, and review states | Legacy and account-owned representations can differ |
 | Scheduled-run transcripts and app read tools | Inputs and results of real runs | Historical runs do not establish every current failure behavior |
@@ -71,7 +71,23 @@ The screenshot does not show a project selector, notification selector, worktree
 
 In particular, **Model and Effort are visible while “Start each run in new chat” is off**. Earlier source-based generalization that those controls disappear for every shared-chat task was too broad. A separate existing-chat detail editor hides some inherited settings; this creation flow exposes them, potentially to configure the task's initial conversation. That explanation remains an inference until the resulting chat is observed.
 
-**4. Other configuration surfaces found in the bundle**
+**4. Saved-task actions and additional configuration surfaces**
+
+![Saved task header, expanded child entries, and overflow action menu](assets/2026-10-08-codex-scheduled-tasks/04-task-actions.png)
+
+The fourth screenshot shows the saved task's **ellipsis overflow button**, which opens a rounded popup below the button. The header retains the task name and timing summary. A downward chevron appears beside the name, with three identically named child entries below and a **Show older** control. This is consistent with grouped run history, although the image alone does not establish the identity or status of each child entry.
+
+The visible menu contains these actions in order:
+
+| Action | Captured icon | Visible treatment |
+| --- | --- | --- |
+| Pause | Pause bars inside a circle | Neutral text and icon |
+| Run now | Circular arrow | Neutral text and icon |
+| Edit | Pencil | Neutral text and icon |
+| Share | Chain link | Neutral text and icon |
+| Delete | Trash can | Red text and icon |
+
+**Edit** is the visible entry point for changing an existing task's settings. The overflow menu places lifecycle actions, immediate execution, editing, and sharing together; it is not itself the settings form. The screenshot establishes that Share exists, but not what it shares, its access rules, or whether it creates a link or a copy. It also does not show a deletion confirmation or the result of Pause or Run now.
 
 The bundle also contains a task-detail editor and a chat-side editor. These should be treated as additional surfaces, not substituted for the captured modal.
 
@@ -79,7 +95,7 @@ The detail editor contains conditional controls for execution location, conversa
 
 The chat-side editor distinguishes a proposal from an existing saved task. A proposal has explicit **Create scheduled task** or **Apply changes** actions. In the inspected saved-task path, valid changed values trigger an update automatically, with **Retry save** after a failed save.
 
-Task rows expose actions on hover or keyboard focus. The action menu includes **Run now**, **Pause/Resume**, and **Delete**. Run now uses a play-triangle asset; pause uses a circled pause asset. History components contain previous runs, timestamps, result summaries, Open chat, read/unread, and archive actions.
+One inspected task-row component exposes actions on hover or keyboard focus, including **Run now**, **Pause/Resume**, and **Delete**. That source variant uses a play-triangle asset for Run now; the actual captured menu instead uses a circular arrow and also includes Edit and Share. The screenshot takes precedence when reproducing this visible surface. History components contain previous runs, timestamps, result summaries, Open chat, read/unread, and archive actions.
 
 Schedule components support ordinary recurrence controls and an advanced RRULE editor with validation. The available modes vary by surface and task type. The supplied screenshots establish only the closed Repeat and Time controls, not their complete menus.
 
@@ -182,6 +198,8 @@ Preserve the captured interface's simple first layer: instructions, recurrence, 
 
 Keep task definitions independent from runs. A task describes durable intent and timing; a run records one dispatch attempt and its result. Conversation destination and execution location should be independent dimensions: fresh versus reused chat does not inherently mean local versus cloud.
 
+Reflect that separation in navigation: place schedule controls on the parent task and group its run conversations underneath. The captured overflow menu provides a compact reference for task actions, with red reserved for Delete. Sharing needs an explicit scope and access model before adopting that action.
+
 Reuse Cat Code's real session start, resume, tool, and permission paths when implementation is authorized. A separate simplified agent runner would risk diverging from interactive behavior. The appropriate Cat Code ownership and protocol changes require a separate repository design pass.
 
 The scheduler should have durable dispatch claims, a defined crash-recovery policy, and an explicit overlap policy. Decide whether an overdue task runs once, skips, or replays missed occurrences. Decide whether a running task causes a later occurrence to queue, skip, or replace it. These should be intentional product semantics rather than accidental consequences of timer timing.
@@ -201,7 +219,8 @@ Prefer structured result fields or a dedicated completion tool over relying excl
 | Both conversation toggle states | Create isolated examples and inspect resulting task/chat relationships |
 | Suggestion-card behavior | Observe whether a click pre-fills the modal, opens a chat, or starts another flow |
 | Creation naming and confirmation | Observe a completed creation and its resulting sidebar entry |
-| Existing-task editing in this exact UI variant | Capture the saved-task editor and save behavior |
+| Existing-task editing in this exact UI variant | Follow the observed Edit action and capture the editor and save behavior |
+| Saved-task action outcomes | Observe Pause/Resume, Run now, Delete confirmation, and Share scope and access behavior |
 | Sleep, restart, offline, and launch-failure recovery | Controlled runs with correlated scheduler and session logs |
 | Notification appearance and delivery | Observe quiet, meaningful-change, blocked, and failed outcomes |
 | Standalone overlap behavior | Observe two due occurrences while the first remains active |
