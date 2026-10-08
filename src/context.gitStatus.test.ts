@@ -46,8 +46,18 @@ const command = args.includes('status') ? 'status' : args.includes('log') ? 'log
 if (process.env.PROBE_MODE === 'hang-' + command) {
   process.on('SIGTERM', () => {});
   setInterval(() => {}, 1000);
+} else if (process.env.PROBE_MODE === 'descendant-status' && command === 'status') {
+  const child = Bun.spawn([process.execPath, '--eval', "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000)"], {
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+  appendFileSync(process.env.PROBE_PIDS, child.pid + '\\n');
+  process.on('SIGTERM', () => {});
+  setInterval(() => {}, 1000);
 } else if (process.env.PROBE_MODE === 'fail-' + command) {
   process.exit(1);
+} else if (process.env.PROBE_MODE === 'empty-log' && command === 'log') {
+  process.exit(0);
 } else {
   const child = Bun.spawn([process.env.PROBE_GIT, ...args], { stdout: 'inherit', stderr: 'inherit' });
   appendFileSync(process.env.PROBE_PIDS, child.pid + '\\n');
@@ -143,15 +153,42 @@ test('successful empty status is still reported as clean', async () => {
   expect((await probe('success')).context).toContain('Status:\n(clean)')
 }, 6000)
 
-for (const command of ['status', 'log', 'user']) {
-  test(`nonzero ${command} omits unavailable optional Git context`, async () => {
-    expect((await probe('fail-' + command)).context).toBeNull()
-  }, 6000)
+test('unavailable optional Git identity preserves status metadata', async () => {
+  const context = (await probe('fail-user')).context
+  expect(context).toContain('Current branch: feature')
+  expect(context).toContain('Status:\n(clean)')
+  expect(context).not.toContain('Git user:')
+}, 6000)
 
-  test(`hung ${command} is killed before optional Git context falls back`, async () => {
+test('empty Git history preserves available status metadata', async () => {
+  const context = (await probe('empty-log')).context
+  expect(context).toContain('Current branch: feature')
+  expect(context).toContain('Status:\n(clean)')
+  expect(context).not.toContain('Recent commits:')
+}, 6000)
+
+test('unavailable Git status omits the status snapshot', async () => {
+  expect((await probe('fail-status')).context).toBeNull()
+}, 6000)
+
+test('hung Git status is killed before context falls back', async () => {
+  const result = await probe('hang-status')
+  expect(result.context).toBeNull()
+  expect(result.elapsed).toBeLessThan(2500)
+  expect(result.childAlive).toBe(false)
+}, 6000)
+
+test('Git status deadline kills a descendant holding captured output open', async () => {
+  const result = await probe('descendant-status')
+  expect(result.context).toBeNull()
+  expect(result.elapsed).toBeLessThan(2000)
+  expect(result.childAlive).toBe(false)
+}, 6000)
+
+for (const command of ['log', 'user']) {
+  test(`hung optional Git ${command} preserves available status metadata`, async () => {
     const result = await probe('hang-' + command)
-    expect(result.context).toBeNull()
+    expect(result.context).toContain('Status:\n(clean)')
     expect(result.elapsed).toBeLessThan(2500)
-    expect(result.childAlive).toBe(false)
   }, 6000)
 }

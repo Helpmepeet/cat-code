@@ -25,6 +25,7 @@ const MAX_STATUS_CHARS = 2000
 const GIT_CONTEXT_COMMAND_OPTIONS = {
   timeout: 1000,
   killSignal: 'SIGKILL' as const,
+  killProcessGroupOnTimeout: true,
   preserveOutputOnError: false,
 }
 
@@ -141,7 +142,7 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
       }),
     ])
 
-    if (status === null || log === null || userName === null) {
+    if (status === null) {
       logForDiagnosticsNoPII('info', 'git_status_unavailable', {
         duration_ms: Date.now() - startTime,
       })
@@ -167,11 +168,13 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
 
     return [
       `This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.`,
-      `Current branch: ${branch}`,
-      `Main branch (you will usually use this for PRs): ${mainBranch}`,
+      ...(branch ? [`Current branch: ${branch}`] : []),
+      ...(mainBranch
+        ? [`Main branch (you will usually use this for PRs): ${mainBranch}`]
+        : []),
       ...(userName ? [`Git user: ${userName}`] : []),
       `Status:\n${truncatedStatus || '(clean)'}`,
-      `Recent commits:\n${log}`,
+      ...(log ? [`Recent commits:\n${log}`] : []),
     ].join('\n\n')
   } catch (error) {
     logForDiagnosticsNoPII('error', 'git_status_failed', {
