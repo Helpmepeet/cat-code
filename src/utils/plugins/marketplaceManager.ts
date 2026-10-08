@@ -2716,12 +2716,14 @@ async function refreshGitMarketplaceSafely(
       ? fs.lstatSync(gitMetadataPath).isDirectory()
       : false
     assertMarketplaceSourceAllowed(source)
-    await cp(installLocation, stagingPath, {
-      recursive: true,
-      dereference: false,
-      filter: sourcePath =>
-        sourcePath !== gitMetadataPath || hasIndependentGitMetadata,
-    })
+    if (fs.existsSync(installLocation)) {
+      await cp(installLocation, stagingPath, {
+        recursive: true,
+        dereference: false,
+        filter: sourcePath =>
+          sourcePath !== gitMetadataPath || hasIndependentGitMetadata,
+      })
+    }
     try {
       await cacheMarketplaceFromGit(
         gitUrl,
@@ -2775,11 +2777,13 @@ async function refreshGitMarketplaceSafely(
       }
 
       assertMarketplaceSourceAllowed(source)
-      await fs.rename(
-        assertMarketplaceCachePath(installLocation),
-        assertMarketplaceCachePath(backupPath),
-      )
-      backedUp = true
+      if (fs.existsSync(installLocation)) {
+        await fs.rename(
+          assertMarketplaceCachePath(installLocation),
+          assertMarketplaceCachePath(backupPath),
+        )
+        backedUp = true
+      }
       assertMarketplaceSourceAllowed(source)
       await fs.rename(
         assertMarketplaceCachePath(stagingPath),

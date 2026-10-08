@@ -10,7 +10,7 @@
 
 import axios from 'axios'
 import { randomUUID } from 'crypto'
-import { existsSync, lstatSync, realpathSync } from 'fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync } from 'fs'
 import {
   chmod,
   mkdir,
@@ -90,6 +90,14 @@ function assertCacheChild(cachePath: string, cacheDir: string): string {
   return resolvedTarget
 }
 
+function ensureCanonicalCacheDir(cacheDir: string): void {
+  const resolvedCacheDir = resolve(cacheDir)
+  mkdirSync(resolvedCacheDir, { recursive: true })
+  if (lstatSync(resolvedCacheDir).isSymbolicLink()) {
+    throw new Error('Official marketplace cache directory has linked ancestry')
+  }
+}
+
 function assertStagingPath(candidate: string, stagingPath: string): string {
   const lexicalStaging = resolve(stagingPath)
   const canonicalStaging = realpathSync(stagingPath)
@@ -146,6 +154,7 @@ export async function fetchOfficialMarketplaceFromGcs(
   const cacheDir = resolve(marketplacesCacheDir)
   let resolvedLoc: string
   try {
+    ensureCanonicalCacheDir(cacheDir)
     resolvedLoc = assertCacheChild(installLocation, cacheDir)
   } catch (error) {
     logForDebugging(

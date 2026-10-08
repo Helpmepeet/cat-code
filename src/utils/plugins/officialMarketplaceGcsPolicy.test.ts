@@ -300,6 +300,28 @@ test('valid GCS update publishes a validated manifest and executable mode', asyn
   expect(readdirSync(marketplacesCacheDir)).toEqual(['claude-plugins-official'])
 })
 
+test('first GCS fetch creates a missing canonical cache root before validation', async () => {
+  rmSync(marketplacesCacheDir, { recursive: true, force: true })
+
+  const result = await fetchOfficialMarketplaceFromGcs(
+    installLocation,
+    marketplacesCacheDir,
+    () => assertMarketplaceSourceAllowed(OFFICIAL_MARKETPLACE_SOURCE),
+  )
+
+  expect(result).toBe('new-sha')
+  expect(requestUrls).toHaveLength(2)
+  expect(readFileSync(join(installLocation, '.gcs-sha'), 'utf-8')).toBe(
+    'new-sha',
+  )
+  expect(
+    readFileSync(
+      join(installLocation, '.claude-plugin', 'marketplace.json'),
+      'utf-8',
+    ),
+  ).toContain('claude-plugins-official')
+})
+
 test('invalid GCS manifest cannot replace an existing cache', async () => {
   responseArchive = Buffer.from(
     zipSync({

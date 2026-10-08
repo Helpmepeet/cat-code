@@ -77,6 +77,7 @@ const {
   assertMarketplaceCachePath,
   getMarketplacesCacheDir,
   refreshMarketplace,
+  saveKnownMarketplacesConfig,
 } = await import('./marketplaceManager.js')
 
 let tempDir: string
@@ -217,5 +218,44 @@ describe('marketplace cache path safety', () => {
 
     await refreshMarketplace(added.name)
     expect(pullCount).toBeGreaterThan(0)
+  })
+
+  test('refresh reclones a registered marketplace with a missing checkout', async () => {
+    const cachePath = join(getMarketplacesCacheDir(), 'safe-marketplace')
+    await saveKnownMarketplacesConfig({
+      'safe-marketplace': {
+        source: { source: 'git', url: 'https://git.example.test/plugins.git' },
+        installLocation: cachePath,
+        lastUpdated: '2026-01-01T00:00:00.000Z',
+      },
+    })
+
+    await refreshMarketplace('safe-marketplace')
+
+    expect(existsSync(join(cachePath, '.claude-plugin', 'marketplace.json'))).toBe(
+      true,
+    )
+    expect(cloneTargets).toHaveLength(1)
+    expect(cloneTargets[0]).not.toBe(cachePath)
+  })
+
+  test('refresh reclones a registered empty checkout', async () => {
+    const cachePath = join(getMarketplacesCacheDir(), 'safe-marketplace')
+    mkdirSync(cachePath)
+    await saveKnownMarketplacesConfig({
+      'safe-marketplace': {
+        source: { source: 'git', url: 'https://git.example.test/plugins.git' },
+        installLocation: cachePath,
+        lastUpdated: '2026-01-01T00:00:00.000Z',
+      },
+    })
+
+    await refreshMarketplace('safe-marketplace')
+
+    expect(existsSync(join(cachePath, '.claude-plugin', 'marketplace.json'))).toBe(
+      true,
+    )
+    expect(cloneTargets).toHaveLength(1)
+    expect(cloneTargets[0]).not.toBe(cachePath)
   })
 })
