@@ -1,6 +1,6 @@
 # Native Client Integrations Map
 
-Last refreshed: 2026-09-29 against the current source tree.
+Last refreshed: 2026-10-09 against the current source tree.
 
 ## Purpose
 
@@ -28,7 +28,7 @@ feature-gated, platform-gated, or package-backed.
 
 | Concern | Start here | Then inspect | Routing decision |
 |---|---|---|---|
-| Chrome startup enablement | [`../../src/utils/claudeInChrome/setup.ts`](../../src/utils/claudeInChrome/setup.ts) | [`../../src/main.tsx`](../../src/main.tsx), [`../../src/utils/claudeInChrome/setupPortable.ts`](../../src/utils/claudeInChrome/setupPortable.ts) | Owns `--chrome`/`--no-chrome`, env overrides, config default, extension detection, native host manifest install, dynamic MCP config, allowed tool names, and Chrome prompt injection. |
+| Chrome startup enablement | [`../../src/utils/claudeInChrome/setup.ts`](../../src/utils/claudeInChrome/setup.ts) | [`../../src/main.tsx`](../../src/main.tsx), [`../../src/utils/claudeInChrome/setupPortable.ts`](../../src/utils/claudeInChrome/setupPortable.ts) | Owns `--chrome`/`--no-chrome`, env overrides, config default, extension detection, native host manifest install, dynamic MCP config, allowed tool names, and Chrome prompt injection. Permission names are built from structured server/tool identity through `getToolNameForPermissionCheck()`. |
 | Chrome server identity and browser paths | [`../../src/utils/claudeInChrome/common.ts`](../../src/utils/claudeInChrome/common.ts) | [`../../src/utils/browser.ts`](../../src/utils/browser.ts) | Owns reserved server name, Chromium-family browser/profile paths, native messaging host directories, Windows registry keys, socket paths, and browser launch helpers. |
 | Chrome MCP package boundary | [`../../src/utils/claudeInChrome/package.ts`](../../src/utils/claudeInChrome/package.ts) | [`../../src/utils/claudeInChrome/mcpServer.ts`](../../src/utils/claudeInChrome/mcpServer.ts) | Package loading is centralized here. If Chrome tools disappear, start by confirming `@ant/claude-for-chrome-mcp` is present and exporting `BROWSER_TOOLS`. |
 | Chrome MCP runtime | [`../../src/utils/claudeInChrome/mcpServer.ts`](../../src/utils/claudeInChrome/mcpServer.ts) | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | Builds the Chrome context, chooses bridge vs native socket, persists paired device info, wires browser-task inference for ants, and runs the stdio MCP server. |

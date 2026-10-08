@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-10-06
+Last refreshed: 2026-10-09
 
 ## Purpose
 
@@ -209,6 +209,7 @@ LSP command, args, env, and workspace folder.
 |---|---|---|
 | Declared marketplace intent | `src/utils/plugins/marketplaceManager.ts` `getDeclaredMarketplaces` | settings files, `src/utils/plugins/addDirPluginSettings.ts` |
 | Materialized marketplace state | `src/utils/plugins/marketplaceManager.ts` | Config-home `plugins/known_marketplaces.json` (normally `~/.cat-code/`), marketplace cache paths |
+| Official marketplace GCS cache | `src/utils/plugins/officialMarketplaceGcs.ts` | `src/utils/plugins/marketplaceManager.ts` | Checks the canonical marketplace-cache ancestry before fetching or publishing the official bundle. |
 | Startup reconciliation | `src/utils/plugins/reconciler.ts` | `src/services/plugins/PluginInstallationManager.ts`, `src/utils/plugins/headlessPluginInstall.ts` |
 | Interactive `/plugin marketplace ...` | `src/commands/plugin/ManageMarketplaces.tsx`, `src/commands/plugin/AddMarketplace.tsx` | `src/utils/plugins/marketplaceManager.ts`, `src/utils/plugins/parseMarketplaceInput.ts` |
 | CLI marketplace subcommands | `src/main.tsx` plugin commander block | `src/cli/handlers/plugins.ts` |
@@ -230,7 +231,11 @@ failure. Git refresh updates a staged copy of the existing checkout. Cached
 reads also validate provenance and marketplace identity; configured admin seeds
 can supply official content only through matching authoritative seed records
 and canonical seed locations. Refresh and transport boundaries enforce current
-source policy, including official GCS requests after asynchronous waits.
+source policy, including official GCS requests after asynchronous waits. The
+GCS cache owner verifies canonical cache ancestry. Git refresh can rebuild a
+registered marketplace whose prior cache is missing. Background autoupdate
+preserves original key spelling, skips case-insensitive duplicate names, and
+rechecks source identity before updating plugins.
 
 Cache-path guards are not filesystem object capabilities. Some bulk, recovery,
 and GCS flows publish validated content before a separate metadata save; a failed
@@ -252,6 +257,7 @@ usually set `needsRefresh` or require restart depending on the path.
 | CLI `plugin validate` | `src/main.tsx`, `src/cli/handlers/plugins.ts` | Also validates plugin content files when validating a plugin manifest in `.claude-plugin`. |
 | Manifest validation | `src/utils/plugins/validatePlugin.ts` | Strict schemas for author feedback, path traversal checks, marketplace-only field warnings. |
 | Component validation | `src/utils/plugins/validatePlugin.ts` `validatePluginContents` | Checks skills, agents, commands, and hooks frontmatter/content warnings. |
+| Marketplace cache recovery and update identity | `src/utils/plugins/{marketplaceManager,officialMarketplaceGcs,pluginAutoupdate}.ts` | Run `bun test src/utils/plugins/marketplaceCacheSafety.test.ts src/utils/plugins/officialMarketplaceGcsPolicy.test.ts src/utils/plugins/pluginAutoupdate.test.ts` for cache paths, GCS policy, and duplicate-name/source checks. |
 
 Use `validateManifest()` for a file or directory. Directory validation prefers
 `.claude-plugin/marketplace.json` over `.claude-plugin/plugin.json`. CLI

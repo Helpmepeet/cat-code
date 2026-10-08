@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-10-04.
+Last refreshed: 2026-10-09.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -151,7 +151,7 @@ Start with `src/state/selectors.ts`.
 - `prepareBackgroundAgentHandoff()` persists detached-agent completion text in the `subagent-terminal` record before post-completion awaits; the optional `notification` field is owned by `src/types/logs.ts`. Preserve this ordering so interruption during review or cleanup cannot erase the parent's recoverable outcome.
 - Terminal tasks are evictable only after `notified=true`; retained local agents, panel grace periods, pending task notifications, and unresolved local-worker instruction records delay eviction. A delivery record stops blocking only after its explicit failure or uncertainty report has transferred to the appropriate model-facing queue.
 - Queue model-facing task notifications through `enqueuePendingNotification()` with `formatTaskNotificationText()` and `toTaskNotificationOrigin()`.
-- For SDK consumers, check direct `emitTaskTerminatedSdk()` / `enqueueSdkEvent()` paths; not every UI/model notification creates an SDK event automatically.
+- For SDK consumers, check direct `emitTaskTerminatedSdk()` / `enqueueSdkEvent()` paths and `src/utils/sdkEventQueue.ts`; queued task-notification consumption in `src/query.ts` can also emit a terminal event. Producers share a (taskId, taskRunId) claim so direct and XML-derived bookends are deduplicated, and a new task_started clears prior terminal claims for that task ID. Not every UI/model notification creates an SDK event automatically.
 
 ## Kill And Stop Behavior
 

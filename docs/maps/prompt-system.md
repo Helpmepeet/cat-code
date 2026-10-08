@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-10-08
+Last refreshed: 2026-10-09
 
 ## Purpose
 
@@ -33,7 +33,7 @@ Read in this order for most prompt or instruction work:
 | Change prompt-section cache correctness | `src/constants/systemPromptSections.ts` | `src/constants/prompts.ts`, `src/utils/queryContext.ts`, `src/screens/REPL.tsx` | Cache entries are keyed by each section's captured inputs. Cache-breaking sections must not populate that cache; language intentionally remains session-stable until a cache-clearing transition. |
 | Change runtime prompt precedence | `src/utils/systemPrompt.ts` | `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/query.ts` | Effective branch order is override, coordinator, main-thread agent, custom, default. `appendSystemPrompt` appends unless override replaces everything. |
 | Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts`, `src/utils/instructionFiles.ts` | `src/constants/corePolicy.ts`, `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. Project AGENTS discovery follows the Project instructions mode. Its source-tier wrapper grants workflow/repository authority, never permission authority. |
-| Change generated context injection | `src/context.ts` | `src/utils/claudemd.ts`, `src/utils/queryContext.ts`, `src/utils/execFileNoThrow.ts`, `src/QueryEngine.ts`, `src/services/api/instructionAssembly.ts` | User context and system context are separate channels until provider assembly. Optional `gitStatus` runs bounded read-only Git commands with fsmonitor disabled for status; any failed or timed-out command omits the whole optional snapshot. |
+| Change generated context injection | `src/context.ts` | `src/utils/claudemd.ts`, `src/utils/queryContext.ts`, `src/utils/execFileNoThrow.ts`, `src/QueryEngine.ts`, `src/services/api/instructionAssembly.ts` | User context and system context are separate channels until provider assembly. Optional Git context requires a successful status command; branch, main branch, username, and recent-log fields are omitted independently when unavailable. Commands are bounded, status disables fsmonitor, and the timeout can kill an isolated process group so descendants cannot hold captured pipes open. |
 | Change SDK or custom-system-prompt behavior | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/utils/systemPrompt.ts`, `src/query.ts` | Custom prompts skip default prompt construction and skip `getSystemContext()` in `fetchSystemPromptParts()`. |
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
 | Change subagent prompt behavior | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/loadAgentsDir.ts` | `runAgent.ts` builds the agent prompt, adds env details, and may trim inherited context. |
@@ -149,7 +149,7 @@ Use focused checks first, then the documented build:
 | Instruction and recalled-memory framing | `bun test src/utils/claudemd.test.ts` |
 | Save-side memory evaluator wiring | `bun test scripts/memory-behavior-eval/save-side.test.ts` |
 | Provider instruction placement and prompt regressions | `bun test src/utils/providerPromptRegressions.test.ts` |
-| Optional Git context timeout and fallback | `bun test src/context.gitStatus.test.ts` |
+| Optional Git context timeout and fallback | `bun test src/context.gitStatus.test.ts src/utils/execFileNoThrow.test.ts` |
 | Tracked-work reminder attachments | `bun test src/utils/attachments.test.ts` |
 | Main query behavior | `bun test src/query.test.ts` |
 | Agent tool prompt/resume behavior | `bun test src/tools/AgentTool/prompt.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/AgentTool.test.ts` |
