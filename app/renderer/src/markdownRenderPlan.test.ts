@@ -324,6 +324,19 @@ describe('semantic leaves keep their document context', () => {
     for (const source of sources) expect(streamedPlansMatchFullParse([...source])).toBe(true)
   })
 
+  test('trailing-block appends preserve LF, CRLF, CR and standalone-parser edge semantics', () => {
+    const sources = [
+      ['Intro.\n\nFirst\r\rSecond', ' more'],
+      ['Intro.\r\n\r\nFirst\r\n\r\nSecond', ' more'],
+      ['Intro.\n\r\nFirst\r\r\nSecond', ' more'],
+      ['Intro.\n\n\uFEFF', '# Heading'],
+      ['Intro.\n\nSee [guide][guide].\n\n[guide]: /manual', '\n\nAfter.'],
+      ['Intro.\n\n```ts\nconst value = 1\n```', '\n\nAfter.'],
+      ['Intro.\n\n```ts\nconst value = 1', '\n```'],
+    ]
+    for (const pieces of sources) expect(streamedPlansMatchFullParse(pieces)).toBe(true)
+  })
+
   test('a fence marker appended mid-line stays paragraph text', () => {
     expect(streamedPlansMatchFullParse(['Intro.\n\nText', '```ts\nconst answer = 42'])).toBe(true)
   })

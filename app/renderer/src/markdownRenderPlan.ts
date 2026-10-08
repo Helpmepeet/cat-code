@@ -1424,6 +1424,9 @@ function canAbsorbFollowingBlock(node: MdastRoot['children'][number], source: st
  * block cannot take it in, as an index into `blocks`; null when there is none.
  */
 function latestSettledBoundary(blocks: MdastRoot['children'], source: string): { index: number; lineStart: number } | null {
+  // This boundary search splits lines only at LF, while remark-parse also
+  // advances block positions across lone CR characters.
+  if (/(^|[^\r])\r(?!\n)/.test(source)) return null
   for (let index = blocks.length - 1; index > 0; index -= 1) {
     const start = blocks[index]!.position?.start.offset
     if (start === undefined) return null
@@ -1463,6 +1466,9 @@ function reparseTrailingBlocks(
   recognizeCallouts: boolean,
 ): { tree: Root; trailingBlock: TrailingBlock } | null {
   const slice = markdownSource.slice(block.lineStart)
+  // A leading BOM is stripped at the start of a standalone parse, but is
+  // ordinary content at this position in the complete document.
+  if (slice.startsWith('\uFEFF')) return null
   const mdast = processor.parse(slice)
   const blocks = mdast.children.length
   if (blocks === 0) return null
