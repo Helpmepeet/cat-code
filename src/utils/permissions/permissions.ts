@@ -320,10 +320,10 @@ function toolMatchesRule(
     }
 
     // Legacy allows are honored only when the old delimiter representation is
-    // one-to-one. Legacy denies also check the live server prefix, since a
-    // server name containing "__" may have been split as a tool name.
+    // one-to-one. Legacy asks and denies conservatively check the live server
+    // prefix, since a server name containing "__" may have split as a tool name.
     const ruleInfo = mcpInfoFromString(rule.ruleValue.toolName)
-    if (rule.ruleBehavior !== 'deny') {
+    if (rule.ruleBehavior === 'allow') {
       if (!ruleInfo) return false
       if (
         !isUnambiguousLegacyMcpIdentity(ruleInfo.serverName) ||

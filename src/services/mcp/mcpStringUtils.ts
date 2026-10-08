@@ -138,6 +138,13 @@ export function getToolNameForPermissionCheck(tool: {
     : tool.name
 }
 
+export function getToolPermissionRuleValue(tool: {
+  name: string
+  mcpInfo?: { serverName: string; toolName: string }
+}): { toolName: string } {
+  return { toolName: getToolNameForPermissionCheck(tool) }
+}
+
 /*
  * Extracts the display name from an MCP tool/command name
  * @param fullName The full MCP tool/command name (e.g., "mcp__server_name__tool_name")

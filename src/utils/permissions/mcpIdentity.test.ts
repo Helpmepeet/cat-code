@@ -1,15 +1,18 @@
 import { describe, expect, test } from 'bun:test'
-import type { ToolPermissionContext } from '../../Tool.js'
+import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
   buildMcpServerPermissionRuleName,
   buildMcpToolName,
   buildMcpPermissionRuleName,
   getToolNameForPermissionCheck,
+  getToolPermissionRuleValue,
 } from '../../services/mcp/mcpStringUtils.js'
 import type { Tool } from '../../Tool.js'
 import { assembleToolPool } from '../../tools.js'
 import {
+  getAskRuleForTool,
   getDenyRuleForTool,
+  hasPermissionsToUseTool,
   toolAlwaysAllowedRule,
 } from './permissions.js'
 import { applyPermissionUpdate } from './PermissionUpdate.js'
@@ -121,6 +124,26 @@ describe('MCP permission identity matching', () => {
     expect(getDenyRuleForTool(context([], [rule]), second)).not.toBeNull()
   })
 
+  test('matches legacy ask rules for underscore-bearing MCP tool names', () => {
+    const tool = mcpTool('github', 'delete_issue')
+    expect(
+      getAskRuleForTool(
+        {
+          ...context(),
+          alwaysAskRules: { session: ['mcp__github__delete_issue'] },
+        },
+        tool,
+      ),
+    ).not.toBeNull()
+
+    const ambiguousAsk = {
+      ...context(),
+      alwaysAskRules: { session: ['mcp__a__b__c'] },
+    }
+    expect(getAskRuleForTool(ambiguousAsk, mcpTool('a__b', 'c'))).not.toBeNull()
+    expect(getAskRuleForTool(ambiguousAsk, mcpTool('a', 'b__c'))).not.toBeNull()
+  })
+
   test('fails closed on lossy legacy allow names and keeps lossy denies', () => {
     const legacyRule = 'mcp__a_b__tool'
     expect(
@@ -158,6 +181,73 @@ describe('MCP permission identity matching', () => {
     ])
     expect(toolAlwaysAllowedRule(persistedContext, mcpTool('a__b', 'c'))).not.toBeNull()
     expect(validatePermissionRule(identityRule('a__b', 'c')).valid).toBe(true)
+  })
+
+  test('persists the canonical MCP identity used by approval producers', () => {
+    const tool = {
+      name: 'mcp__github__delete_issue',
+      mcpInfo: { serverName: 'github', toolName: 'delete_issue' },
+    }
+    const persistedContext = applyPermissionUpdate(context(), {
+      type: 'addRules',
+      destination: 'session',
+      behavior: 'allow',
+      rules: [getToolPermissionRuleValue(tool)],
+    })
+
+    expect(persistedContext.alwaysAllowRules.session).toEqual([
+      identityRule('github', 'delete_issue'),
+    ])
+    expect(
+      toolAlwaysAllowedRule(persistedContext, mcpTool('github', 'delete_issue')),
+    ).not.toBeNull()
+    expect(
+      toolAlwaysAllowedRule(
+        {
+          ...persistedContext,
+          alwaysAllowRules: { session: ['mcp__github__delete_issue'] },
+        },
+        mcpTool('github', 'delete_issue'),
+      ),
+    ).toBeNull()
+  })
+
+  test('legacy ask rules outrank broad allows in default and bypass modes', async () => {
+    const tool = {
+      name: 'mcp__github__delete_issue',
+      mcpInfo: { serverName: 'github', toolName: 'delete_issue' },
+      inputSchema: { parse: (input: unknown) => input },
+      checkPermissions: async () => ({
+        behavior: 'passthrough' as const,
+        message: '',
+      }),
+    } as unknown as Tool
+    const useContext = (permissionContext: ToolPermissionContext) =>
+      ({
+        abortController: new AbortController(),
+        getAppState: () => ({ toolPermissionContext: permissionContext }),
+        setAppState: () => {},
+        options: { tools: [] },
+        messages: [],
+      }) as unknown as ToolUseContext
+    const decide = (permissionContext: ToolPermissionContext) =>
+      hasPermissionsToUseTool(
+        tool,
+        {},
+        useContext(permissionContext),
+        {} as never,
+        'test-tool-use-id',
+      )
+    const policy = {
+      ...context(['mcp__github']),
+      alwaysAskRules: { session: ['mcp__github__delete_issue'] },
+    }
+
+    expect(toolAlwaysAllowedRule(policy, tool)).not.toBeNull()
+    expect((await decide(policy)).behavior).toBe('ask')
+    expect((await decide({ ...policy, mode: 'bypassPermissions' })).behavior).toBe(
+      'ask',
+    )
   })
 
   test('persists encoded punctuation and unicode without rule syntax ambiguity', () => {
@@ -282,5 +372,40 @@ describe('MCP permission identity matching', () => {
     expect(pool.find(tool => tool.mcpInfo?.serverName === 'server_a')?.call).toBe(
       second.call,
     )
+  })
+
+  test('does not let generated aliases steal another MCP tool original name', () => {
+    const collidingMcpTools = [
+      {
+        name: 'mcp__a__b__c__d',
+        mcpInfo: { serverName: 'a__b__c', toolName: 'd' },
+      },
+      {
+        name: 'mcp__a__b__c__d',
+        mcpInfo: { serverName: 'a__b', toolName: 'c__d' },
+      },
+      {
+        name: 'mcp__a__b__c__d__identity_2',
+        mcpInfo: { serverName: 'a__b', toolName: 'c__d__identity_2' },
+      },
+      {
+        name: 'mcp__a__b__c__d__identity_2',
+        mcpInfo: { serverName: 'a', toolName: 'b__c__d__identity_2' },
+      },
+    ] as unknown as Tool[]
+
+    const pool = assembleToolPool(context(), collidingMcpTools, [])
+
+    expect(pool).toHaveLength(4)
+    expect(new Set(pool.map(tool => tool.name)).size).toBe(4)
+    expect(pool.map(tool => tool.mcpInfo?.serverName).sort()).toEqual([
+      'a',
+      'a__b',
+      'a__b',
+      'a__b__c',
+    ])
+    expect(
+      pool.find(tool => tool.mcpInfo?.toolName === 'c__d__identity_2')?.name,
+    ).toBe('mcp__a__b__c__d__identity_2')
   })
 })

@@ -30,6 +30,7 @@ import {
 import { getChromeBrowserTools } from './package.js'
 import { getChromeSystemPrompt } from './prompt.js'
 import { isChromeExtensionInstalledPortable } from './setupPortable.js'
+import { getToolNameForPermissionCheck } from '../../services/mcp/mcpStringUtils.js'
 
 const CHROME_EXTENSION_RECONNECT_URL = 'https://clau.de/chrome/reconnect'
 
@@ -94,8 +95,11 @@ export function setupClaudeInChrome(): {
   systemPrompt: string
 } {
   const isNativeBuild = isInBundledMode()
-  const allowedTools = getChromeBrowserTools().map(
-    tool => `mcp__claude-in-chrome__${tool.name}`,
+  const allowedTools = getChromeBrowserTools().map(tool =>
+    getToolNameForPermissionCheck({
+      name: `mcp__claude-in-chrome__${tool.name}`,
+      mcpInfo: { serverName: 'claude-in-chrome', toolName: tool.name },
+    }),
   )
 
   const env: Record<string, string> = {}

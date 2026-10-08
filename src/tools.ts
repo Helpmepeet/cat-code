@@ -417,9 +417,7 @@ export function assembleToolPool(
   }
   const occupiedNames = new Set([
     ...builtInTools.map(tool => tool.name),
-    ...allowedMcpTools
-      .filter(tool => mcpNameCounts.get(tool.name) === 1)
-      .map(tool => tool.name),
+    ...allowedMcpTools.map(tool => tool.name),
   ])
   const builtInNames = new Set(builtInTools.map(tool => tool.name))
   const seenLegacyNames = new Map<string, number>()
