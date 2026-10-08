@@ -629,7 +629,7 @@ export function App() {
   const newChatInFlightRef = useRef(false)
   const newManagedChatInFlightRef = useRef(false)
   // The window's face registries, one per SESSION, mounted at the shell so every
-  // surface that draws a worker shares one. The transcript, the docked roster,
+  // surface that draws a worker shares one. The transcript, the subagent dock,
   // the Workers list and a relayed permission card can all show the same worker
   // at the same moment; separate registries would dedupe separately and put that
   // worker on screen twice wearing two different faces.
@@ -1637,12 +1637,6 @@ export function App() {
     }
     return entries
   }, [tabs, tabNavigation.tabs])
-  // The active session's worker snapshot, read once for the docked roster and
-  // footer strip so both read one truth.
-  const activeLiveWorkersSnapshot = selectLiveWorkersSnapshot(
-    workersState,
-    activeSessionId,
-  )
   const paneSessionIds = useMemo(
     () => tabs.map(tab => tab.descriptor.appSessionId),
     [tabs],
@@ -5076,9 +5070,7 @@ export function App() {
            * lease roster (L1). Both are read seams; no verb rides them. */
           workers={selectLiveWorkersSnapshot(workersState, activeSessionId)}
           leases={selectLeaseSnapshot(leases, activeSessionId)}
-          /* CC-84 — the worker the docked roster was clicked on, so the dialog
-           * opens on that worker's detail instead of the generic list. Null for
-           * every other entry point (⌘K, the footer pill). */
+          /* A dock fallback may name a worker for the dialog detail view. */
           focusAgentId={tasksFocusAgentId}
           initialTab={tasksInitialTab}
         />

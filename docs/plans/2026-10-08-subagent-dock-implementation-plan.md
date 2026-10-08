@@ -1,6 +1,9 @@
 # Subagent dock: implementation plan
 
-Status: approved design, not started. Visual and motion spec:
+Status: implemented and verified headlessly on 2026-10-09. GUI acceptance
+remains pending operator authorization; see the
+[implementation report](2026-10-09-subagent-dock-implementation-report.md).
+Visual and motion spec:
 [`docs/design-html/2026-10-08-subagent-dock-top-right.html`](../design-html/2026-10-08-subagent-dock-top-right.html)
 (PROPOSED view, Events, Play, and the states strip). The mockup is the
 reference for layout, copy, and timing; this plan is the reference for data,
@@ -51,8 +54,8 @@ to be needed, stop and raise it (`app/shared/protocol.ts` rules in CLAUDE.md §6
 | Fact | Source | Join key | Notes |
 |---|---|---|---|
 | Live lifecycle, name, type, task, blocked reason, verdict, result summary | `workers.snapshot` (`LiveWorkerItem`, already a `SessionPane` prop) | `agentId` | Replaced wholesale per frame; cleared on lifecycle frames (`reduceWorkersState`). Local agents only. |
-| Resumed | `tasksSnapshot` local-agent items, `resumedAt` (`tasksDomain.ts`) | `agentId` (verify the task id equals the agent id for local agents before relying on it) | `deriveTaskAgentState` returns `background` before `resumed`, so do not reuse it for this; read `resumedAt` directly. |
-| Model, settled cost, recorded account, terminal outcome of foreground runs | Transcript `Agent` / `Task` / `ResumeAgent` tool rows (`result.agentId`, `agentModel`, `agentAccount`, `agentUsage`) | `result.agentId` (ResumeAgent: `input.agentId`) | The parent transcript survives restore; only nested subagent history is bounded. |
+| Resumed | `tasksSnapshot` local-agent items, `resumedAt` (`tasksDomain.ts`) | `agentId` (local-agent registration passes it to `createTaskStateBase`) | `deriveTaskAgentState` returns `background` before `resumed`, so do not reuse it for this; read `resumedAt` directly. |
+| Model, settled cost, recorded account, terminal outcome of foreground runs | Transcript `Agent` / `Task` / `ResumeAgent` tool rows (`result.agentId`, `agentModel`, `agentAccount`, `agentUsage`) | `result.agentId` (ResumeAgent: `input.agentId`; foreground launch: `tasksSnapshot.subagents` tool-use join) | The parent transcript survives restore; only nested subagent history is bounded. |
 | Live account, held time, failover | `LeaseSnapshotContext` (`leaseState.ts`), `selectLeaseForOwner` | `ownerId === agentId` | Exists only while a run holds a Codex lease. Absent for Anthropic-path workers. |
 | Foreground activity | Transcript row children (`agentActivityOf` logic) | same row | Background runs emit no nested progress; the projector ignores `task_progress`. |
 
@@ -83,15 +86,17 @@ Clear records, per session, the set of `(agentId, terminal run identity)` that
 were finished at the time of clearing. Use the run's tool-use id or end time as
 the run identity so a later resume and finish of the same agent shows again.
 Persist it with the `promptDraftPersistence.ts` pattern (versioned JSON under a
-`catcode.`-prefixed key, bounded). Before relying on the key, verify which
-session identity survives app restart for a restored session.
+`catcode.`-prefixed key, bounded). Use `engineSessionId` for durable history;
+migrate the provisional `appSessionId` key when the engine identity arrives.
 
 ### Finished row click
 
 `TasksDialog` resolves workers only against the live snapshot, so an evicted
-finished worker has nothing to open there. Open decision for the operator:
-recommended behavior is to scroll the transcript to that agent's card and
-expand it; the alternative is a transcript-derived detail view in the dialog.
+finished worker has nothing to open there. Implemented behavior follows the
+recommendation: scroll the transcript to that agent's card and expand it,
+including a card outside the currently mounted transcript window. If earlier
+history is truncated, request it; rows without a tool-use target use the
+Workers dialog fallback.
 
 ## Hover strip contents
 
@@ -217,8 +222,14 @@ Each step is a coherent, verified commit.
 - Live checks the headless suite cannot prove: morph and strip geometry in a
   real pane, split view, smallest window, light appearance, reduced motion.
 
-## Open items
+## Resolved implementation items
 
-- Finished row click for evicted workers (recommendation above).
-- Confirm the local-agent task id equals `agentId` for the `resumedAt` join.
-- Confirm which session identity survives restart for Clear persistence.
+- Finished row click scrolls to and expands the transcript agent card.
+- Both local-agent registration paths call `createTaskStateBase(agentId, ...)`,
+  so the task `id` is the correct `resumedAt` join.
+- Host restore resumes the recorded `engineSessionId`; it is the durable
+  persistence key even when reopening history creates another app session.
+- Shell-level observation retains terminal background evidence while the pane
+  is unmounted. Storage retains 32 sessions, 128 finished agents per session,
+  and 512 Clear markers per session within a 2 MB serialized bound.
+- Live GUI acceptance remains pending; exact operator steps are in the report.

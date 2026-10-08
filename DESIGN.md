@@ -129,6 +129,19 @@ large pill treatments within one control group.
   subsequent content in `--source-project` for 1.8 seconds while the rules cool
   to the seam colour. Saved or restored seams stay at rest, as does reduced motion.
   The moving composer keeps its normal placeholder, dimmed.
+- **Subagents:** One dock sits at the top-right of each session pane. A 288px
+  panel uses the gutter beside the transcript when it fits; narrower panes show
+  a chip of cat faces that opens a floating panel or the Workers dialog when
+  the pane cannot contain the panel. Collapse is an app-wide preference.
+  Waiting workers lead the active list; terminal workers settle into a Finished
+  group, closed on load. Finished history and Clear survive reload and restart
+  for the session. Each agent occupies one row across resume. Resumed runs use
+  a background ring, the word “resumed”, and a brief `--source-project` arrival
+  wash. Hover or keyboard focus reveals only additional details in a two-line
+  strip attached to the row, with a clamped popover when left space is tight.
+  Foreground workers alone show live activity. Background tasks remain available
+  through ⌘K “Background tasks”. See `SubagentDock.tsx`,
+  `subagentDockState.ts`, and `subagentDockPersistence.ts`.
 - **Composer:** Keep the input visually connected to the transcript. Put model,
   reasoning, permission, and account controls in a compact action row. Reuse
   the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)
