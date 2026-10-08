@@ -97,12 +97,15 @@ describe('Windows native filesystem ABI layouts', () => {
 
   test('packs handle-relative rename and no-clobber link names', () => {
     const rename = buildWindowsRenameInformation(0x1234n, 'nested\\new.txt', true)
-    expect(rename.readUInt8(0)).toBe(1)
+    expect(rename.readUInt32LE(0)).toBe(0x3)
     expect(rename.readBigUInt64LE(8)).toBe(0x1234n)
     expect(rename.readUInt32LE(16)).toBe(Buffer.byteLength('nested\\new.txt', 'utf16le'))
     expect(rename.toString('utf16le', 20, 20 + rename.readUInt32LE(16))).toBe(
       'nested\\new.txt',
     )
+
+    const noReplace = buildWindowsRenameInformation(0x1234n, 'created.txt', false)
+    expect(noReplace.readUInt32LE(0)).toBe(0)
 
     const link = buildWindowsLinkInformation(0x5678n, 'created.txt')
     expect(link.readUInt8(0)).toBe(0)
@@ -124,6 +127,8 @@ test('mocked native transport keeps the borrowed root handle open across root-le
   let fileId = 1
   let failRename = false
   let failDelete = false
+  let mutateRetainedContentsOnRename = false
+  let ordinaryReplaceBlocked = false
   const stringAt = (pointer: bigint, bytes: number): string =>
     Buffer.from(ffi.toArrayBuffer(Number(pointer), 0, bytes))
       .toString('utf16le')
@@ -284,16 +289,45 @@ test('mocked native transport keeps the borrowed root handle open across root-le
         infoClass: number,
       ) => {
         if (infoClass === 13 && failDelete) return 0xc000_0022 | 0
-        if (infoClass === 10 && failRename) return 0xc000_0022 | 0
-        if (infoClass !== 10) return 0
+        if (infoClass === 65 && failRename) return 0xc000_0022 | 0
+        if (infoClass !== 10 && infoClass !== 65) return 0
         const info = Buffer.from(ffi.toArrayBuffer(infoPointer, 0, length))
+        const flags = info.readUInt32LE(0)
         const root = Number(info.readBigUInt64LE(8))
         const nameLength = info.readUInt32LE(16)
         const name = info.toString('utf16le', 20, 20 + nameLength)
         const oldPath = handlePaths.get(handle)!
         const newPath = `${handlePaths.get(root)}\\${name}`
+        const destinationExists = files.has(newPath)
+        const retainedDestinationHandles = [...handlePaths.entries()].filter(
+          ([openHandle, path]) => openHandle !== handle && path === newPath,
+        )
+        if (infoClass === 10 && destinationExists && retainedDestinationHandles.length) {
+          ordinaryReplaceBlocked = true
+          return 0xc000_0056 | 0
+        }
+        if (
+          destinationExists &&
+          ((flags & 0x1) === 0 ||
+            (infoClass !== 65 && (flags & 0x2) !== 0))
+        ) {
+          return 0xc000_0035 | 0
+        }
         const content = files.get(oldPath) ?? Buffer.alloc(0)
         files.delete(oldPath)
+        if (destinationExists && retainedDestinationHandles.length) {
+          const retainedPath = `${newPath}.retained-${handle}`
+          files.set(retainedPath, files.get(newPath)!)
+          if (mutateRetainedContentsOnRename) {
+            files.set(retainedPath, Buffer.from('externally updated target'))
+            mutateRetainedContentsOnRename = false
+          }
+          for (const [openHandle] of retainedDestinationHandles) {
+            handlePaths.set(openHandle, retainedPath)
+          }
+        } else {
+          files.delete(newPath)
+        }
         files.set(newPath, content)
         handlePaths.set(handle, newPath)
         return 0
@@ -324,8 +358,65 @@ test('mocked native transport keeps the borrowed root handle open across root-le
         Buffer.from('second root file'),
       ),
     ).not.toBeNull()
+    const retainedTarget = await contained.openFileCapability('first.txt')
+    const retainedIdentity = retainedTarget.identity
+    const retainedDigest = await retainedTarget.digest()
+    const legacySource = `${rootPath}\\.legacy-replacement.tmp`
+    const legacyName = Buffer.from('first.txt', 'utf16le')
+    const legacyInfo = Buffer.alloc(20 + legacyName.length)
+    legacyInfo.writeUInt8(1, 0)
+    legacyInfo.writeBigUInt64LE(1n, 8)
+    legacyInfo.writeUInt32LE(legacyName.length, 16)
+    legacyName.copy(legacyInfo, 20)
+    files.set(legacySource, Buffer.from('legacy replacement'))
+    handlePaths.set(99, legacySource)
+    const legacyStatus = Buffer.alloc(16)
+    expect(
+      api.symbols.ntSetInformationFile(
+        99,
+        api.ptr(legacyStatus),
+        api.ptr(legacyInfo),
+        legacyInfo.length,
+        10,
+      ),
+    ).toBeLessThan(0)
+    expect(ordinaryReplaceBlocked).toBe(true)
+    files.delete(legacySource)
+    handlePaths.delete(99)
+    const replacement = await contained.publishFileWithIdentity(
+      'first.txt',
+      Buffer.from('replacement with retained handle'),
+      retainedIdentity,
+      undefined,
+      retainedDigest,
+    )
+    expect(replacement).not.toBeNull()
+    expect((await retainedTarget.readFile()).toString()).toBe('first root file')
+    expect(
+      (await contained.readFile('first.txt')).content.toString(),
+    ).toBe('replacement with retained handle')
+    await retainedTarget.close()
+    expect(ordinaryReplaceBlocked).toBe(true)
+    const conflictTarget = await contained.openFileCapability('first.txt')
+    try {
+      mutateRetainedContentsOnRename = true
+      expect(
+        await contained.publishFileWithIdentity(
+          'first.txt',
+          Buffer.from('must roll back'),
+          conflictTarget.identity,
+          undefined,
+          await conflictTarget.digest(),
+        ),
+      ).toBeNull()
+      expect(
+        (await contained.readFile('first.txt')).content.toString(),
+      ).toBe('externally updated target')
+    } finally {
+      await conflictTarget.close()
+    }
     expect((await contained.readFile('first.txt')).content.toString()).toBe(
-      'first root file',
+      'externally updated target',
     )
     const capability = await contained.openFileCapability('first.txt')
     expect(capability.path).toBe(`${rootPath}\\first.txt`)
@@ -430,6 +521,27 @@ windowsOnly('Windows native capabilities survive target and parent reparse swaps
 
     const rootCapabilities = await openWindowsContainedFs(allowed)
     try {
+      await writeFile(join(allowed, 'retained.txt'), 'old target contents')
+      const retained = await rootCapabilities.openFileCapability('retained.txt')
+      try {
+        const identity = retained.identity
+        const digest = await retained.digest()
+        expect(
+          await rootCapabilities.publishFileWithIdentity(
+            'retained.txt',
+            Buffer.from('new published contents'),
+            identity,
+            undefined,
+            digest,
+          ),
+        ).not.toBeNull()
+        expect((await retained.readFile()).toString()).toBe('old target contents')
+        expect(
+          (await readFile(join(allowed, 'retained.txt'), 'utf8')),
+        ).toBe('new published contents')
+      } finally {
+        await retained.close()
+      }
       expect(
         await rootCapabilities.publishFileWithIdentity(
           'root-created.txt',

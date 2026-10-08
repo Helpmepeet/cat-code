@@ -218,7 +218,9 @@ const FILE_NON_DIRECTORY_FILE = 0x40
 const FILE_SYNCHRONOUS_IO_NONALERT = 0x20
 const FILE_OPEN_REPARSE_POINT = 0x0020_0000
 const OBJ_CASE_INSENSITIVE = 0x40
-const IO_FILE_INFORMATION_CLASS = 10
+const IO_FILE_RENAME_INFORMATION_EX_CLASS = 65
+const FILE_RENAME_REPLACE_IF_EXISTS = 0x1
+const FILE_RENAME_POSIX_SEMANTICS = 0x2
 const IO_FILE_DISPOSITION_INFORMATION_CLASS = 13
 const IO_FILE_NAMES_INFORMATION_CLASS = 12
 const STATUS_NO_MORE_FILES = 0x8000_0006
@@ -270,7 +272,11 @@ export function buildWindowsRenameInformation(
 ): Buffer {
   const nameBytes = Buffer.from(name, 'utf16le')
   const value = Buffer.alloc(20 + nameBytes.length)
-  value.writeUInt8(replaceExisting ? 1 : 0, 0)
+  value.writeUInt32LE(
+    (replaceExisting ? FILE_RENAME_REPLACE_IF_EXISTS : 0) |
+      (replaceExisting ? FILE_RENAME_POSIX_SEMANTICS : 0),
+    0,
+  )
   value.writeBigUInt64LE(rootHandle, 8)
   value.writeUInt32LE(nameBytes.length, 16)
   nameBytes.copy(value, 20)
@@ -1386,7 +1392,7 @@ function renameWindowsHandle(
     api.ptr(statusBlock),
     api.ptr(info),
     info.length,
-    IO_FILE_INFORMATION_CLASS,
+    IO_FILE_RENAME_INFORMATION_EX_CLASS,
   )
   if (status < 0) throw windowsStatusError(status)
 }
