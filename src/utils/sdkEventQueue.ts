@@ -73,17 +73,46 @@ export type SdkEvent =
 
 const MAX_QUEUE_SIZE = 1000
 const queue: SdkEvent[] = []
+const recentTerminalTaskRuns = new Set<string>()
 
-export function enqueueSdkEvent(event: SdkEvent): void {
+export function enqueueSdkEvent(event: SdkEvent, taskRunId?: string): void {
   // SDK events are only consumed (drained) in headless/streaming mode.
   // In TUI mode they would accumulate up to the cap and never be read.
   if (!getIsNonInteractiveSession()) {
+    return
+  }
+  if (event.type === 'system' && event.subtype === 'task_started') {
+    const taskKeyPrefix = `${JSON.stringify(event.task_id)}:`
+    for (const key of recentTerminalTaskRuns) {
+      if (key.startsWith(taskKeyPrefix)) recentTerminalTaskRuns.delete(key)
+    }
+  } else if (
+    event.type === 'system' &&
+    event.subtype === 'task_notification' &&
+    !claimTaskTerminatedSdkEvent(event.task_id, taskRunId)
+  ) {
     return
   }
   if (queue.length >= MAX_QUEUE_SIZE) {
     queue.shift()
   }
   queue.push(event)
+}
+
+/** Claim the single terminal SDK bookend for one task run across queue consumers. */
+export function claimTaskTerminatedSdkEvent(
+  taskId: string,
+  taskRunId?: string,
+): boolean {
+  if (!taskId) return true
+  const key = `${JSON.stringify(taskId)}:${JSON.stringify(taskRunId ?? null)}`
+  if (recentTerminalTaskRuns.has(key)) return false
+  recentTerminalTaskRuns.add(key)
+  if (recentTerminalTaskRuns.size > MAX_QUEUE_SIZE) {
+    const oldest = recentTerminalTaskRuns.values().next()
+    if (!oldest.done) recentTerminalTaskRuns.delete(oldest.value)
+  }
+  return true
 }
 
 export function drainSdkEvents(): Array<
@@ -116,6 +145,7 @@ export function emitTaskTerminatedSdk(
   status: 'completed' | 'failed' | 'stopped',
   opts?: {
     toolUseId?: string
+    runId?: string
     summary?: string
     outputFile?: string
     usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
@@ -130,5 +160,5 @@ export function emitTaskTerminatedSdk(
     output_file: opts?.outputFile ?? '',
     summary: opts?.summary ?? '',
     usage: opts?.usage,
-  })
+  }, opts?.runId)
 }

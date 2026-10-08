@@ -42,7 +42,7 @@ import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js'
 import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { filterDeniedAgents, getDenyRuleForAgent } from '../../utils/permissions/permissions.js';
-import { enqueueSdkEvent } from '../../utils/sdkEventQueue.js';
+import { emitTaskTerminatedSdk } from '../../utils/sdkEventQueue.js';
 import { appendSubagentSpawned, appendSubagentTerminal, getAgentTranscriptPath, getTranscriptPath, listAgentMetadataForSession } from '../../utils/sessionStorage.js';
 import { sleep } from '../../utils/sleep.js';
 import { buildEffectiveSystemPrompt } from '../../utils/systemPrompt.js';
@@ -2102,20 +2102,20 @@ export const AgentTool = buildTool({
             // NOT trigger the print.ts XML task_notification parser or the LLM loop.
             if (!wasBackgrounded) {
               const progress = getProgressUpdate(syncTracker);
-              enqueueSdkEvent({
-                type: 'system',
-                subtype: 'task_notification',
-                task_id: foregroundTaskId,
-                tool_use_id: toolUseContext.toolUseId,
-                status: syncAgentError ? 'failed' : wasAborted ? 'stopped' : 'completed',
-                output_file: '',
-                summary: description,
-                usage: {
-                  total_tokens: progress.tokenCount,
-                  tool_uses: progress.toolUseCount,
-                  duration_ms: Date.now() - agentStartTime
-                }
-              });
+              emitTaskTerminatedSdk(
+                foregroundTaskId,
+                syncAgentError ? 'failed' : wasAborted ? 'stopped' : 'completed',
+                {
+                  runId: foregroundRunId,
+                  toolUseId: toolUseContext.toolUseId,
+                  summary: description,
+                  usage: {
+                    total_tokens: progress.tokenCount,
+                    tool_uses: progress.toolUseCount,
+                    duration_ms: Date.now() - agentStartTime,
+                  },
+                },
+              );
             }
           }
 

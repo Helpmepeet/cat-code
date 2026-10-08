@@ -46,6 +46,7 @@ import {
   setSessionProvider,
 } from './bootstrap/state.js'
 import { getMainLoopModel } from './utils/model/model.js'
+import { drainSdkEvents } from './utils/sdkEventQueue.js'
 
 function createAssistantMessage(text: string, uuid: string): AssistantMessage {
   return {
@@ -514,6 +515,17 @@ describe('background completion delivery during an active turn', () => {
           expect(completions[0]).toMatchObject({ attachment: { origin: { status } } })
           expect(calls).toBe(2)
           expect(getCommandQueueSnapshot()).toHaveLength(0)
+          if (querySource === 'sdk') {
+            const terminalEvents = drainSdkEvents().filter(
+              event =>
+                event.subtype === 'task_notification' &&
+                event.task_id === taskId,
+            )
+            expect(terminalEvents).toHaveLength(1)
+            expect(terminalEvents[0]).toMatchObject({
+              status: status === 'killed' ? 'stopped' : status,
+            })
+          }
         })
       }
     }

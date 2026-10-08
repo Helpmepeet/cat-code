@@ -26,6 +26,7 @@ import {
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { AbortError } from '../../utils/errors.js'
 import {
+  enqueue,
   getCommandsByMaxPriority,
   resetCommandQueue,
 } from '../../utils/messageQueueManager.js'
@@ -34,6 +35,11 @@ import { SendMessageTool } from '../SendMessageTool/SendMessageTool.js'
 import { query } from '../../query.js'
 import type { QueryDeps } from '../../query/deps.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
+import {
+  drainSdkEvents,
+  emitTaskTerminatedSdk,
+  enqueueSdkEvent,
+} from '../../utils/sdkEventQueue.js'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -548,6 +554,8 @@ describe('local worker message delivery', () => {
       setAppState,
       finalMessage: 'recipient completed',
       runId: recipient.runId,
+    }, {
+      enqueueNotification: command => enqueue({ ...command, priority: 'next' }),
     })
 
     const notifications = getCommandsByMaxPriority('later')
@@ -559,11 +567,201 @@ describe('local worker message delivery', () => {
     )
     expect(senderNotification?.value).toContain('worker-a private follow-up')
     expect(mainNotification?.value).not.toContain('worker-a private follow-up')
+    expect(senderNotification?.taskRunId).toBe(recipient.runId)
+    expect(mainNotification?.taskRunId).toBe(recipient.runId)
     expect(
       getUnresolvedAgentMessageDeliveries(
         appState.tasks[recipient.agentId] as never,
       ),
     ).toEqual([])
+
+    const probeTool = buildTool({
+      name: 'LocalWorkerProbe',
+      inputSchema: z.object({}),
+      maxResultSizeChars: 1000,
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+      async description() {
+        return 'test tool'
+      },
+      async prompt() {
+        return 'test tool'
+      },
+      async validateInput() {
+        return { result: true as const }
+      },
+      renderToolUseMessage: () => null,
+      renderToolResultMessage: () => null,
+      renderToolUseErrorMessage: () => null,
+      mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: toolUseID,
+          content: 'ok',
+        }
+      },
+      async call() {
+        return { data: 'done' }
+      },
+    })
+    const consumeQueuedNotification = async (
+      context: ToolUseContext,
+      querySource: string,
+      prefix: string,
+    ) => {
+      context.options.tools = [probeTool]
+      let callCount = 0
+      const requests: Message[][] = []
+      const deps: QueryDeps = {
+        uuid: () => `${prefix}-${callCount}`,
+        microcompact: async messages => ({ messages }),
+        autocompact: async () => ({
+          wasCompacted: false,
+          consecutiveFailures: 0,
+        }),
+        callModel: async function* ({ messages }) {
+          requests.push(messages)
+          callCount += 1
+          yield callCount === 1
+            ? toolUseResponse(`${prefix}-tool`)
+            : assistantResponse('done', `${prefix}-done`)
+        },
+      }
+      for await (const _message of query({
+        messages: [createUserMessage({ content: 'continue' })],
+        systemPrompt: ['test system prompt'] as never,
+        userContext: {},
+        systemContext: {},
+        canUseTool: async () => ({
+          behavior: 'allow' as const,
+          decisionReason: { type: 'other' as const, reason: 'test' },
+        }),
+        toolUseContext: context,
+        querySource: querySource as never,
+        deps,
+      })) {
+        void _message
+      }
+      return requests
+    }
+
+    const nestedRequests = await consumeQueuedNotification(
+      workerContext(
+        () => appState,
+        setAppState,
+        sender.agentId,
+        sender.runId,
+        sender.abortController!,
+      ),
+      'agent:general-purpose',
+      'nested-notification',
+    )
+    expect(
+      nestedRequests[1]?.some(message => {
+        if (message.type !== 'attachment') return false
+        const attachment = message.attachment as { origin?: { taskId?: string } }
+        return attachment.origin?.taskId === recipient.agentId
+      }),
+    ).toBe(true)
+
+    emitTaskTerminatedSdk(recipient.agentId, 'completed', {
+      runId: recipient.runId,
+      summary: 'recipient completed',
+    })
+    enqueueSdkEvent({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: recipient.agentId,
+      status: 'completed',
+      output_file: '',
+      summary: 'direct completion',
+    }, recipient.runId)
+    expect(
+      drainSdkEvents().filter(
+        event =>
+          event.subtype === 'task_notification' &&
+          event.task_id === recipient.agentId,
+      ),
+    ).toHaveLength(1)
+    const mainContext = workerContext(
+      () => appState,
+      setAppState,
+      sender.agentId,
+      sender.runId,
+      sender.abortController!,
+    )
+    mainContext.agentId = undefined
+    mainContext.agentRunId = undefined
+
+    const resumed = registerAsyncAgent({
+      agentId: recipient.agentId,
+      description: 'recipient',
+      prompt: 'resume recipient',
+      selectedAgent,
+      agentName: 'worker-b',
+      setAppState,
+    })
+    expect(resumed.runId).not.toBe(recipient.runId)
+    expect(
+      drainSdkEvents().some(
+        event =>
+          event.subtype === 'task_started' &&
+          event.task_id === recipient.agentId,
+      ),
+    ).toBe(false)
+    completeAgentTask(
+      {
+        agentId: recipient.agentId,
+        content: [{ type: 'text', text: 'recipient resumed and completed' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 1,
+        totalTokens: 1,
+      },
+      setAppState,
+      resumed.runId,
+    )
+    enqueueAgentNotification({
+      taskId: recipient.agentId,
+      description: 'recipient',
+      status: 'completed',
+      setAppState,
+      finalMessage: 'recipient resumed and completed',
+      runId: resumed.runId,
+    }, {
+      enqueueNotification: command => enqueue({ ...command, priority: 'next' }),
+    })
+    emitTaskTerminatedSdk(recipient.agentId, 'completed', {
+      runId: resumed.runId,
+      summary: 'recipient resumed and completed',
+    })
+    enqueueSdkEvent({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: recipient.agentId,
+      status: 'completed',
+      output_file: '',
+      summary: 'direct resumed completion',
+    }, resumed.runId)
+    const resumedRequests = await consumeQueuedNotification(
+      mainContext,
+      'repl_main_thread',
+      'resumed-main-notification',
+    )
+    const resumedTaskAttachments = resumedRequests[1]?.filter(message => {
+      if (message.type !== 'attachment') return false
+      const attachment = message.attachment as { origin?: { taskId?: string } }
+      return attachment.origin?.taskId === recipient.agentId
+    })
+    expect(
+      resumedTaskAttachments,
+    ).toHaveLength(2)
+    expect(
+      drainSdkEvents().filter(
+        event =>
+          event.subtype === 'task_notification' &&
+          event.task_id === recipient.agentId,
+      ),
+    ).toHaveLength(1)
   })
 
   test('cancellation during a continuation leaves its exact submission uncertain', async () => {
@@ -864,10 +1062,31 @@ describe('local worker message delivery', () => {
     context.options.tools = [
       buildTool({
         name: 'LocalWorkerProbe',
-        description: 'test tool',
         inputSchema: z.object({}),
-        async *call() {
-          yield { type: 'result' as const, data: 'done' }
+        maxResultSizeChars: 1000,
+        isReadOnly: () => true,
+        isConcurrencySafe: () => true,
+        async description() {
+          return 'test tool'
+        },
+        async prompt() {
+          return 'test tool'
+        },
+        async validateInput() {
+          return { result: true as const }
+        },
+        renderToolUseMessage: () => null,
+        renderToolResultMessage: () => null,
+        renderToolUseErrorMessage: () => null,
+        mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: toolUseID,
+            content: 'ok',
+          }
+        },
+        async call() {
+          return { data: 'done' }
         },
       }),
     ]
