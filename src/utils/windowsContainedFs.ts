@@ -797,9 +797,9 @@ function createWindowsCapability(
       if (closed) throw new Error('Windows file capability is closed')
       return readWindowsHandle(api, handle)
     },
-    async copyTo(destinationPath) {
+    async copyTo(destinationPath, options) {
       if (closed) throw new Error('Windows file capability is closed')
-      await copyWindowsHandle(api, handle, destinationPath)
+      await copyWindowsHandle(api, handle, destinationPath, options?.mode)
     },
     async close() {
       if (closed) return
@@ -813,10 +813,12 @@ async function copyWindowsHandle(
   api: WindowsNativeApi,
   handle: WinHandle,
   destinationPath: string,
+  creationMode?: number,
 ): Promise<void> {
   const size = getWindowsFileInfo(api, handle).size
-  const output = await open(destinationPath, 'w')
+  const output = await open(destinationPath, 'w', creationMode)
   try {
+    if (creationMode !== undefined) await output.chmod(creationMode)
     let offset = 0
     while (offset < size) {
       const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, size - offset))

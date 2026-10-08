@@ -108,13 +108,21 @@ export type ContainedFileCapability = {
   currentIdentity(): Promise<ContainedFileCapability['identity']>
   digest(): Promise<string>
   readFile(): Promise<Buffer>
-  copyTo(destinationPath: string): Promise<void>
+  copyTo(
+    destinationPath: string,
+    options?: ContainedFileCopyOptions,
+  ): Promise<void>
   close(): Promise<void>
+}
+
+export type ContainedFileCopyOptions = {
+  mode?: number
 }
 
 export type ContainedFsTestHooks = {
   beforePublishSourceEntryValidation?: (temporaryName: string) => void
   afterPublishSourceEntryValidation?: (temporaryName: string) => void
+  afterCopyDestinationOpen?: (destinationPath: string) => void | Promise<void>
 }
 
 export class ContainedPublicationPartialMutationError extends Error {
@@ -183,10 +191,16 @@ async function copyHandlePositionally(
   handle: Awaited<ReturnType<typeof open>>,
   destinationPath: string,
   readAt?: (buffer: Buffer, offset: number) => Promise<number>,
+  creationMode?: number,
+  afterDestinationOpen?: (destinationPath: string) => void | Promise<void>,
 ): Promise<void> {
   const size = (await handle.stat()).size
-  const output = await open(destinationPath, 'w')
+  const output = await open(destinationPath, 'w', creationMode)
   try {
+    if (creationMode !== undefined) {
+      await output.chmod(creationMode)
+    }
+    await afterDestinationOpen?.(destinationPath)
     let offset = 0
     while (offset < size) {
       const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, size - offset))
@@ -689,7 +703,7 @@ export async function openContainedFs(
             }
             return Buffer.concat(chunks, offset)
           },
-          async copyTo(destinationPath) {
+          async copyTo(destinationPath, options) {
             if (capabilityClosed) {
               throw new Error('Contained file capability is closed')
             }
@@ -705,6 +719,8 @@ export async function openContainedFs(
                 )
                 return Number(count)
               },
+              options?.mode,
+              testHooks?.afterCopyDestinationOpen,
             )
           },
           async close() {
@@ -804,7 +820,7 @@ export async function openContainedFs(
               }
               return Buffer.concat(chunks, offset)
             },
-            async copyTo(destinationPath) {
+            async copyTo(destinationPath, options) {
               if (capabilityClosed) {
                 throw new Error('Contained file capability is closed')
               }
@@ -820,6 +836,8 @@ export async function openContainedFs(
                       BigInt(offset),
                     ),
                   ),
+                options?.mode,
+                testHooks?.afterCopyDestinationOpen,
               )
             },
             async close() {
@@ -1360,6 +1378,7 @@ function isPortableENOENT(error: unknown): boolean {
 function openPortableContainedFs(
   rootPath: string,
   canonicalRoot: string,
+  testHooks?: ContainedFsTestHooks,
 ): Promise<ContainedFs> {
   return (async () => {
     const { lstat, readFile, readdir, realpath, stat } = await import(
@@ -1452,9 +1471,15 @@ function openPortableContainedFs(
             if (capabilityClosed) throw new Error('Contained file capability is closed')
             return readHandlePositionally(handle)
           },
-          async copyTo(destinationPath) {
+          async copyTo(destinationPath, options) {
             if (capabilityClosed) throw new Error('Contained file capability is closed')
-            await copyHandlePositionally(handle, destinationPath)
+            await copyHandlePositionally(
+              handle,
+              destinationPath,
+              undefined,
+              options?.mode,
+              testHooks?.afterCopyDestinationOpen,
+            )
           },
           async close() {
             if (capabilityClosed) return
@@ -1508,9 +1533,15 @@ function openPortableContainedFs(
             if (capabilityClosed) throw new Error('Contained file capability is closed')
             return readHandlePositionally(handle)
           },
-          async copyTo(destinationPath) {
+          async copyTo(destinationPath, options) {
             if (capabilityClosed) throw new Error('Contained file capability is closed')
-            await copyHandlePositionally(handle, destinationPath)
+            await copyHandlePositionally(
+              handle,
+              destinationPath,
+              undefined,
+              options?.mode,
+              testHooks?.afterCopyDestinationOpen,
+            )
           },
           async close() {
             if (capabilityClosed) return
