@@ -58,6 +58,113 @@ export function serializeMcpToolResult(
     : jsonStringify(finalResult.data)
 }
 
+export function registerMcpToolCallHandler(
+  server: Pick<Server, 'setRequestHandler'>,
+  debug: boolean,
+  verbose: boolean,
+  readFileStateCache: ReturnType<typeof createFileStateCacheWithSizeLimit>,
+): void {
+  server.setRequestHandler(
+    CallToolRequestSchema,
+    async ({ params: { name, arguments: args } }): Promise<CallToolResult> => {
+      const toolPermissionContext = getEmptyToolPermissionContext()
+      // TODO: Also re-expose any MCP tools
+      const tools = getTools(toolPermissionContext)
+      const tool = findToolByName(tools, name)
+      if (!tool) throw new Error(`Tool ${name} not found`)
+
+      // Assume MCP servers do not read messages separately from tool arguments.
+      const toolUseContext: ToolUseContext = {
+        abortController: createAbortController(),
+        options: {
+          commands: MCP_COMMANDS,
+          tools,
+          mainLoopModel: getMainLoopModel(),
+          thinkingConfig: { type: 'disabled' },
+          mcpClients: [],
+          mcpResources: {},
+          isNonInteractiveSession: true,
+          debug,
+          verbose,
+          agentDefinitions: { activeAgents: [], allAgents: [] },
+        },
+        getAppState: () => getDefaultAppState(),
+        setAppState: () => {},
+        messages: [],
+        readFileState: readFileStateCache,
+        setInProgressToolUseIDs: () => {},
+        setResponseLength: () => {},
+        updateFileHistoryState: () => {},
+        updateAttributionState: () => {},
+      }
+
+      try {
+        if (!tool.isEnabled()) {
+          throw new Error(`Tool ${name} is not enabled`)
+        }
+        const input = tool.inputSchema.parse(args ?? {})
+        const prepared = await tool.prepareExecution?.(input, toolUseContext)
+        const preparedContext: ToolUseContext = prepared
+          ? {
+              ...toolUseContext,
+              preparedExecution: {
+                toolName: tool.name,
+                input,
+                state: prepared.state,
+              },
+            }
+          : toolUseContext
+        try {
+          const validationResult = await tool.validateInput?.(
+            input,
+            preparedContext,
+          )
+          if (validationResult && !validationResult.result) {
+            throw new Error(
+              `Tool ${name} input is invalid: ${validationResult.message}`,
+            )
+          }
+          const finalResult = await tool.call(
+            input,
+            preparedContext,
+            hasPermissionsToUseTool,
+            createAssistantMessage({
+              content: [],
+            }),
+          )
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: serializeMcpToolResult(name, finalResult),
+              },
+            ],
+          }
+        } finally {
+          await prepared?.cleanup()
+        }
+      } catch (error) {
+        logError(error)
+
+        const parts =
+          error instanceof Error ? getErrorParts(error) : [String(error)]
+        const errorText = parts.filter(Boolean).join('\n').trim() || 'Error'
+
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: errorText,
+            },
+          ],
+        }
+      }
+    },
+  )
+}
+
 function isTextFileReadOutput(
   data: unknown,
 ): data is Extract<FileReadOutput, { type: 'text' }> {
@@ -134,93 +241,7 @@ export async function startMCPServer(
     },
   )
 
-  server.setRequestHandler(
-    CallToolRequestSchema,
-    async ({ params: { name, arguments: args } }): Promise<CallToolResult> => {
-      const toolPermissionContext = getEmptyToolPermissionContext()
-      // TODO: Also re-expose any MCP tools
-      const tools = getTools(toolPermissionContext)
-      const tool = findToolByName(tools, name)
-      if (!tool) {
-        throw new Error(`Tool ${name} not found`)
-      }
-
-      // Assume MCP servers do not read messages separately from the tool
-      // call arguments.
-      const toolUseContext: ToolUseContext = {
-        abortController: createAbortController(),
-        options: {
-          commands: MCP_COMMANDS,
-          tools,
-          mainLoopModel: getMainLoopModel(),
-          thinkingConfig: { type: 'disabled' },
-          mcpClients: [],
-          mcpResources: {},
-          isNonInteractiveSession: true,
-          debug,
-          verbose,
-          agentDefinitions: { activeAgents: [], allAgents: [] },
-        },
-        getAppState: () => getDefaultAppState(),
-        setAppState: () => {},
-        messages: [],
-        readFileState: readFileStateCache,
-        setInProgressToolUseIDs: () => {},
-        setResponseLength: () => {},
-        updateFileHistoryState: () => {},
-        updateAttributionState: () => {},
-      }
-
-      // TODO: validate input types with zod
-      try {
-        if (!tool.isEnabled()) {
-          throw new Error(`Tool ${name} is not enabled`)
-        }
-        const validationResult = await tool.validateInput?.(
-          (args as never) ?? {},
-          toolUseContext,
-        )
-        if (validationResult && !validationResult.result) {
-          throw new Error(
-            `Tool ${name} input is invalid: ${validationResult.message}`,
-          )
-        }
-        const finalResult = await tool.call(
-          (args ?? {}) as never,
-          toolUseContext,
-          hasPermissionsToUseTool,
-          createAssistantMessage({
-            content: [],
-          }),
-        )
-
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: serializeMcpToolResult(name, finalResult),
-            },
-          ],
-        }
-      } catch (error) {
-        logError(error)
-
-        const parts =
-          error instanceof Error ? getErrorParts(error) : [String(error)]
-        const errorText = parts.filter(Boolean).join('\n').trim() || 'Error'
-
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: errorText,
-            },
-          ],
-        }
-      }
-    },
-  )
+  registerMcpToolCallHandler(server, debug, verbose, readFileStateCache)
 
   async function runServer() {
     const transport = new StdioServerTransport()

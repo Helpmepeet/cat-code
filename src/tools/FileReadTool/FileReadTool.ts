@@ -83,7 +83,10 @@ import {
   checkWritePermissionForTool,
 } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
-import { getDenyRuleForTool } from '../../utils/permissions/permissions.js'
+import {
+  getAskRuleForTool,
+  getDenyRuleForTool,
+} from '../../utils/permissions/permissions.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { readFileInRange } from '../../utils/readFileInRange.js'
 import {
@@ -138,6 +141,8 @@ const BLOCKED_DEVICE_PATHS = new Set([
   '/dev/fd/2',
 ])
 
+const userMentionedFileReads = new WeakSet<object>()
+
 function isBlockedDevicePath(filePath: string): boolean {
   if (BLOCKED_DEVICE_PATHS.has(filePath)) return true
   // /proc/self/fd/0-2 and /proc/<pid>/fd/0-2 are Linux aliases for stdio
@@ -179,6 +184,7 @@ function checkReadPermissionForBoundPath(
   filePath: string,
   permissions: ReturnType<ToolUseContext['getAppState']>['toolPermissionContext'],
   originalDecision: Extract<PermissionDecision, { behavior: 'allow' }>,
+  allowUserMentionedOutsideWorkingDirs = false,
 ): PermissionDecision {
   const denyRule = matchingRuleForInput(filePath, permissions, 'read', 'deny')
   if (denyRule) {
@@ -220,6 +226,9 @@ function checkReadPermissionForBoundPath(
       updatedInput: canonicalInput,
       decisionReason: { type: 'rule', rule: allowRule },
     }
+  }
+  if (allowUserMentionedOutsideWorkingDirs) {
+    return { ...originalDecision, updatedInput: canonicalInput }
   }
   return {
     behavior: 'ask',
@@ -549,14 +558,57 @@ export const FileReadTool = buildTool({
   },
   async checkPermissions(input, context): Promise<PermissionDecision> {
     const appState = context.getAppState()
+    const prepared = getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)
+    const isUserMentionedRead =
+      prepared !== undefined && userMentionedFileReads.has(prepared)
+    if (isUserMentionedRead) {
+      const denyRule = getDenyRuleForTool(
+        appState.toolPermissionContext,
+        FileReadTool,
+      )
+      if (denyRule) {
+        return {
+          behavior: 'deny',
+          message: `Permission to use ${FILE_READ_TOOL_NAME} has been denied.`,
+          decisionReason: { type: 'rule', rule: denyRule },
+        }
+      }
+      const askRule = getAskRuleForTool(
+        appState.toolPermissionContext,
+        FileReadTool,
+      )
+      if (askRule) {
+        return {
+          behavior: 'ask',
+          message: `Claude requested permissions to use ${FILE_READ_TOOL_NAME}, but you haven't granted it yet.`,
+          decisionReason: { type: 'rule', rule: askRule },
+        }
+      }
+    }
     const originalDecision = checkReadPermissionForTool(
       FileReadTool,
       input,
       appState.toolPermissionContext,
     )
-    if (originalDecision.behavior !== 'allow') return originalDecision
-    const prepared = getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)
+    if (
+      originalDecision.behavior !== 'allow' &&
+      !(
+        isUserMentionedRead &&
+        originalDecision.behavior === 'ask' &&
+        originalDecision.decisionReason?.type === 'workingDir'
+      )
+    ) {
+      return originalDecision
+    }
     if (!prepared) return originalDecision
+    const approvedOriginal: Extract<PermissionDecision, { behavior: 'allow' }> =
+      originalDecision.behavior === 'allow'
+        ? originalDecision
+        : {
+            behavior: 'allow',
+            updatedInput: input,
+            decisionReason: originalDecision.decisionReason,
+          }
     const canonicalInput =
       context.preparedExecution?.toolName === FILE_READ_TOOL_NAME
         ? context.preparedExecution.input
@@ -580,11 +632,12 @@ export const FileReadTool = buildTool({
         canonicalInput,
         boundPath,
         permissions,
-        originalDecision,
+        approvedOriginal,
+        isUserMentionedRead,
       )
       if (decision.behavior !== 'allow') return decision
     }
-    return { ...originalDecision, updatedInput: canonicalInput }
+    return { ...approvedOriginal, updatedInput: canonicalInput }
   },
   async prepareExecution(input) {
     const prepared = await prepareFileRead(input.file_path)
@@ -997,12 +1050,14 @@ export async function callFileReadToolWithPreparedCapability(
   context: ToolUseContext,
   canUseTool?: Parameters<typeof FileReadTool.call>[2],
   parentMessage?: Parameters<typeof FileReadTool.call>[3],
+  options: { userMentioned?: boolean } = {},
 ): Promise<Awaited<ReturnType<typeof FileReadTool.call>>> {
   if (getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)) {
     return FileReadTool.call(input, context, canUseTool, parentMessage)
   }
 
   const prepared = await FileReadTool.prepareExecution!(input)
+  if (options.userMentioned) userMentionedFileReads.add(prepared.state as object)
   const preparedContext: ToolUseContext = {
     ...context,
     preparedExecution: {
@@ -1032,6 +1087,7 @@ export async function callFileReadToolWithPreparedCapability(
       parentMessage,
     )
   } finally {
+    userMentionedFileReads.delete(prepared.state as object)
     await prepared.cleanup()
   }
 }

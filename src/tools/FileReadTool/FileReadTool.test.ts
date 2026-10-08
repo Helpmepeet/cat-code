@@ -21,9 +21,11 @@ import {
   isCompleteUnboundedRead,
 } from '../../utils/fileStateCache.js'
 import { createAssistantMessage } from '../../utils/messages.js'
+import { runWithCwdOverride } from '../../utils/cwd.js'
 import {
   checkApprovedUncReadTarget,
   FileReadTool,
+  callFileReadToolWithPreparedCapability,
   MaxFileReadTokenExceededError,
   type Output,
   suggestedRetryLimit,
@@ -161,14 +163,21 @@ function createContext(maxTokens?: number) {
   }
 }
 
-function createLifecycleContext(tools: unknown[]) {
+function createLifecycleContext(
+  tools: unknown[],
+  options: {
+    mode?: 'default' | 'bypassPermissions'
+    alwaysDenyRules?: Record<string, string[]>
+    alwaysAskRules?: Record<string, string[]>
+  } = {},
+) {
   const appState = {
     toolPermissionContext: {
-      mode: 'bypassPermissions',
+      mode: options.mode ?? 'bypassPermissions',
       additionalWorkingDirectories: new Map<string, string>(),
       alwaysAllowRules: {},
-      alwaysDenyRules: {},
-      alwaysAskRules: {},
+      alwaysDenyRules: options.alwaysDenyRules ?? {},
+      alwaysAskRules: options.alwaysAskRules ?? {},
       isBypassPermissionsModeAvailable: true,
     },
     mcp: { tools: [], clients: [] },
@@ -226,6 +235,89 @@ async function runRealToolUse(
   }
   return updates
 }
+
+describe('user-mentioned FileRead permissions', () => {
+  test('allows explicit mentions outside the working directory in default and bypass modes', async () => {
+    const workspace = join(tmpDir, 'mentioned-workspace')
+    mkdirSync(workspace, { recursive: true })
+    const filePath = writeLines('mentioned-outside.txt', 1)
+
+    await runWithCwdOverride(workspace, async () => {
+      for (const mode of ['default', 'bypassPermissions'] as const) {
+        const context = createLifecycleContext([FileReadTool], { mode })
+        const result = await callFileReadToolWithPreparedCapability(
+          { file_path: filePath },
+          context as never,
+          async () => ({ behavior: 'allow' }) as never,
+          undefined,
+          { userMentioned: true },
+        )
+        expect(result.data.type).toBe('text')
+      }
+    })
+  })
+
+  test('retains explicit deny and ask rules for mentioned paths', async () => {
+    const filePath = writeLines('mentioned-restricted.txt', 1)
+    const absoluteRulePath = `//${filePath.replace(/^\/+/, '')}`
+    for (const [ruleKey, rules] of [
+      ['alwaysDenyRules', { session: [`Read(${absoluteRulePath})`] }],
+      ['alwaysAskRules', { session: [`Read(${absoluteRulePath})`] }],
+      ['alwaysDenyRules', { session: ['Read'] }],
+      ['alwaysAskRules', { session: ['Read'] }],
+    ] as const) {
+      const context = createLifecycleContext([FileReadTool], {
+        mode: 'bypassPermissions',
+        [ruleKey]: rules,
+      })
+      await expect(
+        callFileReadToolWithPreparedCapability(
+          { file_path: filePath },
+          context as never,
+          async () => ({ behavior: 'allow' }) as never,
+          undefined,
+          { userMentioned: true },
+        ),
+      ).rejects.toThrow()
+    }
+  })
+
+  test('checks canonical symlink targets and keeps ordinary helper reads restricted', async () => {
+    const workspace = join(tmpDir, 'symlink-workspace')
+    mkdirSync(workspace, { recursive: true })
+    const target = writeLines('symlink-target.txt', 1)
+    const link = join(workspace, 'mentioned-link.txt')
+    symlinkSync(target, link)
+    const absoluteTargetRule = `//${target.replace(/^\/+/, '')}`
+
+    await runWithCwdOverride(workspace, async () => {
+      const restrictedContext = createLifecycleContext([FileReadTool], {
+        mode: 'default',
+        alwaysDenyRules: { session: [`Read(${absoluteTargetRule})`] },
+      })
+      await expect(
+        callFileReadToolWithPreparedCapability(
+          { file_path: link },
+          restrictedContext as never,
+          async () => ({ behavior: 'allow' }) as never,
+          undefined,
+          { userMentioned: true },
+        ),
+      ).rejects.toThrow()
+
+      const ordinaryContext = createLifecycleContext([FileReadTool], {
+        mode: 'bypassPermissions',
+      })
+      await expect(
+        callFileReadToolWithPreparedCapability(
+          { file_path: target },
+          ordinaryContext as never,
+          async () => ({ behavior: 'allow' }) as never,
+        ),
+      ).rejects.toThrow()
+    })
+  })
+})
 
 async function readWith(
   context: ReturnType<typeof createContext>,

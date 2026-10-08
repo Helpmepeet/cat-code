@@ -3223,6 +3223,9 @@ export async function generateFileAttachment(
         const result = await callFileReadToolWithPreparedCapability(
           truncatedInput,
           toolUseContext,
+          undefined,
+          undefined,
+          { userMentioned: mode === 'at-mention' },
         )
         logEvent(successEventName, {})
 
@@ -3249,6 +3252,9 @@ export async function generateFileAttachment(
       const result = await callFileReadToolWithPreparedCapability(
         fileInput,
         toolUseContext,
+        undefined,
+        undefined,
+        { userMentioned: mode === 'at-mention' },
       )
       logEvent(successEventName, {})
       return {
