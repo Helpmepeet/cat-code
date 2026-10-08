@@ -118,7 +118,9 @@ test('cache status changes do not add a toolbar action or open a popover', async
   expect(indicator()?.tagName).toBe('SPAN')
   expect(indicator()?.getAttribute('role')).toBe('status')
   expect(indicator()?.querySelector('.composer-cache-label')?.textContent).toBe('Cache expired')
-  indicator()?.click()
+  await act(async () => {
+    indicator()?.click()
+  })
   expect(tree.container.querySelector('[role="dialog"]')).toBeNull()
   expect(faces()).toEqual(before)
   expect(faces()).not.toContain('token-warning')

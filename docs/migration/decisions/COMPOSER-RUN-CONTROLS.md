@@ -129,8 +129,8 @@ session cannot silently resume on today's OpenAI default (and vice versa).
 
 ## Cache-expired indicator (2026-10-08)
 
-The operator settled the visual in
-[`2026-10-08-cache-expired-notice.html`](../../design-html/2026-10-08-cache-expired-notice.html):
+The operator supplied the untracked local reference
+`docs/design-html/2026-10-08-cache-expired-notice.html`. The settled visual is
 an amber clock immediately before the active-account face, with the former
 context-warning face's 22px size, 14px glyph, 2px stroke and warning tone.
 It is display-only, outside toolbar roving navigation. Its hover label reads
