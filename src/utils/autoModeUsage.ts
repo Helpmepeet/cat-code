@@ -447,23 +447,25 @@ function incrementOutcome(population: AutoModeUsagePopulation, outcome: AutoMode
   population.outcomes[outcome]++
 }
 
-/**
- * Reduces synthetic, metadata-only retained records. The caller supplies only
- * source coverage relevant to the requested range; transcript reading and
- * durable identity storage remain outside this pure reducer.
- */
-export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoModeUsageSummary {
-  const timezone = input.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-  const rangeStart = validTime(input.rangeStart)
-  const rangeEnd = validTime(input.rangeEnd)
-  const cutoff = validTime(input.cutoff)
-  if (rangeStart === null || rangeEnd === null || cutoff === null || rangeStart > rangeEnd || rangeEnd > cutoff) {
-    throw new Error('Invalid auto-mode usage reduction range')
-  }
+export type AutoModeUsageAccumulatorOptions = Omit<AutoModeUsageReductionInput, 'records' | 'sources'> & Readonly<{
+  /** Charge new long-lived entries before retention; throw to abort collection. */
+  onRetain?: (entries: number, estimatedBytes: number) => void
+}>
 
+export type AutoModeUsageAccumulator = Readonly<{
+  /** Add each complete source once, preserving its original record order. */
+  addSource: (records: readonly RetainedAutoModeRecord[]) => void
+  /** The optional lower bound refines coverage only, not the ingested population. */
+  finish: (sources: readonly AutoModeUsageSource[], coverageRangeStart?: string) => AutoModeUsageSummary
+}>
+
+function validatedSources(input: readonly AutoModeUsageSource[]): {
+  sourcesByScope: Map<string, AutoModeUsageSource>
+  sourceConflict: boolean
+} {
   const sourcesByScope = new Map<string, AutoModeUsageSource>()
   let sourceConflict = false
-  for (const source of input.sources) {
+  for (const source of input) {
     if (!boundedId(source.sourceScope) ||
       !['complete', 'partial', 'unavailable'].includes(source.allTools) ||
       !['complete', 'partial', 'unavailable'].includes(source.commands) ||
@@ -486,263 +488,345 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
     }
     sourcesByScope.set(source.sourceScope, source)
   }
-  const sources = [...sourcesByScope.values()]
-  const allTools = population(coverageFor(sources, 'allTools', rangeStart, rangeEnd))
-  const commands = population(coverageFor(sources, 'commands', rangeStart, rangeEnd))
+  return { sourcesByScope, sourceConflict }
+}
+
+/**
+ * Keeps only ungrouped counts and coverage evidence between sources. Record
+ * identities and attempt joins are scoped to one complete addSource call.
+ */
+export function createAutoModeUsageAccumulator(input: AutoModeUsageAccumulatorOptions): AutoModeUsageAccumulator {
+  const onRetain = input.onRetain
+  const timezone = input.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const parsedRangeStart = validTime(input.rangeStart)
+  const parsedRangeEnd = validTime(input.rangeEnd)
+  const parsedCutoff = validTime(input.cutoff)
+  if (parsedRangeStart === null || parsedRangeEnd === null || parsedCutoff === null || parsedRangeStart > parsedRangeEnd || parsedRangeEnd > parsedCutoff) {
+    throw new Error('Invalid auto-mode usage reduction range')
+  }
+  const rangeStart = parsedRangeStart
+  const rangeEnd = parsedRangeEnd
+  const cutoff = parsedCutoff
+  // Until finalization, partial here records historical population evidence.
+  const allTools = population({ state: 'complete', invalidRecords: 0, orphanRecords: 0 })
+  const commands = population({ state: 'complete', invalidRecords: 0, orphanRecords: 0 })
   const buckets = new Map<string, AutoModeUsageBucket>()
   const routes = new Map<string, number>()
   const categories = new Map<string, { category: AutoModePrimaryCategory; count: number }>()
+  const observedScopes = new Set<string>()
   let uncategorized = 0
-  let sourceInvalidRecords = sourceConflict ? 1 : 0
+  let sourceInvalidRecords = 0
   let sourceOrphanRecords = 0
-  let sourceCoverageUnknown = false
 
-  const recordHashes = new Map<string, string>()
-  const starts = new Map<string, Attempt>()
-  const markers = new Map<string, Marker[]>()
-  for (const record of input.records) {
-    const timestamp = validTime(record.observedAt)
-    if (!boundedId(record.sourceScope) || !boundedId(record.recordId) || timestamp === null) {
-      sourceInvalidRecords++
-      continue
+  function addSource(records: readonly RetainedAutoModeRecord[]): void {
+    if (records.some(record => record.sourceScope !== records[0]!.sourceScope)) {
+      throw new Error('Auto-mode usage addSource requires one complete source')
     }
-    if (timestamp > cutoff) continue
-    if (!sourcesByScope.has(record.sourceScope)) sourceCoverageUnknown = true
-    const identity = JSON.stringify([record.sourceScope, record.recordId])
-    const hash = createHash('sha256').update(JSON.stringify(record)).digest('hex')
-    const previousHash = recordHashes.get(identity)
-    if (previousHash === hash) continue
-    if (previousHash !== undefined) {
-      sourceInvalidRecords++
-      continue
-    }
-    recordHashes.set(identity, hash)
-    if (record.diagnosticKind !== AUTO_MODE_DIAGNOSTIC_KIND || !object(record.payload)) {
+    const recordHashes = new Map<string, string>()
+    const starts = new Map<string, Attempt>()
+    const markers = new Map<string, Marker[]>()
+    for (const record of records) {
+      const timestamp = validTime(record.observedAt)
+      if (!boundedId(record.sourceScope) || !boundedId(record.recordId) || timestamp === null) {
+        sourceInvalidRecords++
+        continue
+      }
+      if (timestamp > cutoff) continue
+      if (!observedScopes.has(record.sourceScope)) {
+        onRetain?.(1, 128 + 2 * Buffer.byteLength(record.sourceScope, 'utf8'))
+        observedScopes.add(record.sourceScope)
+      }
+      const identity = JSON.stringify([record.sourceScope, record.recordId])
+      const hash = createHash('sha256').update(JSON.stringify(record)).digest('hex')
+      const previousHash = recordHashes.get(identity)
+      if (previousHash === hash) continue
+      if (previousHash !== undefined) {
+        sourceInvalidRecords++
+        continue
+      }
+      recordHashes.set(identity, hash)
+      if (record.diagnosticKind !== AUTO_MODE_DIAGNOSTIC_KIND || !object(record.payload)) {
+        if (timestamp >= rangeStart) sourceInvalidRecords++
+        continue
+      }
+      const attemptId = record.payload.attempt_id
+      if (!boundedId(attemptId)) {
+        if (timestamp >= rangeStart) sourceInvalidRecords++
+        continue
+      }
+      const joinKey = key(record.sourceScope, attemptId)
+      const parsed = parseAutoModeObservationEvent(record.payload)
+
+      if (parsed?.subtype === 'auto_permission_start') {
+        const previous = starts.get(joinKey)
+        if (!previous) {
+          starts.set(joinKey, {
+            scope: record.sourceScope,
+            attemptId,
+            timestamp,
+            date: localDateKey(timestamp, timezone),
+            toolKind: parsed.tool_kind,
+            start: parsed,
+            invalidTerminal: false,
+            terminal: null,
+            terminalConflict: false,
+            routeConflict: false,
+            categoryConflict: false,
+            stageConflict: false,
+            startConflict: false,
+            stages: [],
+            invalidRecords: 0,
+            historical: record.historical === true,
+          })
+        } else {
+          if (
+            previous.timestamp !== timestamp ||
+            previous.toolKind !== parsed.tool_kind ||
+            previous.start.tool_use_id !== parsed.tool_use_id ||
+            previous.start.auto_mode !== parsed.auto_mode
+          ) {
+            previous.invalidRecords++
+            previous.startConflict = true
+          }
+          previous.historical ||= record.historical === true
+        }
+        continue
+      }
+
+      const terminal = record.payload.subtype === 'auto_permission_end'
+        ? parseTerminal(record.payload)
+        : null
+      if (record.payload.subtype === 'auto_permission_end' && terminal === null) {
+        markers.set(joinKey, [
+          ...(markers.get(joinKey) ?? []),
+          { timestamp, recordId: record.recordId, kind: 'invalid_terminal' },
+        ])
+        continue
+      }
+      if (parsed?.subtype === 'auto_permission_stage') {
+        markers.set(joinKey, [
+          ...(markers.get(joinKey) ?? []),
+          { timestamp, recordId: record.recordId, kind: 'stage', stage: parsed },
+        ])
+        continue
+      }
+      if (terminal !== null) {
+        markers.set(joinKey, [
+          ...(markers.get(joinKey) ?? []),
+          { timestamp, recordId: record.recordId, kind: 'terminal', terminal },
+        ])
+        continue
+      }
       if (timestamp >= rangeStart) sourceInvalidRecords++
-      continue
-    }
-    const attemptId = record.payload.attempt_id
-    if (!boundedId(attemptId)) {
-      if (timestamp >= rangeStart) sourceInvalidRecords++
-      continue
-    }
-    const joinKey = key(record.sourceScope, attemptId)
-    const parsed = parseAutoModeObservationEvent(record.payload)
-
-    if (parsed?.subtype === 'auto_permission_start') {
-      const previous = starts.get(joinKey)
-      if (!previous) {
-        starts.set(joinKey, {
-          scope: record.sourceScope,
-          attemptId,
-          timestamp,
-          date: localDateKey(timestamp, timezone),
-          toolKind: parsed.tool_kind,
-          start: parsed,
-          invalidTerminal: false,
-          terminal: null,
-          terminalConflict: false,
-          routeConflict: false,
-          categoryConflict: false,
-          stageConflict: false,
-          startConflict: false,
-          stages: [],
-          invalidRecords: 0,
-          historical: record.historical === true,
-        })
-      } else {
-        if (
-          previous.timestamp !== timestamp ||
-          previous.toolKind !== parsed.tool_kind ||
-          previous.start.tool_use_id !== parsed.tool_use_id ||
-          previous.start.auto_mode !== parsed.auto_mode
-        ) {
-          previous.invalidRecords++
-          previous.startConflict = true
-        }
-        previous.historical ||= record.historical === true
-      }
-      continue
     }
 
-    const terminal = record.payload.subtype === 'auto_permission_end'
-      ? parseTerminal(record.payload)
-      : null
-    if (record.payload.subtype === 'auto_permission_end' && terminal === null) {
-      markers.set(joinKey, [
-        ...(markers.get(joinKey) ?? []),
-        { timestamp, recordId: record.recordId, kind: 'invalid_terminal' },
-      ])
-      continue
-    }
-    if (parsed?.subtype === 'auto_permission_stage') {
-      markers.set(joinKey, [
-        ...(markers.get(joinKey) ?? []),
-        { timestamp, recordId: record.recordId, kind: 'stage', stage: parsed },
-      ])
-      continue
-    }
-    if (terminal !== null) {
-      markers.set(joinKey, [
-        ...(markers.get(joinKey) ?? []),
-        { timestamp, recordId: record.recordId, kind: 'terminal', terminal },
-      ])
-      continue
-    }
-    if (timestamp >= rangeStart) sourceInvalidRecords++
-  }
-
-  for (const [joinKey, records] of markers) {
-    const attempt = starts.get(joinKey)
-    if (!attempt) {
-      if (records.some(record => record.timestamp >= rangeStart)) sourceOrphanRecords += records.length
-      continue
-    }
-    for (const record of [...records].sort((left, right) =>
-      left.timestamp - right.timestamp || markerOrder(left) - markerOrder(right) ||
-      left.recordId.localeCompare(right.recordId))) {
-      if (record.timestamp < attempt.timestamp) {
-        attempt.invalidTerminal = true
-        attempt.invalidRecords++
+    for (const [joinKey, records] of markers) {
+      const attempt = starts.get(joinKey)
+      if (!attempt) {
+        if (records.some(record => record.timestamp >= rangeStart)) sourceOrphanRecords += records.length
         continue
       }
-      if (record.kind === 'stage' && record.stage) {
-        attempt.stages.push(record.stage)
-        continue
-      }
-      if (record.kind === 'invalid_terminal' || !record.terminal) {
-        attempt.invalidTerminal = true
-        attempt.invalidRecords++
-        continue
-      }
-      const terminal = record.terminal
-      if (attempt.terminal === null) {
-        attempt.terminal = terminal
-      } else if (!terminalEqual(attempt.terminal, terminal)) {
-        attempt.terminalConflict = true
-        attempt.invalidRecords++
-      } else {
-        if (attempt.terminal.route !== terminal.route) {
-          attempt.routeConflict = true
+      for (const record of [...records].sort((left, right) =>
+        left.timestamp - right.timestamp || markerOrder(left) - markerOrder(right) ||
+        left.recordId.localeCompare(right.recordId))) {
+        if (record.timestamp < attempt.timestamp) {
+          attempt.invalidTerminal = true
           attempt.invalidRecords++
+          continue
         }
-        if (!categoryEqual(attempt.terminal.category, terminal.category)) {
-          attempt.categoryConflict = true
+        if (record.kind === 'stage' && record.stage) {
+          attempt.stages.push(record.stage)
+          continue
+        }
+        if (record.kind === 'invalid_terminal' || !record.terminal) {
+          attempt.invalidTerminal = true
           attempt.invalidRecords++
+          continue
+        }
+        const terminal = record.terminal
+        if (attempt.terminal === null) {
+          attempt.terminal = terminal
+        } else if (!terminalEqual(attempt.terminal, terminal)) {
+          attempt.terminalConflict = true
+          attempt.invalidRecords++
+        } else {
+          if (attempt.terminal.route !== terminal.route) {
+            attempt.routeConflict = true
+            attempt.invalidRecords++
+          }
+          if (!categoryEqual(attempt.terminal.category, terminal.category)) {
+            attempt.categoryConflict = true
+            attempt.invalidRecords++
+          }
         }
       }
-    }
-    if (!validateStages(attempt.stages)) {
-      attempt.stageConflict = true
-      attempt.invalidRecords++
-    }
-  }
-
-  for (const attempt of starts.values()) {
-    if (attempt.timestamp < rangeStart || attempt.timestamp > rangeEnd || attempt.timestamp > cutoff) continue
-    // Conflicting starts are unclassifiable population evidence, never a
-    // timestamp chosen by traversal order.
-    if (attempt.startConflict) {
-      sourceInvalidRecords += attempt.invalidRecords
-      continue
+      if (!validateStages(attempt.stages)) {
+        attempt.stageConflict = true
+        attempt.invalidRecords++
+      }
     }
 
-    const bucketStart = localMidnight(attempt.date, timezone)
-    const bucketEnd = Math.min(localMidnight(addCalendarDays(attempt.date, 1), timezone) - 1, rangeEnd)
-    const bucket = buckets.get(attempt.date) ?? {
-      date: attempt.date,
-      allTools: population(coverageFor(sources, 'allTools', bucketStart, bucketEnd)),
-      commands: population(coverageFor(sources, 'commands', bucketStart, bucketEnd)),
-    }
-    buckets.set(attempt.date, bucket)
-    const outcome = resolvedOutcome(attempt)
-    const route = resolvedRoute(attempt)
-    incrementOutcome(allTools, outcome)
-    incrementOutcome(bucket.allTools, outcome)
-    if (attempt.historical) {
-      if (allTools.coverage.state === 'complete') allTools.coverage.state = 'partial'
-      if (bucket.allTools.coverage.state === 'complete') bucket.allTools.coverage.state = 'partial'
-    }
-    if (attempt.toolKind === 'bash' || attempt.toolKind === 'powershell') {
-      incrementOutcome(commands, outcome)
-      incrementOutcome(bucket.commands, outcome)
+    for (const attempt of starts.values()) {
+      if (attempt.timestamp < rangeStart || attempt.timestamp > rangeEnd || attempt.timestamp > cutoff) continue
+      // Conflicting starts are unclassifiable population evidence, never a
+      // timestamp chosen by traversal order.
+      if (attempt.startConflict) {
+        sourceInvalidRecords += attempt.invalidRecords
+        continue
+      }
+
+      let bucket = buckets.get(attempt.date)
+      if (!bucket) {
+        onRetain?.(1, 512 + 2 * Buffer.byteLength(attempt.date, 'utf8'))
+        bucket = {
+          date: attempt.date,
+          allTools: population({ state: 'complete', invalidRecords: 0, orphanRecords: 0 }),
+          commands: population({ state: 'complete', invalidRecords: 0, orphanRecords: 0 }),
+        }
+        buckets.set(attempt.date, bucket)
+      }
+      const outcome = resolvedOutcome(attempt)
+      const route = resolvedRoute(attempt)
+      incrementOutcome(allTools, outcome)
+      incrementOutcome(bucket.allTools, outcome)
       if (attempt.historical) {
-        if (commands.coverage.state === 'complete') commands.coverage.state = 'partial'
-        if (bucket.commands.coverage.state === 'complete') bucket.commands.coverage.state = 'partial'
+        if (allTools.coverage.state === 'complete') allTools.coverage.state = 'partial'
+        if (bucket.allTools.coverage.state === 'complete') bucket.allTools.coverage.state = 'partial'
       }
-    }
-    routes.set(JSON.stringify([route, outcome]), (routes.get(JSON.stringify([route, outcome])) ?? 0) + 1)
+      if (attempt.toolKind === 'bash' || attempt.toolKind === 'powershell') {
+        incrementOutcome(commands, outcome)
+        incrementOutcome(bucket.commands, outcome)
+        if (attempt.historical) {
+          if (commands.coverage.state === 'complete') commands.coverage.state = 'partial'
+          if (bucket.commands.coverage.state === 'complete') bucket.commands.coverage.state = 'partial'
+        }
+      }
+      const routeKey = JSON.stringify([route, outcome])
+      if (!routes.has(routeKey)) onRetain?.(1, 128 + 2 * Buffer.byteLength(routeKey, 'utf8'))
+      routes.set(routeKey, (routes.get(routeKey) ?? 0) + 1)
 
-    if (outcome === 'policy_blocked') {
-      if (attempt.categoryConflict || attempt.terminal?.category === null) {
-        uncategorized++
-      } else {
-        const category = attempt.terminal?.category
-        if (category === null || category === undefined) {
+      if (outcome === 'policy_blocked') {
+        if (attempt.categoryConflict || attempt.terminal?.category === null) {
           uncategorized++
         } else {
-          const categoryIdentity = categoryKey(category)
-          const existing = categories.get(categoryIdentity)
-          if (existing) existing.count++
-          else categories.set(categoryIdentity, { category, count: 1 })
+          const category = attempt.terminal?.category
+          if (category === null || category === undefined) {
+            uncategorized++
+          } else {
+            const categoryIdentity = categoryKey(category)
+            const existing = categories.get(categoryIdentity)
+            if (existing) existing.count++
+            else {
+              onRetain?.(1, 256 + 3 * Buffer.byteLength(categoryIdentity, 'utf8'))
+              categories.set(categoryIdentity, { category: { kind: category.kind, id: category.id }, count: 1 })
+            }
+          }
         }
       }
-    }
-    allTools.coverage.invalidRecords += attempt.invalidRecords
-    bucket.allTools.coverage.invalidRecords += attempt.invalidRecords
-    if (attempt.toolKind === 'bash' || attempt.toolKind === 'powershell') {
-      commands.coverage.invalidRecords += attempt.invalidRecords
-      bucket.commands.coverage.invalidRecords += attempt.invalidRecords
+      allTools.coverage.invalidRecords += attempt.invalidRecords
+      bucket.allTools.coverage.invalidRecords += attempt.invalidRecords
+      if (attempt.toolKind === 'bash' || attempt.toolKind === 'powershell') {
+        commands.coverage.invalidRecords += attempt.invalidRecords
+        bucket.commands.coverage.invalidRecords += attempt.invalidRecords
+      }
     }
   }
 
-  allTools.coverage.invalidRecords += sourceInvalidRecords
-  commands.coverage.invalidRecords += sourceInvalidRecords
-  allTools.coverage.orphanRecords += sourceOrphanRecords
-  commands.coverage.orphanRecords += sourceOrphanRecords
-  if (sourceCoverageUnknown) {
-    if (allTools.coverage.state === 'complete') allTools.coverage.state = 'partial'
-    if (commands.coverage.state === 'complete') commands.coverage.state = 'partial'
-  }
-  finishCoverage(allTools.coverage)
-  finishCoverage(commands.coverage)
-  for (const bucket of buckets.values()) {
-    if (sourceInvalidRecords > 0 || sourceOrphanRecords > 0 || sourceCoverageUnknown) {
-      // These diagnostics have no trustworthy start bucket, so conservatively
-      // suppress a claimed complete bucket without inventing one for them.
-      if (bucket.allTools.coverage.state === 'complete') bucket.allTools.coverage.state = 'partial'
-      if (bucket.commands.coverage.state === 'complete') bucket.commands.coverage.state = 'partial'
+  function finish(globalSources: readonly AutoModeUsageSource[], coverageRangeStart?: string): AutoModeUsageSummary {
+    const finalRangeStart = coverageRangeStart === undefined ? rangeStart : validTime(coverageRangeStart)
+    if (finalRangeStart === null || finalRangeStart < rangeStart || finalRangeStart > rangeEnd) {
+      throw new Error('Invalid auto-mode usage coverage range')
     }
-    finishCoverage(bucket.allTools.coverage)
-    finishCoverage(bucket.commands.coverage)
-  }
+    const { sourcesByScope, sourceConflict } = validatedSources(globalSources)
+    const sources = [...sourcesByScope.values()]
+    const sourceCoverageUnknown = [...observedScopes].some(scope => !sourcesByScope.has(scope))
+    function finalizedPopulation(
+      retained: AutoModeUsagePopulation,
+      kind: 'allTools' | 'commands',
+      start: number,
+      end: number,
+    ): AutoModeUsagePopulation {
+      const coverage = coverageFor(sources, kind, start, end)
+      coverage.invalidRecords = retained.coverage.invalidRecords
+      if (retained.coverage.state === 'partial' && coverage.state === 'complete') coverage.state = 'partial'
+      return { outcomes: { ...retained.outcomes }, coverage }
+    }
+    const finalAllTools = finalizedPopulation(allTools, 'allTools', finalRangeStart, rangeEnd)
+    const finalCommands = finalizedPopulation(commands, 'commands', finalRangeStart, rangeEnd)
+    const finalBuckets = [...buckets.values()].map(bucket => {
+      const bucketStart = localMidnight(bucket.date, timezone)
+      const bucketEnd = Math.min(localMidnight(addCalendarDays(bucket.date, 1), timezone) - 1, rangeEnd)
+      return {
+        date: bucket.date,
+        allTools: finalizedPopulation(bucket.allTools, 'allTools', bucketStart, bucketEnd),
+        commands: finalizedPopulation(bucket.commands, 'commands', bucketStart, bucketEnd),
+      }
+    })
+    finalAllTools.coverage.invalidRecords += sourceInvalidRecords + (sourceConflict ? 1 : 0)
+    finalCommands.coverage.invalidRecords += sourceInvalidRecords + (sourceConflict ? 1 : 0)
+    finalAllTools.coverage.orphanRecords += sourceOrphanRecords
+    finalCommands.coverage.orphanRecords += sourceOrphanRecords
+    if (sourceCoverageUnknown) {
+      if (finalAllTools.coverage.state === 'complete') finalAllTools.coverage.state = 'partial'
+      if (finalCommands.coverage.state === 'complete') finalCommands.coverage.state = 'partial'
+    }
+    finishCoverage(finalAllTools.coverage)
+    finishCoverage(finalCommands.coverage)
+    for (const bucket of finalBuckets) {
+      if (sourceConflict || sourceInvalidRecords > 0 || sourceOrphanRecords > 0 || sourceCoverageUnknown) {
+        // These diagnostics have no trustworthy start bucket, so conservatively
+        // suppress a claimed complete bucket without inventing one for them.
+        if (bucket.allTools.coverage.state === 'complete') bucket.allTools.coverage.state = 'partial'
+        if (bucket.commands.coverage.state === 'complete') bucket.commands.coverage.state = 'partial'
+      }
+      finishCoverage(bucket.allTools.coverage)
+      finishCoverage(bucket.commands.coverage)
+    }
 
-  const namedCategories = [...categories.entries()]
-    .sort(([leftKey, left], [rightKey, right]) => right.count - left.count || leftKey.localeCompare(rightKey))
-  const categorySummary: AutoModeUsageSummary['categories'] = namedCategories.slice(0, 8).map(([categoryIdentity, entry]) => ({
-    key: categoryIdentity,
-    kind: 'named' as const,
-    label: entry.category.id,
-    count: entry.count,
-  }))
-  const otherCount = namedCategories.slice(8).reduce((total, [, entry]) => total + entry.count, 0)
-  if (otherCount > 0) categorySummary.push({ key: 'other', kind: 'other', label: 'Other', count: otherCount })
-  if (uncategorized > 0) {
-    categorySummary.push({ key: 'uncategorized', kind: 'uncategorized', label: 'Uncategorized', count: uncategorized })
-  }
+    const namedCategories = [...categories.entries()]
+      .sort(([leftKey, left], [rightKey, right]) => right.count - left.count || leftKey.localeCompare(rightKey))
+    const categorySummary: AutoModeUsageSummary['categories'] = namedCategories.slice(0, 8).map(([categoryIdentity, entry]) => ({
+      key: categoryIdentity,
+      kind: 'named' as const,
+      label: entry.category.id,
+      count: entry.count,
+    }))
+    const otherCount = namedCategories.slice(8).reduce((total, [, entry]) => total + entry.count, 0)
+    if (otherCount > 0) categorySummary.push({ key: 'other', kind: 'other', label: 'Other', count: otherCount })
+    if (uncategorized > 0) {
+      categorySummary.push({ key: 'uncategorized', kind: 'uncategorized', label: 'Uncategorized', count: uncategorized })
+    }
 
-  return {
-    allTools,
-    commands,
-    buckets: [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date)),
-    routes: [...routes.entries()]
-      .map(([routeAndOutcome, count]) => {
-        const [route, outcome] = JSON.parse(routeAndOutcome) as [AutoModeRoute, AutoModeUsageOutcome]
-        return { route, outcome, count }
-      })
-      .sort((left, right) => left.route.localeCompare(right.route) || left.outcome.localeCompare(right.outcome)),
-    categories: categorySummary,
+    return {
+      allTools: finalAllTools,
+      commands: finalCommands,
+      buckets: finalBuckets.sort((left, right) => left.date.localeCompare(right.date)),
+      routes: [...routes.entries()]
+        .map(([routeAndOutcome, count]) => {
+          const [route, outcome] = JSON.parse(routeAndOutcome) as [AutoModeRoute, AutoModeUsageOutcome]
+          return { route, outcome, count }
+        })
+        .sort((left, right) => left.route.localeCompare(right.route) || left.outcome.localeCompare(right.outcome)),
+      categories: categorySummary,
+    }
   }
+  return { addSource, finish }
+}
+
+/**
+ * Reduces synthetic, metadata-only retained records. Partitioning preserves
+ * within-source order, including first-observed record identity conflicts.
+ */
+export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoModeUsageSummary {
+  const accumulator = createAutoModeUsageAccumulator(input)
+  const recordsByScope = new Map<string, RetainedAutoModeRecord[]>()
+  for (const record of input.records) {
+    const records = recordsByScope.get(record.sourceScope)
+    if (records) records.push(record)
+    else recordsByScope.set(record.sourceScope, [record])
+  }
+  for (const records of recordsByScope.values()) accumulator.addSource(records)
+  return accumulator.finish(input.sources)
 }
 
 export function autoModeCommandRate(summary: AutoModeUsageSummary): AutoModeCommandRate {
