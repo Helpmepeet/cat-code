@@ -59,7 +59,6 @@ import {
   PEER_BUBBLE_CLASS,
   PEER_TONE_CLASS,
   isPeerSpeechCall,
-  peerActivityText,
   peerToolPresentation,
   type PeerToolPresentation,
 } from './peerSurfaces.js'
@@ -156,18 +155,17 @@ import {
   type FaceAxes,
 } from './agentFace.js'
 import { AgentFace } from './AgentChrome.js'
+import { deriveTarget, derivePeerTargetParts, peerTargetFragment, toolCardFilePath, displayFilePath, type PeerTargetParts } from './transcriptToolTarget.js'
+import type { LeaseSnapshot } from '../../shared/protocol.js'
+import { agentToolSourceOf, agentActivityOf, agentProgressBadge, agentModelOf, agentAccountLabel } from './transcriptAgent.js'
 import {
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
 } from './agentChromeModel.js'
 import { formatModelDisplayName } from './statsState.js'
 import {
-  leaseAccountShortLabel,
   LeaseSnapshotContext,
-  selectLeaseForLabel,
-  selectLeaseForOwner,
 } from './leaseState.js'
-import type { LeaseSnapshot } from '../../shared/protocol.js'
 import { ToolInspector } from './ToolInspector.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import {
@@ -2545,107 +2543,6 @@ const STATE_STYLE: Record<
   },
 }
 
-/**
- * How much of a peer argument the one-line slot is allowed to carry.
- *
- * The slot itself is a single truncated line, so CSS already cuts anything too
- * wide for the window. This cap is about the string, not the pixels: a create
- * prompt and a read query are bounded by nothing in their schemas, so a whole
- * essay would otherwise be collapsed onto one line and handed to the DOM for
- * every card on screen. It no longer sees a peer MESSAGE: a send is drawn as
- * speech and shows its text in full.
- */
-const PEER_TARGET_MAX_CHARS = 160
-
-/**
- * One line of a peer argument, whitespace collapsed so a multi-line body reads
- * as a sentence rather than as its first word. The marker is added ONLY when
- * this cut something, so a short message is never made to look abridged.
- */
-function peerTargetFragment(value: string): string {
-  const oneLine = value.replace(/\s+/g, ' ').trim()
-  return oneLine.length > PEER_TARGET_MAX_CHARS
-    ? `${oneLine.slice(0, PEER_TARGET_MAX_CHARS)}…`
-    : oneLine
-}
-
-/**
- * A peer call's target, split so the NAME can read as a name.
- *
- * The verb is no longer in here: it moved to the mark (`peerToolPresentation`),
- * so repeating it would print the same thing twice in two registers, which is
- * what the `• TOOL message Basalt: …` fallback did. Every value comes from
- * `row.input`, which is what THIS session sent, so no text from another session
- * reaches the header on any of these paths.
- */
-type PeerTargetParts = {
-  /** The peer this call is about, when the call names one before it runs. */
-  name: string | null
-  /** The one argument worth a header slot. */
-  detail: string | null
-  /** A search query is mono the way `grep`'s pattern is; prose is not. */
-  detailMono: boolean
-}
-
-function derivePeerTargetParts(
-  toolName: string,
-  str: (key: string) => string | null,
-  input: Record<string, unknown>,
-): PeerTargetParts | null {
-  switch (toolName) {
-    // `SEND_TO_PEER_TOOL_NAME`/`READ_PEER_TOOL_NAME`/`CREATE_PEER_TOOL_NAME`
-    // (`app/sidecar/sendToPeerTool.ts:48`, `readPeerTool.ts:71`,
-    // `createPeerTool.ts:36`); the argument keys are those files' own schemas.
-    case 'SendToPeer': {
-      // Only reached if the speech row is somehow bypassed; a send is drawn as
-      // speech, not as a card (`PeerSpeechRow`).
-      const to = str('to')
-      return to === null ? null : { name: to, detail: null, detailMono: false }
-    }
-    case 'ReadPeer': {
-      // A call missing its required field still projects before the tool
-      // validates it. Returning null here would hand the slot back to the
-      // family fallback, which is `row.toolName` — the raw identifier this
-      // whole treatment exists to keep off the screen.
-      const peer = str('peer') ?? 'a peer'
-      if (peer === null) return null
-      // A query is the whole of what makes a read a search since the tool
-      // returns turns (`readPeerTool.ts` input schema; `view` and `limit` were
-      // removed 2026-09-05). A whitespace-only query is absent to the tool, so
-      // it is absent here too.
-      const query = str('query')?.trim() || null
-      return {
-        name: peer,
-        // Capped like every other peer argument: `query` is bounded by nothing
-        // in the tool's schema (`readPeerTool.ts` `z.string().optional()`), and
-        // this value also reaches the agent activity line through `deriveTarget`.
-        detail: query === null ? null : peerTargetFragment(query),
-        detailMono: query !== null,
-      }
-    }
-    case 'CreatePeer': {
-      // No name to show: the peer is named by main and the name comes back in
-      // the result, so at this point the instruction is all there is.
-      const prompt = str('prompt')
-      return {
-        name: null,
-        detail: prompt === null ? 'a new session' : peerTargetFragment(prompt),
-        detailMono: false,
-      }
-    }
-    case 'ListPeers':
-      // The one optional flag widens the roster to closed rows
-      // (`listPeersTool.ts:44`), which is the only thing the call can vary.
-      return {
-        name: null,
-        detail: input['all'] === true ? 'every peer' : 'open peers',
-        detailMono: false,
-      }
-    default:
-      return null
-  }
-}
-
 /** The name reads as a name, the argument as an argument. */
 function PeerTargetLine({ parts }: { parts: PeerTargetParts }) {
   return (
@@ -2665,92 +2562,6 @@ function PeerTargetLine({ parts }: { parts: PeerTargetParts }) {
       )}
     </>
   )
-}
-
-/** The same parts as one line, for `target` and anything reading it as text. */
-function peerTargetText(parts: PeerTargetParts): string {
-  if (parts.name === null) return parts.detail ?? ''
-  return parts.detail === null ? parts.name : `${parts.name} · ${parts.detail}`
-}
-
-/** Family-specific one-line target framing derived from the REAL tool input. */
-function deriveTarget(
-  row: ToolUseNestedRow,
-  cwd: string | null = null,
-): string {
-  const input = row.input
-  const str = (key: string): string | null => {
-    const value = input[key]
-    return typeof value === 'string' && value.length > 0 ? value : null
-  }
-  const peerParts = derivePeerTargetParts(row.toolName, str, input)
-  if (peerParts !== null) return peerTargetText(peerParts)
-  switch (row.toolFamily) {
-    case 'bash':
-      return str('command') ?? row.toolName
-    case 'read':
-    case 'write':
-    case 'edit': {
-      const filePath = toolCardFilePath(row)
-      return filePath === null ? row.toolName : displayFilePath(filePath, cwd)
-    }
-    case 'grep':
-      return str('pattern') ?? str('path') ?? row.toolName
-    case 'web':
-      return str('url') ?? str('query') ?? row.toolName
-    case 'notebook':
-      return str('notebook_path') ?? str('path') ?? row.toolName
-    case 'mcp':
-      return mcpServerTool(row.toolName)
-    case 'skill':
-      return str('command') ?? str('skill') ?? row.toolName
-    case 'imagegen':
-      return str('prompt') ?? row.toolName
-    case 'agent':
-      // The Agent card's one-line target is the task, from the REAL tool input
-      // (`Agent`/`Task` carry `description`/`prompt` — messageActions.tsx:107-114).
-      return str('description') ?? str('prompt') ?? row.toolName
-    case 'agent-control': {
-      // The verb plus WHO it acted on, from each tool's real recipient key:
-      // `agentId` (`ResumeAgentTool.tsx:25`) and `to` (`SendMessageTool.ts:91`).
-      const recipient = str('agentId') ?? str('to')
-      if (recipient === null) return row.toolName
-      return row.toolName === 'ResumeAgent'
-        ? `resume ${recipient}`
-        : `message ${recipient}`
-    }
-    default:
-      return row.toolName
-  }
-}
-
-function toolCardFilePath(row: ToolUseNestedRow): string | null {
-  if (
-    row.toolFamily !== 'read' &&
-    row.toolFamily !== 'write' &&
-    row.toolFamily !== 'edit'
-  ) {
-    return null
-  }
-  const filePath = row.input['file_path']
-  if (typeof filePath === 'string' && filePath.length > 0) return filePath
-  return row.toolFamily === 'edit' ? row.result?.diff?.filePath ?? null : null
-}
-
-function displayFilePath(filePath: string, cwd: string | null): string {
-  if (cwd === null || cwd.length === 0) return filePath
-  const trimmedCwd = cwd.replace(/[/\\]+$/, '')
-  const separator = trimmedCwd.includes('\\') ? '\\' : '/'
-  const prefix = `${trimmedCwd}${separator}`
-  return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath
-}
-
-/** `mcp__server__tool` → `server › tool` (the prototype's MCP framing). */
-function mcpServerTool(toolName: string): string {
-  if (!toolName.startsWith('mcp__')) return toolName
-  const [, server, ...rest] = toolName.split('__')
-  if (!server) return toolName
-  return rest.length > 0 ? `${server} › ${rest.join('__')}` : server
 }
 
 /** Uppercase micro-label under the header, real data only (byte/line counts
@@ -3943,194 +3754,6 @@ function toolRunDigest(family: ToolRunFamily, row: ToolRunMember): string | null
 }
 
 /**
- * The transcript-derived Agent source for the P4-2 vocabulary. Every field comes
- * from THIS row: the `tool_use` `input` (`subagent_type`/`description`/`prompt`/
- * `run_in_background`, the real Agent-tool input keys — `AgentTool/UI.tsx`) and
- * the read-time correlated `status`. It NEVER reads the session-plane
- * `workers.snapshot` (`workersState.ts`) — that cross-plane read is the
- * D2 §4 sin the decision forbids.
- */
-function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
-  const input = row.input
-  const str = (key: string): string | undefined => {
-    const value = input[key]
-    return typeof value === 'string' && value.length > 0 ? value : undefined
-  }
-  const subagentType = str('subagent_type')
-  const description = str('description')
-  const prompt = str('prompt')
-  const isLaunchRecord =
-    (row.toolName === 'Agent' || row.toolName === 'Task') &&
-    input.run_in_background === true
-  // Identity is transcript-owned in either state: the completed result carries
-  // it on the parent correlation, while a running worker carries it on its
-  // nested progress frames. No live task snapshot joins this card.
-  let nestedAgentName: string | undefined
-  for (const child of row.children) {
-    if (!('agentName' in child) || child.agentName === undefined) continue
-    nestedAgentName = child.agentName
-    break
-  }
-  const agentName =
-    row.result?.agentName ??
-    nestedAgentName
-  // The worker's own id, which is what the face is keyed on: a name is not
-  // unique per spawn and two workers can be told to run under one handle. It
-  // rides the structured result (`transcriptProjector.ts` `agentId`), so a launch
-  // ack has it immediately and a foreground worker only once it settles. A
-  // running foreground card therefore draws by name first and adopts the id when
-  // it lands, which does not move the face: the registry binds both to whichever
-  // arrived first.
-  const agentId = row.result?.agentId
-  return {
-    toolName: row.toolName === 'Task' ? 'Task' : 'Agent',
-    status: row.status,
-    ...(agentId !== undefined ? { agentId } : {}),
-    ...(agentName !== undefined ? { agentName } : {}),
-    ...(input.run_in_background === true || row.toolName === 'ResumeAgent'
-      ? { run_in_background: true }
-      : {}),
-    ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
-    ...(description !== undefined ? { description } : {}),
-    ...(prompt !== undefined ? { prompt } : {}),
-    ...(!isLaunchRecord && row.agentCompletion !== null
-      ? { hasCompletion: true, completionStatus: row.agentCompletion.status }
-      : {}),
-  }
-}
-
-/**
- * What the activity line says a nested BASH call is doing: the model's own
- * description, falling back to the command only when it wrote none.
- *
- * This is not the bash card header, which keeps the raw command by operator
- * call (2026-08-23, `bashCommandLabel.ts`) because a column of cards is read as
- * commands. The activity line is one truncated slot on someone ELSE's card, and
- * a long command spends all of it on a prefix that says nothing about the work.
- * The selection rule is shared, so a command with no description and no leading
- * `# comment` still shows the command.
- */
-function agentActivityTarget(child: ToolUseNestedRow): string {
-  if (child.toolFamily !== 'bash') return deriveTarget(child)
-  const str = (key: string): string | null => {
-    const value = child.input[key]
-    return typeof value === 'string' && value.length > 0 ? value : null
-  }
-  return (
-    selectBashCardText(str('command'), str('description')).hover ??
-    deriveTarget(child)
-  )
-}
-
-/**
- * The running card's live signal: the subagent's most recent nested tool call.
- * Only full frames arrive for subagents (§4/S1 — no nested streaming), so the
- * LAST tool-use child IS what the worker is doing right now. Null until the
- * first one lands, which is the real "spawned but nothing yet" moment.
- */
-function agentActivityOf(row: ToolUseNestedRow): string | null {
-  for (let index = row.children.length - 1; index >= 0; index -= 1) {
-    const child = row.children[index]
-    if (child === undefined || child.kind !== 'tool-use') continue
-    // Peer tools carry their verb in a mark the activity line does not have, so
-    // they supply a whole phrase and skip the prefix below — which would
-    // otherwise print their raw PascalCase names at the user (§7), and print
-    // `ListPeers` twice now that the call has a target of its own.
-    const peerActivity = peerActivityText(child.toolName, child.input)
-    if (peerActivity !== null) return peerActivity
-    const target = agentActivityTarget(child)
-    // `agentActivityTarget` falls back to the tool's OWN name for several families, and
-    // already spells MCP as `server › tool`. Prefixing either prints the name
-    // twice ("TodoWrite TodoWrite") and pushes the badge past its truncation.
-    //
-    // Bash is unprefixed for a different reason: its target is a sentence the
-    // worker wrote about its own work, or failing that a shell command. Both
-    // read as what is happening; "Bash" in front of either only spends the slot.
-    return (
-      target === child.toolName ||
-      child.toolFamily === 'mcp' ||
-      child.toolFamily === 'bash'
-    )
-      ? target
-      : `${child.toolName} ${target}`
-  }
-  return null
-}
-
-/**
- * Nested TOOL CALLS only. The count this replaced ("N nested") counted every
- * child row, mixing the worker's prose turns in with its tool calls, so two
- * agents that did identical work could report different numbers.
- */
-function agentToolCallCount(row: ToolUseNestedRow): number {
-  return row.children.reduce(
-    (total, child) => (child.kind === 'tool-use' ? total + 1 : total),
-    0,
-  )
-}
-
-/**
- * The card's ONE right-hand slot, which holds exactly one thing: while a worker
- * is live it says what the worker is doing, and once it settles it says what the
- * worker cost. Never both, never a state word, and it may be absent.
- *
- * Counting nested rows is the last resort when restored result usage is absent.
- */
-function agentProgressBadge(
-  row: ToolUseNestedRow,
-  state: AgentStateKey,
-): string | null {
-  const activity = agentActivityOf(row)
-  if (state === 'running') return activity ?? 'starting'
-  // A BACKGROUNDED agent yields no nested progress to this card: the async
-  // branch returns its launch ack (`AgentTool.tsx:1279`) before the branch that
-  // calls `onProgress` (`:1320`). So it has no activity to report, and
-  // `starting` would sit there for the worker's entire life.
-  //
-  // It says so itself now. The redesign took the lifecycle word off the card
-  // (2026-08-19), so with the slot empty and the face turned away this card
-  // carried no statement at all that the worker went to the background.
-  //
-  // A LAUNCH RECORD says `launched`, not `backgrounded`. Both are state
-  // `background` and both used to be told apart by the face alone — teal for the
-  // ack, blue for a run genuinely under way. The face carries identity now
-  // (2026-08-21), so the distinction moved into the word, where it says what it
-  // means instead of relying on a reader knowing two shades of the same stamp.
-  if (state === 'background') {
-    const isLaunchRecord =
-      (row.toolName === 'Agent' || row.toolName === 'Task') &&
-      row.input.run_in_background === true
-    return isLaunchRecord ? 'launched' : 'backgrounded'
-  }
-  const settledUsage = row.result?.agentUsage ?? null
-  const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
-  const parts: string[] = []
-  if (toolCalls > 0) {
-    parts.push(`${toolCalls} tool ${toolCalls === 1 ? 'call' : 'calls'}`)
-  }
-  // Built independently of the call count: an agent that answered from context
-  // has real token usage and zero tool calls, and gating both on the count
-  // threw the engine's own totals away.
-  //
-  // `> 0`, not merely present: a missing count is persisted as a literal zero
-  // engine-side (`totalTokensOverride ?? 0`,
-  // `src/tools/AgentTool/agentToolUtils.ts:694`, whose sibling branch logs
-  // `finalize_missing_usage`), and that zero survives the projector's
-  // all-or-nothing narrowing as a valid number. Printing it renders "we never
-  // got usage" as the claim "0 tokens", beside a worker that made 55 tool calls.
-  //
-  // A worker that did not FINISH drops the figure whatever its value: its
-  // totals are a partial tally, and printing them beside a row that has just
-  // said Failed or Stopped invites the reader to compare a broken run's cost
-  // against a whole one's.
-  const settledWhole = state !== 'failed' && state !== 'stopped'
-  if (settledWhole && settledUsage && settledUsage.totalTokens > 0) {
-    parts.push(`${compactCount(settledUsage.totalTokens)} tokens`)
-  }
-  return parts.length === 0 ? null : parts.join(' · ')
-}
-
-/**
  * What line 1 calls a worker whose name has not arrived. Identity arrives LATE —
  * only after the first nested frame, and never at all on old or failed records —
  * so this is the first thing anyone sees, and the type word beside it has to
@@ -4144,83 +3767,6 @@ const NAMELESS_AGENT_LABEL = 'AGENT'
  * that it is a second run of a worker that already existed.
  */
 const RESUMED_TYPE_WORD = 'resumed'
-
-/**
- * The model this worker actually ran on, transcript-plane only.
- *
- * Two sources for the same fact at two moments in a run: a SETTLED worker's own
- * structured result carries `model` (`AgentToolResult.model`), and a RUNNING one
- * has no result yet, so it is read off the `model` its nested assistant frames
- * carry. Both replay from history; neither joins a live snapshot (D2 §4).
- *
- * The first nested frame, not the last: it is the same value for the whole run
- * (the engine resolves the subagent's model once), and reading forward keeps the
- * card from re-rendering a different string as children arrive.
- */
-function agentModelOf(row: ToolUseNestedRow): string | null {
-  const settled = row.result?.agentModel
-  if (settled !== undefined) return settled
-  for (const child of row.children) {
-    if (!('model' in child) || child.model === undefined) continue
-    return child.model
-  }
-  return null
-}
-
-/**
- * The Codex account this worker is holding, or null.
- *
- * A LIVE join, and the only thing on the card that is not transcript-plane. It is
- * deliberate and operator-ruled (2026-08-19): the account is the one fact a
- * reader needs to answer "which of my accounts is this burning", and the
- * transcript carries no such field. The join key needs no new plumbing on either
- * side — `LeaseOwnerRow.ownerId` IS the subagent's `agentId`
- * (`protocol.ts` JOIN KEY note), and the Agent tool's own structured result
- * carries that `agentId` for both the sync and the background paths
- * (`AgentTool.tsx:1306` async ack).
- *
- * TWO sources, live first. The lease join answers while the worker is running
- * and follows it across a failover; it goes null the moment the worker finishes,
- * because `releaseCodexLease` DELETES the entry rather than marking it, so the
- * settled answer comes from the result's own stamp (`agentAccount`) instead.
- * Live is preferred over the stamp for the one case where they can disagree: a
- * background worker's stamp is written at dispatch and cannot be amended.
- *
- * Null is still the ORDINARY case and must stay silent, not blank: an
- * Anthropic-path worker holds no Codex lease at all, and a run recorded before
- * the engine stamped its result carries neither. The account renders when it is
- * knowable and is absent otherwise; nothing on the row claims a slot that can
- * empty.
- */
-function agentAccountLabel(
-  row: ToolUseNestedRow,
-  leases: LeaseSnapshot | null,
-): string | null {
-  const lease =
-    selectLeaseForOwner(leases, row.result?.agentId ?? null) ??
-    selectLeaseForLabel(leases, agentLeaseLabelOf(row))
-  if (lease !== null) return leaseAccountShortLabel(lease)
-  const stamped = row.result?.agentAccount
-  return stamped === undefined ? null : leaseAccountShortLabel(stamped)
-}
-
-/**
- * The label this row's lease was registered under: the Agent tool's own
- * `description` argument, which `registerWorkerCodexLease` passes straight
- * through as `ownerLabel` (`src/tools/AgentTool/AgentTool.tsx:1502`).
- *
- * Read raw off the input rather than from `deriveTarget`, which is display text
- * and may be shortened or fall back to other fields — the join needs the exact
- * string the engine registered. A ResumeAgent row has no `description` and needs
- * none: the projector resolves its `agentId` from the input, so it joins on the
- * key above.
- */
-function agentLeaseLabelOf(row: ToolUseNestedRow): string | null {
-  const description = row.input.description
-  return typeof description === 'string' && description.length > 0
-    ? description
-    : null
-}
 
 /**
  * The model as a reader knows it. The raw id is a dated slug
