@@ -318,8 +318,8 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
   const adjustment = bottomLocked ? fallback
     : visibleAdjustment === null ? fallback
       : Math.min(maxScrollTop, Math.max(0, metrics.scrollTop + visibleAdjustment)) - metrics.scrollTop
-  // Sub-pixel answers are noise from rounded box metrics, and writing scrollTop
-  // costs a layout plus a scroll event.
+  // Avoid subpixel writes, but retain the reading goal so skipped movement and
+  // browser rounding can accumulate into a later correction rather than drift.
   if (Math.abs(adjustment) >= 1) {
     const next = scroller.scrollTop + adjustment
     scroller.scrollTop = next
@@ -329,6 +329,12 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
     }
   }
   pane.anchor = capturePaneVisibleAnchor(scroller)
+  if (!bottomLocked && pane.anchor && visibleAdjustment !== null) {
+    // Reflow can change which character starts the visible line. Resample its
+    // identity, but carry the uncorrected displacement into its reading goal.
+    const remainder = visibleAdjustment - (scroller.scrollTop - metrics.scrollTop)
+    for (const point of pane.anchor.points) point.top -= remainder
+  }
 }
 
 function readPaneMetrics(scroller: HTMLElement): PaneScrollMetrics {

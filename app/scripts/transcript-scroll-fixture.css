@@ -6,6 +6,6 @@
 .scroll-fixture-short .transcript-virtual-column > [data-transcript-entry="history:125"] { height: 48px; }
 .scroll-fixture-tall .transcript-virtual-column > [data-transcript-entry="history:125"] { height: 96px; }
 .scroll-fixture-pane .transcript-col-slide { animation: none; }
-.scroll-fixture-prose { padding: 24px; }
+.scroll-fixture-prose { padding: var(--scroll-fixture-top-padding, 24px) 24px 24px; }
 .scroll-fixture-narrow { width: 650px; }
 .scroll-fixture-native[data-pane-scroll-owner] { overflow-anchor: auto; }

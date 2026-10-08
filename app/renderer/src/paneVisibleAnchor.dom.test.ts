@@ -23,7 +23,7 @@ afterAll(async () => { await harness.teardown() })
 
 // Inject line boxes, not just a message's bounding box. These tests exercise the
 // production coordinator, but are NOT evidence of native layout/RO timing.
-function fixture() {
+function fixture(roundScroll = false) {
   const pane = document.createElement('div')
   const row = document.createElement('div')
   row.setAttribute('data-transcript-entry', 'reading')
@@ -37,7 +37,10 @@ function fixture() {
   let contentHeight = 3_000
   const writes: number[] = []
   Object.defineProperties(pane, {
-    scrollTop: { configurable: true, get: () => scrollTop, set: (value: number) => { scrollTop = value; writes.push(value) } },
+    scrollTop: { configurable: true, get: () => scrollTop, set: (value: number) => {
+      scrollTop = roundScroll ? Math.round(value) : value
+      writes.push(scrollTop)
+    } },
     clientHeight: { configurable: true, get: () => 80 },
     scrollHeight: { configurable: true, get: () => contentHeight },
     getBoundingClientRect: { value: () => ({ top: 0, bottom: 80, left: 0, right: 500, width: 500, height: 80 }) },
@@ -66,6 +69,35 @@ function fixture() {
   restore = () => { release(); document.createRange = originalRange; globalThis.requestAnimationFrame = raf; globalThis.cancelAnimationFrame = cancel }
   return { pane, row, paragraph, writes, flush, grow: (above: number, below: number) => { prefix += above; contentHeight += above + below } }
 }
+
+for (const delta of [-0.75, 0.75]) {
+  for (const roundScroll of [false, true]) {
+    test(`fractional movement stays bounded across frames: ${delta}px, rounded scroll ${roundScroll}`, () => {
+      const f = fixture(roundScroll)
+      const intended = capturePaneVisibleAnchor(f.pane)!
+      for (let step = 0; step < 20; step++) {
+        f.grow(delta, 0)
+        reportPaneHeightCorrection(f.pane, { offset: 0, delta })
+        f.flush()
+        expect(Math.abs(readPaneVisibleAnchorAdjustment(f.pane, intended)!)).toBeLessThan(1)
+      }
+      expect(f.pane.scrollTop).toBe(110 + delta * 20)
+    })
+  }
+}
+
+test('intentional scrolling supersedes an uncorrected fractional reading goal', () => {
+  const f = fixture()
+  f.grow(0.75, 0)
+  reportPaneHeightCorrection(f.pane, { offset: 0, delta: 0.75 })
+  f.flush()
+  f.pane.scrollTop = 600
+  f.pane.dispatchEvent(new Event('scroll'))
+  f.grow(0, 24)
+  reportPaneHeightCorrection(f.pane, { offset: 0, delta: 24 })
+  f.flush()
+  expect(f.pane.scrollTop).toBe(600)
+})
 
 for (const delta of [-24, 0, 24]) {
   test(`a lower-edge replacement of ${delta}px does not move visible text`, () => {

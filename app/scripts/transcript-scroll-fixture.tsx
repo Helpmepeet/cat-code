@@ -129,7 +129,12 @@ async function settle(pane: HTMLElement, count = 12, tracked?: TrackedCharacter,
     }
     let anchorTop: number | null = null
     if (tracked) {
-      try { anchorTop = readTracked(pane, tracked) } catch { /* Sample remount gaps, too. */ }
+      try {
+        anchorTop = readTracked(pane, tracked)
+      } catch (error) {
+        recordGeometry(pane, 'tracked content missing from frame', tracked)
+        throw error
+      }
     }
     samples.push({ scrollTop: pane.scrollTop, scrollHeight: pane.scrollHeight,
       mounted: pane.querySelectorAll('[data-transcript-entry]').length, anchorTop,
@@ -314,12 +319,56 @@ async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 
   assertClose(nestedError, 0, 'nested cumulative intentional motion')
   results.push({ scenario: 'nested gaps and measurements', anchorError: nestedError, writes: writes.length - nestedWriteCount })
   flushSync(() => root.render(null))
+  const generatedImage: NestedTranscriptRow = {
+    ...agent, id: 'synthetic-image', toolUseId: 'image-tool', toolName: 'GenerateImage',
+    toolFamily: 'imagegen', input: { prompt: 'Synthetic fixture image' },
+    result: {
+      content: 'Synthetic image', isError: false, diff: null,
+      generatedImage: {
+        filePath: '/synthetic/image.png', model: 'synthetic', size: '1x1',
+        outputFormat: 'png', bytes: 68,
+        preview: { mediaType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=' },
+      },
+    },
+  }
+  const imagePane = render([generatedImage])
+  scenario = 'generated-image children without gaps'
+  await imagePane.querySelector('img')!.decode()
+  imagePane.scrollTop = 1_000
+  await settle(imagePane)
+  const imageTracked = track(imagePane)
+  const imageWriteCount = writes.length
+  for (let step = 0; step < 20; step++) await scrollStep(imagePane, 2, 12)
+  const imageChildren = imagePane.querySelector('[data-transcript-child]')?.parentElement
+  if (!imageChildren || getComputedStyle(imageChildren).display !== 'block') {
+    throw new Error('Generated-image child layout no longer exercises the no-gap caller')
+  }
+  assertClose(imageChildren.getBoundingClientRect().height,
+    [...imageChildren.children].reduce((total, child) => total + child.getBoundingClientRect().height, 0),
+    'generated-image measured spacer total')
+  const imageError = readTracked(imagePane, imageTracked) - (imageTracked.top - 40)
+  assertClose(imageError, 0, scenario)
+  results.push({ scenario, anchorError: imageError, writes: writes.length - imageWriteCount })
+  flushSync(() => root.render(null))
   const paragraph = (index: number) => `Paragraph ${index.toString().padStart(3, '0')}: ` + 'Synthetic reading content with wrapped lines. '.repeat(12)
   let paragraphs = Array.from({ length: 100 }, (_, index) => paragraph(index))
   let rows = [proseRow(paragraphs.join('\n\n'))]
   const pane = render(rows, 'scroll-fixture-prose')
   scenario = 'Markdown initialization'
   pane.scrollTop = 1_000; await settle(pane)
+  scenario = 'cumulative fractional movement'
+  const fractionalTracked = track(pane)
+  const fractionalWrites = writes.length
+  const initialPadding = Number.parseFloat(getComputedStyle(pane).paddingTop)
+  for (let step = 1; step <= 20; step++) {
+    pane.style.setProperty('--scroll-fixture-top-padding', `${initialPadding + step * 0.75}px`)
+    await settle(pane, 3, fractionalTracked)
+    assertClose(readTracked(pane, fractionalTracked), fractionalTracked.top, scenario)
+  }
+  results.push({
+    scenario, anchorError: readTracked(pane, fractionalTracked) - fractionalTracked.top,
+    writes: writes.length - fractionalWrites,
+  })
   for (const step of ['append below', 'equal-height prepend and tail removal', 'resize', 'prepend rows'] as const) {
     scenario = `Markdown: ${step}`
     const tracked = track(pane)

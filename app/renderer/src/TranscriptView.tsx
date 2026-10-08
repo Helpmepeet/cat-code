@@ -1540,9 +1540,11 @@ function findPaneScroller(element: HTMLElement): HTMLElement {
 function NestedRowList({
   rows,
   className,
+  childGap = 0,
 }: {
   rows: NestedTranscriptRow[]
   className?: string
+  childGap?: number
 }) {
   const { mode } = useContext(ReasoningLayoutContext)
   const items = groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode))
@@ -1552,7 +1554,7 @@ function NestedRowList({
     <ReplyCopyInsetContext.Provider value>
       <BoundedChildList
         className={className}
-        childGap={8}
+        childGap={childGap}
         estimatedChildHeight={NESTED_ROW_ESTIMATED_HEIGHT}
         keys={keys}
         renderChild={index => (
@@ -3269,7 +3271,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 border-l border-accent/20 pl-3">
-          <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+          <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
         </div>
       ) : null}
     </div>
@@ -4484,7 +4486,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       <div className="flex flex-col gap-2">
         {childCount > 0 ? (
           <div className="border-l border-accent/20 pl-3">
-            <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+            <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
           </div>
         ) : null}
         {/* A background agent's real outcome, joined in from its
@@ -4671,7 +4673,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
       {expanded ? (
         <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
           <div className="border-l border-accent/20 pl-3">
-            <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+            <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
           </div>
         </div>
       ) : null}
