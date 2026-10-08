@@ -7,6 +7,7 @@ import {
 import * as path from 'path'
 import { posix, win32 } from 'path'
 import { z } from 'zod/v4'
+import { getSdkBetas } from '../../bootstrap/state.js'
 import {
   PDF_AT_MENTION_INLINE_THRESHOLD,
   PDF_EXTRACT_SIZE_THRESHOLD,
@@ -31,6 +32,7 @@ import {
 } from '../../skills/loadSkillsDir.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
+import { resolveContextWindowPolicy } from '../../utils/contextWindowPolicy.js'
 import { getCwd } from '../../utils/cwd.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../../utils/envUtils.js'
 import { getErrnoCode, isENOENT } from '../../utils/errors.js'
@@ -96,11 +98,8 @@ import {
 import { semanticNumber } from '../../utils/semanticNumber.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
-import {
-  DEFAULT_MAX_OUTPUT_TOKENS,
-  DEFAULT_PREFIX_TARGET_TOKENS,
-  getDefaultFileReadingLimits,
-} from './limits.js'
+import { getDefaultFileReadingLimits } from './limits.js'
+import { getTextReadBudget, measureTextReadTokens } from './textReadBudget.js'
 import {
   DESCRIPTION,
   FILE_READ_TOOL_NAME,
@@ -425,6 +424,13 @@ const outputSchema = lazySchema(() => {
           .describe('Number of lines in the returned content'),
         startLine: z.number().describe('The starting line number'),
         totalLines: z.number().describe('Total number of lines in the file'),
+        functionResolution: z
+          .object({
+            requestedPath: z.string(),
+            symbol: z.string(),
+            endLine: z.number(),
+          })
+          .optional(),
       }),
     }),
     z.object({
@@ -977,6 +983,23 @@ export const FileReadTool = buildTool({
       // Handle file-not-found: suggest similar files
       const code = getErrnoCode(error)
       if (code === 'ENOENT') {
+        // Ranges belong to the missing file, not to a different definition.
+        if (
+          prepared.capability === undefined &&
+          input.offset === undefined &&
+          input.limit === undefined &&
+          input.pages === undefined
+        ) {
+          const resolved = await resolveMissingFunctionRead(
+            input,
+            prepared,
+            context,
+            maxSizeBytes,
+            textReadBudgetForContext(context).hardTokenLimit,
+            parentMessage?.message.id,
+          )
+          if (resolved) return { data: resolved }
+        }
         const similarFilename = await findSimilarPreparedFile(prepared)
         const cwdSuggestion = await suggestPathUnderCwd(fullFilePath)
         let message = `File does not exist. ${FILE_NOT_FOUND_CWD_NOTE} ${getCwd()}.`
@@ -1109,6 +1132,9 @@ function formatFileLines(file: { content: string; startLine: number }): string {
 export function formatFileReadTextForModel(
   data: Extract<Output, { type: 'text' }>,
 ): string {
+  if (data.file.functionResolution) {
+    return functionResolutionNotice(data) + formatFileLines(data.file)
+  }
   if (data.file.content) {
     return (
       memoryFileFreshnessPrefix(data) +
@@ -1120,6 +1146,215 @@ export function formatFileReadTextForModel(
   return data.file.totalLines === 0
     ? '<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>'
     : `<system-reminder>Warning: the file exists but is shorter than the provided offset (${data.file.startLine}). The file has ${data.file.totalLines} lines.</system-reminder>`
+}
+
+function functionResolutionNotice(
+  data: Extract<Output, { type: 'text' }>,
+): string {
+  const resolution = data.file.functionResolution!
+  return `FUNCTION-ONLY resolved read. Requested file does not exist: ${JSON.stringify(resolution.requestedPath)}. Exact symbol: ${JSON.stringify(resolution.symbol)}. Actual source: ${JSON.stringify(data.file.filePath)}, lines ${data.file.startLine} to ${resolution.endLine}. Only this complete function definition was returned, not the containing file. This does not authorize a whole-file Write or Delete.\n\n`
+}
+
+async function resolveMissingFunctionRead(
+  input: Input,
+  missing: PreparedFileRead,
+  context: ToolUseContext,
+  maxSizeBytes: number,
+  hardTokens: number,
+  messageId?: string,
+): Promise<Extract<Output, { type: 'text' }> | undefined> {
+  if (
+    !path.isAbsolute(input.file_path) ||
+    missing.pathnameLimited ||
+    typeof context.getAppState !== 'function'
+  ) {
+    return undefined
+  }
+  const {
+    exactFunctionName,
+    isFunctionResolutionSource,
+    findExactFunctionDefinitions,
+  } = await import('./exactFunctionResolution.js')
+  const symbol = exactFunctionName(missing.originalPath)
+  if (!symbol) return undefined
+  const permissions = context.getAppState().toolPermissionContext
+  // Approval of the missing path never transfers to another file.
+  if (
+    getDenyRuleForTool(permissions, FileReadTool) ||
+    getAskRuleForTool(permissions, FileReadTool)
+  ) return undefined
+
+  let names: string[]
+  try {
+    names = await missing.readSiblingNames()
+  } catch {
+    return undefined
+  }
+  const sources = names.filter(isFunctionResolutionSource)
+  // Bounded local recovery, not a repository index. An incomplete scan cannot
+  // establish uniqueness, so reaching either bound keeps the missing-file result.
+  if (sources.length > 1000) return undefined
+  let remainingBytes = 8 * 1024 * 1024
+  // These bounds cover source discovery, not the returned function's budget.
+  const perFileBytes = 512 * 1024
+  const observedSources = new Map<
+    string,
+    Awaited<ReturnType<typeof preparedFileIdentity>>
+  >()
+  let winner:
+    | {
+        prepared: PreparedFileRead
+        identity: Awaited<ReturnType<typeof preparedFileIdentity>>
+        data: Extract<Output, { type: 'text' }>
+      }
+    | undefined
+  try {
+    for (const name of sources) {
+      context.abortController.signal.throwIfAborted()
+      const candidatePath = path.join(path.dirname(missing.originalPath), name)
+      const canonicalCandidatePath = path.join(path.dirname(missing.canonicalPath), name)
+      const candidateInput = { file_path: candidatePath }
+      const decision = checkReadPermissionForTool(
+        FileReadTool,
+        candidateInput,
+        permissions,
+      )
+      if (decision.behavior !== 'allow') continue
+      let candidate: PreparedFileRead
+      try {
+        candidate = await prepareFileRead(candidatePath)
+      } catch {
+        // A changing/uninspectable candidate cannot prove a unique definition.
+        return undefined
+      }
+      let retained = false
+      try {
+        // Reject sibling symlinks and ancestry that resolves somewhere other
+        // than the requested directory's prepared canonical location.
+        if (
+          candidate.pathnameLimited ||
+          candidate.canonicalPath !== canonicalCandidatePath ||
+          candidate.actualPath !== canonicalCandidatePath
+        ) continue
+        const boundPaths = [
+          candidate.originalPath,
+          candidate.canonicalPath,
+          candidate.actualPath,
+        ]
+        if (
+          boundPaths.some(
+            boundPath =>
+              checkReadPermissionForBoundPath(
+                candidateInput,
+                candidateInput,
+                boundPath,
+                permissions,
+                decision,
+              ).behavior !== 'allow',
+          )
+        ) continue
+        const capability = candidate.capability
+        if (!capability) return undefined
+        const identity = await preparedFileIdentity(candidate)
+        if (identity.size > perFileBytes || identity.size > remainingBytes) {
+          return undefined
+        }
+        remainingBytes -= identity.size
+        const bytes = await capability.readFile()
+        if (
+          bytes.length > perFileBytes ||
+          !fileIdentitiesEqual(identity, await preparedFileIdentity(candidate))
+        ) return undefined
+        observedSources.set(candidate.originalPath, identity)
+        // UTF-8 source only; never reinterpret binary or UTF-16 file formats.
+        const raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+        if (raw.includes('\0')) return undefined
+        if (!raw.includes(symbol)) continue
+        const content = raw.replaceAll('\r\n', '\n')
+        const matches = findExactFunctionDefinitions(candidatePath, content, symbol)
+        if (matches.length > 1 || (matches.length === 1 && winner)) return undefined
+        const match = matches[0]
+        if (!match) continue
+        const numLines = match.endLine - match.startLine + 1
+        if (numLines > MAX_LINES_TO_READ) return undefined
+        const data: Extract<Output, { type: 'text' }> = {
+          type: 'text',
+          file: {
+            filePath: candidate.actualPath,
+            content: match.content,
+            numLines,
+            startLine: match.startLine,
+            totalLines: content.split('\n').length,
+            functionResolution: {
+              requestedPath: input.file_path,
+              symbol,
+              endLine: match.endLine,
+            },
+          },
+        }
+        winner = { prepared: candidate, identity, data }
+        retained = true
+      } catch (error) {
+        if (context.abortController.signal.aborted) throw error
+        return undefined
+      } finally {
+        if (!retained) await candidate.cleanup()
+      }
+    }
+    if (!winner) return undefined
+    // A previously nonmatching file could have gained a second definition.
+    // Recheck the local inventory and all inspected identities, without
+    // retaining hundreds of open capabilities or reading any source twice.
+    const currentSources = (await missing.readSiblingNames()).filter(isFunctionResolutionSource)
+    if (
+      jsonStringify(currentSources.sort()) !== jsonStringify(sources.sort())
+    ) return undefined
+    for (const [sourcePath, identity] of observedSources) {
+      context.abortController.signal.throwIfAborted()
+      let current: PreparedFileRead
+      try {
+        current = await prepareFileRead(sourcePath)
+      } catch {
+        return undefined
+      }
+      try {
+        if (
+          !current.capability ||
+          !fileIdentitiesEqual(identity, await preparedFileIdentity(current))
+        ) return undefined
+      } finally {
+        await current.cleanup()
+      }
+    }
+    // The byte bound is conservative and needs no provider/token-count request.
+    // Never truncate a recovered function: success promises a complete definition.
+    if (
+      Buffer.byteLength(formatFileReadTextForModel(winner.data), 'utf8') >
+        Math.min(hardTokens, maxSizeBytes) ||
+      !fileIdentitiesEqual(winner.identity, await preparedFileIdentity(winner.prepared))
+    ) return undefined
+    context.readFileState.set(winner.prepared.actualPath, {
+      content: winner.data.file.content,
+      timestamp: Math.floor(winner.identity.modifiedAtMs),
+      offset: winner.data.file.startLine,
+      limit: winner.data.file.numLines,
+      isPartialView: true,
+      ...(messageId !== undefined ? { isWriteAuthorizedRead: true } : {}),
+      fileIdentity: winner.identity,
+    })
+    logFileOperation({
+      operation: 'read',
+      tool: 'FileReadTool',
+      filePath: winner.prepared.actualPath,
+      content: winner.data.file.content,
+    })
+    return winner.data
+  } catch (error) {
+    if (context.abortController.signal.aborted) throw error
+    return undefined
+  } finally {
+    await winner?.prepared.cleanup()
+  }
 }
 
 /**
@@ -1202,29 +1437,21 @@ async function validateContentTokens(
   }
 }
 
-const ESTIMATED_BYTES_PER_TOKEN = 1.4
+function textReadBudgetForContext(context: ToolUseContext) {
+  const model = context.options?.mainLoopModel
+  return getTextReadBudget(
+    model ? resolveContextWindowPolicy(model, getSdkBetas()).effective : undefined,
+    context.fileReadingLimits?.maxTokens ??
+      getDefaultFileReadingLimits().maxTokensOverride,
+  )
+}
 
 async function measureRenderedTokens(
   content: string,
   targetTokens: number,
   hardTokens: number,
 ): Promise<{ targetCount: number; hardCount: number }> {
-  const bytes = Buffer.byteLength(content, 'utf8')
-  if (bytes === 0) return { targetCount: 0, hardCount: 0 }
-
-  // The measured fallback keeps prefix sizing useful for ordinary text. The
-  // UTF-8 byte count is the guaranteed upper bound: a byte-level tokenizer
-  // cannot emit more tokens than input bytes. Only skip exact counting when
-  // both the normal target and the absolute ceiling are already satisfied.
-  const estimatedCount = Math.ceil(bytes / ESTIMATED_BYTES_PER_TOKEN)
-  if (estimatedCount <= targetTokens && bytes <= hardTokens) {
-    return { targetCount: estimatedCount, hardCount: bytes }
-  }
-  const apiCount = await countTokensWithAPI(content)
-  if (apiCount !== null) {
-    return { targetCount: apiCount, hardCount: apiCount }
-  }
-  return { targetCount: estimatedCount, hardCount: bytes }
+  return measureTextReadTokens(content, targetTokens, hardTokens, countTokensWithAPI)
 }
 
 async function fitTokenPrefix(
@@ -1593,10 +1820,8 @@ async function callInner(
     readBytes = Buffer.byteLength(content, 'utf8')
   }
 
-  // The configured limit can lower the ceiling but cannot raise the hard
-  // default. On overflow, return a verified complete-line prefix when one can
-  // fit under the normal target; never expose an oversized rendered result.
-  const hardTokenLimit = Math.min(maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)
+  const { hardTokenLimit, prefixTargetTokens: targetTokens } =
+    textReadBudgetForContext(context)
   const freshnessPrefix = isAutoMemFile(fullFilePath)
     ? memoryFreshnessNote(mtimeMs)
     : ''
@@ -1617,7 +1842,6 @@ async function callInner(
   const tokenTruncated =
     renderedCandidateTokens.hardCount > hardTokenLimit
   if (tokenTruncated) {
-    const targetTokens = Math.min(DEFAULT_PREFIX_TARGET_TOKENS, hardTokenLimit)
     const suggestedPrefixLines = Math.max(
       1,
       suggestedRetryLimit(

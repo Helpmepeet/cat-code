@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -14,7 +15,9 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getAutoMemPath } from '../../memdir/paths.js'
+import type { ToolUseContext } from '../../Tool.js'
 import { FileWriteTool } from '../FileWriteTool/FileWriteTool.js'
+import { FilePatchTool } from '../FilePatchTool/FilePatchTool.js'
 import { getFileIdentity } from '../../utils/file.js'
 import {
   createFileStateCacheWithSizeLimit,
@@ -26,6 +29,7 @@ import {
   checkApprovedUncReadTarget,
   FileReadTool,
   callFileReadToolWithPreparedCapability,
+  formatFileReadTextForModel,
   MaxFileReadTokenExceededError,
   type Output,
   suggestedRetryLimit,
@@ -212,7 +216,7 @@ function createLifecycleContext(
 async function runRealToolUse(
   tool: typeof FileReadTool | typeof FileWriteTool,
   input: Record<string, unknown>,
-  context: ReturnType<typeof createLifecycleContext>,
+  context: ToolUseContext,
 ): Promise<unknown[]> {
   const updates: unknown[] = []
   for await (const _update of runToolUse(
@@ -235,6 +239,370 @@ async function runRealToolUse(
   }
   return updates
 }
+
+describe('missing-file exact function recovery', () => {
+  function fixture(name: string, source = 'export function TasksStrip() {\n  return <div />\n}') {
+    const directory = join(tmpDir, `function-recovery-${name}`)
+    mkdirSync(directory)
+    const actual = join(realpathSync(directory), 'App.tsx')
+    const requested = join(directory, 'TasksStrip.tsx')
+    writeFileSync(actual, `const before = 1;\n${source}\nconst after = 2;\n`)
+    const context = createLifecycleContext([FileReadTool, FileWriteTool]) as ToolUseContext
+    ;(context as unknown as {
+      getAppState(): {
+        toolPermissionContext: { additionalWorkingDirectories: Map<string, string> }
+      }
+    }).getAppState().toolPermissionContext.additionalWorkingDirectories.set(directory, directory)
+    return { directory, actual, requested, context }
+  }
+
+  async function recover(
+    entry: ReturnType<typeof fixture>,
+    extra: { offset?: number; limit?: number; pages?: string } = {},
+  ) {
+    return runWithCwdOverride(entry.directory, () =>
+      callFileReadToolWithPreparedCapability(
+        { file_path: entry.requested, ...extra },
+        entry.context,
+      ),
+    )
+  }
+
+  test('returns only the complete exact function with real path and lines', async () => {
+    const entry = fixture('success')
+    const result = await recover(entry)
+    expect(result.data.type).toBe('text')
+    const data = result.data as Extract<Output, { type: 'text' }>
+    expect(data.file).toEqual({
+      filePath: entry.actual,
+      content: 'export function TasksStrip() {\n  return <div />\n}',
+      startLine: 2,
+      numLines: 3,
+      totalLines: 6,
+      functionResolution: {
+        requestedPath: entry.requested,
+        symbol: 'TasksStrip',
+        endLine: 4,
+      },
+    })
+    const rendered = formatFileReadTextForModel(data)
+    expect(rendered).toContain('FUNCTION-ONLY')
+    expect(rendered).toContain(`Requested file does not exist: ${JSON.stringify(entry.requested)}`)
+    expect(rendered).toContain(`Actual source: ${JSON.stringify(entry.actual)}, lines 2 to 4`)
+    expect(rendered).not.toContain('const before')
+    expect(rendered).not.toContain('const after')
+    expect(FileReadTool.outputSchema.safeParse(data).success).toBe(true)
+    expect(existsSync(entry.requested)).toBe(false)
+  })
+
+  test('an existing requested file takes priority and keeps ordinary text output', async () => {
+    const entry = fixture('existing')
+    writeFileSync(entry.requested, 'normal requested contents\n')
+    const result = await recover(entry)
+    const data = result.data as Extract<Output, { type: 'text' }>
+    expect(data.file.content).toBe('normal requested contents\n')
+    expect(data.file.functionResolution).toBeUndefined()
+    expect(data.file.filePath).toBe(entry.requested)
+  })
+
+  test.each([
+    { offset: 0 },
+    { offset: 1 },
+    { offset: 3 },
+    { limit: 10 },
+    { pages: '1' },
+  ])('does not reinterpret original range or page parameters: %j', async extra => {
+    const entry = fixture(`range-${JSON.stringify(extra)}`)
+    await expect(recover(entry, extra)).rejects.toThrow('File does not exist.')
+  })
+
+  test('ambiguous definitions in separate direct files keep the missing-file error', async () => {
+    const entry = fixture('ambiguous-files')
+    writeFileSync(join(entry.directory, 'Other.tsx'), 'const TasksStrip = () => <div />;')
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('ambiguous definitions in a single file keep the missing-file error', async () => {
+    const entry = fixture('ambiguous-symbol', 'function TasksStrip() {}\n{\nconst TasksStrip = () => 42;\n}')
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('does not guess prefixes or factory names', async () => {
+    const entry = fixture('no-fuzzy', 'function createModelCallRecorder() {}')
+    entry.requested = join(entry.directory, 'modelCallRecorder.ts')
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('does not search subdirectories or parent directories', async () => {
+    const entry = fixture('local-scope', 'function Unrelated() {}')
+    mkdirSync(join(entry.directory, 'nested'))
+    writeFileSync(join(entry.directory, 'nested', 'Nested.ts'), 'function TasksStrip() {}')
+    writeFileSync(join(tmpDir, 'Outside.ts'), 'function TasksStrip() {}')
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test.each(['TasksStrip.py', 'TasksStrip.txt', 'TasksStrip.test.tsx', 'TasksStrip.d.ts'])(
+    'unsupported requested names/formats retain missing-file behavior: %s',
+    async name => {
+      const entry = fixture(`unsupported-${name}`)
+      entry.requested = join(entry.directory, name)
+      await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    },
+  )
+
+  test.each(['alwaysDenyRules', 'alwaysAskRules'] as const)(
+    'checks the containing file %s before reading its contents',
+    async rules => {
+      const entry = fixture(`permissions-${rules}`)
+      const state = (entry.context as unknown as {
+        getAppState(): {
+          toolPermissionContext: Record<string, unknown>
+        }
+      }).getAppState()
+      state.toolPermissionContext[rules] = {
+        session: [`Read(//${entry.actual.replace(/^\/+/, '')})`],
+      }
+      await expect(recover(entry)).rejects.toThrow('File does not exist.')
+      expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
+    },
+  )
+
+  test('an approval for a missing path outside working directories does not approve its source', async () => {
+    const entry = fixture('missing-only-approval')
+    ;(entry.context as unknown as {
+      getAppState(): {
+        toolPermissionContext: { additionalWorkingDirectories: Map<string, string> }
+      }
+    }).getAppState().toolPermissionContext.additionalWorkingDirectories.clear()
+    await expect(
+      callFileReadToolWithPreparedCapability(
+        { file_path: entry.requested },
+        entry.context,
+        async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+        undefined,
+        { userMentioned: true },
+      ),
+    ).rejects.toThrow('File does not exist.')
+  })
+
+  test('skips denied definitions when establishing uniqueness among permitted files', async () => {
+    const entry = fixture('permitted-unique')
+    writeFileSync(join(entry.directory, 'Denied.tsx'), 'function TasksStrip() {}')
+    const state = (entry.context as unknown as {
+      getAppState(): { toolPermissionContext: { alwaysDenyRules: Record<string, string[]> } }
+    }).getAppState()
+    state.toolPermissionContext.alwaysDenyRules = {
+      session: [`Read(//${join(entry.directory, 'Denied.tsx').replace(/^\/+/, '')})`],
+    }
+    expect((await recover(entry)).data.type).toBe('text')
+  })
+
+  test('does not follow a sibling symlink to source outside the requested directory', async () => {
+    const entry = fixture('sibling-symlink', 'function Unrelated() {}')
+    const outside = join(tmpDir, 'SymlinkOutside.ts')
+    writeFileSync(outside, 'function TasksStrip() {}')
+    symlinkSync(outside, join(entry.directory, 'Link.ts'))
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('does not resolve through an ancestor symlink retargeted after preparation', async () => {
+    const entry = fixture('ancestor-swap')
+    const outside = join(tmpDir, 'function-recovery-ancestor-outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'App.tsx'), 'function TasksStrip() { return "outside"; }')
+    entry.context.getAppState().toolPermissionContext.additionalWorkingDirectories.set(
+      outside,
+      outside,
+    )
+    const alias = join(tmpDir, 'function-recovery-ancestor-alias')
+    symlinkSync(entry.directory, alias)
+    entry.context.getAppState().toolPermissionContext.additionalWorkingDirectories.set(
+      alias,
+      alias,
+    )
+    const input = { file_path: join(alias, 'TasksStrip.tsx') }
+    const prepared = await FileReadTool.prepareExecution!(input)
+    const context = {
+      ...entry.context,
+      preparedExecution: {
+        toolName: FileReadTool.name,
+        input,
+        state: prepared.state,
+      },
+    }
+    try {
+      expect((await FileReadTool.checkPermissions(input, context)).behavior).toBe('allow')
+      unlinkSync(alias)
+      symlinkSync(outside, alias)
+      await expect(FileReadTool.call(input, context)).rejects.toThrow('File does not exist.')
+      expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
+  test('rechecks a matched source identity after completing the directory scan', async () => {
+    const entry = fixture('source-changes-during-scan')
+    writeFileSync(join(entry.directory, 'Other.ts'), 'function Other() {}')
+    const input = { file_path: entry.requested }
+    const prepared = await FileReadTool.prepareExecution!(input)
+    const context = {
+      ...entry.context,
+      preparedExecution: {
+        toolName: FileReadTool.name,
+        input,
+        state: prepared.state,
+      },
+    }
+    const state = prepared.state as { readSiblingNames(): Promise<string[]> }
+    state.readSiblingNames = async () => ['App.tsx', 'Other.ts']
+    const controller = (entry.context as unknown as ReturnType<typeof createContext>).abortController
+    let iteration = 0
+    controller.signal.throwIfAborted = () => {
+      if (++iteration === 2) {
+        writeFileSync(entry.actual, 'function TasksStrip() { return "changed"; }\n')
+      }
+    }
+    try {
+      await expect(FileReadTool.call(input, context)).rejects.toThrow('File does not exist.')
+      expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
+  test('does not resolve if a previously nonmatching source changes after its scan', async () => {
+    const entry = fixture('new-ambiguity-during-scan')
+    const other = join(entry.directory, 'Other.ts')
+    writeFileSync(other, 'function Other() {}')
+    const input = { file_path: entry.requested }
+    const prepared = await FileReadTool.prepareExecution!(input)
+    const context = {
+      ...entry.context,
+      preparedExecution: {
+        toolName: FileReadTool.name,
+        input,
+        state: prepared.state,
+      },
+    }
+    let listings = 0
+    const state = prepared.state as { readSiblingNames(): Promise<string[]> }
+    state.readSiblingNames = async () => {
+      if (++listings === 2) {
+        writeFileSync(other, 'function TasksStrip() {}\n')
+      }
+      return ['App.tsx', 'Other.ts']
+    }
+    try {
+      await expect(FileReadTool.call(input, context)).rejects.toThrow('File does not exist.')
+      expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
+  test('keeps a complete function-only view partial even when it occupies the whole file', async () => {
+    const entry = fixture('partial-authority')
+    const original = 'function TasksStrip() {}\n'
+    writeFileSync(entry.actual, original)
+    const updates = await runWithCwdOverride(entry.directory, () =>
+      runRealToolUse(FileReadTool, { file_path: entry.requested }, entry.context),
+    )
+    expect(JSON.stringify(updates)).toContain('FUNCTION-ONLY')
+    const cache = (entry.context as unknown as ReturnType<typeof createContext>).readFileState
+    expect(cache.has(entry.requested)).toBe(false)
+    expect(cache.get(entry.actual)?.isPartialView).toBe(true)
+    expect(cache.get(entry.actual)?.isWriteAuthorizedRead).toBe(true)
+    expect(isCompleteUnboundedRead(cache.get(entry.actual))).toBe(false)
+    const deleteInput = {
+      input: `*** Begin Patch\n*** Delete File: ${entry.actual}\n*** End Patch\n`,
+    }
+    const deletion = await FilePatchTool.prepareExecution!(deleteInput)
+    try {
+      const validation = await FilePatchTool.validateInput(deleteInput, {
+        ...entry.context,
+        preparedExecution: {
+          toolName: FilePatchTool.name,
+          input: deleteInput,
+          state: deletion.state,
+        },
+      } as never)
+      expect(validation.result).toBe(false)
+      expect(validation.message).toContain('complete, unbounded model-visible Read')
+    } finally {
+      await deletion.cleanup()
+    }
+    await runWithCwdOverride(entry.directory, () =>
+      runRealToolUse(FileWriteTool, { file_path: entry.actual, content: 'replaced\n' }, entry.context),
+    )
+    expect(readFileSync(entry.actual, 'utf8')).toBe(original)
+    const normal = await runWithCwdOverride(entry.directory, () =>
+      callFileReadToolWithPreparedCapability({ file_path: entry.actual }, entry.context),
+    )
+    expect(normal.data.type).toBe('text')
+    expect((normal.data as Extract<Output, { type: 'text' }>).file.functionResolution).toBeUndefined()
+  })
+
+  test('refuses oversized recovery rather than returning an incomplete function', async () => {
+    const entry = fixture('bounded-function')
+    Object.assign(entry.context, { fileReadingLimits: { maxTokens: 100 } })
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
+  })
+
+  test('refuses recovery when the returned definition cannot fit the byte allowance', async () => {
+    const entry = fixture('bounded-source')
+    Object.assign(entry.context, { fileReadingLimits: { maxSizeBytes: 10 } })
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('refuses line-capped definitions instead of mislabeling a prefix as complete', async () => {
+    const entry = fixture(
+      'bounded-lines',
+      `function TasksStrip() {\n${'  // body\n'.repeat(MAX_LINES_TO_READ)}  return 1;\n}`,
+    )
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
+  })
+
+  test('does not claim uniqueness when the number of local sources exceeds the scan bound', async () => {
+    const entry = fixture('bounded-source-count')
+    for (let index = 0; index < 1000; index++) {
+      writeFileSync(join(entry.directory, `Other${index}.ts`), 'function Other() {}')
+    }
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('recovers in a renderer-sized directory with a large nonmatching source', async () => {
+    const entry = fixture('renderer-scale')
+    for (let index = 0; index < 450; index++) {
+      writeFileSync(
+        join(entry.directory, `Other${index}.ts`),
+        `// ${'source context '.repeat(900)}\nexport const other${index} = 1;\n`,
+      )
+    }
+    writeFileSync(join(entry.directory, 'Large.tsx'), `// ${'x'.repeat(280_000)}\n`)
+    const data = (await recover(entry)).data as Extract<Output, { type: 'text' }>
+    expect(data.file.filePath).toBe(entry.actual)
+    expect(data.file.functionResolution?.symbol).toBe('TasksStrip')
+  })
+
+  test('keeps recovery bounded when a sibling is too large to establish uniqueness', async () => {
+    const entry = fixture('oversized-sibling')
+    writeFileSync(join(entry.directory, 'Large.ts'), `// ${'x'.repeat(512 * 1024)}\n`)
+    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+  })
+
+  test('uses the large-context budget for complete recovered definitions', async () => {
+    const definition = `function TasksStrip() {\n${'  // body context\n'.repeat(1_800)}  return 1;\n}`
+    const entry = fixture('large-context-definition', definition)
+    entry.context.options.mainLoopModel = 'gpt-6.1-sol'
+    const data = (await recover(entry)).data as Extract<Output, { type: 'text' }>
+    expect(data.file.content).toBe(definition)
+    expect(Buffer.byteLength(formatFileReadTextForModel(data))).toBeGreaterThan(25_000)
+    expect(isCompleteUnboundedRead(entry.context.readFileState.get(entry.actual))).toBe(false)
+  })
+})
 
 describe('user-mentioned FileRead permissions', () => {
   test('allows explicit mentions outside the working directory in default and bypass modes', async () => {
@@ -767,6 +1135,64 @@ describe('MaxFileReadTokenExceededError', () => {
 })
 
 describe('token overflow prefixes', () => {
+  test('a large-context model receives the complete requested document range', async () => {
+    const filePath = join(tmpDir, 'large-context-map.txt')
+    const lines = Array.from({ length: 245 }, (_, index) =>
+      `| ${index + 1} | ${'owner and routing notes '.repeat(11)} |`,
+    )
+    writeFileSync(filePath, lines.join('\n'), 'utf-8')
+    const context = Object.assign(createContext(), {
+      options: { mainLoopModel: 'gpt-6.1-sol' },
+    })
+    const data = await readWith(context, filePath, { offset: 1, limit: 160 })
+    expect(data.file.numLines).toBe(160)
+    expect(data.file.content).toBe(lines.slice(0, 160).join('\n'))
+    expect(Buffer.byteLength(formatFileReadTextForModel(data))).toBeGreaterThan(25_000)
+    expect(context.readFileState.get(filePath)?.isTruncatedView).toBeUndefined()
+  })
+
+  test('overflow on a large-context model retains a substantial bounded prefix', async () => {
+    const filePath = join(tmpDir, 'large-context-overflow.txt')
+    writeFileSync(filePath, `${'x'.repeat(200)}\n`.repeat(1_000), 'utf-8')
+    const context = Object.assign(createContext(), {
+      options: { mainLoopModel: 'gpt-6.1-sol' },
+    })
+    const data = await readWith(context, filePath)
+    const renderedBytes = Buffer.byteLength(formatFileReadTextForModel(data))
+    expect(renderedBytes).toBeGreaterThan(80_000)
+    expect(renderedBytes).toBeLessThanOrEqual(100_000)
+    expect(context.readFileState.get(filePath)?.isTruncatedView).toBe(true)
+  })
+
+  test('a narrower explicit budget still limits a large-context model', async () => {
+    const filePath = join(tmpDir, 'large-context-override.txt')
+    writeFileSync(filePath, `${'x'.repeat(200)}\n`.repeat(300), 'utf-8')
+    const context = Object.assign(createContext(4_000), {
+      options: { mainLoopModel: 'gpt-6.1-sol' },
+    })
+    const data = await readWith(context, filePath)
+    expect(Buffer.byteLength(formatFileReadTextForModel(data))).toBeLessThanOrEqual(4_000)
+    expect(context.readFileState.get(filePath)?.isTruncatedView).toBe(true)
+  })
+
+  test('an operator-narrowed context also narrows the live text read', async () => {
+    const previous = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '64000'
+    try {
+      const filePath = join(tmpDir, 'large-context-clamped.txt')
+      writeFileSync(filePath, `${'x'.repeat(200)}\n`.repeat(300), 'utf-8')
+      const context = Object.assign(createContext(), {
+        options: { mainLoopModel: 'gpt-6.1-sol' },
+      })
+      const data = await readWith(context, filePath)
+      expect(Buffer.byteLength(formatFileReadTextForModel(data))).toBeLessThanOrEqual(8_000)
+      expect(context.readFileState.get(filePath)?.isTruncatedView).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+      else process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = previous
+    }
+  })
+
   test('returns a complete-line prefix with continuation and search guidance', async () => {
     const filePath = join(tmpDir, 'token-prefix.txt')
     writeFileSync(filePath, `${'x'.repeat(100)}\n`.repeat(100), 'utf-8')
@@ -824,7 +1250,7 @@ describe('token overflow prefixes', () => {
     const filePath = join(tmpDir, 'token-hard-cap.txt')
     writeFileSync(filePath, `${'x'.repeat(200)}\n`.repeat(1_000), 'utf-8')
 
-    // A caller-supplied higher limit cannot lift the 25k hard ceiling.
+    // Without a known model, a larger override cannot lift the fallback budget.
     const data = await readWith(createContext(50_000), filePath)
     const rendered = FileReadTool.mapToolResultToToolResultBlockParam(
       data,
