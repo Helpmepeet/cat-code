@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-10-07 against `src/app-runtime/`,
+Last refreshed: 2026-10-08 against `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `app/`, and related tests.
 
 Use this map for the Electron runtime-backed app-session path. It covers the
@@ -11,7 +11,7 @@ active desktop app stack, not older dedicated-app design docs.
 1. `app/main/main.ts` for Electron host, IPC, attachment, and cache wiring.
 2. `app/shared/protocol.ts` and `app/shared/hostApi.ts` for desktop wire/control contracts.
 3. `app/sidecar/sessionController.ts` and `app/sidecar/sidecarServer.ts` for the engine boundary.
-4. `app/renderer/src/{App,SessionPane,TranscriptView,BoundedMarkdown,VirtualLineList}.tsx` for session chrome and bounded transcript rendering. `App` is the shell; `SessionPane` is one session's pane.
+4. `app/renderer/src/{App,Sidebar,SessionPane,TranscriptView,BoundedMarkdown,VirtualLineList}.tsx` for session chrome and bounded transcript rendering. `App` is the shell; `SessionPane` is one session's pane.
 5. `app/main/{idleParkDriver,mainDecisions}.ts`, `app/scripts/{dev,devLauncher}.ts`, and `app/sidecar/contextBreakdownDomain.ts` for parking, development launch lifecycle, and on-demand context usage.
 
 ## Routing Table
@@ -53,6 +53,38 @@ active desktop app stack, not older dedicated-app design docs.
 | Bounded desktop transcript rendering | `app/renderer/src/BoundedMarkdown.tsx` | `app/renderer/src/{markdownPlugins,markdownRenderPlan}.ts`, `app/renderer/src/VirtualLineList.tsx`, `app/renderer/src/lineWindow.ts`, `app/renderer/src/TranscriptView.tsx` | Long assistant prose is planned into render leaves, measured, and windowed within its scroll parent; off-window content is represented by spacers. Ordinary transcript math uses `remark-math` plus the untrusted KaTeX pipeline configured in `markdownPlugins.ts`; inline tool output uses the same virtual line list and preserves reveal-band placement and real line numbers. Open fences stay in the same code-card frame, but their copy control remains disabled until the fence is complete. |
 | Streamed prose-arrival preference | `app/renderer/src/proseArrival.ts` | `app/renderer/src/ProseArrivalProvider.tsx`, `app/renderer/src/proseArrivalMark.ts`, `app/renderer/src/ProseArrivalPreview.tsx`, `app/renderer/src/SettingsShell.tsx`, `app/renderer/src/TranscriptView.tsx` | This is renderer-local, versioned local-storage state, not an engine setting. It marks only newly delivered prose for instant, smooth, or flowing presentation; content is never buffered or delayed before visibility. |
 
+## Desktop Sidebar Archive And Session Forks
+
+`app/renderer/src/sidebarArchivedSessions.ts` owns the versioned renderer-local
+archive preference; `App.tsx` persists it and reconciles early app-session IDs
+to engine-session IDs. For a live tab it marks the row optimistically and closes
+the tab; a refused close removes that archive mark. `Sidebar.tsx` exposes
+archived rows through the archive count toggle and unarchives a row before
+opening it. Archive changes sidebar visibility only; it does not delete or
+rewrite a transcript.
+
+The merged row's `lastMessageSentAt` or `sessionActivityAtMs` clears an archive
+mark only when newer than the archive timestamp. `app/sidecar/sessionsCatalogDomain.ts`
+derives `sessionActivityAtMs` from the later of the latest genuine conversation
+record found by a bounded backwards read and the private activation marker
+written by `src/utils/transcriptLease.ts` for a real resume, including one
+without a prompt.
+Transcript mtime, metadata writes, and host-only attach time are not activity
+evidence. `app/renderer/src/sessionActions.ts` owns sidebar Archive/Unarchive
+menu entries.
+
+Standalone `session.branch` is routed through `app/sidecar/sessionActionsDomain.ts`
+and `app/main/openHistorySession.ts`; `resolveBranchOpenHistorySeed()` uses the
+trusted source session identity to open the fork even while catalog enumeration
+lags. This path complements message-level Branch, which forks a selected
+conversation prefix.
+
+## Desktop Bash Result Rendering
+
+`app/renderer/src/TranscriptView.tsx` keeps per-line Bash output coloring even
+when the tool result failed. Failure belongs to the card status because a
+compound command can include successful output before a later step fails.
+
 ## Tests And Validation
 
 | Change area | Command |
@@ -63,6 +95,7 @@ active desktop app stack, not older dedicated-app design docs.
 | Multi-session process isolation probe | `bun test src/app-runtime/multiSessionIsolation.probe.test.ts` |
 | Desktop tests | `bun test app/` |
 | Transcript reasoning fold and interactive descendants | `bun test app/renderer/src/TranscriptView.dom.test.ts` |
+| Bash output on failed tool results | `bun test app/renderer/src/TranscriptView.test.tsx` |
 | Mixed page/session navigation and lifecycle focus | `bun test app/renderer/src/pageTabNavigation.test.ts app/renderer/src/pageTabs.dom.test.tsx app/renderer/src/TabBar.dom.test.ts app/renderer/src/accountLogin.dom.test.tsx app/renderer/src/workspaceLayout.test.ts` |
 | Desktop shell/preload/renderer typecheck | `bun run --cwd app typecheck` |
 | Desktop engine-sidecar typecheck | `bun run --cwd app typecheck:sidecar` |
@@ -72,7 +105,8 @@ active desktop app stack, not older dedicated-app design docs.
 | Desktop hardening smoke | `bun run --cwd app test:hardening` |
 | Desktop AskUserQuestion flow | `bun test app/renderer/src/AskQuestionFlow.test.tsx app/renderer/src/askQuestionState.test.ts app/sidecar/sidecarServer.test.ts app/preload/preloadSource.test.ts` |
 | Desktop action/control seams | `bun test app/sidecar/sessionActionsDomain.test.ts app/sidecar/taskControlDomain.test.ts app/sidecar/settingsDomain.test.ts app/renderer/src/sessionActionRuntimeState.test.ts app/renderer/src/TasksDialog.test.tsx app/renderer/src/SettingsEditors.test.tsx` |
-| Desktop sessions catalog and history opening | `bun test app/main/openHistorySession.test.ts app/main/sessionsCatalogBaseline.test.ts app/sidecar/sessionsCatalogDomain.test.ts app/sidecar/sessionsCatalogCache.test.ts app/renderer/src/sessionsCatalogState.test.ts` |
+| Desktop sidebar archive and standalone fork | `bun test app/renderer/src/sidebarArchivedSessions.test.ts app/renderer/src/sessionActions.test.ts app/main/openHistorySession.test.ts app/sidecar/sessionBranch.process.test.ts` |
+| Desktop sessions catalog and history opening | `bun test app/main/openHistorySession.test.ts app/main/sessionsCatalogBaseline.test.ts app/sidecar/sessionsCatalogDomain.test.ts app/sidecar/sessionsCatalogCache.test.ts app/shared/sessionsCatalogFingerprint.test.ts app/shared/sessionsCatalogWorker.test.ts app/renderer/src/sessionsCatalogState.test.ts` |
 | Desktop catalog worker and idle parking | `bun test app/main/sessionsCatalogRunner.test.ts app/main/idleParkDriver.test.ts app/sidecar/sidecarServer.test.ts app/host/{host,registry}.test.ts` |
 | Desktop attachment, replay, and history boundary | `bun test app/main/mainDecisions.test.ts app/main/replayBuffer.test.ts app/main/mainSourceGuards.test.ts app/preload/preloadSource.test.ts app/sidecar/historyLoadEarlier.test.ts app/sidecar/workerOutcomeRestore.integration.test.ts` |
 | Desktop workspace-move startup validation | `bun test app/sidecar/workspaceJumpStartup.process.test.ts` |
@@ -155,8 +189,10 @@ active desktop app stack, not older dedicated-app design docs.
   Keep its one main-supervised worker serialized and fail closed on malformed or
   secret-bearing output; a failed run must retain the last good catalog.
   `app/shared/sessionsCatalogFingerprint.ts` checks bounded cache data and source
-  metadata before a worker starts. Unchanged sources retain the original capture
-  time; changed transcripts, relocation records, or workspace existence refresh it.
+  metadata before a worker starts, including the private transcript-lease
+  activation markers used for archive-return evidence. Unchanged sources retain
+  the original capture time; changed transcripts, relocation records, activation
+  markers, or workspace existence refresh it.
   `app/main/refreshActivityGate.ts` pauses recurring catalog/accounts/usage starts
   only while all windows are hidden or minimized. Visible unfocused windows keep
   their cadence; returning windows catch up a skipped interval.

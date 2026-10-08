@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-10-07
+Last refreshed: 2026-10-08
 
 ## Purpose
 
@@ -23,21 +23,21 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 
 | Sub-map | Scope | Last refreshed |
 |---|---|---|
-| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-10-07 |
+| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-10-08 |
 | [`docs/maps/tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. | 2026-10-07 |
 | [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-10-04 |
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-09-29 |
 | [`docs/maps/codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-09-30 |
 | [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-04 |
-| [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, project identity, workspace path discovery, transcripts, memory, migrations, and persistence scope. | 2026-10-07 |
+| [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, project identity, workspace path discovery, transcripts, memory, migrations, and persistence scope. | 2026-10-08 |
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-09-21 |
 | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-10-06 |
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
-| [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-07 |
+| [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-08 |
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-09-29 |
 | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. | 2026-09-29 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-09-29 |
-| [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, workspace-map maintenance, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-10-07 |
+| [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, workspace-map maintenance, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-10-08 |
 | [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. | 2026-10-08 |
 
 ## Broad Routing Table
@@ -48,7 +48,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | Main terminal UI and session loop | `src/screens/REPL.tsx` | `src/replLauncher.tsx`, `src/components/`, `src/hooks/`, `src/state/`, `src/ink/` | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) |
 | Slash commands and command exposure | `src/commands.ts` | `src/commands/`, `src/skills/`, `src/plugins/`, `src/utils/plugins/` | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) |
 | Build scripts and feature gates | `package.json`, `scripts/build.ts` | Runtime `feature(...)` call sites in entrypoints, commands, tools, and tasks | [`docs/maps/build-release-testing.md`](build-release-testing.md) |
-| Workspace map maintenance and evaluation | `scripts/workspaceMapRefreshState.ts` | `scripts/workspaceMapLint.ts`, `scripts/workspace-map-eval/taskInventory.ts` | [`docs/maps/build-release-testing.md`](build-release-testing.md) |
+| Workspace map maintenance and evaluation | `scripts/workspaceMapRefreshState.ts` | `scripts/workspaceMapLint.ts`, `scripts/workspace-map-eval/taskInventory.ts`, `scripts/workspace-map-eval/prep/` | [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | Prompt system and instruction behavior | `docs/prompts/` prompt-surface notes | `src/constants/prompts.ts`, `src/context.ts`, `src/utils/queryContext.ts`, `src/tools/AgentTool/` | [`docs/maps/prompt-system.md`](prompt-system.md) |
 | Agents and delegated workers | `src/tools/AgentTool/` | `src/tasks/`, `src/coordinator/`, `src/screens/REPL.tsx`, `src/QueryEngine.ts` | [`docs/maps/tasks-workers.md`](tasks-workers.md) |
 | Built-in tools, MCP, permissions, sandboxing | `src/tools.ts`, `src/hooks/useCanUseTool.tsx` | `src/tools/`, `src/services/mcp/`, `src/utils/permissions/`, `src/utils/sandbox/` | [`docs/maps/tools-permissions.md`](tools-permissions.md) |
