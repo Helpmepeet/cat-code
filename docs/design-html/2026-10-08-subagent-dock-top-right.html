@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subagent dock</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ───────── chrome (x-) ───────── */
+html,body{margin:0;background:#fafafa}
+body{font-family:ui-sans-serif,-apple-system,system-ui,sans-serif}
+.x-bar{position:sticky;top:0;z-index:50;background:#fafafa;border-bottom:1px solid #e4e4e4;padding:10px 20px;display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+.x-group{display:flex;align-items:center;gap:6px}
+.x-k{font:500 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#9a9a9a;margin-right:2px}
+.x-b{font:500 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:#555;background:none;border:1px solid #d6d6d6;border-radius:3px;padding:6px 8px;cursor:pointer}
+.x-b:hover{border-color:#999;color:#222}
+.x-b[aria-pressed="true"]{background:#222;border-color:#222;color:#fafafa}
+.x-sec{padding:22px 20px 8px;font:500 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:#9a9a9a}
+.x-stage{padding:0 20px 8px;overflow:hidden}
+.x-scaler{transform-origin:0 0}
+.x-grid{display:flex;flex-wrap:wrap;gap:26px 34px;padding:6px 20px 40px;align-items:flex-start}
+.x-cell{display:flex;flex-direction:column;gap:8px}
+.x-lab{font:500 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#9a9a9a}
+
+/* ───────── specimen tokens (theme.css dark) ───────── */
+.app{
+  --app-bg:#09090b;--shell-chrome:#070709;--surface-raised:#111113;--surface-panel:#0a0a0c;
+  --seam:rgba(255,255,255,.06);--hover:rgba(255,255,255,.045);
+  --t1:#f4f4f5;--t2:#a1a1aa;--t3:#98989f;--t4:#838389;--t5:#75757b;
+  --accent:#f472b6;--blue4:#60a5fa;--good:#4ade80;--danger:#f87171;--warn:#fbbf24;
+  --p200:#e9d5ff;--p400:#c084fc;--stone4:#a8a29e;--peer:#818cf8;
+  --elev-popover:0 14px 38px rgba(0,0,0,.5);
+  --m-fast:120ms;--m-arrive:180ms;--m-panel:200ms;--m-value:400ms;--m-land:900ms;
+  --ease-enter:cubic-bezier(.2,0,0,1);--ease-std:cubic-bezier(.4,0,.2,1);
+  --sans:'DM Sans',ui-sans-serif,system-ui,sans-serif;--mono:'DM Mono',ui-monospace,Menlo,monospace;
+  /* glass canvas approximated from the screenshot */
+  --canvas:#1c1c1f;
+  font-family:var(--sans);color:var(--t1);-webkit-font-smoothing:antialiased;
+}
+.app *{box-sizing:border-box}
+:where(.app) button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+:where(.app) button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* window */
+.win{position:relative;width:var(--W,1600px);height:900px;background:var(--canvas);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;transition:width var(--m-panel) var(--ease-std)}
+.tabs{height:40px;flex:none;display:flex;align-items:stretch;background:rgba(0,0,0,.28);border-bottom:1px solid var(--seam);padding-left:84px}
+.lights{position:absolute;left:14px;top:14px;display:flex;gap:8px}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.tab{display:flex;align-items:center;gap:7px;padding:0 14px;font-size:12px;color:var(--t3);border-right:1px solid var(--seam);max-width:176px;white-space:nowrap}
+.tab span{overflow:hidden;text-overflow:ellipsis}
+.tab .gd{width:6px;height:6px;border-radius:50%;background:var(--good);flex:none}
+.tab.on{color:var(--t1);box-shadow:inset 0 -2px 0 var(--accent)}
+.tab-plus{display:flex;align-items:center;padding:0 12px;color:var(--t5);font-size:16px}
+.tabs .sp{flex:1}
+.split{align-self:center;margin-right:10px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t4);border:1px solid var(--seam);border-radius:6px;padding:4px 8px}
+.split i{width:11px;height:9px;border:1.3px solid var(--t5);border-radius:2px;display:block;position:relative}
+.split i:after{content:"";position:absolute;left:3.5px;top:0;bottom:0;border-left:1.3px solid var(--t5)}
+.body{flex:1;display:flex;position:relative;min-height:0}
+.rail{width:48px;flex:none;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:20px;padding-bottom:14px}
+.rail i{width:13px;height:13px;border:1.3px solid var(--t5);border-radius:3px;display:block}
+.rail i.c{border-radius:50%}
+.rail b{width:18px;height:18px;border-radius:50%;background:rgba(244,114,182,.18);color:var(--accent);font:600 9px/18px var(--sans);text-align:center}
+.pane{position:relative;flex:1;min-width:0;overflow:hidden}
+
+/* transcript (context backdrop) */
+.scroll{position:absolute;left:0;right:0;top:0;bottom:118px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
+.col{width:900px;max-width:calc(100% - 32px);padding:0 26px 18px;font-size:13.5px;line-height:1.7;color:#d9d9de}
+.col p{margin:0 0 12px}
+.col strong{color:var(--t1);font-weight:600}
+.ub{display:flex;justify-content:flex-end;margin:18px 0 34px}
+.ub span{background:rgba(244,114,182,.07);border:1px solid rgba(244,114,182,.2);border-radius:12px;padding:8px 15px;color:var(--t1)}
+.bash{font:12px/1.5 var(--mono);margin:6px 0 4px}
+.bash .h{display:flex;gap:10px;align-items:center;color:var(--t2)}
+.bash .h em{font-style:normal;color:var(--good)}
+.bash .h b{color:var(--good);font-weight:500;font-size:10px;letter-spacing:.06em}
+.bash .h .ok{margin-left:auto;width:5px;height:5px;border-radius:50%;background:var(--good)}
+.bash .o{margin:6px 0 0 20px;padding:6px 16px;background:rgba(0,0,0,.25);color:var(--t4);font-size:11px;line-height:1.6}
+.launch{display:grid;grid-template-columns:auto 1fr auto;column-gap:8px;align-items:center;margin:4px 0 6px}
+.launch .nm{font:500 13px var(--mono);color:#67e8f9}
+.launch .ty{font:11px var(--mono);color:var(--t5);margin-left:6px}
+.launch .st,.launch .md{font:11px var(--mono);color:var(--t5);text-align:right}
+.launch .ds{grid-column:1/3;color:#d9d9de;font-size:13px;line-height:1.5}
+.col ul{margin:0 0 12px;padding-left:22px}
+
+/* composer */
+.dockbar{position:absolute;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;padding-bottom:12px}
+.dockbar .w{width:900px;max-width:calc(100% - 32px)}
+.comp{padding:8px 4px 0}
+.comp .in{font-size:14px;color:var(--t4);padding:4px 0 10px;border-bottom:1px solid rgba(255,255,255,.1);display:flex}
+.comp .in em{font-style:normal;color:var(--peer)}
+.comp .in .send{margin-left:auto;color:var(--t5)}
+.comp .ctl{display:flex;align-items:center;gap:14px;font-size:12px;padding:12px 2px 0}
+.comp .ctl .pl{color:var(--t5);font-size:16px}
+.comp .ctl .m{color:#67e8f9}
+.comp .ctl .a{color:var(--accent)}
+.comp .ctl .g{flex:1}
+.comp .ctl .br{color:var(--t2);display:flex;align-items:center;gap:6px}
+.comp .ctl .br i{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.comp .ctl .pc{color:var(--accent);display:flex;align-items:center;gap:6px}
+.comp .ctl .pc i{width:12px;height:12px;border-radius:50%;border:2px solid rgba(244,114,182,.25);border-top-color:var(--accent)}
+
+/* shared agent primitives (AgentChrome.tsx) */
+.face{position:relative;display:block;flex:none;width:15px;height:15px}
+.face svg{display:block;width:15px;height:15px;shape-rendering:crispEdges}
+.pip{display:inline-block;flex:none;border-radius:50%;width:8px;height:8px}
+.pip.xs{width:6px;height:6px}
+.pip.running{background:var(--blue4);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.pip.background{border:1.6px solid var(--blue4)}
+.pip.failed{background:var(--danger)}
+.pip.completed{background:var(--good)}
+.pip.resumed{border:1.6px solid var(--blue4)}
+.pip.waiting{border:1.6px solid var(--p400)}
+.pip.stopped{border:1.6px solid var(--warn)}
+.pip.task{border:1.6px solid var(--stone4)}
+@keyframes pulse{50%{opacity:.5}}
+.handle{font:500 12.5px var(--mono);font-weight:600;color:var(--p200);white-space:nowrap;flex:none}
+.tylab{font:500 10.5px var(--mono);white-space:nowrap;flex:none}
+.baton{display:inline-flex;align-items:center;gap:4px;flex:none;white-space:nowrap;border:1px solid rgba(192,132,252,.3);border-radius:5px;padding:0 6px;font:600 10px/16px var(--mono);color:var(--p400)}
+.baton span{opacity:.8}
+.sep{color:var(--t5);flex:none}
+
+/* ───────── CURRENT: docked roster (WorkerRoster.tsx) ───────── */
+.roster{margin:0 4px 2px;border-radius:10px;background:var(--app-bg);padding:3px 4px}
+.rrow{display:flex;width:100%;align-items:center;gap:8px;border-radius:7px;border:1px solid transparent;padding:5px 7px}
+.rrow:hover{border-color:rgba(255,255,255,.06);background:rgba(255,255,255,.035)}
+.rrow .dot{width:7px;height:7px;border-radius:50%;background:var(--t5);flex:none}
+.rrow .dot.live{background:var(--blue4);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.rrow .lbl{font:600 11px var(--mono);color:var(--t3);flex:none}
+.rrow .cnt{font:500 11.5px var(--mono);white-space:nowrap}
+.rrow .cnt.working{color:var(--blue4)}.rrow .cnt.waiting{color:var(--stone4)}.rrow .cnt.done{color:var(--t4)}
+.rrow .ds{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--t3)}
+.rrow .fl{flex:1}
+.rrow .chev{font:13px/1 var(--mono);color:var(--t5);flex:none}
+.roster.grp{position:relative}
+.rpop{position:absolute;left:4px;right:4px;bottom:100%;z-index:40;display:none;padding-bottom:6px}
+.roster.grp:hover .rpop,.roster.grp:focus-within .rpop{display:block}
+.rpop .in{border-radius:10px;border:1px solid rgba(255,255,255,.08);background:var(--surface-panel);padding:4px 4px 5px;box-shadow:var(--elev-popover)}
+.rpop .cap{padding:5px 8px 3px;font:500 9px var(--mono);letter-spacing:.1em;color:var(--t4)}
+/* CURRENT: footer pill (App.tsx TasksStrip) */
+.tpill{position:absolute;right:16px;bottom:16px;z-index:10;display:flex;align-items:center;gap:6px;border-radius:999px;border:1px solid var(--seam);background:var(--shell-chrome);padding:6px 12px;font-size:12px;line-height:16px;color:var(--t2);box-shadow:var(--elev-popover)}
+.tpill:hover{color:var(--t1)}
+.tpill .d{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.tpill .ac{color:var(--accent)}
+
+/* ───────── PROPOSED: top-right subagent dock ───────── */
+.dock{position:absolute;top:12px;right:24px;z-index:20;transform-origin:top right;transition:opacity var(--m-panel) var(--ease-enter),transform var(--m-panel) var(--ease-enter)}
+.dock.gone{opacity:0;transform:scale(.96);pointer-events:none}
+.dock .box{background:var(--surface-panel);border:1px solid rgba(255,255,255,.08);border-radius:10px}
+.dock .panel.float{box-shadow:var(--elev-popover)}
+.dock .hide{display:none}
+
+/* chip */
+.chip{display:flex;align-items:center;height:27px;padding:0 7px 0 7px;color:var(--t3);transition:background var(--m-fast)}
+.chip:hover{background:#121215}
+.chip .cfs{display:flex;align-items:center}
+.cf{width:19px;flex:none;overflow:visible;transition:width var(--m-arrive) var(--ease-enter),opacity var(--m-arrive) var(--ease-enter)}
+.cf:last-child{width:15px}
+.cf .face{transition:transform var(--m-arrive) var(--ease-enter)}
+.cf.off{width:0;opacity:0}
+.cf.off .face{transform:scale(.4)}
+.chip .more{font:500 11px var(--mono);color:var(--t4);margin-left:5px}
+
+/* face badge: the worker's own state, cut out of the surface */
+.badge{position:absolute;right:-3px;bottom:-3px;width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 1.5px var(--surface-panel);transition:background var(--m-arrive),border-color var(--m-arrive)}
+.badge.running{background:var(--blue4);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.badge.background{background:var(--surface-panel);border:1.6px solid var(--blue4)}
+.badge.failed{background:var(--danger)}
+.badge.completed{background:var(--good)}
+.badge.resumed{background:var(--surface-panel);border:1.6px solid var(--blue4)}
+.badge.waiting{background:var(--surface-panel);border:1.6px solid var(--p400)}
+.badge.stopped{background:var(--surface-panel);border:1.6px solid var(--warn)}
+
+/* panel */
+.panel{width:288px;padding:4px}
+.phead{display:flex;align-items:center;height:22px;padding:0 4px 0 8px}
+.phead .cap{font:500 9px var(--mono);letter-spacing:.1em;color:var(--t4)}
+.phead .g{flex:1}
+.ib{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--t5)}
+.ib:hover{color:var(--t2);background:var(--hover)}
+.ib svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.plist{max-height:360px;overflow-y:auto;overflow-x:hidden}
+.rw{display:grid;grid-template-rows:1fr;transition:grid-template-rows var(--m-panel) var(--ease-enter),opacity var(--m-panel) var(--ease-enter)}
+.rw.off{grid-template-rows:0fr;opacity:0}
+.rw>div{min-height:0;overflow:hidden}
+.prow{display:grid;grid-template-columns:15px minmax(0,1fr);column-gap:9px;width:100%;border-radius:7px;border:1px solid transparent;padding:6px 7px 6px 7px}
+.prow:hover{border-color:rgba(255,255,255,.06);background:rgba(255,255,255,.035)}
+.prow .face{margin-top:2px}
+.prow .l1{display:flex;align-items:center;gap:7px;min-width:0;height:19px}
+.prow .l1 .g{flex:1}
+.prow .l2{display:flex;align-items:center;gap:8px;min-width:0}
+.prow .ds{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;line-height:17px;color:var(--t3)}
+.prow .word{font:500 10.5px var(--mono);white-space:nowrap}
+.prow .word.failed{color:var(--danger)}
+.prow .word.completed{color:var(--good)}
+.prow .word.resumed{color:var(--blue4)}
+.prow .word.waiting{color:var(--p400)}
+.prow .word.stopped{color:var(--warn)}
+.prow .handle,.prow .ds,.prow .tylab,.prow .face svg{transition:opacity var(--m-panel)}
+.prow.fin .handle,.prow.fin .ds,.prow.fin .tylab,.prow.fin .face svg{opacity:.55}
+.mtag{font:10.5px var(--mono);color:var(--t4);white-space:nowrap}
+.fhead{display:flex;align-items:center;height:26px;margin-top:4px;padding:0 4px 0 6px;border-top:1px solid var(--seam)}
+.fhead .cap{font:500 9px var(--mono);letter-spacing:.1em;color:var(--t4)}
+.fhead .g{flex:1}
+.clr{font-size:11px;color:var(--t4);border-radius:5px;padding:2px 6px}
+.clr:hover{color:var(--t2);background:var(--hover)}
+.chip.allfin .face svg{opacity:.55}
+/* resumed: the returning row arrives washed in the project-arrival blue, which cools over the same 1.8s the workspace-move arrival uses */
+@keyframes resume-wash{0%{background:rgba(96,165,250,.16);border-color:rgba(96,165,250,.38)}100%{background:rgba(96,165,250,0);border-color:rgba(96,165,250,0)}}
+.prow.arrive{animation:resume-wash 1.8s cubic-bezier(.4,0,.2,1)}
+
+/* hover tip */
+.peek{position:absolute;z-index:40;display:none;width:max-content}
+.peek.on{display:block}
+.peek.row{max-width:300px;background:#131315;border:1px solid rgba(255,255,255,.06);border-right:0;border-radius:7px 0 0 7px;padding:6px 11px 0 11px;box-shadow:-14px 0 28px -8px rgba(0,0,0,.55)}
+.peek.chip{max-width:260px;background:var(--surface-raised);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:7px 10px 8px;box-shadow:var(--elev-popover)}
+.tl{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
+.peek.row .tl-a{height:19px}
+.peek.row .tl-b{height:17px}
+.peek.chip .tl+.tl{margin-top:3px}
+.tl-who .word{font:500 10.5px var(--mono)}
+.tl-who .word.resumed{color:var(--blue4)}.tl-who .word.waiting{color:var(--p400)}.tl-who .word.failed{color:var(--danger)}.tl-who .word.stopped{color:var(--warn)}.tl-who .word.completed{color:var(--good)}
+.tl-a{font:10.5px var(--mono);color:var(--t4)}
+.tl-a i{font-style:normal;color:#3f3f46}
+.tl-a .warn{color:var(--warn)}
+.tl-b>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tb-now{display:flex;align-items:center;gap:6px;font:11px var(--mono);color:var(--blue4)}
+.tb-now span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tb-text{font-size:11.5px;color:var(--t2)}
+.tb-text.purple{color:var(--p200)}
+.tb-meta{font:10.5px var(--mono);color:var(--t4)}
+.prow.tipped,.prow.tipped:hover{background:#131315;border-color:rgba(255,255,255,.06);border-left-color:transparent;border-top-left-radius:0;border-bottom-left-radius:0}
+.tipspec{display:flex;align-items:flex-start}
+.tipspec .peek{position:relative;margin-top:5px;margin-right:-5px;height:50px}
+.tipspec .panel{width:288px}
+.spec .peek{position:static;display:block}
+.spec .tipspec .peek{position:relative}
+.spec .plist{max-height:none}
+.rw.shut{grid-template-rows:0fr;opacity:0}
+.ftog{display:flex;align-items:center;gap:5px;height:20px;border-radius:5px;padding:0 5px 0 2px;margin-left:-2px}
+.ftog:hover{background:var(--hover)}
+.ftog svg{width:10px;height:10px;stroke:var(--t4);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;transition:transform var(--m-arrive) var(--ease-enter)}
+.fhead.open .ftog svg{transform:rotate(90deg)}
+.ftog .cap{display:inline-block}
+
+/* morph layer */
+.dock>.box{position:absolute;top:0;right:0}
+.frame{position:absolute;z-index:30;pointer-events:none;border:1px solid rgba(255,255,255,.08);border-radius:10px}
+.flyer{position:absolute;z-index:31;pointer-events:none;margin:0}
+.dock .panel.morphing{border-color:transparent;box-shadow:none}
+.dock .panel.morphing .prow .face,.dock .panel.morphing .prow .handle{visibility:hidden}
+
+/* static specimens in the states strip */
+.spec{background:var(--canvas);padding:14px;position:relative}
+.spec .dock{position:static}
+.spec .dock>.box{position:static}
+
+@media (prefers-reduced-motion:reduce){
+  .app *,.app *::before,.app *::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <div class="x-group"><span class="x-k">View</span>
+    <button class="x-b" data-view="current">Current</button>
+    <button class="x-b" data-view="proposed">Proposed</button>
+  </div>
+  <div class="x-group"><span class="x-k">Window</span>
+    <button class="x-b" data-width="wide">Wide</button>
+    <button class="x-b" data-width="narrow">Narrow</button>
+  </div>
+  <div class="x-group"><span class="x-k">Events</span>
+    <button class="x-b" data-ev="spawn">Spawn</button>
+    <button class="x-b" data-ev="background">Background</button>
+    <button class="x-b" data-ev="block">Block</button>
+    <button class="x-b" data-ev="finish">Finish</button>
+    <button class="x-b" data-ev="fail">Fail</button>
+    <button class="x-b" data-ev="stop">Stop</button>
+    <button class="x-b" data-ev="resume">Resume</button>
+    <button class="x-b" data-ev="reset">Reset</button>
+  </div>
+  <div class="x-group"><span class="x-k">Sequence</span>
+    <button class="x-b" data-ev="play">Play</button>
+  </div>
+</div>
+
+<div class="x-sec" id="x-title">Session pane</div>
+<div class="x-stage" id="stage">
+  <div class="x-scaler" id="scaler">
+    <div class="app">
+      <div class="win" id="win">
+        <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+        <div class="tabs">
+          <div class="tab on"><i class="gd"></i><span>Review this week's changes</span></div>
+          <div class="tab"><i class="gd"></i><span>Fix transcript scrolling jump</span></div>
+          <div class="tab"><i class="gd"></i><span>Find a small bug in cat-code</span></div>
+          <div class="tab-plus">+</div>
+          <div class="sp"></div>
+          <div class="split"><i></i>Split</div>
+        </div>
+        <div class="body" id="body">
+          <div class="rail"><i class="c"></i><i></i><i></i><i class="c"></i><b>M</b></div>
+          <div class="pane" id="pane">
+            <div class="scroll">
+              <div class="col">
+                <p>No full builds, native GUI checks, live provider calls, or native Windows tests were performed. The three untracked HTML mockups and later concurrent commits were outside the frozen review range and left untouched.</p>
+                <p><strong>Fix order:</strong> approval matching first, filesystem execution second, then queue and task lifecycle failures.</p>
+                <div class="ub"><span>spawn 3 subagents to confirm these findings</span></div>
+                <p>I'll launch three independent verification agents, one per finding group. They'll challenge each finding against current source without changing code.</p>
+                <div class="bash"><div class="h"><em>$</em><b>BASH</b><span>git status --short &amp;&amp; git log -5 --format='%h %s'</span><i class="ok"></i></div>
+                  <div class="o">docs/maps/config-persistence.md<br>docs/maps/prompt-system.md<br>docs/maps/web-app-runtime.md</div></div>
+                <div id="launches"></div>
+                <p><strong>Three independent verification agents are running in parallel</strong>, covering all 24 findings:</p>
+                <ul><li><strong>Permissions, filesystem, and plugins:</strong> 9 findings</li><li><strong>Runtime, UI, context, and analytics:</strong> 9 findings</li><li><strong>Evaluation tooling and measurements:</strong> 6 findings</li></ul>
+              </div>
+            </div>
+            <div class="dockbar"><div class="w">
+              <div id="roster"></div>
+              <div class="comp">
+                <div class="in">Ask&nbsp;<em>Dacite</em>&nbsp;anything or describe a task…<span class="send">↑</span></div>
+                <div class="ctl"><span class="pl">+</span><span class="m">GPT-6.1 Sol</span><span class="a">High</span><span class="a">Auto</span><span class="g"></span><span class="br"><i></i>main</span><span class="pc"><i></i>15%</span></div>
+              </div>
+            </div></div>
+            <div class="dock gone" id="dock"></div>
+          </div>
+          <div id="pill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-sec">States · proposed</div>
+<div class="x-grid app" id="states"></div>
+
+<script>
+/* faceRects() from agentFace.ts, computed with bun for these names */
+const FACE = {
+  Wilkes:[[0,0,1,1],[8,0,1,1],[0,1,2,1],[7,1,2,1],[0,2,1,1],[2,2,5,1],[8,2,1,1],[0,3,9,1],[0,4,2,1],[3,4,3,1],[7,4,2,1],[0,5,9,1],[0,6,3,1],[4,6,1,1],[6,6,3,1],[2,7,2,1],[5,7,2,1],[3,8,3,1]],
+  Kay:[[1,1,1,1],[7,1,1,1],[1,2,3,1],[5,2,3,1],[1,3,7,1],[1,4,1,1],[3,4,3,1],[7,4,1,1],[1,5,3,1],[5,5,3,1],[2,6,1,1],[4,6,1,1],[6,6,1,1],[2,7,5,1]],
+  Goldstine:[[2,0,1,1],[6,0,1,1],[0,1,3,1],[6,1,3,1],[0,2,1,1],[2,2,5,1],[8,2,1,1],[0,3,9,1],[0,4,2,1],[3,4,3,1],[7,4,2,1],[0,5,9,1],[0,6,4,1],[5,6,4,1],[1,7,7,1],[2,8,5,1]],
+  Hopper:[[2,1,1,1],[6,1,1,1],[2,2,2,1],[5,2,2,1],[1,3,7,1],[1,4,1,1],[3,4,3,1],[7,4,1,1],[1,5,7,1],[2,6,2,1],[5,6,2,1],[3,7,3,1],[4,8,1,1]],
+  Lovelace:[[1,0,1,1],[7,0,1,1],[0,1,3,1],[6,1,3,1],[0,2,1,1],[2,2,2,1],[5,2,2,1],[8,2,1,1],[0,3,9,1],[0,4,2,1],[3,4,3,1],[7,4,2,1],[0,5,9,1],[0,6,3,1],[4,6,1,1],[6,6,3,1],[1,7,3,1],[5,7,3,1]],
+  Turing:[[0,0,1,1],[8,0,1,1],[0,1,3,1],[6,1,3,1],[0,2,1,1],[2,2,5,1],[8,2,1,1],[0,3,9,1],[0,4,2,1],[3,4,3,1],[7,4,2,1],[0,5,9,2],[2,7,5,1],[3,8,3,1]],
+  Babbage:[[1,1,1,1],[7,1,1,1],[1,2,2,1],[6,2,2,1],[1,3,3,1],[5,3,3,1],[1,4,1,1],[3,4,3,1],[7,4,1,1],[1,5,3,1],[5,5,3,1],[2,6,1,1],[4,6,1,1],[6,6,1,1],[2,7,5,1],[3,8,3,1]],
+};
+/* AGENT_FACE_IDENTITY_FILL entries; AGENT_TYPE_META colours */
+const TYPE = { Verification:'#5eead4', Explore:'#7dd3fc', 'General-purpose':'#93c5fd' };
+const BLOCK = 'Needs a decision from the assistant before editing shared files.';
+const POOL = [
+  {id:'w1',name:'Wilkes',   fill:'#93c5fd',role:'Verification',desc:'Confirm permission filesystem plugin findings',model:'gpt-6.1-sol',acct:'main',verdict:'PASS',result:'All 9 findings reproduce on current source.',cost:'31 tool calls · 64k tokens',acts:['Read src/utils/permissions/permissions.ts','Grep matchesApprovalRule','bun test src/utils/permissions']},
+  {id:'w2',name:'Kay',      fill:'#fcd34d',role:'Verification',desc:'Confirm runtime UI context findings',model:'gpt-6.1-sol',acct:'alt',failover:1,verdict:'PARTIAL',result:'7 of 9 hold; 2 depend on a stale fixture.',cost:'22 tool calls · 41k tokens',acts:['Read app/renderer/src/SessionPane.tsx','Grep selectDockedWorkers']},
+  {id:'w3',name:'Goldstine',fill:'#fda4af',role:'Verification',desc:'Confirm evaluation measurement findings',model:'gpt-6.1-sol',acct:'main',verdict:'PASS',result:'6 of 6 hold.',cost:'18 tool calls · 35k tokens',acts:['Read scripts/workspace-map-eval/taskInventory.ts','bun test scripts/workspace-map-eval']},
+  {id:'w4',name:'Hopper',   fill:'#5eead4',role:'Explore',desc:'Trace the sidebar fork title search',model:'gpt-6-luna',acct:'alt',result:'The title search reads the fork source, not the copy.',cost:'12 tool calls · 19k tokens',acts:['Grep forkTitle','Read app/renderer/src/Sidebar.tsx','Read app/renderer/src/sessionsCatalogState.ts']},
+  {id:'w5',name:'Lovelace', fill:'#c4b5fd',role:'General-purpose',desc:'Reproduce the approval mismatch',model:'gpt-6.1-sol',acct:'main',result:'Reproduced with a two-rule permission set.',cost:'27 tool calls · 58k tokens',acts:['Read src/hooks/useCanUseTool.tsx','bun test src/hooks']},
+  {id:'w6',name:'Babbage',  fill:'#6ee7b7',role:'Explore',desc:'Map queue and task lifecycle owners',model:'gpt-6-luna',acct:'alt',result:'Owners mapped; no orphaned queue paths.',cost:'9 tool calls · 14k tokens',acts:['Grep LocalAgentTask','Read src/tasks.ts']},
+  {id:'w7',name:'Turing',   fill:'#fdba74',role:'General-purpose',desc:'Draft the migration note for the dock',model:'gpt-6.1-sol',acct:'main',result:'Note drafted under docs/migration.',cost:'6 tool calls · 11k tokens',acts:['Read docs/maps/web-app-runtime.md','Read DESIGN.md']},
+];
+/* the composer's model; a row names its model only when it differs */
+const SESSION_MODEL = 'gpt-6.1-sol';
+const byId = Object.fromEntries(POOL.map(p => [p.id, p]));
+const CHIP_MAX = 4;
+const SETTLE = 700;
+const RM = matchMedia('(prefers-reduced-motion: reduce)');
+
+/* AGENT_STATE_META: label, tone, pip shape */
+const META = {
+  running:   { label:'Running',                  tone:'info'    },
+  background:{ label:'In background',            tone:'info'    },
+  resumed:   { label:'Resumed',                  tone:'info'    },
+  waiting:   { label:'Waiting on the assistant', tone:'purple'  },
+  failed:    { label:'Failed',                   tone:'danger'  },
+  stopped:   { label:'Stopped',                  tone:'warning' },
+  completed: { label:'Completed',                tone:'success' },
+};
+/* row words: running and in-background say nothing; the badge carries them */
+const WORD = { resumed:'resumed', waiting:'waiting', failed:'failed', stopped:'stopped', completed:'done' };
+const LIVE = new Set(['running','background','resumed','waiting','failed']);
+const RUNS = new Set(['running','background','resumed']);
+/* the dock's active group; failed settles into Finished like done and stopped */
+const ACTIVE = new Set(['running','background','resumed','waiting']);
+const FAIL_HOLD = 1500;
+
+const st = { workers:[], tasks:0, view:'proposed', width:'wide', prefCompact:false, open:false, finOpen:false, seq:0 };
+
+const $ = s => document.querySelector(s);
+const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function faceSvg(name, fill){
+  const r = FACE[name].map(([x,y,w,hh]) => `<rect x="${x}" y="${y}" width="${w}" height="${hh}"/>`).join('');
+  return `<svg viewBox="0 0 9 9" fill="${fill}" aria-hidden="true">${r}</svg>`;
+}
+function faceEl(w, badge){
+  const p = byId[w.id];
+  const f = h('span', 'face', faceSvg(p.name, p.fill));
+  f.dataset.id = w.id;
+  if (badge){ const b = h('span', 'badge ' + w.state); f.appendChild(b); }
+  return f;
+}
+const isActive = w => ACTIVE.has(w.state) || !!w.settling;
+const needsAssistant = w => !w.settling && w.state === 'waiting';
+function groups(list){
+  const act = list.filter(isActive).sort((a,b) => needsAssistant(b) - needsAssistant(a) || a.seq - b.seq);
+  const fin = list.filter(w => !isActive(w)).sort((a,b) => b.tEnd - a.tEnd);
+  return { act, fin };
+}
+function ordered(list){ const g = groups(list); return [...g.act, ...g.fin]; }
+function heldLabel(t0){
+  const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`;
+}
+
+/* ───────── CURRENT ───────── */
+function pipHtml(state, xs){ return `<span class="pip ${xs?'xs ':''}${state}"></span>`; }
+function renderCurrent(){
+  const roster = $('#roster'), pill = $('#pill');
+  roster.innerHTML = ''; pill.innerHTML = '';
+  if (st.view !== 'current') return;
+  // a resume is always a background run, and LiveWorkerItem carries no
+  // resumedAt, so today a resumed worker reads as in background
+  const live = w => w.state === 'resumed' ? 'background' : w.state;
+  const docked = st.workers.filter(w => w.state !== 'completed' && w.state !== 'stopped');
+  if (docked.length === 1){
+    const w = docked[0], p = byId[w.id], s = live(w);
+    const box = h('div','roster'); const row = h('button','rrow');
+    row.append(faceEl(w,false));
+    row.insertAdjacentHTML('beforeend', `<span class="handle">${p.name}</span><span class="ds">${esc(p.desc)}</span>${pipHtml(s)}<span class="tylab" style="color:${TYPE[p.role]}">${p.role}</span>${s==='failed'||s==='waiting'?'<span class="baton"><span>→</span>assistant</span>':''}`);
+    box.append(row); roster.append(box);
+  } else if (docked.length > 1){
+    let working=0, background=0, waiting=0, news=0, lead=null;
+    for (const w of docked){ const s = live(w); if (s==='failed'){ news++; lead = lead || w; continue; } if (s==='running') working++; else if (s==='background') background++; else if (s==='waiting') waiting++; }
+    const tail = [];
+    if (working) tail.push([`${working} working`,'working']);
+    if (background) tail.push([`${background} in background`,'working']);
+    if (waiting) tail.push([`${waiting} on the assistant`,'waiting']);
+    if (news > 1) tail.push([`+${news-1} more`,'done']);
+    const tailHtml = tail.map((t,i) => `${i?'<span class="sep">·</span>':''}<span class="cnt ${t[1]}">${t[0]}</span>`).join('');
+    const box = h('div','roster grp'); const row = h('button','rrow');
+    // WorkerRoster: the full roster opens above the line on hover or keyboard focus
+    const pop = h('div','rpop'); const inner = h('div','in');
+    inner.append(h('div','cap', `${docked.length} SUBAGENTS`));
+    for (const w of docked){
+      const p = byId[w.id], s = live(w);
+      const r = h('button','rrow'); r.append(faceEl(w,false));
+      r.insertAdjacentHTML('beforeend', `<span class="handle">${p.name}</span><span class="ds">${esc(p.desc)}</span>${pipHtml(s)}<span class="tylab" style="color:${TYPE[p.role]}">${p.role}</span>${s==='failed'||s==='waiting'?'<span class="baton"><span>→</span>assistant</span>':''}`);
+      inner.append(r);
+    }
+    pop.append(inner); box.append(pop);
+    if (lead){
+      const p = byId[lead.id];
+      row.append(faceEl(lead,false));
+      row.insertAdjacentHTML('beforeend', `${pipHtml('failed')}<span class="handle">${p.name}</span><span class="tylab" style="color:${TYPE[p.role]}">${p.role}</span>${tail.length?'<span class="sep">·</span>':''}${tailHtml}<span class="fl"></span><span class="baton"><span>→</span>assistant</span>`);
+    } else {
+      row.insertAdjacentHTML('beforeend', `<span class="dot ${working+background?'live':''}"></span><span class="lbl">${docked.length} subagents</span><span class="sep">·</span>${tailHtml || '<span class="cnt done">idle</span>'}<span class="fl"></span>`);
+    }
+    row.insertAdjacentHTML('beforeend', '<span class="chev">›</span>');
+    box.append(row); roster.append(box);
+  }
+  // workersPill + TasksStrip
+  let busy = 0, bg = 0;
+  for (const w of st.workers){ if (LIVE.has(live(w))) busy++; if (live(w)==='background') bg++; }
+  if (!busy && !st.tasks) return;
+  let html = '<span class="d"></span>';
+  if (busy){ if (bg) html += '<span class="ac">Background</span><span class="sep">·</span>'; html += `<span>${busy} subagent${busy>1?'s':''} active</span>`; }
+  if (busy && st.tasks) html += '<span class="sep">·</span>';
+  if (st.tasks) html += `<span>${st.tasks} background ${st.tasks===1?'task':'tasks'}</span>`;
+  pill.append(h('button','tpill',html));
+}
+
+/* transcript launch rows: names follow the pool so the backdrop stays coherent */
+function renderLaunches(){
+  const el = $('#launches'); el.innerHTML = '';
+  for (const p of POOL.slice(0,3)){
+    const row = h('div','launch');
+    const f = h('span','face', faceSvg(p.name, p.fill)); f.style.width = f.style.height = '17px'; f.firstChild.style.width = f.firstChild.style.height = '17px';
+    row.append(f);
+    row.insertAdjacentHTML('beforeend', `<span><span class="nm">${p.name}</span><span class="ty">verification</span></span><span class="st">launched</span><span class="ds">${esc(p.desc)}</span><span class="md">gpt-6.1-sol | main</span>`);
+    el.append(row);
+  }
+}
+
+/* ───────── PROPOSED ───────── */
+const ICON_OPEN = '<svg viewBox="0 0 12 12"><path d="M4.5 2.5h5v5M9.5 2.5 3 9"/></svg>';
+const ICON_FOLD = '<svg viewBox="0 0 12 12"><path d="M3 6h6"/></svg>';
+
+function buildRow(w){
+  const p = byId[w.id];
+  const rw = h('div','rw'); rw.dataset.id = w.id;
+  const inner = h('div');
+  const row = h('button','prow');
+  row.append(faceEl(w,true));
+  const main = h('div');
+  main.innerHTML = `<div class="l1"><span class="handle">${p.name}</span><span class="word"></span><span class="g"></span><span class="bt"></span></div><div class="l2"><span class="ds">${esc(p.desc)}</span><span class="tylab" style="color:${TYPE[p.role]}">${p.role}</span></div>`;
+  row.append(main); inner.append(row); rw.append(inner);
+  return rw;
+}
+function updateRow(rw, w){
+  const p = byId[w.id];
+  const row = rw.querySelector('.prow');
+  row.classList.toggle('fin', !isActive(w));
+  row.setAttribute('aria-label', `${p.name}, type ${p.role}, status ${META[w.state].label}`);
+  const badge = row.querySelector('.badge');
+  badge.className = 'badge ' + w.state;
+  const wd = row.querySelector('.word'); wd.className = 'word ' + w.state; wd.textContent = WORD[w.state] || '';
+  const prev = rw.dataset.state;
+  rw.dataset.state = w.state;
+  if (prev !== undefined && prev !== w.state && !RM.matches){
+    // a state change is announced where it lands: the word slides in, the badge pops
+    wd.animate([{ opacity:0, transform:'translateY(5px)' }, { opacity:1, transform:'none' }], { duration:220, easing:'cubic-bezier(.2,0,0,1)' });
+    badge.animate([{ transform:'scale(1.7)' }, { transform:'none' }], { duration:260, easing:'cubic-bezier(.2,0,0,1)' });
+    if (w.state === 'resumed'){
+      row.classList.remove('arrive'); void row.offsetWidth; row.classList.add('arrive');
+      row.addEventListener('animationend', () => row.classList.remove('arrive'), { once:true });
+    }
+  }
+  row.querySelector('.bt').innerHTML = needsAssistant(w) ? '<span class="baton"><span>→</span>assistant</span>'
+    : isActive(w) && p.model !== SESSION_MODEL ? `<span class="mtag">${p.model}</span>` : '';
+}
+const ICON_DISC = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2 6.5 5 3.5 8"/></svg>';
+function buildFinHead(){
+  const rw = h('div','rw'); rw.dataset.id = 'fin';
+  rw.innerHTML = `<div><div class="fhead"><button class="ftog" aria-expanded="false">${ICON_DISC}<span class="cap"></span></button><span class="g"></span><button class="clr">Clear</button></div></div>`;
+  return rw;
+}
+function updateFinHead(el, n, open){
+  const cap = el.querySelector('.cap');
+  const prev = el.dataset.n;
+  cap.textContent = `FINISHED · ${n}`;
+  el.dataset.n = String(n);
+  el.querySelector('.ftog').setAttribute('aria-expanded', String(open));
+  el.querySelector('.fhead').classList.toggle('open', open);
+  // a row that just sank into the closed group ticks the count
+  if (prev !== undefined && prev !== String(n) && !RM.matches)
+    cap.animate([{ transform:'translateY(5px)', opacity:0 }, { transform:'none', opacity:1 }], { duration:220, easing:'cubic-bezier(.2,0,0,1)' });
+}
+
+/* static builders, used by the states strip */
+function chipFaces(list){ const g = groups(list); return g.act.length ? { faces:g.act, total:g.act.length, fin:false } : { faces:g.fin, total:g.fin.length, fin:true }; }
+function chipNode(workers){
+  const box = h('button','box chip');
+  const c = chipFaces(workers);
+  box.classList.toggle('allfin', c.fin);
+  const fs = h('span','cfs');
+  c.faces.slice(0,CHIP_MAX).forEach(w => { const cf = h('span','cf'); cf.dataset.id = w.id; cf.append(faceEl(w,true)); fs.append(cf); });
+  box.append(fs);
+  if (c.total > CHIP_MAX) box.append(h('span','more',`+${c.total-CHIP_MAX}`));
+  return box;
+}
+function panelNode(workers, float, finOpen){
+  const box = h('div','box panel' + (float?' float':''));
+  box.innerHTML = `<div class="phead"><span class="cap"></span><span class="g"></span><button class="ib" aria-label="Open workers" title="Workers" data-act="open">${ICON_OPEN}</button><button class="ib" aria-label="Collapse" title="Collapse" data-act="fold">${ICON_FOLD}</button></div><div class="plist"></div>`;
+  const list = box.querySelector('.plist');
+  const g = groups(workers);
+  box.querySelector('.cap').textContent = capText(g.act.length, g.fin.length);
+  g.act.forEach(w => { const rw = buildRow(w); updateRow(rw, w); list.append(rw); });
+  if (g.fin.length){ const f = buildFinHead(); updateFinHead(f, g.fin.length, !!finOpen); list.append(f); }
+  g.fin.forEach(w => { const rw = buildRow(w); updateRow(rw, w); rw.classList.toggle('shut', !finOpen); rw.inert = !finOpen; list.append(rw); });
+  return box;
+}
+function capText(n, fin){ return n ? `${n} SUBAGENT${n>1?'S':''}` : fin ? 'SUBAGENTS' : ''; }
+
+/* hover tip: only what its anchor does not already say. On a row it slides
+   out of the row's left edge, the row's own height, with its two lines on the
+   row's two baselines: line A beside the name, line B beside the task. On a
+   chip face, which shows nothing but the face, it also names the worker. */
+function tipLines(w, mode){
+  const p = byId[w.id];
+  // a row already names a model that differs from the composer's; a chip face names nothing
+  const rowShowsModel = mode === 'row' && isActive(w) && !needsAssistant(w) && p.model !== SESSION_MODEL;
+  // a Codex lease exists only while the run is going; completion, failure, stop
+  // and a blocked handoff (a completed run) all release it, so held time and
+  // failover come only from a live lease, and the account after that is the
+  // result's own stamp
+  const leased = RUNS.has(w.state);
+  const a = rowShowsModel ? [] : [p.model];
+  if (w.state === 'completed') a.push(p.cost); else a.push(`acct ${p.acct}`);
+  let A = a.map((t,i) => `${i?'<i>·</i>':''}<span>${t}</span>`).join('');
+  if (leased && p.failover) A += `<i>·</i><span class="warn">failed over ×${p.failover}</span>`;
+  let B = '';
+  // nested tool progress reaches only a foreground run; background and resumed
+  // runs (a resume is always a background run) carry no per-call activity
+  if (w.state === 'running') B = `<span class="tb-now">${pipHtml('running', true)}<span>${esc(p.acts[w.act % p.acts.length])}</span></span>`;
+  else if (w.state === 'waiting') B = `<span class="tb-text purple">${esc(BLOCK)}</span>`;
+  else if (w.state === 'completed') B = `<span class="tb-text">${p.verdict ? p.verdict + ' · ' : ''}${esc(p.result)}</span>`;
+  else if (leased) B = `<span class="tb-meta">held ${heldLabel(w.t0)}</span>`;
+  return { A, B };
+}
+function peekHtml(w, mode){
+  const { A, B } = tipLines(w, mode);
+  let who = '';
+  if (mode === 'chip'){
+    const word = WORD[w.state];
+    who = `<div class="tl tl-who"><span class="handle">${byId[w.id].name}</span>${word ? `<span class="word ${w.state}">${word}</span>` : ''}</div>`;
+  }
+  return `${who}<div class="tl tl-a">${A}</div>${B ? `<div class="tl tl-b">${B}</div>` : ''}`;
+}
+function peekNode(w, mode){
+  const e = h('div', `peek on ${mode}`); e.innerHTML = `<div class="pk-in">${peekHtml(w, mode)}</div>`;
+  if (mode === 'chip') return e;
+  // in context: the tip beside its row, in a one-row panel
+  const wrap = h('div','tipspec');
+  const box = h('div','box panel'); const list = h('div','plist'); box.append(list);
+  const rw = buildRow(w); updateRow(rw, w); rw.querySelector('.prow').classList.add('tipped'); list.append(rw);
+  wrap.append(e, box);
+  return wrap;
+}
+
+/* live dock: keyed so rows and faces can enter, leave, and reorder */
+const dock = $('#dock');
+let chipEl, panelEl;
+function mountDock(){
+  dock.innerHTML = '';
+  chipEl = h('button','box chip'); chipEl.innerHTML = '<span class="cfs"></span><span class="more hide"></span>';
+  panelEl = panelNode([], false);
+  dock.append(chipEl, panelEl);
+  chipEl.addEventListener('click', e => { e.stopPropagation(); expand(); });
+  panelEl.addEventListener('click', e => {
+    if (e.target.closest('[data-act="fold"]')){ e.stopPropagation(); collapse(); }
+    if (e.target.closest('.clr')){ e.stopPropagation(); hidePeek(true); st.workers = st.workers.filter(isActive); render(); }
+    if (e.target.closest('.ftog')){ e.stopPropagation(); hidePeek(true); st.finOpen = !st.finOpen; render(); }
+  });
+}
+function layout(){
+  if (st.width === 'narrow') return st.open ? 'panel' : 'chip';
+  return st.prefCompact ? 'chip' : 'panel';
+}
+function visibleBox(){ return layout() === 'chip' ? chipEl : panelEl; }
+function scale(){ const pane = $('#pane'); return pane.getBoundingClientRect().width / pane.offsetWidth || 1; }
+
+function flipRecord(container, sel){
+  const m = new Map();
+  container.querySelectorAll(sel).forEach(el => m.set(el.dataset.id, el.getBoundingClientRect()));
+  return m;
+}
+function flipPlay(container, sel, before, axis){
+  if (RM.matches) return;
+  const s = scale();
+  container.querySelectorAll(sel).forEach(el => {
+    const a = before.get(el.dataset.id); if (!a) return;
+    const b = el.getBoundingClientRect();
+    const d = axis === 'y' ? (a.top - b.top) / s : (a.left - b.left) / s;
+    if (Math.abs(d) < 0.5) return;
+    el.animate([{transform: axis==='y' ? `translateY(${d}px)` : `translateX(${d}px)`},{transform:'none'}], {duration:260, easing:'cubic-bezier(.2,0,0,1)'});
+  });
+}
+function reconcile(container, sel, items, make, update){
+  const keep = new Set(items.map(i => i.key));
+  container.querySelectorAll(sel).forEach(el => {
+    if (!keep.has(el.dataset.id) && !el.classList.contains('leaving')){
+      el.classList.add('leaving','off'); setTimeout(() => el.remove(), RM.matches ? 0 : 220);
+    }
+  });
+  let prev = null;
+  for (const it of items){
+    let el = container.querySelector(`${sel}[data-id="${it.key}"]:not(.leaving)`);
+    const fresh = !el;
+    if (fresh){ el = make(it); el.classList.add('off'); }
+    update(el, it);
+    const want = prev ? prev.nextSibling : container.firstChild;
+    if (want !== el) container.insertBefore(el, want);
+    if (fresh) requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('off')));
+    prev = el;
+  }
+}
+
+function renderDock(){
+  const show = st.view === 'proposed' && st.workers.length > 0;
+  dock.classList.toggle('gone', !show);
+  dock.inert = !show;
+  if (!show && st.open) st.open = false;
+  const L = layout();
+  chipEl.classList.toggle('hide', L !== 'chip');
+  panelEl.classList.toggle('float', st.width === 'narrow');
+  panelEl.classList.toggle('hide', L !== 'panel');
+
+  const g = groups(st.workers);
+  // panel: active rows, the Finished header, finished rows, in one keyed list
+  const plist = panelEl.querySelector('.plist');
+  const before = flipRecord(plist, '.rw:not(.leaving)');
+  const items = [...g.act.map(w => ({ key:w.id, w })), ...(g.fin.length ? [{ key:'fin' }] : []), ...g.fin.map(w => ({ key:w.id, w }))];
+  reconcile(plist, '.rw', items,
+    it => { if (it.key === 'fin') return buildFinHead(); const rw = buildRow(it.w); attachPeek(rw.querySelector('.prow'), it.key, 'row'); return rw; },
+    (el, it) => {
+      if (it.key === 'fin') return updateFinHead(el, g.fin.length, st.finOpen);
+      updateRow(el, it.w);
+      el.classList.toggle('shut', !isActive(it.w) && !st.finOpen);
+      el.inert = el.classList.contains('shut');
+    });
+  flipPlay(plist, '.rw:not(.leaving)', before, 'y');
+  panelEl.querySelector('.cap').textContent = capText(g.act.length, g.fin.length);
+
+  // chip: live faces; when nothing is live, the finished ones, dimmed
+  const c = chipFaces(st.workers);
+  chipEl.classList.toggle('allfin', c.fin);
+  const cfs = chipEl.querySelector('.cfs');
+  const beforeFaces = flipRecord(cfs, '.cf:not(.leaving)');
+  reconcile(cfs, '.cf', c.faces.slice(0, CHIP_MAX).map(w => ({ key:w.id, w })),
+    it => { const cf = h('span','cf'); cf.dataset.id = it.key; cf.append(faceEl(it.w,true)); attachPeek(cf, it.key, 'chip'); return cf; },
+    (el, it) => { el.querySelector('.badge').className = 'badge ' + it.w.state; });
+  flipPlay(cfs, '.cf:not(.leaving)', beforeFaces, 'x');
+  const more = chipEl.querySelector('.more');
+  more.classList.toggle('hide', c.total <= CHIP_MAX); more.textContent = `+${c.total - CHIP_MAX}`;
+  // the chip is one button, so it names every face it shows
+  const who = c.faces.map(w => `${byId[w.id].name} ${META[w.state].label.toLowerCase()}`);
+  chipEl.setAttribute('aria-label', `${c.fin ? 'Finished subagents' : 'Subagents'}: ${who.join(', ')}${c.total > CHIP_MAX ? `, ${c.total - CHIP_MAX} more` : ''}. Expand`);
+
+  refreshPeek();
+}
+
+/* ───────── hover card ───────── */
+const peek = h('div','peek'); peek.setAttribute('role','tooltip'); peek.id = 'dock-tip';
+// the tip is hoverable: moving onto it keeps it open
+peek.addEventListener('mouseenter', () => { clearTimeout(pk.closeT); });
+peek.addEventListener('mouseleave', () => hidePeek());
+$('#pane').append(peek);
+const pk = { id:null, anchor:null, mode:null, openT:0, closeT:0, hiding:false };
+function attachPeek(el, id, mode){
+  el.addEventListener('mouseenter', () => showPeek(id, el, mode));
+  el.addEventListener('mouseleave', () => hidePeek());
+  el.addEventListener('focus', () => { if (el.matches(':focus-visible')) showPeek(id, el, mode, true); });
+  el.addEventListener('blur', () => hidePeek());
+}
+function placePeek(){
+  const { pane, rel } = geom();
+  const pw = pane.offsetWidth;
+  if (pk.mode === 'row'){
+    // flush with the row: its right edge tucks under the row's left border
+    const r = rel(pk.anchor.getBoundingClientRect());
+    peek.style.right = (pw - (r.left + 1)) + 'px';
+    peek.style.top = r.top + 'px';
+    peek.style.height = r.height + 'px';
+  } else {
+    const cr = rel(chipEl.getBoundingClientRect());
+    peek.style.right = (pw - (cr.left + cr.width)) + 'px';
+    peek.style.top = (cr.top + cr.height + 6) + 'px';
+    peek.style.height = '';
+  }
+  peek.style.left = 'auto';
+}
+function setTipped(el){
+  document.querySelectorAll('#dock .prow.tipped').forEach(x => { if (x !== el) x.classList.remove('tipped'); });
+  document.querySelectorAll('#dock [aria-describedby="dock-tip"]').forEach(x => { if (x !== el) x.removeAttribute('aria-describedby'); });
+  if (el && el.classList.contains('prow')) el.classList.add('tipped');
+  if (el) el.setAttribute('aria-describedby', 'dock-tip');
+}
+const SHUT_CLIP = 'inset(0px 0px 0px 100%)', OPEN_CLIP = 'inset(0px 0px 0px 0px)';
+function showPeek(id, anchor, mode, now){
+  clearTimeout(pk.closeT); clearTimeout(pk.openT);
+  const go = () => {
+    const w = st.workers.find(x => x.id === id);
+    if (!w || morphing || !anchor.isConnected || anchor.closest('.shut')) return;
+    const gliding = peek.classList.contains('on') && !pk.hiding && pk.mode === mode && !RM.matches;
+    peek.getAnimations().forEach(a => a.cancel());
+    pk.hiding = false; pk.id = id; pk.anchor = anchor; pk.mode = mode;
+    peek.className = `peek on ${mode}`;
+    peek.innerHTML = `<div class="pk-in">${peekHtml(w, mode)}</div>`;
+    setTipped(anchor);
+    if (gliding){
+      peek.style.transition = 'top 170ms cubic-bezier(.2,0,0,1), height 170ms cubic-bezier(.2,0,0,1), right 170ms cubic-bezier(.2,0,0,1)';
+      placePeek();
+      peek.firstChild.animate([{ opacity:0, transform:'translateY(3px)' }, { opacity:1, transform:'none' }], { duration:170, easing:'cubic-bezier(.2,0,0,1)' });
+    } else {
+      peek.style.transition = 'none';
+      placePeek();
+      if (RM.matches) return;
+      if (mode === 'row'){
+        // slides out of the row
+        peek.animate([{ clipPath:SHUT_CLIP }, { clipPath:OPEN_CLIP }], { duration:190, easing:'cubic-bezier(.2,0,0,1)' });
+        peek.firstChild.animate([{ opacity:0, transform:'translateX(10px)' }, { opacity:1, transform:'none' }], { duration:220, easing:'cubic-bezier(.2,0,0,1)' });
+      } else {
+        peek.animate([{ opacity:0, transform:'translateY(-3px)' }, { opacity:1, transform:'none' }], { duration:150, easing:'cubic-bezier(.2,0,0,1)' });
+      }
+    }
+  };
+  if (now || (peek.classList.contains('on') && !pk.hiding)) go(); else pk.openT = setTimeout(go, 260);
+}
+function hidePeek(immediate){
+  clearTimeout(pk.openT); clearTimeout(pk.closeT);
+  const go = () => {
+    if (!peek.classList.contains('on')) return;
+    pk.hiding = true;
+    const quick = RM.matches || immediate;
+    const a = pk.mode === 'row'
+      ? peek.animate([{ clipPath:OPEN_CLIP }, { clipPath:SHUT_CLIP }], { duration: quick ? 0 : 140, easing:'cubic-bezier(.4,0,1,1)', fill:'forwards' })
+      : peek.animate([{ opacity:1 }, { opacity:0 }], { duration: quick ? 0 : 110, fill:'forwards' });
+    a.onfinish = () => { if (!pk.hiding) return; peek.classList.remove('on'); peek.getAnimations().forEach(x => x.cancel()); setTipped(null); pk.id = null; pk.hiding = false; };
+  };
+  if (immediate) go(); else pk.closeT = setTimeout(go, 100);
+}
+function refreshPeek(){
+  if (!pk.id || pk.hiding || !peek.classList.contains('on')) return;
+  const w = st.workers.find(x => x.id === pk.id);
+  const anchorVisible = pk.anchor.isConnected && !pk.anchor.closest('.hide, .leaving, .shut');
+  if (!w || !anchorVisible){ hidePeek(true); return; }
+  peek.firstChild.innerHTML = peekHtml(w, pk.mode);
+  peek.style.transition = 'top 260ms cubic-bezier(.2,0,0,1), height 260ms cubic-bezier(.2,0,0,1)';
+  requestAnimationFrame(placePeek);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePeek(true); });
+setInterval(() => {
+  let touched = false;
+  for (const w of st.workers) if (w.state === 'running'){ w.act++; touched = true; }
+  if (touched && pk.id && !pk.hiding){
+    const w = st.workers.find(x => x.id === pk.id);
+    if (w && w.state === 'running'){
+      const now = peek.querySelector('.tb-now span:last-child');
+      if (now){ now.textContent = byId[w.id].acts[w.act % byId[w.id].acts.length]; if (!RM.matches) now.animate([{opacity:0, transform:'translateY(3px)'},{opacity:1, transform:'none'}], { duration:180, easing:'ease-out' }); }
+    }
+  }
+}, 2200);
+
+/* chip ⇄ panel. The panel is live the whole time: its edge grows out of the
+   chip and clips it, faces travel to their rows, names ride beside them, and
+   the details fill in after. */
+let morphing = false;
+function geom(){
+  const pane = $('#pane'), s = scale(), P = pane.getBoundingClientRect();
+  return { pane, rel: r => ({ left:(r.left-P.left)/s, top:(r.top-P.top)/s, width:r.width/s, height:r.height/s }) };
+}
+function facesOf(root, rel){
+  const m = new Map();
+  root.querySelectorAll('.face').forEach(f => { if (!f.closest('.leaving, .shut')) m.set(f.dataset.id, { r: rel(f.getBoundingClientRect()), el: f }); });
+  return m;
+}
+function chipGeom(rel){
+  const more = chipEl.querySelector('.more');
+  return {
+    box: rel(chipEl.getBoundingClientRect()),
+    faces: facesOf(chipEl, rel),
+    more: more.classList.contains('hide') ? null : rel(more.getBoundingClientRect()),
+  };
+}
+function runMorph(dir, chip, rel, pane, done){
+  const expanding = dir === 'expand';
+  const A = chip.box, B = rel(panelEl.getBoundingClientRect());
+  const D = expanding ? 340 : 260;
+  const E = expanding ? 'cubic-bezier(.2,0,0,1)' : 'cubic-bezier(.4,0,.2,1)';
+  const kf = (a, b) => expanding ? [a, b] : [b, a];
+  const anims = [], temp = [];
+
+  panelEl.classList.add('morphing');
+  const frame = h('div','frame');
+  if (st.width === 'narrow') frame.style.boxShadow = 'var(--elev-popover)';
+  pane.append(frame); temp.push(frame);
+  const box = b => ({ left:b.left+'px', top:b.top+'px', width:b.width+'px', height:b.height+'px' });
+  anims.push(frame.animate(kf(box(A), box(B)), { duration:D, easing:E, fill:'forwards' }));
+  const inset = `inset(${A.top-B.top}px ${(B.left+B.width)-(A.left+A.width)}px ${(B.top+B.height)-(A.top+A.height)}px ${A.left-B.left}px round 10px)`;
+  anims.push(panelEl.animate(kf({ clipPath:inset }, { clipPath:'inset(0px 0px 0px 0px round 10px)' }), { duration:D, easing:E, fill:'forwards' }));
+
+  // faces: chip slot ⇄ row slot. Live faces past the chip limit come out of
+  // "+N"; finished rows the chip never showed fade in where they sit.
+  const rowFaces = facesOf(panelEl.querySelector('.plist'), rel);
+  const tail = chip.more || { left: A.left + A.width - 20, top: A.top + 6 };
+  for (const [id, b] of rowFaces){
+    const a = chip.faces.get(id);
+    const fin = b.el.closest('.prow').classList.contains('fin');
+    const from = a ? a.r : fin ? b.r : tail;
+    const fl = b.el.cloneNode(true); fl.classList.add('flyer');
+    fl.style.left = b.r.left+'px'; fl.style.top = b.r.top+'px';
+    pane.append(fl); temp.push(fl);
+    const off = `translate(${from.left-b.r.left}px,${from.top-b.r.top}px)`;
+    const start = a ? { transform: off } : { transform: off + ' scale(.4)', opacity: 0 };
+    anims.push(fl.animate(kf(start, { transform:'none', opacity: fin ? .55 : 1 }), { duration:D, easing:E, fill:'forwards' }));
+
+    // the name travels beside its face, outside the clip, so it is readable
+    // for the whole trip; it fades in once the faces have spread apart
+    const handle = b.el.closest('.prow').querySelector('.handle');
+    const hr = rel(handle.getBoundingClientRect());
+    const nm = handle.cloneNode(true); nm.classList.add('flyer');
+    nm.style.left = hr.left+'px'; nm.style.top = hr.top+'px';
+    pane.append(nm); temp.push(nm);
+    const peak = fin ? .55 : 1;
+    const nameFrames = expanding
+      ? [{ transform: off, opacity:0, offset:0 }, { opacity:0, offset:.12 }, { opacity:peak, offset:.5 }, { transform:'none', opacity:peak, offset:1 }]
+      : [{ transform:'none', opacity:peak, offset:0 }, { opacity:peak, offset:.4 }, { opacity:0, offset:.8 }, { transform: off, opacity:0, offset:1 }];
+    anims.push(nm.animate(nameFrames, { duration:D, easing:E, fill:'forwards' }));
+  }
+
+  // details fill in behind the names, top row first
+  const head = [...panelEl.querySelectorAll('.phead .cap, .phead .ib')];
+  const rows = [...panelEl.querySelectorAll('.plist .rw:not(.leaving):not(.shut)')].map(rw =>
+    [...rw.querySelectorAll('.word, .bt, .ds, .tylab, .fhead')]);
+  const hidden = { opacity:0, transform:'translateX(-10px)' }, shown = { transform:'none' };
+  if (expanding){
+    head.forEach(el => anims.push(el.animate([{opacity:0},{opacity:1}], { duration:200, delay:110, easing:E, fill:'backwards' })));
+    rows.forEach((els, i) => els.forEach(el => anims.push(el.animate([hidden, shown], { duration:240, delay:130 + i*40, easing:E, fill:'backwards' }))));
+  } else {
+    head.forEach(el => anims.push(el.animate([{opacity:1},{opacity:0}], { duration:100, easing:'ease-in', fill:'forwards' })));
+    rows.forEach(els => els.forEach(el => anims.push(el.animate([shown, { opacity:0, transform:'translateX(-8px)' }], { duration:90, easing:'ease-out', fill:'forwards' }))));
+  }
+
+  setTimeout(() => {
+    if (done) done();
+    temp.forEach(el => el.remove());
+    // expanding detail fades may still be running on lower rows; they end on
+    // their own (fill: backwards), so only finished or forward-filled ones go
+    anims.forEach(a => { if (!expanding || a.effect.getComputedTiming().fill !== 'backwards') a.cancel(); });
+    panelEl.classList.remove('morphing');
+    morphing = false;
+  }, D + 20);
+}
+function expand(){
+  if (layout() === 'panel' || morphing) return;
+  hidePeek(true);
+  const change = () => { if (st.width === 'narrow') st.open = true; else st.prefCompact = false; };
+  if (RM.matches || dock.classList.contains('gone')){ change(); render(); return; }
+  morphing = true;
+  const { pane, rel } = geom();
+  const chip = chipGeom(rel);
+  change(); render();
+  runMorph('expand', chip, rel, pane);
+}
+function collapse(){
+  if (layout() === 'chip' || morphing) return;
+  hidePeek(true);
+  const change = () => { if (st.width === 'narrow') st.open = false; else st.prefCompact = true; };
+  if (RM.matches || dock.classList.contains('gone')){ change(); render(); return; }
+  morphing = true;
+  const { pane, rel } = geom();
+  // measure the chip where it will land without showing it
+  chipEl.classList.remove('hide'); chipEl.style.visibility = 'hidden';
+  const chip = chipGeom(rel);
+  chipEl.style.visibility = ''; chipEl.classList.add('hide');
+  runMorph('collapse', chip, rel, pane, () => { change(); render(); });
+}
+document.addEventListener('click', e => { if (st.open && !dock.contains(e.target) && !e.target.closest('.x-bar')) collapse(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.open) collapse(); });
+
+/* ───────── events ───────── */
+const newest = pred => [...st.workers].filter(pred).sort((a,b) => b.seq - a.seq)[0];
+const oldest = pred => [...st.workers].filter(pred).sort((a,b) => a.seq - b.seq)[0];
+function settle(w, state, hold){
+  // a finishing row turns first, in place, then moves down to Finished
+  w.state = state; w.tEnd = Date.now(); w.settling = true;
+  setTimeout(() => { w.settling = false; render(); }, RM.matches ? 0 : (hold || SETTLE));
+}
+const EV = {
+  spawn(){
+    const free = POOL.find(p => !st.workers.some(w => w.id === p.id));
+    if (free) st.workers.push({ id:free.id, state:'running', seq:++st.seq, t0:Date.now(), act:0 });
+  },
+  background(){ const w = oldest(w => w.state === 'running' || w.state === 'resumed'); if (w) w.state = 'background'; },
+  block(){ const w = newest(w => RUNS.has(w.state)); if (w) w.state = 'waiting'; },
+  finish(){ const w = oldest(w => RUNS.has(w.state)); if (w) settle(w, 'completed'); },
+  // a failure holds red in place a little longer than a finish, then settles
+  fail(){ const w = newest(w => RUNS.has(w.state)); if (w) settle(w, 'failed', FAIL_HOLD); },
+  stop(){ const w = newest(w => RUNS.has(w.state)); if (w) settle(w, 'stopped'); },
+  resume(){
+    // the assistant resumes a blocked or failed worker first, else the latest finished one
+    const w = oldest(w => w.state === 'waiting' || w.state === 'failed')
+      || [...st.workers].filter(w => !isActive(w)).sort((a,b) => b.tEnd - a.tEnd)[0];
+    if (w){ w.state = 'resumed'; w.settling = false; w.t0 = Date.now(); w.act = 0; }
+  },
+  reset(){
+    st.workers = POOL.slice(0,3).map((p,i) => ({ id:p.id, state:'background', seq:i+1, t0:Date.now() - (6-i)*60e3, act:0 }));
+    st.seq = 3; st.open = false;
+  },
+};
+let playing = null;
+function play(){
+  if (playing) playing.forEach(clearTimeout);
+  hidePeek(true);
+  st.workers = []; st.open = false; render();
+  const steps = [
+    [500, EV.spawn],[600, EV.spawn],[600, EV.spawn],
+    [1100, () => { EV.background(); EV.background(); EV.background(); }],
+    [1100, EV.spawn],
+    [1400, EV.finish],
+    [1600, EV.block],
+    [1600, EV.resume],
+    [1900, EV.finish],
+    [1500, EV.stop],
+    [1500, EV.resume],
+    [2000, EV.fail],
+    [1500, EV.finish],
+    [1500, EV.resume],
+    [2000, EV.finish],
+    [1500, EV.finish],
+  ];
+  let t = 0; playing = steps.map(([d, fn]) => { t += d; return setTimeout(() => { fn(); render(); }, t); });
+}
+
+function render(){
+  document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === st.view));
+  document.querySelectorAll('[data-width]').forEach(b => b.setAttribute('aria-pressed', b.dataset.width === st.width));
+  $('#win').style.setProperty('--W', st.width === 'wide' ? '1600px' : '1180px');
+  renderCurrent();
+  renderDock();
+  fit();
+}
+function fit(){
+  const stage = $('#stage'), sc = $('#scaler');
+  const W = st.width === 'wide' ? 1600 : 1180;
+  const k = Math.min(1, (stage.clientWidth - 40) / W);
+  sc.style.transform = `scale(${k})`;
+  stage.style.height = (900 * k + 8) + 'px';
+}
+addEventListener('resize', fit);
+
+document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { st.view = b.dataset.view; st.open = false; hidePeek(true); render(); });
+document.querySelectorAll('[data-width]').forEach(b => b.onclick = () => { st.width = b.dataset.width; st.open = false; hidePeek(true); render(); });
+document.querySelectorAll('[data-ev]').forEach(b => b.onclick = e => {
+  e.stopPropagation();
+  const ev = b.dataset.ev;
+  if (ev === 'play') return play();
+  if (playing){ playing.forEach(clearTimeout); playing = null; }
+  EV[ev]();
+  render();
+});
+
+/* states strip */
+function stateCell(label, node){
+  const c = h('div','x-cell'); c.append(h('div','x-lab',label));
+  const s = h('div','spec'); const d = h('div','dock'); d.append(node); s.append(d); c.append(s);
+  $('#states').append(c);
+}
+function W(id, state, seq, tEnd){ return { id, state, seq, t0: Date.now() - 4*60e3, tEnd: tEnd || 0, act: 0 }; }
+function buildStates(){
+  stateCell('Chip · 1 running', chipNode([W('w1','running',1)], 0));
+  stateCell('Chip · 3 background', chipNode([W('w1','background',1),W('w2','background',2),W('w3','background',3)], 0));
+  stateCell('Chip · mixed', chipNode([W('w1','background',1),W('w2','running',2),W('w3','resumed',3)], 0));
+  stateCell('Chip · attention', chipNode([W('w1','background',1),W('w2','failed',2),W('w3','waiting',3)], 0));
+  stateCell('Chip · overflow', chipNode(POOL.map((p,i) => W(p.id, i%2?'running':'background', i+1)), 0));
+  stateCell('Chip · all finished', chipNode([W('w1','completed',1,3),W('w2','stopped',2,2),W('w3','completed',3,1)], 0));
+  stateCell('Panel · finished closed', panelNode([W('w1','running',1),W('w2','waiting',2),W('w3','failed',3),W('w4','resumed',4),W('w5','background',5),W('w6','completed',6,9),W('w7','stopped',7,8)], false, false));
+  stateCell('Panel · finished open', panelNode([W('w1','running',1),W('w2','waiting',2),W('w3','failed',3),W('w4','resumed',4),W('w5','background',5),W('w6','completed',6,9),W('w7','stopped',7,8)], false, true));
+  stateCell('Panel · all finished', panelNode([W('w1','completed',1,3),W('w2','stopped',2,2),W('w3','completed',3,1)], false, false));
+  stateCell('Row tip · running', peekNode(W('w4','running',1),'row'));
+  stateCell('Row tip · background', peekNode(W('w2','background',1),'row'));
+  stateCell('Row tip · resumed', peekNode(W('w5','resumed',1),'row'));
+  stateCell('Row tip · waiting', peekNode(W('w2','waiting',1),'row'));
+  stateCell('Row tip · failed', peekNode(W('w3','failed',1),'row'));
+  stateCell('Row tip · done', peekNode(W('w1','completed',1),'row'));
+  stateCell('Row tip · stopped', peekNode(W('w5','stopped',1),'row'));
+  stateCell('Chip tip · running', peekNode(W('w4','running',1),'chip'));
+  stateCell('Chip tip · failed', peekNode(W('w3','failed',1),'chip'));
+}
+
+renderLaunches();
+mountDock();
+EV.reset();
+buildStates();
+render();
+</script>
+</body>
+</html>
