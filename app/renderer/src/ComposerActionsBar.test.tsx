@@ -1067,20 +1067,28 @@ test('AccountSwitcherPanel rows carry no native `disabled`, so roving includes t
   expect(countOccurrences(html, 'aria-disabled="true"')).toBe(2)
 })
 
-test('context pressure uses the ring, never a separate warning face', () => {
-  for (const enabled of [true, false]) {
-    const html = render({
-      contextUsage: { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 },
-      runControls: runControls({
-        autoCompact: { enabled, threshold: 187_000, warningThreshold: 167_000 },
-      }),
-    })
-    expect(html).toContain('Context 88% used')
-    expect(html).toContain('text-tone-warn')
-    expect(html).not.toContain('data-composer-face="token-warning"')
-    expect(html).not.toContain('Context low')
-    expect(html).not.toContain('until auto-compact')
-  }
+test('context pressure restores the threshold warning with auto-compact-specific guidance', () => {
+  const usage = { usedTokens: 175_000, contextWindow: 200_000, percentUsed: 88 }
+  const autoCompact = { threshold: 187_000, warningThreshold: 167_000 }
+  const enabled = render({
+    contextUsage: usage,
+    runControls: runControls({ autoCompact: { ...autoCompact, enabled: true } }),
+  })
+  expect(enabled).toContain('Context 88% used')
+  expect(enabled).toContain('data-composer-face="token-warning"')
+  expect(enabled).toContain('aria-label="6% until auto-compact"')
+
+  const disabled = render({
+    contextUsage: usage,
+    runControls: runControls({ autoCompact: { ...autoCompact, enabled: false } }),
+  })
+  expect(disabled).toContain('aria-label="Context low, 6% remaining"')
+
+  const belowThreshold = render({
+    contextUsage: { ...usage, usedTokens: 166_999 },
+    runControls: runControls({ autoCompact: { ...autoCompact, enabled: false } }),
+  })
+  expect(belowThreshold).not.toContain('data-composer-face="token-warning"')
 })
 
 test('unknown, warm, and legacy snapshots show no cache-expired indicator', () => {
@@ -1091,7 +1099,7 @@ test('unknown, warm, and legacy snapshots show no cache-expired indicator', () =
   expect(render({ runControls: null })).not.toContain('Cache expired')
 })
 
-test('confirmed expiry renders the settled clock immediately before the account', () => {
+test('estimated expiry renders the settled clock immediately before the account', () => {
   const html = render({
     account: account(),
     runControls: runControls({ cacheExpired: true }),
@@ -1099,13 +1107,13 @@ test('confirmed expiry renders the settled clock immediately before the account'
   })
   const clock = html.match(/<span role="status"[\s\S]*?<\/span><\/span>/)?.[0] ?? ''
   expect(html.indexOf('<span role="status"')).toBeLessThan(html.indexOf('Active account:'))
-  expect(clock).toContain('aria-label="Cache expired"')
+  expect(clock).toContain('aria-label="Estimated cache expiry passed"')
   expect(clock).toContain('h-[22px] w-[22px]')
   expect(clock).toContain('text-tone-warn')
   expect(clock).toContain('width="14" height="14"')
   expect(clock).toContain('stroke-width="2"')
   expect(clock).toContain('<circle cx="12" cy="12" r="10"')
-  expect(clock).toContain('>Cache expired</span>')
+  expect(clock).toContain('>Estimated cache expiry passed</span>')
   expect(clock).not.toContain('button')
   expect(clock).not.toContain('tabindex')
   expect(clock).not.toContain('title=')
@@ -1113,14 +1121,15 @@ test('confirmed expiry renders the settled clock immediately before the account'
   expect(html).toContain('Context 21% used')
 })
 
-test('live and preview deadlines render an estimate without trusting stale snapshot booleans', () => {
+test('live and preview deadlines render estimate wording without trusting stale snapshot booleans', () => {
   const now = Date.now()
+  const status = 'Estimated cache expiry passed'
   const live = { ...runControls(), cacheExpiresAt: now - 1, cacheExpired: false }
-  expect(render({ runControls: live })).toContain('Cache expired')
+  expect(render({ runControls: live })).toContain(status)
   expect(render({ runControls: { ...live, cacheExpiresAt: now + 60_000, cacheExpired: true } }))
-    .not.toContain('Cache expired')
-  expect(render({ runControls: null, cacheExpiresAt: now - 1 })).toContain('Cache expired')
-  expect(render({ runControls: null, cacheExpiresAt: now + 60_000 })).not.toContain('Cache expired')
+    .not.toContain(status)
+  expect(render({ runControls: null, cacheExpiresAt: now - 1 })).toContain(status)
+  expect(render({ runControls: null, cacheExpiresAt: now + 60_000 })).not.toContain(status)
 })
 
 test('snapshot delivery isolates expiry by session and clears it on refresh or disconnect', () => {
@@ -1140,16 +1149,16 @@ test('snapshot delivery isolates expiry by session and clears it on refresh or d
     render({ runControls: selectRunControlsSnapshot(state, sessionId) })
   deliver('s1', true)
   deliver('s2', null)
-  expect(display('s1')).toContain('Cache expired')
-  expect(display('s2')).not.toContain('Cache expired')
+  expect(display('s1')).toContain('Estimated cache expiry passed')
+  expect(display('s2')).not.toContain('Estimated cache expiry passed')
   deliver('s1', false)
-  expect(display('s1')).not.toContain('Cache expired')
+  expect(display('s1')).not.toContain('Estimated cache expiry passed')
   deliver('s1', true)
   state = reduceRunControlsState(state, {
     type: 'frame',
     frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
-  expect(display('s1')).not.toContain('Cache expired')
+  expect(display('s1')).not.toContain('Estimated cache expiry passed')
 })
 
 /* --------------------------------------------------------------------- *

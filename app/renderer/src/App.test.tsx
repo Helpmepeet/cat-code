@@ -1521,7 +1521,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={ desktopCommand ? !canExecuteDesktopCommand : projectRoute !== null || branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
     'attachDisabled={ !composerGate.editable || managedFolderUnavailable || preparingImage || pickingFile }',
@@ -2398,7 +2398,9 @@ test('a foreground subagent is handed to the transcript, and a backgrounded one 
   // The gate is `!isBackgrounded`, over `subagents` — NOT over `items`, which
   // excludes a foreground worker by construction (`tasksDomain.ts`).
   expect(paneSource).toContain('subagents.filter(item => !item.isBackgrounded)')
-  expect(paneSource).toContain('agentBackground={agentBackground}')
+  expect(paneSource).toContain(
+    'agentBackground={activeDescriptor?.moving ? null : agentBackground}',
+  )
   // The verb names a tool-use id; a renderer-authored task id would be the defect.
   expect(source).toContain("type: 'task.background.one',")
   expect(source).toContain('toolUseId,')
@@ -3137,7 +3139,7 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // waits through, which retired the wrong copy; pin the batch call so nobody
   // reintroduces a per-frame guess.
   expect(subscribeBody).toContain(
-    'const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)',
+    'const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames.filter(frame => {',
   )
   expect(subscribeBody).toContain('restoreRefusedSubmits(sessionId, retained)')
   expect(subscribeBody).toContain('const restoredBySession = new Map<SessionId, RetainedSubmit[]>()')
