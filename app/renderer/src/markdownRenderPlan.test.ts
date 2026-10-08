@@ -781,6 +781,20 @@ describe('resolveMarkdownMeasurements', () => {
   const source = Array.from({ length: 500 }, (_, index) => `| a${index} | b${index} |`).join('\n')
   const table = `| Alpha | Beta |\n| --- | --- |\n${source}`
 
+  test('proportional leaf allocations preserve the measured run total exactly', () => {
+    const leaves = planMarkdownLeaves('row-rounding', table)
+    const [unit] = mergeMountedMarkdownLeaves(leaves, 0, 2)
+    const { heights } = resolveMarkdownMeasurements(leaves, new Map([[unit.measurementKey, 1_001]]))
+    expect(heights.get(leaves[0].id)! + heights.get(leaves[1].id)!).toBe(1_001)
+  })
+
+  test('fractional measured run totals are not rounded away during allocation', () => {
+    const leaves = planMarkdownLeaves('row-fractional', table)
+    const [unit] = mergeMountedMarkdownLeaves(leaves, 0, 2)
+    const { heights } = resolveMarkdownMeasurements(leaves, new Map([[unit.measurementKey, 1_001.375]]))
+    expect(heights.get(leaves[0].id)! + heights.get(leaves[1].id)!).toBe(1_001.375)
+  })
+
   test('a height measured on a merged run lands on every leaf of that run', () => {
     const leaves = planMarkdownLeaves('row-1', table)
     const [unit] = mergeMountedMarkdownLeaves(leaves, 0, 2)

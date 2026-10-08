@@ -22,8 +22,15 @@ import {
   _forTest as coordinator,
   observePaneBottomLock,
   observePaneScroll,
-  reportPaneHeightCorrection,
+  reportPaneHeightCorrection as reportLivePaneHeightCorrection,
+  type PaneHeightCorrection,
 } from './markdownScrollCoordinator.js'
+
+function reportPaneHeightCorrection(scroller: HTMLElement, correction: PaneHeightCorrection): void {
+  reportLivePaneHeightCorrection(scroller, {
+    delta: correction.delta, readOffset: () => correction.offset,
+  })
+}
 
 const SCROLLER_TEST_ID = 'pane-scroller'
 
@@ -195,6 +202,16 @@ async function mountInstrumentedPane(onFrame: (bodyIndex: number) => void) {
 }
 
 describe('observePaneScroll in a real DOM', () => {
+  test('correction ownership survives renderer class replacement and is released with the last participant', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(1)
+    expect(pane.scroller.hasAttribute('data-pane-scroll-owner')).toBe(true)
+    pane.scroller.className = 'renderer-controlled-replacement'
+    expect(pane.scroller.hasAttribute('data-pane-scroll-owner')).toBe(true)
+    await pane.setBodyCount(0)
+    expect(pane.scroller.hasAttribute('data-pane-scroll-owner')).toBe(false)
+  })
+
   test('twelve mounted bodies share one scroll listener and one ResizeObserver', async () => {
     const pane = await mountInstrumentedPane(() => {})
 
@@ -402,10 +419,11 @@ describe('observePaneScroll in a real DOM', () => {
     expect(pane.scroller.firstElementChild).toBe(replacementRoot)
   })
 
-  test('nested document mutations rely on resize instead of scheduling directly', async () => {
+  test('visible nested mutations schedule even when total document height is unchanged', async () => {
     const calls: number[] = []
     const pane = await mountInstrumentedPane(bodyIndex => calls.push(bodyIndex))
     await pane.setBodyCount(1)
+    injectScrollGeometry(pane.scroller, { scrollTop: 100, clientHeight: 80, scrollHeight: 1_000 })
     pane.scroller.firstElementChild?.appendChild(
       pane.scroller.ownerDocument.createElement('span'),
     )
@@ -413,7 +431,18 @@ describe('observePaneScroll in a real DOM', () => {
     await Promise.resolve()
     await harness.nextFrame()
 
-    expect(calls).toEqual([])
+    expect(calls).toEqual([0])
+  })
+
+  test('net-zero layout invalidation does not repin bottom-follow against unchanged dimensions', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(1)
+    const releaseLock = observePaneBottomLock(pane.scroller, () => true)
+    pane.scroller.scrollTop = 40
+    reportPaneHeightCorrection(pane.scroller, { offset: 0, delta: 0 })
+    await harness.nextFrame()
+    expect(pane.scroller.scrollTop).toBe(40)
+    releaseLock()
   })
 
   test('the bottom-lock owner holds the pane open after the last body unmounts', async () => {

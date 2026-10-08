@@ -102,6 +102,7 @@ compound command can include successful output before a later step fails.
 | Desktop engine-sidecar typecheck | `bun run --cwd app typecheck:sidecar` |
 | Desktop renderer build | `bun run --cwd app renderer:build` |
 | Bounded transcript rendering | `bun test app/renderer/src/BoundedMarkdown.test.tsx app/renderer/src/markdownRenderPlan.test.ts app/renderer/src/lineWindow.test.ts` |
+| Transcript visible anchors and correction timing | `bun test ./app/renderer/src/paneVisibleAnchor.dom.test.ts ./app/renderer/src/transcriptGeometry.dom.test.ts ./app/renderer/src/markdownFallbackGeometry.dom.test.ts ./app/renderer/src/markdownScrollCoordinator.test.ts` |
 | Prose-arrival storage, marking, and preview | `bun test app/renderer/src/ProseArrivalProvider.test.tsx app/renderer/src/proseArrivalMark.test.ts app/renderer/src/proseArrivalPreviewModel.test.ts app/renderer/src/proseArrivalPreview.dom.test.ts` |
 | Desktop hardening smoke | `bun run --cwd app test:hardening` |
 | Desktop AskUserQuestion flow | `bun test app/renderer/src/AskQuestionFlow.test.tsx app/renderer/src/askQuestionState.test.ts app/sidecar/sidecarServer.test.ts app/preload/preloadSource.test.ts` |
@@ -207,7 +208,11 @@ compound command can include successful output before a later step fails.
   latency.
 - `TranscriptView.tsx` windows outer rows as well as inner Markdown/tool content.
   Route restoration through `transcriptScrollMemory.ts`; spacer rows are not
-  transcript anchors. `markdownRenderPlan.ts` permits conservative plain-text
+  transcript anchors. Ongoing correction belongs to `markdownScrollCoordinator.ts`
+  and the bounded visible-character samples in `paneVisibleAnchor.ts`. Fallback
+  height reports supply `readOffset` callbacks evaluated against the final DOM,
+  not offsets captured in potentially different commits. Registered panes opt
+  out of native scroll anchoring. `markdownRenderPlan.ts` permits conservative plain-text
   suffix reuse, and `markdownPlugins.ts` bounds settled-fence highlighting reuse.
   Syntax or document-wide context changes still use the full Markdown parser.
   `paneHeightOwnership.ts` subtracts retained nested bodies' height changes from

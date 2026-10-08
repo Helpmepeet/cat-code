@@ -3,8 +3,18 @@ import {
   _forTest,
   observePaneBottomLock,
   observePaneScroll,
-  reportPaneHeightCorrection,
+  reportPaneHeightCorrection as reportLivePaneHeightCorrection,
+  type PaneHeightCorrection,
 } from './markdownScrollCoordinator.js'
+
+// Numeric fixtures describe a final layout. Cross-commit fixtures provide a
+// live reader, matching the required production report contract.
+function reportPaneHeightCorrection(scroller: HTMLElement,
+  correction: PaneHeightCorrection & { readOffset?: () => number | null }): void {
+  reportLivePaneHeightCorrection(scroller, {
+    delta: correction.delta, readOffset: correction.readOffset ?? (() => correction.offset),
+  })
+}
 
 type FakeScroller = HTMLElement & {
   listenerCount: number
@@ -150,6 +160,66 @@ describe('observePaneScroll', () => {
 })
 
 describe('pane scroll correction', () => {
+  for (const order of ['lower-first', 'upper-first'] as const) {
+    test(`two reports from the same committed layout are not rebased: ${order}`, () => {
+      installGlobals()
+      const scroller = createScroller({ scrollTop: 110, clientHeight: 80, scrollHeight: 1_000 })
+      const release = observePaneScroll(scroller, () => {})
+      const upper = { offset: 0, delta: 30 }
+      const lower = { offset: 130, delta: 20 }
+      for (const correction of order === 'lower-first' ? [lower, upper] : [upper, lower]) {
+        reportPaneHeightCorrection(scroller, correction)
+      }
+      runFrames()
+      expect(scroller.scrollTop).toBe(160)
+      release()
+    })
+  }
+
+  for (const order of ['lower-first', 'upper-first', 'separate-frames'] as const) {
+    test(`sequential commits use their own document coordinates: ${order}`, () => {
+      installGlobals()
+      const scroller = createScroller({ scrollTop: 110, clientHeight: 80, scrollHeight: 1_000 })
+      const release = observePaneScroll(scroller, () => {})
+      let lowerOffset = 120
+      const reportLower = () => reportPaneHeightCorrection(scroller, {
+        offset: lowerOffset, delta: 20, readOffset: () => lowerOffset,
+      })
+      const reportUpper = () => {
+        lowerOffset += 30
+        reportPaneHeightCorrection(scroller, { offset: 0, delta: 30 })
+      }
+      if (order === 'upper-first') {
+        reportUpper()
+        reportLower()
+      } else {
+        reportLower()
+        if (order === 'separate-frames') runFrames()
+        reportUpper()
+      }
+      runFrames()
+      expect(scroller.scrollTop).toBe(140)
+      release()
+    })
+  }
+
+  test('live offsets are read once at flush, and removed boundaries are dropped', () => {
+    installGlobals()
+    const scroller = createScroller({ scrollTop: 110, clientHeight: 80, scrollHeight: 1_000 })
+    const release = observePaneScroll(scroller, () => {})
+    let reads = 0
+    let offset: number | null = 100
+    reportPaneHeightCorrection(scroller, {
+      offset: 100, delta: 20, readOffset: () => { reads++; return offset },
+    })
+    expect(reads).toBe(0)
+    offset = null
+    runFrames()
+    expect(reads).toBe(1)
+    expect(scroller.scrollTop).toBe(110)
+    release()
+  })
+
   test('every correction in a frame is applied as ONE scroll adjustment', () => {
     installGlobals()
     const scroller = createScroller(READING_GEOMETRY)

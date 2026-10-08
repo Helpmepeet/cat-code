@@ -669,9 +669,14 @@ export function resolveMarkdownMeasurements(
 
     live.add(key)
     const total = estimated > 0 ? estimated : 1
+    let cumulativeEstimate = 0
+    let allocated = 0
     for (let index = start; index < end; index += 1) {
       const leaf = leaves[index]
-      heights.set(leaf.id, Math.max(1, Math.round((height * leaf.estimatedHeight) / total)))
+      cumulativeEstimate += leaf.estimatedHeight
+      const cumulativeHeight = index === end - 1 ? height : height * cumulativeEstimate / total
+      heights.set(leaf.id, cumulativeHeight - allocated)
+      allocated = cumulativeHeight
     }
   }
 
