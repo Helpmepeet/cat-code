@@ -7,13 +7,45 @@
  * Output holds raw user prompts, so write it outside the repository.
  * Kind labels are keyword hints for screening, not validated categories.
  */
-import { createReadStream, existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, realpathSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 
 // Last first-prompt timestamp included in the frozen 2026-10-06 inventory.
 const DEFAULT_CUTOFF = '2026-10-06T08:45:00Z'
+const REPO_ROOT = resolve(import.meta.dir, '../..')
+
+export function resolveOutsideRepository(out: string, repo = REPO_ROOT): string {
+  if (!isAbsolute(out)) throw new Error(`output path must be absolute: ${out}`)
+  const target = resolve(out)
+  try {
+    if (lstatSync(target).isSymbolicLink()) throw new Error(`refusing symlink output path: ${out}`)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  let existing = target
+  const suffix: string[] = []
+  while (true) {
+    try {
+      const stat = lstatSync(existing)
+      if (stat.isSymbolicLink() && !existsSync(existing)) throw new Error(`refusing dangling symlink ancestor: ${out}`)
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      const parent = dirname(existing)
+      if (parent === existing) throw error
+      suffix.unshift(existing.slice(existing.lastIndexOf(sep) + 1))
+      existing = parent
+    }
+  }
+  const actual = join(realpathSync(existing), ...suffix)
+  const fromRepo = relative(realpathSync(repo), actual)
+  if (fromRepo === '' || (!fromRepo.startsWith(`..${sep}`) && fromRepo !== '..' && !isAbsolute(fromRepo))) {
+    throw new Error(`refusing to write raw prompts inside the repository: ${out}`)
+  }
+  return target
+}
 
 type Source = 'catcode' | 'claude' | 'codex'
 type Entry = { ts: string; src: Source; id: string; text: string }
@@ -126,14 +158,16 @@ function kind(text: string): string {
   return 'other'
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const outIndex = args.indexOf('--out')
   const cutoffIndex = args.indexOf('--cutoff')
+  const repoIndex = args.indexOf('--repo')
   const out = outIndex >= 0 ? args[outIndex + 1] : undefined
   const cutoff = cutoffIndex >= 0 ? args[cutoffIndex + 1] : DEFAULT_CUTOFF
-  if (!out) throw new Error('usage: taskInventory.ts --out <path outside the repo> [--cutoff <ISO timestamp>]')
-  if (out.startsWith(process.cwd())) throw new Error(`refusing to write raw prompts inside the repository: ${out}`)
+  const repo = repoIndex >= 0 ? args[repoIndex + 1] : REPO_ROOT
+  if (!out) throw new Error('usage: taskInventory.ts --out <path outside the repo> [--repo <root>] [--cutoff <ISO timestamp>]')
+  const safeOut = resolveOutsideRepository(out, repo)
 
   const home = homedir()
   const raw = [
@@ -154,10 +188,10 @@ async function main(): Promise<void> {
     tasks.push({ ...entry, text, kind: kind(text), brief: BRIEF.test(text) || text.length > 1200 })
   }
 
-  writeFileSync(out, JSON.stringify({ cutoff, rawSessions: raw.length, tasks }, null, 1))
+  writeFileSync(safeOut, JSON.stringify({ cutoff, rawSessions: raw.length, tasks }, null, 1))
   const bySource = (list: { src: Source }[]) =>
     Object.fromEntries((['catcode', 'claude', 'codex'] as const).map(src => [src, list.filter(e => e.src === src).length]))
   console.log(JSON.stringify({ cutoff, rawSessions: raw.length, raw: bySource(raw), deduplicated: tasks.length, dedup: bySource(tasks) }))
 }
 
-await main()
+if (import.meta.main) await main()

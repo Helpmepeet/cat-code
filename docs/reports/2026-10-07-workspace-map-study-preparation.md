@@ -2,11 +2,25 @@
 
 Date: 2026-10-07
 
-Status: offline preparation complete for the
+Status: offline preparation was reported complete for the
 [evaluation plan](2026-10-06-workspace-map-evaluation-plan.md); model runs await
-approval. These notes record how the pairs were built and where the plan changed.
+approval. This is the historical status, not a current validity assessment.
+These notes record how the pairs were built and where the plan changed.
 Raw prompts, transcripts, task inputs, working copies, and verification output
 live outside the repository in `~/workspace-map-study/`.
+
+## Review amendment (2026-10-08)
+
+The checked-in preparation pipeline has since been tightened: changed-file
+reconstruction now rejects unsupported task-time evidence and does not use a
+later commit as proof. Harness attempts use private isolated stage and output
+directories, preserve prior attempts, and retain failed-run evidence.
+
+The existing prepared and frozen pairs have **not** been rebuilt or revalidated
+against this pipeline. Their current validity is unresolved; this review does
+not establish that any pair was contaminated. Before use, the pairs need
+reconstruction and verification with the checked-in pipeline. Model runs
+remain unapproved.
 
 ## Selection
 

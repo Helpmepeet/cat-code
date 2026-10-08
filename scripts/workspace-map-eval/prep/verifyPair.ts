@@ -8,20 +8,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { attemptPath } from './attemptPath.ts'
 
 const STUDY = '/Users/pt/workspace-map-study'
 const args = process.argv.slice(2)
 const id = args[0]!
 const opt = (k: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined }
 const manifest = JSON.parse(readFileSync(join(STUDY, 'copies', id, 'manifest.json'), 'utf8'))
-const out = join(STUDY, 'verify', id)
+const out = attemptPath(join(STUDY, 'verify', id))
 mkdirSync(out, { recursive: true })
 const run = (cmd: string[], log: string) => {
   const r = spawnSync('bun', cmd, { encoding: 'utf8', maxBuffer: 1 << 28 })
   writeFileSync(join(out, log), `${r.stdout}\n${r.stderr}`)
   return r
 }
-const result: Record<string, unknown> = { id }
+const result: Record<string, unknown> = { id, output: out }
 for (const setup of ['mandatory', 'nomap'] as const) {
   const dir = join(STUDY, 'copies', id, setup)
   const h = ['--engine', manifest.copies[setup].engine, '--copy', dir, '--out', join(out, setup), '--prompt-file', join(dir, 'prompt.txt')]
@@ -32,11 +33,14 @@ for (const setup of ['mandatory', 'nomap'] as const) {
   const r = run([join(import.meta.dir, 'harness/harness.ts'), ...h], `${setup}-harness.log`)
   let summary: any = {}
   try { summary = JSON.parse(r.stdout.slice(r.stdout.indexOf('{'))) } catch {}
-  const stage = existsSync(join(out, setup, 'stage.json')) ? JSON.parse(readFileSync(join(out, setup, 'stage.json'), 'utf8')).stage : ''
-  const d = run([join(import.meta.dir, 'detect.ts'), join(out, setup, 'home'), '--setup', setup, '--stage', stage, ...(existsSync(join(dir, 'home-seed')) ? ['--seed', join(dir, 'home-seed')] : []), '--json', join(out, `${setup}-detect.json`)], `${setup}-detect.log`)
-  result[setup] = { harnessExit: r.status, turnCompleted: summary.turnCompleted, requests: summary.requests?.length, detectExit: d.status }
+  const harnessOut = summary.output ?? join(out, setup)
+  const stage = existsSync(join(harnessOut, 'stage.json')) ? JSON.parse(readFileSync(join(harnessOut, 'stage.json'), 'utf8')).stage : ''
+  const d = run([join(import.meta.dir, 'detect.ts'), join(harnessOut, 'home'), '--setup', setup, '--stage', stage, ...(existsSync(join(dir, 'home-seed')) ? ['--seed', join(dir, 'home-seed')] : []), '--json', join(out, `${setup}-detect.json`)], `${setup}-detect.log`)
+  result[setup] = { output: harnessOut, harnessExit: r.status, turnCompleted: summary.turnCompleted, requests: summary.requests?.length, detectExit: d.status }
 }
-const c = run([join(import.meta.dir, 'harness/compare.ts'), join(out, 'mandatory'), join(out, 'nomap'), '--engine', manifest.copies.mandatory.engine, '--json', join(out, 'compare.json'), '--nomap-prompt', join(STUDY, 'copies', id, 'nomap', 'prompt.txt'), ...(opt('--expect-unavailable') ? ['--expect-unavailable', opt('--expect-unavailable')!] : [])], 'compare.log')
+const mandatoryOut = (result.mandatory as any)?.output ?? join(out, 'mandatory')
+const nomapOut = (result.nomap as any)?.output ?? join(out, 'nomap')
+const c = run([join(import.meta.dir, 'harness/compare.ts'), mandatoryOut, nomapOut, '--engine', manifest.copies.mandatory.engine, '--json', join(out, 'compare.json'), '--nomap-prompt', join(STUDY, 'copies', id, 'nomap', 'prompt.txt'), ...(opt('--expect-unavailable') ? ['--expect-unavailable', opt('--expect-unavailable')!] : [])], 'compare.log')
 result.compareExit = c.status
 const m = result.mandatory as any, n = result.nomap as any
 result.pass = c.status === 0 && m.detectExit === 0 && n.detectExit === 0 && m.turnCompleted && n.turnCompleted

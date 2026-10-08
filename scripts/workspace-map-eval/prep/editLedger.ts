@@ -7,12 +7,15 @@
 import { createReadStream, existsSync, readdirSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { isRepositoryPath } from './pathEvidence.ts'
 import { createInterface } from 'node:readline'
 
 const home = homedir()
-const out = process.argv[2]!
+const args = process.argv.slice(2)
+const out = args[0]!
+const repoIndex = args.indexOf('--repo')
+const REPO = repoIndex >= 0 ? args[repoIndex + 1]! : '/Users/pt/cat-code'
 writeFileSync(out, '')
-const REPO = '/Users/pt/cat-code'
 
 function walk(dir: string, acc: string[] = []): string[] {
   if (!existsSync(dir)) return acc
@@ -29,7 +32,9 @@ function walk(dir: string, acc: string[] = []): string[] {
 async function* lines(path: string) {
   const rl = createInterface({ input: createReadStream(path), crlfDelay: Infinity })
   for await (const line of rl) {
-    if (!line.includes('cat-code') && !line.includes('tool_result') && !line.includes('_output"')) { yield null; continue }
+    if (!line.includes('cat-code') && !line.includes('tool_result') && !line.includes('_output"')
+      && !line.includes('tool_use') && !line.includes('function_call') && !line.includes('custom_tool_call')
+      && !line.includes('"session_meta"') && !line.includes('"turn_context"')) { yield null; continue }
     try { yield JSON.parse(line) } catch { yield null }
   }
 }
@@ -74,7 +79,7 @@ async function claudeLike(src: string, root: string) {
           else if (/^apply_patch$|^Apply_patch$/.test(part.name)) paths = patchPaths(String(i.patch ?? i.input ?? JSON.stringify(i)), cwd)
           else if (part.name === 'Bash' && BASH_WRITE.test(String(i.command ?? ''))) { tool = 'Bash-write'; paths = [] }
           else continue
-          if (tool !== 'Bash-write' && !paths.some(p => p?.includes('cat-code'))) continue
+          if (tool !== 'Bash-write' && !paths.some(p => p && isRepositoryPath(p, cwd, REPO))) continue
           if (tool === 'Bash-write' && !(String(i.command).includes('cat-code') || cwd.includes('cat-code'))) continue
           pending.set(part.id, { ts: r.timestamp, src, file, session: r.sessionId, cwd, tool, paths, payload: i })
         }
@@ -109,7 +114,7 @@ async function codex() {
         const isBashWrite = !isPatch && BASH_WRITE.test(input)
         if (!isPatch && !isBashWrite) continue
         const paths = isPatch ? patchPaths(input.replace(/\\n/g, '\n'), cwd) : []
-        if (isPatch && !paths.some(q => q.includes('cat-code'))) continue
+        if (isPatch && !paths.some(q => q && isRepositoryPath(q, cwd, REPO))) continue
         if (isBashWrite && !(cwd.includes('cat-code') || input.includes('cat-code'))) continue
         pending.set(p.call_id, { ts: r.timestamp, src: 'codex', file, cwd, tool: isPatch ? 'apply_patch' : 'Bash-write', paths, payload: input })
       } else if ((p.type === 'custom_tool_call_output' || p.type === 'function_call_output') && pending.has(p.call_id)) {

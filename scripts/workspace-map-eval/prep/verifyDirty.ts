@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { outputs } from './outputs.ts'
+import { hasTaskTimeEvidence, isFileAssociatedOutput, supportsChangedLines } from './reconstructionEvidence.ts'
 
 const args = process.argv.slice(2)
 const opt = (k: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined }
@@ -48,17 +49,18 @@ if (!transcripts.length) {
   const h = homedir()
   transcripts.push(...walk(join(h, '.cat-code/projects')), ...walk(join(h, '.claude/projects')), ...walk(join(h, '.codex/sessions')))
 }
-const all = transcripts.flatMap(t => outputs(t)).filter(o => o.ts >= from && o.ts < until).map(o => o.text)
+const all = transcripts.flatMap(t => outputs(t)).filter(o => o.ts >= from && o.ts < until)
+const numberedEvidence = all.filter(o => isFileAssociatedOutput(o.command, rel, root))
 const candLines = cand.split('\n'), baseLines = baseText.split('\n')
-const result: any = { path: rel, window: { from, until }, outputs: all.length, diff: [], numbered: { support: 0, contradict: [] as any[] }, added: { distinctive: 0, seen: 0 } }
+const result: any = { path: rel, window: { from, until }, outputs: all.length, fileAssociatedOutputs: numberedEvidence.length, diff: [], numbered: { support: 0, changedSupport: 0, contradict: [] as any[] }, added: { distinctive: 0, seen: 0 } }
 
 // diff hunks: comparable only when the diff is against our base blob.
 const hashOf = (text: string) => execFileSync('git', ['hash-object', '--stdin'], { input: text, encoding: 'utf8' }).trim()
 const baseHash = baseText ? hashOf(baseText) : '0000000'
 const candHash = hashOf(cand)
-for (const o of all) {
-  for (let idx = o.indexOf(`diff --git a/${rel} b/${rel}`); idx >= 0; idx = o.indexOf(`diff --git a/${rel} b/${rel}`, idx + 10)) {
-    const m = /\nindex ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(o.slice(idx, idx + 400))
+for (const output of all) {
+  for (let idx = output.text.indexOf(`diff --git a/${rel} b/${rel}`); idx >= 0; idx = output.text.indexOf(`diff --git a/${rel} b/${rel}`, idx + 10)) {
+    const m = /\nindex ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(output.text.slice(idx, idx + 400))
     if (!m || !baseHash.startsWith(m[1]!)) continue
     result.diff.push({ matches: candHash.startsWith(m[2]!), new: m[2] })
   }
@@ -66,13 +68,16 @@ for (const o of all) {
 
 // numbered runs
 const NUM = /^\s*(\d+)(?:\t|→)(.*)$/
-for (const o of all) {
-  const lines = o.split('\n')
+for (const output of numberedEvidence) {
+  const lines = output.text.split('\n')
   let run: [number, string][] = []
   const flush = () => {
     if (run.length >= 3) {
       const ok = run.every(([n, t]) => candLines[n - 1] === t)
-      if (ok) result.numbered.support++
+      if (ok) {
+        result.numbered.support++
+        if (supportsChangedLines(run, candLines, baseLines)) result.numbered.changedSupport++
+      }
       else {
         const baseOk = baseText && run.every(([n, t]) => baseLines[n - 1] === t)
         const elsewhere = candLines.join('\n').includes(run.map(x => x[1]).join('\n'))
@@ -96,9 +101,13 @@ const baseSet = new Set(baseLines.map(s => s.trim()))
 const counts = new Map<string, number>()
 for (const l of candLines) counts.set(l.trim(), (counts.get(l.trim()) ?? 0) + 1)
 const added = [...new Set(candLines.map(s => s.trim()))].filter(s => s.length >= 25 && !baseSet.has(s) && counts.get(s) === 1)
-const blob = all.join('\n')
+const blob = all.map(o => o.text).join('\n')
 result.added = { distinctive: added.length, seen: added.filter(s => blob.includes(s)).length }
 result.transcripts = transcripts.length
-result.pass = result.numbered.contradict.length === 0 && result.diff.every((d: any) => d.matches)
+result.pass = hasTaskTimeEvidence(
+  result.diff.map((d: any) => d.matches),
+  result.numbered.changedSupport,
+  result.numbered.contradict.length,
+)
 console.log(JSON.stringify(result))
 process.exit(result.pass ? 0 : 1)

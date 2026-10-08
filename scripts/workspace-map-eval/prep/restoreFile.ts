@@ -3,14 +3,11 @@
 // Reconstructs one file as it stood at a task's prompt time, trying, in order:
 //  1. diff:   a session-printed `git diff` in the unchanged window, accepted only
 //             when base + diff hashes to the diff's index line (fromDiff.ts).
-//  2. commit: the first commit after --at that touches the path, when no logged
-//             edit of the path falls between --at and that commit.
-//  3. replay: base (or empty) plus logged edits (replay.ts), then checked
-//             against what sessions saw (verifyDirty.ts).
+//  2. replay: the base plus logged edits, checked against positive task-time evidence.
 // Prints one JSON line {path, method, ok, sha256, evidence}. Exit 1 if no
-// method yields a verified or uncontradicted file.
+// method yields a file supported by task-time evidence.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 const args = process.argv.slice(2)
@@ -18,7 +15,6 @@ const opt = (k: string) => { const i = args.indexOf(k); return i >= 0 ? args[i +
 const rel = opt('--path')!, base = opt('--base')!, at = opt('--at')!, out = opt('--out')!
 const transcripts = opt('--transcripts')
 const root = '/Users/pt/cat-code', tools = import.meta.dir
-const abs = `${root}/${rel}`
 const sha = () => createHash('sha256').update(readFileSync(out)).digest('hex')
 const run = (script: string, extra: string[]) => spawnSync('bun', [`${tools}/${script}`, ...extra], { cwd: root, encoding: 'utf8', maxBuffer: 64 << 20 })
 const done = (method: string, evidence: unknown, ok = true) => { console.log(JSON.stringify({ path: rel, method, ok, sha256: ok ? sha() : undefined, evidence })); process.exit(ok ? 0 : 1) }
@@ -28,25 +24,7 @@ const d = run('fromDiff.ts', ['--path', rel, '--base', base, '--at', at, '--out'
 const dj = JSON.parse(d.stdout.trim().split('\n').pop() || '{}')
 if (dj.ok) done('diff', dj)
 
-// 2. commit
-let nextEdit = '9999'
-for (const l of readFileSync('/Users/pt/workspace-map-study/ledger/edits.jsonl', 'utf8').split('\n')) {
-  if (!l.includes(abs)) continue
-  const r = JSON.parse(l)
-  if ((r.paths ?? []).includes(abs) && r.ts > at && r.ts < nextEdit) nextEdit = r.ts
-}
-const log = execFileSync('git', ['-C', root, 'log', '--all', '--reverse', '--format=%H %cI', `--since=${at}`, '--', rel], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
-const first = log.map(l => l.split(' ')).map(([h, t]) => ({ h: h!, t: new Date(t!).toISOString() })).find(c => c.t > at)
-if (first && first.t < nextEdit) {
-  try {
-    writeFileSync(out, execFileSync('git', ['-C', root, 'show', `${first.h}:${rel}`], { maxBuffer: 64 << 20 }))
-    const v = run('verifyDirty.ts', ['--path', rel, '--candidate', out, '--base', base, '--at', at, '--transcripts', transcripts ?? ''])
-    const vj = JSON.parse(v.stdout.trim() || '{}')
-    if (v.status === 0) done('commit', { commit: first.h, committed: first.t, nextLoggedEdit: nextEdit, check: vj })
-  } catch {}
-}
-
-// 3. replay
+// Later commits are not task-time proof. Only use task-window diffs or replay.
 const baseArg = spawnSync('git', ['-C', root, 'cat-file', '-e', `${base}:${rel}`]).status === 0 ? base : 'none'
 const r = run('replay.ts', [rel, at, baseArg, '--out', out])
 const failed = /failed=(\d+)/.exec(r.stdout + r.stderr)?.[1]

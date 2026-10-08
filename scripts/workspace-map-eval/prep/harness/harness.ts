@@ -17,26 +17,24 @@
 // --abs: a JSON list [{from, to}] of inputs the prompt names by absolute path;
 //        each is placed at `to` for the run (an existing file must be identical)
 //        and removed afterwards if this run created it.
-// The copy is staged (renamed) to /Users/Shared/ccw/<random>/cat-code for the
-// run, so the working directory the model sees carries no study or setup name,
-// and only one prepared copy is reachable at a time. It is moved back after.
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+// The copy is cloned to /Users/Shared/ccw/<random>/cat-code for the run, so the
+// working directory the model sees carries no study or setup name. The source
+// copy remains untouched; failed attempts remain staged for inspection.
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { sandboxProfile, probeScratch } from './sandbox.ts'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { createAttemptWorkspace } from '../attemptWorkspace.ts'
+import { copyPrivateSeed } from '../privateModes.ts'
+import { runtimeAllowances } from './runtimeAllowances.ts'
 
 const args = process.argv.slice(2)
 const opt = (k: string, d?: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1]! : d! }
 const engine = resolve(opt('--engine'))
 const copy = resolve(opt('--copy'))
-const out = resolve(opt('--out'))
 const stage = join('/Users/Shared/ccw', randomBytes(3).toString('hex'))
-mkdirSync(stage, { recursive: true })
-const cwd = join(stage, 'cat-code')
-renameSync(join(copy, 'cat-code'), cwd)
-let restored = false
-const restore = () => { if (!restored) { restored = true; renameSync(cwd, join(copy, 'cat-code')) } }
-process.on('exit', restore)
+const attempt = createAttemptWorkspace(resolve(opt('--out')), stage, copy)
+const { out, cwd } = attempt
 const promptText = readFileSync(opt('--prompt-file'), 'utf8').replaceAll('{{REPO}}', cwd).replaceAll('{{HOME}}', join(stage, 'home'))
 const imagesDir = args.includes('--images') ? resolve(opt('--images')) : ''
 const MEDIA: Record<string, string> = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
@@ -60,14 +58,16 @@ const maxInput = Number(opt('--max-input-tokens', '40000000'))
 const timeoutMs = live ? maxMinutes * 60e3 + 120e3 : Number(opt('--timeout-ms', '240000'))
 const credential = live ? resolve(opt('--credential')) : ''
 
-rmSync(out, { recursive: true, force: true })
-mkdirSync(out, { recursive: true })
 const home = join(stage, 'home')
 const config = join(home, '.cat-code')
 const tmp = join(stage, 'tmp')
 const scratch = probeScratch()
+attempt.setScratch(scratch.dir)
 const stub = join(scratch.dir, 'stub')
-for (const d of [home, config, tmp, stub, join(home, '.cache'), join(home, '.config')]) mkdirSync(d, { recursive: true })
+const xdgCache = join(home, '.cache')
+const xdgConfig = join(home, '.config')
+for (const d of [home, config, tmp, stub, xdgCache, xdgConfig]) mkdirSync(d, { recursive: true, mode: 0o700 })
+if (existsSync(join(copy, 'home-seed'))) copyPrivateSeed(join(copy, 'home-seed'), home)
 
 // Isolated account state: a fabricated Codex credential that only the local fake
 // transport ever sees. Far-future expiry so no refresh is attempted.
@@ -75,10 +75,10 @@ writeFileSync(join(config, '.config.json'), JSON.stringify({
   hasCompletedOnboarding: true,
   projects: { [cwd]: { hasTrustDialogAccepted: true } },
   codexOAuth: live ? JSON.parse(readFileSync(credential, 'utf8')).codexOAuth : { accessToken: 'offline-probe-access', refreshToken: 'offline-probe-refresh', expiresAt: Date.now() + 365 * 86400e3, accountId: 'acct-offline-probe' },
-}, null, 2))
-// Task inputs destined for the user's home (e.g. a referenced session transcript).
-if (existsSync(join(copy, 'home-seed'))) cpSync(join(copy, 'home-seed'), home, { recursive: true })
-writeFileSync(join(config, 'settings.json'), JSON.stringify({ model, effortLevel: effort }, null, 2))
+}, null, 2), { mode: 0o600 })
+writeFileSync(join(config, 'settings.json'), JSON.stringify({ model, effortLevel: effort }, null, 2), { mode: 0o600 })
+chmodSync(join(config, '.config.json'), 0o600)
+chmodSync(join(config, 'settings.json'), 0o600)
 
 // The harness itself must not leak the operator's environment into the child.
 const keep = ['PATH', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM']
@@ -87,14 +87,21 @@ if (existsSync(join(stage, 'bin'))) process.env.PATH = `${join(stage, 'bin')}:${
 Object.assign(process.env, {
   HOME: home, CLAUDE_CONFIG_DIR: config, TMPDIR: tmp, XDG_CACHE_HOME: join(home, '.cache'), XDG_CONFIG_HOME: join(home, '.config'),
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  GIT_CONFIG_NOSYSTEM: '1',
   ...(live ? {} : { CCW_PROBE_DIR: stub, CCW_ENGINE: engine, ANTHROPIC_API_KEY: 'sk-ant-offline-probe' }),
   ...(!live && args.includes('--probe-bash') ? { CCW_PROBE_BASH: opt('--probe-bash') } : {}),
 })
 
+const bun = Bun.which('bun')!
+const runtimes = runtimeAllowances([bun, ...['git', 'node'].flatMap(name => Bun.which(name) ?? [])])
 const { SidecarSupervisor } = await import(join(engine, 'app/supervisor/supervisor.ts'))
 const { SIDECAR_RUNTIME_ARGS } = await import(join(engine, 'app/main/mainDecisions.ts'))
-const profile = sandboxProfile(stage, engine, { network: live })
-const bun = Bun.which('bun')!
+const profile = sandboxProfile(stage, engine, {
+  network: live,
+  scratch: scratch.dir,
+  runtimeBinaries: runtimes.binaries,
+  runtimeLibraries: runtimes.libraries,
+})
 const frames: unknown[] = []
 const supervisor = new SidecarSupervisor({
   sidecarCommand: '/usr/bin/sandbox-exec',
@@ -158,18 +165,19 @@ if (live && !done && !aborted) { aborted = `wall time > ${maxMinutes} min`; supe
 if (live) {
   // Write back refreshed tokens so the next run starts from the current pair.
   const cfg = JSON.parse(readFileSync(join(config, '.config.json'), 'utf8'))
-  if (cfg.codexOAuth) writeFileSync(credential, JSON.stringify({ ...JSON.parse(readFileSync(credential, 'utf8')), codexOAuth: cfg.codexOAuth }, null, 2), { mode: 0o600 })
+  if (cfg.codexOAuth) {
+    writeFileSync(credential, JSON.stringify({ ...JSON.parse(readFileSync(credential, 'utf8')), codexOAuth: cfg.codexOAuth }, null, 2), { mode: 0o600 })
+    chmodSync(credential, 0o600)
+  }
 }
 await Bun.sleep(3000) // let post-turn auxiliary requests (title) land
 supervisor.shutdown()
 await Bun.sleep(1000)
-restore()
 cpSync(home, join(out, 'home'), { recursive: true })
 cpSync(stub, join(out, 'stub'), { recursive: true })
 rmSync(scratch.dir, { recursive: true, force: true })
-rmSync(stage, { recursive: true, force: true })
-writeFileSync(join(out, 'stage.json'), JSON.stringify({ stage, cwd, copy }, null, 1))
 
 writeFileSync(join(out, 'frames.json'), JSON.stringify(frames, null, 1))
 const requests = existsSync(join(out, 'stub', 'requests')) ? readdirSync(join(out, 'stub', 'requests')).sort() : []
-console.log(JSON.stringify({ ready: !!ready, engineSessionId: ready?.engineSessionId, turnCompleted: done, live, aborted: aborted || undefined, requests }, null, 1))
+attempt.complete()
+console.log(JSON.stringify({ output: out, ready: !!ready, engineSessionId: ready?.engineSessionId, turnCompleted: done, live, aborted: aborted || undefined, requests }, null, 1))
