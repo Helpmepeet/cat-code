@@ -969,6 +969,7 @@ export class QueryEngine {
       querySource: 'sdk',
       maxTurns,
       taskBudget,
+      holdQueuedUserPrompts: Boolean(options?.handoffContinuation),
     })
     let queryTerminal: { reason: string } | undefined
     async function* observeQuery() { queryTerminal = yield* queryIterator }

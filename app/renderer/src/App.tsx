@@ -2843,21 +2843,10 @@ export function App() {
     }
   }, [navigateAfterClosedSession, releasePendingSubmit])
 
-  const archiveSession = async (row: MergedSessionRow) => {
+  const archiveSession = (row: MergedSessionRow) => {
     const archivedAt = Date.now()
+    // Archive changes sidebar visibility, not the session lifecycle.
     setArchivedSessions(current => reduceSessionArchived(current, row, archivedAt))
-    if (row.live && row.appSessionId && !(await closeTab(row.appSessionId))) {
-      // A refused close must not hide a still-running session.
-      const currentRow = {
-        ...row,
-        sessionId: shellRef.current.byId[row.appSessionId]?.engineSessionId ?? row.sessionId,
-      }
-      setArchivedSessions(current =>
-        current.some(entry => entry.sessionId === currentRow.sessionId && entry.archivedAt === archivedAt)
-          ? reduceSessionUnarchived(current, currentRow)
-          : current,
-      )
-    }
   }
 
   const switchBranchForSession = useCallback(async (

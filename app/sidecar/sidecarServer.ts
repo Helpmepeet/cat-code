@@ -3604,14 +3604,35 @@ export class SidecarServer {
             ? 'branch'
             : 'tag'
 
-    const run =
-      verb.type === 'session.rename'
-        ? domain.rename(verb.title)
-        : verb.type === 'session.export'
-          ? domain.export()
-          : verb.type === 'session.branch'
-            ? domain.branch()
-            : domain.tag(verb.tag)
+    const isWholeConversationFork = verb.type === 'session.branch'
+    if (isWholeConversationFork) {
+      if (
+        this.parking ||
+        this.conversationMutationInFlight ||
+        this.controller.getHandoffReservation()
+      ) {
+        this.sendSessionActionResult(connection, {
+          kind: 'session-action.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbName,
+          ok: false,
+          message: 'Another conversation update is already in progress.',
+        })
+        return
+      }
+      // Fork waits for idle and then flushes before reading the transcript. Block
+      // new submits across that entire asynchronous boundary, not just the write.
+      this.conversationMutationInFlight = true
+    }
+
+    const run = (async () => {
+      if (verb.type === 'session.rename') return await domain.rename(verb.title)
+      if (verb.type === 'session.export') return await domain.export()
+      if (verb.type === 'session.branch') return await domain.branch()
+      return await domain.tag(verb.tag)
+    })()
 
     // IDLE-PARK gate 4: a fork writes a new transcript, so hold the park off
     // until this settles (see isParkGateOpen).
@@ -3683,6 +3704,10 @@ export class SidecarServer {
       })
       .finally(() => {
         this.inFlightDurableWrites -= 1
+        if (isWholeConversationFork) {
+          this.conversationMutationInFlight = false
+          this.scheduleBoundaryDrain()
+        }
       })
   }
 

@@ -7938,6 +7938,92 @@ function makeSessionActionsServer(): {
 
 const TARGET_USER_MESSAGE_ID = '11111111-1111-4111-8111-1'
 
+test('full-session Fork blocks a new submit until its async transcript boundary completes', async () => {
+  let finishFork!: () => void
+  const forkGate = new Promise<void>(resolve => {
+    finishFork = resolve
+  })
+  let forkStarted = false
+  let turnStarts = 0
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turnStarts++
+    },
+  })
+  const base = fakeSessionActionsDomain().domain
+  const sessionActions: SidecarSessionActionsDomain = {
+    ...base,
+    async branch() {
+      forkStarted = true
+      await forkGate
+      return {
+        ok: true,
+        message: 'Branched.',
+        branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+        branchTitle: 'Branch title',
+      }
+    },
+  }
+  const server = makeServer(controller, { sessionActions })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({ type: 'session.branch', requestId: 'fork-locked' }),
+  )
+  expect(forkStarted).toBe(true)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'submit-during-fork',
+      prompt: 'This must remain a separate turn.',
+      options: { submitId: 'submit-during-fork' },
+    }),
+  )
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'submit.result',
+      submitId: 'submit-during-fork',
+      accepted: false,
+      code: 'turn_already_running',
+    }),
+  )
+  expect(turnStarts).toBe(0)
+
+  finishFork()
+  await flush()
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'session-action.result',
+      requestId: 'fork-locked',
+      verb: 'branch',
+      ok: true,
+    }),
+  )
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'submit-after-fork',
+      prompt: 'This is now a distinct turn.',
+      options: { submitId: 'submit-after-fork' },
+    }),
+  )
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'submit.result',
+      submitId: 'submit-after-fork',
+      accepted: true,
+    }),
+  )
+  await flush()
+  expect(turnStarts).toBe(1)
+})
+
 test('message-targeted edit resets, replays retained history, then returns the prompt', async () => {
   const { domain, calls } = fakeSessionActionsDomain()
   const controller = new AppSessionController(probeAdapter())

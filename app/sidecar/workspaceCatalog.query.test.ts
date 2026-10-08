@@ -49,6 +49,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
   const { clearToolSchemaCache } = await import('../../src/utils/toolSchemaCache.js')
   const { classifyYoloAction, formatActionForClassifier, YOLO_CLASSIFIER_TOOL_NAME } = await import('../../src/utils/permissions/yoloClassifier.js')
   const sideQuery = await import('../../src/utils/sideQuery.js')
+  const { enqueue, getCommandQueueSnapshot, resetCommandQueue } = await import('../../src/utils/messageQueueManager.js')
 
   const previousSession = bootstrap.getSessionId(), previousProject = bootstrap.getSessionProjectDir()
   const previousCwd = bootstrap.getCwdState(), previousProvider = bootstrap.getSessionProvider()
@@ -56,6 +57,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
   const disposers: Array<() => Promise<void>> = []
   const spies: Array<{ mockRestore(): void }> = []
   beforeEach(async () => {
+    resetCommandQueue()
     await releaseActiveTranscriptLease()
     storage.resetProjectForTesting()
     bootstrap.switchSession(asSessionId(randomUUID()), root)
@@ -63,6 +65,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     clearToolSchemaCache()
   })
   afterEach(async () => {
+    resetCommandQueue()
     for (const spy of spies.splice(0)) spy.mockRestore()
     for (const dispose of disposers.splice(0)) await dispose()
     setPeerHostRequester(null)
@@ -228,5 +231,66 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     expect(recovered.findLast(event => event.type === 'result')).toMatchObject({ subtype: 'success', result: 'recovered' })
     expect(providerCalls).toBe(1)
     expect(observations).toBe(1)
+  })
+
+  test('destination continuation leaves queued user input for a later turn across tool rounds', async () => {
+    const setup = await config()
+    const readTool = setup.queryEngineConfig.tools.find(tool => tool.name === 'Read')
+    expect(readTool).toBeDefined()
+    const firstPath = join(setup.source, 'continuation-tool-one.txt')
+    const secondPath = join(setup.source, 'continuation-tool-two.txt')
+    writeFileSync(firstPath, 'CONTINUATION_TOOL_RESULT_ONE')
+    writeFileSync(secondPath, 'CONTINUATION_TOOL_RESULT_TWO')
+
+    const queuedPrompt = 'QUEUED_AFTER_WORKSPACE_CONTINUATION'
+    enqueue({ mode: 'prompt', value: queuedPrompt, uuid: randomUUID() })
+
+    let providerCalls = 0
+    const requestBodies: string[] = []
+    spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* (request) {
+      providerCalls++
+      requestBodies.push(JSON.stringify({
+        messages: request.messages,
+        inputMessages: request.openAIInstructionAssembly?.inputMessages,
+      }))
+      if (providerCalls === 1) {
+        yield assistant([{
+          type: 'tool_use',
+          id: 'continuation-read-one',
+          name: 'Read',
+          input: { file_path: firstPath },
+        }])
+      } else if (providerCalls === 2) {
+        yield assistant([{
+          type: 'tool_use',
+          id: 'continuation-read-two',
+          name: 'Read',
+          input: { file_path: secondPath },
+        }])
+      } else {
+        yield assistant([{ type: 'text', text: 'Both continuation reads completed.' }])
+      }
+    }))
+
+    const runtime = new QueryEngine({
+      ...setup.queryEngineConfig,
+      thinkingConfig: { type: 'disabled' },
+      canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+    })
+    const events = await drain(
+      runtime.continueHandoff(randomUUID(), { uuid: randomUUID() }),
+    )
+
+    expect(events.findLast(event => event.type === 'result')).toMatchObject({
+      type: 'result',
+      subtype: 'success',
+    })
+    expect(providerCalls).toBe(3)
+    expect(requestBodies[1]).toContain('CONTINUATION_TOOL_RESULT_ONE')
+    expect(requestBodies[2]).toContain('CONTINUATION_TOOL_RESULT_TWO')
+    expect(requestBodies.every(body => !body.includes(queuedPrompt))).toBe(true)
+    expect(getCommandQueueSnapshot()).toMatchObject([
+      { mode: 'prompt', value: queuedPrompt },
+    ])
   })
 }

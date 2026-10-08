@@ -493,6 +493,19 @@ test('close navigation waits for a successful host result and focuses the chosen
   expect(focusIndex).toBeGreaterThan(-1)
 })
 
+test('archiving a session changes sidebar visibility without closing it', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const archiveSession = (row:')
+  const end = source.indexOf('\n  const switchBranchForSession', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const body = source.slice(start, end)
+
+  expect(body).toContain('reduceSessionArchived')
+  expect(body).not.toContain('closeTab')
+  expect(body).not.toContain('releasePendingSubmit')
+})
+
 test('message actions use one stable App dispatcher and correlate targeted results across sessions', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const dispatchStart = source.indexOf(

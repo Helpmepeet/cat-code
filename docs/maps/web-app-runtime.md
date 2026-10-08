@@ -54,15 +54,20 @@ active desktop app stack, not older dedicated-app design docs.
 | Bounded desktop transcript rendering | `app/renderer/src/BoundedMarkdown.tsx` | `app/renderer/src/{markdownPlugins,markdownRenderPlan}.ts`, `app/renderer/src/VirtualLineList.tsx`, `app/renderer/src/lineWindow.ts`, `app/renderer/src/TranscriptView.tsx` | Long assistant prose is planned into render leaves, measured, and windowed within its scroll parent; off-window content is represented by spacers. Ordinary transcript math uses `remark-math` plus the untrusted KaTeX pipeline configured in `markdownPlugins.ts`; inline tool output uses the same virtual line list and preserves reveal-band placement and real line numbers. Open fences stay in the same code-card frame, but their copy control remains disabled until the fence is complete. |
 | Streamed prose-arrival preference | `app/renderer/src/proseArrival.ts` | `app/renderer/src/ProseArrivalProvider.tsx`, `app/renderer/src/proseArrivalMark.ts`, `app/renderer/src/ProseArrivalPreview.tsx`, `app/renderer/src/SettingsShell.tsx`, `app/renderer/src/TranscriptView.tsx` | This is renderer-local, versioned local-storage state, not an engine setting. It marks only newly delivered prose for instant, smooth, or flowing presentation; content is never buffered or delayed before visibility. |
 
-## Desktop Sidebar Archive And Session Forks
+## Desktop Sidebar Archive, Pins, And Session Forks
 
 `app/renderer/src/sidebarArchivedSessions.ts` owns the versioned renderer-local
 archive preference; `App.tsx` persists it and reconciles early app-session IDs
-to engine-session IDs. For a live tab it marks the row optimistically and closes
-the tab; a refused close removes that archive mark. `Sidebar.tsx` exposes
-archived rows through the archive count toggle and unarchives a row before
-opening it. Archive changes sidebar visibility only; it does not delete or
-rewrite a transcript.
+to engine-session IDs. Archive changes sidebar visibility only: it does not
+close a live tab, stop work, or delete or rewrite a transcript. `Sidebar.tsx`
+exposes archived rows through the archive count toggle and unarchives a row
+before opening it.
+
+`app/renderer/src/sidebarPinnedSessions.ts` owns the versioned
+`catcode.sidebarPinnedSessions.v1` preference. Pinned sessions are lifted out of
+Chats or Projects into a manually ordered section. The saved order retains IDs
+that are not in the current roster and reconciles a pre-ready app-session ID to
+its engine-session ID when that identity arrives.
 
 The merged row's `lastMessageSentAt` or `sessionActivityAtMs` clears an archive
 mark only when newer than the archive timestamp. `app/sidecar/sessionsCatalogDomain.ts`
