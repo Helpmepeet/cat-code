@@ -22,16 +22,13 @@ const config = probeConfig()
 const cases: CaseResult[] = []
 const APPENDS = config.smoke ? 4 : 24
 
-type Path = 'plain-append' | 'settled-body-reused' | 'full-transform'
+type Path = 'unattributed'
 
 /**
- * One planner call as a transcript row makes it. The settled tree surviving
- * with the cached body extended to the whole source is the plain-paragraph
- * append; surviving with a shorter body is an open-fence append or unchanged
- * settled body; anything else transformed the whole document.
+ * Planner calls are timed without attributing internal transformation paths:
+ * tree identity is not evidence of which plugin transforms ran.
  */
-function plan(cache: MarkdownPlanCache, source: string): { ms: number; reused: boolean; path: Path } {
-  const before = cache.current?.tree.children[0]
+function plan(cache: MarkdownPlanCache, source: string): { ms: number; path: Path } {
   const start = performance.now()
   planMarkdownLeaves('perf-row', source, {
     rehypePlugins: TRANSCRIPT_REHYPE_PLUGINS,
@@ -41,33 +38,24 @@ function plan(cache: MarkdownPlanCache, source: string): { ms: number; reused: b
     cache,
   })
   const ms = performance.now() - start
-  const after = cache.current?.tree.children[0]
-  const reused = before !== undefined && before === after
-  const path: Path = !reused ? 'full-transform' : cache.current?.body === source ? 'plain-append' : 'settled-body-reused'
-  return { ms, reused, path }
+  return { ms, path: 'unattributed' }
 }
 
 /** Primes a fresh cache untimed, then times `APPENDS` successive appends; a repetition scores the median append. */
 function appendCase(name: string, params: Record<string, unknown>, base: string, suffix: string): void {
-  const reusedPerRep: number[] = []
   const samples = repeat(config, () => {
     const cache = createMarkdownPlanCache()
     let source = base
     plan(cache, source)
     const times: number[] = []
-    let reused = 0
     for (let i = 0; i < APPENDS; i++) {
       source += suffix
       const result = plan(cache, source)
       times.push(result.ms)
-      if (result.reused) reused++
     }
-    reusedPerRep.push(reused)
     return median(times)
   })
-  cases.push(summarize(name, { ...params, appendsPerRep: APPENDS, scoredValue: 'median ms per append' }, samples, {
-    reusedAppendsPerRep: reusedPerRep,
-  }))
+  cases.push(summarize(name, { ...params, appendsPerRep: APPENDS, scoredValue: 'median ms per append' }, samples))
 }
 
 const prefix = settledPrefix(config.smoke ? 4_000 : 33_600)
@@ -92,14 +80,14 @@ const reply = realisticReply(config.smoke ? 1_500 : 12_000)
 for (const wordsPerPiece of [1, 4]) {
   const pieces = streamPieces(reply, wordsPerPiece)
   let last: { times: number[]; paths: Record<Path, number> } = {
-    times: [], paths: { 'plain-append': 0, 'settled-body-reused': 0, 'full-transform': 0 },
+    times: [], paths: { unattributed: 0 },
   }
   const streamConfig = { ...config, reps: Math.min(config.reps, 3) }
   const samples = repeat(streamConfig, () => {
     const cache = createMarkdownPlanCache()
     let source = ''
     const times: number[] = []
-    const paths: Record<Path, number> = { 'plain-append': 0, 'settled-body-reused': 0, 'full-transform': 0 }
+    const paths: Record<Path, number> = { unattributed: 0 }
     for (const piece of pieces) {
       source += piece
       const result = plan(cache, source)
@@ -135,5 +123,6 @@ cases.push(summarize('tab-return/primed-cache-same-source', { replyCharacters: l
 
 emit('markdown', cases, [
   'Planner calls only; React reconciliation, layout and paint are not included.',
+  'The planner API exposes no transform-path signal; tree identity does not prove which plugin transforms ran.',
   'Stream pieces are synthetic word groups with leading whitespace, not sampled provider deltas.',
 ])

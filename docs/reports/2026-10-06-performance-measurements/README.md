@@ -8,7 +8,7 @@ Saved harness for the [desktop performance assessment](../2026-10-06-desktop-per
 
 | Probe | What it times | Not included |
 |---|---|---|
-| `markdown` | `planMarkdownLeaves` with the transcript plugins and the options `BoundedMarkdown` passes: append shapes after a 33,600-character prefix, settled and open code blocks, a whole reply streamed from empty, and the cold plan on tab return. Each update is classified as plain append, settled body reused, or full transform. | React reconciliation, layout, paint. |
+| `markdown` | `planMarkdownLeaves` with the transcript plugins and the options `BoundedMarkdown` passes: append shapes after a 33,600-character prefix, settled and open code blocks, a whole reply streamed from empty, and the cold plan on tab return. | React reconciliation, layout, paint, and internal transform-path attribution. |
 | `raw-replay` | One replayed history burst folded through `withBatch(reduceServerFrame)`, fresh and duplicate. | Transcript projection, React, IPC. |
 | `tracing` | The production delivery trace sink. Scenario 1 reproduces the assessment (frames buffered before first readiness, then replayed). Scenario 2 models a reload after live delivery: partials on the live stream, a compacted replay of finished messages, then the renderer's acknowledgements. | IPC transfer, renderer work, the deduplicated operational warning. |
 | `cache` | `readCache`, and the persistence step main runs at park, close, restart and quit (read existing, carry previews, atomic write with fsync), including a four-session quit. | Engine transcript run-facts read, cold disk. |
@@ -55,21 +55,23 @@ The operational logs cover 2026-10-01 10:34 to 2026-10-06 03:49 UTC (about 4.7 d
 | Assistant text blocks | 2,582; characters p50 320, p90 1,630, p99 12,634; 217 at 2,000 or more, 30 at 10,000 or more |
 | Streamed partials per finished trace record | 7.2 (all kinds); each stream's last 2,048 sequences held only 136 to 200 finished messages (3 streams) |
 
-Twenty real replies of 2,000 characters or more, streamed through the planner with synthetic piece boundaries:
+Historical path-attributed counts below are invalid: the probes inferred a full transform from first-root-node identity, but the planner may clone that node while production skips the plugin transform. Per-update timings and total durations remain planner-call measurements; only the path labels and derived full-transform shares are unsupported.
 
-| Pieces | Updates | Full transforms | Per update p50 / p90 / p99 / max | Updates over 16.7 ms |
+Twenty real replies of 2,000 characters or more, streamed through the planner with synthetic piece boundaries (historical timings remain usable; full-transform counts are invalid):
+
+| Pieces | Updates | ~~Full transforms~~ invalid | Per update p50 / p90 / p99 / max | Updates over 16.7 ms |
 |---|---:|---:|---|---:|
-| 1 word | 19,886 | 74% | 1.0 / 10.6 / 18.5 / 34.8 ms | 486 |
-| 4 words | 4,980 | 79% | 1.1 / 11.6 / 18.7 / 23.5 ms | 187 |
+| 1 word | 19,886 | invalid | 1.0 / 10.6 / 18.5 / 34.8 ms | 486 |
+| 4 words | 4,980 | invalid | 1.1 / 11.6 / 18.7 / 23.5 ms | 187 |
 
 ### Synthetic cases (tier A, medians)
 
 | Case | Result |
 |---|---|
-| Append after 33,600-character prefix | Plain word 0.65 ms; space-ending, multi-sentence, soft break and Thai 13.0 to 13.6 ms, none reused |
+| Append after 33,600-character prefix | Plain word 0.65 ms; space-ending, multi-sentence, soft break and Thai 13.0 to 13.6 ms; historical reuse attribution invalid |
 | Settled code block then formatted append | 15,500: 2.3 ms; 16,500: 5.8 ms; 32,000: 11.5 ms; 64,000: 24.3 ms |
 | Open fence append | 16,000: 1.3 ms; 64,000: 3.3 ms; 128,000: 5.8 ms; 256,000: 11.0 ms |
-| 12,000-character synthetic reply streamed whole | 1-word pieces: 1,201 ms total over 1,646 updates, 49% full transforms, none over 3.8 ms; 4-word: 334 ms over 412 |
+| 12,000-character synthetic reply streamed whole | 1-word pieces: 1,201 ms total over 1,646 updates, transform share invalid, none over 3.8 ms; 4-word: 334 ms over 412 |
 | Tab return, 28,822 characters | Cold plan 6.5 ms; with a primed cache 5.4 ms, because the planner parses before it compares settled bodies |
 | Fresh replay, 300 / 1,300-character messages | 500: 1.9 / 2.2 ms; 2,000: 17.2 / 21.6 ms; 4,000: 59 / 80 ms; 8,000: 258 / 282 ms (the 1,300-character run retains 5,484 under the byte cap) |
 | Cache read, 1,300-character messages | 500: 1.5 ms; 1,000: 2.7 ms; 3,000: 8.0 ms |
@@ -92,7 +94,7 @@ Live tracing cost 0.023 to 0.045 ms per frame.
 
 ### What the baseline changes
 
-- **Markdown remains first.** With real long replies, three quarters of updates transform the whole document, and the p90 update costs about 11 ms. Only about 8% of assistant blocks are that long. The planner keeps no cache at all after a full transform of a document that cannot take the plain-paragraph path, so the next update starts cold as well.
+- **Markdown remains first for measured latency.** The retained planner-call timings show p90 update costs around 11 ms in the historical sample. The old claim that three quarters of updates transform the whole document, and the associated explanation about cold caches after such transforms, are invalid path-attributed conclusions.
 - **Tab-return reuse needs a different design.** A plan cache that survives remount saves about 1 ms of 6.5 ms, because `planMarkdownLeaves` parses the whole source before comparing it with the cached body. Reuse would have to key on the source and skip the parse.
 - **Raw replay drops.** Real restores in this window were 11 messages at the median and 190 at most, where the duplicate check costs well under 2 ms. It matters only for the rare large restore.
 - **Reload tracing rises.** Each real stream's trace window held only 136 to 200 finished messages, about the size of the median cache (134), so roughly half of sessions evict and re-add on reload. The cost begins well below 2,048 messages: 29 ms at 300 and 115 ms at 1,000 in the model, per session. Every replayed frame that is still retained also writes six `trace.sequence.out_of_order` records (two IPC passes and four acknowledgements), which is diagnostic noise as well as I/O. Reloads are rare: three more navigations than windows created, and two renderer exits, in 4.7 days.
@@ -104,7 +106,7 @@ Still unmeasured: key-press scope and every native interaction latency (tier C, 
 
 `planMarkdownLeaves` now keeps every top-level block that ended before a blank line and cannot take in a later block, and re-reads only the rest as its own document. It refuses the shortcut when a definition or footnote appears, when the block above can absorb what follows (a list or indented code), or when an open fence is in the re-read text. Before landing, a differential check streamed the operator's real assistant replies (1,845 medium and 216 long, in word, 4-word and two random chunkings) and 38 adversarial sources through the change. It compared every step with a fresh full parse: 836,857 steps, no difference. That check found and fixed two defects on the way, a duplicated KaTeX block and a list item that split from its list while its marker was still arriving.
 
-The probes below file the new path under `plain-append`, since they classify by outcome: the settled tree survives and the cached body becomes the whole source. Machine load was 21 to 30 during these runs, so treat absolute times as upper bounds.
+The historical probes below file the new path under `plain-append` based on tree identity and cached body. That attribution is not supported: tree identity does not establish whether production plugin transforms ran. Path labels and full-transform shares in saved JSON are invalid; do not use them to infer production execution. The timing samples, measured around planner calls, remain historical planner-call timings. Machine load was 21 to 30 during these runs, so treat absolute times as upper bounds.
 
 | Case (`results-after-trailing-block/`) | Before | After |
 |---|---:|---:|
@@ -116,14 +118,14 @@ The probes below file the new path under `plain-append`, since they classify by 
 
 Real long replies (`results-after-trailing-block-real/`; the cache store had changed slightly, so the 20-reply sample differs from tier B):
 
-| Pieces | Full transforms | Per update p50 / p90 / p99 / max | Updates over 16.7 ms |
+| Pieces | ~~Full transforms~~ invalid | Per update p50 / p90 / p99 / max | Updates over 16.7 ms |
 |---|---:|---|---:|
-| 1 word, before | 74% | 1.0 / 10.6 / 18.5 / 34.8 ms | 486 |
-| 1 word, after | 5% | 0.26 / 1.0 / 2.8 / 22.9 ms | 4 |
-| 4 words, before | 79% | 1.1 / 11.6 / 18.7 / 23.5 ms | 187 |
-| 4 words, after | 6% | 0.26 / 1.0 / 2.8 / 22.7 ms | 1 |
+| 1 word, before | invalid | 1.0 / 10.6 / 18.5 / 34.8 ms | 486 |
+| 1 word, after | invalid | 0.26 / 1.0 / 2.8 / 22.9 ms | 4 |
+| 4 words, before | invalid | 1.1 / 11.6 / 18.7 / 23.5 ms | 187 |
+| 4 words, after | invalid | 0.26 / 1.0 / 2.8 / 22.7 ms | 1 |
 
-In a breakdown of the remaining 1-word full transforms by the shape of the reply's tail, most are cheap multi-line paragraph updates, and the only ones over 16.7 ms were around large code fences. Native interaction latency is still unmeasured.
+The historical breakdown of full transforms by reply-tail shape is also invalid. Native interaction latency is still unmeasured.
 
 ## Run rules
 

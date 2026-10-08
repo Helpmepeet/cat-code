@@ -148,17 +148,14 @@ for (const dirName of ['transcript-cache-v2', 'transcript-cache']) {
 // ── Markdown: real finished replies streamed through the production planner ───
 // Piece boundaries are synthetic (provider deltas are not stored); the text,
 // structure and length are real.
-type Path = 'plain-append' | 'settled-body-reused' | 'full-transform'
+type Path = 'unattributed'
 function plan(cache: MarkdownPlanCache, source: string): { ms: number; path: Path } {
-  const before = cache.current?.tree.children[0]
   const start = performance.now()
   planMarkdownLeaves('perf-real', source, {
     rehypePlugins: TRANSCRIPT_REHYPE_PLUGINS, allowPlainTextAppend: true, math: true, recognizeCallouts: true, cache,
   })
   const ms = performance.now() - start
-  const after = cache.current?.tree.children[0]
-  const reused = before !== undefined && before === after
-  return { ms, path: !reused ? 'full-transform' : cache.current?.body === source ? 'plain-append' : 'settled-body-reused' }
+  return { ms, path: 'unattributed' }
 }
 const textLengths = assistantTexts.map(text => text.length)
 const LONG = 2_000
@@ -169,9 +166,8 @@ const sample = Array.from({ length: Math.min(sampleSize, longTexts.length) }, (_
   longTexts[Math.floor((i * longTexts.length) / Math.min(sampleSize, longTexts.length))]!)
 const markdown: Record<string, unknown> = {}
 for (const wordsPerPiece of [1, 4]) {
-  const paths: Record<Path, number> = { 'plain-append': 0, 'settled-body-reused': 0, 'full-transform': 0 }
+  const paths: Record<Path, number> = { unattributed: 0 }
   const times: number[] = []
-  const fullTimesLateHalf: number[] = []
   for (const text of sample) {
     const cache = createMarkdownPlanCache()
     let source = ''
@@ -180,16 +176,15 @@ for (const wordsPerPiece of [1, 4]) {
       const result = plan(cache, source)
       paths[result.path]++
       times.push(result.ms)
-      if (result.path === 'full-transform' && source.length > text.length / 2) fullTimesLateHalf.push(result.ms)
     }
   }
   const total = times.length
   markdown[`${wordsPerPiece}-word-pieces`] = {
     updates: total,
     updatesByPath: paths,
-    fullTransformShare: round(paths['full-transform'] / Math.max(1, total)),
+    pathAttribution: 'unavailable: planner does not expose transform-path execution',
     perUpdateMs: distribution(times),
-    fullTransformInSecondHalfMs: distribution(fullTimesLateHalf),
+    pathAttributionNote: 'All updates are unclassified; tree identity is not a plugin-execution signal.',
     updatesOver16_7Ms: times.filter(t => t > 16.7).length,
   }
 }
@@ -239,5 +234,6 @@ process.stdout.write(`${JSON.stringify({
     'Aggregates only; no message text, identifiers or file paths are recorded.',
     'Logs cover only the retained window; delivery traces are bounded by size and age.',
     'Markdown piece boundaries are synthetic; provider deltas are not stored anywhere on disk.',
+    'The planner API does not expose transformation-path execution; tree identity does not prove plugin execution.',
   ],
 })}\n`)
