@@ -145,13 +145,14 @@ import {
   type ConnectionSnapshot,
 } from './connectionState.js'
 import {
-  selectDockedWorkers,
-} from './workersState.js'
-import {
   AgentFaceRegistryContext,
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
-import { WorkerRoster } from './WorkerRoster.js'
+import { SubagentDock } from './SubagentDock.js'
+import { useSubagentDock } from './subagentDockController.js'
+import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
+import type { SubagentDockRow } from './subagentDockState.js'
+import type { AgentRevealRequest } from './transcriptAgentReveal.js'
 import {
   resultToastTone,
   switchVerb,
@@ -745,6 +746,19 @@ export function SessionPane({
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const [dockCollapsed, setDockCollapsed] = useSubagentDockCollapsedPreference()
+  const { dock, clearFinished, setDetailsVisible } = useSubagentDock(activeSessionId, activeDescriptor?.engineSessionId ?? null, {
+    workers, tasks: tasksSnapshot, transcriptRows: nestedRows, leases, parentModel: model,
+  })
+  const [revealAgent, setRevealAgent] = useState<AgentRevealRequest | null>(null)
+  const openDockWorker = (row: SubagentDockRow) => {
+    if (row.toolUseId) {
+      applyAtBottom(false)
+      setRevealAgent(previous => ({ toolUseId: row.toolUseId!, sequence: (previous?.sequence ?? 0) + 1 }))
+      if (!nestedRows.some(candidate => candidate.kind === 'tool-use' && candidate.toolUseId === row.toolUseId) &&
+          activeSessionId && transcript.sessions[activeSessionId]?.historyTruncated) onLoadEarlierHistory?.()
+    } else onOpenTasks?.(row.agentId, true)
+  }
   const historyIncomplete = activeSessionId !== null &&
     transcript.sessions[activeSessionId]?.historyTruncated === true
   const autoRecoverHistory = !preview && activeConnection.status === 'ready' &&
@@ -1654,7 +1668,9 @@ export function SessionPane({
     /* Wrapped without re-indenting the pane below, the same way the composer
      * dock's own column wrapper is. */
     <AgentFaceRegistryContext.Provider value={paneFaces}>
-    <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-8 pb-8">
+    <main className="relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-8 pb-8">
+      <SubagentDock state={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
+        onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onOpenWorker={openDockWorker} onOpenWorkers={() => onOpenTasks?.(undefined, true)} />
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the
        * P4-6b `SessionActionsMenu`, a separate surface). The cwd/status debug
@@ -1773,6 +1789,7 @@ export function SessionPane({
             onMessageAction={activeDescriptor?.moving ? undefined : onMessageAction}
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}
+            revealAgent={revealAgent}
             initialScrollRowKey={scrollAnchor?.kind === 'row' ? scrollAnchor.rowKey : null}
             contextTransitions={activeDescriptor?.contextTransitions}
             workspaceMove={activeDescriptor?.workspaceMove}
@@ -1968,24 +1985,9 @@ export function SessionPane({
        * automatic minimum size is its min-content height, which a scrolling
        * child does NOT reduce, so the dock freezes at 448px and clips again.
        * With it, the panel region below is the only child that can give (the
-       * composer is `shrink-0`, the roster and activity rows stop at their own
+       * composer is `shrink-0`, the activity rows stop at their own
        * min-content), so squeeze lands there and turns into scroll. */}
       <div className="mx-auto flex min-h-0 w-full max-w-[var(--transcript-width)] flex-col">
-      {/* The worker roster stays above the composer, in the transcript's own
-       * measure, ahead of the permission/question stack. It dims while the
-       * assistant is itself generating, and renders nothing when there are no
-       * workers.
-       *
-       * OUTSIDE the scrolling region below, deliberately: it is at most one row
-       * tall (a second worker collapses it to a summary line), and its full
-       * roster opens as an `absolute bottom-full` popover that a scroll
-       * container would clip. */}
-      <WorkerRoster
-        compact={generating}
-        onOpen={onOpenTasks}
-        workers={selectDockedWorkers(workers)}
-      />
-
       {/* Everything docked that can grow without limit — the question card, the
        * permission stack, notices, and the waiting-prompt rows — scrolls here
        * instead of pushing the composer off screen. Empty when nothing is
@@ -2780,10 +2782,10 @@ type SessionPaneProps = {
   onSetFast?: (active: boolean) => void
   copyForLlm: () => void
   denyPermission: (requestId: string, message?: string) => void
-  /** This session's live worker roster, docked above the composer. */
+  /** This session's live workers, shown in the top-right subagent dock. */
   workers?: readonly LiveWorkerItem[]
-  /** P4-32a — open the workers/tasks list (the roster's click-through). */
-  onOpenTasks?: (agentId?: string) => void
+  /** Open this pane's workers/tasks list when the dock needs a dialog fallback. */
+  onOpenTasks?: (agentId?: string, workersTab?: boolean) => void
   /** Live engine task mode. Kept outside transcript cards so task state never mutates transcript history. */
   tasksSnapshot?: TasksSnapshot | null
   /**

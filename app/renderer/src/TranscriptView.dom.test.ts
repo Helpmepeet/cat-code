@@ -28,6 +28,7 @@ import type { ReactNode } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import { TranscriptRowsView } from './TranscriptView.js'
+import type { AgentRevealRequest } from './transcriptAgentReveal.js'
 import type { RestorePhase } from './TranscriptView.js'
 import { axesForName, faceRects } from './agentFace.js'
 import {
@@ -281,11 +282,13 @@ function Pane({
   store,
   restorePhase = null,
   initialScrollRowKey = null,
+  revealAgent = null,
 }: {
   rows: NestedTranscriptRow[]
   store: ToolCardExpansionStore
   restorePhase?: RestorePhase | null
   initialScrollRowKey?: string | null
+  revealAgent?: AgentRevealRequest | null
 }): ReactNode {
   const [scroller, setScroller] = useState<HTMLElement | null>(null)
   const attach = (element: HTMLElement | null): void => {
@@ -300,7 +303,7 @@ function Pane({
       : createElement(
           ToolCardExpansionContext.Provider,
           { value: store },
-          createElement(TranscriptRowsView, { rows, restorePhase, initialScrollRowKey }),
+          createElement(TranscriptRowsView, { rows, restorePhase, initialScrollRowKey, revealAgent }),
         ),
   )
 }
@@ -1132,4 +1135,20 @@ describe('the face stamp across a restore', () => {
       all.length,
     )
   })
+})
+
+
+test('an agent reveal materializes an evicted transcript window and expands its card', async () => {
+  const agent = agentRow('old', [readRow(1)], { messageId: 'old-message' })
+  const rows = [agent, ...Array.from({ length: 240 }, (_, index) => historyTextRow(index))]
+  const store = createToolCardExpansionStore()
+  const tree = await harness.mount(createElement(Pane, { rows, store }))
+  expect(tree.container.querySelector('[data-agent-tool-id="toolu_agent_old"]')).toBeNull()
+  await tree.render(createElement(Pane, { rows, store, revealAgent: { toolUseId: agent.toolUseId, sequence: 1 } }))
+  await harness.nextFrame()
+  const card = tree.container.querySelector('[data-agent-tool-id="toolu_agent_old"]')
+  expect(card).not.toBeNull()
+  expect(card?.querySelector('[aria-expanded="true"]')).not.toBeNull()
+  expect(store.get(agent.toolUseId)).toBe(true)
+  expect(tree.container.querySelectorAll('[data-transcript-entry]').length).toBeLessThanOrEqual(80)
 })

@@ -288,7 +288,6 @@ import {
 } from './remoteSettingsState.js'
 import {
   createTasksState,
-  groupTaskItems,
   reduceTasksState,
   selectTasksSnapshot,
 } from './tasksState.js'
@@ -311,12 +310,11 @@ import {
 } from './sessionsCatalogState.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
+import { useSubagentDockObservation } from './subagentDockObservation.js'
 import {
   createWorkersState,
-  workersPill,
   reduceWorkersState,
   selectLiveWorkersSnapshot,
-  summarizeWorkers,
 } from './workersState.js'
 import {
   AgentFaceRegistryContext,
@@ -330,7 +328,6 @@ import {
   selectLeaseSnapshot,
   selectSessionCodexAccount,
 } from './leaseState.js'
-import { WorkerRoster } from './WorkerRoster.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import {
@@ -913,13 +910,11 @@ export function App() {
     createLeaseState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
-  // CC-84 — which worker the tasks dialog should open ON, or null for the plain
-  // list. The docked roster raises its `agentId` (`WorkerRoster.tsx`
-  // `WorkerRow`) and App used to drop it, so clicking a worker landed on the
-  // generic list. This carries it to the EXISTING P4-32b drilldown; no new
-  // surface, and it is cleared with the dialog.
+  // A pane dock can open the Workers list even when no single worker is selected.
+  const [tasksInitialTab, setTasksInitialTab] = useState<'tasks' | 'workers'>('tasks')
   const [tasksFocusAgentId, setTasksFocusAgentId] = useState<string | null>(null)
-  const openTasksDialog = useCallback((agentId?: string) => {
+  const openTasksDialog = useCallback((agentId?: string, workersTab = false) => {
+    setTasksInitialTab(workersTab || agentId ? 'workers' : 'tasks')
     setTasksFocusAgentId(agentId ?? null)
     setTasksOpen(true)
   }, [])
@@ -978,6 +973,8 @@ export function App() {
     undefined,
     createShellState,
   )
+  const dockObservedSessions = useMemo(() => selectShellDescriptors(shell), [shell])
+  useSubagentDockObservation({ sessions: dockObservedSessions, workers: workersState, tasks, transcript, leases })
   // Mirror the roster so the host-event handler (subscribed once) can read the
   // live order without re-subscribing — used to compute the neighbour tab when
   // the active tab is removed.
@@ -4066,7 +4063,10 @@ export function App() {
 		                )
 		              }
 		            }}
-	            onOpenTasks={openTasksDialog}
+	            onOpenTasks={(agentId, workersTab) => {
+              focusWorkspacePanelSession(workspaceLayout.panels.findIndex(panel => panel.sessionId === sessionId), sessionId)
+              openTasksDialog(agentId, workersTab)
+            }}
 	            allowPermission={(requestId, applySuggestions = []) => {
 	              const item = sessionPermissionQueue.find(
 	                candidate => candidate.request.requestId === requestId,
@@ -5047,19 +5047,6 @@ export function App() {
               />
             </div>
           )}
-
-          {/* In-session background-task strip (P4-9). The prototype's `TasksPanel`
-           * is unanchored GUI (⚓0, INVENTORY §W4), not this dialog's entry point.
-           * This pill is the grounded analog: the real
-           * footer summary pill (`BackgroundTaskStatus.tsx`, `getPillLabel`),
-           * scoped to the active session, opening the same TasksDialog ⌘K does. */}
-          {activeView === 'chat' && activeSessionId ? (
-            <TasksStrip
-              snapshot={selectTasksSnapshot(tasks, activeSessionId)}
-              workers={activeLiveWorkersSnapshot?.workers ?? EMPTY_WORKERS}
-              onOpen={() => openTasksDialog()}
-            />
-          ) : null}
         </div>
         </div>
 
@@ -5076,7 +5063,7 @@ export function App() {
           items={paletteItems}
         />
 
-        {/* Background tasks dialog (P4-9): ⌘K → "Background tasks" or the strip pill. */}
+        {/* Background tasks dialog (P4-9): ⌘K → "Background tasks" or a pane dock. */}
         <TasksDialog
           open={tasksOpen}
           onClose={closeTasksDialog}
@@ -5093,89 +5080,13 @@ export function App() {
            * opens on that worker's detail instead of the generic list. Null for
            * every other entry point (⌘K, the footer pill). */
           focusAgentId={tasksFocusAgentId}
+          initialTab={tasksInitialTab}
         />
       </div>
     </AgentFaceRegistryContext.Provider>
     </AgentFaceRegistryStoreContext.Provider>
   )
 }
-
-/**
- * The real `BackgroundTaskStatus.tsx` footer pill, adapted: a compact count of
- * active background tasks for the current session, opening `TasksDialog` on
- * click. Renders nothing when there is nothing active (same as the source
- * component returning `null`, `BackgroundTaskStatus.tsx:195-197`).
- *
- * P4-32a (ruling P1) — this ONE strip also carries the prototype's `bgTaskPill`
- * attention semantics; the slot has an owner, so there is no second pill (CC-5
- * rule #10). A worker waiting on the assistant stays neutral.
- *
- * The two feeds overlap, so they are reconciled rather than summed: a delegated
- * `local_agent` shows up in the tasks snapshot AND in the worker list,
- * so the task half counts only NON-worker task types and the worker half comes
- * from the worker feed alone. Nothing is counted twice.
- *
- * Two prototype gaps are inherited from the P4-9 shell that P1 said to KEEP, and
- * are recorded on the ledger row rather than fixed here: the prototype's pill
- * inverts on hover (fills with its own colour, text going dark,
- * `TasksPanel` hover treatment) where this one only lifts its text; and its
- * neutral tone is the agent purple `#c084fc` where this one uses the theme
- * `accent`. Changing either would restyle P4-9's button, not extend its semantics.
- */
-export function TasksStrip({
-  snapshot,
-  workers,
-  onOpen,
-}: {
-  snapshot: ReturnType<typeof selectTasksSnapshot>
-  workers: readonly LiveWorkerItem[]
-  onOpen: () => void
-}) {
-  const pill = workersPill(workers)
-  const hasBackgroundWorker =
-    summarizeWorkers(workers).background > 0
-  const backgroundTasks = groupTaskItems(snapshot).active.filter(
-    item => item.type !== 'local_agent',
-  )
-  if (!pill && backgroundTasks.length === 0) return null
-  return (
-    <button
-      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[var(--elev-popover)] hover:text-text-primary"
-      onClick={onOpen}
-      type="button"
-    >
-      <span
-        className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
-        aria-hidden="true"
-      />
-      {pill ? (
-        <>
-          {hasBackgroundWorker ? (
-            <>
-              <span className="text-accent">Background</span>
-              <span aria-hidden="true" className="text-text-ghost">
-                ·
-              </span>
-            </>
-          ) : null}
-          <span>{pill.label}</span>
-        </>
-      ) : null}
-      {pill && backgroundTasks.length > 0 ? (
-        <span aria-hidden="true" className="text-text-ghost">
-          ·
-        </span>
-      ) : null}
-      {backgroundTasks.length > 0 ? (
-        <span>
-          {backgroundTasks.length} background{' '}
-          {backgroundTasks.length === 1 ? 'task' : 'tasks'}
-        </span>
-      ) : null}
-    </button>
-  )
-}
-
 
 /** Stable empty inventory for the closed palette — a fresh `[]` each render would
  * bust the palette's `useMemo(filter)` identity check for no reason. */

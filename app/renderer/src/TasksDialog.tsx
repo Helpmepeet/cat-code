@@ -115,6 +115,7 @@ export function TasksDialog({
   workers: workersSnapshot = null,
   leases = null,
   focusAgentId = null,
+  initialTab = 'tasks',
   now,
 }: {
   open: boolean
@@ -141,15 +142,15 @@ export function TasksDialog({
   /** P4-32b — the active session's Codex lease snapshot, source of the Leases tab. */
   leases?: LeaseSnapshot | null
   /**
-   * CC-84 — open ON this worker instead of the task list. Set only when the
-   * docked roster raised a specific `agentId` (`WorkerRoster.tsx`); every
-   * other entry point passes null and gets the Tasks tab as before.
+   * Open directly on a worker named by a pane dock. Without an id, initialTab
+   * chooses the Workers list or the ordinary Background tasks entry point.
    *
    * An id that is not in the current snapshot degrades to the Workers LIST, not
    * to a stale row: `selectWorkerById` already returns null for it, and landing
    * on the roster the click came from is the honest fallback.
    */
   focusAgentId?: string | null
+  initialTab?: 'tasks' | 'workers'
   /** Injected clock for held-duration display; defaults to now at render time. */
   now?: number
 }) {
@@ -160,7 +161,7 @@ export function TasksDialog({
   // worker; the `open` effect below covers it being opened later, which is the
   // live app's path (it mounts shut). Both read the same `focusAgentId`.
   const [tab, setTab] = useState<DialogTab>(() =>
-    open && focusAgentId ? 'workers' : 'tasks',
+    open && focusAgentId ? 'workers' : initialTab,
   )
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(() =>
     open ? focusAgentId : null,
@@ -182,12 +183,12 @@ export function TasksDialog({
   useEffect(() => {
     if (!open) return
     setSelectedTaskId(flat[0]?.id ?? null)
-    // CC-84 — a roster click names the worker it was made on, so the dialog
+    // CC-84 — a dock click names the worker it was made on, so the dialog
     // opens on that worker's detail; `back` from there lands on the Workers
     // list rather than the Tasks tab, which is where the click came from.
-    setTab(focusAgentId ? 'workers' : 'tasks')
+    setTab(focusAgentId ? 'workers' : initialTab)
     setSelectedWorkerId(focusAgentId)
-  }, [open, focusAgentId])
+  }, [open, focusAgentId, initialTab])
 
   useEffect(() => {
     if (!open) return

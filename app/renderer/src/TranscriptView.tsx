@@ -157,6 +157,7 @@ import {
 import { AgentFace } from './AgentChrome.js'
 import { deriveTarget, derivePeerTargetParts, peerTargetFragment, toolCardFilePath, displayFilePath, type PeerTargetParts } from './transcriptToolTarget.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
+import { AgentRevealContext, containsAgentTool, type AgentRevealRequest } from './transcriptAgentReveal.js'
 import { agentToolSourceOf, agentActivityOf, agentProgressBadge, agentModelOf, agentAccountLabel } from './transcriptAgent.js'
 import {
   AGENT_STATE_TONE_CLASS,
@@ -380,6 +381,7 @@ export const TranscriptView = memo(function TranscriptView({
   toolCardExpansionStore = null,
   columnRef,
   initialScrollRowKey,
+  revealAgent = null,
   welcomeExiting = false,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
   workspaceMove: workspaceMoveInput = null,
@@ -445,6 +447,7 @@ export const TranscriptView = memo(function TranscriptView({
   columnRef?: Ref<HTMLDivElement>
   /** Row identity retained by SessionPane when this pane is rebound. */
   initialScrollRowKey?: string | null
+  revealAgent?: AgentRevealRequest | null
   /** Send-message motion (behavior 3): keep `WelcomeScreen` mounted, exiting,
    * for one more render after `state` already has this session's first row. */
   welcomeExiting?: boolean
@@ -485,6 +488,7 @@ export const TranscriptView = memo(function TranscriptView({
       createdPeerNavigation={createdPeerNavigation}
       toolCardExpansionStore={toolCardExpansionStore}
       initialScrollRowKey={initialScrollRowKey}
+      revealAgent={revealAgent}
       columnRef={columnRef}
       welcomeExiting={welcomeExiting}
       contextTransitions={contextTransitions}
@@ -601,6 +605,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   toolCardExpansionStore = null,
   columnRef,
   initialScrollRowKey = null,
+  revealAgent = null,
   welcomeExiting = false,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
   workspaceMove: workspaceMoveInput = null,
@@ -636,6 +641,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   toolCardExpansionStore?: ToolCardExpansionStore | null
   columnRef?: Ref<HTMLDivElement>
   initialScrollRowKey?: string | null
+  revealAgent?: AgentRevealRequest | null
   welcomeExiting?: boolean
   contextTransitions?: SessionDescriptor['contextTransitions']
   workspaceMove?: WorkspaceMoveDisplay | null
@@ -776,6 +782,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     ? `context-transition:${entry.transition.id}`
     : displayItemKey(entry.item))
 
+  const revealIndex = revealAgent ? entries.findIndex(entry => entry.kind !== 'transition' && (
+    entry.item.kind === 'single' ? containsAgentTool([entry.item.row], revealAgent.toolUseId) :
+    entry.item.kind === 'agent-group' ? containsAgentTool(entry.item.members, revealAgent.toolUseId) : false
+  )) : -1
+  const revealEntryKey = entryKeys[revealIndex] ?? null
+
   let content: ReactNode
   if (rows.length === 0) {
     // IS-C (M5) — a restore in flight must never read as an empty pane / hang.
@@ -851,6 +863,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         keys={entryKeys}
         estimatedChildHeight={82}
         initialAnchorKey={initialScrollRowKey}
+        revealRequest={revealAgent && revealEntryKey ? { key: revealEntryKey, sequence: revealAgent.sequence } : null}
         renderChild={renderEntry}
         containerRef={columnRef}
         dataCardStyle={cardStyle}
@@ -895,6 +908,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
 
   return (
     <TranscriptMotionContext.Provider value={motion}>
+    <AgentRevealContext.Provider value={revealAgent}>
     <ToolCardExpansionContext.Provider value={expansionStore}>
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
@@ -924,6 +938,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
+    </AgentRevealContext.Provider>
     </TranscriptMotionContext.Provider>
   )
 })
@@ -1209,6 +1224,7 @@ function BoundedChildList({
   renderChild,
   className,
   initialAnchorKey,
+  revealRequest = null,
   containerRef,
   dataCardStyle,
   transcriptEntries = false,
@@ -1223,6 +1239,7 @@ function BoundedChildList({
   /** Layout classes the replaced wrapper carried, so spacing is unchanged. */
   className?: string
   initialAnchorKey?: string | null
+  revealRequest?: { key: string; sequence: number } | null
   containerRef?: Ref<HTMLDivElement>
   dataCardStyle?: string
   transcriptEntries?: boolean
@@ -1411,6 +1428,23 @@ function BoundedChildList({
         : null,
     })
   })
+
+  useLayoutEffect(() => {
+    if (!revealRequest?.key) return
+    const index = entriesRef.current.findIndex(entry => entry.key === revealRequest.key)
+    const root = rootRef.current
+    if (index < 0 || !root) return
+    const scroller = findPaneScroller(root)
+    const offset = entriesRef.current.slice(0, index).reduce((sum, entry) => sum + entry.height + childGap, 0)
+    scroller.scrollTop += root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + offset
+    setChildWindow(selectCompositeChildWindow(entriesRef.current, offset,
+      scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT, undefined, undefined, childGap))
+    const frame = requestAnimationFrame(() => {
+      const element = [...root.children].find(child => child.getAttribute('data-transcript-entry') === revealRequest.key)
+      element?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [revealRequest?.key, revealRequest?.sequence, childGap])
 
   const mounted = useMemo(
     () => entries.slice(childWindow.start, childWindow.end),
@@ -4052,6 +4086,11 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     completion !== null || row.status === 'error',
   )
 
+  const revealAgent = useContext(AgentRevealContext)
+  useEffect(() => {
+    if (revealAgent?.toolUseId === row.toolUseId) setExpanded(true)
+  }, [revealAgent, row.toolUseId])
+
   if (resumeAck && !resumeAck.ok) {
     return (
       <RejectedResumeCard
@@ -4115,6 +4154,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   )
   return (
     <div
+      data-agent-tool-id={row.toolUseId}
       className={`${TOOL_CARD_SHELL_CLASS[cardStyle]} group/agentcard relative`}
     >
       {backgroundAction === null ? null : (

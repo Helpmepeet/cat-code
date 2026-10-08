@@ -23,7 +23,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ComponentProps } from 'react'
-import { App, TasksStrip } from './App.js'
+import { App } from './App.js'
 import { ConnectionRecovery, SessionPane } from './SessionPane.js'
 import {
   buildDebugExport,
@@ -56,7 +56,6 @@ import {
   SLASH_COMMAND_LISTBOX_ID,
   slashCommandOptionId,
 } from './composerTypeaheadA11y.js'
-import { WorkerRoster } from './WorkerRoster.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import {
   createTranscriptState,
@@ -72,8 +71,6 @@ import {
   type LiveWorkerItem,
   type RunControlsSnapshot,
   type ServerFrame,
-  type TaskSnapshotItem,
-  type TasksSnapshot,
 } from '../../shared/protocol.js'
 
 const TRUNCATED_PANE_SESSION = 'truncated-pane-session'
@@ -2302,21 +2299,6 @@ test('a previewed pane with an empty cache claims nothing', () => {
 
 /* ── P4-32a: the footer strip carries worker attention (ruling P1) ──────────── */
 
-function tasksSnapshotForTest(
-  items: Array<
-    Partial<TaskSnapshotItem> & { id: string; type: TaskSnapshotItem['type'] }
-  >,
-): TasksSnapshot {
-  return {
-    items: items.map(item => ({
-      status: 'running' as const,
-      label: item.id,
-      startTime: 0,
-      ...item,
-    })),
-  }
-}
-
 function agentWorkerForTest(
   over: Partial<LiveWorkerItem> = {},
 ): LiveWorkerItem {
@@ -2329,44 +2311,6 @@ function agentWorkerForTest(
     ...over,
   }
 }
-
-function renderStrip(
-  props: Partial<ComponentProps<typeof TasksStrip>> = {},
-): string {
-  return renderToStaticMarkup(
-    <TasksStrip snapshot={null} workers={[]} onOpen={() => {}} {...props} />,
-  )
-}
-
-test('P4-32a — an idle session with no workers still renders no strip', () => {
-  expect(renderStrip()).toBe('')
-})
-
-test('P4-32a — a foreground swarm reads as active without claiming Background', () => {
-  // D2 C2: workers waiting on the assistant are the assistant's problem.
-  const html = renderStrip({
-    workers: [
-      agentWorkerForTest(),
-      agentWorkerForTest({
-        agentId: 'w-2',
-        status: 'completed',
-        handoffStatus: 'blocked',
-      }),
-    ],
-  })
-  expect(html).toContain('2 subagents active')
-  expect(html).not.toContain('Background')
-  expect(html).not.toContain('tone-warn')
-})
-
-test('P4-32a — a backgrounded subagent makes the task strip say Background', () => {
-  const html = renderStrip({
-    workers: [agentWorkerForTest({ isBackgrounded: true })],
-  })
-
-  expect(html).toContain('Background')
-  expect(html).toContain('1 subagent active')
-})
 
 test('the activity byline carries no task control, even with foreground work running', () => {
   // CC-85 put a `Foreground` pill and a `Background` button here. Both facts
@@ -2404,87 +2348,14 @@ test('a foreground subagent is handed to the transcript, and a backgrounded one 
   expect(source).toContain('toolUseId,')
 })
 
-test('P4-32a — a blocked worker never turns the strip amber', () => {
-  // The handoff goes to the assistant, so a blocked worker never claims the
-  // human owns the next action.
-  const html = renderStrip({
-    workers: [agentWorkerForTest({ status: 'completed', handoffStatus: 'blocked' })],
-  })
-  expect(html).toContain('1 subagent active')
-  expect(html).not.toContain('needs you')
-  expect(html).not.toContain('tone-warn')
-})
-
-test('P4-32a — the same delegated worker is never counted twice across the two feeds', () => {
-  // A backgrounded `local_agent` appears in BOTH tasks.snapshot and the worker
-  // list; the task half must therefore count only non-worker task types.
-  const html = renderStrip({
-    snapshot: tasksSnapshotForTest([
-      { id: 'w-1', type: 'local_agent' },
-      { id: 'sh-1', type: 'local_bash' },
-    ]),
-    workers: [agentWorkerForTest()],
-  })
-  expect(html).toContain('1 subagent active')
-  expect(html).toContain('1 background task')
-  expect(html).not.toContain('2 background')
-})
-
-test('P4-32a — a plain background task keeps the original strip wording', () => {
-  const html = renderStrip({
-    snapshot: tasksSnapshotForTest([
-      { id: 'sh-1', type: 'local_bash' },
-      { id: 'sh-2', type: 'local_bash' },
-    ]),
-  })
-  expect(html).toContain('2 background tasks')
-  expect(html).not.toContain('subagent')
-})
-
-test('P4-32a — real workers reach the composer dock, above the permission stack', () => {
-  // The live path, not the component in isolation: SessionPane must actually mount
-  // the roster inside the composer column, or the wiring is invisible.
-  const html = renderToStaticMarkup(
-    <SessionPane
-      {...idleSessionPaneProps()}
-      workers={[
-        agentWorkerForTest({ handle: 'Turing', description: 'Wire the dock' }),
-      ]}
-    />,
-  )
+test('each pane renders its own subagents without a composer roster', () => {
+  const html = renderToStaticMarkup(<SessionPane {...idleSessionPaneProps()} workers={[
+    agentWorkerForTest({ handle: 'Turing', description: 'Wire the dock' }),
+  ]} />)
+  expect(html).toContain('subagent-dock')
   expect(html).toContain('Turing')
   expect(html).toContain('Wire the dock')
-  // The dock's measure identifies it; its flex classes deliberately do not.
-  // The dock is no longer `shrink-0` (it yields and scrolls so the composer
-  // cannot be clipped), and which classes carry that is `composerDock.test.ts`.
-  const dockIndex = html.indexOf('max-w-[var(--transcript-width)]')
-  expect(dockIndex).toBeGreaterThan(-1)
-  expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
-})
-
-test('P4-32a — the dock retires settled workers but keeps unresolved ones', () => {
-  const settled = renderToStaticMarkup(
-    <SessionPane
-      {...idleSessionPaneProps()}
-      workers={[
-        agentWorkerForTest({
-          description: 'Completed worker',
-          status: 'completed',
-        }),
-      ]}
-    />,
-  )
-  expect(settled).not.toContain('Completed worker')
-
-  const failed = renderToStaticMarkup(
-    <SessionPane
-      {...idleSessionPaneProps()}
-      workers={[
-        agentWorkerForTest({ description: 'Failed worker', status: 'failed' }),
-      ]}
-    />,
-  )
-  expect(failed).toContain('Failed worker')
+  expect(html).not.toContain('worker-roster')
 })
 
 test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for worker joins', () => {
@@ -2561,25 +2432,20 @@ test('two panes on two sessions never spend one face pool, and one session agree
           activeSessionId="session-a"
           workers={[ada]}
         />
-        {/* The shell's own furniture follows the ACTIVE session, which is A. It
-         * has to draw the very face that pane just drew — the regression the
-         * registry was lifted out of the transcript to fix. */}
-        <AgentFaceRegistryContext.Provider value={store.registryFor('session-a')}>
-          <WorkerRoster workers={[ada]} />
-        </AgentFaceRegistryContext.Provider>
+
       </>
     </AgentFaceRegistryStoreContext.Provider>,
   )
 
   const faces =
     html.match(/<svg[^>]*shape-rendering="crispEdges"[\s\S]*?<\/svg>/g) ?? []
-  expect(faces).toHaveLength(3)
+  expect(faces).toHaveLength(4)
   // Session B took that colour first, and session A's worker keeps it anyway:
   // the two panes are not drawing from one pool.
   expect(faces[0]).toContain(AGENT_FACE_IDENTITY_FILL[adaFill])
-  expect(faces[1]).toContain(AGENT_FACE_IDENTITY_FILL[adaFill])
+  expect(faces[2]).toContain(AGENT_FACE_IDENTITY_FILL[adaFill])
   // One session, two surfaces, one face.
-  expect(faces[2]).toBe(faces[1])
+  expect(faces[3]).toBe(faces[2])
 })
 
 test('an incomplete transcript says so inside the pane, on a preview and once live', () => {
@@ -3285,7 +3151,7 @@ test('CC-84 wiring tripwire: the docked roster click carries its worker id into 
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   // The roster passes the callback by reference, so the id it raises survives.
-  expect(source).toContain('onOpenTasks={openTasksDialog}')
+  expect(source).toContain('openTasksDialog(agentId, workersTab)')
   // ...and the dialog is told which worker to open on.
   expect(source).toContain('focusAgentId={tasksFocusAgentId}')
   // Closing clears it, so the next ⌘K open is not stuck on a stale worker.
