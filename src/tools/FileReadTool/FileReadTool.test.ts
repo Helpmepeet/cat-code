@@ -286,9 +286,12 @@ describe('missing-file exact function recovery', () => {
       },
     })
     const rendered = formatFileReadTextForModel(data)
-    expect(rendered).toContain('FUNCTION-ONLY')
-    expect(rendered).toContain(`Requested file does not exist: ${JSON.stringify(entry.requested)}`)
-    expect(rendered).toContain(`Actual source: ${JSON.stringify(entry.actual)}, lines 2 to 4`)
+    expect(rendered.split('\n').slice(0, 4)).toEqual([
+      `Requested file not found: ${JSON.stringify(entry.requested)}`,
+      'Returned complete function: TasksStrip',
+      `Source: ${JSON.stringify(entry.actual)}, lines 2–4`,
+      'The rest of the file is not included.',
+    ])
     expect(rendered).not.toContain('const before')
     expect(rendered).not.toContain('const after')
     expect(FileReadTool.outputSchema.safeParse(data).success).toBe(true)
@@ -508,7 +511,7 @@ describe('missing-file exact function recovery', () => {
     const updates = await runWithCwdOverride(entry.directory, () =>
       runRealToolUse(FileReadTool, { file_path: entry.requested }, entry.context),
     )
-    expect(JSON.stringify(updates)).toContain('FUNCTION-ONLY')
+    expect(JSON.stringify(updates)).toContain('Returned complete function: TasksStrip')
     const cache = (entry.context as unknown as ReturnType<typeof createContext>).readFileState
     expect(cache.has(entry.requested)).toBe(false)
     expect(cache.get(entry.actual)?.isPartialView).toBe(true)

@@ -1152,7 +1152,14 @@ function functionResolutionNotice(
   data: Extract<Output, { type: 'text' }>,
 ): string {
   const resolution = data.file.functionResolution!
-  return `FUNCTION-ONLY resolved read. Requested file does not exist: ${JSON.stringify(resolution.requestedPath)}. Exact symbol: ${JSON.stringify(resolution.symbol)}. Actual source: ${JSON.stringify(data.file.filePath)}, lines ${data.file.startLine} to ${resolution.endLine}. Only this complete function definition was returned, not the containing file. This does not authorize a whole-file Write or Delete.\n\n`
+  return [
+    `Requested file not found: ${JSON.stringify(resolution.requestedPath)}`,
+    `Returned complete function: ${resolution.symbol}`,
+    `Source: ${JSON.stringify(data.file.filePath)}, lines ${data.file.startLine}–${resolution.endLine}`,
+    'The rest of the file is not included.',
+    '',
+    '',
+  ].join('\n')
 }
 
 async function resolveMissingFunctionRead(
