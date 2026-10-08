@@ -2,14 +2,31 @@
  * P4-6b — session-actions domain unit tests. Exercises the domain's fail-closed
  * wrapping + result shaping over an INJECTED fake executor (no real transcript on
  * disk). The engine-op round-trip (saveCustomTitle / renderMessagesToPlainText /
- * createFork) is not re-proven here — the seam is the boundary these tests hold.
+ * createFork) is covered through its real persistence path below; most other
+ * engine-op round-trips use the injected executor seam.
  */
 
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { randomUUID } from 'crypto'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import {
+  getSessionId,
+  getSessionProjectDir,
+  switchSession,
+} from '../../src/bootstrap/state.js'
 import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import { asSessionId } from '../../src/types/ids.js'
 import type { LogOption, SerializedMessage } from '../../src/types/logs.js'
 import type { Message } from '../../src/types/message.js'
 import type { InterruptedTurnRecordV1 } from '../../src/utils/interruptedTurn.js'
+import { createAssistantMessage, createUserMessage } from '../../src/utils/messages.js'
+import {
+  loadTranscriptFile,
+  recordTranscript,
+  resetProjectForTesting,
+} from '../../src/utils/sessionStorage.js'
 import {
   createRealSessionActionsExecutor,
   createSidecarSessionActionsDomain,
@@ -486,5 +503,63 @@ describe('sessionActionsDomain — read-only actions never resume', () => {
     expect(seen.customTitle).toBe('Fixture conversation')
     expect(storedInterruptedTurn).toEqual(fixtureInterruptedTurn())
     expect(sessionStartHookRuns).toBe(0)
+  })
+})
+
+describe('sessionActionsDomain — whole-conversation fork durability', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  const originalPersistenceFlag = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+  let tempDir: string
+  let sessionId: string
+
+  beforeEach(() => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    tempDir = mkdtempSync(join(tmpdir(), 'session-action-fork-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), tempDir)
+    resetProjectForTesting()
+  })
+
+  afterEach(async () => {
+    resetProjectForTesting()
+    switchSession(asSessionId(originalSessionId), originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+    if (originalPersistenceFlag === undefined) {
+      delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    } else {
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = originalPersistenceFlag
+    }
+  })
+
+  test('waits for the controller and durably forks the latest produced conversation', async () => {
+    const user = createUserMessage({ content: 'persisted prompt' })
+    const earlierAssistant = createAssistantMessage({ content: 'earlier response' })
+    const latestAssistant = createAssistantMessage({ content: 'latest response' })
+    let idleResolved = false
+    const controller = {
+      async waitUntilIdle() {
+        await recordTranscript([user, earlierAssistant, latestAssistant])
+        idleResolved = true
+      },
+    } as unknown as AppSessionController
+
+    const executor = createRealSessionActionsExecutor({ tools: [], controller })
+    const result = await executor.branch()
+    const { messages } = await loadTranscriptFile(result.forkPath)
+    const forkedMessages = [...messages.values()]
+
+    expect(idleResolved).toBe(true)
+    expect(forkedMessages.map(message => message.uuid)).toEqual([
+      user.uuid,
+      earlierAssistant.uuid,
+      latestAssistant.uuid,
+    ])
+    expect(forkedMessages.some(message =>
+      message.type === 'assistant' &&
+      message.message.content.some(
+        block => block.type === 'text' && block.text === 'latest response',
+      ),
+    )).toBe(true)
   })
 })

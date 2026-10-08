@@ -455,13 +455,13 @@ describe('sidebar session actions', () => {
   test('live rows have the trimmed ordered menu and a neutral archive below one divider', () => {
     const items = sidebar()
     expect(items.map(item => item.kind)).toEqual([
-      'rename', 'fork', 'close', 'copy-session-id', 'archive',
+      'rename', 'fork', 'peer-wake-blocked', 'close', 'copy-session-id', 'archive',
     ])
     expect(items.map(item => item.section)).toEqual([
-      'primary', 'primary', 'primary', 'primary', 'transfer',
+      'primary', 'primary', 'primary', 'primary', 'primary', 'transfer',
     ])
     expect(items.every(item => item.enabled && !item.danger && !item.flyout)).toBe(true)
-    expect(items[3]?.label).toBe('Copy session ID')
+    expect(items[4]?.label).toBe('Copy session ID')
   })
 
   test('closed and terminal-history rows omit Close and keep live-engine reasons', () => {
@@ -471,21 +471,57 @@ describe('sidebar session actions', () => {
     ]) {
       const items = sidebar(r)
       expect(items.map(item => item.kind)).toEqual([
-        'rename', 'fork', 'copy-session-id', 'archive',
+        'rename', 'fork', 'peer-wake-blocked', 'copy-session-id', 'archive',
       ])
       expect(items.slice(0, 2).every(item => !item.enabled && item.reason)).toBe(true)
       expect(items[0]?.reason).toBe(items[1]?.reason)
-      expect(items.slice(2).every(item => item.enabled)).toBe(true)
+      expect(items[2]).toMatchObject({
+        kind: 'peer-wake-blocked',
+        enabled: r.appSessionId !== null,
+        checked: false,
+      })
+      expect(items.slice(3).every(item => item.enabled)).toBe(true)
     }
     expect(sidebar(row(), false, false).slice(0, 2).every(item => !item.enabled)).toBe(true)
   })
 
-  test('archived rows offer only Unarchive and the engine ID copy', () => {
-    expect(sidebar(row(), true).map(item => item.kind)).toEqual([
-      'unarchive', 'copy-session-id',
+  test('archived rows retain the peer-reopen setting with Unarchive and engine ID copy', () => {
+    const archived = sidebar(row({ peerWakeBlocked: true }), true)
+    expect(archived.map(item => item.kind)).toEqual([
+      'unarchive', 'copy-session-id', 'peer-wake-blocked',
     ])
-    expect(sidebar(row({ sessionId: 'app-1' }))[3]).toMatchObject({
+    expect(archived[2]).toMatchObject({
+      label: 'Don’t let peers reopen',
+      enabled: true,
+      checked: true,
+    })
+    expect(sidebar(row({ sessionId: 'app-1' }))[4]).toMatchObject({
       kind: 'copy-session-id', enabled: false, reason: 'Wait for this session to connect.',
+    })
+  })
+
+  test('Fork waits for the active turn while the standing peer control remains available', () => {
+    const resolved = resolveSessionActions(row(), {
+      isActiveOpen: true,
+      hasActiveTurn: true,
+    })
+    const items = selectSidebarSessionActions(
+      resolved,
+      row(),
+    )
+    const waitingReason =
+      'Wait for this response to finish. The saved transcript is still being updated.'
+    expect(byKind(items).get('fork')).toMatchObject({
+      enabled: false,
+      reason: waitingReason,
+    })
+    expect(byKind(resolved).get('export')).toMatchObject({
+      enabled: false,
+      reason: waitingReason,
+    })
+    expect(byKind(items).get('peer-wake-blocked')).toMatchObject({
+      enabled: true,
+      checked: false,
     })
   })
 

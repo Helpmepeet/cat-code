@@ -160,8 +160,8 @@ const DEFER = {
   // Says the surprising half (why it is moot here), not the obvious half.
   notTracked:
     'Open this session here first. Peers can only reopen sessions opened in this app.',
-  exporting:
-    'Wait for this response to finish before exporting. The saved transcript is still being updated.',
+  updatingTranscript:
+    'Wait for this response to finish. The saved transcript is still being updated.',
 } as const
 
 /**
@@ -310,7 +310,9 @@ export function resolveSessionActions(
       label: 'Export…',
       section: 'transfer',
       enabled: exportable,
-      ...(exportable ? {} : { reason: live ? DEFER.exporting : DEFER.notLive }),
+      ...(exportable
+        ? {}
+        : { reason: live ? DEFER.updatingTranscript : DEFER.notLive }),
     },
     ...(tracked && (row.binding?.kind === 'managed' || row.canMoveBack)
       ? [{
@@ -377,22 +379,28 @@ export function selectSidebarSessionActions(
       ? { reason: 'Wait for this session to connect.' }
       : {}),
   }
+  const peerWakeBlocked = items.find(item => item.kind === 'peer-wake-blocked')
   if (archived) {
     return [
       { kind: 'unarchive', label: 'Unarchive', section: 'primary', enabled: true },
       copy,
+      ...(peerWakeBlocked ? [peerWakeBlocked] : []),
     ]
   }
   const rename = items.find(item => item.kind === 'rename')
+  const exportAction = items.find(item => item.kind === 'export')
   return [
     ...(rename ? [rename] : []),
     {
       kind: 'fork',
       label: 'Fork',
       section: 'primary',
-      enabled: rename?.enabled === true,
-      ...(rename?.enabled ? {} : { reason: rename?.reason ?? DEFER.notLive }),
+      enabled: exportAction?.enabled === true,
+      ...(exportAction?.enabled
+        ? {}
+        : { reason: exportAction?.reason ?? DEFER.notLive }),
     },
+    ...(peerWakeBlocked ? [peerWakeBlocked] : []),
     ...(row.live
       ? [{ kind: 'close' as const, label: 'Close', section: 'primary' as const, enabled: true }]
       : []),

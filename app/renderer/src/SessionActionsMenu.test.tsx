@@ -35,6 +35,27 @@ test('sidebar menus render the proposed glyphs and only the archive divider, wit
   }
 })
 
+test('sidebar peer-reopen setting stays accessible and checked on archived rows', () => {
+  const target = row({ peerWakeBlocked: true })
+  const items = selectSidebarSessionActions(
+    resolveSessionActions(target, { isActiveOpen: false }),
+    target,
+    true,
+  )
+  const html = renderToStaticMarkup(
+    <SessionActionsMenu
+      items={items}
+      anchor={{ top: 40, bottom: 58, left: 80 }}
+      onAction={noop}
+      onClose={noop}
+    />,
+  )
+
+  expect(html).toContain('Don’t let peers reopen')
+  expect(html).toContain('role="menuitemcheckbox"')
+  expect(html).toContain('aria-checked="true"')
+})
+
 function row(overrides: Partial<MergedSessionRow> = {}): MergedSessionRow {
   return {
     sessionId: 'engine-1',
