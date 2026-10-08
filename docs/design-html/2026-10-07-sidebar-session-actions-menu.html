@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidebar session actions</title>
+<style>
+@font-face{font-family:'DM Sans';src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');font-weight:100 1000}
+
+/* ── chrome (x-) ───────────────────────────────────────────── */
+html,body{margin:0;background:#1b1b1d}
+.x-page{padding:28px 32px 60px;font-family:ui-monospace,Menlo,monospace;color:#8a8a8a}
+.x-grid{display:grid;grid-template-columns:repeat(2,560px);column-gap:48px;row-gap:0}
+.x-col{font-size:10px;letter-spacing:.14em;text-transform:uppercase;padding:0 0 10px}
+.x-state{grid-column:1/-1;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;border-top:1px solid #333;padding:14px 0 12px;margin-top:22px}
+.x-cell{height:470px;position:relative}
+.x-cell.x-short{height:250px}
+
+/* ── specimen (app tokens, theme.css dark) ─────────────────── */
+.app{
+  --accent:#f472b6;--accent-rgb:244 114 182;--accent-soft:#f9a8d4;
+  --tone-good:#4ade80;--tone-danger:#f87171;
+  --shell-chrome:#070709;--shell-seam:rgba(255,255,255,.06);
+  --surface-panel:#0a0a0c;
+  --text-primary:#f4f4f5;--text-muted:#a1a1aa;--text-subtle:#98989f;--text-faint:#838389;--text-ghost:#75757b;
+  --elev-menu:0 18px 44px rgba(0,0,0,.6);
+  position:absolute;inset:0;background:#000;font-family:'DM Sans',-apple-system,sans-serif;
+}
+.app svg{display:block}
+.rail{position:absolute;left:0;top:0;bottom:0;width:240px;background:var(--surface-panel);border-right:1px solid rgba(255,255,255,.05);padding:10px 8px;box-sizing:border-box}
+.grp{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 5px;margin-bottom:2px}
+.grp .ic{color:var(--text-subtle);width:12px;height:12px;display:flex}
+.grp .ic svg{width:12px;height:12px}
+.grp .nm{font-size:12px;font-weight:500;color:var(--text-muted)}
+.row{position:relative;display:flex;align-items:center;gap:7px;border:1px solid transparent;border-radius:5px;padding:5.5px 6px 5.5px 5px;margin-bottom:1px}
+.row.hover{border-color:rgb(var(--accent-rgb)/.22);background:rgb(var(--accent-rgb)/.07)}
+.row.active{border-color:rgb(var(--accent-rgb)/.18);background:rgb(var(--accent-rgb)/.09)}
+.lane{display:flex;align-items:center;width:6px;height:17px;flex-shrink:0}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--tone-good);box-shadow:0 0 0 2.5px rgb(74 222 128/.18)}
+.ttl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;line-height:17px;color:var(--text-muted)}
+.row.hover .ttl{color:var(--text-primary)}
+.row.active .ttl{font-weight:500;color:#fce7f3}
+.row.arch .ttl{color:var(--text-faint)}
+.more{border-radius:6px;padding:4px 8px;font-size:11px;font-weight:500;color:var(--text-faint);margin-top:4px}
+.more.hov{background:rgba(255,255,255,.045);color:var(--text-muted)}
+.acts{position:absolute;top:0;bottom:0;right:4px;display:flex;align-items:center;gap:2px;padding-left:14px;
+  background-image:linear-gradient(90deg,rgb(var(--accent-rgb)/0),rgb(var(--accent-rgb)/.07) 14px),linear-gradient(90deg,rgb(10 10 12/0),var(--surface-panel) 14px)}
+.row.active .acts{background-image:linear-gradient(90deg,rgb(var(--accent-rgb)/0),rgb(var(--accent-rgb)/.09) 14px),linear-gradient(90deg,rgb(10 10 12/0),var(--surface-panel) 14px)}
+.ab{width:22px;height:22px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-subtle)}
+.ab.on{background:rgb(var(--accent-rgb)/.16);color:var(--accent-soft)}
+.ab.pin{color:var(--text-faint)}
+
+.menu{position:absolute;width:232px;box-sizing:border-box;border:1px solid var(--shell-seam);border-radius:11px;background:var(--shell-chrome);padding:6px;box-shadow:var(--elev-menu)}
+.mi{display:flex;align-items:center;gap:8px;border-radius:6px;padding:6px 10px;font-size:12.5px;color:var(--text-muted)}
+.mi .g{display:flex;color:var(--text-subtle);flex-shrink:0}
+.mi .l{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mi .t{display:flex;color:var(--text-ghost)}
+.mi .ck{display:flex;color:var(--accent)}
+.mi.off{color:rgb(152 152 159/.7)}
+.mi.off .g{color:inherit}
+.mi.danger,.mi.danger .g{color:var(--tone-danger)}
+.mi.hl{background:rgba(255,255,255,.05);color:var(--text-primary)}
+.sep{height:1px;margin:4px 0;background:var(--shell-seam)}
+.lbl{padding:7px 10px 3px;font-size:9.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-ghost)}
+
+.confirm{position:absolute;width:232px;box-sizing:border-box;border:1px solid var(--shell-seam);border-radius:11px;background:var(--shell-chrome);padding:10px;box-shadow:var(--elev-menu)}
+.confirm .q{font-size:12.5px;font-weight:500;color:var(--text-primary);line-height:17px}
+.confirm .d{font-size:12px;color:var(--text-subtle);line-height:16px;margin-top:4px}
+.confirm .bs{display:flex;justify-content:flex-end;gap:6px;margin-top:10px}
+.btn{font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--shell-seam);color:var(--text-muted)}
+.btn.dg{border-color:rgb(248 113 113/.35);background:rgb(248 113 113/.12);color:var(--tone-danger)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></symbol>
+    <symbol id="i-rename" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M8.6 3.6A6 6 0 0 1 18 8c0 2.4.5 4.2 1.2 5.5"/><path d="M6 8a6 6 0 0 1 .1-1.2M6 8c0 5-2 6-2 6h12.5"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/><path d="M2.5 2.5l19 19"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-meta" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></symbol>
+    <symbol id="i-move" viewBox="0 0 24 24"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+    <symbol id="i-rewind" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></symbol>
+  </defs>
+</svg>
+
+<div class="x-page">
+  <div class="x-grid">
+    <div class="x-col">Current</div>
+    <div class="x-col">Proposed</div>
+
+    <div class="x-state">Open tab · live</div>
+    <!-- CURRENT · open tab -->
+    <div class="x-cell"><div class="app" data-v="cur-open"></div></div>
+    <!-- PROPOSED · open tab -->
+    <div class="x-cell"><div class="app" data-v="new-open"></div></div>
+
+    <div class="x-state">Closed session</div>
+    <div class="x-cell"><div class="app" data-v="cur-closed"></div></div>
+    <div class="x-cell"><div class="app" data-v="new-closed"></div></div>
+
+    <div class="x-state">Archived · collapsed</div>
+    <div class="x-cell"></div>
+    <div class="x-cell"><div class="app" data-v="new-arch-closed"></div></div>
+
+    <div class="x-state">Archived · open</div>
+    <div class="x-cell"></div>
+    <div class="x-cell"><div class="app" data-v="new-arch-open"></div></div>
+
+  </div>
+</div>
+
+<script>
+const ic = (id, s = 15, w = '1.9') =>
+  `<svg width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"><use href="#${id}"/></svg>`
+const kebab = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>`
+const pin = ic('i-pin', 12, '2')
+const folder = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg>`
+
+const ARCH = ['Archived session one', 'Archived session two', 'Archived session three']
+const TITLES = ['Session title one', 'Session title two', 'Session title three', 'Session title four', 'Session title five', 'Session title six']
+
+// target: index of the row whose menu is open; live set; active index; actions: 'cur' | 'new'
+function rail({ target, live, active, acts, archived }) {
+  const rows = TITLES.map((t, i) => {
+    const cls = i === active ? 'row active' : i === target ? 'row hover' : 'row'
+    const dot = live.includes(i) ? '<span class="dot"></span>' : ''
+    let a = ''
+    if (i === target) {
+      a = acts === 'cur'
+        ? `<div class="acts"><span class="ab on">${kebab}</span><span class="ab pin">${pin}</span></div>`
+        : `<div class="acts"><span class="ab on">${kebab}</span></div>`
+    }
+    return `<div class="${cls}"><span class="lane">${dot}</span><span class="ttl">${t}</span>${a}</div>`
+  }).join('')
+  let tail = ''
+  if (archived) {
+    tail = `<div class="more${archived.hover ? ' hov' : ''}">${ARCH.length} archived</div>`
+    if (archived.open) {
+      tail += ARCH.map((t, i) => {
+        const tgt = i === archived.target
+        const a = tgt ? `<div class="acts"><span class="ab on">${kebab}</span></div>` : ''
+        return `<div class="row arch${tgt ? ' hover' : ''}"><span class="lane"></span><span class="ttl">${t}</span>${a}</div>`
+      }).join('')
+    }
+  }
+  return `<div class="rail"><div class="grp"><span class="ic">${folder}</span><span class="nm">project-name</span></div>${rows}${tail}</div>`
+}
+
+const mi = (g, l, o = {}) =>
+  `<div class="mi${o.off ? ' off' : ''}${o.danger ? ' danger' : ''}${o.hl ? ' hl' : ''}"><span class="g">${ic(g)}</span><span class="l">${l}</span>${o.chev ? `<span class="t">${ic('i-chev')}</span>` : ''}${o.check ? `<span class="ck">${ic('i-check')}</span>` : ''}</div>`
+const sep = '<div class="sep"></div>'
+const lbl = t => `<div class="lbl">${t}</div>`
+
+// resolveSessionActions, as rendered today
+function curMenu(open) {
+  return [
+    mi('i-open', open ? 'Open' : 'Restore'),
+    mi('i-rename', 'Rename', { off: !open }),
+    mi('i-bell', 'Don’t let peers reopen'),
+    sep, lbl('View'),
+    ...(open ? [mi('i-eye', 'Show hidden messages')] : []),
+    mi('i-meta', 'Inspect metadata…', { off: !open }),
+    sep,
+    mi('i-copy', 'Copy', { off: !open, chev: open }),
+    mi('i-hash', 'Copy session ids'),
+    mi('i-export', 'Export…', { off: !open }),
+  ].join('')
+}
+
+function newMenu(open) {
+  return [
+    mi('i-rename', 'Rename'),
+    mi('i-branch', 'Fork'),
+    ...(open ? [mi('i-stop', 'Close')] : []),
+    mi('i-hash', 'Copy session ID'),
+    sep,
+    mi('i-archive', 'Archive'),
+  ].join('')
+}
+
+const V = {
+  'cur-open': rail({ target: 1, live: [1, 3], active: 1, acts: 'cur' }) +
+    `<div class="menu" style="top:72px;left:248px">${curMenu(true)}</div>`,
+  'new-open': rail({ target: 1, live: [1, 3], active: 1, acts: 'new' }) +
+    `<div class="menu" style="top:72px;left:248px">${newMenu(true)}</div>`,
+  'cur-closed': rail({ target: 2, live: [1, 3], active: 1, acts: 'cur' }) +
+    `<div class="menu" style="top:100px;left:248px">${curMenu(false)}</div>`,
+  'new-arch-closed': rail({ target: -1, live: [1, 3], active: 1, acts: 'new', archived: { open: false, hover: true } }),
+  'new-arch-open': rail({ target: -1, live: [1, 3], active: 1, acts: 'new', archived: { open: true, target: 1 } }) +
+    `<div class="menu" style="top:280px;left:248px">${mi('i-rewind', 'Unarchive')}${mi('i-hash', 'Copy session ID')}</div>`,
+  'new-closed': rail({ target: 2, live: [1, 3], active: 1, acts: 'new' }) +
+    `<div class="menu" style="top:100px;left:248px">${newMenu(false)}</div>`,
+}
+document.querySelectorAll('.app[data-v]').forEach(el => { el.innerHTML = V[el.dataset.v] })
+</script>
+</body>
+</html>

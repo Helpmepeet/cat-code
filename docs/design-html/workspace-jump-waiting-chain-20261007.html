@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cat Code: the waiting chain</title>
+  <style>
+    :root { color-scheme: light; --paper:#faf8f2; --ink:#30352f; --muted:#6e706a; --line:#d9d8cf; --red:#aa4936; --green:#426b51; --gold:#e3bc68; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { max-width:1120px; margin:auto; padding:38px 32px 42px; }
+    .x-label { color:#777972; font:10px ui-monospace,SFMono-Regular,monospace; letter-spacing:.12em; text-transform:uppercase; }
+    .x-header { display:flex; justify-content:space-between; gap:16px; margin-bottom:18px; }
+    .x-section { border-top:1px solid var(--line); padding-top:20px; margin-top:36px; }
+    .x-section-label { display:flex; gap:12px; align-items:center; margin-bottom:24px; }
+    .x-footer { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; border-top:1px solid var(--line); margin-top:38px; padding-top:18px; }
+    h1 { font-size:clamp(32px,4vw,50px); letter-spacing:-.045em; line-height:1.1; margin:0 0 30px; font-weight:730; }
+    h2,h3,p { margin:0; }
+    .chain { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+    .node { flex:1; text-align:center; min-width:0; }
+    .node h2 { font-size:21px; letter-spacing:-.025em; margin-top:8px; }
+    .node p { color:var(--muted); font-size:15px; margin-top:7px; }
+    .node .problem { color:var(--red); font-weight:650; }
+    .icon { width:100%; max-width:170px; height:160px; display:block; margin:auto; overflow:visible; }
+    .connector { width:44px; flex-shrink:0; height:160px; display:flex; align-items:center; }
+    .connector svg { width:100%; height:38px; overflow:visible; }
+    .measurements { display:grid; grid-template-columns:1fr 1fr; gap:40px; margin-top:30px; padding-top:24px; border-top:1px solid var(--line); }
+    .measurement { display:flex; align-items:center; gap:20px; }
+    .measurement svg { width:64px; height:64px; flex-shrink:0; }
+    .number { font-size:clamp(30px,4vw,42px); font-weight:730; letter-spacing:-.05em; line-height:1.1; }
+    .measurement p { margin-top:6px; font-size:15px; color:var(--muted); }
+    .measurement .red-number { color:var(--red); }
+    .measurement .green-number { color:var(--green); }
+    .comparison { display:grid; grid-template-columns:1fr 1fr; gap:48px; }
+    .comparison figure { margin:0; }
+    .comparison h2 { font-size:22px; letter-spacing:-.025em; margin-bottom:12px; }
+    .comparison svg { display:block; width:100%; height:auto; }
+    .comparison .number { margin-top:10px; }
+    .comparison p { font-size:15px; color:var(--muted); margin-top:5px; }
+    .uncertain { margin-top:28px; display:flex; align-items:center; gap:18px; }
+    .uncertain svg { width:84px; height:70px; flex-shrink:0; }
+    .uncertain h3 { font-size:18px; }
+    .uncertain p { color:var(--muted); font-size:14px; margin-top:5px; }
+    .repairs { display:grid; grid-template-columns:1fr 1fr; gap:48px; }
+    .repair h2 { font-size:22px; letter-spacing:-.025em; margin-bottom:12px; }
+    .repair svg { width:100%; height:auto; display:block; }
+    .repair-labels { display:flex; justify-content:space-between; gap:12px; font-size:14px; color:var(--muted); margin-top:8px; }
+    @media (max-width:720px) {
+      main { padding:26px 20px 30px; }
+      .x-header { flex-wrap:wrap; }
+      .chain { flex-direction:column; align-items:stretch; gap:0; }
+      .node { display:grid; grid-template-columns:130px 1fr; grid-template-rows:1fr 1fr; text-align:left; column-gap:22px; }
+      .node .icon { grid-row:1/3; height:120px; width:130px; }
+      .node h2 { align-self:end; margin:0; }
+      .node p { align-self:start; margin-top:8px; }
+      .connector { height:42px; width:130px; justify-content:center; }
+      .connector svg { width:32px; height:32px; transform:rotate(90deg); }
+      .measurements,.comparison,.repairs { grid-template-columns:1fr; gap:30px; }
+      .comparison svg,.repair svg { max-width:480px; }
+      .measurement { gap:16px; }
+      .x-section { margin-top:30px; }
+    }
+    @media print { main { padding:20px; } .x-section { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <symbol id="cat" viewBox="0 0 160 150">
+        <path d="M31 60 L24 13 L62 39 Q79 34 96 41 L135 13 L128 66 Q141 139 80 141 Q15 137 31 60Z" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#e3bc68"/>
+        <path d="M48 76 H56 M104 76 H112 M69 96 L80 103 L91 96 M80 103 V115 M35 95 L8 87 M35 110 L9 115 M125 95 L151 87 M125 110 L151 115" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </symbol>
+      <symbol id="clipboard" viewBox="0 0 160 150">
+        <rect x="37" y="22" width="86" height="117" rx="5" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#faf8f2"/>
+        <rect x="59" y="13" width="42" height="23" rx="3" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#e3bc68"/>
+        <path d="M55 60 L62 66 L72 53 M55 88 L62 94 L72 81 M85 60 H106 M85 88 H106 M55 117 H106" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </symbol>
+      <symbol id="bell" viewBox="0 0 160 150">
+        <path d="M80 23 V12 M37 104 Q49 88 49 61 Q49 31 80 31 Q111 31 111 61 Q111 88 123 104Z" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#e3bc68"/>
+        <path d="M68 114 Q80 132 92 114" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <path d="M20 50 L32 58 M129 57 L142 49" stroke="#aa4936" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <path d="M121 17 L151 47 M151 17 L121 47" stroke="#aa4936" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </symbol>
+      <symbol id="robot" viewBox="0 0 160 150">
+        <path d="M80 15 V34" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="80" cy="12" r="7" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#d8ded2"/>
+        <rect x="25" y="36" width="110" height="101" rx="8" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#d8ded2"/>
+        <path d="M12 72 V105 M148 72 V105 M53 74 V84 M107 74 V84 M59 113 H101" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </symbol>
+      <symbol id="folder" viewBox="0 0 160 150">
+        <path d="M20 45 V30 H66 L82 47 H140 V125 H20Z" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#e3bc68"/><path d="M20 61 H140" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <path d="M61 91 L75 105 L102 77" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </symbol>
+      <symbol id="sheet" viewBox="0 0 50 60">
+        <path d="M5 4 H32 L45 17 V56 H5Z" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#faf8f2"/>
+        <path d="M32 4 V17 H45 M15 29 H34 M15 41 H34" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </symbol>
+      <symbol id="arrow" viewBox="0 0 44 38"><path d="M2 19 H38 M28 9 L38 19 L28 29" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+      <symbol id="clock" viewBox="0 0 70 70"><circle cx="35" cy="35" r="29" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#faf8f2"/><path d="M35 16 V35 L49 42" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    </defs>
+  </svg>
+  <main>
+    <header class="x-header">
+      <span class="x-label">Cat Code · picture explainer</span>
+      <span class="x-label">07 Oct 2026 · investigation</span>
+    </header>
+    <h1>The waiting chain</h1>
+    <section aria-label="The confirmed startup delay">
+      <div class="chain">
+        <div class="node">
+          <svg class="icon" viewBox="0 0 160 150" role="img" aria-label="Cat Code waiting"><use href="#cat"/></svg>
+          <h2>Cat Code</h2><p>Project context</p>
+        </div>
+        <div class="connector" aria-hidden="true"><svg viewBox="0 0 44 38"><use href="#arrow"/></svg></div>
+        <div class="node">
+          <svg class="icon" viewBox="0 0 160 150" role="img" aria-label="Git checking project files"><use href="#clipboard"/></svg>
+          <h2>Git</h2><p>File check</p>
+        </div>
+        <div class="connector" aria-hidden="true"><svg viewBox="0 0 44 38"><use href="#arrow"/></svg></div>
+        <div class="node">
+          <svg class="icon" viewBox="0 0 160 150" role="img" aria-label="macOS file watcher with a delayed acknowledgement"><use href="#bell"/></svg>
+          <h2>macOS watcher</h2><p class="problem">Delayed reply</p>
+        </div>
+        <div class="connector" aria-hidden="true"><svg viewBox="0 0 44 38"><path d="M2 19 H42" stroke="#999b93" stroke-width="3" stroke-dasharray="4 5"/><path d="M14 10 L30 28 M30 10 L14 28" stroke="#aa4936" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></div>
+        <div class="node">
+          <svg class="icon" viewBox="0 0 160 150" role="img" aria-label="AI with no request yet"><use href="#robot"/></svg>
+          <h2>AI</h2><p>Request pending</p>
+        </div>
+      </div>
+      <div class="measurements" aria-label="Eight isolated Git probes, using a two-second timeout">
+        <div class="measurement">
+          <svg viewBox="0 0 70 70" role="img" aria-label="Watcher wait"><use href="#clock"/></svg>
+          <div><div class="number red-number">6 / 8 stalls</div><p>Watcher path · 2 sec cutoff</p></div>
+        </div>
+        <div class="measurement">
+          <svg viewBox="0 0 70 70" role="img" aria-label="Direct checks completed"><path d="M12 36 L28 52 L58 17" stroke-width="6" stroke="#30352f" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          <div><div class="number green-number">8–20 ms</div><p>Direct checks · all eight</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="x-section" aria-label="Confirmed analytics file churn and its unproven relationship to the original failure">
+      <div class="x-section-label"><span class="x-label">02</span><span class="x-label">Synthetic journal probe · confirmed</span></div>
+      <div class="comparison">
+        <figure>
+          <h2>Current analytics writes</h2>
+          <svg viewBox="0 0 460 170" role="img" aria-label="Many journal files repeatedly created and deleted">
+            <use href="#sheet" x="8" y="48" width="50" height="60"/><use href="#sheet" x="32" y="28" width="50" height="60"/><use href="#sheet" x="56" y="8" width="50" height="60"/>
+            <use href="#sheet" x="119" y="64" width="50" height="60"/><use href="#sheet" x="143" y="44" width="50" height="60"/><use href="#sheet" x="167" y="24" width="50" height="60"/>
+            <use href="#arrow" x="242" y="66" width="44" height="38"/>
+            <path d="M335 49 H423 M347 49 L352 145 H406 L411 49 M363 49 V34 H395 V49 M366 67 V125 M391 67 V125" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <path d="M294 20 L312 38 M312 20 L294 38" stroke="#aa4936" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          <div class="number">3,072</div><p>Journal deletions · 3,072 writes</p>
+        </figure>
+        <figure>
+          <h2>Tested batches</h2>
+          <svg viewBox="0 0 460 170" role="img" aria-label="Grouped writes reuse a persistent journal">
+            <use href="#sheet" x="8" y="48" width="50" height="60"/><use href="#sheet" x="32" y="28" width="50" height="60"/><use href="#sheet" x="56" y="8" width="50" height="60"/>
+            <path d="M7 131 H109 M7 119 V131 M109 119 V131" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <use href="#arrow" x="145" y="66" width="44" height="38"/>
+            <use href="#sheet" x="242" y="40" width="75" height="90"/>
+            <path d="M337 116 Q395 107 395 66 Q395 30 351 31 M363 20 L351 31 L364 42" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          <div class="number">0</div><p>Journal deletions · 3,072 writes</p>
+        </figure>
+      </div>
+      <div class="uncertain">
+        <svg viewBox="0 0 100 80" role="img" aria-label="Question mark over the link to macOS watcher failure"><path d="M5 59 H92" stroke="#85887e" stroke-width="3" stroke-dasharray="5 6"/><path d="M37 20 Q37 6 53 6 Q69 6 69 20 Q69 28 56 34 V41" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="56" cy="49" r="2.5" fill="#30352f"/></svg>
+        <div><h3>Original trigger: unknown</h3><p>Stalls even without analytics writes</p></div>
+      </div>
+    </section>
+
+    <section class="x-section" aria-label="Proposed repairs, not installed">
+      <div class="x-section-label"><span class="x-label">03</span><span class="x-label">Proposed repairs · not installed</span></div>
+      <div class="repairs">
+        <div class="repair">
+          <h2>1. A direct route</h2>
+          <svg viewBox="0 0 460 190" role="img" aria-label="Optional Git context bypasses the watcher, with a short deadline so chat can proceed">
+            <use href="#cat" x="0" y="35" width="110" height="110"/>
+            <use href="#arrow" x="119" y="74" width="40" height="35"/>
+            <use href="#folder" x="168" y="34" width="118" height="110"/>
+            <use href="#arrow" x="303" y="74" width="40" height="35"/>
+            <use href="#robot" x="350" y="35" width="110" height="110"/>
+            <use href="#clock" x="248" y="121" width="47" height="47"/>
+          </svg>
+          <div class="repair-labels"><span>Watcher bypass</span><span>Short deadline</span></div>
+        </div>
+        <div class="repair">
+          <h2>2. Fewer file changes</h2>
+          <svg viewBox="0 0 460 190" role="img" aria-label="Bounded groups of writes reuse a journal, reducing disk churn">
+            <use href="#sheet" x="14" y="63" width="50" height="60"/><use href="#sheet" x="37" y="43" width="50" height="60"/><use href="#sheet" x="60" y="23" width="50" height="60"/>
+            <path d="M12 146 H115 M12 134 V146 M115 134 V146" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <use href="#arrow" x="144" y="74" width="40" height="35"/>
+            <rect x="208" y="29" width="93" height="113" rx="5" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="#d8ded2"/>
+            <path d="M228 55 H280 M228 77 H280 M228 99 H280 M228 121 H280" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <path d="M323 140 Q384 135 384 88 Q384 39 332 40 M343 29 L332 40 L344 51" stroke="#30352f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          <div class="repair-labels"><span>256-row batches</span><span>Journal reuse</span></div>
+        </div>
+      </div>
+    </section>
+    <footer class="x-footer">
+      <span class="x-label">Original gap: 155 sec · cause inferred</span>
+      <span class="x-label">Reproduced Git wait: 33.7 sec</span>
+    </footer>
+  </main>
+</body>
+</html>
