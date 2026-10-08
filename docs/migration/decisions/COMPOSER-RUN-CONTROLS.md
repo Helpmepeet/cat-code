@@ -152,7 +152,7 @@ Its settled visual and exact hover label remain unchanged.
 | Codex/GPT, including GPT requests from an Anthropic-labelled session | 24 hours | Conservative retention-policy lead: the public SDK describes `prompt_cache_retention: "24h"` as a maximum policy, independently of the newer 30-minute minimum TTL. A captured Codex response also echoes `24h`. This is not a verified per-entry deadline for the current ChatGPT backend; it may evict much sooner. Eligible input is at least 1,024 tokens. |
 | First-party Claude | Configured 5 minutes or 1 hour | Live duration comes from the engine's own `getCacheControl({querySource:"sdk"})`, not the Codex policy. Cache-read/write usage must be observed. Reported one-hour writes take precedence over a shorter hint. Matching requests outside this session can refresh shared prefixes, so the display remains an estimate. |
 | Bedrock, Vertex and Foundry Claude | Same engine-selected 5-minute/1-hour duration when model identity and usage can be matched | Bedrock's one-hour environment opt-in is honored by the existing engine helper. Cloud isolation/routing can change reuse; no new cloud-provider usage probe was made. Canonical model names must match the actual response. Unknown deployment aliases remain unavailable. |
-| Historical Claude responses | Reported write TTL, otherwise conservative 1 hour | A cache-read count alone does not state its TTL. The longer fallback avoids inventing a five-minute expiry for an old one-hour entry. |
+| Historical Claude responses with recorded supported-route evidence | Reported write TTL, otherwise conservative 1 hour | New requests record `cacheEstimateSupported` with their coherent run facts. Older Claude history without that evidence stays unknown, because a canonical model name cannot establish whether a custom endpoint served it. A cache-read count alone does not state its TTL. |
 | Custom endpoints, unmatched models and dynamic `opusplan` routing in Plan mode | Unknown | Model strings alone do not establish their current cache route. No clock until there is usable, correctly paired evidence. |
 
 Provider documentation:
@@ -188,6 +188,11 @@ It folds final usage rather than treating early zeros as a cache miss.
 Ordinary tool/user activity and subagent frames do not renew the live estimate.
 Model, effort, Fast or permission-mode changes, compaction, and account switches
 invalidate the old observation instead of carrying it to another request path.
+An invalidated pending stream remains marked through its stop, preventing late
+assistant blocks from restoring its estimate. Unusable terminal usage clears a
+superseded observation rather than leaving the older warning. Account invalidation
+covers command auth refreshes, both provider identities, and committed profile
+removal/sign-out notices; unavailable account identity is handled conservatively.
 
 The existing read-only snapshot carries `cacheExpiresAt` plus `cacheExpired`
 at snapshot time. Both are optional additions; there is no new inbound command
@@ -199,14 +204,21 @@ remain display-only after park/disconnect; they never arm a control.
 History uses the real API-response timestamp, not transcript length, file mtime,
 cache `writtenAt`, or session creation. The existing bounded run-facts reader
 excludes synthetic/error rows, invalid/future timestamps, model mismatches and
-compaction-preserved stale responses. For valid GPT rows with zero initial usage,
+compaction-preserved stale responses. A newer changed-settings `run_facts` record
+also excludes prior API activity and diagnostics. An explicit unknown canonical
+restore seed cannot be overridden by older initial-message evidence. For valid GPT rows with zero initial usage,
 it can use a completed matching-model stream-surface diagnostic from the same
 bounded tail. Prefix-only old diagnostics cannot distinguish same-model
 subagents, so that fallback is conservative matching-model activity in the owning
 transcript, not proof of main-thread reuse. Missing usable evidence stays unknown.
 
 Live resume seeds from these same facts; cached previews receive the optional
-deadline without a new model turn. The derived-facts stamp is 2. New cache writers
+deadline without a new model turn. The derived-facts stamp is 3; older deadlines
+remain hidden until enrichment applies the current pairing and route checks.
+If close-time context facts are incomplete, a validated model/deadline pair is
+persisted independently as `cacheObservation`. Preview hydration checks its model
+against the frames and preserves their context fallback instead of replacing it
+with a thin context header. New cache writers
 use `transcript-cache-v3`, because older readers reject the extra field and can
 delete an artifact they cannot parse. Reads fall back through v2 then v1; normal
 writes and startup GC leave old-generation copies untouched. Explicit session
@@ -214,13 +226,19 @@ removal still deletes all copies. Canonical transcripts, settings and credential
 are not migrated. The worker boundary accepts only the optional bounded numeric
 deadline in addition to its existing exact key list.
 
+The installed `b79a1dfb` app's actual validator was extracted and exercised without
+launching Electron: it accepts the old five-field facts and rejects the deadline
+extension. Its bundle uses v2 and does not access v3. This establishes the
+installed-reader reason for generation isolation; it is not a full installed-app
+rewrite or live transport test.
+
 ### Operator check
 
 No GUI launch or driving is authorized by this work. After choosing to run a
 live check, launch **Cat Code Dev** yourself:
 
 ```sh
-cd /Users/pt/cat-code && CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code CATCODE_DEBUG_STATE=1 bun run --cwd app dev
+cd /Users/pt/cat-code && CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code CATCODE_INITIAL_CWD=/Users/pt/cat-code CATCODE_DEBUG_STATE=1 bun run --cwd app dev
 ```
 
 Wait for `[main] renderer ready`. Open an existing GPT session whose last usable

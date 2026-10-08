@@ -8,6 +8,7 @@ import {
   type TranscriptCache,
 } from '../../shared/protocol.js'
 import { createConnectionState } from './connectionState.js'
+import { PROMPT_CACHE_ROUTE_FACTS_VERSION } from '../../shared/promptCacheEstimate.js'
 import { selectContextPercent } from './contextUsage.js'
 import { createPermissionState } from './permissionState.js'
 import {
@@ -872,6 +873,7 @@ test.each([
     header: {
       ...cache([]).header,
       writtenAt: Date.now(),
+      runFactsVersion: PROMPT_CACHE_ROUTE_FACTS_VERSION,
       runFacts: {
         model: 'gpt-5.6-terra',
         permissionMode: 'auto',
@@ -914,6 +916,32 @@ test('legacy header and frame fallbacks leave an unknown cache estimate omitted'
     contextWindow: 372_000,
   }
   expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+})
+
+test('an independent deadline preserves the frame-derived context and must match its model', () => {
+  const model = 'claude-sonnet-5'
+  const cached = cache([assistantFrame(model, 0, { input_tokens: 50_000 }), resultFrame(999_999)])
+  const before = projectPreviewTranscriptCache(cached).runFacts
+  cached.header.runFactsVersion = PROMPT_CACHE_ROUTE_FACTS_VERSION
+  cached.header.cacheObservation = { model, expiresAt: 1_735_819_200_000 }
+  const after = projectPreviewTranscriptCache(cached).runFacts
+  expect(after.cacheExpiresAt).toBe(1_735_819_200_000)
+  expect(after.contextUsage).toEqual(before.contextUsage)
+  expect(after.contextUsage?.usedTokens).toBe(50_000)
+  cached.header.cacheObservation.model = 'gpt-6.1-sol'
+  expect(projectPreviewTranscriptCache(cached).runFacts.cacheExpiresAt).toBeUndefined()
+})
+
+test.each(['claude-sonnet-5', 'gpt-6.1-sol'])('older %s cache metadata cannot establish current expiry evidence', model => {
+  const cached = cache([assistantFrame(model, 0)])
+  cached.header.runFacts = {
+    model, permissionMode: 'default', effort: null,
+    usedTokens: 2_048, contextWindow: 200_000, cacheExpiresAt: 1_735_819_200_000,
+  }
+  cached.header.runFactsVersion = PROMPT_CACHE_ROUTE_FACTS_VERSION - 1
+  expect(projectPreviewTranscriptCache(cached).runFacts.cacheExpiresAt).toBeUndefined()
+  cached.header.runFactsVersion = PROMPT_CACHE_ROUTE_FACTS_VERSION
+  expect(projectPreviewTranscriptCache(cached).runFacts.cacheExpiresAt).toBe(1_735_819_200_000)
 })
 
 test.each([-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '1735819200000'])(

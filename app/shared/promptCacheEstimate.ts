@@ -2,6 +2,7 @@ const MINUTE_MS = 60_000
 export const CODEX_CACHE_IDLE_ESTIMATE_MS = 24 * 60 * MINUTE_MS
 export const ANTHROPIC_CACHE_5M_MS = 5 * MINUTE_MS
 export const ANTHROPIC_CACHE_1H_MS = 60 * MINUTE_MS
+export const PROMPT_CACHE_ROUTE_FACTS_VERSION = 3
 
 export function isCacheExpiryTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0

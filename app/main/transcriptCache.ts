@@ -72,6 +72,7 @@ import {
   isReplayTruncationFrame,
 } from './replayBuffer.js'
 import { parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
+import { isCacheExpiryTimestamp, PROMPT_CACHE_ROUTE_FACTS_VERSION } from '../shared/promptCacheEstimate.js'
 
 /**
  * Guard-drift fast-path stamp. This is a NEW constant main OWNS (there is no
@@ -92,8 +93,9 @@ export const TRANSCRIPT_CACHE_GUARD_VERSION = 1
  *
  * 1: model, permissionMode, effort, usedTokens, contextWindow.
  * 2: estimated prompt-cache expiry from the latest real API response.
+ * 3: request-route evidence and settings-boundary pairing for cache expiry.
  */
-export const TRANSCRIPT_CACHE_RUN_FACTS_VERSION = 2
+export const TRANSCRIPT_CACHE_RUN_FACTS_VERSION = PROMPT_CACHE_ROUTE_FACTS_VERSION
 
 /**
  * Stamped for diagnostics only — reads gate on `protocolVersion` + `guardVersion`,
@@ -458,7 +460,19 @@ export function buildClosedSessionCache(
     deps.readCachedRunFacts(base.header.appSessionId, base.header.engineSessionId),
     read.authoritative,
   )
-  if (!runFacts) return base
+  if (!runFacts) {
+    const { model, cacheExpiresAt } = read.facts
+    return model !== null && cacheExpiresAt != null
+      ? {
+        ...base,
+        header: {
+          ...base.header,
+          cacheObservation: { model, expiresAt: cacheExpiresAt },
+          runFactsVersion: TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
+        },
+      }
+      : base
+  }
   return createTranscriptCache(
     base.header.appSessionId,
     base.header.engineSessionId,
@@ -890,6 +904,13 @@ function parseTranscriptCacheHeader(
       value.runFactsVersion < 0)
   ) {
     return null
+  }
+  if (value.cacheObservation !== undefined) {
+    const observation = value.cacheObservation
+    if (!isRecord(observation) || Object.keys(observation).length !== 2 ||
+      !isCacheExpiryTimestamp(observation.expiresAt) ||
+      typeof observation.model !== 'string' ||
+      parseTranscriptRunFacts({ ...EMPTY_RUN_FACTS, model: observation.model }) === null) return null
   }
   return value as unknown as TranscriptCacheHeader
 }

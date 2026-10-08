@@ -252,7 +252,11 @@ export function createSidecarRunControlsDomain(
   const listeners = new Set<() => void>()
   let unsubscribeStore: (() => void) | null = null
   let cacheObservation: { model: string; expiresAt: number } | null = null
-  let streamObservation: { model: string; usage: Record<string, unknown> } | null = null
+  let streamObservation: {
+    model: string
+    usage: Record<string, unknown>
+    invalidated: boolean
+  } | null = null
 
   function foldStreamUsage(part: unknown): void {
     if (!streamObservation || !part || typeof part !== 'object') return
@@ -288,7 +292,12 @@ export function createSidecarRunControlsDomain(
     }, null)
   }
 
-  function observeResponse(model: string | undefined, atMs: number, usage: unknown, live: boolean): boolean {
+  function supportedCacheRoute(model: string | null): boolean {
+    return model !== null &&
+      (resolveRequestProvider(model) !== 'firstParty' || isFirstPartyAnthropicBaseUrl())
+  }
+
+  function observeResponse(model: string | undefined, atMs: number, usage: unknown, live: boolean, terminal = false): boolean {
     const current = buildSnapshot(store.getState()).model.current
     if (!model || typeof model !== 'string' || model === SYNTHETIC_MODEL) return false
     if (requestModel(current) !== normalizeModelStringForAPI(model)) {
@@ -297,13 +306,18 @@ export function createSidecarRunControlsDomain(
       return changed
     }
     const provider = resolveRequestProvider(current)
-    if (provider === 'firstParty' && !isFirstPartyAnthropicBaseUrl()) return false
+    if (!supportedCacheRoute(current)) return false
     const ttl = live && provider !== 'openai'
       ? safe(() => getCacheControl({ querySource: 'sdk' }).ttl === '1h'
         ? ANTHROPIC_CACHE_1H_MS : ANTHROPIC_CACHE_5M_MS, undefined)
       : undefined
     const expiresAt = estimatePromptCacheExpiry(model, atMs, usage, ttl)
-    if (expiresAt === null) return false
+    if (expiresAt === null) {
+      if (!terminal) return false
+      const changed = cacheObservation !== null
+      cacheObservation = null
+      return changed
+    }
     const observedModel = normalizeModelStringForAPI(model)
     if (cacheObservation?.model === observedModel && cacheObservation.expiresAt === expiresAt) return false
     cacheObservation = { model: observedModel, expiresAt }
@@ -322,7 +336,9 @@ export function createSidecarRunControlsDomain(
       }
     }
   }
-  for (let i = initial.length - 1; i > historyFloor; i--) {
+  // A canonical reader's explicit unknown includes settings/route invalidation.
+  // Initial messages omit those records and must not override that decision.
+  for (let i = initial.length - 1; options.initialCacheObservation !== null && i > historyFloor; i--) {
     const message = initial[i]
     if (message?.type !== 'assistant' || message.isApiErrorMessage ||
       message.isInternalNoResponseSentinel || message.message.model === SYNTHETIC_MODEL) continue
@@ -335,12 +351,15 @@ export function createSidecarRunControlsDomain(
   }
   const cached = options.initialCacheObservation
   if (!cacheObservation && cached && isCacheExpiryTimestamp(cached.expiresAt) &&
+    supportedCacheRoute(buildSnapshot(store.getState()).model.current) &&
     requestModel(buildSnapshot(store.getState()).model.current) === normalizeModelStringForAPI(cached.model)) {
     cacheObservation = { model: normalizeModelStringForAPI(cached.model), expiresAt: cached.expiresAt }
   }
 
   function clearCacheEstimate(): void {
-    streamObservation = null
+    // Assistant blocks precede final usage. Keep the invalidated request marked
+    // until its stop or the next start so a late block cannot renew its estimate.
+    if (streamObservation) streamObservation.invalidated = true
     if (!cacheObservation) return
     cacheObservation = null
     for (const listener of listeners) listener()
@@ -348,7 +367,8 @@ export function createSidecarRunControlsDomain(
 
   function snapshot(): RunControlsSnapshot {
     const built = buildSnapshot(store.getState())
-    const cacheExpiresAt = cacheObservation && requestModel(built.model.current) === cacheObservation.model
+    const cacheExpiresAt = cacheObservation && supportedCacheRoute(built.model.current) &&
+      requestModel(built.model.current) === cacheObservation.model
       ? cacheObservation.expiresAt : null
     return {
       ...built,
@@ -402,19 +422,19 @@ export function createSidecarRunControlsDomain(
           if (!start || typeof start !== 'object' || Array.isArray(start)) return
           const body = start as Record<string, unknown>
           streamObservation = typeof body.model === 'string'
-            ? { model: body.model, usage: {} } : null
+            ? { model: body.model, usage: {}, invalidated: false } : null
           foldStreamUsage(body.usage)
         } else if (frame.type === 'message_delta') {
           foldStreamUsage(frame.usage)
           const delta = frame.delta
           if (delta && typeof delta === 'object' && 'stop_reason' in delta &&
-            typeof delta.stop_reason === 'string' && streamObservation &&
-            observeResponse(streamObservation.model, now(), streamObservation.usage, true)) {
+            typeof delta.stop_reason === 'string' && streamObservation && !streamObservation.invalidated &&
+            observeResponse(streamObservation.model, now(), streamObservation.usage, true, true)) {
             for (const listener of listeners) listener()
           }
         } else if (frame.type === 'message_stop') {
-          if (streamObservation &&
-            observeResponse(streamObservation.model, now(), streamObservation.usage, true)) {
+          if (streamObservation && !streamObservation.invalidated &&
+            observeResponse(streamObservation.model, now(), streamObservation.usage, true, true)) {
             for (const listener of listeners) listener()
           }
           streamObservation = null
@@ -422,7 +442,8 @@ export function createSidecarRunControlsDomain(
       } else if (message.type === 'system' && message.subtype === 'compact_boundary') {
         clearCacheEstimate()
       } else if (message.type === 'assistant' &&
-        observeResponse(message.message.model, now(), message.message.usage, true)) {
+        !streamObservation?.invalidated &&
+        observeResponse(message.message.model, now(), message.message.usage, true, streamObservation === null)) {
         for (const listener of listeners) listener()
       }
     },
@@ -548,7 +569,7 @@ export function createSidecarRunControlsDomain(
           if (next !== prev) {
             prev = next
             cacheObservation = null
-            streamObservation = null
+            if (streamObservation) streamObservation.invalidated = true
             for (const subscribed of listeners) subscribed()
           }
         })
@@ -576,6 +597,7 @@ function runControlSignature(state: AppState): string {
     state.effortValue ?? null,
     state.fastMode ?? false,
     state.toolPermissionContext.mode,
+    state.authVersion,
   ])
 }
 

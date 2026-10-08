@@ -120,6 +120,7 @@ export function readTranscriptRunFacts(
   const facts = { ...empty }
   let snapshot: RunFactsSnapshot | null = null
   let response: {
+    index: number
     model: string | null
     expiresAt: number | null
     canUseCodexSurface: boolean
@@ -167,10 +168,12 @@ export function readTranscriptRunFacts(
       record.subtype === 'run_facts'
     ) {
       snapshot = {
+        index: i,
         model: readString(record.model),
         permissionMode: readString(record.permissionMode),
         effort: readString(record.effort),
         contextWindow: readPositiveNumber(record.contextWindow),
+        cacheEstimateSupported: record.cacheEstimateSupported === true,
       }
       continue
     }
@@ -200,6 +203,7 @@ export function readTranscriptRunFacts(
         const model = readString(record.message.model)
         const responseAt = readResponseTimestamp(record.timestamp, now)
         response = {
+          index: i,
           model,
           expiresAt: model !== null && responseAt !== null
             ? estimatePromptCacheExpiry(model, responseAt, record.message.usage)
@@ -246,13 +250,17 @@ export function readTranscriptRunFacts(
   if (
     response !== null &&
     response.model !== null &&
-    response.model === facts.model
+    response.model === facts.model &&
+    (snapshot === null || snapshot.index < response.index) &&
+    (response.model.toLowerCase().startsWith('gpt-') || snapshot?.cacheEstimateSupported === true)
   ) {
     // This conditional scan reuses the same bounded tail. Completion diagnostics
     // can precede or follow assistant persistence, including the facts-loop exit.
     const expiresAt = response.expiresAt ??
       (response.canUseCodexSurface
-        ? readCompletedCodexExpiry(lines, compaction, response.model, now)
+        ? readCompletedCodexExpiry(lines, {
+          ...compaction, floor: Math.max(compaction.floor, snapshot?.index ?? 0),
+        }, response.model, now)
         : null)
     if (expiresAt !== null) facts.cacheExpiresAt = expiresAt
   }
@@ -420,10 +428,12 @@ const RUN_FACTS_MARKER = 'run_facts'
 
 /** One request's coherent facts, as the engine recorded them (`run_facts`). */
 type RunFactsSnapshot = {
+  index: number
   model: string | null
   permissionMode: string | null
   effort: string | null
   contextWindow: number | null
+  cacheEstimateSupported: boolean
 }
 
 /**

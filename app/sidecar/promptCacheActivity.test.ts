@@ -81,14 +81,15 @@ test('real main-thread assistant activity warms the estimate and re-emits it', (
   unsubscribe()
 })
 
-test('subagent traffic and short requests do not refresh the main cache', () => {
+test('subagent traffic is ignored, but an ineligible completed main response leaves expiry unknown', () => {
   const { domain } = setup([historical(AT - CODEX_CACHE_IDLE_ESTIMATE_MS - 1)])
   domain.observeSessionEvent!(response(MODEL, 'child-tool'))
+  expect(domain.getSnapshot().cacheExpired).toBe(true)
   const short = response()
   if (short.type === 'message' && short.message.type === 'assistant') short.message.message.usage = { input_tokens: 20 }
   domain.observeSessionEvent!(short)
   domain.observeSessionEvent!({ type: 'turn.status', activeTurn: false })
-  expect(domain.getSnapshot().cacheExpired).toBe(true)
+  expect(domain.getSnapshot().cacheExpired).toBeNull()
 })
 
 test('a main response on a different model cannot leave the old model warning', () => {
@@ -152,4 +153,65 @@ test('compaction-preserved history cannot seed a new prefix, but a new response 
   }
   expect(setup([old, boundary, old]).domain.getSnapshot().cacheExpiresAt).toBeNull()
   expect(setup([old, boundary, old, { ...historical(AT), uuid: 'new-api' }]).domain.getSnapshot().cacheExpired).toBe(false)
+})
+
+test.each(['effort', 'account', 'compaction'])('an invalidated %s request cannot renew from late assistant or terminal frames', reason => {
+  const { domain, store } = setup([historical(AT - CODEX_CACHE_IDLE_ESTIMATE_MS - 1)])
+  const unsubscribe = domain.subscribe(() => {})
+  domain.observeSessionEvent!(stream({ type: 'message_start', message: { model: MODEL, usage: EMPTY_USAGE } }))
+  if (reason === 'effort') store.setState(state => ({ ...state, effortValue: 'low' }))
+  else if (reason === 'account') domain.clearCacheEstimate!()
+  else domain.observeSessionEvent!({ type: 'message', message: { type: 'system', subtype: 'compact_boundary' } } as AppSessionEvent)
+  domain.observeSessionEvent!(response())
+  domain.observeSessionEvent!(stream({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 2_000 } }))
+  domain.observeSessionEvent!(stream({ type: 'message_stop' }))
+  expect(domain.getSnapshot().cacheExpiresAt).toBeNull()
+  domain.observeSessionEvent!(stream({ type: 'message_start', message: { model: MODEL, usage: EMPTY_USAGE } }))
+  domain.observeSessionEvent!(stream({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 2_000 } }))
+  expect(domain.getSnapshot().cacheExpired).toBe(false)
+  unsubscribe()
+})
+
+test.each([undefined, 0, 20, -1])('terminal usage %s cannot retain a superseded deadline', input_tokens => {
+  const { domain } = setup([historical(AT - CODEX_CACHE_IDLE_ESTIMATE_MS - 1)])
+  domain.observeSessionEvent!(stream({ type: 'message_start', message: { model: MODEL, usage: EMPTY_USAGE } }))
+  domain.observeSessionEvent!(stream({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens } }))
+  domain.observeSessionEvent!(stream({ type: 'message_stop' }))
+  expect(domain.getSnapshot().cacheExpiresAt).toBeNull()
+})
+
+test('the account command auth refresh invalidates the estimate without a model change', () => {
+  const { domain, store } = setup([historical(AT - CODEX_CACHE_IDLE_ESTIMATE_MS - 1)])
+  const unsubscribe = domain.subscribe(() => {})
+  store.setState(state => ({ ...state, authVersion: state.authVersion + 1 }))
+  expect(domain.getSnapshot().cacheExpiresAt).toBeNull()
+  unsubscribe()
+})
+
+test('a canonical unknown seed cannot be overridden by older initial-message evidence', () => {
+  const store = createStore<AppState>({ ...getDefaultAppState(), mainLoopModel: MODEL })
+  const domain = createSidecarRunControlsDomain(store, {
+    buildSnapshot: snapshot,
+    initialMessages: [historical(AT - CODEX_CACHE_IDLE_ESTIMATE_MS - 1)],
+    initialCacheObservation: null,
+    now: () => AT,
+  })
+  expect(domain.getSnapshot().cacheExpiresAt).toBeNull()
+})
+
+test('a cached Claude observation cannot bypass the custom-endpoint guard', () => {
+  const previousUrl = process.env.ANTHROPIC_BASE_URL
+  setSessionProvider('firstParty')
+  process.env.ANTHROPIC_BASE_URL = 'https://cache-policy-unknown.invalid'
+  try {
+    const model = 'claude-sonnet-4-6'
+    const store = createStore<AppState>({ ...getDefaultAppState(), mainLoopModel: model })
+    const domain = createSidecarRunControlsDomain(store, {
+      buildSnapshot: snapshot, initialCacheObservation: { model, expiresAt: AT - 1 },
+    })
+    expect(domain.getSnapshot().cacheExpiresAt).toBeNull()
+  } finally {
+    if (previousUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = previousUrl
+  }
 })

@@ -6042,6 +6042,37 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   ).toEqual(['provider-a-model', 'provider-b-model'])
 })
 
+test.each(['anthropic identity', 'unavailable identity'])('a successful account switch clears expiry for %s', async scenario => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
+  const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })
+  const initial = baseAccounts.getSnapshot()!
+  let anthropicActiveAccountId = 'claude-a'
+  const accounts: SidecarAccountsDomain = {
+    ...baseAccounts,
+    getSnapshot: () => scenario === 'unavailable identity' ? null
+      : { ...initial, anthropicActiveAccountId },
+    async runVerb() {
+      anthropicActiveAccountId = 'claude-b'
+      return { verb: 'account.switch', result: { ok: true, message: 'Switched.' }, poolChanged: true }
+    },
+  }
+  const model = 'gpt-6.1-sol'
+  const base = fakeRunControlsDomain().domain.getSnapshot()
+  const runControls = createSidecarRunControlsDomain(createStore(getDefaultAppState()), {
+    buildSnapshot: () => ({ ...base, model: { ...base.model, current: model, provider: 'openai' } }),
+    initialCacheObservation: { model, expiresAt: Date.now() - 1 },
+  })
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
+  expect(runControls.getSnapshot().cacheExpired).toBe(true)
+  server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'cache-switch', accountId: 'claude-b', provider: 'anthropic' }))
+  await flush()
+  expect(runControls.getSnapshot().cacheExpiresAt).toBeNull()
+  const latest = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> => frame.kind === 'run-controls.snapshot',
+  ).at(-1)
+  expect(latest?.runControls.cacheExpiresAt).toBeNull()
+})
+
 test('P4-5 — account.result never carries token material', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
@@ -6232,7 +6263,10 @@ test('host deletion notice reconciles a live sidecar pool without rerunning dele
       },
     }),
   })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
+  const { domain: runControls } = fakeRunControlsDomain()
+  let cacheInvalidations = 0
+  runControls.clearCacheEstimate = () => { cacheInvalidations++ }
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
 
   server.handleData(
     conn,
@@ -6249,6 +6283,7 @@ test('host deletion notice reconciles a live sidecar pool without rerunning dele
   await flush()
 
   expect(deleted).toEqual([])
+  expect(cacheInvalidations).toBe(1)
   expect(
     received.some(
       frame =>
@@ -6326,6 +6361,8 @@ test('host sign-out notice removes only the exact generation and re-broadcasts l
     clearAuthCaches: async () => {},
   })
   const { domain: runControls } = fakeRunControlsDomain()
+  let cacheInvalidations = 0
+  runControls.clearCacheEstimate = () => { cacheInvalidations++ }
   const settings = fakeSettingsDomain()
   const leases = createSidecarLeaseDomain(makePermissionStore())
   const { server, received, conn } = connect(
@@ -6359,6 +6396,7 @@ test('host sign-out notice removes only the exact generation and re-broadcasts l
   expect(retirements).toEqual([
     { accountId: 'signed-out-account', credentialGeneration: 1 },
   ])
+  expect(cacheInvalidations).toBe(1)
   expect(
     received.filter(f => f.kind === 'accounts.snapshot').length,
   ).toBeGreaterThan(beforeAccounts)

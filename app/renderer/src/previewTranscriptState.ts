@@ -7,7 +7,7 @@ import {
   type TranscriptCache,
 } from '../../shared/protocol.js'
 import type { SDKMessage } from '@cat-code/engine/sdk'
-import { isCacheExpiryTimestamp } from '../../shared/promptCacheEstimate.js'
+import { isCacheExpiryTimestamp, PROMPT_CACHE_ROUTE_FACTS_VERSION } from '../../shared/promptCacheEstimate.js'
 import { selectContextUsage, type ContextUsage } from './contextUsage.js'
 import {
   type BatchAction,
@@ -169,6 +169,7 @@ export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
   // frames DO hold a live `result`, so the scan is the fallback rather than
   // dead code.
   const header = cache.header.runFacts
+  const estimateCurrent = (cache.header.runFactsVersion ?? 0) >= PROMPT_CACHE_ROUTE_FACTS_VERSION
   if (header) {
     return {
       model: header.model,
@@ -179,12 +180,17 @@ export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
           ? null
           : previewContextUsage(header.usedTokens, header.contextWindow),
       ...(header.cacheExpiresAt === null ||
-        isCacheExpiryTimestamp(header.cacheExpiresAt)
+        (estimateCurrent && isCacheExpiryTimestamp(header.cacheExpiresAt))
         ? { cacheExpiresAt: header.cacheExpiresAt }
         : {}),
     }
   }
-  return selectRunFactsFromFrames(frames)
+  const fallback = selectRunFactsFromFrames(frames)
+  const observation = cache.header.cacheObservation
+  return observation?.model === fallback.model && estimateCurrent &&
+    isCacheExpiryTimestamp(observation.expiresAt)
+    ? { ...fallback, cacheExpiresAt: observation.expiresAt }
+    : fallback
 }
 
 /** Matches `contextUsage.ts`'s default when no turn reported a real window. */

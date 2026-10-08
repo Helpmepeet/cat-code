@@ -522,6 +522,7 @@ test.each([
   ['read with unknown historical TTL', { cache_read_input_tokens: 2_048 }, ANTHROPIC_CACHE_1H_MS],
 ])('a Claude %s keeps the reported usage policy', (_label, usage, idleMs) => {
   const facts = factsOf(transcriptOf([
+    { ...runFacts('claude-sonnet-5', 'default', null, 200_000), cacheEstimateSupported: true },
     apiResponse('claude-sonnet-5', OLD_RESPONSE_AT, usage),
   ]), noWindow)
   expect(facts.cacheExpiresAt).toBe(OLD_RESPONSE_AT + idleMs)
@@ -578,9 +579,9 @@ test.each([
 
 test('an API error timestamp cannot extend the preceding real response estimate', () => {
   const facts = factsOf(transcriptOf([
+    runFacts('gpt-5.6-sol', 'auto', null, 372_000),
     apiResponse(),
     user('plan'),
-    runFacts('gpt-5.6-sol', 'auto', null, 372_000),
     { ...apiResponse('gpt-5.6-sol', Date.now() - 1_000), isApiErrorMessage: true },
   ]), forbiddenResolver)
   expect(facts.cacheExpiresAt).toBe(OLD_RESPONSE_AT + CODEX_CACHE_IDLE_ESTIMATE_MS)
@@ -622,6 +623,26 @@ test('a model switch in authoritative facts cannot relabel the old response dead
   expect(facts.model).toBe('gpt-5.7-sol')
   expect(facts.effort).toBe('high')
   expect(facts.cacheExpiresAt).toBeUndefined()
+})
+
+test.each([undefined, false, 'true'])('historical Claude requires boolean supported-route evidence, not %s', supported => {
+  const facts = factsOf(transcriptOf([
+    { ...runFacts('claude-sonnet-5', 'default', null, 200_000), cacheEstimateSupported: supported },
+    apiResponse('claude-sonnet-5', OLD_RESPONSE_AT, { cache_read_input_tokens: 2_048 }),
+  ]), forbiddenResolver)
+  expect(facts.cacheExpiresAt).toBeUndefined()
+})
+
+test('a newer settings snapshot invalidates older same-model activity until a fresh response', () => {
+  const records = [
+    runFacts('gpt-5.6-sol', 'auto', 'high', 372_000),
+    apiResponse(),
+    runFacts('gpt-5.6-sol', 'plan', 'low', 372_000),
+  ]
+  expect(factsOf(transcriptOf(records), forbiddenResolver).cacheExpiresAt).toBeUndefined()
+  const recent = Date.now() - 1_000
+  expect(factsOf(transcriptOf([...records, apiResponse('gpt-5.6-sol', recent)]), forbiddenResolver).cacheExpiresAt)
+    .toBe(recent + CODEX_CACHE_IDLE_ESTIMATE_MS)
 })
 
 test('a response model differing from the coherent snapshot cannot override its pairing', () => {
@@ -716,7 +737,7 @@ test('the newest completed matching surface supplies a recent activity deadline'
   expect(facts.cacheExpiresAt!).toBeGreaterThan(Date.now())
 })
 
-test('diagnostic recovery continues beyond the ordinary run-facts early exit', () => {
+test('a diagnostic preceding newer request settings cannot renew a zero-usage response', () => {
   const facts = factsOf(transcriptOf([
     completedSurface(),
     apiResponse('gpt-6.1-sol', OLD_RESPONSE_AT - 5_000, { input_tokens: 10 }),
@@ -724,7 +745,7 @@ test('diagnostic recovery continues beyond the ordinary run-facts early exit', (
     zeroCodexResponse(),
   ]), forbiddenResolver)
   expect(facts.usedTokens).toBe(10)
-  expect(facts.cacheExpiresAt).toBe(OLD_RESPONSE_AT + 2_000 + CODEX_CACHE_IDLE_ESTIMATE_MS)
+  expect(facts.cacheExpiresAt).toBeUndefined()
 })
 
 test.each([

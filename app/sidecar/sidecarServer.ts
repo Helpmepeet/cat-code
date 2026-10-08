@@ -3271,7 +3271,7 @@ export class SidecarServer {
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
     const verb = parsed as AccountVerbMessage
-    const activeAccountBefore = accounts.getSnapshot()?.activeAccountId ?? null
+    const accountsBefore = accounts.getSnapshot()
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
     void accounts
@@ -3290,7 +3290,10 @@ export class SidecarServer {
             : {}),
         })
         if (poolChanged) {
-          if ((accounts.getSnapshot()?.activeAccountId ?? null) !== activeAccountBefore) {
+          const accountsAfter = accounts.getSnapshot()
+          if (!accountsBefore || !accountsAfter ||
+            accountsAfter.activeAccountId !== accountsBefore.activeAccountId ||
+            accountsAfter.anthropicActiveAccountId !== accountsBefore.anthropicActiveAccountId) {
             this.runControls?.clearCacheEstimate?.()
           }
           this.broadcastAccountsSnapshot()
@@ -3354,6 +3357,7 @@ export class SidecarServer {
       .applyDeletedProfile(parsed.data.accountId)
       .then(changed => {
         if (!changed) return
+        this.runControls?.clearCacheEstimate?.()
         this.broadcastAccountsSnapshot()
         this.broadcastRunControlsSnapshot()
         this.broadcastLeaseSnapshot()
@@ -3393,6 +3397,7 @@ export class SidecarServer {
       .applyExternallyCommittedSignOut(parsed.data)
       .then(changed => {
         if (!changed) return
+        this.runControls?.clearCacheEstimate?.()
         this.broadcastAccountsSnapshot()
         this.broadcastRunControlsSnapshot()
         this.broadcastLeaseSnapshot()

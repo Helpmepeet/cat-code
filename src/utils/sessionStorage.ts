@@ -940,6 +940,8 @@ export function recordRunFacts(entry: {
   permissionMode: string
   effort: string | null
   contextWindow: number
+  /** Whether the actual request used an established prompt-cache provider route. */
+  cacheEstimateSupported?: boolean
 }): void {
   assertActiveTranscriptLease(getSessionId())
   try {
@@ -952,6 +954,7 @@ export function recordRunFacts(entry: {
       entry.permissionMode,
       entry.effort,
       entry.contextWindow,
+      entry.cacheEstimateSupported ?? null,
     ])
     if (snapshot === lastRunFactsSnapshot) return
     lastRunFactsSnapshot = snapshot

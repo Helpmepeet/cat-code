@@ -2194,6 +2194,18 @@ describe('session storage', () => {
       expect(written).toHaveLength(2)
       expect(written[1]).toContain('"effort":"low"')
     })
+
+    test('request-route eligibility is persisted and participates in snapshot deduplication', async () => {
+      await recordTranscript([createUserMessage({ content: 'real turn', uuid: randomUUID() })])
+      await flushSessionStorage()
+      recordRunFacts({ ...facts, cacheEstimateSupported: true })
+      recordRunFacts({ ...facts, cacheEstimateSupported: true })
+      recordRunFacts({ ...facts, cacheEstimateSupported: false })
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      const rows = text.split('\n').filter(line => line.includes('"subtype":"run_facts"')).map(line => JSON.parse(line))
+      expect(rows).toHaveLength(2)
+      expect(rows.map(row => row.cacheEstimateSupported)).toEqual([true, false])
+    })
   })
 
   describe('prompt-cache-break diagnostics only write to an owned transcript', () => {

@@ -55,6 +55,8 @@ import { persistTranscriptBackfillResult } from './transcriptBackfill.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { CODEX_CACHE_IDLE_ESTIMATE_MS } from '../shared/promptCacheEstimate.js'
+import { projectPreviewTranscriptCache } from '../renderer/src/previewTranscriptState.js'
+import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
 
 const SID: SessionId = '11111111-1111-4111-8111-111111111111'
 /** A session with no cache file at all. */
@@ -772,7 +774,7 @@ test('version-1 facts stay readable and backfill enrichment preserves actual tra
   const oldCache = createTranscriptCache(SID, engineSessionId, frames, COMPLETE_FACTS)
   oldCache.header.runFactsVersion = 1
   writeCache(dir, oldCache)
-  expect(TRANSCRIPT_CACHE_RUN_FACTS_VERSION).toBe(2)
+  expect(TRANSCRIPT_CACHE_RUN_FACTS_VERSION).toBe(3)
   expect(readCache(dir, SID)).toEqual(oldCache)
   expect(cacheHasCurrentRunFacts(dir, SID)).toBe(false)
   expect(readCachedRunFacts(dir, SID, engineSessionId)).toBeNull()
@@ -815,7 +817,7 @@ test('version-1 facts stay readable and backfill enrichment preserves actual tra
   })
   expect(result).toBe('written')
   const refreshed = readCache(dir, SID)!
-  expect(refreshed.header.runFactsVersion).toBe(2)
+  expect(refreshed.header.runFactsVersion).toBe(TRANSCRIPT_CACHE_RUN_FACTS_VERSION)
   expect(refreshed.header.guardVersion).toBe(oldCache.header.guardVersion)
   expect(refreshed.header.protocolVersion).toBe(oldCache.header.protocolVersion)
   expect(refreshed.frames).toEqual(oldCache.frames)
@@ -972,6 +974,47 @@ test('buildClosedSessionCache enriches a distilled close cache from the transcri
   expect(cache?.header.runFactsVersion).toBe(TRANSCRIPT_CACHE_RUN_FACTS_VERSION)
   // The distill allowlist is unchanged by enrichment.
   expect(cache?.frames).toHaveLength(1)
+})
+
+test('zero-usage Codex history survives close persistence as an independent preview deadline', () => {
+  const dir = tempDir()
+  const path = join(dir, 'zero-usage.jsonl')
+  const model = 'gpt-6.1-sol'
+  const at = Date.parse('2025-01-01T12:00:00.000Z')
+  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  writeFileSync(path, [
+    { type: 'system', subtype: 'run_facts', model, permissionMode: 'auto', effort: 'high', contextWindow: 1_048_576 },
+    { type: 'assistant', timestamp: new Date(at).toISOString(), message: { model, usage } },
+    { type: 'system', subtype: 'codex_stream_surface', timestamp: new Date(at + 2_000).toISOString(),
+      model, completed: true, input_tokens: 2_200, cached_tokens: 2_000, output_tokens: 4 },
+  ].map(record => JSON.stringify(record)).join('\n'))
+  const assistant = SDK_MESSAGE_FIXTURE.assistant[0]!.message
+  const frame: ServerFrame = { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    event: { type: 'message', message: { ...assistant, message: { ...assistant.message, model, usage } } } }
+  const cache = buildClosedSessionCache({
+    transcriptPath: () => path,
+    readRunFacts: path => readTranscriptRunFacts(path, () => null),
+    readCachedRunFacts: () => null,
+  }, [readyFrame(), frame])!
+  expect(cache.header.runFacts).toBeUndefined()
+  expect(cache.header.cacheObservation).toEqual({ model, expiresAt: at + 2_000 + CODEX_CACHE_IDLE_ESTIMATE_MS })
+  writeCache(dir, cache)
+  const preview = projectPreviewTranscriptCache(readCache(dir, SID)!)
+  expect(preview.runFacts.cacheExpiresAt).toBe(at + 2_000 + CODEX_CACHE_IDLE_ESTIMATE_MS)
+  expect(preview.runFacts.contextUsage).toBeNull()
+  expect(readCache(dir, SID)!.frames).toEqual(cache.frames)
+})
+
+test.each([
+  null, {}, { model: '', expiresAt: 1 }, { model: 'x'.repeat(129), expiresAt: 1 },
+  { model: 'gpt-6.1-sol', expiresAt: -1 },
+  { model: 'gpt-6.1-sol', expiresAt: '1' },
+  { model: 'gpt-6.1-sol', expiresAt: 1, extra: true },
+])('invalid independent cache observation %j fails closed', cacheObservation => {
+  const dir = tempDir()
+  writeFileSync(cachePath(dir), JSON.stringify({ header: { ...header(), cacheObservation }, frames: [] }))
+  expect(readCachedHeader(dir, SID)).toBeNull()
+  expect(readCache(dir, SID)).toBeNull()
 })
 
 test('buildClosedSessionCache skips a session with no transcript frames or no engine id', () => {

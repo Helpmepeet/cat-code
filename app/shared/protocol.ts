@@ -3993,6 +3993,11 @@ export type TranscriptCacheHeader = {
    */
   runFacts?: TranscriptRunFacts
   /**
+   * Independent expiry evidence when context facts are incomplete. Model pairing
+   * keeps this display fact from replacing the frame-derived context fallback.
+   */
+  cacheObservation?: { model: string; expiresAt: number }
+  /**
    * Which generation of run-facts derivation wrote `runFacts`. Absent on a
    * cache written before this field existed.
    *
