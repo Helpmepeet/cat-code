@@ -1951,24 +1951,17 @@ export function App() {
     }
   }, [createFreshSession, focusCreatedSession])
 
-  /** Start in the active project, or open a chat without a project. */
+  /** Start without a project; workspace selection happens through workspace jump. */
   const newChat = useCallback(async () => {
     if (newChatInFlightRef.current) return
     newChatInFlightRef.current = true
 
     try {
-      if (
-        activeSessionRow?.appSessionId &&
-        activeSessionRow.binding?.kind !== 'managed'
-      ) {
-        await newSessionInWorkspace(activeSessionRow.appSessionId)
-      } else {
-        await newManagedChat()
-      }
+      await newManagedChat()
     } finally {
       newChatInFlightRef.current = false
     }
-  }, [activeSessionRow, newManagedChat, newSessionInWorkspace])
+  }, [newManagedChat])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
