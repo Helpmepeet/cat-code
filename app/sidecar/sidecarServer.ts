@@ -665,6 +665,11 @@ export class SidecarServer {
    */
   private readonly retriedQueuedPromptKeys = new Set<string>()
   /**
+   * Prompt ids whose force-send was explicitly requested during a destination
+   * continuation.
+   */
+  private readonly forcedReconciliationPromptIds = new Set<string>()
+  /**
    * D1a — messages sent mid-turn that are waiting for the running response and
    * have NOT been announced to the transcript yet, keyed by the uuid they will
    * carry when they are. Holding the prompt here (rather than reading it back
@@ -1922,6 +1927,11 @@ export class SidecarServer {
         }
         if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
         await this.controller.settleHandoff(message.operationId, message.action === 'settle_uncertain' ? 'uncertain' : message.action === 'settle_failed' ? 'failed' : 'cancelled')
+        if (message.action === 'settle_cancelled') {
+          this.forcedReconciliationPromptIds.clear()
+        } else {
+          this.drainOneQueuedPrompt(true)
+        }
       } else if (message.action === 'release') {
         if (state.continuation.state !== 'settled' || state.requiresUserReconciliation) throw new Error('Outcome is not settled')
         this.controller.releaseHandoffReservation(message.operationId)
@@ -1936,8 +1946,12 @@ export class SidecarServer {
       sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId, ok })
   }
 
-  private drainOneQueuedPrompt(): boolean {
-    if (!this.controller.canStartAutomaticTurn()) return false
+  private drainOneQueuedPrompt(allowUserReconciliation = false): boolean {
+    const canStart = allowUserReconciliation
+      ? this.controller.requiresHandoffReconciliation() &&
+        !this.controller.getHandoffReservation()
+      : this.controller.canStartAutomaticTurn()
+    if (!canStart) return false
     if (this.closed || this.parking || this.activeTurn) return false
     if (
       this.workspaceTrust &&
@@ -1948,7 +1962,12 @@ export class SidecarServer {
 
     // Re-read at drain time: the turn we were scheduled behind may have drained
     // this prompt itself on its way out.
-    const command = dequeue(isDeliverableParentPrompt)
+    const command = dequeue(command =>
+      isDeliverableParentPrompt(command) &&
+      (!allowUserReconciliation ||
+        (command.uuid !== undefined &&
+          this.forcedReconciliationPromptIds.has(command.uuid))),
+    )
     if (!command) return false
 
     // D1a — this turn is where a still-staged message becomes a transcript row,
@@ -1980,6 +1999,7 @@ export class SidecarServer {
       onInputPersisted: () => {
         persisted = true
         this.retriedQueuedPromptKeys.delete(retryKey)
+        this.forcedReconciliationPromptIds.delete(retryKey)
       },
       onSettled: error => {
         if (!error || persisted) return
@@ -1988,6 +2008,7 @@ export class SidecarServer {
             `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
           )
           this.retriedQueuedPromptKeys.delete(retryKey)
+          this.forcedReconciliationPromptIds.delete(retryKey)
           return
         }
         this.retriedQueuedPromptKeys.add(retryKey)
@@ -2625,6 +2646,7 @@ export class SidecarServer {
       const staged = this.stagedPrompts.get(uuid)
       if (!staged) continue
       this.stagedPrompts.delete(uuid)
+      this.forcedReconciliationPromptIds.delete(uuid)
       this.rememberRecalledPrompt(uuid, { ...staged, requestId })
       recalled.push({ id: uuid, prompt: staged.prompt })
     }
@@ -2764,7 +2786,20 @@ export class SidecarServer {
       return
     }
 
-    if (this.activeTurn) {
+    let resultMessage = 'Sending the queued message now.'
+    let resultOk = true
+    if (this.activeTurn && this.destinationHandoffOperation) {
+      // A destination continuation is an admitted, separately owned operation.
+      // Preserve the explicit user intent, but let the continuation owner reach
+      // its durable outcome before delivering the queued prompt.
+      this.forcedReconciliationPromptIds.add(head.id)
+      resultMessage =
+        'The message will send after the workspace change finishes.'
+    } else if (this.controller.requiresHandoffReconciliation()) {
+      this.forcedReconciliationPromptIds.add(head.id)
+      resultOk = this.drainOneQueuedPrompt(true)
+      if (!resultOk) resultMessage = 'The message is still waiting to be sent.'
+    } else if (this.activeTurn) {
       this.controller.abort('force-send', 'interrupt')
     } else {
       this.scheduleBoundaryDrain()
@@ -2775,8 +2810,8 @@ export class SidecarServer {
       sessionId: this.sessionId,
       requestId: parsed.data.requestId,
       promptId,
-      ok: true,
-      message: 'Sending the queued message now.',
+      ok: resultOk,
+      message: resultMessage,
     })
   }
 

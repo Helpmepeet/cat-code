@@ -126,6 +126,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
   let started!: () => void, release!: () => void
   const active = new Promise<void>(resolve => { started = resolve })
   const prompts: unknown[] = []
+  let workspaceTrusted = true
   const controller = new AppSessionController({ async *runTurn({ prompt, options }) {
     prompts.push(prompt)
     options?.onInputPersisted?.()
@@ -134,9 +135,22 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       await new Promise<void>(resolve => { release = resolve })
     }
     yield result
-  } })
+  }, async persistHandoffOutcome() { return [] } })
   const received: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
-  const server = new SidecarServer({ sessionId, engineSessionId, controller, log: () => {} })
+  const server = new SidecarServer({
+    sessionId,
+    engineSessionId,
+    controller,
+    log: () => {},
+    ...(subtype === 'interrupted'
+      ? {
+          workspaceTrust: {
+            getSnapshot: () => ({ trusted: workspaceTrusted }),
+            acceptTrust: () => ({ ok: true }),
+          } as never,
+        }
+      : {}),
+  })
   const attach = () => server.addConnection({ write(data) { for (const value of decoder.push(Buffer.from(data))) if (value.kind === 'frame') received.push(value.payload as ServerFrame) }, end() {} })
   try {
     writeWorkspaceJump({ version: 1, appSessionId: sessionId, engineSessionId, operationId, sourceGeneration: 'source',
@@ -167,9 +181,63 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
         message: { type: 'app.submit', requestId: 'during', prompt: 'also check the logs', options: { submitId: 'during' } } }))
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'during')).toMatchObject({ accepted: true })
       expect(getCommandQueueSnapshot()).toMatchObject([{ value: 'also check the logs', priority: 'next' }])
+      const queuedPrompt = received
+        .filter((frame): frame is Extract<ServerFrame, { kind: 'queued-prompts.snapshot' }> =>
+          frame.kind === 'queued-prompts.snapshot',
+        )
+        .at(-1)?.prompts[0]
+      expect(queuedPrompt?.id).toBeString()
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'prompt.force', requestId: 'force-during-continuation', promptId: queuedPrompt!.id } }))
+      expect(received.find(frame => frame.kind === 'prompt-force.result')).toMatchObject({
+        requestId: 'force-during-continuation',
+        ok: true,
+        message: 'The message will send after the workspace change finishes.',
+      })
+      expect(controller.getAbortState().status).toBe('idle')
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'meta', prompt: 'automatic work', options: { submitId: 'meta', isMeta: true } } }))
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'meta')).toMatchObject({ accepted: false })
+    } else {
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'app.submit', requestId: 'during-failed', prompt: 'withdraw this request', options: { submitId: 'during-failed' } } }))
+      expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'during-failed')).toMatchObject({ accepted: true })
+      const recalledPrompt = received
+        .filter((frame): frame is Extract<ServerFrame, { kind: 'queued-prompts.snapshot' }> =>
+          frame.kind === 'queued-prompts.snapshot',
+        )
+        .at(-1)?.prompts[0]
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'prompt.force', requestId: 'force-recalled-prompt', promptId: recalledPrompt!.id } }))
+      expect(received.find(frame => frame.kind === 'prompt-force.result')).toMatchObject({
+        requestId: 'force-recalled-prompt',
+        ok: true,
+        message: 'The message will send after the workspace change finishes.',
+      })
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'prompt.recall', requestId: 'recall-forced-prompt' } }))
+      expect(received.find(frame => frame.kind === 'prompt-recall.result' && frame.requestId === 'recall-forced-prompt')).toMatchObject({
+        ok: true,
+        recalled: [{ id: recalledPrompt!.id }],
+      })
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'app.submit', requestId: 'during-failed', prompt: 'keep this request', options: { submitId: 'during-failed' } } }))
+      expect(received.filter(frame => frame.kind === 'submit.result' && frame.submitId === 'during-failed')).toMatchObject([
+        { accepted: true },
+        { accepted: true },
+      ])
+      const queuedPrompt = received
+        .filter((frame): frame is Extract<ServerFrame, { kind: 'queued-prompts.snapshot' }> =>
+          frame.kind === 'queued-prompts.snapshot',
+        )
+        .at(-1)?.prompts[0]
+      expect(queuedPrompt?.text).toBe('keep this request')
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'prompt.force', requestId: 'force-kept-prompt', promptId: queuedPrompt!.id } }))
+      expect(received.find(frame => frame.kind === 'prompt-force.result' && frame.requestId === 'force-kept-prompt')).toMatchObject({
+        ok: true,
+        message: 'The message will send after the workspace change finishes.',
+      })
     }
     release()
     await Bun.sleep(0)
@@ -178,9 +246,58 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     expect(controller.getHandoffReservation()).toBe(operationId)
     expect(controller.canStartAutomaticTurn()).toBe(false)
     expect(prompts).toHaveLength(1)
+    if (subtype === 'interrupted') {
+      expect(getCommandQueueSnapshot()).toMatchObject([
+        { value: 'keep this request', priority: 'next' },
+      ])
+      const state = readWorkspaceJump(sessionId)!
+      writeWorkspaceJump({
+        ...state,
+        phase: 'settled',
+        outcome: 'uncertain',
+        requiresUserReconciliation: true,
+        continuation: { ...state.continuation, state: 'settled' },
+      })
+      workspaceTrusted = false
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'workspace.handoff', requestId: 'reconcile', operationId, action: 'settle_uncertain' } }))
+      for (let i = 0; i < 50 && !received.some(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'reconcile'); i += 1) {
+        await Bun.sleep(5)
+      }
+      expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'reconcile')).toMatchObject({ ok: true })
+      expect(controller.getHandoffReservation()).toBeNull()
+      expect(controller.requiresHandoffReconciliation()).toBe(true)
+      expect(controller.isTurnActive()).toBe(false)
+      expect(prompts).toHaveLength(1)
+      expect(getCommandQueueSnapshot()).toMatchObject([
+        { value: 'keep this request', priority: 'next' },
+      ])
+      const queuedPromptId = getCommandQueueSnapshot()[0]!.uuid!
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'prompt.force', requestId: 'force-while-untrusted', promptId: queuedPromptId } }))
+      expect(received.find(frame => frame.kind === 'prompt-force.result' && frame.requestId === 'force-while-untrusted')).toMatchObject({
+        ok: false,
+        message: 'The message is still waiting to be sent.',
+      })
+      workspaceTrusted = true
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'prompt.force', requestId: 'force-after-trust', promptId: queuedPromptId } }))
+      expect(received.find(frame => frame.kind === 'prompt-force.result' && frame.requestId === 'force-after-trust')).toMatchObject({
+        ok: true,
+        message: 'Sending the queued message now.',
+      })
+      for (let i = 0; i < 50 && prompts.length < 2; i += 1) await Bun.sleep(5)
+      expect(prompts).toHaveLength(2)
+      expect(prompts[1]).toBe('keep this request')
+      expect(getCommandQueueSnapshot()).toHaveLength(0)
+      expect(controller.requiresHandoffReconciliation()).toBe(false)
+      expect(received.some(frame => frame.kind === 'workspace.user-admitted' && frame.operationId === operationId)).toBe(true)
+    }
     server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
       message: { type: 'app.submit', requestId: 'after', prompt: 'before settlement', options: { submitId: 'after' } } }))
-    expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'after')).toMatchObject({ accepted: false })
+    expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'after')).toMatchObject({
+      accepted: subtype === 'interrupted',
+    })
     attach()
     await Bun.sleep(0)
     expect(received.filter(frame => frame.kind === 'host.request')).toEqual([])
