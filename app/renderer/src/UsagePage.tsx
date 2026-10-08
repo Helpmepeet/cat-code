@@ -6,7 +6,7 @@ import { UsageHeatmap } from './UsageActivityCharts.js';
 import { UsageCacheSummary, UsageModelDonut, UsageToolBreakdown } from './UsageOverviewDetails.js';
 import { UsageSessionContributors } from './UsageSessionContributors.js';
 import type { MergedSessionRow } from './sessionsCatalogState.js';
-import { usageBucketDays, usageBucketLabel, usageDailyActivity } from './usageTrendState.js';
+import { usageActivityStats, usageBucketDays, usageBucketLabel, usageDailyActivity } from './usageTrendState.js';
 import { UsageMetrics } from './UsageMetrics.js';
 import { usageModelColors } from './usageGraphState.js';
 import { UsageAutoMode } from './UsageAutoMode.js';
@@ -21,23 +21,14 @@ function usageDayText(date: string, weekday = false, year = false): string {
 function usageLastDate(exclusive: string): string {
     return new Date(Date.parse(`${exclusive}T00:00:00.000Z`) - 86400000).toISOString().slice(0, 10);
 }
+function usageInstantDayText(instant: string, timezone: string): string {
+    return new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric' }).format(new Date(instant));
+}
 function usageUpdated(asOf: string, timezone: string): string {
     const date = new Date(asOf), now = new Date();
     const day = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
     const time = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', minute: '2-digit' }).format(date);
     return `Updated ${day.format(date) === day.format(now) ? '' : `${new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric' }).format(date)} `}${time}`;
-}
-function activityStats(days: ReadonlyMap<string, { tokens: { fresh: number; read: number; write: number; output: number } }>, lastDate: string) {
-    const active = [...days.entries()].filter(([, day]) => usageTotal(day.tokens) > 0).map(([date]) => date).sort();
-    let longest = 0, streak = 0, previous = '';
-    for (const date of active) {
-        streak = previous && Date.parse(`${date}T00:00:00Z`) - Date.parse(`${previous}T00:00:00Z`) === 86400000 ? streak + 1 : 1;
-        longest = Math.max(longest, streak);
-        previous = date;
-    }
-    let current = 0;
-    for (let at = Date.parse(`${lastDate}T00:00:00Z`); days.has(new Date(at).toISOString().slice(0, 10)) && usageTotal(days.get(new Date(at).toISOString().slice(0, 10))!.tokens) > 0; at -= 86400000) current++;
-    return { active: active.length, longest, current };
 }
 function UsagePanel({ title, children, wide = false, className = '' }: {
     title?: string;
@@ -82,14 +73,14 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const partial = snapshot?.coverage.state === 'partial';
     const selected = summary?.days.find(day => day.date === selectedDate);
     const activity = snapshot ? usageDailyActivity(snapshot.ranges) : null;
-    const heatStats = activity ? activityStats(activity.days, activity.lastDate) : null;
+    const heatStats = activity ? usageActivityStats(activity) : null;
     const colors = usageModelColors(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(item => item.models) : []);
     const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0 && Object.values(summary.autoMode.allTools.outcomes).every(count => count === 0);
     const refreshing = state.status === 'loading';
     const refreshFailed = state.status === 'error' && !!snapshot;
     const refreshLabel = refreshing ? 'Refreshing analytics' : refreshFailed ? 'Refresh failed. Try again' : 'Refresh analytics';
     return <main className="usage-page" data-range={range} aria-labelledby="usage-title" onScroll={event => setScrolled(event.currentTarget.scrollTop > 8)}><div className="usage-content">
-        <div className={`usage-sticky-top${scrolled ? ' usage-sticky-scrolled' : ''}`}><header className="usage-header"><div><h1 id="usage-title">Analytics</h1>{snapshot && summary && !unavailable && <p className="usage-freshness"><span>{usageDayText(summary.startDate, false, summary.startDate.slice(0, 4) !== usageLastDate(summary.endDateExclusive).slice(0, 4))} to {usageDayText(usageLastDate(summary.endDateExclusive), false, summary.startDate.slice(0, 4) !== usageLastDate(summary.endDateExclusive).slice(0, 4))}</span>{summary.previousPeriod && <span>vs {usageDayText(summary.previousPeriod.startInclusive.slice(0, 10))} to {usageDayText(summary.previousPeriod.endInclusive.slice(0, 10))}</span>}<span>{usageUpdated(snapshot.asOf, snapshot.timezone)}</span></p>}</div><div className="usage-header-actions">{onRefresh && <button className={`usage-refresh${refreshFailed ? ' usage-refresh-failed' : ''}`} type="button" onClick={onRefresh} disabled={refreshing || unavailable} aria-label={refreshLabel} title={refreshLabel}><svg className={`usage-refresh-icon${refreshing ? ' animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg></button>}<div className="usage-range usage-segmented" data-range={range} role="group" aria-label="Analytics period">{(['7d', '30d', 'all'] as const).map(value => <button key={value} type="button" aria-pressed={value === range} onClick={() => setRange(value)}>{value === 'all' ? 'All' : value === '7d' ? '7 days' : '30 days'}</button>)}</div></div></header></div>
+        <div className={`usage-sticky-top${scrolled ? ' usage-sticky-scrolled' : ''}`}><header className="usage-header"><div><h1 id="usage-title">Analytics</h1>{snapshot && summary && !unavailable && <p className="usage-freshness"><span>{usageDayText(summary.startDate, false, summary.startDate.slice(0, 4) !== usageLastDate(summary.endDateExclusive).slice(0, 4))} to {usageDayText(usageLastDate(summary.endDateExclusive), false, summary.startDate.slice(0, 4) !== usageLastDate(summary.endDateExclusive).slice(0, 4))}</span>{summary.previousPeriod && <span>vs {usageInstantDayText(summary.previousPeriod.startInclusive, snapshot.timezone)} to {usageInstantDayText(summary.previousPeriod.endInclusive, snapshot.timezone)}</span>}<span>{usageUpdated(snapshot.asOf, snapshot.timezone)}</span></p>}</div><div className="usage-header-actions">{onRefresh && <button className={`usage-refresh${refreshFailed ? ' usage-refresh-failed' : ''}`} type="button" onClick={onRefresh} disabled={refreshing || unavailable} aria-label={refreshLabel} title={refreshLabel}><svg className={`usage-refresh-icon${refreshing ? ' animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.2-6.5L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.2 6.5L21 16"/><path d="M16 16h5v5"/></svg></button>}<div className="usage-range usage-segmented" data-range={range} role="group" aria-label="Analytics period">{(['7d', '30d', 'all'] as const).map(value => <button key={value} type="button" aria-pressed={value === range} onClick={() => setRange(value)}>{value === 'all' ? 'All' : value === '7d' ? '7 days' : '30 days'}</button>)}</div></div></header></div>
         {(unavailable || !snapshot || empty) && <div className="usage-status" role="status">{unavailable ? 'Analytics is unavailable.' : !snapshot ? (state.status === 'loading' ? 'Loading analytics…' : usageFailureMessage(state.errorCode)) : partial ? 'Activity for this period is incomplete.' : 'No recorded activity in this period.'}</div>}
         {summary && snapshot && activity && !unavailable && !empty && <UsageChartHoverContext.Provider value={{ date: linkedDate, setDate: setHoverDate }}><UsageModelHoverContext.Provider value={{ id: hoverModel, setId: setHoverModel }}>
             <h2 className="usage-section-heading">Usage</h2>
@@ -109,7 +100,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
                     <UsagePanel title="Model usage"><UsageModelDonut summary={summary} colors={colors}/></UsagePanel>
                     <UsagePanel><UsageCacheSummary key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
                 </div>
-                <UsagePanel wide><div className="usage-activity-header"><h2 className="usage-panel-heading">Daily activity</h2>{heatStats && <div className="usage-activity-stats"><span><b>{heatStats.active}</b>active days</span><span><b>{heatStats.longest}</b>longest streak</span><span><b>{heatStats.current}</b>current streak</span></div>}</div><UsageHeatmap activity={activity} range={summary} selected={selectedDate} selectedBucketDays={range === 'all' ? usageBucketDays(summary) : 1} onSelect={setSelectedDate}/></UsagePanel>
+                <UsagePanel wide><div className="usage-activity-header"><h2 className="usage-panel-heading">{activity.earlierDaysUnavailable ? 'Daily activity (last 30 days)' : 'Daily activity'}</h2>{heatStats && <div className="usage-activity-stats"><span><b>{heatStats.active}</b>active days</span><span><b>{heatStats.longest}</b>longest streak</span><span><b>{heatStats.current}{heatStats.currentAtLeast ? '+' : ''}</b>current streak</span></div>}</div>{activity.earlierDaysUnavailable && <p className="usage-note">Earlier daily detail is unavailable.{heatStats?.currentAtLeast ? ' A + marks a current streak that may extend further.' : ''}</p>}<UsageHeatmap activity={activity} range={summary} selected={selectedDate} selectedBucketDays={range === 'all' ? usageBucketDays(summary) : 1} onSelect={setSelectedDate}/></UsagePanel>
                 <UsageParallelSessions summary={summary} selected={selectedDate} onSelect={setSelectedDate}/>
                 <UsageReasoningEffort summary={summary} selected={selectedDate} onSelect={setSelectedDate}/>
             </div>
