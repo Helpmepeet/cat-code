@@ -2080,3 +2080,87 @@ html[data-glass='on'] [data-window-overlay] {
   .workspace-arrival-wash { display: none; animation: none; }
   .chat-project-divider-arriving .chat-project-divider-rule { animation: none; }
 }
+
+/* One pane owns the dock and bounds its measuring and motion layers. */
+:root {
+  --subagent-row-attached: color-mix(in srgb, var(--surface-raised) 65%, var(--surface-panel));
+  --subagent-chip-hover: color-mix(in srgb, var(--surface-raised) 75%, var(--shell-hover));
+  --subagent-resume-wash: color-mix(in srgb, var(--source-project) 16%, transparent);
+  --subagent-resume-border: color-mix(in srgb, var(--source-project) 38%, transparent);
+}
+:root[data-appearance='light'] {
+  --subagent-row-attached: color-mix(in srgb, var(--surface-raised) 80%, var(--surface-panel));
+  --subagent-chip-hover: color-mix(in srgb, var(--surface-raised) 60%, var(--shell-hover));
+  --subagent-resume-wash: color-mix(in srgb, var(--source-project) 12%, transparent);
+  --subagent-resume-border: color-mix(in srgb, var(--source-project) 30%, transparent);
+}
+.subagent-dock { position:absolute; top:12px; right:24px; width:min(288px, calc(100% - 48px)); z-index:20; }
+.subagent-dock-hidden { visibility:hidden; pointer-events:none; }
+.subagent-dock-chip { position:absolute; top:0; right:0; display:flex; align-items:center; height:27px; max-width:100%; padding:0 7px; border:1px solid var(--shell-seam); border-radius:10px; background:var(--surface-panel); }
+.subagent-dock-chip:hover { background:var(--subagent-chip-hover); }
+.subagent-dock-chip-slot { display:block; flex:none; width:19px; }
+.subagent-dock-chip-slot:last-of-type { width:15px; }
+.subagent-dock-more { margin-left:5px; font:500 11px var(--font-mono); color:var(--text-faint); }
+.subagent-dock-face { position:relative; display:block; width:15px; height:15px; flex:none; }
+.subagent-dock-face svg { display:block; }
+.subagent-dock-badge { position:absolute; right:-3px; bottom:-3px; width:7px; height:7px; border-radius:50%; box-shadow:0 0 0 1.5px var(--surface-panel); }
+.subagent-dock-badge-running { background:var(--source-project); animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
+.subagent-dock-badge-background, .subagent-dock-badge-resumed { background:var(--surface-panel); border:1.6px solid var(--source-project); }
+.subagent-dock-badge-waiting { background:var(--surface-panel); border:1.6px solid var(--peer); }
+.subagent-dock-badge-completed { background:var(--tone-good); }
+.subagent-dock-badge-failed { background:var(--tone-danger); }
+.subagent-dock-badge-stopped { background:var(--surface-panel); border:1.6px solid var(--tone-warn); }
+.subagent-dock-panel { display:flex; flex-direction:column; width:100%; max-height:var(--subagent-dock-height, calc(100vh - 24px)); padding:4px; background:var(--surface-panel); border:1px solid var(--shell-seam); border-radius:10px; }
+.subagent-dock-floating { box-shadow:var(--elev-popover); }
+.subagent-dock-header { display:flex; align-items:center; justify-content:space-between; height:22px; flex:none; padding:0 4px 0 8px; font:500 9px var(--font-mono); letter-spacing:.1em; color:var(--text-faint); }
+.subagent-dock-header button { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:5px; font-size:13px; }
+.subagent-dock-header button:hover, .subagent-dock-finished-header button:hover { color:var(--text-primary); background:var(--shell-hover); }
+.subagent-dock-list { overflow:auto; min-height:0; }
+.subagent-dock-row { display:grid; grid-template-columns:15px minmax(0,1fr); column-gap:9px; width:100%; padding:6px 7px; border:1px solid transparent; border-radius:7px; text-align:left; }
+.subagent-dock-row > span:first-child { margin-top:2px; }
+.subagent-dock-row:hover, .subagent-dock-row:focus-visible { background:var(--subagent-row-attached); border-color:var(--shell-seam); }
+.subagent-dock-row-main { min-width:0; }
+.subagent-dock-line-a, .subagent-dock-line-b { display:flex; align-items:center; min-width:0; gap:7px; }
+.subagent-dock-line-a { height:19px; }
+.subagent-dock-line-b { height:17px; }
+.subagent-dock-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:600 12.5px var(--font-mono); color:var(--peer); }
+.subagent-dock-line-a > .subagent-dock-detail:last-child { margin-left:auto; }
+.subagent-dock-task { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; line-height:17px; color:var(--text-subtle); }
+.subagent-dock-model, .subagent-dock-word { flex:none; white-space:nowrap; font:500 10.5px var(--font-mono); color:var(--text-faint); }
+.subagent-dock-word-resumed { color:var(--source-project); }
+.subagent-dock-word-waiting { color:var(--peer); }
+.subagent-dock-word-completed { color:var(--tone-good); }
+.subagent-dock-word-failed { color:var(--tone-danger); }
+.subagent-dock-word-stopped { color:var(--tone-warn); }
+.subagent-dock-row-finished .subagent-dock-name, .subagent-dock-row-finished .subagent-dock-task, .subagent-dock-row-finished svg, .subagent-dock-all-finished svg { opacity:.55; }
+.subagent-dock-finished-header { display:flex; align-items:center; justify-content:space-between; height:26px; margin-top:4px; padding:0 4px; border-top:1px solid var(--shell-seam); color:var(--text-faint); }
+.subagent-dock-finished-header button { display:flex; align-items:center; gap:5px; padding:2px 5px; border-radius:5px; font-size:11px; }
+.subagent-dock-finished-row { display:grid; grid-template-rows:1fr; transition:grid-template-rows 260ms var(--ease-enter), opacity 260ms var(--ease-enter); }
+.subagent-dock-finished-row > button { min-height:0; overflow:hidden; }
+.subagent-dock-finished-closed { grid-template-rows:0fr; opacity:0; }
+.subagent-dock-finished-closed > button { padding-top:0; padding-bottom:0; border-top-width:0; border-bottom-width:0; }
+.subagent-dock-tip { overflow:hidden; position:absolute; z-index:40; max-width:300px; padding:6px 11px; border:1px solid var(--shell-seam); border-radius:7px; background:var(--surface-raised); box-shadow:var(--elev-popover); animation:subagent-tip-in 190ms var(--ease-enter); }
+.subagent-dock-tip-attached { background:var(--subagent-row-attached); border-right:0; border-radius:7px 0 0 7px; }
+.subagent-dock-tip-who { display:flex; gap:7px; min-width:0; font:600 11px var(--font-mono); color:var(--peer); }
+.subagent-dock-tip-who > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.subagent-dock-tip-a, .subagent-dock-tip-b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.subagent-dock-tip-a { height:19px; font:10.5px var(--font-mono); line-height:19px; color:var(--text-faint); }
+.subagent-dock-tip-b { height:17px; font-size:11.5px; line-height:17px; color:var(--text-muted); }
+.subagent-dock-tip-hiding { animation:subagent-tip-out 140ms ease-in forwards; }
+.subagent-dock-flyer { position:absolute; z-index:31; pointer-events:none; margin:0; }
+.subagent-dock-morphing .subagent-dock-row .subagent-dock-face, .subagent-dock-morphing .subagent-dock-row .subagent-dock-name { visibility:hidden; }
+.subagent-dock-arrival { animation:subagent-resume-wash 1.8s var(--ease-standard); }
+.subagent-dock-state-change { animation:subagent-badge-pop 260ms var(--ease-enter); }
+.subagent-dock-chip:focus-visible, .subagent-dock-row:focus-visible, .subagent-dock-header button:focus-visible, .subagent-dock-finished-header button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+@keyframes subagent-resume-wash { from { background:var(--subagent-resume-wash); border-color:var(--subagent-resume-border); } to { background:transparent; border-color:transparent; } }
+@keyframes subagent-badge-pop { from { transform:scale(1.7); } to { transform:none; } }
+@keyframes subagent-tip-in { from { opacity:0; transform:translateX(10px); clip-path:inset(0 0 0 100%); } to { opacity:1; transform:none; clip-path:inset(0); } }
+@keyframes subagent-tip-out { to { opacity:0; clip-path:inset(0 0 0 100%); } }
+@media (prefers-reduced-motion:reduce) { .subagent-dock *, .subagent-dock *::before { animation:none !important; transition:none !important; } }
+.subagent-dock-reduced *, .subagent-dock-reduced *::before { animation:none !important; transition:none !important; }
+
+.subagent-dock-frame { position:absolute; z-index:30; pointer-events:none; border:1px solid var(--shell-seam); border-radius:10px; }
+.subagent-dock-morphing { border-color:transparent; box-shadow:none; }
+.subagent-dock-arrival .subagent-dock-badge { animation:subagent-badge-pop 260ms var(--ease-enter); }
+
+.subagent-dock-row-tipped, .subagent-dock-row-tipped:hover { background:var(--subagent-row-attached); border-color:var(--shell-seam); border-left-color:transparent; border-top-left-radius:0; border-bottom-left-radius:0; }

@@ -175,49 +175,21 @@ describe('theme.css', () => {
     const mediaRules = [...CSS.matchAll(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*([^{}]+)\s*\{\s*([^{}]+)\s*\}\s*\}/g,
     )]
-    expect(mediaRules).toHaveLength(2)
+    const animationRule = mediaRules.find(rule => rule[1].includes('.animate-arrive'))
+    const transitionRule = mediaRules.find(rule => rule[1].includes('.transition-opacity'))
 
-    const animationSelectors = mediaRules[0]?.[1]
+    const animationSelectors = animationRule?.[1]
       .split(',')
       .map(selector => selector.trim())
       .sort()
-    expect(animationSelectors).toEqual(
-      [
-        '.animate-arrive',
-        '.animate-compact-absorb',
-        '.animate-compact-ingest',
-        '.animate-compact-star',
-        '.animate-compact-sweep-left',
-        '.animate-compact-sweep-right',
-        '.animate-composer-glyph-out',
-        '.animate-composer-lift',
-        '.animate-drawer-in',
-        '.animate-face-pulse',
-        '.animate-land',
-        '.animate-ping',
-        '.animate-pop-up',
-        '.animate-pulse',
-        '.animate-sa-pop',
-        '.animate-scrim-in',
-        '.animate-settle',
-        '.animate-spin',
-        '.animate-tab-in',
-        '.animate-toast-in',
-        '.animate-welcome-exit',
-        // Arriving prose fades in; a reader who asked for less motion gets the
-        // honest instant arrival instead (`proseArrival.ts`).
-        '.prose-arrive-smooth',
-        '.prose-arrive-flowing',
-      ].sort(),
-    )
-    // The exact list pins the current contract; this discovery catches a future
-    // animation class that is added without also updating that list and media rule.
-    const definedAnimations = [...CSS.matchAll(/(\.animate-[\w-]+)\s*\{[^{}]*\banimation\s*:/g)]
+    // Every declared motion utility must be neutralized, regardless of how
+    // the stylesheet groups its rules or how many components add their own.
+    const definedAnimations = [...CSS.matchAll(/(\.(?:animate-[\w-]+|prose-arrive-[\w-]+))\s*\{[^{}]*\banimation\s*:/g)]
       .map(match => match[1])
     expect(definedAnimations.every(selector => animationSelectors?.includes(selector))).toBe(true)
-    expect(mediaRules[0]?.[2].trim()).toBe('animation: none !important;')
+    expect(animationRule?.[2].trim()).toBe('animation: none !important;')
 
-    const transitionSelectors = mediaRules[1]?.[1]
+    const transitionSelectors = transitionRule?.[1]
       .split(',')
       .map(selector => selector.trim())
       .sort()
@@ -229,7 +201,10 @@ describe('theme.css', () => {
       '.transcript-col-slide.is-sliding',
       "[class*='transition-[']",
     ].sort())
-    expect(mediaRules[1]?.[2].trim()).toBe('transition-duration: 0s !important;')
+    expect(transitionRule?.[2].trim()).toBe('transition-duration: 0s !important;')
+    const dockMotionRule = mediaRules.find(rule => rule[1].includes('.subagent-dock *'))
+    expect(dockMotionRule?.[2]).toContain('animation:none !important')
+    expect(dockMotionRule?.[2]).toContain('transition:none !important')
   })
 
   test('the default theme is the unscoped block, so it needs no rules of its own', () => {

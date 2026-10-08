@@ -21,7 +21,7 @@ const INACTIVE_REF: RefCallback<HTMLElement> = () => {}
  * element does not receive the remainder of that entrance, which prevents a
  * regroup from restarting it. The timeout covers reduced motion and removals.
  */
-export function useEntranceLatch(freshKeys: ReadonlySet<string>) {
+export function useEntranceLatch(freshKeys: ReadonlySet<string>, fallbackMs = ENTRANCE_FALLBACK_MS) {
   const records = useRef(new Map<string, EntranceRecord>())
   const elements = useRef(new Map<string, HTMLElement>())
   const refs = useRef(new Map<string, RefCallback<HTMLElement>>())
@@ -45,7 +45,7 @@ export function useEntranceLatch(freshKeys: ReadonlySet<string>) {
   useLayoutEffect(() => {
     for (const key of freshKeys) {
       if (records.current.has(key)) continue
-      const timeout = setTimeout(() => finish(key), ENTRANCE_FALLBACK_MS)
+      const timeout = setTimeout(() => finish(key), fallbackMs)
       records.current.set(key, { element: elements.current.get(key) ?? null, timeout })
     }
   })
@@ -83,7 +83,7 @@ export function useEntranceLatch(freshKeys: ReadonlySet<string>) {
 }
 
 /** A one-element entrance triggered only by a committed value change. */
-export function useEntranceOnChange<T>(value: T, eligible: boolean, className: string) {
+export function useEntranceOnChange<T>(value: T, eligible: boolean, className: string, fallbackMs = ENTRANCE_FALLBACK_MS) {
   const previous = useRef({ value, generation: 0 })
   const changed = !Object.is(previous.current.value, value)
   const generation = previous.current.generation + (changed ? 1 : 0)
@@ -92,7 +92,7 @@ export function useEntranceOnChange<T>(value: T, eligible: boolean, className: s
   useLayoutEffect(() => {
     previous.current = { value, generation }
   }, [value, generation])
-  const latch = useEntranceLatch(fresh)
+  const latch = useEntranceLatch(fresh, fallbackMs)
   return {
     active: latch.active.has(key),
     ref: latch.refFor(key, className),
