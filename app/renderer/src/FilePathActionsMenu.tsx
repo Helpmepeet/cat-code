@@ -16,6 +16,7 @@ import {
 import { useToast } from './toastContext.js'
 import {
   estimateFilePathMenuHeight,
+  FILE_PATH_MENU_ROW_HEIGHT,
   canOpenFilePathInSession,
   placeFilePathActionsMenu,
   resolveFilePathActionItems,
@@ -23,6 +24,7 @@ import {
   type FilePathActionItem,
   type FilePathActionKind,
   type FilePathActionsAnchor,
+  type FilePathMenuExtras,
   type FilePathParts,
 } from './filePathActions.js'
 import {
@@ -92,12 +94,14 @@ export function FilePathActionsMenu({
   rawPath,
   cwd,
   sessionId,
+  extras,
   onClose,
 }: {
   anchor: FilePathActionsAnchor
   rawPath: string
   cwd?: string | null
   sessionId: SessionId
+  extras?: FilePathMenuExtras
   onClose: () => void
 }): ReactNode {
   const menuRef = useRef<HTMLDivElement>(null)
@@ -112,12 +116,13 @@ export function FilePathActionsMenu({
   const items = resolveFilePathActionItems(
     parts,
     undefined,
-    canOpenFilePathInSession(parts, cwd),
+    extras?.canOpen ?? canOpenFilePathInSession(parts, cwd),
   )
+  const leading = extras?.leading
   const placement = placeFilePathActionsMenu(
     anchor,
     readViewport(),
-    estimateFilePathMenuHeight(items),
+    estimateFilePathMenuHeight(items) + (leading ? FILE_PATH_MENU_ROW_HEIGHT : 0),
   )
 
   const handleAction = (kind: FilePathActionKind): void => {
@@ -172,6 +177,19 @@ export function FilePathActionsMenu({
             : { top: placement.top, left: placement.left }
         }
       >
+        {leading ? (
+          <>
+            <FilePathMenuRow
+              item={{ kind: 'copy', label: leading.label, enabled: true }}
+              onAction={() => {
+                restoreTriggerFocus()
+                onClose()
+                leading.onSelect()
+              }}
+            />
+            <div className="my-1 h-px bg-shell-seam" />
+          </>
+        ) : null}
         {items.map((item, index) => (
           <Fragment key={item.kind}>
             {index > 0 ? <div className="my-1 h-px bg-shell-seam" /> : null}

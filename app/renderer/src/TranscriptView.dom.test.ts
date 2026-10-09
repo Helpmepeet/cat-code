@@ -496,6 +496,33 @@ test('clicking a generated image opens the shared image preview', async () => {
   expect(dialog?.isConnected).toBe(false)
 })
 
+test('right-clicking a generated image offers the image and its file outside the workspace', async () => {
+  const tree = await harness.mount(
+    createElement(TranscriptRowsView, { rows: [generatedImageRow()], cwd: '/repo' }),
+  )
+  const image = tree.container.querySelector<HTMLElement>(
+    'button[aria-label="Expand generated image"] img',
+  )
+  const event = new globalThis.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 100,
+    clientY: 150,
+  })
+  await act(async () => {
+    image?.dispatchEvent(event)
+  })
+  await harness.nextFrame()
+
+  expect(event.defaultPrevented).toBe(true)
+  const menu = tree.container.querySelector('[role="menu"][aria-label="File actions for cat.png"]')
+  const labels = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map(
+    item => item.textContent,
+  )
+  // /tmp/cat.png is outside /repo: Open is offered only because the host validates it.
+  expect(labels).toEqual(['Copy image', 'Copy', 'Open in'])
+})
+
 test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {
   const clipboardWrites: string[] = []
   const clipboardDescriptor = Object.getOwnPropertyDescriptor(

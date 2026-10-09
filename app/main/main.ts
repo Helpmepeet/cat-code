@@ -3885,8 +3885,16 @@ function registerHostControlPlane(): void {
 
   ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE, (_e, input: unknown): Promise<boolean> => {
     if (!host) return Promise.resolve(false)
-    return openWorkspaceFile(input, host.listSessions(), (path, target) =>
-      launchTargetOpener(path, target),
+    return openWorkspaceFile(
+      input,
+      host.listSessions(),
+      (path, target) => launchTargetOpener(path, target),
+      {
+        generatedImagesRoot: join(
+          process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+          'generated-images',
+        ),
+      },
     )
   })
 }

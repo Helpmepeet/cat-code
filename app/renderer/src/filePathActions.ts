@@ -8,12 +8,21 @@ import { createContext } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
 import { basename } from './pathUtils.js'
 
+/** What a surface adds to the menu beyond the path itself. */
+export type FilePathMenuExtras = {
+  /** Offer Open for a path outside the workspace that the host still validates (generated images). */
+  canOpen?: boolean
+  /** One row above the file actions, for the thing the path belongs to. */
+  leading?: { label: string; onSelect: () => void }
+}
+
 export type FilePathMenuContextValue = {
   cwd: string | null
   openFilePathMenu: (
     anchor: FilePathActionsAnchor,
     rawPath: string,
     sessionId: SessionId,
+    extras?: FilePathMenuExtras,
   ) => void
 }
 

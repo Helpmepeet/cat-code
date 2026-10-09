@@ -173,7 +173,9 @@ import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import {
   FilePathMenuContext,
   type FilePathActionsAnchor,
+  type FilePathMenuExtras,
 } from './filePathActions.js'
+import { copyImageToClipboard } from './imageClipboard.js'
 import {
   ActionBranchIcon,
   ActionCloseIcon,
@@ -655,10 +657,16 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     anchor: FilePathActionsAnchor
     rawPath: string
     sessionId: SessionId
+    extras?: FilePathMenuExtras
   } | null>(null)
   const openFilePathMenu = useCallback(
-    (anchor: FilePathActionsAnchor, rawPath: string, sessionId: SessionId) => {
-      setFilePathMenuState({ anchor, rawPath, sessionId })
+    (
+      anchor: FilePathActionsAnchor,
+      rawPath: string,
+      sessionId: SessionId,
+      extras?: FilePathMenuExtras,
+    ) => {
+      setFilePathMenuState({ anchor, rawPath, sessionId, extras })
     },
     [],
   )
@@ -915,6 +923,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                         rawPath={filePathMenuState.rawPath}
                         cwd={cwd}
                         sessionId={filePathMenuState.sessionId}
+                        extras={filePathMenuState.extras}
                         onClose={closeFilePathMenu}
                       />
                     ) : null}
@@ -5518,6 +5527,7 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
   const resultEntrance = useContext(TranscriptMotionContext).results
   const resolving = resultEntrance.active.has(row.id)
   const toast = useToast()
+  const filePathContext = useContext(FilePathMenuContext)
   const [copied, setCopied] = useState(false)
   const [previewOpen, setPreviewOpen] = useTranscriptDisclosure(`generated-image:${row.id}`)
   const closePreview = useCallback(() => setPreviewOpen(false), [setPreviewOpen])
@@ -5602,7 +5612,30 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
         ref={resolving ? resultEntrance.refFor(row.id, 'animate-arrive') : undefined}
         onAnimationEnd={event => resultEntrance.onAnimationEnd(row.id, event)}
       >
-        <div className="group relative w-fit max-w-full">
+        <div
+          className="group relative w-fit max-w-full"
+          onContextMenu={event => {
+            if (!filePathContext) return
+            event.preventDefault()
+            event.stopPropagation()
+            filePathContext.openFilePathMenu(
+              { type: 'pointer', x: event.clientX, y: event.clientY },
+              image.filePath,
+              row.sessionId,
+              {
+                canOpen: true,
+                leading: {
+                  label: 'Copy image',
+                  onSelect: () => {
+                    copyImageToClipboard(src)
+                      .then(() => toast('Image copied', { tone: 'success' }))
+                      .catch(() => toast('Could not write to the clipboard', { tone: 'warn' }))
+                  },
+                },
+              },
+            )
+          }}
+        >
           <button
             type="button"
             aria-label="Expand generated image"
