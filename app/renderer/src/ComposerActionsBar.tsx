@@ -23,6 +23,7 @@ import {
   type ContextCapacity,
   type ContextUsage,
 } from './contextUsage.js'
+import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
 import {
   selectBreakdownRows,
   type ContextBreakdownRow,
@@ -1392,7 +1393,7 @@ function CacheExpiredIndicator() {
   return (
     <span
       role="status"
-      aria-label="Cache expired"
+      aria-label="Estimated cache expiry passed"
       className="composer-cache-indicator relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
     >
       <Glyph size={14} strokeWidth="2">
@@ -1403,9 +1404,69 @@ function CacheExpiredIndicator() {
         aria-hidden
         className="composer-cache-label absolute bottom-full left-1/2 z-40 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-shell-seam bg-surface-raised px-[9px] py-[5px] text-[11.5px] font-medium text-text-primary shadow-lg"
       >
-        Cache expired
+        Estimated cache expiry passed
       </span>
     </span>
+  )
+}
+
+function TokenWarningChip({
+  warning,
+  faceProps,
+}: {
+  warning: TokenWarning
+  faceProps?: ComposerFaceProps
+}) {
+  const { open, setOpen, ref, triggerRef } = usePopover()
+  const summary = warning.autoCompactEnabled
+    ? `${warning.percentLeft}% until auto-compact`
+    : 'Context low'
+  const title = warning.autoCompactEnabled
+    ? summary
+    : `Context low, ${warning.percentLeft}% remaining`
+  return (
+    <div ref={ref} className="relative flex shrink-0">
+      <button
+        ref={triggerRef}
+        {...faceProps}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={title}
+        title={title}
+        onClick={() => setOpen(value => !value)}
+        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
+      >
+        <ActionWarningIcon size={14} />
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-label="Context"
+          className="absolute bottom-full right-0 z-40 mb-2.5 w-[252px] rounded-xl border border-tone-warn/25 bg-surface-raised px-3.5 py-3 shadow-lg"
+        >
+          <div className="mb-1.5 flex items-center gap-[7px]">
+            <span className="inline-flex text-tone-warn">
+              <ActionWarningIcon size={13} />
+            </span>
+            <span className="text-[12.5px] font-semibold text-text-primary">
+              {summary}
+            </span>
+          </div>
+          <div className="text-[11.5px] leading-relaxed text-text-muted">
+            {warning.autoCompactEnabled ? (
+              'This conversation is getting long. Soon it auto-compacts into a summary so it can continue without resending everything.'
+            ) : (
+              <>
+                This conversation is nearly full. Run{' '}
+                <span className="font-mono text-tone-warn">/compact</span> to
+                summarize it and keep going.
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -1593,6 +1654,10 @@ export function ComposerActionsBar({
   const cacheExpired = useCacheExpiredEstimate(
     runControls ? runControls.cacheExpiresAt : cacheExpiresAt,
     runControls?.cacheExpired,
+  )
+  const tokenWarning = selectTokenWarning(
+    contextUsage ?? null,
+    runControls?.autoCompact,
   )
 
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
@@ -1841,6 +1906,12 @@ export function ComposerActionsBar({
           ) : null}
           {(accountInteractive || showAccount || anthropicAccountLabel) && contextUsage ? (
             <RailSep />
+          ) : null}
+          {tokenWarning ? (
+            <TokenWarningChip
+              warning={tokenWarning}
+              faceProps={faceProps('token-warning')}
+            />
           ) : null}
           {contextUsage ? (
             <ContextChip

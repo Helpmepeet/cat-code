@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
-import { usageFlowSamples, usageSmoothCurve, usageStackedAreaGeometry } from './usageStackedAreaState.js';
+import { usageFlowSamples, usageStackedAreaGeometry } from './usageStackedAreaState.js';
 
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 
@@ -27,18 +27,34 @@ test('stacked boundaries preserve totals without negative thickness or invalid c
     expect(geometry.centerPaths).toHaveLength(3);
 });
 
-test('Catmull-Rom curves preserve through-point tangents and do not taper endpoints', () => {
-    expect(usageSmoothCurve([])).toBe('');
-    expect(usageSmoothCurve([{ x: 4, y: 8 }])).toBe('M4,8');
-    expect(usageSmoothCurve([{ x: 0, y: 10 }, { x: 10, y: 0 }, { x: 20, y: 10 }])).toBe('M0,10 C2,8 6,0 10,0 C14,0 18,8 20,10');
-    expect(usageSmoothCurve([{ x: 0, y: 50 }, { x: 0, y: 40 }, { x: 10, y: 50 }])).not.toMatch(/NaN|Infinity/);
+test('live stacked-area curves preserve endpoint tangents, exact construction, and repeated x coordinates', () => {
     const geometry = usageStackedAreaGeometry([
+        { x: 0, values: [0] },
+        { x: 10, values: [10] },
+        { x: 20, values: [0] },
+    ], 10, 0, 10);
+    expect(geometry.curves[1]).toEqual([
+        {
+            from: { x: 0, y: 10 },
+            control1: { x: 2, y: 8 },
+            control2: { x: 6, y: 0 },
+            to: { x: 10, y: 0 },
+        },
+        {
+            from: { x: 10, y: 0 },
+            control1: { x: 14, y: 0 },
+            control2: { x: 18, y: 8 },
+            to: { x: 20, y: 10 },
+        },
+    ]);
+    expect(geometry.paths[0]).toBe('M0,10 C2,8 6,0 10,0 C14,0 18,8 20,10 L20,10 C18,10 14,10 10,10 C6,10 2,10 0,10 Z');
+
+    const repeatedX = usageStackedAreaGeometry([
         { x: 0, values: [5] },
-        { x: 5, values: [5] },
+        { x: 0, values: [6] },
         { x: 10, values: [5] },
     ], 10, 0, 100);
-    expect(geometry.paths[0]).toStartWith('M0,50');
-    expect(geometry.boundaries[1]!.map(point => point.y)).toEqual([50, 50, 50]);
+    expect(repeatedX.paths.join(' ')).not.toMatch(/NaN|Infinity/);
 });
 
 test('center indicators stop across intervals where a series is absent', () => {

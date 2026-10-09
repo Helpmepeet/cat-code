@@ -23,9 +23,10 @@ import { migrateRetiredGptModels } from './migrateRetiredGptModels.js'
 import { migrateSonnet1mToSonnet45 } from './migrateSonnet1mToSonnet45.js'
 import { migrateSonnet45ToSonnet46 } from './migrateSonnet45ToSonnet46.js'
 import { resetAutoModeOptInForDefaultOffer } from './resetAutoModeOptInForDefaultOffer.js'
+import { migrateWorkspaceHandoffStorage } from './migrateWorkspaceHandoffStorage.js'
 import { resetProToOpusDefault } from './resetProToOpusDefault.js'
 
-export const CURRENT_MIGRATION_VERSION = 16
+export const CURRENT_MIGRATION_VERSION = 17
 
 const MIGRATION_LOCK_STALE_MS = 5_000
 const MIGRATION_LOCK_UPDATE_MS = 1_000
@@ -66,6 +67,8 @@ function readFreshMigrationVersion(): number | undefined {
 }
 
 function runVersionedMigrations(): Error | null {
+  const handoffError = migrateWorkspaceHandoffStorage()
+  if (handoffError) return handoffError
   const autoUpdatesError = migrateAutoUpdatesToSettings()
   if (autoUpdatesError) return autoUpdatesError
 

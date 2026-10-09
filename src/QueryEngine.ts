@@ -49,7 +49,7 @@ import {
 import { alignProviderFileEditTool, assembleToolPool } from './tools.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
-import type { Message, MessageOrigin, UserMessage } from './types/message.js'
+import type { Message, MessageOrigin, SystemMessage, UserMessage } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
 import { createAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
@@ -98,9 +98,11 @@ import {
   verifyHandoffTranscriptDurably,
   verifyActiveTranscriptTipDurably,
   findHandoffOutcomeInActiveTranscript,
+  sealResumeCheckpoint,
+  verifyResumeCheckpoint,
 } from './utils/sessionStorage.js'
 import { createHandoffSkippedResult } from './services/tools/handoffExecution.js'
-import { TurnHandoff, handoffContinuationPrompt, handoffTerminalPrompt, handoffOutcomeText, readHandoffOutcomeData, type HandoffTerminalOutcome } from './app-runtime/handoff.js'
+import { TurnHandoff, handoffContinuationPrompt, handoffReconciliationPrompt, handoffTerminalPrompt, handoffOutcomeText, readHandoffOutcomeData, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './app-runtime/handoff.js'
 import { buildEffectiveSystemPrompt } from './utils/systemPrompt.js'
 import { resolveThemeSetting } from './utils/systemTheme.js'
 import {
@@ -332,17 +334,25 @@ export class QueryEngine {
       uuid?: string
       isMeta?: boolean
       origin?: MessageOrigin
-      onInputPersisted?: () => void
+      onInputPersisted?: () => void | Promise<void>
       /** Only used by continueHandoff; never populated from app.submit. */
       handoffContinuation?: { operationId: string }
       /** Only the controller can request durable genuine-user reconciliation. */
       handoffReconciliationAdmission?: true
-    },
+    } & HandoffTurnLifecycleOptions,
   ): AsyncGenerator<SDKMessage, void, unknown> {
     if (options?.handoffReconciliationAdmission &&
       (options.isMeta || options.origin || options.handoffContinuation)) {
       throw new Error('Workspace reconciliation requires genuine user input')
     }
+    let executionClosed = false
+    let providerEntered = false
+    const closeExecution = (outcome: import('../app/shared/workspaceHandoff.js').WorkspaceHandoffExecutionOutcome) => {
+      if (executionClosed) return
+      executionClosed = true
+      options?.onExecutionClosed?.(outcome)
+    }
+    try {
     const {
       cwd,
       getMcpRuntimeSnapshot,
@@ -394,6 +404,19 @@ export class QueryEngine {
     const startTime = Date.now()
     const turnHandoff = new TurnHandoff()
     let transcriptWriteFailure: unknown = null
+    const pendingTranscriptWrites: Promise<unknown>[] = []
+    const recordTranscriptAsync = (snapshot: Message[]) => {
+      // Snapshot the ordering, but keep message objects live until the writer's
+      // lazy serialization sees the provider's usage/stop-reason mutations.
+      const pending = recordTranscriptFn([...snapshot]).catch(error => {
+        transcriptWriteFailure ??= error
+      })
+      pendingTranscriptWrites.push(pending)
+    }
+    const settleTranscriptWrites = async () => {
+      await Promise.all(pendingTranscriptWrites)
+      if (transcriptWriteFailure) throw transcriptWriteFailure
+    }
 
     // Wrap canUseTool to track permission denials
     const wrappedCanUseTool: CanUseToolFn = async (
@@ -575,13 +598,23 @@ export class QueryEngine {
       }
     }
 
+    const savedReconciliationInput = options?.handoffReconciliationContext
+      ? this.mutableMessages.find(message => message.type === 'user' && message.uuid === options.uuid && !message.isMeta && !message.origin)
+      : undefined
+    const savedReconciliationContext = options?.handoffReconciliationContext
+      ? this.mutableMessages.find(message => message.uuid === options.handoffReconciliationContext!.contextUuid)
+      : undefined
+    if (savedReconciliationInput && (!savedReconciliationContext || savedReconciliationContext.type !== 'user' ||
+      !savedReconciliationContext.isMeta || savedReconciliationContext.message.content !== handoffReconciliationPrompt())) {
+      throw new Error('Reconciliation retry lacks its accepted context')
+    }
     const {
       messages: messagesFromUserInput,
       shouldQuery,
       allowedTools,
       model: modelFromUserInput,
       resultText,
-    } = await processUserInput({
+    } = savedReconciliationInput ? { messages: [savedReconciliationInput], shouldQuery: true, allowedTools: undefined, model: undefined, resultText: undefined } : await processUserInput({
       input: prompt,
       mode: 'prompt',
       setToolJSX: () => {},
@@ -597,8 +630,15 @@ export class QueryEngine {
       querySource: 'sdk',
     })
 
+    if (options?.handoffReconciliationContext) {
+      messagesFromUserInput.push((savedReconciliationContext as UserMessage | undefined) ?? createUserMessage({
+        content: handoffReconciliationPrompt(), isMeta: true,
+        uuid: options.handoffReconciliationContext.contextUuid as UUID,
+      }))
+    }
     // Push new messages, including user input and any attachments
-    this.mutableMessages.push(...messagesFromUserInput)
+    const acceptedUuids = savedReconciliationInput ? new Set(this.mutableMessages.map(message => message.uuid)) : new Set<string>()
+    this.mutableMessages.push(...messagesFromUserInput.filter(message => !acceptedUuids.has(message.uuid)))
     // Autonomous app-runtime turns carry trusted engine provenance through the
     // same persisted UserMessage path as normal input. This option is never
     // populated by the renderer-side app.submit protocol.
@@ -641,7 +681,7 @@ export class QueryEngine {
     if (persistSession && messagesFromUserInput.length > 0) {
       const transcriptPromise = recordTranscriptFn(messages)
       if (isBareMode() && !options?.handoffReconciliationAdmission) {
-        void transcriptPromise.catch(error => { transcriptWriteFailure ??= error })
+        pendingTranscriptWrites.push(transcriptPromise.catch(error => { transcriptWriteFailure ??= error }))
       } else {
         inputTranscriptTip = await transcriptPromise
         inputPersisted = true
@@ -676,7 +716,17 @@ export class QueryEngine {
       await verifyActiveTranscriptTipDurably(tip, input.uuid)
       inputPersisted = true
     }
-    if (inputPersisted) options?.onInputPersisted?.()
+    if (inputPersisted) {
+      if (options?.onHandoffInputCommitted) {
+        const checkpoint = await sealResumeCheckpoint(messages)
+        await options.onHandoffInputCommitted(checkpoint)
+      }
+      await options?.onInputPersisted?.()
+      if (this.abortController.signal.aborted && options?.handoffContinuation) {
+        closeExecution('not_started')
+        return
+      }
+    }
 
     if (deferredAttemptUuid) {
       const accepted = messagesFromUserInput.some(
@@ -867,8 +917,10 @@ export class QueryEngine {
         }
       }
 
+      closeExecution(this.abortController.signal.aborted ? 'interrupted' : 'success')
       if (persistSession) {
         await recordTranscriptFn(messages)
+        await settleTranscriptWrites()
         if (
           isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
           isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -956,6 +1008,7 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
+    providerEntered = true
     const queryIterator = this.abortController.signal.aborted
       ? (async function* () { return { reason: 'aborted' } })()
       : query({
@@ -969,6 +1022,7 @@ export class QueryEngine {
       querySource: 'sdk',
       maxTurns,
       taskBudget,
+      holdQueuedUserPrompts: Boolean(options?.handoffContinuation),
     })
     let queryTerminal: { reason: string } | undefined
     async function* observeQuery() { queryTerminal = yield* queryIterator }
@@ -1028,7 +1082,7 @@ export class QueryEngine {
           // useLogMessages.ts fire-and-forgets. enqueueWrite is
           // order-preserving so fire-and-forget here is safe.
           if (message.type === 'assistant') {
-            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
+            recordTranscriptAsync(messages)
           } else {
             await recordTranscriptFn(messages)
           }
@@ -1083,7 +1137,7 @@ export class QueryEngine {
           // forking the chain and orphaning the conversation on resume.
           if (persistSession) {
             messages.push(message)
-            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
+            recordTranscriptAsync(messages)
           }
           yield* normalizeMessage(message)
           break
@@ -1139,7 +1193,7 @@ export class QueryEngine {
           // Record inline (same reason as progress above).
           if (persistSession) {
             messages.push(message)
-            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
+            recordTranscriptAsync(messages)
           }
 
           // Extract structured output from StructuredOutput tool calls
@@ -1148,7 +1202,9 @@ export class QueryEngine {
           }
           // Handle max turns reached signal from query.ts
           else if (message.attachment.type === 'max_turns_reached') {
+            closeExecution('failed')
             if (persistSession) {
+              await settleTranscriptWrites()
               if (
                 isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
                 isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1228,6 +1284,13 @@ export class QueryEngine {
             break
           }
           this.mutableMessages.push(message)
+          // Retained system messages must enter the same ordered snapshots as
+          // assistant blocks. Deferring recovery until the next input creates
+          // a new ancestor before an already-recorded completed response.
+          if (persistSession && message.subtype !== 'compact_boundary') {
+            messages.push(message as SystemMessage)
+            recordTranscriptAsync(messages)
+          }
           // Yield compact boundary messages to SDK
           if (
             message.subtype === 'compact_boundary' &&
@@ -1303,7 +1366,9 @@ export class QueryEngine {
 
       // Check if USD budget has been exceeded
       if (maxBudgetUsd !== undefined && getTotalCost() >= maxBudgetUsd) {
+        closeExecution('failed')
         if (persistSession) {
+          await settleTranscriptWrites()
           if (
             isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
             isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1346,7 +1411,9 @@ export class QueryEngine {
           10,
         )
         if (callsThisQuery >= maxRetries) {
+          closeExecution('failed')
           if (persistSession) {
+            await settleTranscriptWrites()
             if (
               isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
               isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1382,6 +1449,7 @@ export class QueryEngine {
     }
 
     } catch (error) {
+      closeExecution('failed')
       if (!turnHandoff.requested) throw error
       turnHandoff.invalidate()
       queryTerminal = { reason: 'handoff_failed' }
@@ -1398,6 +1466,23 @@ export class QueryEngine {
         }
       }
       this.mutableMessages = [...messages]
+    } finally {
+      if (!executionClosed) {
+        const terminalMessage = messages.findLast(message => message.type === 'assistant' || message.type === 'user')
+        const firstContent = terminalMessage && Array.isArray(terminalMessage.message.content) ? terminalMessage.message.content[0] : undefined
+        const interrupted = this.abortController.signal.aborted || (terminalMessage &&
+          isSyntheticMessage(terminalMessage) && firstContent && 'text' in firstContent &&
+          (firstContent.text === INTERRUPT_MESSAGE || firstContent.text === INTERRUPT_MESSAGE_FOR_TOOL_USE))
+        const failed = turnHandoff.requested || !isResultSuccessful(terminalMessage, lastStopReason) ||
+          (terminalMessage?.type === 'assistant' && (terminalMessage.isApiErrorMessage || terminalMessage.error === 'authentication_failed'))
+        closeExecution(interrupted ? 'interrupted' : failed ? 'failed' : 'success')
+      }
+      // Drain recorder promises only after the provider can finish mutating
+      // streamed messages. This is an enqueue barrier, not an fsync guarantee.
+      await Promise.all(pendingTranscriptWrites)
+      if (transcriptWriteFailure && !turnHandoff.requested) {
+        throw transcriptWriteFailure
+      }
     }
 
     if (turnHandoff.accepted || queryTerminal?.reason === 'handoff_failed') {
@@ -1584,17 +1669,53 @@ export class QueryEngine {
       ...(isApiError || isAuthError ? { errors: [] } : {}),
       uuid: randomUUID(),
     }
+    } finally {
+      if (!executionClosed) closeExecution(providerEntered ? 'failed' : 'not_started')
+    }
   }
 
   interrupt(reason?: string): void {
     this.abortController.abort(reason)
   }
 
-  continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void }): AsyncGenerator<SDKMessage, void, unknown> {
+  continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void> } & HandoffTurnLifecycleOptions): AsyncGenerator<SDKMessage, void, unknown> {
     if (!operationId) throw new Error('Missing handoff operation identity')
     return this.submitMessage(handoffContinuationPrompt(), {
-      isMeta: true, uuid: options?.uuid, handoffContinuation: { operationId }, onInputPersisted: options?.onInputPersisted,
+      ...options, isMeta: true, handoffContinuation: { operationId },
     })
+  }
+
+  sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1> {
+    return sealResumeCheckpoint(this.mutableMessages)
+  }
+
+  verifyResumeCheckpoint(checkpoint: import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1): Promise<void> {
+    return verifyResumeCheckpoint(checkpoint)
+  }
+
+  async recoverHandoffReconciliation(notice: { displayUuid: string; contextUuid: string }): Promise<{
+    inputUuid: string; contextUuid: string; checkpoint: import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1
+  } | null> {
+    const index = this.mutableMessages.findIndex(message => message.uuid === notice.displayUuid)
+    const display = this.mutableMessages[index]
+    const warningContext = this.mutableMessages[index + 1]
+    if (index < 0 || display?.type !== 'system' || display.subtype !== 'workspace_handoff_outcome' ||
+      warningContext?.type !== 'user' || warningContext.uuid !== notice.contextUuid || !warningContext.isMeta) return null
+    for (let next = index + 2; next < this.mutableMessages.length; next++) {
+      const input = this.mutableMessages[next]!
+      if (input.type !== 'user' || input.isMeta || input.origin || input.isVirtual || input.sourceToolAssistantUUID ||
+        input.toolUseResult !== undefined || !messageSelector().selectableUserMessagesFilter(input) ||
+        (Array.isArray(input.message.content) && input.message.content.some(block => block.type === 'tool_result'))) continue
+      const context = this.mutableMessages[next + 1]
+      if (context?.type !== 'user' || !context.isMeta || context.message.content !== handoffReconciliationPrompt()) return null
+      const checkpoint = await sealResumeCheckpoint(this.mutableMessages)
+      return { inputUuid: input.uuid, contextUuid: context.uuid, checkpoint }
+    }
+    return null
+  }
+
+  async readHandoffOutcome(operationId: string): Promise<HandoffTerminalOutcome | null> {
+    return (await findHandoffOutcomeInActiveTranscript(operationId))?.outcome ?? null
   }
 
   async persistHandoffOutcome(operationId: string, outcome: HandoffTerminalOutcome): Promise<SDKMessage[]> {

@@ -303,14 +303,6 @@ export function getUnresolvedAgentMessageDeliveries(
   )
 }
 
-export function formatAgentMessageDeliveryReport(
-  task: LocalAgentTaskState,
-): string | undefined {
-  return formatAgentMessageDeliveryRecords(
-    getUnresolvedAgentMessageDeliveries(task),
-  )
-}
-
 export function formatAgentMessageDeliveryRecords(
   records: readonly LocalAgentMessageDelivery[],
 ): string | undefined {

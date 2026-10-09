@@ -1,3 +1,4 @@
+import type { ResumeCheckpointV1, WorkspaceHandoffExecutionOutcome } from '../../app/shared/workspaceHandoff.js'
 type HandoffCaller = { agentId?: unknown; turnHandoff?: TurnHandoff }
 
 export type HandoffRequest = { operationId: string; toolUseId: string }
@@ -72,4 +73,14 @@ export function readHandoffOutcomeData(value: unknown): { operationId: string; o
     typeof data.operationId !== 'string' || !data.operationId || data.operationId.length > 128 ||
     typeof data.outcome !== 'string' || !['failed', 'cancelled', 'uncertain'].includes(data.outcome)) return null
   return { operationId: data.operationId, outcome: data.outcome as HandoffTerminalOutcome }
+}
+
+export type HandoffTurnLifecycleOptions = {
+  onHandoffInputCommitted?: (checkpoint: ResumeCheckpointV1) => Promise<void>
+  onExecutionClosed?: (outcome: WorkspaceHandoffExecutionOutcome) => void
+  handoffReconciliationContext?: { operationId: string; noticeUuid: string; contextUuid: string }
+}
+
+export function handoffReconciliationPrompt(): string {
+  return "The user's message satisfies the workspace warning's wait condition. Review existing progress and follow this user's instruction."
 }

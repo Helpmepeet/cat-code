@@ -121,6 +121,32 @@ preview is neither a move nor a real resume.
 
 ## Contract
 
+### Handoff lifecycle amendment, 2026-10-09
+
+The [handoff implementation plan](../../reports/2026-10-09-handoff-fix-plan.md)
+separates movement, command delivery, execution, review and gate convergence.
+Main owns a V2 jump ledger with conservative V1 read compatibility. The engine
+owns one bounded execution record per operation and sealed resume checkpoints.
+Success requires independently intended conversation equality through the real
+bounded-prefix reader, final execution classification, and durable record
+publication. Operational acknowledgements and SDK results do not supply proof.
+
+Continuation acknowledges durable consumption and runs independently of the
+20-second command deadline. Cumulative status retains committed warning and
+genuine-input reconciliation evidence during overlapping coordination. Stop and
+Close retain operation-scoped cancellation intent; cancellation after execution
+closure cannot rewrite its outcome or abort a later turn. Release requires main's
+durable authorization and a matching current-generation gate observation before
+the host reservation is cleared. Replacement validates unresolved evidence and
+never replays the original continuation. Historical converged receipts do not
+re-arm holds after later authorized conversation changes.
+
+Protocol V3 addresses controls to supervisor-minted UUID generations and keeps
+these control frames out of renderer replay. No new renderer authority, session
+lifetime, trust grant, transcript repair or migration of existing conversations
+is introduced. Storage migration initializes a private execution-record directory;
+only main upgrades a touched V1 ledger.
+
 The session menu offers **Move to project…** for a saved managed Chat. Main resolves a one-time native directory-picker token, and the host validates the resulting real path. The destination must already have engine-persisted trust. The same `appSessionId`, `engineSessionId`, transcript, sidebar row, and original managed-folder ownership survive every move. **Move back** returns the working context to the original Chat folder; it does not rewind messages, files, hooks, or external effects. Chat-created working files stay in that folder. The model's desktop prompt names the original and current directories and explains how to interpret earlier relative file references. It grants no additional filesystem access.
 
 An idle Chat may move while ready, parked, or closed. The host internally starts a parked or closed source through its normal restore owner, waits for its control snapshots, parks it, relocates it, verifies the destination engine, and parks the destination again. A closed Chat remains closed; these internal starts do not publish a tab-opening event or change focus. If no engine ID has been allocated, the normal sidecar startup allocates one before relocation. The host uses `app.park` and accepts only its dedicated parked exit. Active turns, pending permissions, queued prompts, workers, in-flight writes, sign-in, a concurrent branch switch, another move or restore, and a persisted worktree or deferred continuation block it. Peer sessions themselves cannot move. Retained child peer rows remain in their original project with their history; a child with active work, or a pending unconsumed peer delivery, blocks its parent's move. Closed children do not. Main's peer plane rechecks both live project associations before forwarding or redelivering, so old-project messages cannot enter the new context. Bypass-mode relocation remains outside this decision; classifier-backed Auto is supported.

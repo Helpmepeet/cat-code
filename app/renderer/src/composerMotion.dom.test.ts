@@ -98,18 +98,45 @@ const COMPACT = {
   enabled: true, threshold: 187_000, warningThreshold: 167_000,
 } as RunControlsSnapshot['autoCompact']
 
-function rail(usedTokens: number, cacheExpired: boolean | null = null, cacheExpiresAt?: number) {
+function rail(
+  usedTokens: number,
+  cacheExpired: boolean | null = null,
+  cacheExpiresAt?: number,
+  autoCompact = COMPACT,
+) {
   return createElement(ComposerActionsBar, {
     attachDisabled: false, onAttach: () => {}, model: null, reasoningEffort: null,
     fastMode: null, permissionContext: null, onSetMode: () => {}, account: null,
     contextUsage: { usedTokens, contextWindow: 200_000, percentUsed: Math.round(usedTokens / 2_000) },
-    runControls: { autoCompact: COMPACT, cacheExpired, cacheExpiresAt } as RunControlsSnapshot,
+    runControls: { autoCompact, cacheExpired, cacheExpiresAt } as RunControlsSnapshot,
   })
 }
 
+test('context warning explains whether compaction is automatic or manual', async () => {
+  const tree = await harness.mount(rail(175_000, null, undefined, {
+    ...COMPACT, enabled: false,
+  }))
+  const warning = () => tree.container.querySelector<HTMLButtonElement>(
+    '[data-composer-face="token-warning"]',
+  )
+  expect(warning()?.getAttribute('aria-label')).toBe('Context low, 6% remaining')
+  await act(async () => warning()?.click())
+  expect(tree.container.querySelector('[role="dialog"]')?.textContent).toContain(
+    'Run /compact to summarize it and keep going.',
+  )
+
+  await act(async () => warning()?.click())
+  await tree.render(rail(175_000))
+  expect(warning()?.getAttribute('aria-label')).toBe('6% until auto-compact')
+  await act(async () => warning()?.click())
+  expect(tree.container.querySelector('[role="dialog"]')?.textContent).toContain(
+    'Soon it auto-compacts into a summary',
+  )
+})
+
 test('cache status changes do not add a toolbar action or open a popover', async () => {
   const tree = await harness.mount(rail(167_000))
-  const indicator = () => tree.container.querySelector<HTMLElement>('[aria-label="Cache expired"]')
+  const indicator = () => tree.container.querySelector<HTMLElement>('[aria-label="Estimated cache expiry passed"]')
   const faces = () => [...tree.container.querySelectorAll('[data-composer-face]')]
     .map(node => node.getAttribute('data-composer-face'))
   const before = faces()
@@ -117,13 +144,13 @@ test('cache status changes do not add a toolbar action or open a popover', async
   await tree.render(rail(167_000, true))
   expect(indicator()?.tagName).toBe('SPAN')
   expect(indicator()?.getAttribute('role')).toBe('status')
-  expect(indicator()?.querySelector('.composer-cache-label')?.textContent).toBe('Cache expired')
+  expect(indicator()?.querySelector('.composer-cache-label')?.textContent).toBe('Estimated cache expiry passed')
   await act(async () => {
     indicator()?.click()
   })
   expect(tree.container.querySelector('[role="dialog"]')).toBeNull()
   expect(faces()).toEqual(before)
-  expect(faces()).not.toContain('token-warning')
+  expect(faces()).toContain('token-warning')
   await tree.render(rail(167_000, false))
   expect(indicator()).toBeNull()
   await tree.render(rail(167_000, true))
@@ -148,7 +175,7 @@ test('an idle deadline shows the clock, a fresh response clears it, and focus ca
   })
   try {
     const tree = await harness.mount(rail(40_000, false, start + 1_000))
-    const indicator = () => tree.container.querySelector('[aria-label="Cache expired"]')
+    const indicator = () => tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')
     expect(indicator()).toBeNull()
     setSystemTime(start + 1_001)
     await act(async () => {
@@ -181,16 +208,16 @@ test('real preview and parked panes pass their deadline to the composer without 
   const tree = await harness.mount(createElement(SessionPane, {
     ...base, preview: true, previewRunFacts: facts, runControls: null,
   }))
-  expect(tree.container.querySelector('[aria-label="Cache expired"]')).not.toBeNull()
+  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).not.toBeNull()
   await tree.render(createElement(SessionPane, {
     ...base, preview: true, previewRunFacts: { ...facts, cacheExpiresAt: Date.now() + 60_000 }, runControls: null,
   }))
-  expect(tree.container.querySelector('[aria-label="Cache expired"]')).toBeNull()
+  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).toBeNull()
   await tree.render(createElement(SessionPane, {
     ...base, preview: false, activeConnection: { status: 'parked', inputEnabled: false },
     model: facts.model, runControls: null, cacheExpiresAt: facts.cacheExpiresAt,
   }))
-  expect(tree.container.querySelector('[aria-label="Cache expired"]')).not.toBeNull()
+  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).not.toBeNull()
 })
 
 test('keyboard cursor rows switch without a colour transition', async () => {
@@ -351,14 +378,14 @@ const SEND_SESSION_ID = 'session-1'
 const READY = { status: 'ready' as const, inputEnabled: true }
 const CONNECTING = { status: 'connecting' as const, inputEnabled: false }
 const readyFrame: ServerFrame = {
-  kind: 'ready', protocolVersion: 2, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
+  kind: 'ready', protocolVersion: 3, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
   payload: {
     type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
     abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   },
 }
 const messageFrame = (message: SDKMessage): ServerFrame => ({
-  kind: 'event', protocolVersion: 2, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
+  kind: 'event', protocolVersion: 3, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
 })
 const userText = (uuid: string, text: string): SDKMessage => ({
   type: 'user', uuid: uuid as never, parent_tool_use_id: null,

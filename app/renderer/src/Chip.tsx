@@ -1,20 +1,13 @@
 /**
- * P4-1 shared primitive — `Chip` + `ChipStrip`.
+ * P4-1 shared primitive — `Chip`.
  *
  * A tone-aware pill button (Surfaces.jsx:40-84 `Chip`): optional leading icon,
  * a label, an optional brighter `value`, and an optional count `badge`. Quiet
  * by default (transparent, muted text); the tone tint appears on hover and when
  * `active`. Presentation only — the caller owns behaviour via `onClick`.
- *
- * `ChipStrip` is the generic horizontal layout container the composer/byline
- * rails compose (the prototype's dotted-separator grammar, Surfaces.jsx:751).
- * NB: the prototype's `ChipStrip` (Surfaces.jsx:746) is the *composer-specific*
- * rail (RunChip/ReasoningChip/PermChip/AccountChip/…), which is P4-0 composer
- * territory, not a reusable primitive — the shared-kit `ChipStrip` here is the
- * generic separator-aware row those chips live in. Flagged in the report.
  */
 
-import { Children, Fragment, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { toneClasses, type Tone } from './tone.js'
 
 export type { Tone } from './tone.js'
@@ -88,51 +81,5 @@ export function Chip({
     <button type="button" onClick={onClick} title={title} className={className}>
       {body}
     </button>
-  )
-}
-
-/**
- * A horizontal row of chips. With `separated`, the prototype's faint `·`
- * dividers are interleaved between children (Surfaces.jsx:751 `Sep`).
- */
-export function ChipStrip({
-  children,
-  separated = false,
-  className = '',
-}: {
-  children: ReactNode
-  separated?: boolean
-  className?: string
-}) {
-  // Children.toArray already drops null/undefined/boolean children and assigns
-  // each a stable key — no extra filtering needed. Index keys are safe here: the
-  // strip is a static, positional row of stateless chips (nothing to preserve
-  // across a reorder).
-  const items = Children.toArray(children)
-  return (
-    <div
-      className={`flex min-w-0 items-center gap-[7px] ${className}`.trimEnd()}
-      role="group"
-    >
-      {separated
-        ? items.map((child, index) => (
-            <Fragment key={index}>
-              {index > 0 ? <Separator /> : null}
-              {child}
-            </Fragment>
-          ))
-        : items}
-    </div>
-  )
-}
-
-function Separator() {
-  return (
-    <span
-      className="shrink-0 select-none text-[12px] text-text-subtle/60"
-      aria-hidden="true"
-    >
-      ·
-    </span>
   )
 }

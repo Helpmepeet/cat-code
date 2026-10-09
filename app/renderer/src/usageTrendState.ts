@@ -62,7 +62,3 @@ export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | '
     }
     return [...values].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value }));
 }
-
-export function usageHasCacheWrites(summary: UsageRangeSummary): boolean {
-    return summary.tokens.write > 0 || summary.cacheWriteReporting === 'reported' || summary.cacheWriteReporting === 'partial';
-}

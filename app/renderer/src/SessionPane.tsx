@@ -1131,7 +1131,6 @@ export function SessionPane({
     }
     // `flight` is an object literal rebuilt per send; comparing its identity is
     // exactly the "a new flight started" signal this effect wants.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flight])
 
   // Tear down any pending timer/flight if the pane unbinds mid-motion (a tab

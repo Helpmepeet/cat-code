@@ -4,9 +4,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
-import { readWorkspaceJump, writeWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, writeWorkspaceJump, workspaceJumpOperationSha256, type WorkspaceJumpStateV2 } from '../../src/utils/workspaceJumpState.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
+import type { ResumeCheckpointV1, WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import { MAX_FRAME_BYTES } from '../shared/limits.js'
 import { SidecarServer } from './sidecarServer.js'
 import { getCwd } from '../../src/utils/cwd.js'
@@ -16,48 +17,36 @@ import type { SDKResultMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import { SDKResultSuccessSchema } from '../../src/entrypoints/sdk/coreSchemas.js'
 import { getCommandQueueSnapshot, resetCommandQueue } from '../../src/utils/messageQueueManager.js'
 
-test('closed handoff control settles the reserved engine, then only genuine admission reconciles it', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'catcode-handoff-boundary-'))
+test('legacy admitted history and wrong generation controls cannot start continuation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-legacy-boundary-'))
   const oldConfig = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = root
-  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID()
-  let terminalWrites = 0
-  const prompts: unknown[] = []
-  const controller = new AppSessionController({
-    async *runTurn({ prompt, options }) { prompts.push(prompt); options?.onInputPersisted?.() },
-    async persistHandoffOutcome() { terminalWrites++; return [] },
-  })
-  const received: ServerFrame[] = []
-  const decoder = new FrameDecoder(MAX_FRAME_BYTES)
-  const server = new SidecarServer({ sessionId, engineSessionId, controller, log: () => {} })
+  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID(), generation = randomUUID(), continuationId = randomUUID()
+  let runs = 0
+  const controller = new AppSessionController({ async *runTurn() { runs++ } })
+  const received: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const server = new SidecarServer({ sessionId, engineSessionId, generation, controller, log: () => {} })
   const connection = server.addConnection({ write(data) { for (const value of decoder.push(Buffer.from(data))) if (value.kind === 'frame') received.push(value.payload as ServerFrame) }, end() {} })
-  const send = (message: unknown) => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId, message }))
+  const send = (requestId: string, fields: object) => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+    message: { type: 'workspace.handoff', requestId, operationId, forGeneration: generation, ...fields } }))
   try {
-    writeWorkspaceJump({ version: 1, appSessionId: sessionId, engineSessionId, operationId, sourceGeneration: 'generation',
-      source: { cwd: '/chat', binding: { kind: 'managed', storageId: randomUUID(), storageRootId: randomUUID() } }, target: { cwd: '/project', binding: { kind: 'project' } },
-      phase: 'settled', location: 'source', consumed: false, cancelled: false, acceptedAt: 1, outcome: 'failed',
-      requiresUserReconciliation: true, sourceOutcomePersisted: false, continuation: { id: randomUUID(), state: 'not_admitted' } })
-    controller.restoreHandoffReservation(operationId)
-    send({ type: 'app.submit', requestId: 'too-early', prompt: 'new request' })
-    expect(prompts).toEqual([])
-    send({ type: 'workspace.handoff', requestId: 'malformed', operationId, action: 'settle_failed', cwd: '/forged' })
-    await Bun.sleep(0)
-    expect(terminalWrites).toBe(0)
-    send({ type: 'workspace.handoff', requestId: 'valid', operationId, action: 'settle_failed' })
-    await Bun.sleep(0)
-    expect(terminalWrites).toBe(1)
-    expect(received.filter(frame => frame.kind === 'workspace.handoff.result')).toEqual([
-      { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION, sessionId, requestId: 'valid', operationId, ok: true },
-    ])
-    expect(controller.getHandoffReservation()).toBeNull()
-    expect(controller.canStartAutomaticTurn()).toBe(false)
-    send({ type: 'app.submit', requestId: 'automatic', prompt: 'automatic work', options: { isMeta: true } })
-    expect(prompts).toEqual([])
-    send({ type: 'app.submit', requestId: 'genuine', prompt: 'inspect where we are' })
-    await Bun.sleep(0)
-    expect(prompts).toEqual(['inspect where we are'])
-    expect(controller.requiresHandoffReconciliation()).toBe(false)
-    expect(received.some(frame => frame.kind === 'workspace.user-admitted' && frame.operationId === operationId)).toBe(true)
+    writeWorkspaceJump({ version: 1, appSessionId: sessionId, engineSessionId, operationId, sourceGeneration: 'legacy-generation',
+      source: { cwd: '/chat', binding: { kind: 'managed', storageId: randomUUID(), storageRootId: randomUUID() } }, target: { cwd: getCwd(), binding: { kind: 'project' } },
+      phase: 'settled', location: 'destination', consumed: true, cancelled: false, acceptedAt: 1, outcome: 'completed',
+      requiresUserReconciliation: false, sourceOutcomePersisted: false, continuation: { id: continuationId, state: 'admitted' } })
+    send('wrong-generation', { action: 'status', forGeneration: randomUUID() })
+    send('forged-path', { action: 'status', cwd: '/forged' })
+    send('invalid-revision', { action: 'release', authorizationRevision: 0 })
+    send('verify', { action: 'verify', tipUuid: randomUUID(), toolUseId: 'source-boundary' })
+    await Bun.sleep(20)
+    expect(controller.getWorkspaceHandoffSnapshot()).toBeNull()
+    send('legacy', { action: 'continue', continuationId })
+    await Bun.sleep(20)
+    expect(runs).toBe(0)
+    expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'wrong-generation')).toMatchObject({ disposition: 'refused', reason: 'wrong_generation' })
+    expect(received.filter(frame => frame.kind === 'workspace.handoff.result' && ['forged-path','invalid-revision'].includes(frame.requestId))).toEqual([])
+    expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'legacy')).toMatchObject({ disposition: 'refused', status: { record: { kind: 'absent' }, gate: { mode: 'held' } } })
+    expect(controller.getHandoffReservation()).toBe(operationId)
   } finally {
     server.close()
     if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
@@ -66,6 +55,115 @@ test('closed handoff control settles the reserved engine, then only genuine admi
   }
 })
 
+// Scripted proof is sufficient only for queue and transport behavior here.
+// Real W/R publication is exercised by workspaceHandoff.integration.test.ts.
+const scriptedCheckpoint = (): ResumeCheckpointV1 => ({ version: 1, prefixBytes: 1,
+  prefixSha256: 'a'.repeat(64), activeTipUuid: randomUUID(), projectionSha256: 'b'.repeat(64), messageCount: 2 })
+function freshState(sessionId: string, engineSessionId: string, operationId: string, generation: string): WorkspaceJumpStateV2 {
+  return { version: 2, revision: 1, origin: 'fresh', appSessionId: sessionId, engineSessionId, operationId, sourceGeneration: randomUUID(),
+    source: { cwd: '/chat', binding: { kind: 'managed', storageId: randomUUID(), storageRootId: randomUUID() } },
+    target: { cwd: getCwd(), binding: { kind: 'project' } }, acceptedAt: 1, phase: 'settled', location: 'destination', consumed: true,
+    continuation: { id: randomUUID(), admissionGeneration: generation, dispatch: 'consumed', outcome: 'pending', receiptRevision: null, checkpointSha256: null },
+    cancellation: null, review: { required: false, noticeUuid: null, reconciledInputUuid: null }, release: { target: 'held', authorizedRevision: null, confirmed: null } }
+}
+
+test('repeated attachments share the state cap and retain the newest cumulative transport snapshot', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-handoff-state-cap-'))
+  const oldConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = root
+  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID(), generation = randomUUID()
+  const state = freshState(sessionId, engineSessionId, operationId, generation)
+  const identity = { appSessionId: sessionId, engineSessionId, operationId, continuationId: state.continuation.id,
+    sourceGeneration: state.sourceGeneration, admissionGeneration: generation, operationSha256: workspaceJumpOperationSha256(state) }
+  // Scripted snapshots isolate transport throttling; this test publishes no W/R proof.
+  let snapshot: WorkspaceHandoffSnapshot = { ...identity, observerGeneration: generation, statusSeq: 1,
+    execution: 'idle', record: { kind: 'absent' }, gate: { mode: 'held', reservationOperationId: operationId, requiresUserReconciliation: false } }
+  let sequence = 1
+  const controller = new AppSessionController({ async *runTurn() {} })
+  const snapshotSpy = spyOn(controller, 'getWorkspaceHandoffSnapshot').mockImplementation(() => ({ ...snapshot, statusSeq: ++sequence }))
+  const allFrames: ServerFrame[] = []
+  const server = new SidecarServer({ sessionId, engineSessionId, generation, controller, log: () => {} })
+  const clockSpy = spyOn(Date, 'now').mockReturnValue(1_000_000)
+  const realTimer = globalThis.setTimeout
+  let flush: (() => void) | undefined
+  const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
+    const timer = realTimer(callback, delay)
+    if (delay === 10_000) { clearTimeout(timer); flush = callback }
+    return timer
+  }) as typeof setTimeout)
+  const attach = () => {
+    const frames: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
+    const connection = server.addConnection({ write(data) {
+      for (const item of decoder.push(Buffer.from(data))) if (item.kind === 'frame') {
+        frames.push(item.payload as ServerFrame); allFrames.push(item.payload as ServerFrame)
+      }
+    }, end() {} })
+    return { connection, frames }
+  }
+  try {
+    writeWorkspaceJump(state)
+    for (let i = 0; i < 32; i++) attach()
+    snapshot = { ...snapshot, execution: 'running', record: { kind: 'valid', record: { ...identity,
+      version: 1, origin: 'fresh', revision: 2, consumed: true, inputCommitted: true,
+      cancellation: null, terminal: null, notice: null, reconciliation: null } } }
+    const delayed = attach()
+    expect(allFrames.filter(frame => frame.kind === 'workspace.handoff.state')).toHaveLength(32)
+    expect(delayed.frames.filter(frame => frame.kind === 'workspace.handoff.state')).toHaveLength(0)
+    expect(flush).toBeDefined()
+    server.handleData(delayed.connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+      message: { type: 'workspace.handoff', requestId: 'status', operationId, forGeneration: generation, action: 'status' } }))
+    expect(delayed.frames.find(frame => frame.kind === 'workspace.handoff.result')).toMatchObject({ disposition: 'accepted',
+      status: { record: { kind: 'valid', record: { consumed: true, inputCommitted: true, revision: 2 } } } })
+    clockSpy.mockReturnValue(1_010_000)
+    flush!()
+    expect(delayed.frames.find(frame => frame.kind === 'workspace.handoff.state')).toMatchObject({
+      status: { execution: 'running', record: { kind: 'valid', record: { consumed: true, inputCommitted: true, revision: 2 } } } })
+  } finally {
+    server.close(); timerSpy.mockRestore(); clockSpy.mockRestore(); snapshotSpy.mockRestore()
+    if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = oldConfig
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('parking stays fenced while the warning persistence owner is pending', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-warning-park-'))
+  const oldConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = root
+  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID(), generation = randomUUID()
+  const { activateTranscriptLease, releaseActiveTranscriptLease } = await import('../../src/utils/transcriptLease.js')
+  await activateTranscriptLease(engineSessionId)
+  let unblock!: () => void, entered!: () => void, parked = false
+  const saving = new Promise<void>(resolve => { entered = resolve })
+  const controller = new AppSessionController({
+    async *runTurn() {}, sealResumeCheckpoint: async () => scriptedCheckpoint(),
+    async persistHandoffOutcome() {
+      entered()
+      await new Promise<void>(resolve => { unblock = resolve })
+      return [{ type: 'system', uuid: randomUUID() }, { type: 'system', uuid: randomUUID() }] as never
+    },
+  })
+  const frames: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const server = new SidecarServer({ sessionId, engineSessionId, generation, controller, onPark: () => { parked = true }, log: () => {} })
+  const connection = server.addConnection({ write(data) { for (const item of decoder.push(Buffer.from(data))) if (item.kind === 'frame') frames.push(item.payload as ServerFrame) }, end() {} })
+  try {
+    writeWorkspaceJump(freshState(sessionId, engineSessionId, operationId, generation))
+    server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+      message: { type: 'workspace.handoff', requestId: 'settle', operationId, forGeneration: generation, action: 'settle', outcome: 'uncertain' } }))
+    await saving
+    server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId, message: { type: 'app.park', requestId: 'park' } }))
+    expect(parked).toBe(false)
+    expect(controller.getHandoffReservation()).toBe(operationId)
+    unblock()
+    for (let i = 0; i < 100 && !frames.some(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'settle'); i++) await Bun.sleep(5)
+    expect(frames.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'settle')).toMatchObject({ disposition: 'accepted', status: { gate: { mode: 'review' } } })
+  } finally {
+    unblock?.(); server.close(); await releaseActiveTranscriptLease()
+    if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = oldConfig
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 test('park checks authoritative controller activity even for turns not started by the sidecar', async () => {
   let release!: () => void
   let started!: () => void
@@ -116,7 +214,9 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
   const oldConfig = process.env.CLAUDE_CONFIG_DIR
   const trust = spyOn(engineConfig, 'isPathTrusted').mockReturnValue(true)
   process.env.CLAUDE_CONFIG_DIR = root
-  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID()
+  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID(), generation = randomUUID()
+  const { activateTranscriptLease, releaseActiveTranscriptLease } = await import('../../src/utils/transcriptLease.js')
+  await activateTranscriptLease(engineSessionId)
   const result = { type: 'result', subtype, is_error: false, duration_ms: 1, duration_api_ms: 1, num_turns: 1,
     stop_reason: subtype === 'success' ? 'end_turn' : 'interrupted', session_id: engineSessionId, total_cost_usd: 0,
     usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
@@ -129,17 +229,21 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
   let workspaceTrusted = true
   const controller = new AppSessionController({ async *runTurn({ prompt, options }) {
     prompts.push(prompt)
-    options?.onInputPersisted?.()
+    await options?.onHandoffInputCommitted?.(scriptedCheckpoint())
+    await options?.onInputPersisted?.()
     if (prompts.length === 1) {
       started()
       await new Promise<void>(resolve => { release = resolve })
     }
+    options?.onExecutionClosed?.(subtype === 'success' ? 'success' : 'interrupted')
     yield result
-  }, async persistHandoffOutcome() { return [] } })
+  }, sealResumeCheckpoint: async () => scriptedCheckpoint(), verifyResumeCheckpoint: async () => {},
+    async persistHandoffOutcome() { return [{ type: 'system', uuid: randomUUID() }, { type: 'system', uuid: randomUUID() }] as never } })
   const received: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
   const server = new SidecarServer({
     sessionId,
     engineSessionId,
+    generation,
     controller,
     log: () => {},
     ...(subtype === 'interrupted'
@@ -153,11 +257,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
   })
   const attach = () => server.addConnection({ write(data) { for (const value of decoder.push(Buffer.from(data))) if (value.kind === 'frame') received.push(value.payload as ServerFrame) }, end() {} })
   try {
-    writeWorkspaceJump({ version: 1, appSessionId: sessionId, engineSessionId, operationId, sourceGeneration: 'source',
-      source: { cwd: '/chat', binding: { kind: 'managed', storageId: randomUUID(), storageRootId: randomUUID() } },
-      target: { cwd: getCwd(), binding: { kind: 'project' } }, acceptedAt: 1, phase: 'settled', location: 'destination',
-      consumed: true, cancelled: false, outcome: 'completed', sourceOutcomePersisted: false, requiresUserReconciliation: false,
-      continuation: { id: randomUUID(), state: 'admitted' } })
+    writeWorkspaceJump(freshState(sessionId, engineSessionId, operationId, generation))
     controller.restoreHandoffReservation(operationId)
     // Replacement startup restores the reservation before the host attaches.
     const connection = attach()
@@ -167,11 +267,11 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       message: { type: 'app.submit', requestId: 'before', prompt: 'before continuation', options: { submitId: 'before' } } }))
     expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'before')).toMatchObject({ accepted: false })
     server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
-      message: { type: 'workspace.handoff', requestId: 'continue', operationId, action: 'continue' } }))
+      message: { type: 'workspace.handoff', requestId: 'continue', operationId, forGeneration: generation, action: 'continue', continuationId: (readWorkspaceJump(sessionId)! as WorkspaceJumpStateV2).continuation.id } }))
     await active
     if (subtype === 'success') {
-      const admitted = readWorkspaceJump(sessionId)!
-      writeWorkspaceJump({ ...admitted, cancelled: true, requiresUserReconciliation: true })
+      const admitted = readWorkspaceJump(sessionId)! as WorkspaceJumpStateV2
+      writeWorkspaceJump({ ...admitted, cancellation: { cancelId: randomUUID(), requestedBy: 'stop', application: 'unknown' }, review: { ...admitted.review, required: true } })
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'cancelled', prompt: 'after cancellation', options: { submitId: 'cancelled' } } }))
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'cancelled')).toMatchObject({ accepted: false })
@@ -240,8 +340,9 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       })
     }
     release()
+    for (let attempt = 0; attempt < 100 && controller.getWorkspaceHandoffSnapshot()?.execution !== 'terminal'; attempt++) await Bun.sleep(5)
     await Bun.sleep(0)
-    expect(received.find(frame => frame.kind === 'workspace.handoff.result')).toMatchObject({ operationId, ok: subtype === 'success' })
+    expect(received.find(frame => frame.kind === 'workspace.handoff.result')).toMatchObject({ operationId, disposition: 'accepted' })
     expect(received.some(frame => frame.kind === 'event' && frame.event.type === 'message' && frame.event.message.type === 'result' && frame.event.message.subtype === subtype)).toBe(true)
     expect(controller.getHandoffReservation()).toBe(operationId)
     expect(controller.canStartAutomaticTurn()).toBe(false)
@@ -250,21 +351,20 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       expect(getCommandQueueSnapshot()).toMatchObject([
         { value: 'keep this request', priority: 'next' },
       ])
-      const state = readWorkspaceJump(sessionId)!
+      const state = readWorkspaceJump(sessionId)! as WorkspaceJumpStateV2
       writeWorkspaceJump({
         ...state,
         phase: 'settled',
-        outcome: 'uncertain',
-        requiresUserReconciliation: true,
-        continuation: { ...state.continuation, state: 'settled' },
+        review: { ...state.review, required: true },
+        continuation: { ...state.continuation, outcome: 'interrupted' },
       })
       workspaceTrusted = false
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
-        message: { type: 'workspace.handoff', requestId: 'reconcile', operationId, action: 'settle_uncertain' } }))
+        message: { type: 'workspace.handoff', requestId: 'reconcile', operationId, forGeneration: generation, action: 'settle', outcome: 'uncertain' } }))
       for (let i = 0; i < 50 && !received.some(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'reconcile'); i += 1) {
         await Bun.sleep(5)
       }
-      expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'reconcile')).toMatchObject({ ok: true })
+      expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'reconcile')).toMatchObject({ disposition: 'accepted' })
       expect(controller.getHandoffReservation()).toBeNull()
       expect(controller.requiresHandoffReconciliation()).toBe(true)
       expect(controller.isTurnActive()).toBe(false)
@@ -286,12 +386,12 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
         ok: true,
         message: 'Sending the queued message now.',
       })
-      for (let i = 0; i < 50 && prompts.length < 2; i += 1) await Bun.sleep(5)
+      for (let i = 0; i < 100 && (prompts.length < 2 || controller.requiresHandoffReconciliation()); i += 1) await Bun.sleep(5)
       expect(prompts).toHaveLength(2)
       expect(prompts[1]).toBe('keep this request')
       expect(getCommandQueueSnapshot()).toHaveLength(0)
       expect(controller.requiresHandoffReconciliation()).toBe(false)
-      expect(received.some(frame => frame.kind === 'workspace.user-admitted' && frame.operationId === operationId)).toBe(true)
+      expect(received.some(frame => frame.kind === 'workspace.handoff.state' && frame.operationId === operationId && frame.status.record.kind === 'valid' && !!frame.status.record.record.reconciliation)).toBe(true)
     }
     server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
       message: { type: 'app.submit', requestId: 'after', prompt: 'before settlement', options: { submitId: 'after' } } }))
@@ -302,12 +402,12 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     await Bun.sleep(0)
     expect(received.filter(frame => frame.kind === 'host.request')).toEqual([])
     if (subtype === 'success') {
-      const state = readWorkspaceJump(sessionId)!
-      writeWorkspaceJump({ ...state, continuation: { ...state.continuation, state: 'settled' } })
+      const state = readWorkspaceJump(sessionId)! as WorkspaceJumpStateV2
+      writeWorkspaceJump({ ...state, release: { target: 'open', authorizedRevision: 2, confirmed: null } })
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
-        message: { type: 'workspace.handoff', requestId: 'release', operationId, action: 'release' } }))
+        message: { type: 'workspace.handoff', requestId: 'release', operationId, forGeneration: generation, action: 'release', authorizationRevision: 2 } }))
       await Bun.sleep(0)
-      expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'release')).toMatchObject({ ok: true })
+      expect(received.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'release')).toMatchObject({ disposition: 'accepted' })
       expect(controller.getHandoffReservation()).toBeNull()
       expect(controller.canStartAutomaticTurn()).toBe(true)
       expect(prompts).toHaveLength(2)
@@ -316,6 +416,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     }
   } finally {
     release?.(); server.close(); resetCommandQueue(); trust.mockRestore()
+    await releaseActiveTranscriptLease()
     if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = oldConfig
     rmSync(root, { recursive: true, force: true })
@@ -344,57 +445,4 @@ test('a locally reserved source turn without a durable handoff still requests ca
     expect(controller.getHandoffReservation()).toBe(operationId)
     expect(controller.canStartAutomaticTurn()).toBe(false)
   } finally { server.close(); persistence.mockRestore() }
-})
-
-for (const stopAt of ['before continuation', 'during continuation', 'after continuation'] as const) test(`explicit Stop cancels a restored destination ${stopAt}`, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'catcode-destination-stop-'))
-  const oldConfig = process.env.CLAUDE_CONFIG_DIR
-  const trust = spyOn(engineConfig, 'isPathTrusted').mockReturnValue(true)
-  process.env.CLAUDE_CONFIG_DIR = root
-  const sessionId = randomUUID(), engineSessionId = randomUUID(), operationId = randomUUID()
-  let started!: () => void, release!: () => void
-  const active = new Promise<void>(resolve => { started = resolve })
-  const controller = new AppSessionController({ async *runTurn({ signal }) {
-    started()
-    await new Promise<void>(resolve => { release = resolve; signal.addEventListener('abort', () => resolve(), { once: true }) })
-    yield { type: 'result', subtype: signal.aborted ? 'interrupted' : 'success', is_error: false,
-      duration_ms: 1, duration_api_ms: 1, num_turns: 1, stop_reason: signal.aborted ? 'interrupted' : 'end_turn',
-      session_id: engineSessionId, total_cost_usd: 0,
-      usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-      modelUsage: {}, permission_denials: [], uuid: randomUUID(), ...(signal.aborted ? {} : { result: 'Done.' }),
-    } satisfies SDKResultMessage
-  } })
-  const received: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
-  const server = new SidecarServer({ sessionId, engineSessionId, controller, log: () => {} })
-  try {
-    writeWorkspaceJump({ version: 1, appSessionId: sessionId, engineSessionId, operationId, sourceGeneration: 'source',
-      source: { cwd: '/chat', binding: { kind: 'managed', storageId: randomUUID(), storageRootId: randomUUID() } },
-      target: { cwd: getCwd(), binding: { kind: 'project' } }, acceptedAt: 1, phase: 'settled', location: 'destination',
-      consumed: true, cancelled: false, outcome: 'completed', sourceOutcomePersisted: false, requiresUserReconciliation: false,
-      continuation: { id: randomUUID(), state: 'admitted' } })
-    controller.restoreHandoffReservation(operationId)
-    const connection = server.addConnection({ write(data) { for (const value of decoder.push(Buffer.from(data))) if (value.kind === 'frame') received.push(value.payload as ServerFrame) }, end() {} })
-    const send = (message: unknown) => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId, message }))
-    await Bun.sleep(0)
-    if (stopAt !== 'before continuation') {
-      send({ type: 'workspace.handoff', requestId: 'continue', operationId, action: 'continue' })
-      await active
-      if (stopAt === 'after continuation') { release(); await Bun.sleep(0) }
-    }
-    send({ type: 'app.abort', requestId: 'stop', reason: 'Stopped by user' })
-    await Bun.sleep(0)
-    expect(received.filter(frame => frame.kind === 'host.request' && frame.verb === 'workspace.cancel')).toMatchObject([
-      { verb: 'workspace.cancel', args: { operationId } },
-    ])
-    if (stopAt !== 'before continuation') {
-      expect(received.find(frame => frame.kind === 'workspace.handoff.result')).toMatchObject({ ok: stopAt === 'after continuation' })
-    }
-    expect(controller.getHandoffReservation()).toBe(operationId)
-    expect(controller.canStartAutomaticTurn()).toBe(false)
-  } finally {
-    server.close(); trust.mockRestore()
-    if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
-    else process.env.CLAUDE_CONFIG_DIR = oldConfig
-    rmSync(root, { recursive: true, force: true })
-  }
 })

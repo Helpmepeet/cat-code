@@ -148,14 +148,12 @@ for (const dirName of ['transcript-cache-v2', 'transcript-cache']) {
 // ── Markdown: real finished replies streamed through the production planner ───
 // Piece boundaries are synthetic (provider deltas are not stored); the text,
 // structure and length are real.
-type Path = 'unattributed'
-function plan(cache: MarkdownPlanCache, source: string): { ms: number; path: Path } {
+function plan(cache: MarkdownPlanCache, source: string): number {
   const start = performance.now()
   planMarkdownLeaves('perf-real', source, {
     rehypePlugins: TRANSCRIPT_REHYPE_PLUGINS, allowPlainTextAppend: true, math: true, recognizeCallouts: true, cache,
   })
-  const ms = performance.now() - start
-  return { ms, path: 'unattributed' }
+  return performance.now() - start
 }
 const textLengths = assistantTexts.map(text => text.length)
 const LONG = 2_000
@@ -166,22 +164,18 @@ const sample = Array.from({ length: Math.min(sampleSize, longTexts.length) }, (_
   longTexts[Math.floor((i * longTexts.length) / Math.min(sampleSize, longTexts.length))]!)
 const markdown: Record<string, unknown> = {}
 for (const wordsPerPiece of [1, 4]) {
-  const paths: Record<Path, number> = { unattributed: 0 }
   const times: number[] = []
   for (const text of sample) {
     const cache = createMarkdownPlanCache()
     let source = ''
     for (const piece of streamPieces(text, wordsPerPiece)) {
       source += piece
-      const result = plan(cache, source)
-      paths[result.path]++
-      times.push(result.ms)
+      times.push(plan(cache, source))
     }
   }
-  const total = times.length
   markdown[`${wordsPerPiece}-word-pieces`] = {
-    updates: total,
-    updatesByPath: paths,
+    updates: times.length,
+    updatesByPath: { unattributed: times.length },
     pathAttribution: 'unavailable: planner does not expose transform-path execution',
     perUpdateMs: distribution(times),
     pathAttributionNote: 'All updates are unclassified; tree identity is not a plugin-execution signal.',

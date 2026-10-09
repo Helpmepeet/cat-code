@@ -1664,130 +1664,68 @@ async function loadAndCacheMarketplace(
         temporaryCachePath = assertMarketplaceCachePath(join(cacheDir, tempName))
         cleanupNeeded = true
 
-        let lastError: Error | null = null
-
         // Quick check if SSH is likely to work
         const sshConfigured = await isGitHubSshLikelyConfigured()
+        const attempts = sshConfigured
+          ? [
+              { transport: 'SSH', url: sshUrl },
+              { transport: 'HTTPS', url: httpsUrl },
+            ]
+          : [
+              { transport: 'HTTPS', url: httpsUrl },
+              { transport: 'SSH', url: sshUrl },
+            ]
+        let lastError: Error | null = null
 
-        if (sshConfigured) {
-          // SSH looks good, try it first
-          safeCallProgress(onProgress, `Cloning via SSH: ${sshUrl}`)
-          try {
-            await cacheMarketplaceFromGit(
-              sshUrl,
-              temporaryCachePath,
-              source,
-              source.ref,
-              source.sparsePaths,
-              onProgress,
-            )
-          } catch (err) {
-            lastError = toError(err)
-
-            // Log SSH failure for monitoring
-            logError(lastError)
-
-            // SSH failed despite being configured, try HTTPS fallback
+        for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+          const attempt = attempts[attemptIndex]!
+          const previousAttempt = attempts[attemptIndex - 1]
+          if (previousAttempt) {
+            const previousError = lastError!
             safeCallProgress(
               onProgress,
-              `SSH clone failed, retrying with HTTPS: ${httpsUrl}`,
+              `${previousAttempt.transport} clone failed, retrying with ${attempt.transport}: ${attempt.url}`,
             )
-
             logForDebugging(
-              `SSH clone failed for ${source.repo} despite SSH being configured, falling back to HTTPS`,
+              sshConfigured
+                ? `SSH clone failed for ${source.repo} despite SSH being configured, falling back to HTTPS`
+                : `HTTPS clone failed for ${source.repo} (${previousError.message}), falling back to SSH`,
               { level: 'info' },
             )
 
-            // Clean up failed SSH attempt if it created anything
+            // Clean up the failed attempt before retrying with the fallback.
             assertMarketplaceSourceAllowed(source)
             await fs.rm(
               assertMarketplaceCachePath(temporaryCachePath),
               { recursive: true, force: true },
             )
-
-            // Try HTTPS
-            try {
-              await cacheMarketplaceFromGit(
-                httpsUrl,
-                temporaryCachePath,
-                source,
-                source.ref,
-                source.sparsePaths,
-                onProgress,
-              )
-              lastError = null // Success!
-            } catch (httpsErr) {
-              // HTTPS also failed - use HTTPS error as the final error
-              lastError = toError(httpsErr)
-
-              // Log HTTPS failure for monitoring (both SSH and HTTPS failed)
-              logError(lastError)
-            }
+          } else if (sshConfigured) {
+            safeCallProgress(onProgress, `Cloning via SSH: ${sshUrl}`)
+          } else {
+            safeCallProgress(
+              onProgress,
+              `SSH not configured, cloning via HTTPS: ${httpsUrl}`,
+            )
+            logForDebugging(
+              `SSH not configured for GitHub, using HTTPS for ${source.repo}`,
+              { level: 'info' },
+            )
           }
-        } else {
-          // SSH not configured, go straight to HTTPS
-          safeCallProgress(
-            onProgress,
-            `SSH not configured, cloning via HTTPS: ${httpsUrl}`,
-          )
-
-          logForDebugging(
-            `SSH not configured for GitHub, using HTTPS for ${source.repo}`,
-            { level: 'info' },
-          )
 
           try {
             await cacheMarketplaceFromGit(
-              httpsUrl,
+              attempt.url,
               temporaryCachePath,
               source,
               source.ref,
               source.sparsePaths,
               onProgress,
             )
+            lastError = null
+            break
           } catch (err) {
             lastError = toError(err)
-
-            // Always try SSH as fallback for ANY HTTPS failure
-            // Log HTTPS failure for monitoring
             logError(lastError)
-
-            // HTTPS failed, try SSH as fallback
-            safeCallProgress(
-              onProgress,
-              `HTTPS clone failed, retrying with SSH: ${sshUrl}`,
-            )
-
-            logForDebugging(
-              `HTTPS clone failed for ${source.repo} (${lastError.message}), falling back to SSH`,
-              { level: 'info' },
-            )
-
-            // Clean up failed HTTPS attempt if it created anything
-            assertMarketplaceSourceAllowed(source)
-            await fs.rm(
-              assertMarketplaceCachePath(temporaryCachePath),
-              { recursive: true, force: true },
-            )
-
-            // Try SSH
-            try {
-              await cacheMarketplaceFromGit(
-                sshUrl,
-                temporaryCachePath,
-                source,
-                source.ref,
-                source.sparsePaths,
-                onProgress,
-              )
-              lastError = null // Success!
-            } catch (sshErr) {
-              // SSH also failed - use SSH error as the final error
-              lastError = toError(sshErr)
-
-              // Log SSH failure for monitoring (both HTTPS and SSH failed)
-              logError(lastError)
-            }
           }
         }
 

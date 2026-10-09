@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceJumpCoordinator, type WorkspaceJumpCoordinatorDeps } from './workspaceJumpCoordinator.js'
+import { WorkspaceHandoffControl } from './workspaceHandoffControl.js'
+import type { WorkspaceHandoffSnapshot, WorkspaceHandoffExecutionRecord } from '../shared/workspaceHandoff.js'
 import type { PeerRegistryRow } from './peerRequestPlane.js'
-import { readWorkspaceJump, writeWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, writeWorkspaceJump, workspaceJumpOperationSha256, upgradeWorkspaceJumpState, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
 import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
 const paths: string[] = []
@@ -42,8 +44,11 @@ function harness() {
     validateCwd: path => ({ ok: true, realpath: path }),
     trustedProjectRoots: async roots => trusted ? roots : [],
     verifyReady: () => idle,
-    persistTerminalOutcome: async () => { terminalCalls++; return terminalDurable },
-    continueDestination: async () => { continuationCalls++; if (continuationFails) throw new Error('lost completion') },
+    control: async (_state, action) => {
+      if (action.action === 'continue') { continuationCalls++; if (continuationFails) return { kind: 'timeout' } }
+      if (action.action === 'settle') terminalCalls++
+      return { kind: 'result', result: { requestId: randomUUID(), operationId, action: action.action, disposition: 'accepted' } }
+    },
     host: {
       getSessionGeneration: () => generation,
       reserveWorkspaceJump: async (id, operationId) => { held.set(id, operationId); return { ok: true, value: undefined } },
@@ -66,7 +71,7 @@ function harness() {
     const handle = list.value.workspaces[0]!.handle
     return coordinator.handleRequest(appSessionId, { verb: 'workspace.jump', operationId, destinationHandle: handle })
   }
-  return { coordinator, deps, row, appSessionId, directory, operationId, ready, held, accept,
+  return { coordinator, deps, row, appSessionId, directory, operationId, ready, held, accept, generation: () => generation,
     moved: () => moved, continuations: () => continuationCalls, terminals: () => terminalCalls,
     setGeneration: () => { generation = randomUUID() }, setTrusted: (v: boolean) => { trusted = v },
     setIdle: (v: boolean) => { idle = v }, setTerminalDurable: (v: boolean) => { terminalDurable = v },
@@ -88,7 +93,8 @@ test('acceptance cannot move; durable readiness, response delivery, and one-use 
   await h.coordinator.waitForSettlement(h.appSessionId)
   expect(h.moved()).toBe(1)
   expect(h.continuations()).toBe(1)
-  expect(h.held.size).toBe(0)
+  expect(h.held.size).toBe(1)
+  expect(h.coordinator.snapshot(h.appSessionId)?.continuation.dispatch).toBe('unknown')
   const reopened = new WorkspaceJumpCoordinator(h.deps)
   const list = await reopened.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
   expect(list).toEqual({ ok: true, value: { eligible: false, workspaces: [] } })
@@ -173,8 +179,8 @@ test('published acceptance keeps its host reservation when state notification fa
   expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.cancel', operationId: h.operationId }))
     .toEqual({ ok: true, value: { operationId: h.operationId, status: 'cancelled' } })
   await h.coordinator.waitForSettlement(h.appSessionId)
-  expect(h.coordinator.snapshot(h.appSessionId)?.sourceOutcomePersisted).toBe(true)
-  expect(h.held.size).toBe(0)
+  expect(h.coordinator.snapshot(h.appSessionId)?.review.required).toBe(true)
+  expect(h.held.size).toBe(1)
   expect(h.moved()).toBe(0)
 })
 
@@ -189,22 +195,6 @@ test('unreadable acceptance after publication retains the host reservation and r
   expect(h.coordinator.retains(h.appSessionId)).toBe(true)
   expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.cancel', operationId: h.operationId })).ok).toBe(false)
   expect(h.moved()).toBe(0)
-})
-
-test('cancellation acknowledges while source terminal persistence still awaits tool-idle', async () => {
-  const h = harness()
-  let releaseIdle!: () => void
-  const idle = new Promise<void>(resolve => { releaseIdle = resolve })
-  h.deps.persistTerminalOutcome = async () => { await idle; return true }
-  await h.accept()
-  const cancelled = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.cancel', operationId: h.operationId })
-  expect(cancelled).toEqual({ ok: true, value: { operationId: h.operationId, status: 'cancelled' } })
-  expect(h.held.size).toBe(1)
-  expect(h.coordinator.snapshot(h.appSessionId)?.sourceOutcomePersisted).toBe(false)
-  releaseIdle()
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  expect(h.held.size).toBe(0)
-  expect(h.coordinator.snapshot(h.appSessionId)?.sourceOutcomePersisted).toBe(true)
 })
 
 test('cancellation during asynchronous readiness verification cannot authorize a late move', async () => {
@@ -271,130 +261,6 @@ test('accepted or unreadable operation can never be reported as not accepted', a
   expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.cancel', operationId: h.operationId })).ok).toBe(false)
 })
 
-test('Stop while parking prevents mutation and awaits durable source outcome before releasing', async () => {
-  const h = harness()
-  let release!: () => void
-  h.holdMove(() => new Promise<void>(resolve => { release = resolve }))
-  await h.accept()
-  await h.coordinator.handleRequest(h.appSessionId, h.ready)
-  h.coordinator.afterResponse(h.appSessionId, h.ready, true)
-  h.setTerminalDurable(false)
-  await h.coordinator.cancel(h.appSessionId)
-  release()
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  expect(h.moved()).toBe(0)
-  expect(h.continuations()).toBe(0)
-  expect(h.held.size).toBe(1)
-  expect(h.coordinator.retains(h.appSessionId)).toBe(true)
-  expect(await h.coordinator.reconcileUser(h.appSessionId)).toBe(false)
-  h.setTerminalDurable(true)
-  expect(await h.coordinator.reconcileUser(h.appSessionId)).toBe(true)
-  expect(h.held.size).toBe(0)
-  expect(readWorkspaceJump(h.appSessionId, h.directory)?.consumed).toBe(false)
-})
-
-test('Stop retries an unacknowledged failed outcome without changing its kind or replaying work', async () => {
-  const h = harness()
-  h.setFinalLocation('source')
-  const outcomes: Array<string | undefined> = []
-  let releasePersistence!: () => void
-  h.deps.persistTerminalOutcome = async state => {
-    outcomes.push(state.outcome)
-    if (outcomes.length === 1) return false
-    await new Promise<void>(resolve => { releasePersistence = resolve })
-    return true
-  }
-  await h.accept()
-  await h.coordinator.handleRequest(h.appSessionId, h.ready)
-  h.coordinator.afterResponse(h.appSessionId, h.ready, true)
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  expect(outcomes).toEqual(['failed'])
-  expect(h.held.size).toBe(1)
-  expect(h.coordinator.snapshot(h.appSessionId)?.sourceOutcomePersisted).toBe(false)
-
-  const cancel = { verb: 'workspace.cancel' as const, operationId: h.operationId }
-  expect(await h.coordinator.handleRequest(h.appSessionId, cancel))
-    .toEqual({ ok: true, value: { operationId: h.operationId, status: 'cancelled' } })
-  expect(outcomes).toEqual(['failed', 'failed'])
-  expect(await h.coordinator.reconcileUser(h.appSessionId, h.operationId)).toBe(false)
-  // Another Stop and a recovery boundary coalesce with the in-flight note.
-  expect((await h.coordinator.handleRequest(h.appSessionId, cancel)).ok).toBe(true)
-  expect(await h.coordinator.settleRecovery(h.appSessionId, h.operationId)).toBe(false)
-  expect(outcomes).toEqual(['failed', 'failed'])
-  releasePersistence()
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  const settled = h.coordinator.snapshot(h.appSessionId)!
-  expect(settled.outcome).toBe('failed')
-  expect(settled.sourceOutcomePersisted).toBe(true)
-  expect(settled.requiresUserReconciliation).toBe(true)
-  expect(h.held.size).toBe(0)
-  expect(h.moved()).toBe(1)
-  expect(h.continuations()).toBe(0)
-  expect(await h.coordinator.reconcileUser(h.appSessionId, h.operationId)).toBe(true)
-  expect(h.coordinator.retains(h.appSessionId)).toBe(false)
-})
-
-test('lost continuation settlement is retained and never automatically replayed after restart', async () => {
-  const h = harness()
-  h.failContinuation()
-  await h.accept()
-  await h.coordinator.handleRequest(h.appSessionId, h.ready)
-  h.coordinator.afterResponse(h.appSessionId, h.ready, true)
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  expect(h.continuations()).toBe(1)
-  expect(readWorkspaceJump(h.appSessionId, h.directory)?.continuation.state).toBe('uncertain')
-  const restored = new WorkspaceJumpCoordinator(h.deps)
-  expect(restored.loadRetention().appSessionIds.has(h.appSessionId)).toBe(true)
-  restored.recover(h.appSessionId)
-  expect(h.continuations()).toBe(1)
-  expect((await restored.handleRequest(h.appSessionId, h.ready)).ok).toBe(false)
-})
-
-test('Stop during admitted destination continuation writes cancelled outcome before releasing', async () => {
-  const h = harness()
-  let releaseContinuation!: () => void
-  let enteredContinuation!: () => void
-  const entered = new Promise<void>(resolve => { enteredContinuation = resolve })
-  h.deps.continueDestination = async () => {
-    enteredContinuation()
-    await new Promise<void>(resolve => { releaseContinuation = resolve })
-  }
-  await h.accept()
-  await h.coordinator.handleRequest(h.appSessionId, h.ready)
-  h.coordinator.afterResponse(h.appSessionId, h.ready, true)
-  await entered
-  await h.coordinator.cancel(h.appSessionId)
-  expect(h.held.size).toBe(1)
-  releaseContinuation()
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  expect(h.terminals()).toBe(1)
-  const state = h.coordinator.snapshot(h.appSessionId)!
-  expect(state.outcome).toBe('cancelled')
-  expect(state.consumed).toBe(true)
-  expect(state.sourceOutcomePersisted).toBe(true)
-  expect(state.continuation.state).toBe('settled')
-  expect(state.requiresUserReconciliation).toBe(true)
-  expect(h.held.size).toBe(0)
-})
-
-test('durable destination consumes jump despite reopen failure; unknown location refuses reconciliation', async () => {
-  const h = harness()
-  await h.accept()
-  await h.coordinator.handleRequest(h.appSessionId, h.ready)
-  // A host failure after relocation still names its authoritative durable location.
-  h.deps.host.moveWorkspaceJump = async (_id, _operationId, _cwd, start) => {
-    start()
-    return { result: { ok: false, error: { code: 'spawn_failed', message: 'could not reopen' } }, location: 'destination', relocation: null }
-  }
-  h.coordinator.afterResponse(h.appSessionId, h.ready, true)
-  await h.coordinator.waitForSettlement(h.appSessionId)
-  const state = readWorkspaceJump(h.appSessionId, h.directory)!
-  expect(state.consumed).toBe(true)
-  expect(h.continuations()).toBe(0)
-  writeWorkspaceJump({ ...state, location: 'unknown' }, h.directory)
-  expect(await h.coordinator.reconcileUser(h.appSessionId)).toBe(false)
-})
-
 test('unreadable operation is retained before registry launch and refuses capability admission', async () => {
   const h = harness()
   mkdirSync(h.directory)
@@ -404,46 +270,152 @@ test('unreadable operation is retained before registry launch and refuses capabi
   expect(h.coordinator.retains(h.appSessionId)).toBe(true)
 })
 
-test('restored source retries only the fixed terminal note and keeps user reconciliation until genuine receipt', async () => {
-  const h = harness()
-  await h.accept()
-  const restored = new WorkspaceJumpCoordinator(h.deps)
-  restored.recover(h.appSessionId)
-  expect(await restored.settleRecovery(h.appSessionId, h.operationId)).toBe(true)
-  expect(h.terminals()).toBe(1)
-  expect(h.continuations()).toBe(0)
-  expect(restored.snapshot(h.appSessionId)?.requiresUserReconciliation).toBe(true)
-  expect(await restored.settleRecovery(h.appSessionId, h.operationId)).toBe(true)
-  expect(h.terminals()).toBe(1)
-  expect(await restored.reconcileUser(h.appSessionId, randomUUID())).toBe(false)
-  expect(await restored.reconcileUser(h.appSessionId, h.operationId)).toBe(true)
-  expect(restored.retains(h.appSessionId)).toBe(false)
-  // A late transport replay of the accepted operation is never a new request.
-  expect((await h.accept()).ok).toBe(false)
+function snapshot(h: ReturnType<typeof harness>, sequence: number, record?: Partial<WorkspaceHandoffExecutionRecord>, gate: WorkspaceHandoffSnapshot['gate'] = { mode: 'held', reservationOperationId: h.operationId, requiresUserReconciliation: false }): WorkspaceHandoffSnapshot {
+  const state = h.coordinator.snapshot(h.appSessionId)!
+  const identity = { appSessionId: h.appSessionId, engineSessionId: state.engineSessionId, operationId: state.operationId, continuationId: state.continuation.id, sourceGeneration: state.sourceGeneration, admissionGeneration: state.continuation.admissionGeneration, operationSha256: workspaceJumpOperationSha256(state) }
+  return { ...identity, observerGeneration: h.generation(), statusSeq: sequence, execution: record?.terminal ? 'terminal' : 'idle', gate,
+    record: record ? { kind: 'valid', record: { ...identity, version: 1, origin: 'fresh', revision: sequence, consumed: true, inputCommitted: true, cancellation: null, terminal: null, notice: null, reconciliation: null, ...record } } : { kind: 'absent' } }
+}
+const checkpoint = () => ({ version: 1 as const, prefixBytes: 10, prefixSha256: 'a'.repeat(64), projectionSha256: 'b'.repeat(64), activeTipUuid: randomUUID(), messageCount: 1 })
+async function arrive(h: ReturnType<typeof harness>) { await h.accept(); await h.coordinator.handleRequest(h.appSessionId, h.ready); h.coordinator.afterResponse(h.appSessionId, h.ready, true); await h.coordinator.waitForSettlement(h.appSessionId) }
+
+test('settlement and newer cumulative reconciliation merge while an acknowledgement is pending; stale settlement cannot re-arm review', async () => {
+  const h = harness(); await arrive(h)
+  let finish!: () => void
+  h.deps.control = async (_state, action) => { if (action.action === 'status') await new Promise<void>(resolve => { finish = resolve }); return { kind: 'timeout' } }
+  h.coordinator.queryStatus(h.appSessionId)
+  await Promise.resolve()
+  const notice = { displayUuid: randomUUID(), contextUuid: randomUUID(), outcome: 'uncertain' as const, checkpoint: checkpoint() }
+  const first = snapshot(h, 1, { notice })
+  expect(h.coordinator.observe(h.appSessionId, first)).toBe(true)
+  const next = snapshot(h, 2, { notice, reconciliation: { noticeUuid: notice.displayUuid, inputUuid: randomUUID(), contextUuid: randomUUID(), checkpoint: checkpoint() } }, { mode: 'open', reservationOperationId: null, requiresUserReconciliation: false })
+  expect(h.coordinator.observe(h.appSessionId, next)).toBe(true)
+  expect(h.coordinator.snapshot(h.appSessionId)?.review.required).toBe(false)
+  expect(h.coordinator.observe(h.appSessionId, first)).toBe(false)
+  expect(h.coordinator.snapshot(h.appSessionId)?.review.required).toBe(false)
+  finish()
 })
 
-test('verified compensation allows a later genuine request but a later manual relocation cannot reset eligibility', async () => {
+test('release not applied retains hold; lost release reply converges by gate evidence without repeating continuation', async () => {
+  const h = harness(); await arrive(h)
+  const terminal = { outcome: 'success' as const, order: 1, checkpoint: checkpoint() }
+  expect(h.coordinator.observe(h.appSessionId, snapshot(h, 1, { terminal }))).toBe(true)
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(h.coordinator.snapshot(h.appSessionId)?.continuation.outcome).toBe('success')
+  expect(h.held.size).toBe(1)
+  expect(h.coordinator.retains(h.appSessionId)).toBe(true)
+  h.coordinator.observe(h.appSessionId, snapshot(h, 2, { terminal }, { mode: 'open', reservationOperationId: null, requiresUserReconciliation: false }))
+  expect(h.held.size).toBe(0)
+  expect(h.coordinator.retains(h.appSessionId)).toBe(false)
+  expect(h.continuations()).toBe(1)
+  const settled = h.coordinator.snapshot(h.appSessionId)!
+  h.setGeneration()
+  expect(h.coordinator.retains(h.appSessionId)).toBe(false)
+  expect(h.coordinator.isReserved(h.appSessionId)).toBe(false)
+  expect(h.coordinator.recover(h.appSessionId)).toEqual(settled)
+})
+
+test('late cancellation intent remains distinct from durable successful closure', async () => {
+  const h = harness(); await arrive(h)
+  await h.coordinator.cancel(h.appSessionId, undefined, 'close')
+  const cancelId = h.coordinator.snapshot(h.appSessionId)!.cancellation!.cancelId
+  h.coordinator.observe(h.appSessionId, snapshot(h, 1, { cancellation: { cancelId, application: 'too_late', order: 2 }, terminal: { outcome: 'success', order: 1, checkpoint: checkpoint() } }))
+  const state = h.coordinator.snapshot(h.appSessionId)!
+  expect(state.continuation.outcome).toBe('success')
+  expect(state.cancellation).toEqual({ cancelId, requestedBy: 'close', application: 'too_late' })
+  await h.coordinator.waitForSettlement(h.appSessionId)
+})
+
+test('process replacement observes old admission evidence and never redispatches its attempt', async () => {
+  const h = harness(); await arrive(h)
+  h.setGeneration(); h.coordinator.recover(h.appSessionId)
+  h.coordinator.observe(h.appSessionId, { ...snapshot(h, 1), execution: 'idle' })
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(h.continuations()).toBe(1)
+  expect(h.coordinator.retains(h.appSessionId)).toBe(true)
+})
+
+test('unresolved V1 completed admission stays unknown; settled V1 stays legacy without invented success', async () => {
+  const h = harness(); await h.accept()
+  const current = h.coordinator.snapshot(h.appSessionId)!
+  const {revision:_r,origin:_o,cancellation:_c,review:_w,release:_s,continuation:_a,...identity}=current
+  const legacy = { ...identity, version: 1 as const, phase: 'settled' as const, location: 'destination' as const, consumed:true, cancelled:false, requiresUserReconciliation:false, sourceOutcomePersisted:false, outcome:'completed' as const, continuation:{id: current.continuation.id,state:'admitted' as const} }
+  writeWorkspaceJump(legacy,h.directory)
+  const recovered = h.coordinator.recover(h.appSessionId)!
+  expect(recovered.continuation.outcome).toBe('unknown')
+  expect(recovered.legacy?.continuation.state).toBe('admitted')
+  expect(h.continuations()).toBe(0)
+  expect(upgradeWorkspaceJumpState({...legacy,continuation:{...legacy.continuation,state:'settled'}}).continuation.outcome).toBe('legacy_settled')
+})
+
+test('confirmed review release permits ordinary close while retaining review and refusing automatic queue eligibility', async () => {
+  const h = harness(); await arrive(h)
+  const notice = { displayUuid: randomUUID(), contextUuid: randomUUID(), outcome: 'uncertain' as const, checkpoint: checkpoint() }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 1, { notice }, { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true }))
+  expect(h.coordinator.isReserved(h.appSessionId)).toBe(false)
+  expect(h.coordinator.retains(h.appSessionId)).toBe(true)
+  expect(h.coordinator.requiresReview(h.appSessionId)).toBe(true)
+  expect(workspaceJumpAllowsQueuedInput(h.coordinator.snapshot(h.appSessionId)!, h.coordinator.liveObservation(h.appSessionId))).toBe(false)
+  expect(h.held.size).toBe(0)
+  await h.coordinator.waitForSettlement(h.appSessionId)
+})
+
+test('status reply schedules a release retry after freeing its command slot without replaying continuation', async () => {
+  const h = harness(); await arrive(h)
+  const terminal = { outcome: 'success' as const, order: 1, checkpoint: checkpoint() }
+  let releases = 0, sequence = 1
+  const control = new WorkspaceHandoffControl({
+    generation: h.generation,
+    acceptsStatus: (id, status) => id === h.appSessionId && status.engineSessionId === h.row.engineSessionId,
+    observe: (id, status) => { h.coordinator.observe(id, status) },
+    recover: id => h.coordinator.queryStatus(id),
+    send: (id, message) => {
+      if (message.action === 'release' && ++releases === 1) return true
+      const gate = message.action === 'release' ? { mode: 'open' as const, reservationOperationId: null, requiresUserReconciliation: false } : { mode: 'held' as const, reservationOperationId: h.operationId, requiresUserReconciliation: false }
+      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: 3, sessionId: id, requestId: message.requestId, operationId: h.operationId, action: message.action, disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, gate) })
+      return true
+    },
+  })
+  h.deps.control = (state, action) => control.request(state.appSessionId, state.operationId, action)
+  try {
+    h.coordinator.observe(h.appSessionId, snapshot(h, 1, { terminal }))
+    await Promise.resolve(); await Promise.resolve()
+    expect(releases).toBe(1)
+    expect(h.held.size).toBe(1)
+    control.disconnect(h.appSessionId)
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    h.coordinator.queryStatus(h.appSessionId)
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(releases).toBe(2)
+    expect(h.held.size).toBe(0)
+    expect(h.continuations()).toBe(1)
+  } finally { control.dispose() }
+})
+
+test('verified source compensation permits a later request but a later manual relocation cannot reset authority', async () => {
   const h = harness()
-  await h.accept()
-  await h.coordinator.handleRequest(h.appSessionId, h.ready)
-  let compensationRecord!: Parameters<typeof writeSessionRelocation>[0]
+  await h.accept(); await h.coordinator.handleRequest(h.appSessionId, h.ready)
+  let compensation!: Parameters<typeof writeSessionRelocation>[0]
   h.deps.host.moveWorkspaceJump = async (_id, _operation, _cwd, start) => {
     start()
     const state = h.coordinator.snapshot(h.appSessionId)!
-    compensationRecord = { version: 1, engineSessionId: state.engineSessionId, appSessionId: h.appSessionId,
+    compensation = { version: 1, engineSessionId: state.engineSessionId, appSessionId: h.appSessionId,
       original: state.source, source: state.target, target: state.source, phase: 'complete',
       controls: { mode: 'default' }, backup: join(process.env.CLAUDE_CONFIG_DIR!, 'backup'), movedAt: Date.now() }
-    writeSessionRelocation(compensationRecord)
-    return { result: { ok: false, error: { code: 'session_unreachable', message: 'verified compensation' } },
-      location: 'source', relocation: compensationRecord }
+    writeSessionRelocation(compensation)
+    return { result: { ok: false, error: { code: 'session_unreachable', message: 'verified compensation' } }, location: 'source', relocation: compensation }
   }
   h.coordinator.afterResponse(h.appSessionId, h.ready, true)
   await h.coordinator.waitForSettlement(h.appSessionId)
-  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })).ok).toBe(true)
-  expect(await h.coordinator.reconcileUser(h.appSessionId, h.operationId)).toBe(true)
+  const notice = { displayUuid: randomUUID(), contextUuid: randomUUID(), outcome: 'failed' as const, checkpoint: checkpoint() }
+  const evidence = { consumed: false, inputCommitted: false, terminal: { outcome: 'not_started' as const, order: 1, checkpoint: checkpoint() }, notice }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 1, evidence, { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true }))
+  const reconciliation = { noticeUuid: notice.displayUuid, inputUuid: randomUUID(), contextUuid: randomUUID(), checkpoint: checkpoint() }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 2, { ...evidence, reconciliation }, { mode: 'open', reservationOperationId: null, requiresUserReconciliation: false }))
+  await h.coordinator.waitForSettlement(h.appSessionId)
   const listed = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
   expect(listed.ok && 'eligible' in listed.value && listed.value.eligible).toBe(true)
   expect(h.coordinator.snapshot(h.appSessionId)?.consumed).toBe(false)
-  writeSessionRelocation({ ...compensationRecord, backup: `${compensationRecord.backup}-manual`, movedAt: compensationRecord.movedAt + 1 })
+  writeSessionRelocation({ ...compensation, backup: `${compensation.backup}-manual`, movedAt: compensation.movedAt + 1 })
   expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })).toEqual({ ok: true, value: { eligible: false, workspaces: [] } })
 })

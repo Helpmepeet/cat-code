@@ -352,7 +352,8 @@ export async function fileHistorySourceForPreparedMutation(
   const identity = await prepared.existing.currentIdentity()
   return {
     sourcePath: prepared.existing.path,
-    copyTo: destinationPath => prepared.existing!.copyTo(destinationPath),
+    copyTo: (destinationPath, options) =>
+      prepared.existing!.copyTo(destinationPath, options),
     stats: { size: identity.size, mode: identity.mode },
   }
 }

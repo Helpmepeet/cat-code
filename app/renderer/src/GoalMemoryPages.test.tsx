@@ -361,7 +361,7 @@ test('renders memory waiting state without fixtures', () => {
   const html = renderToStaticMarkup(<MemoryPage snapshot={null} />)
 
   expect(html).toContain('No memory loaded')
-  expect(html).toContain('Open a session')
+  expect(html).toContain('Memory information is unavailable for this configuration.')
   expect(html).not.toContain('MOCK')
   // CLAUDE.md §7 — the empty state must not print internal vocabulary at the
   // user (the copy it replaced named the sidecar and the prototype fixtures).

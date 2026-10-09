@@ -22,14 +22,6 @@ export const AUTO_MODE_DISPLAY_GROUPS = [
 
 export type AutoModeDecisionGroup = 'allowed' | 'blocked'
 
-export function autoModeDisplayCounts(summary: AutoModeUsageSummary) {
-  return AUTO_MODE_DISPLAY_GROUPS.map(({ group, label, outcomes }) => ({
-    group,
-    label,
-    count: outcomes.reduce((total, outcome) => total + summary.allTools.outcomes[outcome], 0),
-  }))
-}
-
 export function autoModeAttempts(summary: AutoModeUsageSummary): number {
   return AUTO_MODE_OUTCOMES.reduce(
     (total, outcome) => total + summary.allTools.outcomes[outcome],
@@ -91,15 +83,6 @@ export function confirmedRateSegments(
   return segments
 }
 
-export function autoModeOutcomeSeries(summary: AutoModeUsageSummary) {
-  return AUTO_MODE_OUTCOMES.map(outcome => ({
-    outcome,
-    points: [...summary.buckets]
-      .sort((left, right) => left.date.localeCompare(right.date))
-      .map(bucket => ({ date: bucket.date, count: bucket.allTools.outcomes[outcome] })),
-  }))
-}
-
 export function autoModeDisplaySeries(summary: AutoModeUsageSummary) {
   const buckets = [...summary.buckets].sort((left, right) => left.date.localeCompare(right.date))
   return AUTO_MODE_DISPLAY_GROUPS.map(({ group, label, outcomes }) => ({
@@ -116,17 +99,6 @@ export function sortedAutoModeCategories(summary: AutoModeUsageSummary) {
   return [...summary.categories].sort((left, right) =>
     right.count - left.count || left.key.localeCompare(right.key),
   )
-}
-
-export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number]['route'], readonly string[]> = {
-  base: ['Attempts', 'Base checks'],
-  forced: ['Attempts', 'Supplied decision'],
-  guard: ['Attempts', 'Base checks', 'Review/safety guard'],
-  accept_edits: ['Attempts', 'Base checks', 'Workspace edits'],
-  allowlist: ['Attempts', 'Base checks', 'Allowlist'],
-  stage1: ['Attempts', 'Base checks', 'Safety check'],
-  stage2: ['Attempts', 'Base checks', 'Safety check', 'Context review'],
-  unknown: ['Attempts', 'Unknown route'],
 }
 
 const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['route'], 'Base paths' | 'Stage 1' | 'Stage 2'> = {
@@ -155,27 +127,6 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
     const group: AutoModeDecisionGroup = route.outcome === 'allowed' ? 'allowed' : 'blocked'
     add('Attempts', routeNode, route.count)
     add(routeNode, group, route.count, group)
-  }
-  return [...edges.values()].sort((left, right) =>
-    left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || (left.outcome ?? '').localeCompare(right.outcome ?? ''),
-  )
-}
-
-export function autoModeRouteEdges(summary: AutoModeUsageSummary) {
-  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageSummary['routes'][number]['outcome']; count: number }>()
-  for (const route of summary.routes) {
-    const path = AUTO_MODE_ROUTE_EDGES[route.route]
-    const links = [...path.slice(1).map((to, index) => ({ from: path[index]!, to })), {
-      from: path.at(-1)!,
-      to: route.outcome,
-    }]
-    for (const [index, link] of links.entries()) {
-      const sink = index === links.length - 1
-      const key = JSON.stringify([link.from, link.to])
-      const edge = edges.get(key)
-      if (edge) edge.count += route.count
-      else edges.set(key, { ...link, ...(sink ? { outcome: route.outcome } : {}), count: route.count })
-    }
   }
   return [...edges.values()].sort((left, right) =>
     left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || (left.outcome ?? '').localeCompare(right.outcome ?? ''),

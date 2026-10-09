@@ -192,6 +192,7 @@ describe('theme.css', () => {
         '.animate-composer-glyph-out',
         '.animate-composer-lift',
         '.animate-drawer-in',
+        '.animate-effort-flow',
         '.animate-face-pulse',
         '.animate-land',
         '.animate-ping',

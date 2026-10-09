@@ -515,6 +515,7 @@ test('(c) a bogus resume id fails loudly — non-zero exit + distinguishable std
       CLAUDE_CONFIG_DIR: configHome,
       CATCODE_SIDECAR_SOCKET: socketPath,
       CATCODE_SIDECAR_SESSION_ID: 'p31-bogus-app',
+      CATCODE_SIDECAR_GENERATION: randomUUID(),
       CATCODE_SIDECAR_CWD: cwd,
       CATCODE_SIDECAR_RESUME_SESSION_ID: bogusId,
     },

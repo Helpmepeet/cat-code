@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   Field,
   ManagedBadge,
-  ResolutionOrderLegend,
   SourceBadge,
 } from './SettingsField.js'
 
@@ -84,13 +83,4 @@ test('Field renders an inline validation error', () => {
     </Field>,
   )
   expect(html).toContain('Must be a number.')
-})
-
-test('ResolutionOrderLegend shows all five sources highest-wins', () => {
-  const html = renderToStaticMarkup(<ResolutionOrderLegend />)
-  expect(html).toContain('Resolution order:')
-  expect(html).toContain('highest wins')
-  for (const label of ['Managed', 'Flag', 'Local', 'Project', 'User']) {
-    expect(html).toContain(label)
-  }
 })

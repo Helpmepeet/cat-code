@@ -34,7 +34,7 @@ const SID = 'replay-session'
 function ready(sessionId: string) {
   return {
     kind: 'ready' as const,
-    protocolVersion: 2 as const,
+    protocolVersion: 3 as const,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -52,7 +52,7 @@ function ready(sessionId: string) {
 function assistantFrame(sessionId: string, index: number) {
   return {
     kind: 'event' as const,
-    protocolVersion: 2 as const,
+    protocolVersion: 3 as const,
     sessionId,
     replay: true as const,
     event: {

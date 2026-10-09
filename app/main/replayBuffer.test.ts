@@ -437,11 +437,17 @@ test('workspace control receipts never survive renderer replay', () => {
   buffer.record(SID, ready)
   buffer.record(SID, {
     kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
-    sessionId: SID, requestId: 'handoff-check', operationId: 'jump-1', ok: true,
+    sessionId: SID, requestId: 'handoff-check', operationId: 'jump-1', action: 'status', disposition: 'refused', reason: 'wrong_identity',
   })
   buffer.record(SID, {
-    kind: 'workspace.user-admitted', protocolVersion: PROTOCOL_VERSION,
+    kind: 'workspace.handoff.state', protocolVersion: PROTOCOL_VERSION,
     sessionId: SID, operationId: 'jump-1',
+    status: {
+      appSessionId: SID, engineSessionId: 'engine-1', operationId: 'jump-1', continuationId: 'continuation-1',
+      sourceGeneration: 'source-1', admissionGeneration: null, operationSha256: 'a'.repeat(64),
+      observerGeneration: 'observer-1', statusSeq: 1, execution: 'unconfirmed', record: { kind: 'absent' },
+      gate: { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true },
+    },
   })
   expect(buffer.snapshotSession(SID)).toEqual([ready])
   expect(buffer.snapshot()).toEqual([ready])

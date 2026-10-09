@@ -11,6 +11,7 @@ import {
 import { SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY } from './sidebarHiddenWorkspaces.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
 import {
+  PINNED_SESSION_DRAG_MIME,
   SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
 } from './sidebarPinnedSessions.js'
 import {
@@ -736,9 +737,9 @@ test('nothing hidden means no restore line at all', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('hidden project')
 })
 
-// ── Session pins are no longer part of the rail ──────────────────────────────
+// ── Pinned sessions ──────────────────────────────────────────────────────────
 
-test('stored session pins do not lift rows or add a Pinned section', () => {
+test('a stored pin lifts its session into the Pinned section without duplication', () => {
   const html = renderSidebar({
     menuActive: true,
     rows: [
@@ -747,19 +748,31 @@ test('stored session pins do not lift rows or add a Pinned section', () => {
     ],
     storage: pinning('engine-s1'),
   })
-  expect(html).not.toContain('>Pinned<')
+  expect(html).toContain('>Pinned<')
   expect(html.match(/>Alpha</g)).toHaveLength(1)
   expect(html.match(/>Beta</g)).toHaveLength(1)
   expect(html).toContain('>proj<')
-  expect(html).not.toContain('aria-label="Pin Alpha"')
-  expect(html).not.toContain('aria-label="Unpin Alpha"')
+  expect(html).toContain('aria-label="Unpin Alpha"')
+  expect(html).toContain('aria-pressed="true"')
 })
 
 test('the Pinned section is absent when nothing is pinned', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('>Pinned<')
 })
 
-test('session rows are not drag handles even with stored pins', () => {
+test('stored pin order wins over activity order', () => {
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [
+      registryRow('s1', { displayLabel: 'Alpha', lastMessageSentAt: 2 }),
+      registryRow('s2', { displayLabel: 'Beta', lastMessageSentAt: 1 }),
+    ],
+    storage: pinning('engine-s2', 'engine-s1'),
+  })
+  expect(html.indexOf('>Beta<')).toBeLessThan(html.indexOf('>Alpha<'))
+})
+
+test('only pinned session rows join workspace headers as reorder handles', () => {
   const rows = [
     registryRow('s1', { displayLabel: 'Alpha' }),
     registryRow('s2', { displayLabel: 'Beta' }),
@@ -774,7 +787,6 @@ test('session rows are not drag handles even with stored pins', () => {
   expect(html).toContain('transition-colors cursor-pointer')
   expect(html).not.toContain('transition-colors cursor-grab')
 
-  // Old pin storage has no effect on row interaction or ordering.
   const withPin = renderSidebar({
     menuActive: true,
     rows,
@@ -782,8 +794,50 @@ test('session rows are not drag handles even with stored pins', () => {
   })
   expect(
     withPin.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
-  ).toHaveLength(1)
-  expect(withPin).not.toContain('transition-colors cursor-grab')
+  ).toHaveLength(2)
+  expect(withPin).toContain('transition-colors cursor-grab')
+  expect(withPin).toContain('aria-label="Unpin Alpha"')
+})
+
+test('pinned drag payload is distinct from workspace and tab drags', () => {
+  expect(PINNED_SESSION_DRAG_MIME).not.toBe(WORKSPACE_ORDER_DRAG_MIME)
+  expect(PINNED_SESSION_DRAG_MIME).not.toBe('text/sessionId')
+})
+
+test('a session row exposes a pin control only when wired', () => {
+  const wired = renderToStaticMarkup(
+    <SidebarRowItem
+      row={registryRow('a', { displayLabel: 'Alpha' })}
+      isActive={false}
+      onSelectLive={noop}
+      onRestore={noop}
+      onOpenHistory={noop}
+      onTogglePin={noop}
+    />,
+  )
+  expect(wired).toContain('aria-label="Pin Alpha"')
+  expect(wired).toContain('title="Pin to top"')
+  expect(wired).toContain('aria-pressed="false"')
+  expect(renderRow(registryRow('a', { displayLabel: 'Alpha' }))).not.toContain(
+    'aria-label="Pin Alpha"',
+  )
+})
+
+test('a pinned row reads pressed and offers the unpin', () => {
+  const html = renderToStaticMarkup(
+    <SidebarRowItem
+      row={registryRow('a', { displayLabel: 'Alpha' })}
+      isActive={false}
+      pinned
+      onSelectLive={noop}
+      onRestore={noop}
+      onOpenHistory={noop}
+      onTogglePin={noop}
+    />,
+  )
+  expect(html).toContain('aria-pressed="true"')
+  expect(html).toContain('aria-label="Unpin Alpha"')
+  expect(html).toContain('title="Unpin"')
 })
 
 test('a group ignores a stale hand-arrangement and stays in activity order', () => {

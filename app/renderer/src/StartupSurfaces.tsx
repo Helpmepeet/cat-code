@@ -79,7 +79,6 @@ function PrimaryButton({
   return (
     <button
       type="button"
-      // eslint-disable-next-line jsx-a11y/no-autofocus
       autoFocus={autoFocus}
       onClick={onClick}
       className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-on-fill"
@@ -439,7 +438,6 @@ function SignInLinkActions({ url }: { url: string | null }): ReactNode {
           // first autofocus has nothing to land on.
           key={url === null ? 'pending' : 'ready'}
           type="button"
-          // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus
           disabled={url === null}
           onClick={() => {
@@ -645,7 +643,6 @@ function OAuthAlias({
         }}
       >
         <input
-          // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus
           value={alias}
           onChange={e => setAlias(e.target.value)}
@@ -697,7 +694,6 @@ function ProviderChoice({
   return (
     <button
       type="button"
-      // eslint-disable-next-line jsx-a11y/no-autofocus
       autoFocus={autoFocus}
       onClick={() => onBegin(provider)}
       className="group flex w-full items-center gap-3 rounded-[11px] border border-shell-seam bg-app-bg px-3.5 py-3 text-left transition-colors hover:border-accent/40 hover:bg-shell-hover focus-visible:border-accent/60 focus-visible:outline-none"

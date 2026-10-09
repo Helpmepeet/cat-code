@@ -165,6 +165,7 @@ function parseIdleTtlMs(raw: string | undefined): number {
 type SidecarArgs = {
   socketPath: string
   sessionId: string
+  generation: string
   /**
    * Caller-chosen session root (REGISTRY.md §7). Host-owned input (T8/HC1); the
    * supervisor also sets it as the child's spawn cwd, so the engine's project
@@ -216,6 +217,10 @@ function parseArgs(): SidecarArgs {
     )
   }
   const probeOnAttach = process.env.CATCODE_SIDECAR_PROBE === '1'
+  const generation = process.env.CATCODE_SIDECAR_GENERATION
+  if (!generation || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation)) {
+    throw new Error('Invalid session process identity')
+  }
   let binding: SessionBinding = { kind: 'project' }
   const bindingJson = process.env.CATCODE_SESSION_BINDING_JSON
   if (bindingJson) {
@@ -253,6 +258,7 @@ function parseArgs(): SidecarArgs {
   return {
     socketPath,
     sessionId,
+    generation,
     cwd: cwd ?? process.cwd(),
     resumeEngineSessionId,
     freshEngineSessionId,
@@ -447,6 +453,7 @@ async function main(): Promise<void> {
     probe: args.probeOnAttach,
     cwd: runtimeCwd,
     appSessionId: args.sessionId,
+    generation: args.generation,
     binding: args.binding,
     recreatedFolderNotice: args.recreatedFolderNotice,
     // Mutually exclusive by construction: a resume seeds the restored
@@ -530,6 +537,7 @@ async function main(): Promise<void> {
   const server = new SidecarServer({
     sessionId: args.sessionId,
     engineSessionId,
+    generation: args.generation,
     controller,
     ...(permissions ? { permissions } : {}),
     ...(settings ? { settings } : {}),
