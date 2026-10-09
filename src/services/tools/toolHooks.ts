@@ -13,6 +13,7 @@ import type {
   ProgressMessage,
 } from '../../types/message.js'
 import type { PermissionDecision } from '../../types/permissions.js'
+import { issueHookInteractionReceipt } from './toolInputSecurity.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
 import { logForDebugging } from '../../utils/debug.js'
 import {
@@ -376,6 +377,9 @@ export async function resolveHookPermissionDecision(
       toolUseContext,
     )
     if (ruleCheck === null) {
+      if (interactionSatisfied) {
+        issueHookInteractionReceipt(tool.name, hookInput, toolUseID)
+      }
       logForDebugging(
         interactionSatisfied
           ? `Hook satisfied user interaction for ${tool.name} via updatedInput`

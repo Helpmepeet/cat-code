@@ -109,7 +109,10 @@ import {
   runElicitationHooks,
   runElicitationResultHooks,
 } from './elicitationHandler.js'
-import { buildMcpToolName } from './mcpStringUtils.js'
+import {
+  buildMcpPermissionRuleName,
+  buildMcpToolName,
+} from './mcpStringUtils.js'
 import { normalizeNameForMCP } from './normalization.js'
 import { getLoggingSafeMcpBaseUrl } from './utils.js'
 
@@ -1980,7 +1983,10 @@ export const fetchToolsForClient = memoizeWithLRU(
                     type: 'addRules' as const,
                     rules: [
                       {
-                        toolName: fullyQualifiedName,
+                        toolName: buildMcpPermissionRuleName(
+                          client.name,
+                          tool.name,
+                        ),
                         ruleContent: undefined,
                       },
                     ],

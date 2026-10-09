@@ -66,8 +66,14 @@ describe('Normal mode static delegation guidance', () => {
     expect(promptsSource).toContain(delegationReasons)
 
     const gptGuidance = getGPTUsingToolsSection(new Set(['Agent']))
-    expect(gptGuidance).toContain(reviewRule)
-    expect(gptGuidance).toContain(delegationReasons)
+    expect(gptGuidance).toContain(
+      'Review, audit, and verification requests do not imply permission to spawn a reviewer',
+    )
+    expect(gptGuidance).toContain('an independent review agent requires an explicit request')
+    expect(gptGuidance).toContain(
+      'Work directly unless delegation has a concrete benefit from independent parallel work, isolating substantial intermediate output, or an explicit user request',
+    )
+    expect(gptGuidance).toContain('While a background agent owns a subtask, do not duplicate its investigation')
   })
 })
 
@@ -124,6 +130,39 @@ describe('GPT read discipline guidance', () => {
 
   test('Claude style does not carry the GPT read discipline rule', () => {
     expect(promptsSource).not.toContain('READ DISCIPLINE:')
+  })
+})
+
+describe('GPT web research guidance', () => {
+  test('appears only when WebSearch is enabled and names WebFetch only when present', () => {
+    expect(getGPTUsingToolsSection(new Set(['Read']))).not.toContain('WEB RESEARCH:')
+
+    const searchOnly = getGPTUsingToolsSection(new Set(['WebSearch']))
+    expect(searchOnly).toContain('WEB RESEARCH: Search with WebSearch instead of answering from memory')
+    expect(searchOnly).toContain('search again in extended mode')
+    expect(searchOnly).toContain('when the user asks what people recommend or think about something')
+    expect(searchOnly).not.toContain('WebFetch')
+
+    expect(
+      getGPTUsingToolsSection(new Set(['WebSearch', 'WebFetch'])),
+    ).toContain('read the page with WebFetch')
+  })
+
+  test('reaches the assembled GPT prompt from the session tool pool', async () => {
+    clearSystemPromptSections()
+    try {
+      const tools = [{ name: 'WebSearch' }, { name: 'WebFetch' }] as Parameters<
+        typeof getSystemPrompt
+      >[0]
+      const prompt = (await getSystemPrompt(tools, 'gpt-6-sol')).join('\n')
+      expect(prompt).toContain('WEB RESEARCH: Search with WebSearch')
+    } finally {
+      clearSystemPromptSections()
+    }
+  })
+
+  test('lets GPT open URLs its own web searches returned', () => {
+    expect(getGPTIntroSection(null)).toContain('or returned by your web searches.')
   })
 })
 

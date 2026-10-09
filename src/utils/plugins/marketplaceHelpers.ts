@@ -504,6 +504,16 @@ export function isSourceAllowedByPolicy(source: MarketplaceSource): boolean {
   })
 }
 
+export function assertMarketplaceSourceAllowed(
+  source: MarketplaceSource,
+): void {
+  if (!isSourceAllowedByPolicy(source)) {
+    throw new Error(
+      `Marketplace source is no longer allowed by enterprise policy: ${formatSourceForDisplay(source)}`,
+    )
+  }
+}
+
 /**
  * Format a MarketplaceSource for display in error messages
  */

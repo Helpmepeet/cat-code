@@ -423,3 +423,33 @@ When detail exceeds that cap, grouping now reduces tool names before dropping
 named models. The four current models, GPT-6 Astra, GPT-6.1 Sol, GPT-6 Luna,
 and GPT-5.6 Terra, receive priority in the bounded model list. Other retains
 exact omitted totals when even the tighter model list cannot fit.
+
+### Tool diagnostics envelope correction, 2026-10-08
+
+The error trend is a diagnostic surface, not just a popularity ranking. Named
+tools with recorded errors receive priority by absolute error count, matched
+results, then requests. Remaining slots retain request-volume leaders. The
+graph automatically selects up to three named error leaders, excluding grouped
+Other and Unknown unless no named tools survive. Explicit manual choices remain
+in effect, including an intentionally empty selection. Selected names include
+the period-wide error rate and exact error/matched-result counts. Edit,
+apply_patch, and legacy Apply_patch remain distinct recorded identities.
+
+All history now uses at most 60 nonempty calendar buckets rather than waiting
+for the 180-bucket wire maximum. Bucketing happens while distinct session
+identities are available, preserving exact per-bucket session counts, tool and
+token totals, parallel minutes, effort, and automatic-permission outcomes.
+The renderer labels multi-day totals with the existing bucket width.
+
+The finalizer reduces optional contributor detail and All-history detail before
+collapsing recent tool categories. It tries to preserve named error leaders and
+at least one build observation per tool/bucket in every period before using
+more aggressive, explicit omissions. Build retention favors error evidence.
+The graph reports omitted build-observation counts even when no marker remains;
+these are observations, not a count of distinct missing commits. The 256 KiB
+record cap, 10-tool cap, and strict inbound/outbound validation are unchanged.
+
+Counting version 21 invalidates version-20 summaries that had already grouped
+recent tool names, then rebuilds summaries from the existing redacted
+index-v11 records. The raw index projection, transcripts, sessions, and
+accounts are unchanged; no persisted engine migration is required.

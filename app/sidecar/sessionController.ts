@@ -61,6 +61,8 @@ import {
 } from '../../src/utils/fileStateCache.js'
 import type { Message } from '../../src/types/message.js'
 import { SYNTHETIC_MODEL } from '../../src/utils/messages.js'
+import { getTranscriptPath } from '../../src/utils/sessionStorage.js'
+import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
 import { createListPeersTool } from './listPeersTool.js'
 import {
@@ -829,8 +831,15 @@ export async function createSidecarSessionController({
     ? hasProviderBoundHistory(initialMessages)
     : false
   setProviderSwitchLocked(providerBoundHistory)
+  const cacheFacts = initialMessages
+    ? readTranscriptRunFacts(getTranscriptPath(), () => null).facts
+    : null
   const runControls = createSidecarRunControlsDomain(appStateStore, {
     providerSwitchLocked: providerBoundHistory,
+    initialMessages,
+    initialCacheObservation: cacheFacts?.model && cacheFacts.cacheExpiresAt != null
+      ? { model: cacheFacts.model, expiresAt: cacheFacts.cacheExpiresAt }
+      : null,
   })
 
   const controller = createRuntimeBackedAppSession({

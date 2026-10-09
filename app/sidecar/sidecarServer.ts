@@ -1,4 +1,4 @@
-import { readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { isPathTrusted } from '../../src/utils/config.js'
@@ -621,6 +621,7 @@ export class SidecarServer {
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
   private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
+  private destinationHandoffOperation: string | null = null
   private sourceHandoffOperation: string | null = null
   private handoffResult: { operationId: string; tipUuid: string; toolUseId: string } | null = null
   private handoffReadySent = false
@@ -663,6 +664,11 @@ export class SidecarServer {
    * as a turn durably accepts the prompt, so this only ever holds failures.
    */
   private readonly retriedQueuedPromptKeys = new Set<string>()
+  /**
+   * Prompt ids whose force-send was explicitly requested during a destination
+   * continuation.
+   */
+  private readonly forcedReconciliationPromptIds = new Set<string>()
   /**
    * D1a — messages sent mid-turn that are waiting for the running response and
    * have NOT been announced to the transcript yet, keyed by the uuid they will
@@ -850,6 +856,7 @@ export class SidecarServer {
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
+      this.runControls?.observeSessionEvent?.(event)
       // Before the broadcast: `broadcastEvent` returns early with no clients
       // attached, and a turn that hangs with the window closed is exactly the
       // case this needs to see.
@@ -1902,9 +1909,14 @@ export class SidecarServer {
             this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') throw new Error('Continuation unavailable')
         if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
         this.activeTurn = true
+        this.destinationHandoffOperation = message.operationId
         this.beginTurnObservation()
         try { await this.controller.continueHandoff(message.operationId, { uuid: state.continuation.id }) }
-        finally { this.activeTurn = false; this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok') }
+        finally {
+          this.destinationHandoffOperation = null
+          this.activeTurn = false
+          this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
+        }
         if (!this.turnResultSucceeded || this.turnResultFailed || this.handoffResult) throw new Error('Continuation did not settle successfully')
       } else if (message.action === 'settle_failed' || message.action === 'settle_cancelled' || message.action === 'settle_uncertain') {
         // Cancellation may arrive while the source tool exchange is settling.
@@ -1916,6 +1928,11 @@ export class SidecarServer {
         }
         if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
         await this.controller.settleHandoff(message.operationId, message.action === 'settle_uncertain' ? 'uncertain' : message.action === 'settle_failed' ? 'failed' : 'cancelled')
+        if (message.action === 'settle_cancelled') {
+          this.forcedReconciliationPromptIds.clear()
+        } else {
+          this.drainOneQueuedPrompt(true)
+        }
       } else if (message.action === 'release') {
         if (state.continuation.state !== 'settled' || state.requiresUserReconciliation) throw new Error('Outcome is not settled')
         this.controller.releaseHandoffReservation(message.operationId)
@@ -1930,8 +1947,12 @@ export class SidecarServer {
       sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId, ok })
   }
 
-  private drainOneQueuedPrompt(): boolean {
-    if (!this.controller.canStartAutomaticTurn()) return false
+  private drainOneQueuedPrompt(allowUserReconciliation = false): boolean {
+    const canStart = allowUserReconciliation
+      ? this.controller.requiresHandoffReconciliation() &&
+        !this.controller.getHandoffReservation()
+      : this.controller.canStartAutomaticTurn()
+    if (!canStart) return false
     if (this.closed || this.parking || this.activeTurn) return false
     if (
       this.workspaceTrust &&
@@ -1942,7 +1963,12 @@ export class SidecarServer {
 
     // Re-read at drain time: the turn we were scheduled behind may have drained
     // this prompt itself on its way out.
-    const command = dequeue(isDeliverableParentPrompt)
+    const command = dequeue(command =>
+      isDeliverableParentPrompt(command) &&
+      (!allowUserReconciliation ||
+        (command.uuid !== undefined &&
+          this.forcedReconciliationPromptIds.has(command.uuid))),
+    )
     if (!command) return false
 
     // D1a — this turn is where a still-staged message becomes a transcript row,
@@ -1974,6 +2000,7 @@ export class SidecarServer {
       onInputPersisted: () => {
         persisted = true
         this.retriedQueuedPromptKeys.delete(retryKey)
+        this.forcedReconciliationPromptIds.delete(retryKey)
       },
       onSettled: error => {
         if (!error || persisted) return
@@ -1982,6 +2009,7 @@ export class SidecarServer {
             `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
           )
           this.retriedQueuedPromptKeys.delete(retryKey)
+          this.forcedReconciliationPromptIds.delete(retryKey)
           return
         }
         this.retriedQueuedPromptKeys.add(retryKey)
@@ -2619,6 +2647,7 @@ export class SidecarServer {
       const staged = this.stagedPrompts.get(uuid)
       if (!staged) continue
       this.stagedPrompts.delete(uuid)
+      this.forcedReconciliationPromptIds.delete(uuid)
       this.rememberRecalledPrompt(uuid, { ...staged, requestId })
       recalled.push({ id: uuid, prompt: staged.prompt })
     }
@@ -2758,7 +2787,20 @@ export class SidecarServer {
       return
     }
 
-    if (this.activeTurn) {
+    let resultMessage = 'Sending the queued message now.'
+    let resultOk = true
+    if (this.activeTurn && this.destinationHandoffOperation) {
+      // A destination continuation is an admitted, separately owned operation.
+      // Preserve the explicit user intent, but let the continuation owner reach
+      // its durable outcome before delivering the queued prompt.
+      this.forcedReconciliationPromptIds.add(head.id)
+      resultMessage =
+        'The message will send after the workspace change finishes.'
+    } else if (this.controller.requiresHandoffReconciliation()) {
+      this.forcedReconciliationPromptIds.add(head.id)
+      resultOk = this.drainOneQueuedPrompt(true)
+      if (!resultOk) resultMessage = 'The message is still waiting to be sent.'
+    } else if (this.activeTurn) {
       this.controller.abort('force-send', 'interrupt')
     } else {
       this.scheduleBoundaryDrain()
@@ -2769,8 +2811,8 @@ export class SidecarServer {
       sessionId: this.sessionId,
       requestId: parsed.data.requestId,
       promptId,
-      ok: true,
-      message: 'Sending the queued message now.',
+      ok: resultOk,
+      message: resultMessage,
     })
   }
 
@@ -2808,9 +2850,21 @@ export class SidecarServer {
     // `session_disconnected` is an existing ErrorFrame code the renderer already
     // folds to disconnected/inputEnabled:false — no new error code, no renderer
     // change. Retryable: the user unparks (restore-on-click) and re-sends.
-    if (this.controller.getHandoffReservation()) {
-      refuseSubmit('session_not_ready', 'Workspace change is awaiting settlement.', true)
-      return
+    const reservation = this.controller.getHandoffReservation()
+    if (reservation) {
+      let canQueue = false
+      if (this.activeTurn && this.controller.isTurnActive() &&
+          this.destinationHandoffOperation === reservation && !message.options?.isMeta) {
+        try {
+          const state = readWorkspaceJump(this.sessionId)
+          canQueue = !!state && state.engineSessionId === this.engineSessionId &&
+            state.operationId === reservation && workspaceJumpAllowsQueuedInput(state)
+        } catch { /* An unreadable move ledger keeps admission closed. */ }
+      }
+      if (!canQueue) {
+        refuseSubmit('session_not_ready', 'Workspace change is awaiting settlement.', true)
+        return
+      }
     }
     if (this.parking) {
       refuseSubmit('session_disconnected', 'session parking', true)
@@ -3217,6 +3271,7 @@ export class SidecarServer {
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
     const verb = parsed as AccountVerbMessage
+    const accountsBefore = accounts.getSnapshot()
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
     void accounts
@@ -3235,6 +3290,12 @@ export class SidecarServer {
             : {}),
         })
         if (poolChanged) {
+          const accountsAfter = accounts.getSnapshot()
+          if (!accountsBefore || !accountsAfter ||
+            accountsAfter.activeAccountId !== accountsBefore.activeAccountId ||
+            accountsAfter.anthropicActiveAccountId !== accountsBefore.anthropicActiveAccountId) {
+            this.runControls?.clearCacheEstimate?.()
+          }
           this.broadcastAccountsSnapshot()
           // Account/credential changes can change getModelOptions() (notably
           // adding/removing Anthropic subscription access), even though no
@@ -3296,6 +3357,7 @@ export class SidecarServer {
       .applyDeletedProfile(parsed.data.accountId)
       .then(changed => {
         if (!changed) return
+        this.runControls?.clearCacheEstimate?.()
         this.broadcastAccountsSnapshot()
         this.broadcastRunControlsSnapshot()
         this.broadcastLeaseSnapshot()
@@ -3335,6 +3397,7 @@ export class SidecarServer {
       .applyExternallyCommittedSignOut(parsed.data)
       .then(changed => {
         if (!changed) return
+        this.runControls?.clearCacheEstimate?.()
         this.broadcastAccountsSnapshot()
         this.broadcastRunControlsSnapshot()
         this.broadcastLeaseSnapshot()

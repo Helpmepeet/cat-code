@@ -28,7 +28,7 @@ const inputSchema = lazySchema(() =>
       .max(10)
       .optional()
       .describe(
-        'Maximum number of results. Defaults to 5. Must be between 1 and 10.',
+        'Maximum number of results. Defaults to 10. Must be between 1 and 10.',
       ),
     include_domains: z
       .array(z.string().trim().min(1))
@@ -44,6 +44,12 @@ const inputSchema = lazySchema(() =>
       .enum(['day', 'week', 'month', 'year', 'any'])
       .optional()
       .describe('Published-date freshness filter. Defaults to any.'),
+    mode: z
+      .enum(['standard', 'extended'])
+      .optional()
+      .describe(
+        '"standard" (default): one quick search. "extended": a multi-step deep search, slower and about twice the cost; finds sources a single query misses.',
+      ),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>

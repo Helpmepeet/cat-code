@@ -17,6 +17,11 @@ import { StreamingToolExecutor } from './StreamingToolExecutor.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import { FilePatchError, serializeFilePatchError } from '../../tools/FilePatchTool/types.js'
 import { asAgentId } from '../../types/ids.js'
+import {
+  consumeTrustedSedEditForExecution,
+  registerTrustedSedEditApproval,
+} from '../../tools/BashTool/sedEditCapability.js'
+import { createPermissionContext } from '../../hooks/toolPermission/PermissionContext.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
 // mock.module is installed during the import phase of every file in the
@@ -27,6 +32,7 @@ import { asAgentId } from '../../types/ids.js'
 let stubsActive = false
 let injectedContext: string[] | null = null
 let postToolUseHooksThrow = false
+let injectedPreToolResult: unknown | null = null
 
 const actualToolHooks = await import('./toolHooks.js')
 const realRunPreToolUseHooks = actualToolHooks.runPreToolUseHooks
@@ -36,22 +42,39 @@ mock.module('./toolHooks.js', () => ({
   runPreToolUseHooks: async function* (
     ...args: Parameters<typeof realRunPreToolUseHooks>
   ) {
-    if (!stubsActive || injectedContext === null) {
+    if (!stubsActive) {
       yield* realRunPreToolUseHooks(...args)
       return
     }
-    const [, tool, , toolUseID] = args
-    yield {
-      type: 'additionalContext' as const,
-      message: {
-        message: createAttachmentMessage({
-          type: 'hook_additional_context',
-          content: injectedContext,
-          hookName: `PreToolUse:${tool.name}`,
-          toolUseID,
-          hookEvent: 'PreToolUse',
-        }),
-      },
+    if (injectedContext === null && injectedPreToolResult === null) {
+      yield* realRunPreToolUseHooks(...args)
+      return
+    }
+    if (injectedContext !== null) {
+      const [, tool, , toolUseID] = args
+      yield {
+        type: 'additionalContext' as const,
+        message: {
+          message: createAttachmentMessage({
+            type: 'hook_additional_context',
+            content: injectedContext,
+            hookName: `PreToolUse:${tool.name}`,
+            toolUseID,
+            hookEvent: 'PreToolUse',
+          }),
+        },
+      }
+    }
+    if (injectedPreToolResult !== null) {
+      const injected =
+        typeof injectedPreToolResult === 'function'
+          ? (
+              injectedPreToolResult as (
+                ...args: Parameters<typeof realRunPreToolUseHooks>
+              ) => unknown
+            )(...args)
+          : injectedPreToolResult
+      yield injected as never
     }
   },
   runPostToolUseHooks: async function* (
@@ -102,6 +125,7 @@ function createToolUseContext(
       additionalWorkingDirectories: new Map<string, string>(),
       alwaysAllowRules: {},
       alwaysDenyRules: {},
+      alwaysAskRules: {},
     },
     mcp: { tools: [], clients: [] },
     tasks: {},
@@ -134,15 +158,34 @@ function createToolUseContext(
 
 function makeTool(
   name: string,
-  call: () => Promise<{ data: unknown }>,
+  call: (
+    input: Record<string, unknown>,
+    context: ToolUseContext,
+  ) => Promise<{ data: unknown }>,
   aliases?: string[],
+  validateInput: () => Promise<ValidationResult> = async () => ({
+    result: true as const,
+  }),
+  lifecycle?: {
+    backfillObservableInput?(input: Record<string, unknown>): void
+    prepareExecution?(
+      input: Record<string, unknown>,
+      context: ToolUseContext,
+    ): Promise<{ state: unknown; cleanup(): void }>
+  },
 ) {
   return buildTool({
     name,
     aliases,
-    inputSchema: z.strictObject({ value: z.string() }),
+    inputSchema: z.strictObject({
+      value: z.string(),
+      command: z.string().optional(),
+      path: z.string().optional(),
+      nested: z.strictObject({ value: z.string() }).optional(),
+    }),
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
+    requiresUserInteraction: (): boolean => false,
     async description() {
       return name
     },
@@ -150,8 +193,9 @@ function makeTool(
       return name
     },
     async validateInput(): Promise<ValidationResult> {
-      return { result: true as const }
+      return validateInput()
     },
+    ...lifecycle,
     renderToolUseMessage: () => null,
     renderToolResultMessage: () => null,
     renderToolUseErrorMessage: () => null,
@@ -170,6 +214,11 @@ function makeTool(
 async function drain(
   tool: ReturnType<typeof makeTool>,
   abortController?: AbortController,
+  input: Record<string, unknown> = { value: 'x' },
+  canUseTool: Parameters<typeof runToolUse>[2] = async (
+    _tool,
+    authorizedInput,
+  ) => ({ behavior: 'allow' as const, updatedInput: authorizedInput }),
 ): Promise<MessageUpdateLazy[]> {
   const context = createToolUseContext([tool], abortController)
   const updates: MessageUpdateLazy[] = []
@@ -178,11 +227,11 @@ async function drain(
       type: 'tool_use',
       id: 'toolu_1',
       name: tool.name,
-      input: { value: 'x' },
+      input,
       caller: { type: 'direct' },
     },
     createAssistantMessage(),
-    async () => ({ behavior: 'allow' as const, updatedInput: { value: 'x' } }),
+    canUseTool as never,
     context,
   )) {
     updates.push(update)
@@ -225,6 +274,7 @@ function toolResultIndices(updates: MessageUpdateLazy[]): number[] {
 afterEach(() => {
   stubsActive = false
   injectedContext = null
+  injectedPreToolResult = null
   postToolUseHooksThrow = false
 })
 
@@ -369,6 +419,685 @@ describe('runToolUse PreToolUse additionalContext', () => {
       'FilePatchError:PATCH_ANCHOR_AMBIGUOUS',
     )
     expect(classifyToolError(error)).not.toContain(path)
+  })
+})
+
+describe('runToolUse final input authorization', () => {
+  test('rejects schema-invalid passthrough PreToolUse updatedInput', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookUpdatedInput',
+      updatedInput: { value: 'changed', _simulatedSedEdit: { filePath: '/x' } },
+    }
+    let calls = 0
+    let authorizations = 0
+    const tool = makeTool('SchemaMutationTool', async () => {
+      calls++
+      return { data: 'unexpected' }
+    })
+    await drain(
+      tool,
+      undefined,
+      { value: 'original' },
+      async () => {
+        authorizations++
+        return { behavior: 'allow' as const }
+      },
+    )
+    expect(calls).toBe(0)
+    expect(authorizations).toBe(0)
+  })
+
+  test('preserves PreToolUse context before a schema-invalid mutation error', async () => {
+    stubsActive = true
+    injectedContext = [HOOK_TEXT]
+    injectedPreToolResult = {
+      type: 'hookUpdatedInput',
+      updatedInput: { value: 'changed', untrusted: true },
+    }
+    let calls = 0
+    const tool = makeTool('ContextAndInvalidInputTool', async () => {
+      calls++
+      return { data: 'unexpected' }
+    })
+    const updates = await drain(tool, undefined, { value: 'original' })
+    expect(calls).toBe(0)
+    expect(additionalContextTexts(updates)).toEqual([HOOK_TEXT])
+    const toolResults = updates.filter(update => toolResultIndices([update]).length)
+    expect(toolResults).toHaveLength(1)
+    expect(additionalContextIndex(updates)).toBeLessThan(
+      updates.indexOf(toolResults[0]!),
+    )
+  })
+
+  test('rejects model-provided internal SedEdit fields at the input schema', async () => {
+    let calls = 0
+    let authorizations = 0
+    const tool = makeTool('Bash', async () => {
+      calls++
+      return { data: 'unexpected' }
+    })
+    await drain(
+      tool,
+      undefined,
+      {
+        value: 'x',
+        command: 'safe',
+        _simulatedSedEdit: {
+          filePath: '/unapproved/file',
+          newContent: 'unapproved',
+        },
+      },
+      async () => {
+        authorizations++
+        return { behavior: 'allow' as const }
+      },
+    )
+    expect(calls).toBe(0)
+    expect(authorizations).toBe(0)
+  })
+
+  test('rejects schema-invalid PreToolUse allow updatedInput before permission checks', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookPermissionResult',
+      hookPermissionResult: {
+        behavior: 'allow',
+        updatedInput: { value: 'changed', untrusted: true },
+      },
+    }
+    let calls = 0
+    let authorizations = 0
+    const tool = makeTool('HookSchemaMutationTool', async () => {
+      calls++
+      return { data: 'unexpected' }
+    })
+    await drain(
+      tool,
+      undefined,
+      { value: 'original' },
+      async () => {
+        authorizations++
+        return { behavior: 'allow' as const }
+      },
+    )
+    expect(calls).toBe(0)
+    expect(authorizations).toBe(0)
+  })
+
+  test('rejects semantically invalid PreToolUse allow updatedInput before permission checks', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookPermissionResult',
+      hookPermissionResult: {
+        behavior: 'allow',
+        updatedInput: { value: 'blocked' },
+      },
+    }
+    let calls = 0
+    let authorizations = 0
+    const tool = makeTool(
+      'HookSemanticMutationTool',
+      async () => {
+        calls++
+        return { data: 'unexpected' }
+      },
+      undefined,
+      async () => ({ result: false, message: 'blocked', errorCode: 1 }),
+    )
+    await drain(
+      tool,
+      undefined,
+      { value: 'original' },
+      async () => {
+        authorizations++
+        return { behavior: 'allow' as const }
+      },
+    )
+    expect(calls).toBe(0)
+    expect(authorizations).toBe(0)
+  })
+
+  test('rejects semantic-invalid passthrough mutation before canUseTool', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookUpdatedInput',
+      updatedInput: { value: 'blocked' },
+    }
+    let calls = 0
+    let authorizations = 0
+    const tool = makeTool(
+      'SemanticMutationTool',
+      async () => {
+        calls++
+        return { data: 'unexpected' }
+      },
+      undefined,
+      async () => ({ result: false, message: 'blocked', errorCode: 1 }),
+    )
+    await drain(
+      tool,
+      undefined,
+      { value: 'original' },
+      async () => {
+        authorizations++
+        return { behavior: 'allow' as const }
+      },
+    )
+    expect(calls).toBe(0)
+    expect(authorizations).toBe(0)
+  })
+
+  test('re-authorizes a changed hook input and calls with the final object', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookUpdatedInput',
+      updatedInput: {
+        value: 'changed',
+        command: 'different',
+        path: '/different',
+      },
+    }
+    let calls = 0
+    let authorizations = 0
+    let executedInput: Record<string, unknown> | undefined
+    let finalAuthorizedInput: Record<string, unknown> | undefined
+    const tool = makeTool('ChangedInputTool', async () => ({ data: 'ok' }))
+    tool.call = async input => {
+      calls++
+      executedInput = input as Record<string, unknown>
+      return { data: 'ok' }
+    }
+    await drain(
+      tool,
+      undefined,
+      { value: 'original', command: 'safe', path: '/safe' },
+      async (_tool, input) => {
+        authorizations++
+        finalAuthorizedInput = input
+        return { behavior: 'allow' as const, updatedInput: input }
+      },
+    )
+    expect(authorizations).toBe(1)
+    expect(calls).toBe(1)
+    expect(executedInput).toEqual({
+      value: 'changed',
+      command: 'different',
+      path: '/different',
+    })
+    expect(executedInput).toBe(finalAuthorizedInput)
+  })
+
+  test.each(['allow', 'ask'] as const)(
+    'handles PreToolUse %s updatedInput',
+    async behavior => {
+      stubsActive = true
+      injectedPreToolResult = {
+        type: 'hookPermissionResult',
+        hookPermissionResult: {
+          behavior,
+          updatedInput: { value: `${behavior}-input` },
+          message: 'Permission needed',
+        },
+      }
+      let calls = 0
+      let authorizations = 0
+      let executedInput: Record<string, unknown> | undefined
+      const tool = makeTool('HookDecisionTool', async () => ({ data: 'ok' }))
+      tool.call = async input => {
+        calls++
+        executedInput = input as Record<string, unknown>
+        return { data: 'ok' }
+      }
+      await drain(
+        tool,
+        undefined,
+        { value: 'original' },
+        async (_tool, input) => {
+          authorizations++
+          return { behavior: 'allow' as const, updatedInput: input }
+        },
+      )
+      expect(calls).toBe(1)
+      expect(executedInput).toEqual({ value: `${behavior}-input` })
+      expect(authorizations).toBe(1)
+    },
+  )
+
+  test('keeps hook-satisfied interactive input without a second prompt', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookPermissionResult',
+      hookPermissionResult: {
+        behavior: 'allow',
+        updatedInput: { value: 'hook-answer' },
+      },
+    }
+    let calls = 0
+    let authorizations = 0
+    let executedInput: Record<string, unknown> | undefined
+    const tool = makeTool('InteractiveHookTool', async () => ({ data: 'ok' }))
+    tool.requiresUserInteraction = () => true
+    tool.call = async input => {
+      calls++
+      executedInput = input as Record<string, unknown>
+      return { data: 'ok' }
+    }
+    await drain(
+      tool,
+      undefined,
+      { value: 'original' },
+      async () => {
+        authorizations++
+        return { behavior: 'allow' as const }
+      },
+    )
+    expect(authorizations).toBe(0)
+    expect(calls).toBe(1)
+    expect(executedInput).toEqual({ value: 'hook-answer' })
+  })
+
+  test.each([
+    ['PermissionRequest hook', false],
+    ['coordinator approval', false],
+    ['bridge approval', false],
+    ['userModified-only approval marker', true],
+  ] as const)(
+    'revalidates %s updatedInput from the permission boundary',
+    async (_path, userModified) => {
+      stubsActive = true
+      let calls = 0
+      let authorizations = 0
+      let executedInput: Record<string, unknown> | undefined
+      const tool = makeTool('PermissionMutationTool', async () => ({ data: 'ok' }))
+      tool.call = async input => {
+        calls++
+        executedInput = input as Record<string, unknown>
+        return { data: 'ok' }
+      }
+      await drain(
+        tool,
+        undefined,
+        { value: 'original', command: 'safe', path: '/safe' },
+        async () => {
+          authorizations++
+          return {
+            behavior: 'allow' as const,
+            updatedInput: {
+              value: 'authorized replacement',
+              command: 'different',
+              path: '/different',
+            },
+            userModified,
+          }
+        },
+      )
+      expect(authorizations).toBe(2)
+      expect(calls).toBe(1)
+      expect(executedInput).toEqual({
+        value: 'authorized replacement',
+        command: 'different',
+        path: '/different',
+      })
+    },
+  )
+
+  test('userModified flag cannot override a final tool-policy denial', async () => {
+    stubsActive = true
+    let calls = 0
+    const tool = makeTool('PolicyDeniedInputTool', async () => {
+      calls++
+      return { data: 'unexpected' }
+    })
+    tool.checkPermissions = async input =>
+      input.path === '/blocked'
+        ? {
+            behavior: 'deny',
+            message: 'blocked path',
+            decisionReason: { type: 'other', reason: 'blocked path' },
+          }
+        : { behavior: 'allow', updatedInput: input }
+    await drain(
+      tool,
+      undefined,
+      { value: 'original', command: 'safe', path: '/safe' },
+      async () => ({
+        behavior: 'allow' as const,
+        updatedInput: {
+          value: 'user-selected',
+          command: 'different',
+          path: '/blocked',
+        },
+        userModified: true,
+      }),
+    )
+    expect(calls).toBe(0)
+  })
+
+  test('changed input from a second canUseTool result needs its own receipt', async () => {
+    stubsActive = true
+    let calls = 0
+    let authorizations = 0
+    const tool = makeTool('UnstablePermissionInputTool', async () => {
+      calls++
+      return { data: 'unexpected' }
+    })
+    await drain(
+      tool,
+      undefined,
+      { value: 'original', command: 'safe', path: '/safe' },
+      async () => {
+        authorizations++
+        return {
+          behavior: 'allow' as const,
+          updatedInput:
+            authorizations === 1
+              ? { value: 'first', command: 'first', path: '/first' }
+              : { value: 'second', command: 'second', path: '/second' },
+          userModified: true,
+        }
+      },
+    )
+    expect(authorizations).toBe(2)
+    expect(calls).toBe(0)
+  })
+
+  test('accepts edited input once only with a local user-approval receipt', async () => {
+    stubsActive = true
+    let calls = 0
+    let authorizations = 0
+    let executedInput: Record<string, unknown> | undefined
+    const approvedInput = {
+      value: 'user-approved',
+      command: 'edited',
+      path: '/edited',
+    }
+    const tool = makeTool('UserEditedInputTool', async () => ({ data: 'ok' }))
+    tool.call = async input => {
+      calls++
+      executedInput = input as Record<string, unknown>
+      return { data: 'ok' }
+    }
+    await drain(
+      tool,
+      undefined,
+      { value: 'original', command: 'safe', path: '/safe' },
+      async (currentTool, input, context, message, toolUseID) => {
+        authorizations++
+        const permissionContext = createPermissionContext(
+          currentTool,
+          input,
+          context,
+          message,
+          toolUseID,
+          () => {},
+        )
+        const decision = await permissionContext.handleUserAllow(
+          approvedInput,
+          [],
+        )
+        expect(decision.updatedInput).toBe(approvedInput)
+        return decision
+      },
+    )
+    expect(authorizations).toBe(1)
+    expect(calls).toBe(1)
+    expect(executedInput).toEqual(approvedInput)
+    expect(executedInput).toBe(approvedInput)
+  })
+
+  test('no-op hooks over backfilled metadata preserve prepared canonical input', async () => {
+    stubsActive = true
+    const modelInput = {
+      value: 'same',
+      path: '/model/path',
+      nested: { value: 'model' },
+    }
+    let preparedInput: Record<string, unknown> | undefined
+    let hookInput: Record<string, unknown> | undefined
+    let authorizedInput: Record<string, unknown> | undefined
+    let executedInput: Record<string, unknown> | undefined
+    let prepareCount = 0
+    let cleanupCount = 0
+    injectedPreToolResult = (...args: unknown[]) => {
+      hookInput = args[2] as Record<string, unknown>
+      return {
+        type: 'hookUpdatedInput',
+        updatedInput: structuredClone(hookInput),
+      }
+    }
+    const tool = makeTool(
+      'PreparedNoOpTool',
+      async () => ({ data: 'ok' }),
+      undefined,
+      undefined,
+      {
+        backfillObservableInput(input) {
+          input.path = '/expanded/path'
+          ;(input.nested as { value: string }).value = 'expanded'
+        },
+        async prepareExecution(input) {
+          prepareCount++
+          preparedInput = input
+          return {
+            state: input.path,
+            cleanup() {
+              cleanupCount++
+            },
+          }
+        },
+      },
+    )
+    tool.call = async input => {
+      executedInput = input as Record<string, unknown>
+      return { data: 'ok' }
+    }
+    await drain(tool, undefined, modelInput, async (_tool, input) => {
+      authorizedInput = input
+      return { behavior: 'allow' as const, updatedInput: input }
+    })
+    expect(hookInput?.path).toBe('/expanded/path')
+    expect((hookInput?.nested as { value: string }).value).toBe('expanded')
+    expect(modelInput.path).toBe('/model/path')
+    expect(modelInput.nested.value).toBe('model')
+    expect(prepareCount).toBe(1)
+    expect(cleanupCount).toBe(1)
+    expect(preparedInput).toBe(authorizedInput)
+    expect(executedInput).toBe(preparedInput)
+    expect(executedInput?.path).toBe('/model/path')
+  })
+
+  test('user-approved parsed clone keeps the original prepared handle', async () => {
+    stubsActive = true
+    const modelInput = {
+      value: 'same',
+      command: 'safe',
+      path: '/same/path',
+      nested: { value: 'same' },
+    }
+    let preparedInput: Record<string, unknown> | undefined
+    let executedInput: Record<string, unknown> | undefined
+    let prepareCount = 0
+    let cleanupCount = 0
+    const tool = makeTool(
+      'PreparedApprovalTool',
+      async () => ({ data: 'ok' }),
+      undefined,
+      undefined,
+      {
+        async prepareExecution(input) {
+          prepareCount++
+          preparedInput = input
+          return {
+            state: input.path,
+            cleanup() {
+              cleanupCount++
+            },
+          }
+        },
+      },
+    )
+    tool.call = async input => {
+      executedInput = input as Record<string, unknown>
+      return { data: 'ok' }
+    }
+    await drain(
+      tool,
+      undefined,
+      modelInput,
+      async (currentTool, input, context, message, toolUseID) => {
+        const permissionContext = createPermissionContext(
+          currentTool,
+          input,
+          context,
+          message,
+          toolUseID,
+          () => {},
+        )
+        return permissionContext.handleUserAllow(structuredClone(input), [])
+      },
+    )
+    expect(prepareCount).toBe(1)
+    expect(cleanupCount).toBe(1)
+    expect(executedInput).toBe(preparedInput)
+    expect(executedInput).toEqual(modelInput)
+  })
+
+  test('permission wait cannot retarget prepared input after a hook changes its path', async () => {
+    stubsActive = true
+    injectedPreToolResult = {
+      type: 'hookUpdatedInput',
+      updatedInput: {
+        value: 'changed',
+        command: 'safe',
+        path: '/approved/path',
+      },
+    }
+    let prepareCount = 0
+    let cleanupCount = 0
+    let authorizedPath: unknown
+    let executedPath: unknown
+    let executedPreparedPath: unknown
+    let currentFilesystemTarget = '/approved/path'
+    const tool = makeTool(
+      'PreparedPathChangeTool',
+      async () => ({ data: 'ok' }),
+      undefined,
+      undefined,
+      {
+        async prepareExecution(input) {
+          prepareCount++
+          const handle = { path: input.path }
+          return {
+            state: handle,
+            cleanup() {
+              cleanupCount++
+            },
+          }
+        },
+      },
+    )
+    tool.call = async (input, context) => {
+      executedPath = input.path
+      executedPreparedPath = (
+        context.preparedExecution?.state as { path: string } | undefined
+      )?.path
+      return { data: 'ok' }
+    }
+    await drain(
+      tool,
+      undefined,
+      { value: 'original', command: 'safe', path: '/model/path' },
+      async (_tool, input) => {
+        authorizedPath = input.path
+        await Promise.resolve()
+        currentFilesystemTarget = '/attacker-switched-target'
+        return { behavior: 'allow' as const, updatedInput: structuredClone(input) }
+      },
+    )
+    expect(authorizedPath).toBe('/approved/path')
+    expect(currentFilesystemTarget).toBe('/attacker-switched-target')
+    expect(executedPath).toBe('/approved/path')
+    expect(executedPreparedPath).toBe('/approved/path')
+    expect(prepareCount).toBe(2)
+    expect(cleanupCount).toBe(2)
+  })
+
+  test('freezes nested canonical input across asynchronous authorization', async () => {
+    stubsActive = true
+    const input = { value: 'original', nested: { value: 'before' } }
+    injectedPreToolResult = {
+      type: 'hookUpdatedInput',
+      updatedInput: input,
+    }
+    let executedInput: Record<string, unknown> | undefined
+    const tool = makeTool('NestedMutationTool', async () => ({ data: 'ok' }))
+    tool.call = async callInput => {
+      executedInput = callInput as Record<string, unknown>
+      return { data: 'ok' }
+    }
+    await drain(tool, undefined, input, async (_tool, authorizedInput) => {
+      const nested = authorizedInput.nested as { value: string }
+      expect(Object.isFrozen(nested)).toBe(true)
+      expect(() => {
+        nested.value = 'mutated during authorization'
+      }).toThrow()
+      await Promise.resolve()
+      return { behavior: 'allow' as const, updatedInput: authorizedInput }
+    })
+    expect((executedInput?.nested as { value: string }).value).toBe('before')
+  })
+
+  test('passes trusted SedEdit capability out of band to Bash call once', async () => {
+    stubsActive = true
+    let calls = 0
+    let executedInput: Record<string, unknown> | undefined
+    let executedCapability: unknown
+    const tool = makeTool('Bash', async () => ({ data: 'ok' }))
+    tool.call = async (input, context) => {
+      calls++
+      executedInput = input as Record<string, unknown>
+      executedCapability = consumeTrustedSedEditForExecution(context)
+      return { data: 'ok' }
+    }
+    await drain(tool, undefined, { value: 'x', command: 'safe' }, async (_tool, input) => {
+      registerTrustedSedEditApproval(
+        input,
+        'toolu_1',
+        {
+          toolUseID: 'toolu_1',
+          command: 'safe',
+          filePath: '/previewed/file',
+          previewId: 'preview-1',
+          identity: {
+            canonicalPath: '/previewed/file',
+            device: 1,
+            inode: 2,
+            size: 10,
+            modifiedAtMs: 3,
+            changedAtMs: 4,
+          },
+        },
+      )
+      return { behavior: 'allow' as const, updatedInput: input }
+    })
+    expect(calls).toBe(1)
+    expect(executedInput).toEqual({ value: 'x', command: 'safe' })
+    expect(executedInput).not.toHaveProperty('_simulatedSedEdit')
+    expect(executedCapability).toEqual({
+      toolUseID: 'toolu_1',
+      command: 'safe',
+      filePath: '/previewed/file',
+      previewId: 'preview-1',
+      identity: {
+        canonicalPath: '/previewed/file',
+        device: 1,
+        inode: 2,
+        size: 10,
+        modifiedAtMs: 3,
+        changedAtMs: 4,
+      },
+    })
   })
 })
 

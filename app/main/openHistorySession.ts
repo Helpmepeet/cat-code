@@ -53,7 +53,7 @@
  */
 
 import type { HostError, SessionDescriptor } from '../shared/hostApi.js'
-import type { SessionsCatalogSnapshot } from '../shared/protocol.js'
+import type { SessionActionResultFrame, SessionsCatalogSnapshot } from '../shared/protocol.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
 
 /**
@@ -94,6 +94,33 @@ export type TrustedOpenHistorySeed = {
   /** Main-captured provenance for a just-created desktop fork. */
   forked: true
   binding?: SessionBinding
+}
+
+/** A sidecar-created fork can open before the catalog has enumerated it. */
+export function resolveBranchOpenHistorySeed(
+  frame: SessionActionResultFrame,
+  source: SessionDescriptor | undefined,
+): TrustedOpenHistorySeed | undefined {
+  if (
+    !frame.ok ||
+    (frame.verb !== 'branchFromMessage' && frame.verb !== 'branch') ||
+    typeof frame.branchEngineSessionId !== 'string' ||
+    !ENGINE_SESSION_ID_RE.test(frame.branchEngineSessionId) ||
+    !source ||
+    source.appSessionId !== frame.sessionId ||
+    source.cwd.trim().length === 0
+  ) {
+    return undefined
+  }
+  return {
+    engineSessionId: frame.branchEngineSessionId,
+    cwd: source.cwd,
+    forked: true,
+    ...(source.binding !== undefined ? { binding: source.binding } : {}),
+    ...(typeof frame.branchTitle === 'string' && frame.branchTitle.trim().length > 0
+      ? { title: frame.branchTitle }
+      : {}),
+  }
 }
 
 /**

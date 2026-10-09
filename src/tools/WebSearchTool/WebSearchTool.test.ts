@@ -34,10 +34,23 @@ describe('Exa WebSearch request mapping', () => {
       ),
     ).toEqual({
       query: 'bun fetch timeout docs',
-      numResults: 5,
+      numResults: 10,
       type: 'auto',
-      contents: { highlights: { maxCharacters: 500 } },
+      contents: { highlights: { maxCharacters: 2000 } },
     })
+  })
+
+  test('maps extended mode to Exa deep search with a longer timeout', async () => {
+    const { _forTest } = await import('./exa.js')
+
+    expect(
+      _forTest.buildExaSearchRequest({ query: 'q', mode: 'extended' }).type,
+    ).toBe('deep')
+    expect(
+      _forTest.buildExaSearchRequest({ query: 'q', mode: 'standard' }).type,
+    ).toBe('auto')
+    expect(_forTest.timeoutMsForMode(undefined)).toBe(20_000)
+    expect(_forTest.timeoutMsForMode('extended')).toBe(60_000)
   })
 
   test('trims query text before sending to Exa', async () => {
@@ -140,7 +153,7 @@ describe('Exa WebSearch response parsing', () => {
 
   test('caps returned highlight text to the compact request bound', async () => {
     const { _forTest } = await import('./exa.js')
-    const oversizedHighlight = 'x'.repeat(1200)
+    const oversizedHighlight = 'x'.repeat(2500)
 
     expect(
       _forTest.parseExaSearchResponse(
@@ -157,7 +170,7 @@ describe('Exa WebSearch response parsing', () => {
         0.1,
         1,
       ).results[0]?.highlights,
-    ).toEqual(['x'.repeat(500)])
+    ).toEqual(['x'.repeat(2000)])
   })
 
   test('drops non-http result URLs', async () => {
@@ -384,7 +397,7 @@ describe('Exa WebSearch fetch execution', () => {
         new AbortController().signal,
         1,
       ),
-    ).rejects.toThrow('Exa search timed out after 20s.')
+    ).rejects.toThrow('Exa search timed out.')
   })
 
   test('does not wait for status response bodies before throwing stable errors', async () => {
@@ -446,7 +459,7 @@ describe('Exa WebSearch fetch execution', () => {
       new Promise(resolve => setTimeout(() => resolve('still pending'), 100)),
     ])
 
-    expect(result).toBe('Exa search timed out after 20s.')
+    expect(result).toBe('Exa search timed out.')
   })
 
   test('preserves caller cancellation while reading response JSON', async () => {
@@ -576,8 +589,13 @@ describe('WebSearchTool Exa integration', () => {
         include_domains: ['typescriptlang.org'],
         exclude_domains: ['example.com'],
         freshness: 'month',
+        mode: 'extended',
       }).success,
     ).toBe(true)
+    expect(
+      WebSearchTool.inputSchema.safeParse({ query: 'bad', mode: 'deep' })
+        .success,
+    ).toBe(false)
 
     expect(
       WebSearchTool.inputSchema.safeParse({ query: 'bad', max_results: 0 })

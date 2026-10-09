@@ -1,0 +1,190 @@
+{
+  "probe": "real-data",
+  "runtime": "node v24.3.0",
+  "operational": {
+    "files": 16,
+    "firstTimestamp": "2026-10-01T11:44:43.766Z",
+    "lastTimestamp": "2026-10-06T05:26:32.757Z",
+    "eventCounts": {
+      "app.start": 12,
+      "window.created": 16,
+      "renderer.navigation.started": 16,
+      "renderer.load.ready": 16,
+      "renderer.process.gone": 2,
+      "session.restore.completed": 14,
+      "session.turn.started": 190,
+      "session.close.requested": 27,
+      "app.parked.windowless": 7,
+      "app.shutdown.started": 6,
+      "log.suppressed": 310
+    },
+    "rendererGoneReasons": {
+      "clean-exit": 2
+    },
+    "restoreMessageCount": {
+      "n": 14,
+      "p50": 13,
+      "p90": 153,
+      "p99": 190,
+      "max": 190
+    }
+  },
+  "deliveryTrace": {
+    "files": 6,
+    "bytes": 96799787,
+    "firstTimestamp": "2026-10-05T15:14:33.768Z",
+    "lastTimestamp": "2026-10-06T05:25:41.544Z",
+    "recordKinds": {
+      "delivery.trace": 81086,
+      "trace.source.incomplete": 2,
+      "trace.sequence.gap": 3,
+      "trace.loss": 696,
+      "trace.stream.quiescent": 6
+    },
+    "messageKinds": {
+      "none": 1754,
+      "user": 1443,
+      "system": 4098,
+      "stream_event": 70911,
+      "assistant": 2770,
+      "result": 110
+    },
+    "partialsPerFinishedRecord": 6.97,
+    "flushReasons": {
+      "terminal": 80093,
+      "shutdown": 13,
+      "quiescent": 257,
+      "buffered": 45,
+      "evicted": 678
+    },
+    "replayRecordsByFlushReason": {},
+    "streams": 11,
+    "sequencesBetweenFinishedMessages": {
+      "n": 9523,
+      "p50": 1,
+      "p90": 4,
+      "p99": 176,
+      "max": 1386
+    },
+    "finishedMessagesWithinLast2048Sequences": {
+      "n": 2,
+      "p50": 367,
+      "p90": 367,
+      "p99": 367,
+      "max": 367
+    }
+  },
+  "transcriptCaches": {
+    "files": 361,
+    "bytes": {
+      "n": 361,
+      "p50": 523175,
+      "p90": 3245131,
+      "p99": 6680261,
+      "max": 12066373
+    },
+    "messagesPerCache": {
+      "n": 361,
+      "p50": 123,
+      "p90": 676,
+      "p99": 1417,
+      "max": 2201
+    },
+    "framesPerCache": {
+      "n": 361,
+      "p50": 123,
+      "p90": 677,
+      "p99": 1418,
+      "max": 2202
+    },
+    "cachesWithImagePreviews": 0,
+    "readAndJsonParseMs": {
+      "n": 361,
+      "p50": 2.09,
+      "p90": 8.862,
+      "p99": 20.54,
+      "max": 37.025
+    }
+  },
+  "assistantText": {
+    "blocks": 2670,
+    "characters": {
+      "n": 2670,
+      "p50": 325,
+      "p90": 1743,
+      "p99": 12328,
+      "max": 45083
+    },
+    "blocksAtLeast2000": 235,
+    "blocksAtLeast10000": 30
+  },
+  "markdownStreamingEstimate": {
+    "sampledReplies": 20,
+    "sampleCharacters": {
+      "n": 20,
+      "p50": 4271,
+      "p90": 19196,
+      "p99": 45083,
+      "max": 45083
+    },
+    "1-word-pieces": {
+      "updates": 18898,
+      "updatesByPath": {
+        "plain-append": 15317,
+        "settled-body-reused": 2616,
+        "full-transform": 965
+      },
+      "fullTransformShare": 0.051,
+      "perUpdateMs": {
+        "n": 18898,
+        "p50": 0.257,
+        "p90": 0.995,
+        "p99": 2.764,
+        "max": 22.896
+      },
+      "fullTransformInSecondHalfMs": {
+        "n": 365,
+        "p50": 0.246,
+        "p90": 0.792,
+        "p99": 10.389,
+        "max": 22.896
+      },
+      "updatesOver16_7Ms": 4
+    },
+    "4-word-pieces": {
+      "updates": 4732,
+      "updatesByPath": {
+        "plain-append": 3808,
+        "settled-body-reused": 631,
+        "full-transform": 293
+      },
+      "fullTransformShare": 0.062,
+      "perUpdateMs": {
+        "n": 4732,
+        "p50": 0.263,
+        "p90": 1.011,
+        "p99": 2.841,
+        "max": 22.743
+      },
+      "fullTransformInSecondHalfMs": {
+        "n": 118,
+        "p50": 0.234,
+        "p90": 3.002,
+        "p99": 11.57,
+        "max": 22.743
+      },
+      "updatesOver16_7Ms": 1
+    }
+  },
+  "notes": [
+    "Aggregates only; no message text, identifiers or file paths are recorded.",
+    "Logs cover only the retained window; delivery traces are bounded by size and age.",
+    "Markdown piece boundaries are synthetic; provider deltas are not stored anywhere on disk."
+  ],
+  "wallSeconds": 12.5,
+  "loadAverageAfter": [
+    20.7236328125,
+    29.88623046875,
+    21.896484375
+  ]
+}

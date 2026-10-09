@@ -1,12 +1,12 @@
 import type { UsageDay, UsageRangeSummary, UsageWindow } from '../../shared/usageDashboard.js';
-import { usageCacheReadRate } from './usageDashboardState.js';
+import { usageCacheReadRate, usageTotal } from './usageDashboardState.js';
 
 const DAY_MS = 86400000;
 const civilDay = (date: string): number => Date.parse(`${date}T00:00:00.000Z`);
 const dayKey = (time: number): string => new Date(time).toISOString().slice(0, 10);
 export type UsageTrendPoint = { date: string; value: number | null };
 /** Per-day history from firstDate through lastDate; a date inside that span with no entry recorded nothing. */
-export type UsageDailyActivity = { firstDate: string; lastDate: string; days: ReadonlyMap<string, UsageDay> };
+export type UsageDailyActivity = { firstDate: string; lastDate: string; days: ReadonlyMap<string, UsageDay>; earlierDaysUnavailable: boolean };
 export function usageDailyActivity(ranges: Record<UsageWindow, UsageRangeSummary>): UsageDailyActivity {
     const recent = ranges['30d'], all = ranges.all;
     // All is sparse daily until it outgrows its bucket budget; after that only the
@@ -14,7 +14,23 @@ export function usageDailyActivity(ranges: Record<UsageWindow, UsageRangeSummary
     const allDaily = usageBucketDays(all) === 1;
     const days = new Map<string, UsageDay>();
     for (const day of [...(allDaily ? all.days : []), ...recent.days]) days.set(day.date, day);
-    return { firstDate: allDaily && all.startDate < recent.startDate ? all.startDate : recent.startDate, lastDate: dayKey(civilDay(recent.endDateExclusive) - DAY_MS), days };
+    return { firstDate: allDaily && all.startDate < recent.startDate ? all.startDate : recent.startDate, lastDate: dayKey(civilDay(recent.endDateExclusive) - DAY_MS), days, earlierDaysUnavailable: !allDaily && all.startDate < recent.startDate };
+}
+export function usageActivityStats(activity: UsageDailyActivity) {
+    const isActive = (day: UsageDay | undefined): boolean => !!day && (usageTotal(day.tokens) > 0 || day.requests > 0 || day.records > 0 || day.sessions > 0);
+    const active = [...activity.days.entries()].filter(([, day]) => isActive(day)).map(([date]) => date).sort();
+    let longest = 0, streak = 0, previous = '';
+    for (const date of active) {
+        streak = previous && civilDay(date) - civilDay(previous) === DAY_MS ? streak + 1 : 1;
+        longest = Math.max(longest, streak);
+        previous = date;
+    }
+    let current = 0;
+    const first = civilDay(activity.firstDate), last = civilDay(activity.lastDate);
+    for (let at = last; at >= first && isActive(activity.days.get(dayKey(at))); at -= DAY_MS) current++;
+    // A streak reaching the daily-detail boundary may continue into unavailable history.
+    const currentAtLeast = activity.earlierDaysUnavailable && current > 0 && last - current * DAY_MS < first;
+    return { active: active.length, longest, current, currentAtLeast };
 }
 export function usageBucketDays(summary: UsageRangeSummary): number {
     return 'bucketDays' in summary && typeof summary.bucketDays === 'number' ? summary.bucketDays : 1;

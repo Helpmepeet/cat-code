@@ -47,16 +47,58 @@ function makeTempDir(): string {
 function callPatch(
   patch: string,
   readFileState = createFileStateCacheWithSizeLimit(10),
+  beforeCall?: (state: unknown) => void,
 ) {
-  return FilePatchTool.call(
-    { input: patch },
-    {
-      readFileState,
-      updateFileHistoryState: () => undefined,
-    } as never,
-    undefined as never,
-    { uuid: 'test-parent' } as never,
+  const input = { input: patch }
+  const context = {
+    readFileState,
+    updateFileHistoryState: () => undefined,
+  }
+  return callPatchPreparedInput(input, context, beforeCall)
+}
+
+function callPatchPreparedInput(
+  input: Record<string, unknown>,
+  context: Record<string, unknown>,
+  beforeCall?: (state: unknown) => void,
+) {
+  return FilePatchTool.prepareExecution!(input as never).then(
+    prepared => {
+      Object.assign(context, {
+        preparedExecution: {
+          toolName: FilePatchTool.name,
+          input,
+          state: prepared.state,
+        },
+      })
+      beforeCall?.(prepared.state)
+      return FilePatchTool.call(
+        input as never,
+        context as never,
+        undefined as never,
+        { uuid: 'test-parent' } as never,
+      ).finally(prepared.cleanup)
+    },
   )
+}
+
+async function validatePreparedPatch(
+  input: Record<string, unknown>,
+  context: Record<string, unknown>,
+) {
+  const prepared = await FilePatchTool.prepareExecution!(input as never)
+  Object.assign(context, {
+    preparedExecution: {
+      toolName: FilePatchTool.name,
+      input,
+      state: prepared.state,
+    },
+  })
+  try {
+    return await FilePatchTool.validateInput(input as never, context as never)
+  } finally {
+    await prepared.cleanup()
+  }
 }
 
 // prepareFileMutation awaits an IDE round trip, a mkdir and a file-history
@@ -135,6 +177,154 @@ function validationContext(readFileState = createFileStateCacheWithSizeLimit(10)
 }
 
 describe('FilePatchTool concurrent write safety', () => {
+  test('move validation does not reopen a destination introduced after preparation', async () => {
+    const dir = makeTempDir()
+    const source = join(dir, 'source.txt')
+    const destination = join(dir, 'destination.txt')
+    const outside = join(dir, 'outside.txt')
+    writeFileSync(source, 'old\n')
+    writeFileSync(outside, 'outside-marker\n')
+    const input = {
+      input: `*** Begin Patch
+*** Update File: ${source}
+*** Move to: ${destination}
+@@
+-old
++new
+*** End Patch`,
+    }
+    const context = {
+      ...(validationContext(seedFullRead(source, 'old\n')) as Record<string, unknown>),
+      updateFileHistoryState: () => undefined,
+    }
+    const prepared = await FilePatchTool.prepareExecution!(input as never)
+    Object.assign(context, {
+      preparedExecution: {
+        toolName: FilePatchTool.name,
+        input,
+        state: prepared.state,
+      },
+    })
+    symlinkSync(outside, destination)
+    try {
+      const validation = await FilePatchTool.validateInput(
+        input as never,
+        context as never,
+      )
+      expect(validation.result).toBe(true)
+      await expect(
+        FilePatchTool.call(
+          input as never,
+          context as never,
+          undefined as never,
+          { uuid: 'test-parent' } as never,
+        ),
+      ).rejects.toThrow()
+      expect(readFileSync(outside, 'utf8')).toBe('outside-marker\n')
+      expect(readFileSync(source, 'utf8')).toBe('old\n')
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
+  test('compound actual-path checks preserve the original patch input shape', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'permission-shape.txt')
+    writeFileSync(filePath, 'before\n')
+    const input = {
+      input: `*** Begin Patch
+*** Update File: ${filePath}
+@@
+ before
+-before
++after
+*** End Patch`,
+    }
+    const permissionContext = {
+      mode: 'acceptEdits',
+      additionalWorkingDirectories: new Map([[dir, dir]]),
+      alwaysAllowRules: {},
+      alwaysDenyRules: {},
+      alwaysAskRules: {},
+      isBypassPermissionsModeAvailable: true,
+    }
+    const context = {
+      readFileState: createFileStateCacheWithSizeLimit(10),
+      getAppState: () => ({ toolPermissionContext: permissionContext }),
+    }
+    const prepared = await FilePatchTool.prepareExecution!(input as never)
+    Object.assign(context, {
+      preparedExecution: {
+        toolName: FilePatchTool.name,
+        input,
+        state: prepared.state,
+      },
+    })
+    try {
+      const parsed = FilePatchTool.inputSchema.parse(input)
+      const decision = await FilePatchTool.checkPermissions(
+        parsed as never,
+        context as never,
+      )
+      expect(decision.behavior).toBe('allow')
+      if (decision.behavior === 'allow') {
+        expect(decision.updatedInput).toBe(input)
+      }
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
+  test('an add remains beneath its prepared parent after a symlink swap', async () => {
+    const base = makeTempDir()
+    const allowed = join(base, 'allowed')
+    const outside = join(base, 'outside')
+    const alias = join(base, 'parent-link')
+    mkdirSync(allowed)
+    mkdirSync(outside)
+    symlinkSync(allowed, alias)
+    const input = {
+      ops: [
+        {
+          type: 'add' as const,
+          path: join(alias, 'nested', 'deep', 'created.txt'),
+          lines: ['safe'],
+          noNewlineAtEndOfFile: false,
+        },
+      ],
+    }
+    const context = {
+      readFileState: createFileStateCacheWithSizeLimit(10),
+      updateFileHistoryState: () => undefined,
+    }
+    const prepared = await FilePatchTool.prepareExecution!(input as never)
+    Object.assign(context, {
+      preparedExecution: {
+        toolName: FilePatchTool.name,
+        input,
+        state: prepared.state,
+      },
+    })
+    try {
+      rmSync(alias)
+      symlinkSync(outside, alias)
+      await FilePatchTool.call(
+        input as never,
+        context as never,
+        undefined,
+        { uuid: 'test-parent' } as never,
+      )
+      expect(
+        readFileSync(join(allowed, 'nested', 'deep', 'created.txt'), 'utf8'),
+      ).toBe('safe\n')
+      expect(
+        existsSync(join(outside, 'nested', 'deep', 'created.txt')),
+      ).toBe(false)
+    } finally {
+      await prepared.cleanup()
+    }
+  })
+
   test('applies the patch when nothing else touches the file', async () => {
     const dir = makeTempDir()
     const filePath = join(dir, 'target.txt')
@@ -185,7 +375,7 @@ describe('FilePatchTool concurrent write safety', () => {
       fileIdentity: getFileIdentity(filePath),
     })
 
-    const validation = await FilePatchTool.validateInput(
+    const validation = await validatePreparedPatch(
       {
         ops: [
           {
@@ -570,7 +760,7 @@ describe('FilePatchTool concurrent write safety', () => {
     const filePath = join(dir, 'unread.txt')
     writeFileSync(filePath, 'content\n')
 
-    const result = await FilePatchTool.validateInput(
+    const result = await validatePreparedPatch(
       { ops: [{ type: 'delete', path: filePath }] },
       validationContext(),
     )
@@ -591,7 +781,7 @@ describe('FilePatchTool concurrent write safety', () => {
     const partialState = seedFullRead(partialPath, 'partial\n', {
       isPartialView: true,
     })
-    const partialResult = await FilePatchTool.validateInput(
+    const partialResult = await validatePreparedPatch(
       { ops: [{ type: 'delete', path: partialPath }] },
       validationContext(partialState),
     )
@@ -602,7 +792,7 @@ describe('FilePatchTool concurrent write safety', () => {
 
     const staleState = seedFullRead(stalePath, 'before\n')
     writeFileSync(stalePath, 'after\n')
-    const staleResult = await FilePatchTool.validateInput(
+    const staleResult = await validatePreparedPatch(
       { ops: [{ type: 'delete', path: stalePath }] },
       validationContext(staleState),
     )
@@ -707,7 +897,7 @@ describe('FilePatchTool concurrent write safety', () => {
     const destinationPath = join(settingsDir, 'settings.json')
     writeFileSync(sourcePath, '{}\n')
 
-    const result = await FilePatchTool.validateInput(
+    const result = await validatePreparedPatch(
       {
         input: `*** Begin Patch
 *** Update File: ${sourcePath}
@@ -758,17 +948,6 @@ describe('FilePatchTool concurrent write safety', () => {
     const sourcePath = join(dir, 'source.txt')
     const destinationPath = join(dir, 'destination.txt')
     writeFileSync(sourcePath, FIRST_ORIGINAL)
-    const originalFs = getFsImplementation()
-    setFsImplementation({
-      ...originalFs,
-      async unlink(path) {
-        if (path === sourcePath) {
-          throw new Error('forced source deletion failure')
-        }
-        return originalFs.unlink(path)
-      },
-    })
-
     await expect(
       callPatch(`*** Begin Patch
 *** Update File: ${sourcePath}
@@ -779,7 +958,24 @@ describe('FilePatchTool concurrent write safety', () => {
 +beta patched
  gamma
 *** End Patch
-`),
+`,
+        undefined,
+        state => {
+          const prepared = state as {
+            byPath: Map<
+              string,
+              {
+                parent: {
+                  removeFile: (...args: never[]) => Promise<boolean>
+                }
+              }
+            >
+          }
+          prepared.byPath.get(sourcePath)!.parent.removeFile = async () => {
+            throw new Error('forced source deletion failure')
+          }
+        },
+      ),
     ).rejects.toThrow('forced source deletion failure')
     expect(readFileSync(sourcePath, 'utf8')).toBe(FIRST_ORIGINAL)
     expect(() => readFileSync(destinationPath, 'utf8')).toThrow()
@@ -813,14 +1009,13 @@ describe('FilePatchTool operation independence', () => {
   ): Promise<FilePatchError> {
     let error: unknown
     try {
-      await FilePatchTool.call(
-        { ops },
+      const input = { ops }
+      await callPatchPreparedInput(
+        input,
         {
           readFileState: createFileStateCacheWithSizeLimit(10),
           updateFileHistoryState: () => undefined,
-        } as never,
-        undefined,
-        { uuid: 'test-parent' } as never,
+        },
       )
     } catch (caught) {
       error = caught

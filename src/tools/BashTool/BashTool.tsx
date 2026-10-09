@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+import type { UUID } from 'crypto'
 import { feature } from 'bun:bundle';
 import { recordThreadGoalCommandEvidence } from '../../utils/threadGoalEvidenceRecorder.js'
 import { saveThreadGoal } from '../../utils/sessionStorage.js'
@@ -10,7 +12,6 @@ import { z } from 'zod/v4';
 import { getKairosActive } from '../../bootstrap/state.js';
 import { TOOL_SUMMARY_MAX_LENGTH } from '../../constants/toolLimits.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
-import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js';
 import type { SetToolJSXFn, ToolCallProgress, ToolUseContext, ValidationResult } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import { backgroundExistingForegroundTask, markTaskNotified, registerForeground, spawnShellTask, unregisterForeground } from '../../tasks/LocalShellTask/LocalShellTask.js';
@@ -22,13 +23,15 @@ import { splitCommand_DEPRECATED, splitCommandWithOperators } from '../../utils/
 import { extractClaudeCodeHints } from '../../utils/claudeCodeHints.js';
 import { detectCodeIndexingFromCommand } from '../../utils/codeIndexing.js';
 import { isEnvTruthy } from '../../utils/envUtils.js';
-import { isENOENT, ShellError } from '../../utils/errors.js';
-import { detectFileEncoding, detectLineEndings, getFileModificationTime, writeTextContent } from '../../utils/file.js';
-import { fileHistoryEnabled, fileHistoryTrackEdit } from '../../utils/fileHistory.js';
+import { ShellError } from '../../utils/errors.js';
+import { fileIdentitiesEqual } from '../../utils/file.js';
 import { truncate } from '../../utils/format.js';
-import { getFsImplementation } from '../../utils/fsOperations.js';
 import { lazySchema } from '../../utils/lazySchema.js';
 import { expandPath } from '../../utils/path.js';
+import {
+  prepareFileMutationAuthorization,
+  readPreparedFileMetadata,
+} from '../../utils/fileAuthorization.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { maybeRecordPluginHint } from '../../utils/plugins/hintRecommendation.js';
 import { exec } from '../../utils/Shell.js';
@@ -48,7 +51,17 @@ import { interpretCommandResult, SEMANTIC_COMMAND_NAMES } from './commandSemanti
 import { checkKillOwnership } from './killOwnership.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
-import { parseSedEditCommand } from './sedEditParser.js';
+import { applySedSubstitution, parseSedEditCommand } from './sedEditParser.js';
+import {
+  consumeTrustedSedEditForExecution,
+  isPreparedSedEditPreview,
+  type PreparedSedEditPreview,
+  type TrustedSedEdit,
+} from './sedEditCapability.js';
+import {
+  prepareFileMutation,
+  writeFileWithSideEffects,
+} from '../FileEditTool/shared.js';
 import { shouldUseSandbox } from './shouldUseSandbox.js';
 import { BASH_TOOL_NAME } from './toolName.js';
 import { BackgroundHint, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseQueuedMessage } from './UI.js';
@@ -245,23 +258,12 @@ For commands that are harder to parse at a glance (piped commands, obscure flags
 - curl -s url | jq '.data[]' → "Fetch JSON from URL and extract data array elements"`),
   run_in_background: semanticBoolean(z.boolean().optional()).describe(`Set to true to run this command in the background. Use Read to read the output later.`),
   dangerouslyDisableSandbox: semanticBoolean(z.boolean().optional()).describe('Set this to true to dangerously override sandbox mode and run commands without sandboxing.'),
-  _simulatedSedEdit: z.object({
-    filePath: z.string(),
-    newContent: z.string()
-  }).optional().describe('Internal: pre-computed sed edit result from preview')
 }));
 
-// Always omit _simulatedSedEdit from the model-facing schema. It is an internal-only
-// field set by SedEditPermissionRequest after the user approves a sed edit preview.
-// Exposing it in the schema would let the model bypass permission checks and the
-// sandbox by pairing an innocuous command with an arbitrary file write.
 // Also conditionally remove run_in_background when background tasks are disabled.
-const inputSchema = lazySchema(() => isBackgroundTasksDisabled ? fullInputSchema().omit({
-  run_in_background: true,
-  _simulatedSedEdit: true
-}) : fullInputSchema().omit({
-  _simulatedSedEdit: true
-}));
+const inputSchema = lazySchema(() => isBackgroundTasksDisabled
+  ? fullInputSchema().omit({ run_in_background: true })
+  : fullInputSchema());
 type InputSchema = ReturnType<typeof inputSchema>;
 
 // Use fullInputSchema for the type to always include run_in_background
@@ -355,65 +357,62 @@ export function detectBlockedSleepPattern(command: string): string | null {
 type SimulatedSedEditResult = {
   data: Out;
 };
-type SimulatedSedEditContext = Pick<ToolUseContext, 'readFileState' | 'updateFileHistoryState'>;
 
 /**
- * Applies a simulated sed edit directly instead of running sed.
- * This is used by the permission dialog to ensure what the user previews
- * is exactly what gets written to the file.
+ * Publishes only through the filesystem object retained for this preview.
  */
-async function applySedEdit(simulatedEdit: {
-  filePath: string;
-  newContent: string;
-}, toolUseContext: SimulatedSedEditContext, parentMessage?: AssistantMessage): Promise<SimulatedSedEditResult> {
-  const {
-    filePath,
-    newContent
-  } = simulatedEdit;
-  const absoluteFilePath = expandPath(filePath);
-  const fs = getFsImplementation();
-
-  // Read original content for VS Code notification
-  const encoding = detectFileEncoding(absoluteFilePath);
-  let originalContent: string;
-  try {
-    originalContent = await fs.readFile(absoluteFilePath, {
-      encoding
-    });
-  } catch (e) {
-    if (isENOENT(e)) {
-      return {
-        data: {
-          stdout: '',
-          stderr: `sed: ${filePath}: No such file or directory\nExit code 1`,
-          interrupted: false
-        }
-      };
-    }
-    throw e;
+async function applySedEdit(
+  approval: TrustedSedEdit,
+  preview: PreparedSedEditPreview,
+  input: BashToolInput,
+  toolUseContext: ToolUseContext,
+  parentMessage?: AssistantMessage,
+): Promise<SimulatedSedEditResult> {
+  const prepared = preview.preparedMutation;
+  if (
+    toolUseContext.preparedExecution?.toolName !== BASH_TOOL_NAME ||
+    toolUseContext.preparedExecution.input !== input ||
+    toolUseContext.toolUseId !== preview.toolUseID ||
+    !prepared.parent ||
+    !prepared.existing ||
+    approval.toolUseID !== preview.toolUseID ||
+    approval.command !== preview.command ||
+    approval.filePath !== preview.filePath ||
+    approval.previewId !== preview.previewId ||
+    !fileIdentitiesEqual(approval.identity, preview.identity)
+  ) {
+    throw new Error('Sed preview authority does not match the prepared file.')
   }
 
-  // Track file history before making changes (for undo support)
-  if (fileHistoryEnabled() && parentMessage) {
-    await fileHistoryTrackEdit(toolUseContext.updateFileHistoryState, absoluteFilePath, parentMessage.uuid);
+  const current = await prepared.existing.currentIdentity();
+  const currentIdentity = {
+    canonicalPath: prepared.canonicalPath,
+    ...current,
+  };
+  if (!fileIdentitiesEqual(preview.identity, currentIdentity)) {
+    throw new Error('The file changed after the Sed preview was prepared.')
   }
+  const previewContent = await preview.loadPreview()
 
-  // Detect line endings and write new content
-  const endings = detectLineEndings(absoluteFilePath);
-  writeTextContent(absoluteFilePath, newContent, encoding, endings);
-
-  // Notify VS Code about the file change
-  notifyVscodeFileUpdated(absoluteFilePath, originalContent, newContent);
-
-  // Update read timestamp to invalidate stale writes
-  toolUseContext.readFileState.set(absoluteFilePath, {
-    content: newContent,
-    timestamp: getFileModificationTime(absoluteFilePath),
-    offset: undefined,
-    limit: undefined
+  if (parentMessage) {
+    await prepareFileMutation(
+      preview.filePath,
+      toolUseContext.updateFileHistoryState,
+      parentMessage.uuid as UUID,
+      prepared,
+    );
+  }
+  await writeFileWithSideEffects({
+    absoluteFilePath: preview.filePath,
+    originalFileContents: previewContent.originalContent,
+    updatedFile: previewContent.newContent,
+    encoding: previewContent.encoding,
+    lineEndings: previewContent.lineEndings,
+    readFileState: toolUseContext.readFileState,
+    expectedIdentity: preview.identity,
+    preparedMutation: prepared,
   });
 
-  // Return success result matching sed output format (sed produces no output on success)
   return {
     data: {
       stdout: '',
@@ -541,6 +540,61 @@ export const BashTool = buildTool({
       result: true
     };
   },
+  async prepareExecution(input, context) {
+    const sedInfo = parseSedEditCommand(input.command);
+    if (!sedInfo || !context.toolUseId) {
+      return { state: null, cleanup() {} };
+    }
+    let preparedMutation;
+    try {
+      preparedMutation = await prepareFileMutationAuthorization(sedInfo.filePath);
+      if (
+        preparedMutation.pathnameLimited ||
+        !preparedMutation.parent ||
+        !preparedMutation.existing
+      ) {
+        await preparedMutation.cleanup();
+        return { state: null, cleanup() {} };
+      }
+      const openedIdentity = {
+        canonicalPath: preparedMutation.canonicalPath,
+        ...preparedMutation.existing.identity,
+      };
+      let previewContentPromise:
+        | ReturnType<PreparedSedEditPreview['loadPreview']>
+        | undefined;
+      const preview: PreparedSedEditPreview = {
+        kind: 'sed-edit-preview',
+        toolUseID: context.toolUseId,
+        command: input.command,
+        sedInfo,
+        filePath: preparedMutation.canonicalPath,
+        previewId: randomUUID(),
+        identity: openedIdentity,
+        preparedMutation,
+        approvalExpected: false,
+        loadPreview() {
+          return (previewContentPromise ??= readPreparedFileMetadata(
+            preparedMutation,
+          ).then(metadata => {
+            if (!fileIdentitiesEqual(openedIdentity, metadata.identity)) {
+              throw new Error('The Sed target changed while its preview was prepared.');
+            }
+            return {
+              originalContent: metadata.content,
+              newContent: applySedSubstitution(metadata.content, sedInfo),
+              encoding: metadata.encoding,
+              lineEndings: metadata.lineEndings,
+            };
+          }));
+        },
+      };
+      return { state: preview, cleanup: preparedMutation.cleanup };
+    } catch {
+      if (preparedMutation) await preparedMutation.cleanup();
+      return { state: null, cleanup() {} };
+    }
+  },
   async checkPermissions(input, context): Promise<PermissionResult> {
     // Runs ahead of bashToolHasPermission so a worker cannot reach a process it
     // did not start through an allow rule, auto mode, or bypassPermissions: a
@@ -634,10 +688,25 @@ export const BashTool = buildTool({
     };
   },
   async call(input: BashToolInput, toolUseContext, _canUseTool?: CanUseToolFn, parentMessage?: AssistantMessage, onProgress?: ToolCallProgress<BashProgress>) {
-    // Handle simulated sed edit - apply directly instead of running sed
-    // This ensures what the user previewed is exactly what gets written
-    if (input._simulatedSedEdit) {
-      return applySedEdit(input._simulatedSedEdit, toolUseContext, parentMessage);
+    const trustedSedEdit = consumeTrustedSedEditForExecution(toolUseContext);
+    const preparedSedState = toolUseContext.preparedExecution?.state;
+    const sedPreview = isPreparedSedEditPreview(preparedSedState)
+      ? preparedSedState
+      : undefined;
+    if (trustedSedEdit) {
+      if (!sedPreview) {
+        throw new Error('The prepared SedEdit capability is no longer available.');
+      }
+      return applySedEdit(
+        trustedSedEdit,
+        sedPreview,
+        input,
+        toolUseContext,
+        parentMessage,
+      );
+    }
+    if (sedPreview?.approvalExpected) {
+      throw new Error('The approved SedEdit preview no longer matches its capability.');
     }
     const {
       abortController,

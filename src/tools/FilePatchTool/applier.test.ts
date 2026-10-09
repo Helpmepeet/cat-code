@@ -43,6 +43,54 @@ afterEach(() => {
   }
 })
 
+async function callPreparedPatch(
+  input: Record<string, unknown>,
+  context: Record<string, unknown>,
+  _canUseTool?: undefined,
+  parentMessage?: { uuid: string },
+  beforeCall?: (state: unknown) => void,
+) {
+  const message = parentMessage ?? { uuid: 'test-parent' }
+  const prepared = await FilePatchTool.prepareExecution!(input as never)
+  Object.assign(context, {
+    preparedExecution: {
+      toolName: FilePatchTool.name,
+      input,
+      state: prepared.state,
+    },
+  })
+  try {
+    beforeCall?.(prepared.state)
+    return await FilePatchTool.call(
+      input as never,
+      context as never,
+      undefined,
+      message as never,
+    )
+  } finally {
+    await prepared.cleanup()
+  }
+}
+
+async function validatePreparedPatch(
+  input: Record<string, unknown>,
+  context: object,
+) {
+  const prepared = await FilePatchTool.prepareExecution!(input as never)
+  Object.assign(context, {
+    preparedExecution: {
+      toolName: FilePatchTool.name,
+      input,
+      state: prepared.state,
+    },
+  })
+  try {
+    return await FilePatchTool.validateInput(input as never, context as never)
+  } finally {
+    await prepared.cleanup()
+  }
+}
+
 function fileState(
   path: string,
   content: string,
@@ -1167,7 +1215,7 @@ describe('applyPatchToBuffers', () => {
     })
 
     await expect(
-      FilePatchTool.call(
+      callPreparedPatch(
         {
           ops: [
             {
@@ -1195,6 +1243,17 @@ describe('applyPatchToBuffers', () => {
         } as never,
         undefined,
         { uuid: 'test-parent' } as never,
+        state => {
+          const prepared = state as {
+            byPath: Map<
+              string,
+              { parent: { removeFile: (...args: never[]) => Promise<boolean> } }
+            >
+          }
+          prepared.byPath.get(secondPath)!.parent.removeFile = async () => {
+            throw new Error('forced unlink failure')
+          }
+        },
       ),
     ).rejects.toThrow('forced unlink failure')
 
@@ -1237,7 +1296,7 @@ describe('FilePatchTool.call disk-mutation safety', () => {
     })
 
     await expect(
-      FilePatchTool.call(
+      callPreparedPatch(
         {
           ops: [
             {
@@ -1280,7 +1339,7 @@ describe('FilePatchTool.call disk-mutation safety', () => {
     const readFileState = seedReadState(srcPath, 'content\n')
 
     await expect(
-      FilePatchTool.call(
+      callPreparedPatch(
         {
           ops: [
             {
@@ -1332,7 +1391,7 @@ describe('FilePatchTool.call disk-mutation safety', () => {
     // add new.txt succeeds, then delete second.txt throws (original error);
     // rolling back the add re-throws (rollback error). The original must win.
     await expect(
-      FilePatchTool.call(
+      callPreparedPatch(
         {
           ops: [
             {
@@ -1350,6 +1409,20 @@ describe('FilePatchTool.call disk-mutation safety', () => {
         } as never,
         undefined,
         { uuid: 'test-parent' } as never,
+        state => {
+          const prepared = state as {
+            byPath: Map<
+              string,
+              { parent: { removeFile: (...args: never[]) => Promise<boolean> } }
+            >
+          }
+          prepared.byPath.get(deletePath)!.parent.removeFile = async () => {
+            throw new Error('ORIGINAL delete failure')
+          }
+          prepared.byPath.get(addPath)!.parent.removeFile = async () => {
+            throw new Error('ROLLBACK delete failure')
+          }
+        },
       ),
     ).rejects.toThrow('ORIGINAL delete failure')
   })
@@ -1379,7 +1452,7 @@ describe('FilePatchTool.validateInput move destination', () => {
     const destPath = join(tempDir, 'dest.ipynb')
     writeFileSync(srcPath, 'content\n')
 
-    const result = await FilePatchTool.validateInput(
+    const result = await validatePreparedPatch(
       {
         ops: [
           {
@@ -1409,7 +1482,7 @@ describe('FilePatchTool.validateInput move destination', () => {
     tempDirs.push(tempDir)
     const notebookPath = join(tempDir, 'new.ipynb')
 
-    const result = await FilePatchTool.validateInput(
+    const result = await validatePreparedPatch(
       {
         ops: [{
           type: 'add',
@@ -1432,7 +1505,7 @@ describe('FilePatchTool.validateInput move destination', () => {
     tempDirs.push(baseDir)
 
     const result = await runWithCwdOverride(baseDir, () =>
-      FilePatchTool.validateInput(
+      validatePreparedPatch(
         {
           ops: [
             {
@@ -1474,7 +1547,7 @@ describe('FilePatchTool.validateInput move destination', () => {
       limit: undefined,
     })
 
-    await FilePatchTool.call(
+    await callPreparedPatch(
       {
         ops: [
           {
@@ -1600,7 +1673,7 @@ describe('FilePatchTool.call transcript payload', () => {
       fileIdentity: getFileIdentity(deletePath),
     })
 
-    const result = await FilePatchTool.call(
+    const result = await callPreparedPatch(
       {
         ops: [
           {
@@ -1703,7 +1776,7 @@ describe('FilePatchTool.call transcript payload', () => {
       `${longFirstLine}\n${'filler\n'.repeat(10)}trailer\n`,
     )
 
-    const result = await FilePatchTool.call(
+    const result = await callPreparedPatch(
       {
         ops: [
           {
@@ -1746,7 +1819,7 @@ describe('FilePatchTool.call transcript payload', () => {
     const longLine = `var data=[${'BULK_SENTINEL'.repeat(20_000)}]`
     writeFileSync(bundlePath, `header\n${longLine}\ntrailer\n`)
 
-    const result = await FilePatchTool.call(
+    const result = await callPreparedPatch(
       {
         ops: [
           {

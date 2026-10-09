@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test';
 import { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js';
 import { UsagePage } from './UsagePage.js';
@@ -231,4 +232,49 @@ test('heatmap selection in All resolves to its local aggregate bucket', async ()
     expect(tree.container.querySelector('.usage-day-detail')?.getAttribute('aria-label')).toContain('2026-09-06 to 2026-09-10');
     expect(cell.getAttribute('aria-pressed')).toBe('true');
     expect([...tree.container.querySelectorAll('button')].find(button => button.textContent === 'All')?.getAttribute('aria-pressed')).toBe('true');
+});
+
+test('volume comparisons stay neutral in both directions while cache rate keeps its directional colors', async () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8') + `
+        .usage-content {
+            --usage-secondary: rgb(100, 100, 100);
+            --usage-delta-up: rgb(0, 160, 0);
+            --usage-delta-down: rgb(180, 0, 0);
+        }
+    `;
+    document.head.appendChild(style);
+    try {
+        const snapshot = await recordedSnapshot();
+        const summary = snapshot.ranges['7d'];
+        summary.activeDays = 1;
+        const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+        for (const increase of [true, false]) {
+            const current = increase ? { fresh: 20, read: 80, write: 0, output: 0 } : { fresh: 40, read: 10, write: 0, output: 0 };
+            const previous = increase ? { fresh: 30, read: 20, write: 0, output: 0 } : { fresh: 20, read: 80, write: 0, output: 0 };
+            summary.tokens = current;
+            summary.sessions = increase ? 2 : 1;
+            summary.requests = increase ? 20 : 10;
+            summary.previousPeriod = {
+                startInclusive: '2026-08-31T00:00:00.000Z',
+                endInclusive: '2026-09-06T12:00:00.000Z',
+                tokens: previous, activeDays: 1, sessions: increase ? 1 : 2,
+                records: 1, requests: increase ? 10 : 20,
+                cachedInputShare: null, cacheWriteReporting: 'unreported',
+            };
+            await tree.render(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+            const tiles = [...tree.container.querySelectorAll('.usage-metric')];
+            expect(tiles).toHaveLength(5);
+            for (const tile of tiles) {
+                const delta = tile.querySelector<HTMLElement>('.usage-metric-delta')!;
+                expect(delta.getAttribute('aria-label')).toContain(increase ? 'increase' : 'decrease');
+                expect(delta.textContent).toContain(increase ? '▲' : '▼');
+                expect(getComputedStyle(delta).color).toBe(tile.classList.contains('usage-metric-cache')
+                    ? increase ? 'rgb(0, 160, 0)' : 'rgb(180, 0, 0)'
+                    : 'rgb(100, 100, 100)');
+            }
+        }
+    } finally {
+        style.remove();
+    }
 });

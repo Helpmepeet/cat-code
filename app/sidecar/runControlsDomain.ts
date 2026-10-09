@@ -35,8 +35,17 @@ import {
 } from '../../src/bootstrap/state.js'
 import { applyFastMode } from '../../src/commands/fast/fast.js'
 import { executeEffort } from '../../src/commands/effort/effort.js'
+import type { AppSessionEvent } from '../../src/app-runtime/sessionEvents.js'
+import { getCacheControl } from '../../src/services/api/claude.js'
+import { mapClaudeModelToCodex } from '../../src/services/api/codex-fetch-adapter.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
+import type { Message } from '../../src/types/message.js'
+import {
+  findLastCompactBoundaryIndex,
+  isCompactBoundaryMessage,
+  SYNTHETIC_MODEL,
+} from '../../src/utils/messages.js'
 import {
   convertEffortValueToLevel,
   getSupportedEffortLevels,
@@ -61,6 +70,9 @@ import {
   getDefaultMainLoopModel,
   getMainLoopModel,
   getMarketingNameForModel,
+  getRuntimeMainLoopModel,
+  getUserSpecifiedModelSetting,
+  normalizeModelStringForAPI,
   parseUserSpecifiedModel,
 } from '../../src/utils/model/model.js'
 import {
@@ -71,13 +83,21 @@ import {
   getAPIProvider,
   getConfiguredAnthropicProvider,
   persistStartupProviderPreference,
+  isFirstPartyAnthropicBaseUrl,
   resolveModelSelectionProvider,
+  resolveRequestProvider,
   type APIProvider,
 } from '../../src/utils/model/providers.js'
 import type {
   RunControlModelOption,
   RunControlsSnapshot,
 } from '../shared/protocol.js'
+import {
+  ANTHROPIC_CACHE_1H_MS,
+  ANTHROPIC_CACHE_5M_MS,
+  estimatePromptCacheExpiry,
+  isCacheExpiryTimestamp,
+} from '../shared/promptCacheEstimate.js'
 
 /** The redacted outcome of a run-control write (no transport, no secret). */
 export type RunControlSetResult = {
@@ -200,9 +220,12 @@ export type SidecarRunControlsDomain = {
   lockProviderSwitches(): boolean
   /** Activate the provider explicitly chosen by first-run authentication. */
   activateProvider(provider: 'anthropic' | 'openai'): RunControlSetResult
+  /** Engine-originated API messages only; not a renderer write capability. */
+  observeSessionEvent?(event: AppSessionEvent): void
+  /** A different account or compacted prefix cannot reuse the old estimate. */
+  clearCacheEstimate?(): void
   /**
-   * Fires ONLY when a run-control-relevant app-state field actually changes
-   * (change-detected — no per-token re-broadcast storm during a turn).
+   * Fires on controls or observed API activity, not ordinary token deltas.
    */
   subscribe(listener: () => void): () => void
 }
@@ -213,10 +236,14 @@ export function createSidecarRunControlsDomain(
     executor?: RunControlExecutor
     buildSnapshot?: (state: AppState) => RunControlsSnapshot
     providerSwitchLocked?: boolean
+    initialMessages?: readonly Message[]
+    initialCacheObservation?: { model: string; expiresAt: number } | null
+    now?: () => number
   } = {},
 ): SidecarRunControlsDomain {
   const executor = options.executor ?? createRealRunControlExecutor(store)
   const buildSnapshot = options.buildSnapshot ?? buildRunControlsSnapshot
+  const now = options.now ?? Date.now
   let providerSwitchLocked =
     options.providerSwitchLocked === true ||
     isProviderSwitchLocked() ||
@@ -224,11 +251,129 @@ export function createSidecarRunControlsDomain(
   if (providerSwitchLocked) setProviderSwitchLocked(true)
   const listeners = new Set<() => void>()
   let unsubscribeStore: (() => void) | null = null
+  let cacheObservation: { model: string; expiresAt: number } | null = null
+  let streamObservation: {
+    model: string
+    usage: Record<string, unknown>
+    invalidated: boolean
+  } | null = null
+
+  function foldStreamUsage(part: unknown): void {
+    if (!streamObservation || !part || typeof part !== 'object') return
+    for (const key of ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const) {
+      const value = (part as Record<string, unknown>)[key]
+      if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        streamObservation.usage[key] = value
+      }
+    }
+    const creation = (part as Record<string, unknown>).cache_creation
+    if (creation && typeof creation === 'object') {
+      const prior = streamObservation.usage.cache_creation
+      const ttlUsage: Record<string, number> = prior && typeof prior === 'object'
+        ? { ...prior as Record<string, number> } : {}
+      for (const key of ['ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens']) {
+        const value = (creation as Record<string, unknown>)[key]
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) ttlUsage[key] = value
+      }
+      if (Object.keys(ttlUsage).length > 0) streamObservation.usage.cache_creation = ttlUsage
+    }
+  }
+
+  function requestModel(model: string | null): string | null {
+    if (!model) return null
+    return safe(() => {
+      const permissionMode = store.getState().toolPermissionContext.mode
+      // opusplan also depends on query-loop token estimates unavailable here.
+      if (permissionMode === 'plan' && getUserSpecifiedModelSetting() === 'opusplan') return null
+      const runtimeModel = getRuntimeMainLoopModel({ permissionMode, mainLoopModel: model })
+      return resolveRequestProvider(runtimeModel) === 'openai'
+        ? mapClaudeModelToCodex(runtimeModel)
+        : normalizeModelStringForAPI(runtimeModel)
+    }, null)
+  }
+
+  function supportedCacheRoute(model: string | null): boolean {
+    return model !== null &&
+      (resolveRequestProvider(model) !== 'firstParty' || isFirstPartyAnthropicBaseUrl())
+  }
+
+  function observeResponse(model: string | undefined, atMs: number, usage: unknown, live: boolean, terminal = false): boolean {
+    const current = buildSnapshot(store.getState()).model.current
+    if (!model || typeof model !== 'string' || model === SYNTHETIC_MODEL) return false
+    if (requestModel(current) !== normalizeModelStringForAPI(model)) {
+      const changed = cacheObservation !== null
+      cacheObservation = null
+      return changed
+    }
+    const provider = resolveRequestProvider(current)
+    if (!supportedCacheRoute(current)) return false
+    const ttl = live && provider !== 'openai'
+      ? safe(() => getCacheControl({ querySource: 'sdk' }).ttl === '1h'
+        ? ANTHROPIC_CACHE_1H_MS : ANTHROPIC_CACHE_5M_MS, undefined)
+      : undefined
+    const expiresAt = estimatePromptCacheExpiry(model, atMs, usage, ttl)
+    if (expiresAt === null) {
+      if (!terminal) return false
+      const changed = cacheObservation !== null
+      cacheObservation = null
+      return changed
+    }
+    const observedModel = normalizeModelStringForAPI(model)
+    if (cacheObservation?.model === observedModel && cacheObservation.expiresAt === expiresAt) return false
+    cacheObservation = { model: observedModel, expiresAt }
+    return true
+  }
+
+  const initial = [...(options.initialMessages ?? [])]
+  let historyFloor = findLastCompactBoundaryIndex(initial)
+  const boundary = initial[historyFloor]
+  if (boundary && isCompactBoundaryMessage(boundary)) {
+    // Preserved messages retain old usage and cannot warm a compacted prefix.
+    const tailUuid = boundary.compactMetadata?.preservedSegment?.tailUuid
+    if (tailUuid) {
+      for (let i = initial.length - 1; i > historyFloor; i--) {
+        if (initial[i]?.uuid === tailUuid) { historyFloor = i; break }
+      }
+    }
+  }
+  // A canonical reader's explicit unknown includes settings/route invalidation.
+  // Initial messages omit those records and must not override that decision.
+  for (let i = initial.length - 1; options.initialCacheObservation !== null && i > historyFloor; i--) {
+    const message = initial[i]
+    if (message?.type !== 'assistant' || message.isApiErrorMessage ||
+      message.isInternalNoResponseSentinel || message.message.model === SYNTHETIC_MODEL) continue
+    const atMs = Date.parse(message.timestamp ?? '')
+    if (Number.isFinite(atMs) && atMs >= 0 && atMs <= now() &&
+      new Date(atMs).toISOString() === message.timestamp) {
+      observeResponse(message.message.model, atMs, message.message.usage, false)
+    }
+    break
+  }
+  const cached = options.initialCacheObservation
+  if (!cacheObservation && cached && isCacheExpiryTimestamp(cached.expiresAt) &&
+    supportedCacheRoute(buildSnapshot(store.getState()).model.current) &&
+    requestModel(buildSnapshot(store.getState()).model.current) === normalizeModelStringForAPI(cached.model)) {
+    cacheObservation = { model: normalizeModelStringForAPI(cached.model), expiresAt: cached.expiresAt }
+  }
+
+  function clearCacheEstimate(): void {
+    // Assistant blocks precede final usage. Keep the invalidated request marked
+    // until its stop or the next start so a late block cannot renew its estimate.
+    if (streamObservation) streamObservation.invalidated = true
+    if (!cacheObservation) return
+    cacheObservation = null
+    for (const listener of listeners) listener()
+  }
 
   function snapshot(): RunControlsSnapshot {
     const built = buildSnapshot(store.getState())
+    const cacheExpiresAt = cacheObservation && supportedCacheRoute(built.model.current) &&
+      requestModel(built.model.current) === cacheObservation.model
+      ? cacheObservation.expiresAt : null
     return {
       ...built,
+      cacheExpiresAt,
+      cacheExpired: cacheExpiresAt === null ? null : now() >= cacheExpiresAt,
       model: {
         ...built.model,
         providerSwitchLocked:
@@ -261,6 +406,46 @@ export function createSidecarRunControlsDomain(
   return {
     getSnapshot() {
       return snapshot()
+    },
+    clearCacheEstimate,
+    observeSessionEvent(event) {
+      if (event.type !== 'message') return
+      const message = event.message
+      if ('parent_tool_use_id' in message && message.parent_tool_use_id != null) return
+      if (message.type === 'stream_event') {
+        const part = message.event
+        if (!part || typeof part !== 'object' || Array.isArray(part)) return
+        const frame = part as Record<string, unknown>
+        if (frame.type === 'message_start') {
+          streamObservation = null
+          const start = frame.message
+          if (!start || typeof start !== 'object' || Array.isArray(start)) return
+          const body = start as Record<string, unknown>
+          streamObservation = typeof body.model === 'string'
+            ? { model: body.model, usage: {}, invalidated: false } : null
+          foldStreamUsage(body.usage)
+        } else if (frame.type === 'message_delta') {
+          foldStreamUsage(frame.usage)
+          const delta = frame.delta
+          if (delta && typeof delta === 'object' && 'stop_reason' in delta &&
+            typeof delta.stop_reason === 'string' && streamObservation && !streamObservation.invalidated &&
+            observeResponse(streamObservation.model, now(), streamObservation.usage, true, true)) {
+            for (const listener of listeners) listener()
+          }
+        } else if (frame.type === 'message_stop') {
+          if (streamObservation && !streamObservation.invalidated &&
+            observeResponse(streamObservation.model, now(), streamObservation.usage, true, true)) {
+            for (const listener of listeners) listener()
+          }
+          streamObservation = null
+        }
+      } else if (message.type === 'system' && message.subtype === 'compact_boundary') {
+        clearCacheEstimate()
+      } else if (message.type === 'assistant' &&
+        !streamObservation?.invalidated &&
+        observeResponse(message.message.model, now(), message.message.usage, true, streamObservation === null)) {
+        for (const listener of listeners) listener()
+      }
     },
     setModel(model) {
       const currentSnapshot = snapshot()
@@ -383,6 +568,8 @@ export function createSidecarRunControlsDomain(
           const next = runControlSignature(store.getState())
           if (next !== prev) {
             prev = next
+            cacheObservation = null
+            if (streamObservation) streamObservation.invalidated = true
             for (const subscribed of listeners) subscribed()
           }
         })
@@ -409,6 +596,8 @@ function runControlSignature(state: AppState): string {
     state.mainLoopModelForSession ?? null,
     state.effortValue ?? null,
     state.fastMode ?? false,
+    state.toolPermissionContext.mode,
+    state.authVersion,
   ])
 }
 
@@ -518,6 +707,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
     : safe(() => getFastModeUnavailableReason(), null)
 
   return {
+    // No observation yet; the domain layers the live/history estimate on top.
+    cacheExpired: null,
     model: {
       current,
       currentLabel,
@@ -546,23 +737,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
   }
 }
 
-/**
- * The composer warning glyph's two thresholds, mirrored off the ENGINE rather
- * than recomputed (§10). Both come from the same functions
- * `calculateTokenWarningState` uses (`src/services/compact/autoCompact.ts:256-269`).
- *
- * These are the engine's THRESHOLDS, not its verdict. The renderer compares them
- * against API-reported usage off the newest `result` frame, while the engine
- * compares `tokenCountWithEstimation(...) - preRequestTokensFreed`
- * (`autoCompact.ts:373-374`),
- * so the glyph approximates `isAboveWarningThreshold` and can lag it mid-turn.
- * The drift and why it is accepted are documented at the point of comparison,
- * `app/renderer/src/tokenWarning.ts`.
- *
- * Guarded like {@link readContextWindow}: a failed resolve costs the glyph (it
- * stays hidden, the honest state when we cannot say how close compaction is),
- * never the whole snapshot.
- */
+/** Engine capacity thresholds for the usage panel. Keep the legacy warning
+ * field on the wire even though the rail no longer renders a separate glyph. */
 function readAutoCompact(model: string | null): RunControlsSnapshot['autoCompact'] {
   const enabled = safe(() => isAutoCompactEnabled(), false)
   if (!model) return { enabled, threshold: null, warningThreshold: null }

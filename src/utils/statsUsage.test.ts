@@ -11,6 +11,41 @@ afterEach(async () => { for (const path of roots.splice(0))
 const asOf = '2026-09-13T12:00:00.000Z';
 const msg = (timestamp: string, id: string, input: number, tool = 't1', sessionId = 's') => ({ type: 'assistant', sessionId, uuid: id + timestamp, timestamp, message: { id, model: 'model', usage: { input_tokens: input, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, content: [{ type: 'tool_use', id: tool, name: 'Bash' }] } });
 async function file(rows: unknown[]) { const dir = await mkdtemp(join(tmpdir(), 'usage-count-')); roots.push(dir); const path = join(dir, 's.jsonl'); await writeFile(path, rows.map(r => JSON.stringify(r)).join('\n')); return path; }
+test('Auto-mode collection releases completed source records without losing aggregate counts', async () => {
+    const files = Array.from({ length: 20 }, (_, index) => `/isolated/auto-mode/source-${index}.jsonl`);
+    const rows = [
+        { type: 'system', subtype: 'auto_permission_capability', schema_version: 1, uuid: 'capability', timestamp: '2026-09-12T00:00:00.000Z' },
+        ...Array.from({ length: 3 }, (_, index) => [
+            { type: 'system', subtype: 'auto_permission_start', schema_version: 1, uuid: `start-${index}`, timestamp: '2026-09-12T01:00:00.000Z', attempt_id: `attempt-${index}`, tool_use_id: `tool-${index}`, tool_kind: 'bash', auto_mode: 'auto', initial: true },
+            { type: 'system', subtype: 'auto_permission_end', schema_version: 1, uuid: `end-${index}`, timestamp: '2026-09-12T01:01:00.000Z', attempt_id: `attempt-${index}`, raw_result: 'allow', disposition: 'allowed', route: 'base' },
+        ]).flat(),
+    ];
+    const readRecords: NonNullable<Parameters<typeof collectRetainedUsage>[2]>['readRecords'] = async (_path, consume) => {
+        for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'source-budget' });
+        return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+    };
+    const expected = await collectRetainedUsage(files, asOf, { timezone: 'UTC', readRecords });
+    const bounded = await collectRetainedUsage(files, asOf, { timezone: 'UTC', readRecords, maxStateBytes: 64 * 1024 });
+    expect(bounded.ranges).toEqual(expected.ranges);
+    for (const summary of Object.values(bounded.ranges)) {
+        expect(summary.autoMode.allTools.outcomes.allowed).toBe(60);
+        expect(summary.autoMode.commands.outcomes.allowed).toBe(60);
+        expect(summary.autoMode.allTools.coverage.state).toBe('complete');
+    }
+});
+
+test('one oversized Auto-mode source still respects the state budget', async () => {
+    await expect(collectRetainedUsage(['/isolated/auto-mode/large.jsonl'], asOf, {
+        maxStateBytes: 16 * 1024,
+        readRecords: async (_path, consume) => {
+            for (let offset = 0; offset < 100; offset++) {
+                await consume({ value: { type: 'system', subtype: 'auto_permission_start', schema_version: 1, uuid: `start-${offset}`, timestamp: asOf, attempt_id: `attempt-${offset}`, tool_use_id: `tool-${offset}`, tool_kind: 'bash', auto_mode: 'auto', initial: true }, offset, generation: 'large-source' });
+            }
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        },
+    })).rejects.toBeInstanceOf(UsageResourceError);
+});
+
 test('parallel minutes count distinct main sessions once and effort follows recorded request settings', async () => {
     const a = await file([
         { type: 'system', subtype: 'run_facts', sessionId: 'a', uuid: 'facts-a', timestamp: '2026-09-12T09:59:59.000Z', effort: 'high' },

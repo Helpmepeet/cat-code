@@ -2,7 +2,7 @@ import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
-import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, type WorkspaceJumpState } from './workspaceJumpCoordinator.js'
+import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput, type WorkspaceJumpState } from './workspaceJumpCoordinator.js'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
 import {
   parseProjectRouteCommand,
@@ -230,6 +230,7 @@ import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
 import { inspectSessionsCatalogSources } from '../shared/sessionsCatalogFingerprint.js'
 import {
+  resolveBranchOpenHistorySeed,
   resolveOpenHistorySession,
   type TrustedOpenHistorySeed,
 } from './openHistorySession.js'
@@ -356,42 +357,28 @@ function rememberBranchOpenSeed(
   appSessionId: SessionId,
   frame: Extract<ServerFrame, { kind: 'session-action.result' }>,
 ): void {
-  if (
-    !frame.ok ||
-    frame.verb !== 'branchFromMessage' ||
-    typeof frame.branchEngineSessionId !== 'string' ||
-    !SESSION_ID_RE.test(frame.branchEngineSessionId)
-  ) {
-    return
-  }
   const source = host
     ?.listSessions()
     .find(descriptor => descriptor.appSessionId === appSessionId)
-  if (!source || source.cwd.trim().length === 0) return
+  const seed = resolveBranchOpenHistorySeed(frame, source)
+  if (!seed || !source) return
   // The branch transcript exists as soon as this result arrives. Persist its
   // managed-storage ownership before forwarding the result makes it openable;
   // the bounded seed below only covers catalog lag in this process.
   if (
     source.binding?.kind === 'managed' &&
-    !host?.recordManagedBranch(appSessionId, frame.branchEngineSessionId)
+    !host?.recordManagedBranch(appSessionId, seed.engineSessionId)
   ) {
     logLegacyDiagnostic(
-      `could not durably record managed branch ${frame.branchEngineSessionId}`,
+      `could not durably record managed branch ${seed.engineSessionId}`,
       'host',
       'main',
     )
   }
   const now = Date.now()
-  branchOpenSeeds.delete(frame.branchEngineSessionId)
-  branchOpenSeeds.set(frame.branchEngineSessionId, {
-    engineSessionId: frame.branchEngineSessionId,
-    cwd: source.cwd,
-    forked: true,
-    ...(source.binding !== undefined ? { binding: source.binding } : {}),
-    ...(typeof frame.branchTitle === 'string' &&
-    frame.branchTitle.trim().length > 0
-      ? { title: frame.branchTitle }
-      : {}),
+  branchOpenSeeds.delete(seed.engineSessionId)
+  branchOpenSeeds.set(seed.engineSessionId, {
+    ...seed,
     expiresAt: now + BRANCH_OPEN_SEED_TTL_MS,
   })
   pruneBranchOpenSeeds(now)
@@ -720,7 +707,7 @@ function cancelAllReplayFlushes(): void {
 
 /**
  * IS-A — where the at-rest transcript caches live: beside the durable registry
- * (`<config-home>/desktop/transcript-cache-v2`), same trust domain as the registry
+ * (`transcriptCacheDir()`), same trust domain as the registry
  * file and the engine transcript JSONL. Fixed at startup (env is stable per run),
  * matching the registry's own `defaultRegistryDir()` timing.
  */
@@ -903,14 +890,15 @@ function persistTranscriptCache(appSessionId: SessionId): void {
 /**
  * Startup cache GC (IS-A). The launch-time registry reap runs BEFORE main
  * subscribes to HostEvents, so reaped rows emit no `session-removed` — a cache
- * file whose row is gone would otherwise linger forever. Delete every cache file
- * whose id the host no longer vouches for as restorable. Runs once, after the
+ * file whose row is gone would otherwise linger forever. Delete current-generation
+ * files whose ids the host no longer vouches for. Older builds keep their copies.
+ * Runs once, after the
  * registry launch sweep settles.
  */
 function gcTranscriptCache(): void {
   try {
-    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR, true)) {
-      if (!host || !host.canPreview(id)) deleteCache(TRANSCRIPT_CACHE_DIR, id)
+    for (const id of listCachedSessionIds(TRANSCRIPT_CACHE_DIR)) {
+      if (!host || !host.canPreview(id)) deleteCache(TRANSCRIPT_CACHE_DIR, id, false)
     }
   } catch (error) {
     process.stderr.write(`[main] transcript-cache GC failed: ${errText(error)}\n`)
@@ -4038,7 +4026,8 @@ function handOff(
   if ((message.type === 'app.submit' || message.type === 'peer.deliver') && workspaceJump?.isReserved(sessionId)) {
     let state: WorkspaceJumpState | null = null
     try { state = workspaceJump.snapshot(sessionId) } catch { return 'session_not_ready' }
-    if (!state || state.phase !== 'settled' || state.continuation.state === 'admitted' || message.type === 'peer.deliver' || message.options?.isMeta) return 'session_not_ready'
+    if (!state || state.phase !== 'settled' || message.type === 'peer.deliver' || message.options?.isMeta ||
+        (state.continuation.state === 'admitted' && !workspaceJumpAllowsQueuedInput(state))) return 'session_not_ready'
   }
   if (switchingSessionIds.has(sessionId) && (message.type === 'app.submit' || message.type === 'peer.deliver')) {
     return 'session_not_ready'

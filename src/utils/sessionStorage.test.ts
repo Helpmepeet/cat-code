@@ -12,6 +12,7 @@ import type { AssistantMessage } from '../types/message.js'
 import { createAttachmentMessage, getQueuedCommandAttachments } from './attachments.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
+import { assertSessionNotMoving } from './sessionRelocationState.js'
 import { activateTranscriptLease, releaseActiveTranscriptLease } from './transcriptLease.js'
 import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, verifyHandoffTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
 
@@ -1780,6 +1781,68 @@ describe('session storage', () => {
     expect(logs[0]?.entrypoint).toBe('sdk-cli')
   })
 
+  test('catalog enrichment skips unreadable move records without weakening resume or preview guards', async () => {
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const configHome = join(tempDir, 'catalog-config')
+    const invalidSessionId = randomUUID()
+    const relocationDir = join(configHome, 'session-relocations')
+    mkdirSync(relocationDir, { recursive: true })
+    process.env.CLAUDE_CONFIG_DIR = configHome
+    try {
+      const paths = [invalidSessionId, sessionId].map(id => join(tempDir, `${id}.jsonl`))
+      for (const [index, path] of paths.entries()) {
+        await writeFile(path, `${JSON.stringify({
+          type: 'user',
+          uuid: randomUUID(),
+          parentUuid: null,
+          isSidechain: false,
+          sessionId: index === 0 ? invalidSessionId : sessionId,
+          cwd: tempDir,
+          timestamp: '2026-10-05T00:00:00.000Z',
+          message: { role: 'user', content: 'preserve this conversation' },
+        })}\n`)
+      }
+      const lite = await getSessionFilesLite(tempDir)
+      const ordered = [invalidSessionId, sessionId].map(id =>
+        lite.find(log => log.sessionId === id)!,
+      )
+      const original = {
+        cwd: tempDir,
+        binding: { kind: 'managed', storageRootId: randomUUID(), storageId: randomUUID() },
+      }
+      const withoutControls = {
+        version: 1,
+        engineSessionId: invalidSessionId,
+        appSessionId: randomUUID(),
+        phase: 'complete',
+        original,
+        source: original,
+        target: { cwd: join(tempDir, 'target'), binding: { kind: 'project' } },
+        backup: join(configHome, 'backup'),
+        movedAt: Date.now(),
+      }
+      const recordPath = join(relocationDir, `${invalidSessionId}.json`)
+      for (const text of [JSON.stringify(withoutControls), '{']) {
+        writeFileSync(recordPath, text)
+        await expect(enrichLogs(ordered, 0, 1)).rejects.toThrow()
+        expect(() => assertSessionNotMoving(invalidSessionId)).toThrow()
+        const result = await enrichLogs(ordered, 0, 1, { skipUnreadableRelocations: true })
+        expect(result.logs.map(log => log.sessionId)).toEqual([sessionId])
+        expect(result.nextIndex).toBe(2)
+        expect(readFileSync(recordPath, 'utf8')).toBe(text)
+        expect(readFileSync(paths[0]!, 'utf8')).toContain('preserve this conversation')
+      }
+      writeFileSync(recordPath, JSON.stringify({
+        ...withoutControls, controls: { mode: 'default' }, phase: 'moving',
+      }))
+      await expect(enrichLogs(ordered, 0, 1, { skipUnreadableRelocations: true }))
+        .rejects.toThrow('Conversation move is incomplete')
+    } finally {
+      if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    }
+  })
+
   test('lite catalog retains the session binding after a large first message', async () => {
     const originalBinding = process.env.CATCODE_SESSION_BINDING_JSON
     const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -2130,6 +2193,18 @@ describe('session storage', () => {
         .filter(l => l.includes('"subtype":"run_facts"'))
       expect(written).toHaveLength(2)
       expect(written[1]).toContain('"effort":"low"')
+    })
+
+    test('request-route eligibility is persisted and participates in snapshot deduplication', async () => {
+      await recordTranscript([createUserMessage({ content: 'real turn', uuid: randomUUID() })])
+      await flushSessionStorage()
+      recordRunFacts({ ...facts, cacheEstimateSupported: true })
+      recordRunFacts({ ...facts, cacheEstimateSupported: true })
+      recordRunFacts({ ...facts, cacheEstimateSupported: false })
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      const rows = text.split('\n').filter(line => line.includes('"subtype":"run_facts"')).map(line => JSON.parse(line))
+      expect(rows).toHaveLength(2)
+      expect(rows.map(row => row.cacheEstimateSupported)).toEqual([true, false])
     })
   })
 

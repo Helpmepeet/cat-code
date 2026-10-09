@@ -11,6 +11,7 @@ import {
 } from '../Tool.js'
 import {
   FileReadTool,
+  callFileReadToolWithPreparedCapability,
   MaxFileReadTokenExceededError,
   type Output as FileReadToolOutput,
   readImageWithTokenBudget,
@@ -2161,7 +2162,10 @@ export async function getChangedFiles(
           return null
         }
 
-        const result = await FileReadTool.call(fileInput, toolUseContext)
+        const result = await callFileReadToolWithPreparedCapability(
+          fileInput,
+          toolUseContext,
+        )
         // Extract only the changed section
         if (result.data.type === 'text') {
           const snippet = getSnippetForTwoFileDiff(
@@ -3216,7 +3220,13 @@ export async function generateFileAttachment(
           offset: offset ?? 1,
           limit: MAX_LINES_TO_READ,
         }
-        const result = await FileReadTool.call(truncatedInput, toolUseContext)
+        const result = await callFileReadToolWithPreparedCapability(
+          truncatedInput,
+          toolUseContext,
+          undefined,
+          undefined,
+          { userMentioned: mode === 'at-mention' },
+        )
         logEvent(successEventName, {})
 
         return {
@@ -3239,7 +3249,13 @@ export async function generateFileAttachment(
     }
 
     try {
-      const result = await FileReadTool.call(fileInput, toolUseContext)
+      const result = await callFileReadToolWithPreparedCapability(
+        fileInput,
+        toolUseContext,
+        undefined,
+        undefined,
+        { userMentioned: mode === 'at-mention' },
+      )
       logEvent(successEventName, {})
       return {
         type: 'file',
@@ -3327,7 +3343,32 @@ function getTodoReminderTurnCounts(messages: Message[]): {
   }
 }
 
-async function getTodoReminderAttachments(
+function hasUnchangedReminder(
+  messages: Message[],
+  type: 'todo_reminder' | 'task_reminder',
+  content: unknown,
+): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.type !== 'attachment') continue
+    const attachment = message.attachment
+    if (
+      typeof attachment !== 'object' ||
+      attachment === null ||
+      !('type' in attachment) ||
+      attachment.type !== type
+    ) {
+      continue
+    }
+    return (
+      'content' in attachment &&
+      JSON.stringify(attachment.content) === JSON.stringify(content)
+    )
+  }
+  return false
+}
+
+export async function getTodoReminderAttachments(
   messages: Message[] | undefined,
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
@@ -3368,6 +3409,8 @@ async function getTodoReminderAttachments(
     const todoKey = toolUseContext.agentId ?? getSessionId()
     const appState = toolUseContext.getAppState()
     const todos = appState.todos[todoKey] ?? []
+    if (!todos.some(todo => todo.status !== 'completed')) return []
+    if (hasUnchangedReminder(messages, 'todo_reminder', todos)) return []
     return [
       {
         type: 'todo_reminder',
@@ -3436,7 +3479,7 @@ function getTaskReminderTurnCounts(messages: Message[]): {
   }
 }
 
-async function getTaskReminderAttachments(
+export async function getTaskReminderAttachments(
   messages: Message[] | undefined,
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
@@ -3483,6 +3526,8 @@ async function getTaskReminderAttachments(
     turnsSinceLastReminder >= TODO_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS
   ) {
     const tasks = await listTasks(getTaskListId())
+    if (!tasks.some(task => task.status !== 'completed')) return []
+    if (hasUnchangedReminder(messages, 'task_reminder', tasks)) return []
     return [
       {
         type: 'task_reminder',

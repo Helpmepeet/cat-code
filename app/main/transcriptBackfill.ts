@@ -109,8 +109,8 @@ export function persistTranscriptBackfillResult(
     (existing.header.runFactsVersion ?? 0) >= TRANSCRIPT_CACHE_RUN_FACTS_VERSION &&
     !(options.isCacheStale?.(current, existing.header.writtenAt) ?? false)
   ) {
-    // A legacy transcript-only cache is readable through the fallback, but
-    // discovery intentionally scans v2 only. Copy it once so later launches
+    // Older generations are readable through fallback, but discovery scans
+    // only the current directory. Copy once so later launches
     // do not re-run the backfill worker for the same complete cache.
     if (readCachedHeader(options.cacheDir, result.appSessionId) === null) {
       writeCache(options.cacheDir, existing)

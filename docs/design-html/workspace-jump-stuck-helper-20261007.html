@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>The stuck helper — Cat Code</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #faf8f2; color: #282923; font-family: ui-sans-serif, system-ui, sans-serif; }
+    main { max-width: 1100px; margin: auto; padding: 36px 24px; }
+    .x-label { font: 10px ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; color: #72726c; }
+    .x-controls { display: flex; gap: 8px; margin: 24px 0 12px; }
+    .x-controls button { background: transparent; border: 1px solid #aaa9a1; padding: 10px 16px; font: inherit; color: #4c4c46; cursor: pointer; border-radius: 4px; }
+    .x-controls button[aria-pressed="true"] { background: #e4e3dd; border-color: #53534d; }
+    button:focus-visible { outline: 3px solid #74746c; outline-offset: 3px; }
+    h1 { margin: 18px 0 6px; font-size: clamp(32px,5vw,58px); font-weight: 700; letter-spacing: -.045em; }
+    svg { display: block; width: 100%; height: auto; }
+    svg text { font-family: ui-sans-serif,system-ui,sans-serif; fill: #282923; text-anchor: middle; }
+    .title { font-size: 26px; font-weight: 700; }
+    .label { font-size: 21px; }
+    .small { font-size: 17px; }
+    .ink { stroke: #34362d; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+    .line { fill: none; stroke: #34362d; stroke-width: 5; }
+    .bad { fill: #b34732; }
+    .good { fill: #46664b; }
+    .muted { fill: #74756c; }
+    .fix { display: none; }
+    body[data-mode="fix"] .observed { display: none; }
+    body[data-mode="fix"] .fix { display: block; }
+    .x-footer { margin-top: 20px; padding-top: 14px; border-top: 1px solid #d1d0c8; display: flex; gap: 24px; flex-wrap: wrap; }
+    @media(max-width:650px) { main { padding: 24px 12px; } .x-controls { margin-top: 18px; } }
+  </style>
+</head>
+<body data-mode="observed">
+  <main>
+    <div class="x-label">Picture explainer · Cat Code delay</div>
+    <h1>The stuck helper</h1>
+    <div class="x-controls" role="group" aria-label="Explanation view">
+      <button type="button" data-view="observed" aria-pressed="true">Observed</button>
+      <button type="button" data-view="fix" aria-pressed="false">Proposed fix</button>
+    </div>
+    <svg viewBox="0 0 1040 570" role="img" aria-labelledby="picture-title picture-description">
+      <title id="picture-title">Cat Code waits on a stuck file watcher before asking the AI</title>
+      <desc id="picture-description">After entering the project, Cat Code checks files through Git. Git waits for the file watcher. In the observed run this took 34 seconds, and no AI request could start during that wait.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#34362d" stroke-width="1.6"/></marker>
+        <symbol id="folder" viewBox="0 0 120 95"><path d="M9 22 V10 H49 L62 25 H111 V85 H9 Z" fill="#e5c16b" class="ink"/><path d="M9 34 H111" fill="none" class="ink"/></symbol>
+        <symbol id="cat" viewBox="0 0 140 150"><path d="M24 62 L19 15 L57 42 Q72 36 86 43 L121 15 L118 67 Q134 137 70 140 Q7 136 24 62" fill="#e5c16b" class="ink"/><path d="M40 78 H48 M94 78 H102 M60 99 L70 105 L80 99 M70 106 V116 M26 100 L3 92 M26 113 L4 117 M115 100 L136 92 M115 113 L136 118" fill="none" class="ink"/></symbol>
+        <symbol id="helper" viewBox="0 0 160 155"><circle cx="80" cy="53" r="37" fill="#d9cbb1" class="ink"/><path d="M31 146 V124 Q32 96 80 96 Q128 96 129 124 V146" fill="#b8c1b3" class="ink"/><path d="M55 52 Q61 59 68 52 M91 52 Q98 59 105 52" fill="none" class="ink"/><ellipse cx="81" cy="76" rx="7" ry="9" fill="#34362d"/></symbol>
+        <symbol id="robot" viewBox="0 0 160 155"><path d="M80 16 V37" class="ink"/><circle cx="80" cy="13" r="7" fill="#b8c1b3" class="ink"/><rect x="20" y="39" width="120" height="98" rx="14" fill="#d8ded5" class="ink"/><path d="M6 73 V108 M154 73 V108 M51 75 V86 M109 75 V86 M59 114 H101" class="ink"/></symbol>
+      </defs>
+      <text x="173" y="56" class="title">Cat Code</text>
+      <text x="510" y="56" class="title">File watcher</text>
+      <text x="855" y="56" class="title">AI</text>
+      <use href="#cat" x="107" y="85" width="140" height="150"/>
+      <use href="#helper" x="430" y="87" width="160" height="155"/>
+      <use href="#robot" x="775" y="85" width="160" height="155"/>
+      <text x="173" y="280" class="label">Project file check</text>
+      <g class="observed">
+        <path d="M268 159 H387" class="line" marker-end="url(#arrow)"/>
+        <text x="333" y="132" class="small">Git</text>
+        <text x="602" y="105" font-size="32" class="muted">Z z</text>
+        <path d="M613 159 H739" stroke="#a5a59a" stroke-width="4" stroke-dasharray="8 8" fill="none"/>
+        <path d="M667 145 L697 175 M697 145 L667 175" stroke="#b34732" stroke-width="6" stroke-linecap="round"/>
+        <text x="510" y="280" class="label bad">No reply</text>
+        <text x="855" y="280" class="label muted">No request yet</text>
+        <circle cx="510" cy="385" r="55" fill="none" stroke="#b34732" stroke-width="5"/>
+        <path d="M510 350 V385 L535 398" fill="none" stroke="#b34732" stroke-width="5" stroke-linecap="round"/>
+        <text x="510" y="479" font-size="38" font-weight="700" class="bad">34 seconds</text>
+        <text x="510" y="520" class="label">Reproduced wait</text>
+      </g>
+      <g class="fix">
+        <text x="510" y="280" class="label muted">Bypass</text>
+        <text x="855" y="280" class="label good">Ready</text>
+        <path d="M245 227 Q288 385 460 385 H570 Q738 385 792 238" class="line" marker-end="url(#arrow)"/>
+        <use href="#folder" x="450" y="325" width="120" height="95"/>
+        <text x="510" y="472" font-size="30" font-weight="700">Direct file check</text>
+        <text x="510" y="519" class="label">Short time limit</text>
+      </g>
+    </svg>
+    <div class="x-footer">
+      <span class="x-label">Original wait: 155 seconds</span>
+      <span class="x-label">Original cause: strong inference</span>
+      <span class="x-label">Fix status: proposed</span>
+    </div>
+  </main>
+  <script>
+    const descriptions = {
+      observed: 'After entering the project, Cat Code checks files through Git. Git waits for the file watcher. In the observed run this took 34 seconds, and no AI request could start during that wait.',
+      fix: 'Proposed fix, not implemented: Git checks files directly without asking the stuck watcher. A short time limit lets the AI continue if the optional file check takes too long.'
+    };
+    document.querySelectorAll('[data-view]').forEach(button => {
+      button.addEventListener('click', () => {
+        const mode = button.dataset.view;
+        document.body.dataset.mode = mode;
+        document.querySelectorAll('[data-view]').forEach(other => other.setAttribute('aria-pressed', String(other === button)));
+        document.getElementById('picture-description').textContent = descriptions[mode];
+        document.getElementById('picture-title').textContent = mode === 'fix' ? 'Proposed direct file check with a short time limit' : 'Cat Code waits on a stuck file watcher before asking the AI';
+      });
+    });
+  </script>
+</body>
+</html>

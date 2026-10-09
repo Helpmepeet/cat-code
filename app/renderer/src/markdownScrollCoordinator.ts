@@ -14,6 +14,10 @@
  * together, and applies that one answer before the frame's subscribers run, so
  * each body then recomputes its window against the corrected position.
  *
+ * Visible-character samples own correction when layout is available. Height
+ * reports remain a fallback when no visible text can be resolved. In particular,
+ * a report's aggregate delta does not locate movement within a long message.
+ *
  * Three consumers register here: the Markdown body (`BoundedMarkdown`), the
  * line virtualizer (`VirtualLineList`), and the composite child container
  * (`BoundedChildList`). A fourth registers only as the pane's stick-to-bottom
@@ -26,14 +30,30 @@ import {
   type PaneHeightCorrection,
   type PaneScrollMetrics,
 } from './paneAnchorModel.js'
+import {
+  capturePaneVisibleAnchor,
+  readPaneVisibleAnchorAdjustment,
+  type PaneVisibleAnchor,
+} from './paneVisibleAnchor.js'
 
 export type { PaneHeightCorrection } from './paneAnchorModel.js'
+
+export type PaneHeightCorrectionReport = {
+  delta: number
+  /**
+   * Read the affected boundary in the final DOM at flush time. A report-time
+   * number cannot distinguish effects in one layout from separate commits.
+   * Return null when that boundary no longer exists.
+   */
+  readOffset: () => number | null
+}
 
 type PaneRecord = {
   subscribers: Set<() => void>
   bottomLocks: Set<() => boolean>
   programmaticScrolls: Set<(scrollTop: number) => void>
-  corrections: PaneHeightCorrection[]
+  corrections: PaneHeightCorrectionReport[]
+  anchor: PaneVisibleAnchor | null
   /** `scrollTop` this pane wrote itself, pending its own scroll event. */
   selfScrollTop: number | null
   observedChildren: Set<Element>
@@ -66,20 +86,54 @@ export function observePaneScroll(scroller: HTMLElement, onFrame: () => void): (
 
 /**
  * Reports that a registered body's rendered height changed by `delta` pixels,
- * with everything above `offset` left where it was. Called from the commit that
- * made the change, so the pane can correct the scroll position the previous
- * commit chose against the estimate this one replaced.
+ * with everything above the affected boundary left where it was. Called from
+ * the commit that made the change. `readOffset` resolves every report in
+ * the SAME final document, regardless of commit order or effect ordering.
  *
  * A report for a scroller with no live pane is dropped: the body is unmounting,
  * and there is no anchor left to preserve.
  */
 export function reportPaneHeightCorrection(
   scroller: HTMLElement,
-  correction: PaneHeightCorrection,
+  correction: PaneHeightCorrectionReport,
 ): void {
   const pane = panes.get(scroller)
-  if (pane === undefined || correction.delta === 0) return
-  pane.corrections.push(correction)
+  if (pane === undefined) return
+  if (correction.delta !== 0) {
+    pane.corrections.push({ ...correction })
+  }
+  reportPaneLayoutChange(scroller)
+}
+
+/** A commit may move visible content without changing its owner's total height. */
+export function reportPaneLayoutChange(scroller: HTMLElement): void {
+  const pane = panes.get(scroller)
+  if (pane === undefined) return
+  // A distant explicit jump can leave no old mounted content to sample. Once
+  // its new window exists, establish the reading position before measuring it.
+  pane.anchor ??= capturePaneVisibleAnchor(scroller)
+  pane.geometryDirty = true
+  pane.schedule()
+}
+
+/** Compensate a keyed prefix edit without replacing the interior reading goal. */
+export function compensatePanePrefix(scroller: HTMLElement, delta: number): void {
+  if (delta === 0) return
+  const pane = panes.get(scroller)
+  if (pane?.anchor && pane.anchor.scrollTop !== scroller.scrollTop) {
+    pane.anchor = capturePaneVisibleAnchor(scroller)
+  }
+  scroller.scrollTop += delta
+  if (!pane) return
+  // The prefix estimate is only part of this commit's movement. Keeping the
+  // character's old viewport position lets the frame correct measurement error
+  // or simultaneous interior reflow, rather than mistaking this write for a jump.
+  if (pane.anchor) pane.anchor.scrollTop = scroller.scrollTop
+  pane.selfScrollTop = scroller.scrollTop
+  for (const onProgrammaticScroll of pane.programmaticScrolls) {
+    onProgrammaticScroll(scroller.scrollTop)
+  }
+  pane.geometryDirty = true
   pane.schedule()
 }
 
@@ -111,11 +165,16 @@ export function observePaneBottomLock(
 }
 
 function createPane(scroller: HTMLElement): PaneRecord {
+  // React can replace the pane's className during a resize or chrome update.
+  // Keep correction ownership on an independent attribute for the pane lifetime.
+  const alreadyManual = scroller.hasAttribute?.('data-pane-scroll-owner') ?? false
+  scroller.setAttribute?.('data-pane-scroll-owner', '')
   const pane: PaneRecord = {
     subscribers: new Set(),
     bottomLocks: new Set(),
     programmaticScrolls: new Set(),
     corrections: [],
+    anchor: capturePaneVisibleAnchor(scroller),
     selfScrollTop: null,
     observedChildren: new Set(),
     lastGeometry: readPaneMetrics(scroller),
@@ -159,11 +218,18 @@ function createPane(scroller: HTMLElement): PaneRecord {
   const mutationObserver =
     typeof MutationObserver === 'undefined' || globalThis.document === undefined
       ? null
-      : new MutationObserver(() => {
+      : new MutationObserver(records => {
           syncObservedChildren()
-          markGeometryDirty()
+          // Hidden panes have no visible anchor. Keep root observation aligned,
+          // but do not window them against absent geometry on nested mutations.
+          if (scroller.clientHeight > 0 || records.some(record => record.target === scroller)) {
+            markGeometryDirty()
+          }
         })
-  mutationObserver?.observe(scroller, { childList: true })
+  mutationObserver?.observe(scroller, {
+    childList: true, subtree: true, characterData: true,
+    attributes: true, attributeFilter: ['class', 'style', 'hidden'],
+  })
   pane.mutationObserver = mutationObserver
   // The scroll event our OWN correction causes must not schedule another frame.
   // Without this the pane feeds itself: correcting writes `scrollTop`, the
@@ -177,6 +243,8 @@ function createPane(scroller: HTMLElement): PaneRecord {
       return
     }
     pane.selfScrollTop = null
+    // User scrolling and explicit navigation choose a new reading position.
+    pane.anchor = capturePaneVisibleAnchor(scroller)
     schedule()
   }
   pane.schedule = schedule
@@ -191,6 +259,7 @@ function createPane(scroller: HTMLElement): PaneRecord {
     scrollTarget.removeEventListener('scroll', onScroll)
     pane.resizeObserver?.disconnect()
     pane.mutationObserver?.disconnect()
+    if (!alreadyManual) scroller.removeAttribute?.('data-pane-scroll-owner')
   }
   return pane
 }
@@ -203,6 +272,7 @@ function createPane(scroller: HTMLElement): PaneRecord {
 function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void {
   if (pane.corrections.length === 0 && !pane.geometryDirty) return
   const metrics = readPaneMetrics(scroller)
+  const layoutDirty = pane.geometryDirty
   const geometryChanged =
     pane.geometryDirty &&
     (metrics.viewportHeight !== pane.lastGeometry.viewportHeight ||
@@ -212,28 +282,58 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
     viewportHeight: metrics.viewportHeight,
     contentHeight: metrics.contentHeight,
   }
-  if (pane.corrections.length === 0 && !geometryChanged) return
-  const corrections = pane.corrections
+  if (pane.corrections.length === 0 && !geometryChanged && !layoutDirty) return
+  const reports = pane.corrections
   pane.corrections = []
+  const corrections: PaneHeightCorrection[] = []
+  for (const report of reports) {
+    const offset = report.readOffset()
+    if (offset !== null) corrections.push({ offset, delta: report.delta })
+  }
 
   let bottomLocked = false
   for (const isBottomLocked of pane.bottomLocks) {
     if (isBottomLocked()) bottomLocked = true
   }
+  // Mutation invalidation is also used for net-zero interior movement. It is
+  // not a new bottom-follow request when the document dimensions did not move.
+  if (bottomLocked && corrections.length === 0 && !geometryChanged) {
+    pane.anchor = capturePaneVisibleAnchor(scroller)
+    return
+  }
 
-  const adjustment = selectPaneScrollAdjustment({
+  const fallback = selectPaneScrollAdjustment({
     metrics,
     corrections,
     bottomLocked,
   })
-  // Sub-pixel answers are noise from rounded box metrics, and writing scrollTop
-  // costs a layout plus a scroll event.
-  if (Math.abs(adjustment) < 1) return
-  const next = scroller.scrollTop + adjustment
-  scroller.scrollTop = next
-  pane.selfScrollTop = scroller.scrollTop
-  for (const onProgrammaticScroll of pane.programmaticScrolls) {
-    onProgrammaticScroll(scroller.scrollTop)
+  // A scroll written by restoration, navigation or prepend compensation must
+  // not be undone, even when its scroll event has not been delivered yet.
+  if (pane.anchor && metrics.scrollTop !== pane.anchor.scrollTop) {
+    pane.anchor = capturePaneVisibleAnchor(scroller)
+  }
+  const visibleAdjustment = pane.anchor === null ? null
+    : readPaneVisibleAnchorAdjustment(scroller, pane.anchor)
+  const maxScrollTop = Math.max(0, metrics.contentHeight - metrics.viewportHeight)
+  const adjustment = bottomLocked ? fallback
+    : visibleAdjustment === null ? fallback
+      : Math.min(maxScrollTop, Math.max(0, metrics.scrollTop + visibleAdjustment)) - metrics.scrollTop
+  // Avoid subpixel writes, but retain the reading goal so skipped movement and
+  // browser rounding can accumulate into a later correction rather than drift.
+  if (Math.abs(adjustment) >= 1) {
+    const next = scroller.scrollTop + adjustment
+    scroller.scrollTop = next
+    pane.selfScrollTop = scroller.scrollTop
+    for (const onProgrammaticScroll of pane.programmaticScrolls) {
+      onProgrammaticScroll(scroller.scrollTop)
+    }
+  }
+  pane.anchor = capturePaneVisibleAnchor(scroller)
+  if (!bottomLocked && pane.anchor && visibleAdjustment !== null) {
+    // Reflow can change which character starts the visible line. Resample its
+    // identity, but carry the uncorrected displacement into its reading goal.
+    const remainder = visibleAdjustment - (scroller.scrollTop - metrics.scrollTop)
+    for (const point of pane.anchor.points) point.top -= remainder
   }
 }
 

@@ -1,0 +1,189 @@
+{
+  "probe": "real-data",
+  "runtime": "node v24.3.0",
+  "operational": {
+    "files": 16,
+    "firstTimestamp": "2026-10-01T10:34:45.183Z",
+    "lastTimestamp": "2026-10-06T03:49:05.440Z",
+    "eventCounts": {
+      "app.start": 12,
+      "window.created": 17,
+      "renderer.navigation.started": 20,
+      "renderer.load.ready": 17,
+      "renderer.process.gone": 2,
+      "session.restore.completed": 15,
+      "session.turn.started": 169,
+      "session.close.requested": 25,
+      "app.parked.windowless": 7,
+      "app.shutdown.started": 6,
+      "log.suppressed": 301
+    },
+    "rendererGoneReasons": {
+      "clean-exit": 2
+    },
+    "restoreMessageCount": {
+      "n": 15,
+      "p50": 11,
+      "p90": 153,
+      "p99": 190,
+      "max": 190
+    }
+  },
+  "deliveryTrace": {
+    "files": 6,
+    "bytes": 91847546,
+    "firstTimestamp": "2026-10-05T14:27:07.879Z",
+    "lastTimestamp": "2026-10-06T03:49:00.566Z",
+    "recordKinds": {
+      "delivery.trace": 76803,
+      "trace.loss": 671,
+      "trace.source.incomplete": 2,
+      "trace.sequence.gap": 3,
+      "trace.stream.quiescent": 4
+    },
+    "messageKinds": {
+      "stream_event": 67425,
+      "assistant": 2644,
+      "user": 1371,
+      "system": 3906,
+      "none": 1394,
+      "result": 63
+    },
+    "partialsPerFinishedRecord": 7.19,
+    "flushReasons": {
+      "terminal": 76145,
+      "evicted": 534,
+      "quiescent": 79,
+      "buffered": 45
+    },
+    "replayRecordsByFlushReason": {},
+    "streams": 9,
+    "sequencesBetweenFinishedMessages": {
+      "n": 8988,
+      "p50": 1,
+      "p90": 4,
+      "p99": 176,
+      "max": 942
+    },
+    "finishedMessagesWithinLast2048Sequences": {
+      "n": 3,
+      "p50": 136,
+      "p90": 200,
+      "p99": 200,
+      "max": 200
+    }
+  },
+  "transcriptCaches": {
+    "files": 352,
+    "bytes": {
+      "n": 352,
+      "p50": 561618,
+      "p90": 3455554,
+      "p99": 6680261,
+      "max": 32446045
+    },
+    "messagesPerCache": {
+      "n": 352,
+      "p50": 134,
+      "p90": 676,
+      "p99": 1417,
+      "max": 2201
+    },
+    "framesPerCache": {
+      "n": 352,
+      "p50": 134,
+      "p90": 677,
+      "p99": 1418,
+      "max": 2202
+    },
+    "cachesWithImagePreviews": 1,
+    "readAndJsonParseMs": {
+      "n": 352,
+      "p50": 2.028,
+      "p90": 9.076,
+      "p99": 16.812,
+      "max": 67.033
+    }
+  },
+  "assistantText": {
+    "blocks": 2582,
+    "characters": {
+      "n": 2582,
+      "p50": 320,
+      "p90": 1630,
+      "p99": 12634,
+      "max": 45083
+    },
+    "blocksAtLeast2000": 217,
+    "blocksAtLeast10000": 30
+  },
+  "markdownStreamingEstimate": {
+    "sampledReplies": 20,
+    "sampleCharacters": {
+      "n": 20,
+      "p50": 4494,
+      "p90": 19825,
+      "p99": 45083,
+      "max": 45083
+    },
+    "1-word-pieces": {
+      "updates": 19886,
+      "updatesByPath": {
+        "plain-append": 1811,
+        "settled-body-reused": 3398,
+        "full-transform": 14677
+      },
+      "fullTransformShare": 0.738,
+      "perUpdateMs": {
+        "n": 19886,
+        "p50": 1.029,
+        "p90": 10.617,
+        "p99": 18.536,
+        "max": 34.758
+      },
+      "fullTransformInSecondHalfMs": {
+        "n": 7411,
+        "p50": 2.753,
+        "p90": 15.622,
+        "p99": 19.108,
+        "max": 34.758
+      },
+      "updatesOver16_7Ms": 486
+    },
+    "4-word-pieces": {
+      "updates": 4980,
+      "updatesByPath": {
+        "plain-append": 234,
+        "settled-body-reused": 823,
+        "full-transform": 3923
+      },
+      "fullTransformShare": 0.788,
+      "perUpdateMs": {
+        "n": 4980,
+        "p50": 1.142,
+        "p90": 11.633,
+        "p99": 18.735,
+        "max": 23.547
+      },
+      "fullTransformInSecondHalfMs": {
+        "n": 1968,
+        "p50": 2.783,
+        "p90": 16.526,
+        "p99": 19.607,
+        "max": 23.547
+      },
+      "updatesOver16_7Ms": 187
+    }
+  },
+  "notes": [
+    "Aggregates only; no message text, identifiers or file paths are recorded.",
+    "Logs cover only the retained window; delivery traces are bounded by size and age.",
+    "Markdown piece boundaries are synthetic; provider deltas are not stored anywhere on disk."
+  ],
+  "wallSeconds": 79.5,
+  "loadAverageAfter": [
+    9.17138671875,
+    8.736328125,
+    9.13671875
+  ]
+}

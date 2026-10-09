@@ -141,6 +141,8 @@ import { captureInterruptedTurn } from './utils/interruptedTurn.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
 import { createCuaDriverRun, type CuaDriverRun } from './utils/cuaDriver/run.js'
+import { emitTaskTerminatedSdk } from './utils/sdkEventQueue.js'
+import { parseTaskNotificationDetails } from './utils/taskNotification.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -2207,10 +2209,8 @@ async function* queryLoop(
     // Get queued commands snapshot before processing attachments.
     // These will be sent as attachments so Claude can respond to them in the current turn.
     //
-    // Drain pending notifications. LocalShellTask completions are 'next'
-    // (when MONITOR_TOOL is on) and drain without Sleep. Other task types
-    // (agent/workflow/framework) still default to 'later' — the Sleep flush
-    // covers those. If all task types move to 'next', this branch could go.
+    // Shell and local-agent completions use 'next' and drain without Sleep.
+    // Other producers can still request 'later'; Sleep flushes those too.
     //
     // Slash commands are excluded from mid-turn drain — they must go through
     // processSlashCommand after the turn ends (via useQueueProcessor), not be
@@ -2328,6 +2328,33 @@ async function* queryLoop(
         if (cmd.uuid) {
           consumedCommandUuids.push(cmd.uuid)
           notifyCommandLifecycle(cmd.uuid, 'started')
+        }
+        if (cmd.mode === 'task-notification' && typeof cmd.value === 'string') {
+          const details = parseTaskNotificationDetails(cmd.value)
+          if (
+            details?.taskId &&
+            (details.status === 'completed' ||
+              details.status === 'failed' ||
+              details.status === 'killed')
+          ) {
+            emitTaskTerminatedSdk(
+              details.taskId,
+              details.status === 'killed' ? 'stopped' : details.status,
+              {
+                runId: cmd.taskRunId,
+                toolUseId: details.toolUseId,
+                summary: details.summary,
+                outputFile: details.outputFile,
+                usage: details.usage
+                  ? {
+                      total_tokens: details.usage.totalTokens,
+                      tool_uses: details.usage.toolUses,
+                      duration_ms: details.usage.durationMs,
+                    }
+                  : undefined,
+              },
+            )
+          }
         }
       }
       removeFromQueue(consumedCommands)

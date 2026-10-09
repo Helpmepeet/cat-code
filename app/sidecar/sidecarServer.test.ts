@@ -67,7 +67,9 @@ import {
   type LeaseReader,
   type SidecarLeaseDomain,
 } from './leaseDomain.js'
-import type { SidecarRunControlsDomain } from './runControlsDomain.js'
+import { createSidecarRunControlsDomain, type SidecarRunControlsDomain } from './runControlsDomain.js'
+import { CODEX_CACHE_IDLE_ESTIMATE_MS } from '../shared/promptCacheEstimate.js'
+import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
 import { createTaskStateBase } from '../../src/Task.js'
@@ -3883,6 +3885,7 @@ function fakeRunControlsDomain(): {
   let providerSwitchLocked = false
   let listener: (() => void) | null = null
   const snapshot = (): RunControlsSnapshot => ({
+    cacheExpired: null,
     model: {
       current: model,
       // The real builder resolves both from the engine (marketing name +
@@ -4042,6 +4045,43 @@ test('P4-24c — a valid model.set switches the model + re-broadcasts run-contro
   // + size cap on the outbound path must carry them, not drop them.
   expect(latest?.currentLabel).toBe('Name for gpt-5.6-terra')
   expect(latest?.contextWindow).toBe(200_000)
+  expect(snaps[snaps.length - 1]?.runControls.cacheExpired).toBeNull()
+})
+
+test('final Codex usage warms the estimate through controller events and outbound snapshots', async () => {
+  const model = 'gpt-6.1-sol'
+  const now = Date.now()
+  const base = fakeRunControlsDomain().domain.getSnapshot()
+  const domain = createSidecarRunControlsDomain(createStore(getDefaultAppState()), {
+    buildSnapshot: () => ({ ...base, model: { ...base.model, current: model, provider: 'openai' } }),
+    initialCacheObservation: { model, expiresAt: now - 1 },
+    now: () => now,
+  })
+  const stream = SDK_MESSAGE_FIXTURE.stream_event[0]!.message
+  const assistant = SDK_MESSAGE_FIXTURE.assistant[0]!.message
+  const messages = [
+    { ...stream, event: { type: 'message_start', message: { model, usage: { input_tokens: 0 } } } },
+    { ...assistant, message: { ...assistant.message, model, usage: { input_tokens: 0 } } },
+    { ...stream, event: { type: 'message_delta', delta: { stop_reason: 'end_turn' },
+      usage: { input_tokens: 200, cache_read_input_tokens: 2_000 } } },
+    { ...stream, event: { type: 'message_stop' } },
+  ]
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      for (const message of messages) yield message
+    },
+  })
+  const { received } = connect(controller, { runControls: domain })
+  const before = received.find(frame => frame.kind === 'run-controls.snapshot')
+  expect(before?.kind === 'run-controls.snapshot' && before.runControls.cacheExpired).toBe(true)
+  await controller.submit('go')
+  const snapshots = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> => frame.kind === 'run-controls.snapshot',
+  )
+  expect(snapshots.at(-1)?.runControls.cacheExpired).toBe(false)
+  expect(snapshots.at(-1)?.runControls.cacheExpiresAt).toBe(now + CODEX_CACHE_IDLE_ESTIMATE_MS)
+  expect(received.filter(frame => frame.kind === 'event' && frame.event.type === 'message')).toHaveLength(messages.length)
 })
 
 test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast', () => {
@@ -6002,6 +6042,37 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   ).toEqual(['provider-a-model', 'provider-b-model'])
 })
 
+test.each(['anthropic identity', 'unavailable identity'])('a successful account switch clears expiry for %s', async scenario => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
+  const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })
+  const initial = baseAccounts.getSnapshot()!
+  let anthropicActiveAccountId = 'claude-a'
+  const accounts: SidecarAccountsDomain = {
+    ...baseAccounts,
+    getSnapshot: () => scenario === 'unavailable identity' ? null
+      : { ...initial, anthropicActiveAccountId },
+    async runVerb() {
+      anthropicActiveAccountId = 'claude-b'
+      return { verb: 'account.switch', result: { ok: true, message: 'Switched.' }, poolChanged: true }
+    },
+  }
+  const model = 'gpt-6.1-sol'
+  const base = fakeRunControlsDomain().domain.getSnapshot()
+  const runControls = createSidecarRunControlsDomain(createStore(getDefaultAppState()), {
+    buildSnapshot: () => ({ ...base, model: { ...base.model, current: model, provider: 'openai' } }),
+    initialCacheObservation: { model, expiresAt: Date.now() - 1 },
+  })
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
+  expect(runControls.getSnapshot().cacheExpired).toBe(true)
+  server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'cache-switch', accountId: 'claude-b', provider: 'anthropic' }))
+  await flush()
+  expect(runControls.getSnapshot().cacheExpiresAt).toBeNull()
+  const latest = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'run-controls.snapshot' }> => frame.kind === 'run-controls.snapshot',
+  ).at(-1)
+  expect(latest?.runControls.cacheExpiresAt).toBeNull()
+})
+
 test('P4-5 — account.result never carries token material', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
@@ -6192,7 +6263,10 @@ test('host deletion notice reconciles a live sidecar pool without rerunning dele
       },
     }),
   })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
+  const { domain: runControls } = fakeRunControlsDomain()
+  let cacheInvalidations = 0
+  runControls.clearCacheEstimate = () => { cacheInvalidations++ }
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
 
   server.handleData(
     conn,
@@ -6209,6 +6283,7 @@ test('host deletion notice reconciles a live sidecar pool without rerunning dele
   await flush()
 
   expect(deleted).toEqual([])
+  expect(cacheInvalidations).toBe(1)
   expect(
     received.some(
       frame =>
@@ -6286,6 +6361,8 @@ test('host sign-out notice removes only the exact generation and re-broadcasts l
     clearAuthCaches: async () => {},
   })
   const { domain: runControls } = fakeRunControlsDomain()
+  let cacheInvalidations = 0
+  runControls.clearCacheEstimate = () => { cacheInvalidations++ }
   const settings = fakeSettingsDomain()
   const leases = createSidecarLeaseDomain(makePermissionStore())
   const { server, received, conn } = connect(
@@ -6319,6 +6396,7 @@ test('host sign-out notice removes only the exact generation and re-broadcasts l
   expect(retirements).toEqual([
     { accountId: 'signed-out-account', credentialGeneration: 1 },
   ])
+  expect(cacheInvalidations).toBe(1)
   expect(
     received.filter(f => f.kind === 'accounts.snapshot').length,
   ).toBeGreaterThan(beforeAccounts)
@@ -8324,13 +8402,38 @@ test('the existing session.branch verb remains accepted as additive v1 vocabular
   expect(received).toContainEqual(
     expect.objectContaining({
       kind: 'session-action.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
       requestId: 'sb1',
       verb: 'branch',
       ok: true,
+      branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+      branchTitle: 'Branch title',
     }),
   )
   expect(calls).toEqual(['branch'])
 })
+
+for (const message of [
+  { type: 'session.branch' },
+  { type: 'session.branch', requestId: '' },
+  { type: 'session.branch', requestId: 123 },
+  { type: 'session.branch', requestId: 'sb-invalid', userMessageId: TARGET_USER_MESSAGE_ID },
+  { type: 'session.branch', requestId: 'sb-invalid', engineSessionId: ENGINE_SESSION },
+]) {
+  test(`session.branch rejects invalid intent ${JSON.stringify(message)} before dispatch`, async () => {
+    const { server, calls } = makeSessionActionsServer()
+    const { socket, received } = makeSocket()
+    const conn = server.addConnection(socket)
+
+    server.handleData(conn, rawFrame(message))
+    await flush()
+
+    expect(calls).toEqual([])
+    expect(received.some(frame => frame.kind === 'session-action.result')).toBe(false)
+    expect(received.some(frame => frame.kind === 'error')).toBe(true)
+  })
+}
 
 test('P4-6b — rejects session.rename missing requestId at the schema boundary, no domain call', async () => {
   const { server, calls } = makeSessionActionsServer()

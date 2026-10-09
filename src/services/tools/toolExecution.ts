@@ -2,6 +2,7 @@ import { feature } from 'bun:bundle'
 import { isHandoffExecutionFenced } from '../../app-runtime/handoff.js'
 import { createHandoffSkippedResult } from './handoffExecution.js'
 import type { UUID } from 'crypto'
+import { isDeepStrictEqual } from 'util'
 import type {
   ContentBlockParam,
   ToolResultBlockParam,
@@ -85,6 +86,7 @@ import {
 } from '../../utils/errors.js'
 import { executePermissionDeniedHooks } from '../../utils/hooks.js'
 import { logError } from '../../utils/log.js'
+import { checkRuleBasedPermissions } from '../../utils/permissions/permissions.js'
 import {
   CANCEL_MESSAGE,
   createProgressMessage,
@@ -151,6 +153,17 @@ import {
   runPostToolUseHooks,
   runPreToolUseHooks,
 } from './toolHooks.js'
+import {
+  authorizeFinalToolInput,
+  clearUserApprovalReceipts,
+  freezeCanonicalToolInput,
+  ToolInputPreparation,
+} from './toolInputSecurity.js'
+import {
+  attachTrustedSedEditToExecution,
+  clearTrustedSedEditApprovals,
+  clearTrustedSedEditExecutionCapability,
+} from '../../tools/BashTool/sedEditCapability.js'
 
 /** Minimum total hook duration (ms) to show inline timing summary */
 export const HOOK_TIMING_DISPLAY_THRESHOLD_MS = 500
@@ -817,12 +830,43 @@ async function checkPermissionsAndCallTool(
     ]
   }
 
+  toolUseContext = { ...toolUseContext, toolUseId: toolUseID }
+  const preparation = new ToolInputPreparation()
+  try {
+    toolUseContext = await preparation.prepare(
+      tool,
+      parsedInput.data,
+      toolUseContext,
+    )
+  } catch (error) {
+    await preparation.dispose()
+    return [
+      {
+        message: createUserMessage({
+          content: [
+            {
+              type: 'tool_result',
+              content: `<tool_use_error>Tool input preparation failed: ${formatError(error)}</tool_use_error>`,
+              is_error: true,
+              tool_use_id: toolUseID,
+            },
+          ],
+          toolUseResult: 'Tool input preparation failed.',
+          sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+        }),
+      },
+    ]
+  }
+
+  let executionContextForCleanup: ToolUseContext | undefined
+  try {
   // Validate input values. Each tool has its own validation logic
   const isValidCall = await tool.validateInput?.(
     parsedInput.data,
     toolUseContext,
   )
   if (isValidCall?.result === false) {
+    await preparation.dispose()
     logForDebugging(
       `${tool.name} tool validation error: ${isValidCall.message?.slice(0, 200)}`,
     )
@@ -916,44 +960,27 @@ async function checkPermissionsAndCallTool(
 
   const resultingMessages = []
 
-  // Defense-in-depth: strip _simulatedSedEdit from model-provided Bash input.
-  // This field is internal-only — it must only be injected by the permission
-  // system (SedEditPermissionRequest) after user approval. If the model supplies
-  // it, the schema's strictObject should already reject it, but we strip here
-  // as a safeguard against future regressions.
   let processedInput = parsedInput.data
-  if (
-    tool.name === BASH_TOOL_NAME &&
-    processedInput &&
-    typeof processedInput === 'object' &&
-    '_simulatedSedEdit' in processedInput
-  ) {
-    const { _simulatedSedEdit: _, ...rest } =
-      processedInput as typeof processedInput & {
-        _simulatedSedEdit: unknown
-      }
-    processedInput = rest as typeof processedInput
-  }
 
-  // Backfill legacy/derived fields on a shallow clone so hooks/canUseTool see
+  // Backfill legacy/derived fields on a deep clone so hooks/canUseTool see
   // them without affecting tool.call(). SendMessageTool adds fields; file
   // tools overwrite file_path with expandPath — that mutation must not reach
   // call() because tool results embed the input path verbatim (e.g. "File
   // created successfully at: {path}"), and changing it alters the serialized
-  // transcript and VCR fixture hashes. If a hook/permission later returns a
-  // fresh updatedInput, callInput converges on it below — that replacement
-  // is intentional and should reach call().
+  // transcript and VCR fixture hashes. An unchanged derived snapshot maps
+  // back to the original canonical input after hooks complete.
   let callInput = processedInput
   const backfilledClone =
     tool.backfillObservableInput &&
     typeof processedInput === 'object' &&
     processedInput !== null
-      ? ({ ...processedInput } as typeof processedInput)
+      ? (structuredClone(processedInput) as typeof processedInput)
       : null
   if (backfilledClone) {
     tool.backfillObservableInput!(backfilledClone as Record<string, unknown>)
     processedInput = backfilledClone
   }
+  const preToolHookInputSnapshot = structuredClone(processedInput)
 
   let shouldPreventContinuation = false
   let stopReason: string | undefined
@@ -1009,6 +1036,7 @@ async function checkPermissionsAndCallTool(
         resultingMessages.push(result.message)
         break
       case 'stop':
+        await preparation.dispose()
         getStatsStore()?.observe(
           'pre_tool_hook_duration_ms',
           Date.now() - preToolHookStart,
@@ -1053,6 +1081,110 @@ async function checkPermissionsAndCallTool(
     }
   }
 
+  let canonicalHookInput: Record<string, unknown>
+  try {
+    const permissionUpdatedInput =
+      hookPermissionResult?.behavior !== 'deny' &&
+      hookPermissionResult &&
+      'updatedInput' in hookPermissionResult
+        ? hookPermissionResult.updatedInput
+        : undefined
+    const effectiveHookInput = permissionUpdatedInput ?? processedInput
+    const parsedHookInput =
+      isDeepStrictEqual(effectiveHookInput, parsedInput.data) ||
+      isDeepStrictEqual(effectiveHookInput, preToolHookInputSnapshot)
+        ? parsedInput.data
+        : tool.inputSchema.parse(effectiveHookInput)
+    canonicalHookInput = isDeepStrictEqual(parsedHookInput, parsedInput.data)
+      ? parsedInput.data
+      : parsedHookInput
+  } catch (error) {
+    await preparation.dispose()
+    const errorContent = `Final tool input failed schema validation: ${formatError(error)}`
+    return [
+      ...resultingMessages,
+      {
+        message: createUserMessage({
+          content: [
+            {
+              type: 'tool_result',
+              content: `<tool_use_error>${errorContent}</tool_use_error>`,
+              is_error: true,
+              tool_use_id: toolUseID,
+            },
+          ],
+          toolUseResult: errorContent,
+          sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+        }),
+      },
+    ]
+  }
+  processedInput = canonicalHookInput
+  if (
+    hookPermissionResult?.behavior !== 'deny' &&
+    hookPermissionResult &&
+    'updatedInput' in hookPermissionResult &&
+    hookPermissionResult.updatedInput !== undefined
+  ) {
+    hookPermissionResult = {
+      ...hookPermissionResult,
+      updatedInput: canonicalHookInput,
+    }
+  }
+  try {
+    toolUseContext = await preparation.prepare(
+      tool,
+      processedInput,
+      toolUseContext,
+    )
+    const hookValidation = await tool.validateInput?.(
+      processedInput,
+      toolUseContext,
+    )
+    if (hookValidation?.result === false) {
+      await preparation.dispose()
+      return [
+        ...resultingMessages,
+        {
+          message: createUserMessage({
+            content: [
+              {
+                type: 'tool_result',
+                content: `<tool_use_error>${hookValidation.message}</tool_use_error>`,
+                is_error: true,
+                tool_use_id: toolUseID,
+              },
+            ],
+            toolUseResult: `Error: ${hookValidation.message}`,
+            sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+          }),
+        },
+      ]
+    }
+  } catch (error) {
+    await preparation.dispose()
+    const errorContent = `Final tool input validation failed: ${formatError(error)}`
+    return [
+      ...resultingMessages,
+      {
+        message: createUserMessage({
+          content: [
+            {
+              type: 'tool_result',
+              content: `<tool_use_error>${errorContent}</tool_use_error>`,
+              is_error: true,
+              tool_use_id: toolUseID,
+            },
+          ],
+          toolUseResult: errorContent,
+          sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+        }),
+      },
+    ]
+  }
+
+  processedInput = freezeCanonicalToolInput(processedInput)
+
   const toolAttributes: Record<string, string | number | boolean> = {}
   if (processedInput && typeof processedInput === 'object') {
     if (tool.name === FILE_READ_TOOL_NAME && 'file_path' in processedInput) {
@@ -1090,7 +1222,7 @@ async function checkPermissionsAndCallTool(
     assistantMessage,
     toolUseID,
   )
-  const permissionDecision = resolved.decision
+  let permissionDecision = resolved.decision
   processedInput = resolved.input
   const permissionDurationMs = Date.now() - permissionStart
   // In auto mode, canUseTool awaits the classifier (side_query) — if that's
@@ -1155,7 +1287,38 @@ async function checkPermissionsAndCallTool(
     })
   }
 
+  let trustedSedEdit: import('../../tools/BashTool/sedEditCapability.js').TrustedSedEdit | undefined
+  if (permissionDecision.behavior === 'allow') {
+    const finalInput = await authorizeFinalToolInput(
+      tool,
+      permissionDecision.updatedInput ?? resolved.input ?? processedInput,
+      hookPermissionResult?.behavior === 'allow' &&
+        hookPermissionResult.updatedInput !== undefined
+        ? parsedInput.data
+        : resolved.input,
+      permissionDecision,
+      toolUseID,
+      toolUseContext,
+      assistantMessage,
+      preparation,
+      (changedTool, changedInput, changedContext) =>
+        checkRuleBasedPermissions(
+          changedTool,
+          changedInput,
+          changedContext,
+        ),
+      canUseTool,
+    )
+    permissionDecision = finalInput.decision
+    processedInput = finalInput.input
+    if (finalInput.allowed) {
+      toolUseContext = finalInput.context
+      trustedSedEdit = finalInput.trustedSedEdit
+    }
+  }
+
   if (permissionDecision.behavior !== 'allow') {
+    await preparation.dispose()
     if (permissionDecision.decisionReason?.type !== 'classifier') {
       recordAutoModeOutcome(
         toolUseID,
@@ -1278,6 +1441,7 @@ async function checkPermissionsAndCallTool(
   // cancel the owning query while that decision is pending; re-check before
   // crossing the execution boundary so the tool cannot start afterward.
   if (toolUseContext.abortController.signal.aborted) {
+    await preparation.dispose()
     const content = createToolResultStopMessage(toolUseID)
     content.content = withMemoryCorrectionHint(CANCEL_MESSAGE)
     resultingMessages.push({
@@ -1314,21 +1478,15 @@ async function checkPermissionsAndCallTool(
     ...mcpToolDetailsForAnalytics(tool.name, mcpServerType, mcpServerBaseUrl),
   })
 
-  // Use the updated input from permissions if provided
-  // (Don't overwrite if undefined - processedInput may have been modified by passthrough hooks)
-  if (permissionDecision.updatedInput !== undefined) {
-    processedInput = permissionDecision.updatedInput
-  }
-
-  // Checked here, on the input the tool will run with: a PreToolUse hook or the
-  // permission decision may have replaced the model's input above. The later
-  // backfill restore only touches `file_path`.
+  // Check the final canonical input after hook and permission processing,
+  // immediately before tool execution.
   const cuaDriverRefusal = checkCuaDriverToolCall(
     tool.name,
     processedInput,
     toolUseContext.cuaDriverRun,
   )
   if (cuaDriverRefusal !== null) {
+    await preparation.dispose()
     const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)
     endToolBlockedOnUserSpan('reject', decisionInfo?.source || 'unknown')
     endToolSpan()
@@ -1401,36 +1559,13 @@ async function checkPermissionsAndCallTool(
   // Permission and pre-tool hooks can await while a sibling accepts transfer.
   // This is the last gate before effects, shared by batch and stream execution.
   if (isHandoffExecutionFenced(toolUseContext)) {
+    await preparation.dispose()
     return [{ message: createHandoffSkippedResult(toolUseID, assistantMessage) }]
   }
 
   startSessionActivity('tool_exec')
   toolUseContext.onToolExecutionStart?.()
-  // If processedInput still points at the backfill clone, no hook/permission
-  // replaced it — pass the pre-backfill callInput so call() sees the model's
-  // original field values. Otherwise converge on the hook-supplied input.
-  // Permission/hook flows may return a fresh object derived from the
-  // backfilled clone (e.g. via inputSchema.parse). If its file_path matches
-  // the backfill-expanded value, restore the model's original so the tool
-  // result string embeds the path the model emitted — keeps transcript/VCR
-  // hashes stable. Other hook modifications flow through unchanged.
-  if (
-    backfilledClone &&
-    processedInput !== callInput &&
-    typeof processedInput === 'object' &&
-    processedInput !== null &&
-    'file_path' in processedInput &&
-    'file_path' in (callInput as Record<string, unknown>) &&
-    (processedInput as Record<string, unknown>).file_path ===
-      (backfilledClone as Record<string, unknown>).file_path
-  ) {
-    callInput = {
-      ...processedInput,
-      file_path: (callInput as Record<string, unknown>).file_path,
-    } as typeof processedInput
-  } else if (processedInput !== backfilledClone) {
-    callInput = processedInput
-  }
+  callInput = processedInput
   // Everything accumulated so far is pre-call: PreToolUse hook output,
   // hookSpecificOutput.additionalContext, and the PermissionRequest-hook
   // decision attachment. The catch below returns a freshly built error result,
@@ -1477,13 +1612,23 @@ async function checkPermissionsAndCallTool(
     // Measurement must never change tool execution or cancellation.
   }
   try {
+    const executionContext = {
+      ...toolUseContext,
+      toolUseId: toolUseID,
+      userModified: permissionDecision.userModified ?? false,
+    }
+    executionContextForCleanup = executionContext
+    if (trustedSedEdit) {
+      attachTrustedSedEditToExecution(
+        executionContext,
+        tool.name,
+        toolUseID,
+        trustedSedEdit,
+      )
+    }
     const result = await tool.call(
       callInput,
-      {
-        ...toolUseContext,
-        toolUseId: toolUseID,
-        userModified: permissionDecision.userModified ?? false,
-      },
+      executionContext,
       canUseTool,
       assistantMessage,
       progress => {
@@ -1607,7 +1752,7 @@ async function checkPermissionsAndCallTool(
         const bashInput = processedInput as BashToolInput
         fileExtension = getFileExtensionsFromBashCommand(
           bashInput.command,
-          bashInput._simulatedSedEdit?.filePath,
+          trustedSedEdit?.filePath,
         )
       }
     }
@@ -2047,6 +2192,17 @@ async function checkPermissionsAndCallTool(
     // Clean up decision info after logging
     if (decisionInfo) {
       toolUseContext.toolDecisions?.delete(toolUseID)
+    }
+  }
+  } finally {
+    try {
+      await preparation.dispose()
+    } finally {
+      clearUserApprovalReceipts(toolUseID)
+      clearTrustedSedEditApprovals(toolUseID)
+      if (executionContextForCleanup) {
+        clearTrustedSedEditExecutionCapability(executionContextForCleanup)
+      }
     }
   }
 }

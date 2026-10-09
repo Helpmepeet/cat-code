@@ -216,14 +216,22 @@ function isDefaultGeneratedImagePath(outputPath: string): boolean {
 }
 
 function ensureOutputPath(input: Input): string {
-  input.output_path = normalizeOutputPath(input.output_path ?? getDefaultOutputPath(input))
-  return input.output_path
+  const normalized = normalizeOutputPath(
+    input.output_path ?? getDefaultOutputPath(input),
+  )
+  if (input.output_path !== normalized) {
+    input.output_path = normalized
+  }
+  return normalized
 }
 
 function normalizeReferenceImagePath(input: Input): string | undefined {
   if (!input.reference_image_path) return undefined
-  input.reference_image_path = normalizeOutputPath(input.reference_image_path)
-  return input.reference_image_path
+  const normalized = normalizeOutputPath(input.reference_image_path)
+  if (input.reference_image_path !== normalized) {
+    input.reference_image_path = normalized
+  }
+  return normalized
 }
 
 function getDisplayOutputPath(outputPath: string): string {
@@ -937,12 +945,23 @@ For transparency, omit background and choose PNG or WebP. The interface displays
   get outputSchema(): OutputSchema {
     return outputSchema()
   },
+  async prepareExecution(input) {
+    ensureOutputPath(input)
+    normalizeReferenceImagePath(input)
+    return { state: null, cleanup() {} }
+  },
   backfillObservableInput(input) {
     if (typeof input.output_path === 'string') {
-      input.output_path = normalizeOutputPath(input.output_path)
+      const normalized = normalizeOutputPath(input.output_path)
+      if (input.output_path !== normalized) {
+        input.output_path = normalized
+      }
     }
     if (typeof input.reference_image_path === 'string') {
-      input.reference_image_path = normalizeOutputPath(input.reference_image_path)
+      const normalized = normalizeOutputPath(input.reference_image_path)
+      if (input.reference_image_path !== normalized) {
+        input.reference_image_path = normalized
+      }
     }
   },
   getPath(input): string {

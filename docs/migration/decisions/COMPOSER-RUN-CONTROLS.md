@@ -127,6 +127,137 @@ provider/model from the latest real assistant message in the restored transcript
 `<synthetic>` local-command output and API-error rows) before constructing QueryEngine, so a Claude
 session cannot silently resume on today's OpenAI default (and vice versa).
 
+## Cache-expired indicator (2026-10-08)
+
+The operator supplied the untracked local reference
+`docs/design-html/2026-10-08-cache-expired-notice.html`. The settled visual is
+an amber clock immediately before the active-account face, with the former
+context-warning face's 22px size, 14px glyph, 2px stroke and warning tone.
+It is display-only, outside toolbar roving navigation. Its hover label reads
+exactly **Cache expired**, using the composer's raised-surface, seam, typography
+and shadow treatment. There is no native title, click action or popover.
+The separate context-low triangle and its popover are removed by explicit user
+decision; the context ring's pressure tones and usage panel remain.
+
+**Operator amendment, 2026-10-08:** the original guaranteed-next-request-miss
+requirement left the first implementation inactive. The operator subsequently
+approved **estimation**. The clock now represents an idle-time estimate, not a
+provider-issued expiry deadline or a promise that the next request misses.
+Its settled visual and exact hover label remain unchanged.
+
+### Provider estimates and evidence
+
+| Actual request route | Idle estimate | Evidence and limit |
+| --- | --- | --- |
+| Codex/GPT, including GPT requests from an Anthropic-labelled session | 24 hours | Conservative retention-policy lead: the public SDK describes `prompt_cache_retention: "24h"` as a maximum policy, independently of the newer 30-minute minimum TTL. A captured Codex response also echoes `24h`. This is not a verified per-entry deadline for the current ChatGPT backend; it may evict much sooner. Eligible input is at least 1,024 tokens. |
+| First-party Claude | Configured 5 minutes or 1 hour | Live duration comes from the engine's own `getCacheControl({querySource:"sdk"})`, not the Codex policy. Cache-read/write usage must be observed. Reported one-hour writes take precedence over a shorter hint. Matching requests outside this session can refresh shared prefixes, so the display remains an estimate. |
+| Bedrock, Vertex and Foundry Claude | Same engine-selected 5-minute/1-hour duration when model identity and usage can be matched | Bedrock's one-hour environment opt-in is honored by the existing engine helper. Cloud isolation/routing can change reuse; no new cloud-provider usage probe was made. Canonical model names must match the actual response. Unknown deployment aliases remain unavailable. |
+| Historical Claude responses with recorded supported-route evidence | Reported write TTL, otherwise conservative 1 hour | New requests record `cacheEstimateSupported` with their coherent run facts. Older Claude history without that evidence stays unknown, because a canonical model name cannot establish whether a custom endpoint served it. A cache-read count alone does not state its TTL. |
+| Custom endpoints, unmatched models and dynamic `opusplan` routing in Plan mode | Unknown | Model strings alone do not establish their current cache route. No clock until there is usable, correctly paired evidence. |
+
+Provider documentation:
+
+- [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+- [OpenAI API prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
+  The newer 30-minute value is a **minimum**, not the point at which entries die.
+- [Pinned public SDK retention contract](https://github.com/openai/openai-python/blob/4e152cdefe1844c2d5d78653310e9b9c0195c44e/src/openai/types/responses/response_create_params.py#L169-L201)
+  distinguishes maximum retention from minimum lifetime.
+- openai/codex#32037 contains the historical `24h` response echo, including
+  `store:false`. It is a captured lead, not a reproduced current-server guarantee.
+- In openai/codex#18815, an OpenAI contributor said on 2026-04-21 that expiry
+  information was unavailable to clients. That older statement does not prove
+  it can never become available.
+- [Prompt-cache diagnostics](https://developers.openai.com/api/docs/guides/prompt-caching/diagnostics)
+  can compare requests after sending them. No preflight validity query was found;
+  applicability to this ChatGPT OAuth route remains unverified.
+- [AWS prompt caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
+- [Vertex Claude prompt caching](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/prompt-caching)
+  was fetched, but only navigation was available. It is not treated as verified
+  TTL evidence.
+
+Existing response data showed a Codex cache read after a 14.5-minute diagnostic
+gap, ruling out a blind five-minute countdown. It also exposed an important
+serialization seam: saved Codex assistant frames can have zero initial usage.
+Final counts arrive in later stream events and completed
+`codex_stream_surface` diagnostics. No new credentialed request was made.
+
+### Observation, transport and restoration
+
+The sidecar observes raw engine-originated main-thread assistant/stream events.
+It folds final usage rather than treating early zeros as a cache miss.
+Ordinary tool/user activity and subagent frames do not renew the live estimate.
+Model, effort, Fast or permission-mode changes, compaction, and account switches
+invalidate the old observation instead of carrying it to another request path.
+An invalidated pending stream remains marked through its stop, preventing late
+assistant blocks from restoring its estimate. Unusable terminal usage clears a
+superseded observation rather than leaving the older warning. Account invalidation
+covers command auth refreshes, both provider identities, and committed profile
+removal/sign-out notices; unavailable account identity is handled conservatively.
+
+The existing read-only snapshot carries `cacheExpiresAt` plus `cacheExpired`
+at snapshot time. Both are optional additions; there is no new inbound command
+or protocol-version change. The renderer derives display state from the deadline,
+updates while idle, catches elapsed time on focus/visibility, and cleans up its
+timer/listeners. A fresh observed response clears the icon. Retained deadlines
+remain display-only after park/disconnect; they never arm a control.
+
+History uses the real API-response timestamp, not transcript length, file mtime,
+cache `writtenAt`, or session creation. The existing bounded run-facts reader
+excludes synthetic/error rows, invalid/future timestamps, model mismatches and
+compaction-preserved stale responses. A newer changed-settings `run_facts` record
+also excludes prior API activity and diagnostics. An explicit unknown canonical
+restore seed cannot be overridden by older initial-message evidence. For valid GPT rows with zero initial usage,
+it can use a completed matching-model stream-surface diagnostic from the same
+bounded tail. Prefix-only old diagnostics cannot distinguish same-model
+subagents, so that fallback is conservative matching-model activity in the owning
+transcript, not proof of main-thread reuse. Missing usable evidence stays unknown.
+
+Live resume seeds from these same facts; cached previews receive the optional
+deadline without a new model turn. The derived-facts stamp is 3; older deadlines
+remain hidden until enrichment applies the current pairing and route checks.
+If close-time context facts are incomplete, a validated model/deadline pair is
+persisted independently as `cacheObservation`. Preview hydration checks its model
+against the frames and preserves their context fallback instead of replacing it
+with a thin context header. New cache writers
+use `transcript-cache-v3`, because older readers reject the extra field and can
+delete an artifact they cannot parse. Reads fall back through v2 then v1; normal
+writes and startup GC leave old-generation copies untouched. Explicit session
+removal still deletes all copies. Canonical transcripts, settings and credentials
+are not migrated. The worker boundary accepts only the optional bounded numeric
+deadline in addition to its existing exact key list.
+
+The installed `b79a1dfb` app's actual validator was extracted and exercised without
+launching Electron: it accepts the old five-field facts and rejects the deadline
+extension. Its bundle uses v2 and does not access v3. This establishes the
+installed-reader reason for generation isolation; it is not a full installed-app
+rewrite or live transport test.
+
+### Operator check
+
+No GUI launch or driving is authorized by this work. After choosing to run a
+live check, launch **Cat Code Dev** yourself:
+
+```sh
+cd /Users/pt/cat-code && CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code CATCODE_INITIAL_CWD=/Users/pt/cat-code CATCODE_DEBUG_STATE=1 bun run --cwd app dev
+```
+
+Wait for `[main] renderer ready`. Open an existing GPT session whose last usable
+API activity is more than 24 hours old. Its live or cached composer should show
+the amber clock immediately before the account, without needing a new request.
+Hover it: the label must read exactly “Cache expired”. Clicking must do nothing.
+A recent eligible session should show no clock; session length alone is irrelevant.
+
+Confirm there is no context-low triangle. A high-context session should retain
+its amber/red ring and usage panel. If you choose to send an ordinary request,
+the clock should clear when its final usage arrives; no extra paid probe is needed.
+Older cache metadata may require the background enrichment pass before the
+preview deadline appears. An existing dev process/sidecar retains loaded code,
+so use a fresh dev launch to exercise this change.
+
+Native hover appearance and current-backend lifetime remain unverified. Headless
+checks prove the estimator and display plumbing, not that every cache actually
+dies at the estimated deadline.
+
 ## Parity (§0 flags)
 
 - **🔁 adapted** — the Fast face is offered only when the model supports fast (or it is already on

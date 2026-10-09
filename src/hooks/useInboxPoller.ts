@@ -16,6 +16,12 @@ import {
   useSetAppState,
 } from '../state/AppState.js'
 import { findToolByName } from '../Tool.js'
+import {
+  takeTrustedSedEditApprovalForTransfer,
+  type SedEditPreviewForUI,
+  type TrustedSedEditPreviewChallenge,
+} from '../tools/BashTool/sedEditCapability.js'
+import { applySedSubstitution, parseSedEditCommand } from '../tools/BashTool/sedEditParser.js'
 import { isInProcessTeammateTask } from '../tasks/InProcessTeammateTask/types.js'
 import { getAllBaseTools } from '../tools.js'
 import type { PermissionUpdate } from '../types/permissions.js'
@@ -40,6 +46,11 @@ import type { PaneBackendType } from '../utils/swarm/backends/types.js'
 import { TEAM_LEAD_NAME } from '../utils/swarm/constants.js'
 import { getLeaderToolUseConfirmQueue } from '../utils/swarm/leaderPermissionBridge.js'
 import { sendPermissionResponseViaMailbox } from '../utils/swarm/permissionSync.js'
+import { fileIdentitiesEqual } from '../utils/file.js'
+import {
+  prepareFileMutationAuthorization,
+  readPreparedFileMetadata,
+} from '../utils/fileAuthorization.js'
 import {
   removeTeammateFromTeamFile,
   setMemberMode,
@@ -84,6 +95,62 @@ import {
   processMailboxPermissionResponse,
   processSandboxPermissionResponse,
 } from './useSwarmPermissionPoller.js'
+
+async function readVerifiedSedEditPreview(
+  challenge: TrustedSedEditPreviewChallenge,
+  toolUseID: string,
+  command: string,
+): Promise<SedEditPreviewForUI> {
+  if (
+    challenge.toolUseID !== toolUseID ||
+    challenge.command !== command ||
+    challenge.filePath !== challenge.identity.canonicalPath
+  ) {
+    throw new Error('The SedEdit preview does not match the requested tool use.')
+  }
+  const sedInfo = parseSedEditCommand(command)
+  if (!sedInfo) {
+    throw new Error('The SedEdit command is not eligible for a file preview.')
+  }
+  const prepared = await prepareFileMutationAuthorization(challenge.filePath)
+  try {
+    if (
+      prepared.pathnameLimited ||
+      !prepared.parent ||
+      !prepared.existing ||
+      prepared.canonicalPath !== challenge.filePath
+    ) {
+      throw new Error('The team lead cannot prepare the requested SedEdit target.')
+    }
+    const openedIdentity = {
+      canonicalPath: prepared.canonicalPath,
+      ...await prepared.existing.currentIdentity(),
+    }
+    if (!fileIdentitiesEqual(openedIdentity, challenge.identity)) {
+      throw new Error('The SedEdit target changed before the team lead could preview it.')
+    }
+    const metadata = await readPreparedFileMetadata(prepared)
+    if (!fileIdentitiesEqual(metadata.identity, challenge.identity)) {
+      throw new Error('The SedEdit target changed before the team lead could preview it.')
+    }
+    return {
+      kind: 'sed-edit-preview',
+      toolUseID,
+      command,
+      sedInfo,
+      filePath: prepared.canonicalPath,
+      previewId: challenge.previewId,
+      identity: metadata.identity,
+      originalContent: metadata.content,
+      newContent: applySedSubstitution(metadata.content, sedInfo),
+      encoding: metadata.encoding,
+      lineEndings: metadata.lineEndings,
+      fileExists: true,
+    }
+  } finally {
+    await prepared.cleanup()
+  }
+}
 
 /**
  * Get the agent name to poll for messages.
@@ -537,6 +604,30 @@ export function useInboxPoller({
             continue
           }
 
+          let sedEditPreview: SedEditPreviewForUI | undefined
+          if (parsed.trusted_sed_edit_preview) {
+            try {
+              const command = parsed.input.command
+              if (typeof command !== 'string') {
+                throw new Error('SedEdit permission request has no command.')
+              }
+              sedEditPreview = await readVerifiedSedEditPreview(
+                parsed.trusted_sed_edit_preview,
+                parsed.tool_use_id,
+                command,
+              )
+            } catch (error) {
+              logForDebugging(
+                `[InboxPoller] Rejected SedEdit request ${parsed.request_id}: ${error}`,
+                { level: 'warn' },
+              )
+              await rejectUnrenderableRequest(
+                'The team lead could not verify the worker file preview.',
+              )
+              continue
+            }
+          }
+
           trackForAck(m)
 
           const entry: ToolUseConfirm = {
@@ -546,6 +637,7 @@ export function useInboxPoller({
             input: parsed.input,
             toolUseContext: {} as ToolUseConfirm['toolUseContext'],
             toolUseID: parsed.tool_use_id,
+            sedEditPreview,
             permissionResult: {
               behavior: 'ask',
               message: parsed.description,
@@ -570,6 +662,13 @@ export function useInboxPoller({
               updatedInput: Record<string, unknown>,
               permissionUpdates: PermissionUpdate[],
             ) {
+              const transferredSedEditApproval =
+                parsed.tool_name === 'Bash'
+                  ? takeTrustedSedEditApprovalForTransfer(
+                      updatedInput,
+                      parsed.tool_use_id,
+                    )
+                  : undefined
               void sendPermissionResponseViaMailbox(
                 parsed.agent_id,
                 {
@@ -577,6 +676,9 @@ export function useInboxPoller({
                   resolvedBy: 'leader',
                   updatedInput,
                   permissionUpdates,
+                  trustedSedEditApproval: transferredSedEditApproval?.payload,
+                  sedEditPreviewApproved:
+                    transferredSedEditApproval?.previewApproved ?? false,
                 },
                 parsed.request_id,
                 teamName,
@@ -663,6 +765,10 @@ export function useInboxPoller({
               decision: 'approved',
               updatedInput: parsed.response?.updated_input,
               permissionUpdates: parsed.response?.permission_updates,
+              trustedSedEditApproval:
+                parsed.response?.trusted_sed_edit_approval,
+              sedEditPreviewApproved:
+                parsed.response?.sed_edit_preview_approved,
             })
           } else {
             processMailboxPermissionResponse({

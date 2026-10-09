@@ -2,12 +2,10 @@ import {
   useEffect,
   useRef,
   useState,
-  type AnimationEventHandler,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type Ref,
-  type RefCallback,
 } from 'react'
 import {
   formatResetLabel,
@@ -17,7 +15,6 @@ import {
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
-import { useEntranceOnChange } from './entranceLatch.js'
 import { ContextGauge } from './ContextGauge.js'
 import {
   pressureTone,
@@ -31,9 +28,9 @@ import {
   type ContextBreakdownRow,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
-import { ActionWarningIcon } from './SessionActionIcons.js'
+import { ActionWarningIcon, Glyph } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
-import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
+import { useCacheExpiredEstimate } from './useCacheExpiredEstimate.js'
 import type {
   AccountStatus,
   AnthropicAccountStatus,
@@ -1391,90 +1388,24 @@ function CompactIcon() {
   )
 }
 
-/**
- * The amber "approaching auto-compact" glyph + popover (the prototype's
- * `TokenWarning`, Surfaces.jsx:415, rendered in the rail at `:779` between the
- * separator and the context donut).
- *
- * Renders NOTHING below the warning threshold — {@link selectTokenWarning}
- * returns null and this never mounts, matching the engine's own
- * `isAboveWarningThreshold` gate rather than a number we chose. The amber is the
- * shared `--tone-warn` token, which is already exactly the prototype's `#fbbf24`
- * (theme.css:62), so no hex is inlined and no dynamic class is interpolated.
- *
- * The two sentences are the engine's two cases (`TokenWarning.tsx:166` / `:169`):
- * with auto-compact ON the session recovers by itself, with it OFF the user has
- * to run `/compact`, so the copy tells them to do that rather than explaining
- * why it stopped.
- */
-function TokenWarningChip({
-  warning,
-  faceProps,
-  animateArrival = false,
-  arrivalRef,
-  onArrivalAnimationEnd,
-}: {
-  warning: TokenWarning
-  faceProps?: ComposerFaceProps
-  animateArrival?: boolean
-  arrivalRef?: RefCallback<HTMLButtonElement>
-  onArrivalAnimationEnd?: AnimationEventHandler<HTMLButtonElement>
-}) {
-  const { open, setOpen, ref, triggerRef } = usePopover()
-  const { percentLeft, autoCompactEnabled } = warning
-  const summary = autoCompactEnabled
-    ? `${percentLeft}% until auto-compact`
-    : 'Context low'
-  const title = autoCompactEnabled
-    ? `${percentLeft}% until auto-compact`
-    : `Context low · ${percentLeft}% remaining`
+function CacheExpiredIndicator() {
   return (
-    <div ref={ref} className="relative flex shrink-0">
-      <button
-        ref={element => {
-          triggerRef.current = element
-          arrivalRef?.(element)
-        }}
-        {...faceProps}
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={title}
-        title={title}
-        onClick={() => setOpen(value => !value)}
-        className={`${animateArrival ? 'animate-token-warn-in' : ''} flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn`}
-        onAnimationEnd={onArrivalAnimationEnd}
+    <span
+      role="status"
+      aria-label="Cache expired"
+      className="composer-cache-indicator relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
+    >
+      <Glyph size={14} strokeWidth="2">
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </Glyph>
+      <span
+        aria-hidden
+        className="composer-cache-label absolute bottom-full left-1/2 z-40 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-shell-seam bg-surface-raised px-[9px] py-[5px] text-[11.5px] font-medium text-text-primary shadow-lg"
       >
-        <ActionWarningIcon size={14} />
-      </button>
-      {open ? (
-        <div
-          role="dialog"
-          aria-label="Context"
-          className="animate-pop-up absolute bottom-full right-0 z-40 mb-2.5 w-[252px] rounded-xl border border-tone-warn/25 bg-surface-raised px-3.5 py-3 shadow-lg"
-        >
-          <div className="mb-1.5 flex items-center gap-[7px]">
-            <span className="inline-flex text-tone-warn">
-              <ActionWarningIcon size={13} />
-            </span>
-            <span className="text-[12.5px] font-semibold text-text-primary">
-              {summary}
-            </span>
-          </div>
-          <div className="text-[11.5px] leading-relaxed text-text-muted">
-            {autoCompactEnabled ? (
-              'This conversation is getting long. Soon it auto-compacts into a summary so it can continue without resending everything.'
-            ) : (
-              <>
-                This conversation is nearly full. Run{' '}
-                <span className="font-mono text-tone-warn">/compact</span> to
-                summarize it and keep going.
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </div>
+        Cache expired
+      </span>
+    </span>
   )
 }
 
@@ -1561,6 +1492,7 @@ export function ComposerActionsBar({
   reasoningEffort,
   fastMode,
   runControls,
+  cacheExpiresAt,
   onSetModel,
   onSetEffort,
   onSetFast,
@@ -1602,6 +1534,8 @@ export function ComposerActionsBar({
    * an interactive picker; absent, it falls back to the P4-24 read-only face.
    */
   runControls?: RunControlsSnapshot | null
+  /** Read-only retained/preview estimate when there is no live snapshot. */
+  cacheExpiresAt?: number | null
   onSetModel?: (model: string | null) => void
   onSetEffort?: (effort: string) => void
   onSetFast?: (active: boolean) => void
@@ -1656,15 +1590,9 @@ export function ComposerActionsBar({
   // Interactive switcher when the active account AND a switch handler are both
   // present; otherwise the P4-24 read-only alias face (mirrors the ModelChip gate).
   const accountInteractive = account != null && onSwitchAccount != null
-
-  // Derived at read time, never stored: the glyph appears when the live context
-  // crosses the engine's warning threshold and clears itself once a turn compacts.
-  const tokenWarning = selectTokenWarning(
-    contextUsage ?? null,
-    runControls?.autoCompact,
-  )
-  const warningEntrance = useEntranceOnChange(
-    tokenWarning !== null, tokenWarning !== null, 'animate-token-warn-in',
+  const cacheExpired = useCacheExpiredEstimate(
+    runControls ? runControls.cacheExpiresAt : cacheExpiresAt,
+    runControls?.cacheExpired,
   )
 
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
@@ -1672,15 +1600,9 @@ export function ComposerActionsBar({
   // the first face ('attach', always rendered), so Tab from the field has a
   // deterministic landing spot. Faces read their tabIndex from `faceProps(id)`.
   const [activeFace, setActiveFace] = useState<string | null>(null)
-  // The warning glyph is the one face that can vanish mid-session (it unmounts
-  // the moment a turn compacts). If it held the tab stop when it went, no face
-  // would match and the whole toolbar would have NO tabIndex=0 until a blur
-  // happened to reset it. Resolve the stop at read time instead of storing it.
-  const resolvedActiveFace =
-    activeFace === 'token-warning' && !tokenWarning ? null : activeFace
   const faceProps = (id: string): ComposerFaceProps => ({
     'data-composer-face': id,
-    tabIndex: id === (resolvedActiveFace ?? 'attach') ? 0 : -1,
+    tabIndex: id === (activeFace ?? 'attach') ? 0 : -1,
     onFocus: () => setActiveFace(id),
   })
   const exitToComposer = () => onFocusComposer?.()
@@ -1881,6 +1803,7 @@ export function ComposerActionsBar({
         ) : null}
 
         <div className="ml-auto flex min-w-0 items-center gap-[7px]">
+          {cacheExpired ? <CacheExpiredIndicator /> : null}
           {accountInteractive && account && onSwitchAccount ? (
             <AccountChip
               active={account}
@@ -1918,19 +1841,6 @@ export function ComposerActionsBar({
           ) : null}
           {(accountInteractive || showAccount || anthropicAccountLabel) && contextUsage ? (
             <RailSep />
-          ) : null}
-          {/* The prototype orders the right cluster account · Sep · TokenWarning ·
-            * ContextChip (Surfaces.jsx:771-780): the glyph sits INSIDE the separator,
-            * next to the donut it is about, and is absent entirely below the
-            * threshold. */}
-          {tokenWarning ? (
-            <TokenWarningChip
-              warning={tokenWarning}
-              animateArrival={warningEntrance.active}
-              arrivalRef={warningEntrance.ref}
-              onArrivalAnimationEnd={warningEntrance.onAnimationEnd}
-              faceProps={faceProps('token-warning')}
-            />
           ) : null}
           {contextUsage ? (
             <ContextChip

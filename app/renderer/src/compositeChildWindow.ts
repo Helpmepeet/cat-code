@@ -109,7 +109,7 @@ export function reduceCompositeChildState(
     case 'measured': {
       let next: Map<string, number> | null = null
       for (const measurement of action.measurements) {
-        const height = Math.ceil(measurement.height)
+        const height = measurement.height
         if (!Number.isFinite(height) || height <= 0) continue
         const current = state.heights.get(measurement.key)
         if (current === height) continue
@@ -174,6 +174,7 @@ export function selectCompositeChildWindow(
   viewportHeight: number,
   overscan: number = COMPOSITE_CHILD_OVERSCAN,
   maxMounted: number = MAX_MOUNTED_COMPOSITE_CHILDREN,
+  gap: number = 0,
 ): CompositeChildWindow {
   if (entries.length === 0) {
     return { start: 0, end: 0, topSpacerHeight: 0, bottomSpacerHeight: 0 }
@@ -183,15 +184,15 @@ export function selectCompositeChildWindow(
   const endOffset = Math.max(startOffset, scrollOffset + viewportHeight + overscan)
   let offset = 0
   let start = 0
-  while (start < entries.length && offset + entries[start].height < startOffset) {
-    offset += entries[start].height
+  while (start < entries.length && offset + entries[start].height + gap < startOffset) {
+    offset += entries[start].height + gap
     start += 1
   }
 
   let end = start
   let covered = offset
   while (end < entries.length && covered < endOffset && end - start < maxMounted) {
-    covered += entries[end].height
+    covered += entries[end].height + gap
     end += 1
   }
 
@@ -206,8 +207,8 @@ export function selectCompositeChildWindow(
   return {
     start,
     end,
-    topSpacerHeight: sumHeights(entries, 0, start),
-    bottomSpacerHeight: sumHeights(entries, end, entries.length),
+    topSpacerHeight: sumHeights(entries, 0, start, gap),
+    bottomSpacerHeight: sumHeights(entries, end, entries.length, gap),
   }
 }
 
@@ -223,13 +224,14 @@ export function selectCompositeChildWindow(
 export function selectInitialCompositeChildWindow(
   entries: readonly CompositeChildEntry[],
   maxMounted: number = MAX_MOUNTED_COMPOSITE_CHILDREN,
+  gap: number = 0,
 ): CompositeChildWindow {
   const end = Math.min(entries.length, Math.max(0, maxMounted))
   return {
     start: 0,
     end,
     topSpacerHeight: 0,
-    bottomSpacerHeight: sumHeights(entries, end, entries.length),
+    bottomSpacerHeight: sumHeights(entries, end, entries.length, gap),
   }
 }
 
@@ -249,8 +251,11 @@ function sumHeights(
   entries: readonly CompositeChildEntry[],
   from: number,
   to: number,
+  gap: number,
 ): number {
-  let total = 0
+  // The spacer replaces hidden boxes and the gaps BETWEEN them. Its boundary
+  // gap remains in the real flex layout, so it must not also enter the spacer.
+  let total = Math.max(0, to - from - 1) * gap
   for (let index = from; index < to; index += 1) total += entries[index].height
   return total
 }

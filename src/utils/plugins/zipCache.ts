@@ -32,12 +32,8 @@
 import { randomBytes } from 'crypto'
 import {
   chmod,
-  lstat,
-  readdir,
-  readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -47,6 +43,7 @@ import { parseZipModes, unzipFile } from '../dxt/zip.js'
 import { isEnvTruthy } from '../envUtils.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { expandTilde } from '../permissions/pathValidation.js'
+import { openContainedFs } from '../containedFs.js'
 import type { MarketplaceSource } from './schemas.js'
 
 /**
@@ -218,7 +215,12 @@ export async function createZipFromDirectory(
 ): Promise<Uint8Array> {
   const files: Record<string, ZipEntry> = {}
   const visited = new Set<string>()
-  await collectFilesForZip(sourceDir, '', files, visited)
+  const source = await openContainedFs(sourceDir)
+  try {
+    await collectFilesForZip(source, '', files, visited)
+  } finally {
+    await source.close()
+  }
 
   const { zipSync } = await import('fflate')
   const zipData = zipSync(files, { level: 6 })
@@ -230,41 +232,30 @@ export async function createZipFromDirectory(
 
 /**
  * Recursively collect files from a directory for zipping.
- * Uses lstat to detect symlinks and tracks visited inodes for cycle detection.
+ * Uses root-relative descriptor operations and tracks directory identities.
  */
 async function collectFilesForZip(
-  baseDir: string,
+  source: Awaited<ReturnType<typeof openContainedFs>>,
   relativePath: string,
   files: Record<string, ZipEntry>,
   visited: Set<string>,
 ): Promise<void> {
-  const currentDir = relativePath ? join(baseDir, relativePath) : baseDir
   let entries: string[]
   try {
-    entries = await readdir(currentDir)
+    entries = await source.readdir(relativePath)
   } catch {
     return
   }
 
-  // Track visited directories by dev+ino to detect symlink cycles.
-  // bigint: true is required — on Windows NTFS, the file index packs a 16-bit
-  // sequence number into the high bits. Once that sequence exceeds ~32 (very
-  // common on a busy CI runner that churns through temp files), the value
-  // exceeds Number.MAX_SAFE_INTEGER and two adjacent directories round to the
-  // same JS number, causing subdirs to be silently skipped as "cycles". This
-  // broke the round-trip test on Windows CI when sharding shuffled which tests
-  // ran first and pushed MFT sequence numbers over the precision cliff.
+  // bigint: true is required here: Windows NTFS file IDs can exceed
+  // Number.MAX_SAFE_INTEGER after enough filesystem churn.
   // See also: markdownConfigLoader.ts getFileIdentity, anthropics/claude-code#13893
   try {
-    const dirStat = await stat(currentDir, { bigint: true })
-    // ReFS (Dev Drive), NFS, some FUSE mounts report dev=0 and ino=0 for
-    // everything. Fail open: skip cycle detection rather than skip the
-    // directory. We already skip symlinked directories unconditionally below,
-    // so the only cycle left here is a bind mount, which we accept.
+    const dirStat = await source.statDir(relativePath)
     if (dirStat.dev !== 0n || dirStat.ino !== 0n) {
       const key = `${dirStat.dev}:${dirStat.ino}`
       if (visited.has(key)) {
-        logForDebugging(`Skipping symlink cycle at ${currentDir}`)
+        logForDebugging(`Skipping symlink cycle at ${relativePath}`)
         return
       }
       visited.add(key)
@@ -279,41 +270,25 @@ async function collectFilesForZip(
       continue
     }
 
-    const fullPath = join(currentDir, entry)
     const relPath = relativePath ? `${relativePath}/${entry}` : entry
 
     let fileStat
     try {
-      fileStat = await lstat(fullPath)
+      fileStat = await source.lstat(relPath)
     } catch {
       continue
     }
 
-    // Skip symlinked directories (follow symlinked files)
-    if (fileStat.isSymbolicLink()) {
-      try {
-        const targetStat = await stat(fullPath)
-        if (targetStat.isDirectory()) {
-          continue
-        }
-        // Symlinked file — read its contents below
-        fileStat = targetStat
-      } catch {
-        continue // broken symlink
-      }
-    }
-
     if (fileStat.isDirectory()) {
-      await collectFilesForZip(baseDir, relPath, files, visited)
-    } else if (fileStat.isFile()) {
+      await collectFilesForZip(source, relPath, files, visited)
+    } else if (fileStat.isFile() || fileStat.isSymbolicLink()) {
       try {
-        const content = await readFile(fullPath)
+        const { content, mode } = await source.readFile(relPath)
         // os=3 (Unix) + st_mode in high 16 bits of external_attr — this is
-        // what parseZipModes reads back on extraction. fileStat is already
-        // in hand from the lstat/stat above, so no extra syscall.
+        // what parseZipModes reads back on extraction.
         files[relPath] = [
           new Uint8Array(content),
-          { os: 3, attrs: (fileStat.mode & 0xffff) << 16 },
+          { os: 3, attrs: (mode & 0xffff) << 16 },
         ]
       } catch (error) {
         logForDebugging(`Failed to read file for zip: ${relPath}: ${error}`)

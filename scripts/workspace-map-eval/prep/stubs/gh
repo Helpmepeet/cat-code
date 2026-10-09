@@ -1,0 +1,75 @@
+#!/usr/bin/env bun
+// Offline, read-only stand-in for the GitHub CLI. Serves one pull request as
+// it stood before the task's request, from gh-data/ next to this file:
+// prs.json (pr list), pr-<n>.json (pr view, GraphQL field names),
+// pr-<n>-comments.json (REST inline comments), pr-<n>.diff (pr diff).
+// Fields the snapshot lacks come back null. Anything else, including every
+// write, fails the way an unreachable GitHub would.
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+
+const data = join(import.meta.dir, 'gh-data')
+const args = process.argv.slice(2)
+const flag = (k: string) => { const i = args.findIndex(a => a === k || a.startsWith(`${k}=`)); if (i < 0) return undefined; return args[i]!.includes('=') ? args[i]!.split('=').slice(1).join('=') : args[i + 1] }
+const has = (k: string) => args.includes(k)
+const fail = (msg: string, code = 1): never => { process.stderr.write(`${msg}\n`); process.exit(code) }
+const unreachable = () => fail('error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com')
+const load = (f: string) => existsSync(join(data, f)) ? JSON.parse(readFileSync(join(data, f), 'utf8')) : unreachable()
+
+function emit(value: unknown) {
+  const jq = flag('--jq') ?? flag('-q')
+  if (has('--template') || has('-t')) fail('--template is not supported here')
+  const text = JSON.stringify(value)
+  if (!jq) { process.stdout.write(text + '\n'); return }
+  const r = spawnSync('/usr/bin/jq', ['-r', jq], { input: text, encoding: 'utf8' })
+  process.stdout.write(r.stdout); process.stderr.write(r.stderr); process.exit(r.status ?? 1)
+}
+function pick(obj: Record<string, unknown>, fields?: string) {
+  if (!fields) return obj
+  return Object.fromEntries(fields.split(',').map(f => [f.trim(), obj[f.trim()] ?? null]))
+}
+function prNumber(): number {
+  const ref = args.slice(2).find(a => !a.startsWith('-') && !/^(?:--)/.test(a) && args[args.indexOf(a) - 1] !== '--json' && args[args.indexOf(a) - 1] !== '--jq' && args[args.indexOf(a) - 1] !== '-q' && args[args.indexOf(a) - 1] !== '--repo' && args[args.indexOf(a) - 1] !== '-R')
+  if (!ref) { const list = load('prs.json'); return list.find((p: any) => p.state === 'OPEN')?.number ?? fail('no pull requests found for branch') }
+  const m = /(\d+)$/.exec(ref) ?? (load('prs.json').find((p: any) => p.headRefName === ref) ? [0, load('prs.json').find((p: any) => p.headRefName === ref).number] : null)
+  return m ? Number(m[1]) : fail(`no pull requests found for branch "${ref}"`)
+}
+
+const [cmd, sub] = args
+if (cmd === 'auth' && sub === 'status') { process.stdout.write('github.com\n  ✓ Logged in to github.com account Helpmepeet\n'); process.exit(0) }
+if (cmd === 'pr' && sub === 'list') {
+  const state = (flag('--state') ?? flag('-s') ?? 'open').toUpperCase()
+  const list = load('prs.json').filter((p: any) => state === 'ALL' || p.state === state).slice(0, Number(flag('--limit') ?? flag('-L') ?? 30))
+  if (flag('--json')) emit(list.map((p: any) => pick(p, flag('--json'))))
+  else for (const p of list) process.stdout.write(`${p.number}\t${p.title}\t${p.headRefName}\t${p.state ?? ''}\n`)
+  process.exit(0)
+}
+if (cmd === 'pr' && sub === 'view') {
+  const n = prNumber(), pr = load(`pr-${n}.json`)
+  if (flag('--json')) { emit(pick(pr, flag('--json'))); process.exit(0) }
+  let out = `${pr.title} #${n}\n${pr.state} • ${pr.headRefName} → ${pr.baseRefName}\n\n${pr.body}\n\n${pr.url}\n`
+  if (has('--comments') || has('-c')) for (const r of pr.reviews ?? []) out += `\n--- ${r.author?.login} ${r.state} (${r.submittedAt})\n${r.body}\n`
+  process.stdout.write(out); process.exit(0)
+}
+if (cmd === 'pr' && sub === 'diff') {
+  const n = prNumber(), f = join(data, `pr-${n}.diff`)
+  if (!existsSync(f)) unreachable()
+  if (has('--name-only')) { const names = [...readFileSync(f, 'utf8').matchAll(/^diff --git a\/(\S+) /gm)].map(m => m[1]); process.stdout.write(names.join('\n') + '\n') }
+  else process.stdout.write(readFileSync(f))
+  process.exit(0)
+}
+if (cmd === 'pr' && (sub === 'checks' || sub === 'status')) unreachable()
+if (cmd === 'api') {
+  const method = (flag('--method') ?? flag('-X') ?? 'GET').toUpperCase()
+  if (method !== 'GET' || has('-f') || has('-F') || has('--field') || has('--raw-field') || has('--input')) unreachable()
+  const path = (args.slice(1).find(a => /^\/?repos\//.test(a)) ?? '').replace(/^\//, '').replace(/\?.*$/, '')
+  const m = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)(\/comments|\/reviews)?$/.exec(path)
+  if (!m) unreachable()
+  const n = Number(m[1]!)
+  if (m[2] === '/comments') emit(load(`pr-${n}-comments.json`))
+  else if (m[2] === '/reviews') emit((load(`pr-${n}.json`).reviews ?? []).map((r: any) => ({ user: { login: r.author?.login }, body: r.body, state: r.state, submitted_at: r.submittedAt, commit_id: r.commit?.oid ?? null })))
+  else { const pr = load(`pr-${n}.json`); emit({ number: n, title: pr.title, body: pr.body, state: String(pr.state).toLowerCase(), html_url: pr.url, head: { ref: pr.headRefName, sha: pr.headRefOid }, base: { ref: pr.baseRefName, sha: pr.baseRefOid }, draft: pr.isDraft }) }
+  process.exit(0)
+}
+unreachable()

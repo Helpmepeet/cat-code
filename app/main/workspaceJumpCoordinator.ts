@@ -12,7 +12,7 @@ import {
   type WorkspaceJumpBoundary, type WorkspaceJumpState,
 } from '../../src/utils/workspaceJumpState.js'
 
-export { loadWorkspaceJumpRetention } from '../../src/utils/workspaceJumpState.js'
+export { loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
 export type { WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 
 type WorkspaceVerb = Extract<HostRequestVerb, 'workspaces.list' | 'workspace.jump' | 'workspace.ready' | 'workspace.cancel'>

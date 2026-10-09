@@ -23,7 +23,15 @@ test.each([
   ['shortcut', 'none'],
   ['sidebar', 'none'],
   ['button', 'managed'],
+  ['shortcut', 'managed'],
+  ['sidebar', 'managed'],
   ['button', 'project'],
+  ['shortcut', 'project'],
+  ['sidebar', 'project'],
+  ['button', 'legacy'],
+  ['shortcut', 'legacy'],
+  ['sidebar', 'legacy'],
+  ['workspace', 'project'],
   ['folder', 'none'],
 ] as const)('Chat creation via %s with %s active uses the matching host path', async (entry, context) => {
   let managedChats = 0
@@ -46,7 +54,8 @@ test.each([
     ...created,
     appSessionId: 'existing-chat',
     title: 'Existing chat',
-    binding: context === 'project' ? { kind: 'project' } : created.binding,
+    binding: context === 'legacy' ? undefined
+      : context === 'project' ? { kind: 'project' } : created.binding,
   }
   window.catcode = {
     subscribe: () => () => {},
@@ -84,7 +93,7 @@ test.each([
     },
   } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
   const tree = await harness.mount(<App />)
-  if (entry === 'sidebar' || entry === 'folder') {
+  if (entry === 'sidebar' || entry === 'workspace' || entry === 'folder') {
     await act(async () => {
       tree.container.querySelector<HTMLButtonElement>('button[aria-label="Pin sidebar open"]')!.click()
     })
@@ -96,6 +105,8 @@ test.each([
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true, bubbles: true }))
     } else if (entry === 'folder') {
       tree.container.querySelector<HTMLButtonElement>('[aria-label="Add project"]')!.click()
+    } else if (entry === 'workspace') {
+      tree.container.querySelector<HTMLButtonElement>('[aria-label="New session in this workspace"]')!.click()
     } else if (entry === 'sidebar') {
       const newChat = [...tree.container.querySelectorAll('button')].find(
         button => button.textContent?.includes('New chat') && !button.hasAttribute('aria-label'),
@@ -104,8 +115,8 @@ test.each([
       newChat!.click()
     } else button!.click()
   })
-  expect(managedChats).toBe(context === 'project' || entry === 'folder' ? 0 : 1)
-  expect(workspaceCreates).toEqual(context === 'project' ? ['existing-chat'] : [])
+  expect(managedChats).toBe(entry === 'workspace' || entry === 'folder' ? 0 : 1)
+  expect(workspaceCreates).toEqual(entry === 'workspace' ? ['existing-chat'] : [])
   expect(folderPicks).toBe(entry === 'folder' ? 1 : 0)
   expect(directoryCreates).toBe(entry === 'folder' ? 1 : 0)
   expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()

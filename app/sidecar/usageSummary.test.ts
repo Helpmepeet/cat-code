@@ -44,6 +44,40 @@ test('bounded model summaries keep current models ahead of retired and older mod
     expect(tight.models.find(model => model.kind === 'other')?.tokens.fresh).toBe(10_030);
 });
 
+test('tool grouping keeps error leaders ahead of high-volume healthy tools and preserves separate edit implementations', async () => {
+    const summary = (await collectRetainedUsage([], '2026-09-13T12:00:00.000Z')).ranges['7d'];
+    summary.tools = [
+        { ...usageCategory('Bash'), requests: 1000, results: 1000, errors: 0 },
+        { ...usageCategory('Read'), requests: 800, results: 800, errors: 0 },
+        { ...usageCategory('Edit'), requests: 20, results: 20, errors: 12 },
+        { ...usageCategory('apply_patch'), requests: 15, results: 15, errors: 8 },
+        { ...usageCategory('Apply_patch'), requests: 10, results: 10, errors: 5 },
+    ];
+    const grouped = groupUsageSummary(summary, 8, 4);
+    expect(grouped.tools.filter(tool => tool.kind === 'named').map(tool => tool.label)).toEqual(['Bash', 'Edit', 'apply_patch', 'Apply_patch']);
+    expect(grouped.tools.find(tool => tool.kind === 'other')).toMatchObject({ requests: 800, results: 800, errors: 0 });
+    expect(grouped.tools.reduce((sum, tool) => sum + tool.errors, 0)).toBe(25);
+    expect(groupUsageSummary(summary, 8, 1).tools.find(tool => tool.kind === 'named')?.label).toBe('Edit');
+});
+
+test('bounded build history keeps failure evidence ahead of high-volume successful builds', async () => {
+    const summary = (await collectRetainedUsage([], '2026-09-13T12:00:00.000Z')).ranges['7d'];
+    const tool = { ...usageCategory('Edit'), requests: 102, results: 102, errors: 2 };
+    summary.tools = [tool];
+    summary.days[0]!.tools = [{
+        id: tool.id, requests: 102, results: 102, errors: 2,
+        builds: { items: [
+            { sha: 'aaaaaaa', dirty: false, requests: 100, results: 100, errors: 0, firstObservedAt: '2026-09-07T08:00:00.000Z' },
+            { sha: 'bbbbbbb', dirty: true, requests: 2, results: 2, errors: 2, firstObservedAt: '2026-09-07T09:00:00.000Z' },
+        ] },
+    }];
+    const grouped = groupUsageSummary(summary, 8, 10, 0, 1);
+    expect(grouped.days[0]!.tools[0]!.builds).toEqual({
+        items: [{ sha: 'bbbbbbb', dirty: true, requests: 2, results: 2, errors: 2, firstObservedAt: '2026-09-07T09:00:00.000Z' }],
+        omitted: { count: 1, requests: 100, results: 100, errors: 0 },
+    });
+});
+
 test('contributors are ranked and truncated with explicit omitted counts', () => {
     const base = { id: '', engineSessionId: null, project: null, tokens: emptyTokens(), requests: 0, results: 0, errors: 0, models: [], modelDetail: { state: 'full' as const, omitted: 0 }, timeline: { state: 'unavailable' as const, omitted: 0, items: [] } };
     const items: import('../shared/usageDashboard.js').UsageSessionContributor[] = Array.from({ length: 25 }, (_, i) => ({ ...base, id: `session-${i}`, tokens: { ...emptyTokens(), fresh: i }, requests: i === 0 ? 100 : i === 1 ? 10 : 0, results: i === 1 ? 10 : 0, errors: i === 1 ? 10 : 0 }));

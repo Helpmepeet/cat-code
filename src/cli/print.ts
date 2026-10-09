@@ -368,7 +368,10 @@ import { formatHeadlessTextResult } from './headlessTextResult.js'
 import { toObservedTask } from './pendingTaskNotifications.js'
 import { createHeadlessWaitLoop } from './headlessWaitLoop.js'
 import { stopTask } from '../tasks/stopTask.js'
-import { drainSdkEvents } from '../utils/sdkEventQueue.js'
+import {
+  claimTaskTerminatedSdkEvent,
+  drainSdkEvents,
+} from '../utils/sdkEventQueue.js'
 import { initializeGrowthBook } from '../services/analytics/growthbook.js'
 import { errorMessage, toError } from '../utils/errors.js'
 import { sleep } from '../utils/sleep.js'
@@ -2205,7 +2208,13 @@ function runHeadlessStreaming(
             // default to 'completed' and falsely close the task for SDK
             // consumers. Terminal bookends are now emitted directly via
             // emitTaskTerminatedSdk, so skipping statusless events is safe.
-            if (statusMatch) {
+            if (
+              statusMatch &&
+              claimTaskTerminatedSdkEvent(
+                taskIdMatch?.[1] ?? '',
+                command.taskRunId,
+              )
+            ) {
               output.enqueue({
                 type: 'system',
                 subtype: 'task_notification',

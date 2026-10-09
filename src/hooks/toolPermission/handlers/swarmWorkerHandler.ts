@@ -7,6 +7,12 @@ import { logError } from '../../../utils/log.js'
 import type { PermissionDecision } from '../../../utils/permissions/PermissionResult.js'
 import type { PermissionUpdate } from '../../../utils/permissions/PermissionUpdateSchema.js'
 import {
+  getSedEditPreviewChallenge,
+  isPreparedSedEditPreview,
+  markSedEditApprovalExpected,
+  type TrustedSedEditApprovalPayload,
+} from '../../../tools/BashTool/sedEditCapability.js'
+import {
   createPermissionRequest,
   isSwarmWorker,
   sendPermissionRequestViaMailbox,
@@ -61,6 +67,14 @@ async function handleSwarmWorkerPermission(
 
   // Forward permission request to the leader via mailbox
   try {
+    const preparedPreview = isPreparedSedEditPreview(
+      ctx.toolUseContext.preparedExecution?.state,
+    )
+      ? ctx.toolUseContext.preparedExecution.state
+      : undefined
+    const sedEditPreview = preparedPreview
+      ? getSedEditPreviewChallenge(preparedPreview)
+      : undefined
     const clearPendingRequest = (): void =>
       ctx.toolUseContext.setAppState(prev => ({
         ...prev,
@@ -77,6 +91,7 @@ async function handleSwarmWorkerPermission(
         input: ctx.input,
         description,
         permissionSuggestions: suggestions,
+        trustedSedEditPreview: sedEditPreview,
       })
 
       // Register callback BEFORE sending the request to avoid race condition
@@ -99,12 +114,20 @@ async function handleSwarmWorkerPermission(
 
       registerPermissionCallback({
         requestId: request.id,
+        toolName: ctx.tool.name,
         toolUseId: ctx.toolUseID,
+        sedEditPreview,
+        expectSedEditApproval() {
+          if (!preparedPreview) return false
+          markSedEditApprovalExpected(preparedPreview)
+          return true
+        },
         async onAllow(
           allowedInput: Record<string, unknown> | undefined,
           permissionUpdates: PermissionUpdate[],
           feedback?: string,
           contentBlocks?: ContentBlockParam[],
+          _trustedSedEditApproval?: TrustedSedEditApprovalPayload,
         ) {
           if (!claim()) return // atomic check-and-mark before await
           cleanup()

@@ -1,6 +1,8 @@
 import { assertSessionNotMoving } from './sessionRelocationState.js'
+import { constants } from 'fs'
 import { chmod, lstat, mkdir, open, unlink } from 'fs/promises'
 import { join } from 'path'
+import { writeFileAtomicDurable } from './atomicFile.js'
 import { registerCleanup } from './cleanupRegistry.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
@@ -66,6 +68,37 @@ function leaseDirectory(): string {
 function leaseTarget(sessionId: string): string {
   if (!validateUuid(sessionId)) throw new Error('Invalid transcript session ID')
   return join(leaseDirectory(), `${sessionId}.lease`)
+}
+
+function activationPath(sessionId: string): string {
+  return join(leaseDirectory(), `${sessionId}.activation.json`)
+}
+
+/** Read-only archive-return evidence, independent of transcript writes or heartbeats. */
+export async function readTranscriptActivationAtMs(sessionId: string): Promise<number | null> {
+  if (!validateUuid(sessionId)) return null
+  let file: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    file = await open(activationPath(sessionId), constants.O_RDONLY | constants.O_NOFOLLOW)
+    const info = await file.stat()
+    if (!info.isFile() || info.size > 128 || (info.mode & 0o077) !== 0 ||
+      (typeof process.getuid === 'function' && info.uid !== process.getuid())) return null
+    const bytes = Buffer.alloc(129)
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0)
+    if (bytesRead !== info.size) return null
+    const value: unknown = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8'))
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+    const record = value as Record<string, unknown>
+    if (Object.keys(record).length !== 1) return null
+    const timestamp = record.activatedAtMs
+    return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp >= 0
+      ? timestamp
+      : null
+  } catch {
+    return null
+  } finally {
+    await file?.close().catch(() => {})
+  }
 }
 
 async function ensureLeaseTarget(sessionId: string): Promise<string> {
@@ -166,6 +199,19 @@ export async function activateTranscriptLease(sessionId: string): Promise<void> 
     // prior guard reports an unexpected failure.
     activeLease = next
     registerLeaseCleanup()
+    try {
+      next.assertHealthy()
+      // The existing per-session lease serializes publication. Persist separately
+      // from transcripts so no-prompt resume survives release without inventing
+      // conversation or letting unowned maintenance look like an active session.
+      await writeFileAtomicDurable(
+        activationPath(sessionId),
+        JSON.stringify({ activatedAtMs: Date.now() }),
+        { mode: 0o600 },
+      )
+    } catch (error) {
+      logReleaseFailure('Transcript activation timestamp write failed', error)
+    }
     if (previous) {
       await releaseLease(previous).catch(error => {
         logReleaseFailure('Previous transcript lease release failed', error)

@@ -7,9 +7,9 @@
  * buckets the merged roster by `cwd`, and "Add project" only opens a folder
  * picker — the session created there is what makes the group appear. There is no
  * empty-workspace record to delete, so the mirror of Add is a VIEW hide, not a
- * delete: the sessions stay on disk and on the Sessions page (which lists
- * everything), exactly the non-destructive shape `isSidebarVisibleRow` already
- * uses for dead-workspace rows (`sidebarState.ts:285`).
+ * delete: the sessions stay on disk, and the sidebar's hidden-project control
+ * restores their groups. This is the non-destructive shape
+ * `isSidebarVisibleRow` also uses for dead-workspace rows.
  *
  * Keyed on `cwd`, NEVER on the rendered label — `disambiguateWorkspaceLabels`
  * rewrites a label the moment a second workspace shares its basename
@@ -162,7 +162,7 @@ export function reduceHiddenWorkspacesCleared(
  * whole persisted list. The button's label names `groups.length`; without
  * this, a search-narrowed render could read "Show 1 hidden project" while its
  * click cleared every hidden project, including ones the current view never
- * enumerated (a search filter, `isSidebarVisibleRow`, or a pin can each drop a
+ * enumerated (a search filter or `isSidebarVisibleRow` can each drop a
  * hidden project out of one render's group list without un-hiding it).
  * Generic over `{ cwd }` (the `selectVisibleWorkspaceGroups` idiom). Returns
  * the SAME reference on a no-op, folding `reduceWorkspaceShown`'s own no-op
@@ -185,7 +185,7 @@ export function reduceHiddenWorkspacesShown<G extends { cwd: string }>(
  * `activityOf` is how a group reports its most recent work — the sidebar passes
  * the CC-2 warp-free key (`sidebarActivityKey`), so opening or restoring a
  * session cannot resurrect a hidden project but sending a message can. Generic
- * over `{ cwd }` (the `selectPinnedRows` idiom) so this module needs no
+ * over `{ cwd }` so this module needs no
  * `MergedSessionRow` import and is testable on bare fixtures.
  */
 export function selectVisibleWorkspaceGroups<G extends { cwd: string }>(

@@ -217,21 +217,40 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
         } else {
             let get = scratch.query<{ value: string }, [string, string]>('SELECT value FROM identities WHERE kind=? AND key=?');
             let put = scratch.query('INSERT OR REPLACE INTO identities VALUES (?,?,?)');
+            let scratchWrites = 0;
+            const commitScratchBatch = (store: Database) => {
+                if (!store.inTransaction) return;
+                check();
+                store.exec('COMMIT');
+                scratchWrites = 0;
+            };
+            const beginScratchWrite = (store: Database) => {
+                check();
+                if (!store.inTransaction) store.exec('BEGIN');
+            };
+            const finishScratchWrite = (store: Database) => {
+                if (++scratchWrites === 256) commitScratchBatch(store);
+            };
             const spillScratch = () => {
                 // Keep the old disk-backed capacity for very large histories,
                 // while bounding the additional heap used by ordinary scans.
                 // Scratch contains hashed identities and accounting fields only;
                 // it is never restart state and needs neither WAL nor durability.
+                // PERSIST reuses the disk journal. OFF is rejected by defensive
+                // SQLite configurations, silently leaving per-row DELETE churn.
                 scratchDirectory = mkdtempSync(join(tmpdir(), 'cat-usage-identities-'));
                 const disk = new Database(join(scratchDirectory, 'scratch.sqlite'), { create: true });
                 try {
-                    disk.exec('PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA max_page_count=262144; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID; BEGIN;');
+                    const mode = disk.query<{ journal_mode: string }, []>('PRAGMA journal_mode=PERSIST').get();
+                    if (mode?.journal_mode !== 'persist') throw new UsageResourceError('Usage scratch journal mode unavailable');
+                    disk.exec('PRAGMA synchronous=OFF; PRAGMA max_page_count=262144; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;');
                     const copy = disk.query('INSERT INTO identities VALUES (?,?,?)');
                     for (const row of scratch.query<{ kind: string; key: string; value: string }, []>('SELECT kind,key,value FROM identities').iterate()) {
-                        check();
+                        beginScratchWrite(disk);
                         copy.run(row.kind, row.key, row.value);
+                        finishScratchWrite(disk);
                     }
-                    disk.exec('COMMIT');
+                    commitScratchBatch(disk);
                 } catch (error) { disk.close(); throw error; }
                 scratch.close();
                 scratch = disk;
@@ -245,11 +264,16 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                     set(key: string, value: T) {
                         try {
                             const hashed = digest(key), encoded = JSON.stringify(value);
-                            try { put.run(name, hashed, encoded); }
+                            const write = () => {
+                                if (scratchDirectory) beginScratchWrite(scratch);
+                                put.run(name, hashed, encoded);
+                                if (scratchDirectory) finishScratchWrite(scratch);
+                            };
+                            try { write(); }
                             catch (error) {
                                 if (scratchDirectory || !object(error) || error.code !== 'SQLITE_FULL') throw error;
                                 spillScratch();
-                                put.run(name, hashed, encoded);
+                                write();
                             }
                         } catch (error) {
                             check();
@@ -270,6 +294,14 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                     return JSON.parse(source.quality) as StatsReadQuality;
                 },
             });
+            // A failed disk write can make SQLite roll back its transaction
+            // automatically (including SQLITE_FULL). Never publish an aggregate
+            // unless its final scratch batch has committed successfully.
+            try { commitScratchBatch(scratch); }
+            catch (error) {
+                check();
+                throw new UsageResourceError('Usage identity storage limit or write failure');
+            }
             snapshot = options.finalize?.(snapshot) ?? snapshot;
         }
         check();

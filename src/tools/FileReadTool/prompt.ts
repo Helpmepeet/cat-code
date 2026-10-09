@@ -30,7 +30,7 @@ export function renderPromptTemplate(
   offsetInstruction: string,
 ): string {
   return `Reads a file from the local filesystem. You can access any file directly by using this tool.
-Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
+Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. A missing JS/TS file requested without offset, limit, or pages may resolve to exactly one permitted complete function definition with the exact basename as its name, in a file directly in the same directory. Such a successful result identifies the function, missing path and actual source line range, and states that the rest of the file is not included. Otherwise a missing file returns an error.
 
 Usage:
 - The file_path parameter must be an absolute path, not a relative path

@@ -8,6 +8,23 @@ import { UsageCacheSummary, UsageModelDonut } from './UsageOverviewDetails.js';
 import { UsageParallelSessions, UsageReasoningEffort } from './UsageWorkPatterns.js';
 
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+const activityAsOf = '2026-10-08T12:00:00.000Z';
+async function activitySnapshot(rows: unknown[], timezone = 'Asia/Bangkok', asOf = activityAsOf) {
+    return collectRetainedUsage(['/isolated/analytics-display.jsonl'], asOf, {
+        timezone,
+        readRecords: async (_path, consume) => {
+            for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'display-test' });
+            return { bytesRead: rows.length, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        },
+    });
+}
+function dailyRecords(count: number, omitted: readonly number[] = []) {
+    return Array.from({ length: count }, (_, index) => ({
+        type: 'assistant', sessionId: 'display-test', uuid: `record-${index}`,
+        timestamp: new Date(Date.parse(activityAsOf) - (count - index - 1) * 86400000).toISOString(),
+        message: { id: `message-${index}`, model: 'model', usage: { input_tokens: 1, output_tokens: 1 }, content: [] },
+    })).filter((_, index) => !omitted.includes(index));
+}
 function populated() {
     const copy = structuredClone(snapshot);
     copy.ranges['7d'].tokens.fresh = 123;
@@ -147,4 +164,63 @@ test('missing contributor details do not erase recorded daily totals', () => {
     const render = () => renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: '7d', date: day.date }}/>);
     expect(render()).toContain('Session details are unavailable for this day.');
     expect(render()).toContain('123</strong> tokens');
+});
+
+test('comparison dates use the snapshot timezone on both sides of UTC midnight', async () => {
+    for (const [timezone, asOf, current, previous] of [
+        ['Asia/Bangkok', activityAsOf, 'Oct 2 to Oct 8', 'Sep 25 to Oct 1'],
+        ['America/Los_Angeles', '2026-10-08T02:00:00.000Z', 'Oct 1 to Oct 7', 'Sep 24 to Sep 30'],
+    ] as const) {
+        const rows = ['2026-09-01T12:00:00.000Z', asOf].map((timestamp, index) => ({ type: 'user', sessionId: 'display-test', uuid: `user-${index}`, timestamp }));
+        const copy = await activitySnapshot(rows, timezone, asOf);
+        const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+        const freshness = html.match(/<p class="usage-freshness">(.*?)<\/p>/)?.[1];
+        expect(freshness).toContain(current);
+        expect(freshness).toContain(`vs ${previous}`);
+    }
+});
+
+test('zero-token user activity counts toward active days and streaks', async () => {
+    const copy = await activitySnapshot(['2026-09-01T12:00:00.000Z', activityAsOf].map((timestamp, index) => ({ type: 'user', sessionId: 'display-test', uuid: `user-${index}`, timestamp })));
+    expect(copy.ranges['7d'].activeDays).toBe(1);
+    expect(copy.ranges.all.activeDays).toBe(2);
+    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+    expect(html).toContain('1 active days');
+    expect(html).toContain('<b>2</b>active days');
+    expect(html).toContain('<b>1</b>longest streak');
+    expect(html).toContain('<b>1</b>current streak');
+});
+
+for (const count of [60, 61, 70]) test(`daily activity discloses bounded detail at ${count} consecutive days`, async () => {
+    const copy = await activitySnapshot(dailyRecords(count));
+    expect(copy.ranges.all.activeDays).toBe(count);
+    expect(copy.ranges.all.bucketDays ?? 1).toBe(count === 60 ? 1 : 2);
+    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: 'all', date: '' }}/>);
+    expect(html).toContain(`${count} active days`);
+    expect(html).toContain(`<h2>Total tokens</h2><strong>${count * 2}</strong>`);
+    if (count === 60) {
+        expect(html).toContain('<b>60</b>active days');
+        expect(html).toContain('<b>60</b>longest streak');
+        expect(html).toContain('<b>60</b>current streak');
+        expect(html).not.toContain('Earlier daily detail is unavailable.');
+    } else {
+        expect(html).toContain('Daily activity (last 30 days)');
+        expect(html).toContain('Earlier daily detail is unavailable.');
+        expect(html).toContain('<b>30</b>active days');
+        expect(html).toContain('<b>30</b>longest streak');
+        expect(html).toContain('<b>30+</b>current streak');
+        expect(html).toContain('A + marks a current streak that may extend further.');
+        expect(html).not.toContain('data-date="2026-09-08" class="usage-heat-cell"');
+    }
+});
+
+test('a known inactive day ends a current streak without inferring older bucketed days', async () => {
+    const copy = await activitySnapshot(dailyRecords(70, [64]));
+    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: 'all', date: '' }}/>);
+    expect(html).toContain('69 active days');
+    expect(html).toContain('Daily activity (last 30 days)');
+    expect(html).toContain('<b>29</b>active days');
+    expect(html).toContain('<b>24</b>longest streak');
+    expect(html).toContain('<b>5</b>current streak');
+    expect(html).not.toContain('A + marks');
 });

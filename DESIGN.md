@@ -118,7 +118,9 @@ large pill treatments within one control group.
 - **Conversation:** Agent prose reads as a continuous column. User messages
   receive a restrained accent tinted bubble. Tool activity is compact and
   scannable; expand detail on demand. Code and command output use mono text and
-  clear boundaries. See `TranscriptView.tsx` and `toolCardStyle.ts`.
+  clear boundaries. Bash failure is indicated by the card status; output keeps
+  its per-line styling rather than turning entirely red on a nonzero exit.
+  See `TranscriptView.tsx` and `toolCardStyle.ts`.
 - **Workspace moves:** Agent jumps and manual moves share one centered transcript
   divider with seam-coloured rules and muted text. Moving shows the running-tool
   pulse, destination name, and project path; arrival shows “Working in”, a project
@@ -130,7 +132,10 @@ large pill treatments within one control group.
 - **Composer:** Keep the input visually connected to the transcript. Put model,
   reasoning, permission, and account controls in a compact action row. Reuse
   the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)
-  before adding a new control style.
+  before adding a new control style. Context pressure belongs on the ring, not
+  a separate triangle. Estimated cache expiry uses a display-only amber clock
+  before the account face, with a small raised-surface hover label reading
+  “Cache expired”. Unknown expiry shows nothing.
 - **Overlays and feedback:** Use a raised surface, a fine border, and the
   matching elevation token. Let tone indicate a real outcome or required
   action. Avoid decorative status text that repeats what the interface shows.

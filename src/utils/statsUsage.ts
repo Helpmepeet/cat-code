@@ -10,6 +10,7 @@ import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, 
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
     classifyHistoricalAutoModeToolResult,
+    createAutoModeUsageAccumulator,
     projectAutoModeCapability,
     projectAutoModeDiagnosticPayload,
     reduceAutoModeUsage,
@@ -25,6 +26,8 @@ import {
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
+// Leave room for named tool outcomes and build observations in all three ranges.
+const ALL_DETAIL_BUCKETS = Math.min(MAX_USAGE_ALL_BUCKETS, 60);
 export class UsageResourceError extends Error {
 }
 export interface UsageIdentityStore {
@@ -199,11 +202,27 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         });
     };
     let identities = 0, stateBytes = 0;
-    const reserve = (key: string, payloadBytes = 512) => {
-        identities++;
-        stateBytes += key.length * 2 + payloadBytes;
+    let autoModeRecordIdentities = 0, autoModeRecordStateBytes = 0;
+    const reserveState = (entries: number, bytes: number) => {
+        identities += entries;
+        stateBytes += bytes;
         if (identities > (options.maxIdentities ?? MAX_USAGE_IDENTITIES) || stateBytes > (options.maxStateBytes ?? MAX_USAGE_STATE_BYTES))
             throw new UsageResourceError('Usage state budget exceeded');
+    };
+    const reserve = (key: string, payloadBytes = 512) => reserveState(1, key.length * 2 + payloadBytes);
+    const retainAutoModeRecord = (value: RetainedAutoModeRecord) => {
+        const key = `auto-mode-record:${value.sourceScope}:${value.recordId}`;
+        reserve(key, 1024);
+        autoModeRecordIdentities++;
+        autoModeRecordStateBytes += key.length * 2 + 1024;
+        autoModeRecords.push(value);
+    };
+    const releaseAutoModeRecords = () => {
+        identities -= autoModeRecordIdentities;
+        stateBytes -= autoModeRecordStateBytes;
+        autoModeRecordIdentities = 0;
+        autoModeRecordStateBytes = 0;
+        autoModeRecords.length = 0;
     };
     if (files.length > MAX_USAGE_IDENTITIES)
         throw new UsageResourceError('Usage source budget exceeded');
@@ -222,7 +241,14 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf, timezone);
         if (range === 'all') { bounds.startDate = localDateKey(cutoff, timezone); bounds.startInclusive = new Date(localMidnight(bounds.startDate, timezone)).toISOString(); bounds.dates = []; }
         const summary: UsageRangeSummary = { range, startDate: bounds.startDate, endDateExclusive: bounds.endDateExclusive, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, ...(range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf, timezone }), parallel: zeroParallel(), effort: zeroEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
-        return { summary, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
+        const autoModeAccumulator = createAutoModeUsageAccumulator({
+            rangeStart: range === 'all' ? '0000-01-01T00:00:00.000Z' : bounds.startInclusive,
+            rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(),
+            cutoff: asOf,
+            timezone,
+            onRetain: reserveState,
+        });
+        return { summary, autoModeAccumulator, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
             }>() };
@@ -381,10 +407,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     candidate.result?.outcome !== null &&
                     candidate.result?.outcome !== undefined);
             if (!provenAuto) continue;
-            reserve(`historical-auto:${sourceScope}:${candidate.toolUseId}`, 1024);
             markHistoricalSource(file);
             const attemptId = historicalRecordId(sourceScope, candidate.toolUseId, 'attempt');
-            autoModeRecords.push({
+            retainAutoModeRecord({
                 sourceScope,
                 recordId: historicalRecordId(candidate.recordId, 'start'),
                 observedAt: candidate.observedAt,
@@ -424,7 +449,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                         subtype: 'auto_permission_end' as const,
                         attempt_id: attemptId,
                     };
-            autoModeRecords.push({
+            retainAutoModeRecord({
                 sourceScope,
                 recordId: historicalRecordId(candidate.result.recordId, 'end'),
                 observedAt: candidate.result.observedAt,
@@ -489,8 +514,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const autoModeRecordId = nonempty(row.uuid)
                     ? row.uuid
                     : `${item.generation}:${item.offset}`;
-                reserve(`auto-mode-record:${sourceScope}:${autoModeRecordId}`, 1024);
-                autoModeRecords.push({
+                retainAutoModeRecord({
                     sourceScope,
                     recordId: autoModeRecordId,
                     observedAt,
@@ -957,18 +981,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         finally {
             finalizeHistoricalSource(file);
+            for (const state of states) state.autoModeAccumulator.addSource(autoModeRecords);
+            releaseAutoModeRecords();
         }
     }
     for (const s of states) {
-        const end = Math.min(Date.parse(s.summary.endExclusive) - 1, cutoff);
-        s.summary.autoMode = reduceAutoModeUsage({
-            records: autoModeRecords,
-            sources: [...autoModeSources.values()],
-            rangeStart: s.summary.startInclusive,
-            rangeEnd: new Date(end).toISOString(),
-            cutoff: asOf,
-            timezone,
-        });
+        s.summary.autoMode = s.autoModeAccumulator.finish([...autoModeSources.values()], s.summary.startInclusive);
         const models = [...modelTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
         const tools = [...toolTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
         s.summary.timing = summarizeUsageTiming(
@@ -1094,9 +1112,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     // daily data avoids allocating empty history; larger histories use explicit
     // local-calendar buckets while activeDays remains exact.
     const all = states[2]!;
-    if (all.summary.days.length > MAX_USAGE_ALL_BUCKETS || all.summary.autoMode.buckets.length > MAX_USAGE_ALL_BUCKETS) {
+    if (all.summary.days.length > ALL_DETAIL_BUCKETS || all.summary.autoMode.buckets.length > ALL_DETAIL_BUCKETS) {
         const span = calendarDayDistance(all.summary.startDate, all.summary.endDateExclusive);
-        const bucketDays = Math.ceil(span / MAX_USAGE_ALL_BUCKETS);
+        const bucketDays = Math.ceil(span / ALL_DETAIL_BUCKETS);
         const bucketDate = (date: string) => addCalendarDays(all.summary.startDate, Math.floor(calendarDayDistance(all.summary.startDate, date) / bucketDays) * bucketDays);
         const buckets = new Map<string, UsageDay>();
         const bucketSessions = new Map<string, Set<string>>();
@@ -1216,5 +1234,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 19, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 21, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

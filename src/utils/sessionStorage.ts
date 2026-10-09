@@ -940,6 +940,8 @@ export function recordRunFacts(entry: {
   permissionMode: string
   effort: string | null
   contextWindow: number
+  /** Whether the actual request used an established prompt-cache provider route. */
+  cacheEstimateSupported?: boolean
 }): void {
   assertActiveTranscriptLease(getSessionId())
   try {
@@ -952,6 +954,7 @@ export function recordRunFacts(entry: {
       entry.permissionMode,
       entry.effort,
       entry.contextWindow,
+      entry.cacheEstimateSupported ?? null,
     ])
     if (snapshot === lastRunFactsSnapshot) return
     lastRunFactsSnapshot = snapshot
@@ -5793,6 +5796,7 @@ async function loadAllProjectsMessageLogsFull(
 export async function loadAllProjectsMessageLogsProgressive(
   limit?: number,
   initialEnrichCount: number = INITIAL_ENRICH_COUNT,
+  options?: SessionLogEnrichmentOptions,
 ): Promise<SessionLogResult> {
   const projectsDir = getProjectsDir()
 
@@ -5814,7 +5818,7 @@ export async function loadAllProjectsMessageLogsProgressive(
   // Deduplicate — same session can appear in multiple project dirs
   const sorted = deduplicateLogsBySessionId(rawLogs)
 
-  const { logs, nextIndex } = await enrichLogs(sorted, 0, initialEnrichCount)
+  const { logs, nextIndex } = await enrichLogs(sorted, 0, initialEnrichCount, options)
 
   // Re-sort the enriched batch by corrected `modified` (enrichLogs replaces the
   // mtime-based value with the real last-activity timestamp). `allStatLogs`
@@ -6611,7 +6615,8 @@ async function readLiteMetadata(
   filePath: string,
   fileSize: number,
   buf: Buffer,
-): Promise<LiteMetadata> {
+  options?: SessionLogEnrichmentOptions,
+): Promise<LiteMetadata | null> {
   const { head, tail } = await readHeadAndTail(filePath, fileSize, buf)
   if (!head) return { firstPrompt: '', isSidechain: false, forked: false }
 
@@ -6620,7 +6625,15 @@ async function readLiteMetadata(
   const isSidechain =
     head.includes('"isSidechain":true') || head.includes('"isSidechain": true')
   const relocationId = basename(filePath, '.jsonl')
-  const relocation = validateUuid(relocationId) ? readSessionRelocation(relocationId) : null
+  let relocation: ReturnType<typeof readSessionRelocation>
+  try {
+    relocation = validateUuid(relocationId) ? readSessionRelocation(relocationId) : null
+  } catch (error) {
+    if (!options?.skipUnreadableRelocations) throw error
+    // Omit the row rather than falling back to an unverified former workspace.
+    logForDebugging(`Session ${relocationId} filtered from catalog: unreadable relocation record`)
+    return null
+  }
   if (relocation?.phase === 'moving') throw new Error('Conversation move is incomplete')
   const projectPath = relocation?.target.cwd ?? extractJsonStringField(head, 'cwd')
   const entrypoint = extractJsonStringField(head, 'entrypoint')
@@ -6953,10 +6966,12 @@ export async function getSessionFilesLite(
 async function enrichLog(
   log: LogOption,
   readBuf: Buffer,
+  options?: SessionLogEnrichmentOptions,
 ): Promise<LogOption | null> {
   if (!log.isLite || !log.fullPath) return log
 
-  const meta = await readLiteMetadata(log.fullPath, log.fileSize ?? 0, readBuf)
+  const meta = await readLiteMetadata(log.fullPath, log.fileSize ?? 0, readBuf, options)
+  if (!meta) return null
 
   // Prefer the last in-file timestamp over the lite path's mtime fallback
   // (`log.modified`), which drifts when the file is rewritten after the final
@@ -7026,6 +7041,11 @@ async function enrichLog(
   return enriched
 }
 
+export type SessionLogEnrichmentOptions = {
+  /** Catalog listing only; resume and preview retain strict relocation validation. */
+  skipUnreadableRelocations?: boolean
+}
+
 /**
  * Enriches enough lite logs from `allLogs` (starting at `startIndex`) to
  * produce `count` valid results. Returns the valid enriched logs and the
@@ -7035,6 +7055,7 @@ export async function enrichLogs(
   allLogs: LogOption[],
   startIndex: number,
   count: number,
+  options?: SessionLogEnrichmentOptions,
 ): Promise<{ logs: LogOption[]; nextIndex: number }> {
   const result: LogOption[] = []
   const readBuf = Buffer.alloc(LITE_READ_BUF_SIZE)
@@ -7044,7 +7065,7 @@ export async function enrichLogs(
     const log = allLogs[i]!
     i++
 
-    const enriched = await enrichLog(log, readBuf)
+    const enriched = await enrichLog(log, readBuf, options)
     if (enriched) {
       result.push(enriched)
     }

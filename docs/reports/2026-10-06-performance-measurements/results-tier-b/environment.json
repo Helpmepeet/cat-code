@@ -1,0 +1,44 @@
+{
+  "recordedAt": "2026-10-06T03:49:15.768Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "release": "25.6.0",
+  "cpu": "Apple M4 Pro",
+  "logicalCpus": 12,
+  "totalMemoryGiB": 24,
+  "node": "v24.3.0",
+  "bun": "1.4.0",
+  "sourceRevision": "bc5e4602dfda8f656031af117b5e1c388c9e77a4",
+  "loadAverageAtStart": [
+    6.09326171875,
+    8.4404296875,
+    9.09423828125
+  ],
+  "probeConfig": {
+    "reps": 5,
+    "warmups": 1,
+    "smoke": false
+  },
+  "probes": [
+    "real-data"
+  ],
+  "sourceHashes": {
+    "app/renderer/src/markdownRenderPlan.ts": "22f425afbc768a19ee01a5a7e068fa2d2f0937a09729a330701345666a27fd24",
+    "app/renderer/src/markdownPlugins.ts": "02235f9d23bdae6cdb828affedf3b0a141f97d9aaa6f5cc4037b5e754d017500",
+    "app/renderer/src/rawMessageLog.ts": "ea860102635401e0a61c76a4fa0cf929ca12599851c4542bf3135a84c85dca1d",
+    "app/renderer/src/serverFrameBatch.ts": "86a601a2d69a64a4bd0b7050aa9798f3c015b444fed3b3c387ea3f4697d7fce1",
+    "app/main/deliveryTraceSink.ts": "7bb167880825a3612a7fef6bf5d75a9c572f070c4232462fdea09c6af6c8ed21",
+    "app/shared/deliveryTrace.ts": "d98eb8661d2766f2712c18d62fa74e9fd205b3a9c6f8050cc199d9f0aacadd3c",
+    "app/main/main.ts": "7bc3f6765992c3dc2d4eb354c9d9b34f149db75cd44d9d84ecf232d20c57926a",
+    "app/main/transcriptCache.ts": "7ff83f19b15a46abbcad7d6f0f046f283b99436b9bb93a6d24442604e8883f51",
+    "app/main/replayBuffer.ts": "0ce2a6dda4bb98c70d5ff186a8d194d4465c21e7063592049aeb2f4d1e75dd38",
+    "docs/reports/2026-10-06-performance-measurements/run.ts": "0fad72aac5754dd5ca6e18b626e5879afe8129e6fa846bdd97a5753088e3e85e",
+    "docs/reports/2026-10-06-performance-measurements/fixtures.ts": "7243f4273e594534ca16c149fb4d26241bf22e691d63c795a894ef9fb31cf8cb",
+    "docs/reports/2026-10-06-performance-measurements/timing.ts": "99f7176f5d39d0770fd146ac6f4aef61ccf38fee201ef2e5390c2ceac6dc692d",
+    "docs/reports/2026-10-06-performance-measurements/probes/markdown.ts": "dec112712ad0eafb7b5ed1a205253dbf29a6859041295a98c501475ec218e1f7",
+    "docs/reports/2026-10-06-performance-measurements/probes/raw-replay.ts": "dd1403282df78f854797b43fd67d3aff6635e6746e8e50e41101de60a37f5f58",
+    "docs/reports/2026-10-06-performance-measurements/probes/tracing.ts": "01ad0a35bfed5c784b55d422ac07deecad3caae266766c60e178a6c0aec72e26",
+    "docs/reports/2026-10-06-performance-measurements/probes/cache.ts": "2656c84caf19e85d881ecbb2d1a46b55f05dda2b419e0e025b34f4b5b399950f",
+    "docs/reports/2026-10-06-performance-measurements/probes/real-data.ts": "25082766501929772158f330d0da88c57683f9924e1330bcfd842bc1e09893bb"
+  }
+}

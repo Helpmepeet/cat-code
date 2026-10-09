@@ -2062,6 +2062,8 @@ async function* queryModel(
           permissionMode: permissionContext.mode,
           effort: logEffortValue === undefined ? null : String(logEffortValue),
           contextWindow: getContextWindowForModel(options.model, logBetas),
+          cacheEstimateSupported:
+            requestProvider !== 'firstParty' || isFirstPartyAnthropicBaseUrl(),
         })
       }
     })

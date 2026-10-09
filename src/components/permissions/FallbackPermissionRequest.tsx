@@ -3,6 +3,7 @@ import React, { useCallback, useMemo } from 'react';
 import { getOriginalCwd } from '../../bootstrap/state.js';
 import { Box, Text, useTheme } from '../../ink.js';
 import { sanitizeToolNameForAnalytics } from '../../services/analytics/metadata.js';
+import { getToolPermissionRuleValue } from '../../services/mcp/mcpStringUtils.js';
 import { env } from '../../utils/env.js';
 import { shouldShowAlwaysAllowOptions } from '../../utils/permissions/permissionsLoader.js';
 import { truncateToLines } from '../../utils/stringUtils.js';
@@ -81,7 +82,7 @@ export function FallbackPermissionRequest(t0) {
             toolUseConfirm.onAllow(toolUseConfirm.input, [{
               type: "addRules",
               rules: [{
-                toolName: toolUseConfirm.tool.name
+                ...getToolPermissionRuleValue(toolUseConfirm.tool)
               }],
               behavior: "allow",
               destination: "localSettings"

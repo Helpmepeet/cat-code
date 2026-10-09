@@ -44,7 +44,9 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     const legacySolLunaModels = namedModels.filter(isCurrentSolLunaUsageModel);
     const historicalModels = modelLimit >= 4 ? namedModels.filter(isRetiredUsageModel) : [];
     const selectedModels = new Set([...new Map([...priorityModels, ...legacySolLunaModels, ...historicalModels, ...namedModels].map(model => [model.id, model])).values()].slice(0, modelLimit).map(model => model.id));
-    const selectedTools = new Set(tools.filter(t => t.kind === 'named').slice(0, toolLimit).map(t => t.id));
+    const errorLeaders = tools.filter(t => t.kind === 'named' && t.errors > 0)
+        .sort((a, b) => b.errors - a.errors || b.results - a.results || b.requests - a.requests || a.id.localeCompare(b.id));
+    const selectedTools = new Set([...new Map([...errorLeaders, ...tools.filter(t => t.kind === 'named')].map(tool => [tool.id, tool])).values()].slice(0, toolLimit).map(t => t.id));
     const keepModel = (m: UsageCategory) => m.kind === 'unknown' || selectedModels.has(m.id);
     const keepTool = (t: UsageCategory) => t.kind === 'unknown' || selectedTools.has(t.id);
     const omittedModels = models.filter(m => !keepModel(m));
@@ -90,7 +92,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
         }
         for (const tool of grouped.values()) {
             if (!tool.builds) continue;
-            const ranked = [...tool.builds.items].sort((a, b) => b.requests - a.requests || a.firstObservedAt.localeCompare(b.firstObservedAt) || a.sha.localeCompare(b.sha));
+            const ranked = [...tool.builds.items].sort((a, b) => b.errors - a.errors || b.requests - a.requests || a.firstObservedAt.localeCompare(b.firstObservedAt) || a.sha.localeCompare(b.sha));
             const omitted = ranked.slice(buildLimit);
             tool.builds.items = ranked.slice(0, buildLimit).sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.sha.localeCompare(b.sha));
             if (omitted.length) {
@@ -136,31 +138,56 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     };
 }
 
-/** Fit one validated worker record while preserving useful categories ahead of optional detail. */
+/** All-history detail must not force recent error trends into Other. */
 export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): UsageDashboardSnapshot {
     const raw = snapshot.ranges;
-    const tiers = [
+    const detailTiers = [
         { models: 8, tools: 10, contributors: 20, builds: 8, timeline: 12 },
         { models: 8, tools: 10, contributors: 10, builds: 4, timeline: 3 },
         { models: 8, tools: 10, contributors: 5, builds: 2, timeline: 1 },
-        { models: 8, tools: 10, contributors: 0, builds: 0, timeline: 0 },
-        { models: 8, tools: 4, contributors: 0, builds: 0, timeline: 0 },
-        { models: 8, tools: 2, contributors: 0, builds: 0, timeline: 0 },
-        { models: 8, tools: 1, contributors: 0, builds: 0, timeline: 0 },
-        { models: 8, tools: 0, contributors: 0, builds: 0, timeline: 0 },
-        { models: 4, tools: 4, contributors: 0, builds: 0, timeline: 0 },
-        { models: 4, tools: 2, contributors: 0, builds: 0, timeline: 0 },
-        { models: 4, tools: 1, contributors: 0, builds: 0, timeline: 0 },
-        { models: 4, tools: 0, contributors: 0, builds: 0, timeline: 0 },
-        { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 },
     ] as const;
-    for (const tier of tiers) {
+    type Tier = { models: number; tools: number; contributors: number; builds: number; timeline: number };
+    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>) => {
         snapshot.ranges = {
-            '7d': groupUsageSummary(raw['7d'], tier.models, tier.tools, tier.contributors, tier.builds, tier.timeline),
-            '30d': groupUsageSummary(raw['30d'], tier.models, tier.tools, tier.contributors, tier.builds, tier.timeline),
-            all: groupUsageSummary(raw.all, tier.models, tier.tools, 0, tier.builds, 0),
+            '7d': groupUsageSummary(raw['7d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline),
+            '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline),
+            all: groupUsageSummary(raw.all, all.models, all.tools, 0, all.builds, 0),
         };
-        if (parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage') return snapshot;
+        return parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage';
+    };
+    for (const tier of detailTiers) if (fit(tier, tier)) return snapshot;
+    const allTiers = [
+        { models: 8, tools: 10, builds: 1 },
+        { models: 8, tools: 10, builds: 0 },
+        { models: 8, tools: 4, builds: 1 },
+        { models: 8, tools: 4, builds: 0 },
+        { models: 8, tools: 2, builds: 1 },
+        { models: 8, tools: 2, builds: 0 },
+        { models: 8, tools: 1, builds: 1 },
+        { models: 8, tools: 1, builds: 0 },
+        { models: 4, tools: 4, builds: 1 },
+        { models: 4, tools: 2, builds: 1 },
+        { models: 4, tools: 1, builds: 0 },
+        { models: 0, tools: 1, builds: 0 },
+        { models: 0, tools: 0, builds: 0 },
+    ] as const;
+    for (const builds of [2, 1]) for (const contributors of [5, 0]) {
+        const recent = { models: 8, tools: 10, contributors, builds, timeline: contributors ? 1 : 0 };
+        for (const all of allTiers.filter(tier => tier.models === 8 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;
+    }
+    const allBuildTiers = [...allTiers.filter(tier => tier.builds === 1), ...allTiers.filter(tier => tier.builds === 0)];
+    for (const tools of [10, 8, 6]) for (const builds of [2, 1, 0]) for (const contributors of [5, 0]) {
+        const recent = { models: 8, tools, contributors, builds, timeline: contributors ? 1 : 0 };
+        for (const all of allBuildTiers) if (fit(recent, all)) return snapshot;
+    }
+    for (const models of [8, 4]) {
+        const recent = { models, tools: 4, contributors: 0, builds: 1, timeline: 0 };
+        for (const all of allTiers.filter(tier => tier.models >= 4 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;
+    }
+    // Pathological histories still fit through explicit, reconciled omissions.
+    for (const models of [8, 4, 0]) for (const tools of [10, 4, 2, 1, 0]) {
+        const recent = { models, tools, contributors: 0, builds: tools ? 1 : 0, timeline: 0 };
+        for (const all of allTiers) if (fit(recent, all)) return snapshot;
     }
     throw new Error('Invalid usage summary');
 }

@@ -26,6 +26,7 @@ import {
   loadKnownMarketplacesConfig,
   refreshMarketplace,
 } from './marketplaceManager.js'
+import { isSourceAllowedByPolicy } from './marketplaceHelpers.js'
 import { parsePluginIdentifier } from './pluginIdentifier.js'
 import { isMarketplaceAutoUpdate, type PluginScope } from './schemas.js'
 
@@ -79,14 +80,27 @@ export function getAutoUpdatedPluginNames(): string[] {
 
 /**
  * Get the set of marketplaces that have autoUpdate enabled.
- * Returns the marketplace names that should be auto-updated.
+ * Maps case-insensitive lookup names to their original config keys.
  */
-async function getAutoUpdateEnabledMarketplaces(): Promise<Set<string>> {
+async function getAutoUpdateEnabledMarketplaces(): Promise<Map<string, string>> {
   const config = await loadKnownMarketplacesConfig()
   const declared = getDeclaredMarketplaces()
-  const enabled = new Set<string>()
+  const enabled = new Map<string, string>()
+  const marketplaceNameCounts = new Map<string, number>()
+  for (const name of Object.keys(config)) {
+    const normalizedName = name.toLowerCase()
+    marketplaceNameCounts.set(
+      normalizedName,
+      (marketplaceNameCounts.get(normalizedName) ?? 0) + 1,
+    )
+  }
 
   for (const [name, entry] of Object.entries(config)) {
+    const normalizedName = name.toLowerCase()
+    if ((marketplaceNameCounts.get(normalizedName) ?? 0) > 1) continue
+    if (!isSourceAllowedByPolicy(entry.source)) {
+      continue
+    }
     // Settings-declared autoUpdate takes precedence over JSON state
     const declaredAutoUpdate = declared[name]?.autoUpdate
     const autoUpdate =
@@ -94,7 +108,7 @@ async function getAutoUpdateEnabledMarketplaces(): Promise<Set<string>> {
         ? declaredAutoUpdate
         : isMarketplaceAutoUpdate(name, entry)
     if (autoUpdate) {
-      enabled.add(name.toLowerCase())
+      enabled.set(normalizedName, name)
     }
   }
 
@@ -224,8 +238,8 @@ async function updatePlugins(
  * This function runs silently without blocking user interaction.
  * Called from main.tsx during startup as a background job.
  */
-export function autoUpdateMarketplacesAndPluginsInBackground(): void {
-  void (async () => {
+export function autoUpdateMarketplacesAndPluginsInBackground(): Promise<void> {
+  return (async () => {
     if (shouldSkipPluginAutoupdate()) {
       logForDebugging('Plugin autoupdate: skipped (auto-updater disabled)')
       return
@@ -242,7 +256,7 @@ export function autoUpdateMarketplacesAndPluginsInBackground(): void {
 
       // Refresh only marketplaces with autoUpdate enabled
       const refreshResults = await Promise.allSettled(
-        Array.from(autoUpdateEnabledMarketplaces).map(async name => {
+        Array.from(autoUpdateEnabledMarketplaces.values()).map(async name => {
           try {
             await refreshMarketplace(name, undefined, {
               disableCredentialHelper: true,
@@ -266,7 +280,30 @@ export function autoUpdateMarketplacesAndPluginsInBackground(): void {
       }
 
       logForDebugging('Plugin autoupdate: checking installed plugins')
-      const updatedPlugins = await updatePlugins(autoUpdateEnabledMarketplaces)
+      const currentConfig = await loadKnownMarketplacesConfig()
+      const currentMarketplaceNameCounts = new Map<string, number>()
+      for (const name of Object.keys(currentConfig)) {
+        const normalizedName = name.toLowerCase()
+        currentMarketplaceNameCounts.set(
+          normalizedName,
+          (currentMarketplaceNameCounts.get(normalizedName) ?? 0) + 1,
+        )
+      }
+      const currentlyAllowedMarketplaces = new Set(
+        [...autoUpdateEnabledMarketplaces].flatMap(([normalizedName, name]) => {
+          const entry = currentConfig[name]
+          if (
+            name.toLowerCase() !== normalizedName ||
+            currentMarketplaceNameCounts.get(normalizedName) !== 1
+          ) {
+            return []
+          }
+          return entry !== undefined && isSourceAllowedByPolicy(entry.source)
+            ? [normalizedName]
+            : []
+        }),
+      )
+      const updatedPlugins = await updatePlugins(currentlyAllowedMarketplaces)
 
       if (updatedPlugins.length > 0) {
         if (pluginUpdateCallback) {

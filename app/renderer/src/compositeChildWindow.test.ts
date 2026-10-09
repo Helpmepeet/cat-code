@@ -60,6 +60,36 @@ describe('selectInitialCompositeChildWindow', () => {
 })
 
 describe('selectCompositeChildWindow', () => {
+  test('fractional measured rows retain identical total geometry when a window changes', () => {
+    const keys = keysOf(200)
+    const actualHeight = 44.75
+    const gap = 8
+    const state = reduceCompositeChildState(createCompositeChildState(), {
+      kind: 'measured', measurements: keys.map(key => ({ key, height: actualHeight })),
+    })
+    const entries = selectCompositeChildEntries(keys, 120, state)
+    for (const offset of [0, 1000, 1040, 4000]) {
+      const window = selectCompositeChildWindow(entries, offset, 800, 400, 80, gap)
+      const boxes = window.end - window.start +
+        Number(window.topSpacerHeight > 0) + Number(window.bottomSpacerHeight > 0)
+      const rendered = window.topSpacerHeight + window.bottomSpacerHeight +
+        (window.end - window.start) * actualHeight + (boxes - 1) * gap
+      expect(rendered).toBe(200 * actualHeight + 199 * gap)
+    }
+  })
+
+  test('exact nested gaps keep total geometry invariant across window boundaries', () => {
+    const entries = uniformEntries(200, 120)
+    const gap = 8
+    for (const offset of [0, 1559, 1561, 10_000, 30_000]) {
+      const window = selectCompositeChildWindow(entries, offset, 800, 400, 80, gap)
+      const boxes = window.end - window.start +
+        Number(window.topSpacerHeight > 0) + Number(window.bottomSpacerHeight > 0)
+      expect(window.topSpacerHeight + window.bottomSpacerHeight +
+        (window.end - window.start) * 120 + (boxes - 1) * gap).toBe(25_592)
+    }
+  })
+
   test('at the top of the pane it mounts from the first child', () => {
     const window = selectCompositeChildWindow(uniformEntries(5_000, 120), 0, 800)
 

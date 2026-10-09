@@ -21,6 +21,10 @@
 import { mkdir, readdir, readFile, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
+import type {
+  TrustedSedEditApprovalPayload,
+  TrustedSedEditPreviewChallenge,
+} from '../../tools/BashTool/sedEditCapability.js'
 import { logForDebugging } from '../debug.js'
 import { getErrnoCode } from '../errors.js'
 import { lazySchema } from '../lazySchema.js'
@@ -71,6 +75,26 @@ export const SwarmPermissionRequestSchema = lazySchema(() =>
     input: z.record(z.string(), z.unknown()),
     /** Suggested permission rules from the permission result */
     permissionSuggestions: z.array(z.unknown()),
+    trustedSedEditPreview: z
+      .object({
+        toolUseID: z.string(),
+        command: z.string(),
+        filePath: z.string(),
+        previewId: z.string(),
+        identity: z
+          .object({
+            canonicalPath: z.string(),
+            device: z.number(),
+            inode: z.number(),
+            size: z.number(),
+            modifiedAtMs: z.number(),
+            changedAtMs: z.number(),
+            nativeFileId: z.string().optional(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
     /** Status of the request */
     status: z.enum(['pending', 'approved', 'rejected']),
     /** Who resolved the request */
@@ -106,6 +130,10 @@ export type PermissionResolution = {
   updatedInput?: Record<string, unknown>
   /** Permission updates to apply (e.g., "always allow" rules) */
   permissionUpdates?: PermissionUpdate[]
+  /** Separate user-approved SedEdit capability, correlated to this request. */
+  trustedSedEditApproval?: TrustedSedEditApprovalPayload
+  /** Explicit UI approval of the special preview, distinct from Bash allow. */
+  sedEditPreviewApproved?: boolean
 }
 
 /**
@@ -173,6 +201,7 @@ export function createPermissionRequest(params: {
   input: Record<string, unknown>
   description: string
   permissionSuggestions?: unknown[]
+  trustedSedEditPreview?: TrustedSedEditPreviewChallenge
   teamName?: string
   workerId?: string
   workerName?: string
@@ -204,6 +233,9 @@ export function createPermissionRequest(params: {
     description: params.description,
     input: params.input,
     permissionSuggestions: params.permissionSuggestions || [],
+    ...(params.trustedSedEditPreview
+      ? { trustedSedEditPreview: params.trustedSedEditPreview }
+      : {}),
     status: 'pending',
     createdAt: Date.now(),
   }
@@ -697,6 +729,7 @@ export async function sendPermissionRequestViaMailbox(
       description: request.description,
       input: request.input,
       permission_suggestions: request.permissionSuggestions,
+      trusted_sed_edit_preview: request.trustedSedEditPreview,
     })
 
     // Requester creates the outstanding-request record (sending -> written)
@@ -764,6 +797,8 @@ export async function sendPermissionResponseViaMailbox(
       error: resolution.feedback,
       updated_input: resolution.updatedInput,
       permission_updates: resolution.permissionUpdates,
+      trusted_sed_edit_approval: resolution.trustedSedEditApproval,
+      sed_edit_preview_approved: resolution.sedEditPreviewApproved,
     })
 
     // Response side: no new PendingControlRecord — fulfills the one the

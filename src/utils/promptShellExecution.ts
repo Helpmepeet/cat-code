@@ -12,8 +12,8 @@ import { processToolResultBlock } from './toolResultStorage.js'
 // use the base Tool type: it marks call()'s canUseTool/parentMessage as
 // required, but both concrete tools have them optional and the original code
 // called BashTool.call({ command }, ctx) with just 2 args. We can't use
-// `typeof BashTool` either: BashTool's input schema has fields (e.g.
-// _simulatedSedEdit) that PowerShellTool's does not.
+// `typeof BashTool` either: BashTool's input schema has fields that
+// PowerShellTool's does not.
 // NOTE: call() is invoked directly here, bypassing validateInput — any
 // load-bearing check must live in call() itself (see PR #23311).
 type ShellOut = { stdout: string; stderr: string; interrupted: boolean }

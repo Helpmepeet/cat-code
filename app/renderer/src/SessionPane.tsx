@@ -237,6 +237,7 @@ export function SessionPane({
   reasoningEffort,
   fastMode,
   contextWindow = null,
+  cacheExpiresAt = null,
   lastPermissionMode = null,
   runControls,
   contextBreakdown = null,
@@ -2400,6 +2401,7 @@ export function SessionPane({
           permissionModeReadOnly={railPermissionMode}
           fastMode={fastMode}
           runControls={runControls}
+          cacheExpiresAt={preview ? previewRunFacts?.cacheExpiresAt : cacheExpiresAt}
           onSetModel={onSetModel}
           onSetEffort={onSetEffort}
           onSetFast={onSetFast}
@@ -2754,6 +2756,8 @@ type SessionPaneProps = {
   /** The engine-resolved window for `model`, the donut's denominator before any
    * turn reports one. Null falls back to `contextUsage.ts`'s default. */
   contextWindow?: number | null
+  /** Last engine-reported idle estimate, retained while the engine is parked. */
+  cacheExpiresAt?: number | null
   /** The mode this session is in, or was last in. Display only — the picker is
    * armed by `permissionContext`, which a dead session does not have. */
   lastPermissionMode?: string | null

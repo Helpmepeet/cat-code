@@ -13,7 +13,7 @@ import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import {
-  FileReadTool,
+  callFileReadToolWithPreparedCapability,
   type Output as FileReadToolOutput,
 } from '../../tools/FileReadTool/FileReadTool.js'
 import type { Message } from '../../types/message.js'
@@ -213,7 +213,7 @@ async function setupSessionMemoryFile(
   // Drop any cached entry so FileReadTool's dedup doesn't return a
   // file_unchanged stub — we need the actual content. The Read repopulates it.
   toolUseContext.readFileState.delete(memoryPath)
-  const result = await FileReadTool.call(
+  const result = await callFileReadToolWithPreparedCapability(
     { file_path: memoryPath },
     toolUseContext,
   )

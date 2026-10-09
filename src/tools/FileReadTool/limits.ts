@@ -5,14 +5,15 @@
  *   |-------------------|---------|---------------------------|---------------|-----------------|
  *   | MAX_LINES_TO_READ | 2000    | lines selected            | none          | marks partial   |
  *   | maxSizeBytes      | 256 KB  | TOTAL FILE SIZE (not out) | 1 stat        | throws pre-read |
- *   | maxTokens         | 25000   | actual output tokens      | API roundtrip | throws post-read|
+ *   | text tokens       | context | rendered output tokens    | API if needed | trims text      |
  *
  * The line cap applies only when the caller passes no explicit limit, and it
  * relieves maxTokens only.  It cannot relieve maxSizeBytes, which gates on
  * total file size rather than on the selected slice (see the mismatch note
  * below), so a default read of a 300 KB file still throws pre-read.
  * maxSizeBytes likewise applies only to no-limit reads, so an explicit range
- * still reads a file of any size.
+ * still reads a file of any size. getTextReadBudget owns the finite text token
+ * ceiling; non-text formats retain DEFAULT_MAX_OUTPUT_TOKENS.
  *
  * Known mismatch: maxSizeBytes gates on total file size, not the slice.
  * Tested truncating instead of throwing for explicit-limit reads that
@@ -23,26 +24,11 @@
 import memoize from 'lodash-es/memoize.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import { MAX_OUTPUT_SIZE } from 'src/utils/file.js'
-export const DEFAULT_MAX_OUTPUT_TOKENS = 25000
-
-// Prefer a compact prefix on overflow, leaving room in the model context for
-// the surrounding request. DEFAULT_MAX_OUTPUT_TOKENS remains the hard ceiling.
-export const DEFAULT_PREFIX_TARGET_TOKENS = 8000
-
-/**
- * Env var override for max output tokens. Returns undefined when unset/invalid
- * so the caller can fall through to the next precedence tier.
- */
-function getEnvMaxTokens(): number | undefined {
-  const override = process.env.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS
-  if (override) {
-    const parsed = parseInt(override, 10)
-    if (!isNaN(parsed) && parsed > 0) {
-      return parsed
-    }
-  }
-  return undefined
-}
+import {
+  DEFAULT_TEXT_READ_MAX_OUTPUT_TOKENS,
+  resolveReadMaxTokensOverride,
+} from './textReadBudget.js'
+export const DEFAULT_MAX_OUTPUT_TOKENS = DEFAULT_TEXT_READ_MAX_OUTPUT_TOKENS
 
 export type FileReadingLimits = {
   maxTokens: number
@@ -57,14 +43,16 @@ export type FileReadingLimits = {
  * the cap changing mid-session as the flag refreshes in the background.
  *
  * Precedence for the requested maxTokens: env var > GrowthBook >
- * DEFAULT_MAX_OUTPUT_TOKENS. FileReadTool treats DEFAULT_MAX_OUTPUT_TOKENS as
- * the absolute ceiling, so these overrides can lower the live limit but cannot
- * raise it.
+ * DEFAULT_MAX_OUTPUT_TOKENS. Non-text reads retain this default. Text reads use
+ * getTextReadBudget with the effective model context; maxTokensOverride
+ * distinguishes an explicit configured limit from the legacy default.
  *
  * Defensive: each field is individually validated; invalid values fall
  * through to the hardcoded defaults (no route to cap=0).
  */
-export const getDefaultFileReadingLimits = memoize((): FileReadingLimits => {
+export const getDefaultFileReadingLimits = memoize((): FileReadingLimits & {
+  maxTokensOverride?: number
+} => {
   const override =
     getFeatureValue_CACHED_MAY_BE_STALE<Partial<FileReadingLimits> | null>(
       'tengu_amber_wren',
@@ -78,14 +66,11 @@ export const getDefaultFileReadingLimits = memoize((): FileReadingLimits => {
       ? override.maxSizeBytes
       : MAX_OUTPUT_SIZE
 
-  const envMaxTokens = getEnvMaxTokens()
-  const maxTokens =
-    envMaxTokens ??
-    (typeof override?.maxTokens === 'number' &&
-    Number.isFinite(override.maxTokens) &&
-    override.maxTokens > 0
-      ? override.maxTokens
-      : DEFAULT_MAX_OUTPUT_TOKENS)
+  const maxTokensOverride = resolveReadMaxTokensOverride(
+    process.env.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS,
+    override?.maxTokens,
+  )
+  const maxTokens = maxTokensOverride ?? DEFAULT_MAX_OUTPUT_TOKENS
 
   const includeMaxSizeInPrompt =
     typeof override?.includeMaxSizeInPrompt === 'boolean'
@@ -104,6 +89,7 @@ export const getDefaultFileReadingLimits = memoize((): FileReadingLimits => {
   return {
     maxSizeBytes,
     maxTokens,
+    ...(maxTokensOverride !== undefined ? { maxTokensOverride } : {}),
     includeMaxSizeInPrompt,
     targetedRangeNudge,
   }

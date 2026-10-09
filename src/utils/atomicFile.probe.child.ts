@@ -128,20 +128,34 @@ if (role === 'terminal-writer') {
     `${coordinationDirectory}/file-edit-started`,
     String(process.pid),
   )
-  await FileEditTool.call(
-    {
-      file_path: filePath,
-      old_string: oldString,
-      new_string: newString,
-      replace_all: false,
+  const input = {
+    file_path: filePath,
+    old_string: oldString,
+    new_string: newString,
+    replace_all: false,
+  }
+  const context = {
+    readFileState: createFileStateCacheWithSizeLimit(10),
+    updateFileHistoryState: () => undefined,
+  }
+  const prepared = await FileEditTool.prepareExecution!(input as never)
+  Object.assign(context, {
+    preparedExecution: {
+      toolName: FileEditTool.name,
+      input,
+      state: prepared.state,
     },
-    {
-      readFileState: createFileStateCacheWithSizeLimit(10),
-      updateFileHistoryState: () => undefined,
-    } as never,
-    undefined as never,
-    { uuid: 'atomic-file-probe' } as never,
-  )
+  })
+  try {
+    await FileEditTool.call(
+      input as never,
+      context as never,
+      undefined as never,
+      { uuid: 'atomic-file-probe' } as never,
+    )
+  } finally {
+    await prepared.cleanup()
+  }
 } else {
   throw new Error(`unknown role: ${role}`)
 }

@@ -19,6 +19,7 @@ import type { Tools, ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { Message } from '../types/message.js'
 import { createAbortController } from './abortController.js'
+import { withDiagnosticsTiming } from './diagLogs.js'
 import type { FileStateCache } from './fileStateCache.js'
 import type { CacheSafeParams } from './forkedAgent.js'
 import { getMainLoopModel } from './model/model.js'
@@ -66,14 +67,18 @@ export async function fetchSystemPromptParts({
   const [defaultSystemPrompt, userContext, systemContext] = await Promise.all([
     customSystemPrompt !== undefined
       ? Promise.resolve([])
-      : getSystemPrompt(
-          tools,
-          mainLoopModel,
-          additionalWorkingDirectories,
-          mcpClients,
+      : withDiagnosticsTiming('prompt_parts_system_prompt', () =>
+          getSystemPrompt(
+            tools,
+            mainLoopModel,
+            additionalWorkingDirectories,
+            mcpClients,
+          ),
         ),
-    getUserContext(),
-    customSystemPrompt !== undefined ? Promise.resolve({}) : getSystemContext(),
+    withDiagnosticsTiming('prompt_parts_user_context', getUserContext),
+    customSystemPrompt !== undefined
+      ? Promise.resolve({})
+      : withDiagnosticsTiming('prompt_parts_system_context', getSystemContext),
   ])
   return { defaultSystemPrompt, userContext, systemContext }
 }

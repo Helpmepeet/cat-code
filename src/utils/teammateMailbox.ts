@@ -11,6 +11,8 @@ import { randomUUID } from 'crypto'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
+import type { TrustedSedEditApprovalPayload } from '../tools/BashTool/sedEditCapability.js'
+import type { TrustedSedEditPreviewChallenge } from '../tools/BashTool/sedEditCapability.js'
 import {
   StructuredTeammateHandoffRequestMessageSchema,
   StructuredTeammateHandoffResultMessageSchema,
@@ -1384,6 +1386,26 @@ export const PermissionRequestMessageSchema = lazySchema(() =>
     description: z.string(),
     input: z.record(z.string(), z.unknown()),
     permission_suggestions: z.array(z.unknown()),
+    trusted_sed_edit_preview: z
+      .object({
+        toolUseID: z.string(),
+        command: z.string(),
+        filePath: z.string(),
+        previewId: z.string(),
+        identity: z
+          .object({
+            canonicalPath: z.string(),
+            device: z.number(),
+            inode: z.number(),
+            size: z.number(),
+            modifiedAtMs: z.number(),
+            changedAtMs: z.number(),
+            nativeFileId: z.string().optional(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   }),
 )
 
@@ -1405,6 +1427,27 @@ export const PermissionResponseMessageSchema = lazySchema(() =>
         .object({
           updated_input: z.record(z.string(), z.unknown()).optional(),
           permission_updates: z.array(z.unknown()).optional(),
+          trusted_sed_edit_approval: z
+            .object({
+              toolUseID: z.string(),
+              command: z.string(),
+              filePath: z.string(),
+              previewId: z.string(),
+              identity: z
+                .object({
+                  canonicalPath: z.string(),
+                  device: z.number(),
+                  inode: z.number(),
+                  size: z.number(),
+                  modifiedAtMs: z.number(),
+                  changedAtMs: z.number(),
+                  nativeFileId: z.string().optional(),
+                })
+                .strict(),
+            })
+            .strict()
+            .optional(),
+          sed_edit_preview_approved: z.boolean().optional(),
         })
         .optional(),
     }),
@@ -1432,6 +1475,7 @@ export function createPermissionRequestMessage(params: {
   description: string
   input: Record<string, unknown>
   permission_suggestions?: unknown[]
+  trusted_sed_edit_preview?: TrustedSedEditPreviewChallenge
 }): PermissionRequestMessage {
   return {
     type: 'permission_request',
@@ -1442,6 +1486,7 @@ export function createPermissionRequestMessage(params: {
     description: params.description,
     input: params.input,
     permission_suggestions: params.permission_suggestions || [],
+    trusted_sed_edit_preview: params.trusted_sed_edit_preview,
   }
 }
 
@@ -1454,6 +1499,8 @@ export function createPermissionResponseMessage(params: {
   error?: string
   updated_input?: Record<string, unknown>
   permission_updates?: unknown[]
+  trusted_sed_edit_approval?: TrustedSedEditApprovalPayload
+  sed_edit_preview_approved?: boolean
 }): PermissionResponseMessage {
   if (params.subtype === 'error') {
     return {
@@ -1470,6 +1517,8 @@ export function createPermissionResponseMessage(params: {
     response: {
       updated_input: params.updated_input,
       permission_updates: params.permission_updates,
+      trusted_sed_edit_approval: params.trusted_sed_edit_approval,
+      sed_edit_preview_approved: params.sed_edit_preview_approved,
     },
   }
 }

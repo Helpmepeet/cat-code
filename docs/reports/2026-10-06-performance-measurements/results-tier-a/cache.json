@@ -1,0 +1,284 @@
+{
+  "probe": "cache",
+  "runtime": "node v24.3.0",
+  "cases": [
+    {
+      "name": "read/1300-chars/500",
+      "params": {
+        "messages": 500,
+        "textCharacters": 1300,
+        "serializedBytes": 827450
+      },
+      "samplesMs": [
+        1.558,
+        1.65,
+        1.455,
+        1.545,
+        1.362
+      ],
+      "medianMs": 1.545,
+      "minMs": 1.362,
+      "maxMs": 1.65
+    },
+    {
+      "name": "persist/1300-chars/500",
+      "params": {
+        "messages": 500,
+        "textCharacters": 1300,
+        "serializedBytes": 827450,
+        "scoredValue": "read existing + write replacement, ms"
+      },
+      "samplesMs": [
+        6.97,
+        9.749,
+        6.184,
+        5.939,
+        5.931
+      ],
+      "medianMs": 6.184,
+      "minMs": 5.931,
+      "maxMs": 9.749,
+      "detail": {
+        "readMedianMs": 1.476,
+        "writeMedianMs": 4.922
+      }
+    },
+    {
+      "name": "read/1300-chars/1000",
+      "params": {
+        "messages": 1000,
+        "textCharacters": 1300,
+        "serializedBytes": 1654798
+      },
+      "samplesMs": [
+        4.081,
+        2.723,
+        2.633,
+        2.805,
+        2.742
+      ],
+      "medianMs": 2.742,
+      "minMs": 2.633,
+      "maxMs": 4.081
+    },
+    {
+      "name": "persist/1300-chars/1000",
+      "params": {
+        "messages": 1000,
+        "textCharacters": 1300,
+        "serializedBytes": 1654798,
+        "scoredValue": "read existing + write replacement, ms"
+      },
+      "samplesMs": [
+        9.443,
+        8.731,
+        10.019,
+        8.803,
+        9.305
+      ],
+      "medianMs": 9.305,
+      "minMs": 8.731,
+      "maxMs": 10.019,
+      "detail": {
+        "readMedianMs": 2.827,
+        "writeMedianMs": 6.354
+      }
+    },
+    {
+      "name": "read/1300-chars/2000",
+      "params": {
+        "messages": 2000,
+        "textCharacters": 1300,
+        "serializedBytes": 3310300
+      },
+      "samplesMs": [
+        6.124,
+        5.178,
+        5.181,
+        5.66,
+        5.173
+      ],
+      "medianMs": 5.181,
+      "minMs": 5.173,
+      "maxMs": 6.124
+    },
+    {
+      "name": "persist/1300-chars/2000",
+      "params": {
+        "messages": 2000,
+        "textCharacters": 1300,
+        "serializedBytes": 3310300,
+        "scoredValue": "read existing + write replacement, ms"
+      },
+      "samplesMs": [
+        14.908,
+        14.509,
+        14.903,
+        15.275,
+        16.285
+      ],
+      "medianMs": 14.908,
+      "minMs": 14.509,
+      "maxMs": 16.285,
+      "detail": {
+        "readMedianMs": 5.625,
+        "writeMedianMs": 9.636
+      }
+    },
+    {
+      "name": "read/1300-chars/3000",
+      "params": {
+        "messages": 3000,
+        "textCharacters": 1300,
+        "serializedBytes": 4965798
+      },
+      "samplesMs": [
+        9.344,
+        7.822,
+        8.031,
+        9.152,
+        7.764
+      ],
+      "medianMs": 8.031,
+      "minMs": 7.764,
+      "maxMs": 9.344
+    },
+    {
+      "name": "persist/1300-chars/3000",
+      "params": {
+        "messages": 3000,
+        "textCharacters": 1300,
+        "serializedBytes": 4965798,
+        "scoredValue": "read existing + write replacement, ms"
+      },
+      "samplesMs": [
+        22.775,
+        22.357,
+        22.577,
+        20.514,
+        23.689
+      ],
+      "medianMs": 22.577,
+      "minMs": 20.514,
+      "maxMs": 23.689,
+      "detail": {
+        "readMedianMs": 8.199,
+        "writeMedianMs": 13.565
+      }
+    },
+    {
+      "name": "read/300-chars/500",
+      "params": {
+        "messages": 500,
+        "textCharacters": 300,
+        "serializedBytes": 329210
+      },
+      "samplesMs": [
+        1.043,
+        1.027,
+        1.029,
+        1.028,
+        1.068
+      ],
+      "medianMs": 1.029,
+      "minMs": 1.027,
+      "maxMs": 1.068
+    },
+    {
+      "name": "persist/300-chars/500",
+      "params": {
+        "messages": 500,
+        "textCharacters": 300,
+        "serializedBytes": 329210,
+        "scoredValue": "read existing + write replacement, ms"
+      },
+      "samplesMs": [
+        5.966,
+        6.013,
+        5.979,
+        5.982,
+        5.977
+      ],
+      "medianMs": 5.979,
+      "minMs": 5.966,
+      "maxMs": 6.013,
+      "detail": {
+        "readMedianMs": 1.107,
+        "writeMedianMs": 4.852
+      }
+    },
+    {
+      "name": "read/300-chars/8000",
+      "params": {
+        "messages": 8000,
+        "textCharacters": 300,
+        "serializedBytes": 5264210
+      },
+      "samplesMs": [
+        16.475,
+        17.226,
+        16.939,
+        16.297,
+        17.123
+      ],
+      "medianMs": 16.939,
+      "minMs": 16.297,
+      "maxMs": 17.226
+    },
+    {
+      "name": "persist/300-chars/8000",
+      "params": {
+        "messages": 8000,
+        "textCharacters": 300,
+        "serializedBytes": 5264210,
+        "scoredValue": "read existing + write replacement, ms"
+      },
+      "samplesMs": [
+        32.352,
+        32.164,
+        31.289,
+        31.992,
+        32.051
+      ],
+      "medianMs": 32.051,
+      "minMs": 31.289,
+      "maxMs": 32.352,
+      "detail": {
+        "readMedianMs": 16.884,
+        "writeMedianMs": 15.096
+      }
+    },
+    {
+      "name": "quit/4-sessions/1000",
+      "params": {
+        "sessions": 4,
+        "messagesPerSession": 1000,
+        "textCharacters": 1300,
+        "scoredValue": "serial persist of every session, ms"
+      },
+      "samplesMs": [
+        37.119,
+        36.508,
+        38.609,
+        37.625,
+        46.581
+      ],
+      "medianMs": 37.625,
+      "minMs": 36.508,
+      "maxMs": 46.581,
+      "detail": {
+        "readShareMedianMs": 11.701
+      }
+    }
+  ],
+  "notes": [
+    "Warm files on the local disk; cold reads were not measured.",
+    "Synthetic caches carry no generated-image previews, so the carry-forward finds nothing to keep."
+  ],
+  "wallSeconds": 1.2,
+  "loadAverageAfter": [
+    6.09326171875,
+    8.4404296875,
+    9.09423828125
+  ]
+}

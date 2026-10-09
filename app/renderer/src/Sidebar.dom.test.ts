@@ -18,7 +18,10 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
-import { Sidebar } from './Sidebar.js'
+import { Sidebar, SidebarRowItem } from './Sidebar.js'
+import { sessionDescriptor } from './sessionDescriptorFixture.js'
+import { selectMergedSessionRows, type MergedSessionRow } from './sessionsCatalogState.js'
+import { reduceSessionUnarchived } from './sidebarArchivedSessions.js'
 import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_WIDTH_STORAGE_KEY,
@@ -314,4 +317,173 @@ test('an open rail grows the footer when the pointer enters the band and rests i
     })
     expect(footerShowsList(tree.container)).toBe(false)
   })
+})
+
+function sessionRow(id: string, over: Partial<MergedSessionRow> = {}): MergedSessionRow {
+  return {
+    ...selectMergedSessionRows([sessionDescriptor(id, { title: id })], null)[0]!,
+    lastMessageSentAt: null,
+    transcriptActivityAtMs: null,
+    ...over,
+  }
+}
+
+function archiveToggle(container: HTMLElement): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll('button')].find(button =>
+    /^\d+ archived$/.test(button.textContent ?? ''),
+  )
+}
+
+test('archives are hidden from both normal lists, toggle below projects, and keep the full count under search', async () => {
+  const project = sessionRow('Project archive', { cwd: '/tmp/proj' })
+  const chat = sessionRow('Chat archive', {
+    binding: { kind: 'managed', storageRootId: 'managed-root', storageId: 'chat' },
+    cwd: '',
+  })
+  const visible = sessionRow('Visible')
+  const rows = [project, chat, visible]
+  const archivedSessions = [project, chat].map(row => ({
+    sessionId: row.sessionId, archivedAt: Date.now(),
+  }))
+  const tree = await harness.mount(sidebar({
+    menuActive: true, rows, archivedSessions, onOpenRowActions: () => {},
+  }))
+  const title = (text: string) => tree.container.querySelector(`[aria-label^="session ${text},"]`)
+  expect(title('Project archive')).toBeNull()
+  expect(title('Chat archive')).toBeNull()
+  expect(title('Visible')).not.toBeNull()
+  expect(archiveToggle(tree.container)?.textContent).toBe('2 archived')
+  expect(archiveToggle(tree.container)?.getAttribute('aria-expanded')).toBe('false')
+  const projectsSection = [...tree.container.querySelectorAll('section')].find(section =>
+    section.textContent?.includes('Projects'),
+  )!
+  expect(projectsSection.compareDocumentPosition(archiveToggle(tree.container)!) &
+    Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+
+  await act(async () => { archiveToggle(tree.container)!.click() })
+  expect(title('Project archive')?.querySelector('span.text-text-faint')).not.toBeNull()
+  expect(title('Chat archive')).not.toBeNull()
+  expect(archiveToggle(tree.container)?.getAttribute('aria-expanded')).toBe('true')
+
+  const input = tree.container.querySelector<HTMLInputElement>('input')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Project archive')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(input.value).toBe('Project archive')
+  expect(title('Chat archive')).toBeNull()
+  expect(title('Project archive')).not.toBeNull()
+  expect(archiveToggle(tree.container)?.textContent).toBe('2 archived')
+  await act(async () => { archiveToggle(tree.container)!.click() })
+  expect(title('Project archive')).toBeNull()
+})
+
+for (const kind of ['live', 'restorable', 'history'] as const) {
+  test(`opening an archived ${kind} row unarchives first, then follows its normal open path`, async () => {
+    const row = sessionRow('Archived', kind === 'history'
+      ? { appSessionId: null, inRegistry: false, live: false, status: 'history', modifiedAtMs: 0 }
+      : kind === 'restorable'
+        ? { live: false, restorable: true, status: 'exited' }
+        : {})
+    let archivedSessions = [{ sessionId: row.sessionId, archivedAt: Date.now() }]
+    const calls: string[] = []
+    const props = {
+      menuActive: true, rows: [row], archivedSessions,
+      onSelectLive: (id: string) => { calls.push(`select:${id}`) },
+      onRestore: (id: string) => { calls.push(`restore:${id}`) },
+      onOpenHistory: (id: string) => { calls.push(`history:${id}`) },
+      onUnarchiveSession: (target: MergedSessionRow) => {
+        calls.push(`unarchive:${target.sessionId}`)
+        archivedSessions = [...reduceSessionUnarchived(archivedSessions, target)]
+      },
+    }
+    const tree = await harness.mount(sidebar(props))
+    await act(async () => { archiveToggle(tree.container)!.click() })
+    const target = tree.container.querySelector<HTMLElement>('[aria-label^="session Archived,"]')!
+    await act(async () => { target.click() })
+    expect(calls).toEqual([
+      `unarchive:${row.sessionId}`,
+      kind === 'history' ? `history:${row.sessionId}` :
+        `${kind === 'live' ? 'select' : 'restore'}:${row.appSessionId}`,
+    ])
+    await tree.render(sidebar({ ...props, archivedSessions }))
+    expect(archiveToggle(tree.container)).toBeUndefined()
+    expect(tree.container.querySelector('[aria-label^="session Archived,"]')).not.toBeNull()
+  })
+}
+
+test('every row kebab uses the merged identity, archived menus carry true, and menus never activate the row', async () => {
+  const live = sessionRow('Live')
+  const history = sessionRow('History', {
+    appSessionId: null, inRegistry: false, live: false, status: 'history', modifiedAtMs: 0,
+  })
+  const orphan = { ...history, sessionId: 'orphan', cwd: '', displayLabel: 'Orphan' }
+  const calls: { id: string; archived?: boolean; anchor: { top: number; bottom: number; left: number } }[] = []
+  const opens: string[] = []
+  const props = {
+    menuActive: true, rows: [live, history, orphan],
+    onOpenRowActions: (id: string, anchor: { top: number; bottom: number; left: number }, archived?: boolean) => {
+      calls.push({ id, anchor, archived })
+    },
+    onOpenHistory: (id: string) => { opens.push(id) },
+    onSelectLive: (id: string) => { opens.push(id) },
+  }
+  const tree = await harness.mount(sidebar(props))
+  for (const row of [live, history, orphan]) {
+    const kebab = tree.container.querySelector<HTMLButtonElement>(
+      `[aria-label="Session actions for ${row.displayLabel}"]`,
+    )
+    expect(kebab).not.toBeNull()
+    await act(async () => { kebab!.click() })
+  }
+  expect(calls.map(call => call.id)).toEqual([live.sessionId, history.sessionId, orphan.sessionId])
+  expect(calls.every(call => call.archived === undefined)).toBe(true)
+  expect(opens).toEqual([])
+  expect(tree.container.querySelector('[aria-label^="Pin Live"]')).toBeNull()
+  expect(tree.container.querySelector('[aria-label^="Unpin Live"]')).toBeNull()
+  expect(tree.container.textContent).not.toContain('Pinned')
+
+  await tree.render(sidebar({
+    ...props, archivedSessions: [{ sessionId: history.sessionId, archivedAt: Date.now() }],
+  }))
+  await act(async () => { archiveToggle(tree.container)!.click() })
+  await act(async () => {
+    tree.container.querySelector<HTMLButtonElement>('[aria-label="Session actions for History"]')!.click()
+  })
+  expect(calls.at(-1)?.archived).toBe(true)
+  const archivedRow = tree.container.querySelector('[aria-label^="session History,"]')!
+  await act(async () => {
+    archivedRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 35, clientY: 42 }))
+  })
+  expect(calls.at(-1)).toEqual({
+    id: history.sessionId, archived: true, anchor: { top: 42, bottom: 42, left: 35 },
+  })
+  expect(opens).toEqual([])
+})
+
+test('archived rows open from the keyboard, but kebab key events do not open or unarchive', async () => {
+  const row = sessionRow('History', {
+    appSessionId: null, inRegistry: false, live: false, status: 'history',
+  })
+  const calls: string[] = []
+  const tree = await harness.mount(createElement(SidebarRowItem, {
+    row, isActive: false, archived: true,
+    onSelectLive: () => { calls.push('select') },
+    onRestore: () => { calls.push('restore') },
+    onOpenHistory: id => { calls.push(`history:${id}`) },
+    onUnarchiveSession: target => { calls.push(`unarchive:${target.sessionId}`) },
+    onOpenRowActions: () => { calls.push('menu') },
+  }))
+  const target = tree.container.querySelector<HTMLElement>('[role="button"]')!
+  expect(target.tabIndex).toBe(0)
+  await act(async () => {
+    tree.container.querySelector('button')!.dispatchEvent(
+      new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }),
+    )
+  })
+  expect(calls).toEqual([])
+  await act(async () => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }))
+  })
+  expect(calls).toEqual([`unarchive:${row.sessionId}`, `history:${row.sessionId}`])
 })

@@ -17,6 +17,7 @@ import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership
 import {
   observePaneScroll,
   reportPaneHeightCorrection,
+  reportPaneLayoutChange,
 } from './markdownScrollCoordinator.js'
 
 const INITIAL_VIEWPORT_HEIGHT = 800
@@ -162,14 +163,19 @@ export function BoundedMarkdown({
     // The first commit is where this body's box came into existence, which is
     // layout rather than a correction of anything.
     if (previous === null) return
+    if (rect.height > 0 || previous.height > 0) reportPaneLayoutChange(scroller)
     const delta = ownPaneHeightDelta(rect.height - previous.height, previous.nestedHeights, nestedHeights)
     if (delta === 0) return
     // The change cannot be above the shorter of the two top spacers: that band
     // is blank in both layouts, so everything before it kept its position.
     const unchangedPrefix = Math.min(previous.topSpacer, leafWindow.topSpacerHeight)
-    const offset =
-      rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop + unchangedPrefix
-    reportPaneHeightCorrection(scroller, { offset, delta })
+    reportPaneHeightCorrection(scroller, {
+      delta,
+      readOffset: () => scroller.contains(root)
+        ? root.getBoundingClientRect().top - scroller.getBoundingClientRect().top +
+          scroller.scrollTop + unchangedPrefix
+        : null,
+    })
   })
 
   // Keyed on the mounted leaf identities rather than the numeric window, so a
@@ -183,8 +189,8 @@ export function BoundedMarkdown({
         for (const entry of entries) {
           const key = entry.target.getAttribute('data-markdown-leaf')
           if (key === null) continue
-          const height = Math.ceil(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height)
-          if (height <= 0 || Math.abs((current.get(key) ?? 0) - height) < 1) continue
+          const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height
+          if (!Number.isFinite(height) || height <= 0 || current.get(key) === height) continue
           if (next === null) next = new Map(current)
           next.delete(key)
           next.set(key, height)

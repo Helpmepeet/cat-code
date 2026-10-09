@@ -8,6 +8,7 @@ import {
   type TranscriptCache,
 } from '../../shared/protocol.js'
 import { createConnectionState } from './connectionState.js'
+import { PROMPT_CACHE_ROUTE_FACTS_VERSION } from '../../shared/promptCacheEstimate.js'
 import { selectContextPercent } from './contextUsage.js'
 import { createPermissionState } from './permissionState.js'
 import {
@@ -861,6 +862,103 @@ test('header run facts win over the frames, which cannot know mode or effort', (
   expect(entry.runFacts.effort).toBe('xhigh')
   expect(entry.runFacts.contextUsage?.percentUsed).toBe(25)
 })
+
+test.each([
+  ['past estimate', Date.parse('2025-01-02T12:00:00.000Z')],
+  ['recent estimate', Date.now() + 60_000],
+  ['explicitly unknown', null],
+])('a %s cache deadline survives preview hydration and pane selection', (_label, cacheExpiresAt) => {
+  const cached: TranscriptCache = {
+    ...cache([assistantFrame('gpt-5.6-terra', 0)]),
+    header: {
+      ...cache([]).header,
+      writtenAt: Date.now(),
+      runFactsVersion: PROMPT_CACHE_ROUTE_FACTS_VERSION,
+      runFacts: {
+        model: 'gpt-5.6-terra',
+        permissionMode: 'auto',
+        effort: 'high',
+        usedTokens: 50_000,
+        contextWindow: 372_000,
+        cacheExpiresAt,
+      },
+    },
+  }
+  const projected = projectPreviewTranscriptCache(cached)
+  const preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
+    type: 'preview-load',
+    cache: cached,
+    projected,
+  })
+  const selected = selectPaneTranscript({
+    previewState: preview,
+    sessionId: SID,
+    previewOpen: true,
+    liveTranscript: createTranscriptState(),
+  })
+  expect(selected.runFacts?.cacheExpiresAt).toBe(cacheExpiresAt)
+  expect(selected.runFacts).toBe(projected.runFacts)
+  expect(selected.preview).toBe(true)
+  expect(selectTranscriptRows(selected.transcript, SID)).toEqual(
+    selectTranscriptRows(projected.transcript, SID),
+  )
+})
+
+test('legacy header and frame fallbacks leave an unknown cache estimate omitted', () => {
+  const cached = cache([assistantFrame('gpt-5.6-terra', 0)])
+  cached.header.writtenAt = Date.now()
+  expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+  cached.header.runFacts = {
+    model: 'gpt-5.6-terra',
+    permissionMode: 'auto',
+    effort: 'high',
+    usedTokens: 50_000,
+    contextWindow: 372_000,
+  }
+  expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+})
+
+test('an independent deadline preserves the frame-derived context and must match its model', () => {
+  const model = 'claude-sonnet-5'
+  const cached = cache([assistantFrame(model, 0, { input_tokens: 50_000 }), resultFrame(999_999)])
+  const before = projectPreviewTranscriptCache(cached).runFacts
+  cached.header.runFactsVersion = PROMPT_CACHE_ROUTE_FACTS_VERSION
+  cached.header.cacheObservation = { model, expiresAt: 1_735_819_200_000 }
+  const after = projectPreviewTranscriptCache(cached).runFacts
+  expect(after.cacheExpiresAt).toBe(1_735_819_200_000)
+  expect(after.contextUsage).toEqual(before.contextUsage)
+  expect(after.contextUsage?.usedTokens).toBe(50_000)
+  cached.header.cacheObservation.model = 'gpt-6.1-sol'
+  expect(projectPreviewTranscriptCache(cached).runFacts.cacheExpiresAt).toBeUndefined()
+})
+
+test.each(['claude-sonnet-5', 'gpt-6.1-sol'])('older %s cache metadata cannot establish current expiry evidence', model => {
+  const cached = cache([assistantFrame(model, 0)])
+  cached.header.runFacts = {
+    model, permissionMode: 'default', effort: null,
+    usedTokens: 2_048, contextWindow: 200_000, cacheExpiresAt: 1_735_819_200_000,
+  }
+  cached.header.runFactsVersion = PROMPT_CACHE_ROUTE_FACTS_VERSION - 1
+  expect(projectPreviewTranscriptCache(cached).runFacts.cacheExpiresAt).toBeUndefined()
+  cached.header.runFactsVersion = PROMPT_CACHE_ROUTE_FACTS_VERSION
+  expect(projectPreviewTranscriptCache(cached).runFacts.cacheExpiresAt).toBe(1_735_819_200_000)
+})
+
+test.each([-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '1735819200000'])(
+  'an invalid preview header deadline %s is not exposed to the pane',
+  cacheExpiresAt => {
+    const cached = cache([assistantFrame('gpt-5.6-terra', 0)])
+    cached.header.runFacts = {
+      model: 'gpt-5.6-terra',
+      permissionMode: 'auto',
+      effort: 'high',
+      usedTokens: 50_000,
+      contextWindow: 372_000,
+      cacheExpiresAt,
+    } as unknown as NonNullable<TranscriptCache['header']['runFacts']>
+    expect(projectPreviewTranscriptCache(cached).runFacts).not.toHaveProperty('cacheExpiresAt')
+  },
+)
 
 /**
  * The header's window used to be structurally null (the worker declared the

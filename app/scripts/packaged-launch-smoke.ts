@@ -276,7 +276,10 @@ console.log('B. packaged application launch')
  * production main's OWN stdout instead, which is stronger evidence anyway —
  * nothing in the test can force the value it is checking.
  */
-const app = Bun.spawn([executable], {
+// macOS resolves Electron's profile independently of HOME. Isolate its
+// preferences and single-instance lock as well as the engine configuration.
+const electronProfile = scratch('catcode-packaged-profile-')
+const app = Bun.spawn([executable, `--user-data-dir=${electronProfile}`], {
   cwd: workDir,
   env: {
     PATH: NO_BUN_PATH,
@@ -401,6 +404,10 @@ assert(
   launchLog.includes('[main] renderer ready'),
   'packaged app launched and its renderer attached',
   launchLog.slice(-1200),
+)
+assert(
+  readdirSync(electronProfile).length > 0,
+  'packaged app populated the isolated Electron profile',
 )
 
 // B2 — production main's own words: the packaged branch ran and the renderer

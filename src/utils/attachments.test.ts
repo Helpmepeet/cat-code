@@ -21,7 +21,18 @@ import {
   writeToMailbox,
   type TeamPrincipal,
 } from './teammateMailbox.js'
-import { _attachmentsForTest } from './attachments.js'
+import {
+  _attachmentsForTest,
+  createAttachmentMessage,
+  getTaskReminderAttachments,
+  getTodoReminderAttachments,
+  TODO_REMINDER_CONFIG,
+  type Attachment,
+} from './attachments.js'
+import { createAssistantMessage, normalizeAttachmentForAPI } from './messages.js'
+import { createTask, getTaskListId, updateTask } from './tasks.js'
+import { TodoWriteTool } from '../tools/TodoWriteTool/TodoWriteTool.js'
+import { TaskUpdateTool } from '../tools/TaskUpdateTool/TaskUpdateTool.js'
 
 type FakeAppState = {
   teamContext?: {
@@ -33,6 +44,123 @@ type FakeAppState = {
   tasks: Record<string, unknown>
   inbox: { messages: Array<{ id: string; status: string }> }
 }
+
+describe('task reminders', () => {
+  const envKeys = [
+    'CLAUDE_CONFIG_DIR',
+    'USER_TYPE',
+    'CLAUDE_CODE_ENABLE_TASKS',
+    'CLAUDE_CODE_TASK_LIST_ID',
+  ] as const
+  let originalEnv: Array<string | undefined>
+  let tempDir: string
+  type Todos = Extract<Attachment, { type: 'todo_reminder' }>['content']
+  let todos: Todos
+  let taskId: string | undefined
+
+  beforeEach(() => {
+    originalEnv = envKeys.map(key => process.env[key])
+    tempDir = mkdtempSync(join(tmpdir(), 'attachments-reminders-'))
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    process.env.USER_TYPE = 'external'
+    process.env.CLAUDE_CODE_ENABLE_TASKS = 'true'
+    process.env.CLAUDE_CODE_TASK_LIST_ID = randomUUID()
+    todos = []
+    taskId = undefined
+  })
+
+  afterEach(() => {
+    for (const [index, key] of envKeys.entries()) {
+      const value = originalEnv[index]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  const idleTurns = (
+    count = Math.max(
+      TODO_REMINDER_CONFIG.TURNS_SINCE_WRITE,
+      TODO_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS,
+    ),
+  ) => Array.from({ length: count }, () =>
+    createAssistantMessage({ content: 'Continuing the requested work.' }),
+  )
+
+  function context(tools = [TodoWriteTool, TaskUpdateTool]): ToolUseContext {
+    return {
+      agentId: 'reminder-test',
+      options: { tools },
+      getAppState: () => ({ todos: { 'reminder-test': todos } }),
+    } as unknown as ToolUseContext
+  }
+
+  for (const kind of ['todo', 'task'] as const) {
+    const reminders = kind === 'todo'
+      ? getTodoReminderAttachments
+      : getTaskReminderAttachments
+
+    async function setStatus(status: 'pending' | 'in_progress' | 'completed') {
+      if (kind === 'todo') {
+        todos = [{ content: 'Run checks', activeForm: 'Running checks', status }]
+      } else if (taskId) {
+        await updateTask(getTaskListId(), taskId, { status })
+      } else {
+        taskId = await createTask(getTaskListId(), {
+          subject: 'Run checks',
+          description: 'Run the applicable project checks.',
+          activeForm: 'Running checks',
+          status,
+          blocks: [],
+          blockedBy: [],
+        })
+      }
+    }
+
+    test(`${kind}: no reminder for an empty or completed list`, async () => {
+      expect(await reminders(idleTurns(), context())).toEqual([])
+      await setStatus('completed')
+      expect(await reminders(idleTurns(), context())).toEqual([])
+    })
+
+    test(`${kind}: preserves tool availability and turn-delay gates`, async () => {
+      await setStatus('pending')
+      expect(await reminders(idleTurns(), context([]))).toEqual([])
+      expect(await reminders(idleTurns(1), context())).toEqual([])
+      const result = await reminders(idleTurns(), context())
+      expect(result).toHaveLength(1)
+      const [message] = normalizeAttachmentForAPI(result[0]!)
+      const text = String(message?.message.content)
+      expect(text).toContain('Run checks')
+      expect(text).toContain('Do not mention this reminder to the user')
+      expect(text).not.toContain("haven't been used recently")
+      expect(text).not.toContain("hasn't been used recently")
+    })
+
+    test(`${kind}: does not repeat unchanged work but permits a changed list`, async () => {
+      await setStatus('pending')
+      const [first] = await reminders(idleTurns(), context())
+      expect(first).toBeDefined()
+      const history = [createAttachmentMessage(first!), ...idleTurns()]
+      expect(await reminders(history, context())).toEqual([])
+      await setStatus('in_progress')
+      expect(await reminders(
+        [createAttachmentMessage(first!), ...idleTurns(1)],
+        context(),
+      )).toEqual([])
+      const [second] = await reminders(history, context())
+      expect(second).toBeDefined()
+
+      // Returning to an older state is a change from the most recent reminder.
+      await setStatus('pending')
+      expect(await reminders([
+        ...history,
+        createAttachmentMessage(second!),
+        ...idleTurns(),
+      ], context())).toHaveLength(1)
+    })
+  }
+})
 
 describe('getTeammateMailboxAttachments (via _attachmentsForTest)', () => {
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR

@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-10-04.
+Last refreshed: 2026-10-07.
 
 ## Purpose
 
@@ -23,7 +23,7 @@ Read in this order for most tool, MCP, or permission work:
 | 3 | [`../../src/Tool.ts`](../../src/Tool.ts) and [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Core contract plus validation, hooks, permission handoff, execution, and result shaping. |
 | 4 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) and [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Interactive approval and main allow / ask / deny policy. |
 | 5 | [`../../src/utils/permissions/{permissionSetup,filesystem,pathValidation}.ts`](../../src/utils/permissions/) | Permission-context setup plus filesystem path matching and validation. |
-| 6 | [`../../src/tools/{FileReadTool,FileWriteTool}/`](../../src/tools/) and [`../../src/utils/{file,fileStateCache}.ts`](../../src/utils/) | Read/write safety: bounded model output, complete-read authorization, stable file identity, and replacement-safe writes. |
+| 6 | [`../../src/tools/{FileReadTool,FileWriteTool}/`](../../src/tools/), [`../../src/utils/fileAuthorization.ts`](../../src/utils/fileAuthorization.ts), and [`../../src/utils/containedFs.ts`](../../src/utils/containedFs.ts) | Read/write safety: prepared object capabilities, bounded output, complete-read authorization, stable identity, and conflict-aware publication. |
 | 7 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) and [`../../src/utils/toolSearch.ts`](../../src/utils/toolSearch.ts) | MCP exposure/resource transformation and deferred-tool policy. |
 
 ## Current Mental Model
@@ -62,8 +62,12 @@ The live tool system is assembled in layers:
 | Auto-mode model availability | `src/utils/betas.ts` (`modelSupportsAutoMode`) | `src/utils/permissions/permissionSetup.ts`, `app/sidecar/permissionDomain.ts`, `app/sidecar/permissionDomain.test.ts` | The first-party Claude allowlist covers Opus/Sonnet 4.6, 5 and 5.5. Check it when changing model defaults or resume remapping; the desktop picker and restored Auto state both consume this gate. Settings and circuit-breaker checks still apply. |
 | Permission-context construction | `src/utils/permissions/permissionSetup.ts` | `src/utils/permissions/permissionsLoader.ts`, `src/utils/settings/settings.ts`, `src/commands/add-dir/validation.ts` | This is where session mode, additional working dirs, auto-mode safety stripping, and on-disk rule loading are assembled into `ToolPermissionContext`. |
 | File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.cat-code` plus legacy `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
+| Read recovery and text budgets | `src/tools/FileReadTool/FileReadTool.ts` | `src/tools/FileReadTool/{exactFunctionResolution,textReadBudget,limits}.ts` | Missing JS/TS paths without range/page arguments may return one exact permitted function from a direct sibling source. Results identify the actual source and remain partial-file reads for Write/Delete authorization. Text output budgets use the effective model context with a finite ceiling and narrower explicit overrides; non-text, default line, and file-size limits remain separate. |
+| Filesystem object capabilities | `src/utils/fileAuthorization.ts` | `src/utils/containedFs.ts`, `src/utils/windowsContainedFs.ts`, file-tool `prepareExecution()` implementations | POSIX descriptor-relative and Windows HANDLE-relative operations share the prepared lifecycle. Follow platform tests and publication conflict handling, not pathname checks alone. |
+| Private temporary files | `src/utils/privateTemp.ts` | Call sites that create transient file artifacts | Creates an exclusive UUID-named file in a fresh temporary directory; POSIX modes are `0700` for the directory and `0600` for the file. Check current callers before attributing this helper to a runtime flow. |
+| Bash SedEdit preview authority | `src/tools/BashTool/sedEditCapability.ts` | `src/tools/BashTool/BashTool.tsx`, `src/components/permissions/SedEditPermissionRequest/`, `src/utils/swarm/permissionSync.ts`, `src/utils/teammateMailbox.ts` | One-use engine approval binds the command, tool-use ID, preview ID, and retained file identity. Ordinary Bash approvals do not acquire preview authority. |
 | Sandbox integration | `src/utils/permissions/pathValidation.ts` | `src/utils/sandbox/sandbox-adapter.ts`, `src/tools/BashTool/shouldUseSandbox.ts`, `src/utils/permissions/permissions.ts` | The path validator treats sandbox write allowlists as an extra write scope for out-of-working-dir paths. Bash sandbox auto-allow is decided higher up in permissions. |
-| Tool execution lifecycle | `src/services/tools/toolExecution.ts` | `src/services/tools/toolHooks.ts`, `src/hooks/useCanUseTool.tsx`, `src/utils/toolResultStorage.ts` | Main per-call pipeline: schema parsing, validation, hook execution, permission decision, tool call, result processing, and failure handling. A tool-call failure preserves already-produced PreToolUse context before its error result and PostToolUseFailure output. |
+| Tool execution lifecycle | `src/services/tools/toolExecution.ts` | `src/services/tools/toolInputSecurity.ts`, `src/services/tools/toolHooks.ts`, `src/hooks/useCanUseTool.tsx`, `src/utils/toolResultStorage.ts` | Canonical input, preparation, validation, hooks, permission, final executable-input authorization, and cleanup. Equivalent parsed input clones retain the original preparation; changed inputs invalidate prior authorization. Failures preserve already-produced PreToolUse context. |
 | Concurrent tool orchestration | `src/services/tools/toolOrchestration.ts` | `src/services/tools/StreamingToolExecutor.ts`, tool `isConcurrencySafe()` implementations | Non-read-only or non-concurrency-safe tools serialize. Read-only safe batches can run together. Context modifiers are applied after concurrent batches complete. |
 | Tool hooks | `src/services/tools/toolHooks.ts` | `src/utils/hooks.ts`, `src/schemas/hooks.ts`, `src/types/hooks.ts` | Start here for PreToolUse, PostToolUse, and PostToolUseFailure behavior and how hook outputs affect continuation or MCP output rewrites. |
 | MCP config layering | `src/services/mcp/config.ts` | `src/utils/config.ts`, `src/utils/plugins/mcpPluginIntegration.ts`, `src/utils/settings/types.ts` | Config layering spans global, project, managed, plugin, and connector sources. Deduplication is content-based, not just by server name. |
@@ -107,8 +111,10 @@ src/services/api/claude.ts
 ```text
 src/services/tools/toolExecution.ts
   safeParse input with tool.inputSchema
+  prepare execution state for the canonical input
   call tool.validateInput() if present
   run PreToolUse hooks
+  canonicalize and validate any changed hook input before permission
 
 src/hooks/useCanUseTool.tsx
   calls hasPermissionsToUseTool()
@@ -124,7 +130,13 @@ src/hooks/useCanUseTool.tsx
   resolves config allow immediately
   or routes to coordinator / worker / interactive approval
 
-tool call executes
+src/services/tools/toolInputSecurity.ts
+  validate the final canonical input
+  re-authorize changed input or verify an engine-issued exact approval receipt
+  retain prepared state for unchanged canonical input
+
+tool call executes with that same canonical object and prepared context
+  dispose prepared state on completion, denial, cancellation, or failure
 
 src/services/tools/toolHooks.ts
   runs PostToolUse or PostToolUseFailure hooks
@@ -262,9 +274,9 @@ When debugging MCP behavior, separate these concerns:
 | Concern | Owner | Notes |
 |---|---|---|
 | Server config parse and validation | `src/services/mcp/config.ts` | Uses MCP config schemas and rejects invalid server config before connection. |
-| Runtime connection and tool list fetch | `src/services/mcp/client.ts` | Converts server tool metadata into local `Tool` objects. |
+| Runtime connection and tool list fetch | `src/services/mcp/client.ts`, `src/services/mcp/mcpStderrCapture.ts` | Converts server tool metadata into local `Tool` objects. Stdio startup diagnostics retain at most 8,192 characters; collection stops after connection while the listener continues draining the pipe. |
 | Tool name normalization | `src/services/mcp/mcpStringUtils.ts`, `src/services/mcp/normalization.ts` | MCP names can be prefixed or unprefixed depending on SDK mode and env. |
-| Permission identity for MCP tools | `src/services/mcp/mcpStringUtils.ts`, `src/utils/permissions/permissions.ts` | Permission matching uses the fully-qualified MCP identity even when display names are unprefixed. |
+| Permission identity for MCP tools | `src/services/mcp/mcpStringUtils.ts`, `src/utils/permissions/permissions.ts` | Permission matching uses structured live `mcpInfo` and reversible, scoped `mcpid:v1:` rules. Unambiguous legacy rules remain supported; ambiguous legacy allows fail closed and denies match conservatively. |
 | Result transformation and truncation | `src/services/mcp/client.ts`, `src/utils/mcpValidation.ts`, `src/utils/mcpOutputStorage.ts` | Structured content, content arrays, large output files, and images have separate handling. |
 | MCP resources | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/` | Resource routing is separate from MCP `callTool`. |
 
@@ -293,6 +305,10 @@ Use focused checks first, then the documented build:
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
 | Tool failure hook context | `bun test src/services/tools/toolExecution.test.ts` |
 | File read/write bounds and replacement safety | `bun test src/tools/FileReadTool/FileReadTool.test.ts src/tools/FileWriteTool/FileWriteTool.test.ts src/utils/fileWriteSafety.test.ts` |
+| Prepared filesystem and native ABI | `bun test src/utils/fileAuthorization.test.ts src/utils/containedFs.test.ts src/utils/windowsContainedFs.test.ts`; Windows runtime tests require Windows |
+| Private temp-file permissions and cleanup | `bun test src/utils/privateTemp.test.ts` |
+| MCP startup stderr capture | `bun test src/services/mcp/mcpStderrCapture.test.ts` |
+| Final executable input and SedEdit authority | Run `src/services/tools/toolInputSecurity.test.ts`, `src/services/tools/toolExecution.test.ts`, and `src/tools/BashTool/sedEditCapability.test.ts` in separate Bun test processes |
 | GPT image generation backend and model limits | `bun test src/tools/GenerateImageTool/GenerateImageTool.test.ts` |
 | Mailbox control authority (closed union, authority matrix, request correlation) | `bun test src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` |
 | Tool search behavior | `bun test` for `src/tools/ToolSearchTool/` and `src/utils/toolSearch.ts` if present in current snapshot |
@@ -307,8 +323,17 @@ Use focused checks first, then the documented build:
   from prompt exposure before the model ever sees them.
 - Do not assume bypass mode overrides everything. Safety-check asks and
   content-specific ask rules are intentionally bypass-immune.
-- Do not assume MCP tool names are stable display strings. Permission checks may
-  use `mcp__server__tool` even when the displayed name is unprefixed.
+- Do not derive MCP permission identity by splitting display names. The
+  `mcp__server__tool` representation can collide across distinct principals;
+  authorization uses structured `mcpInfo` and reversible scoped rules.
+- Retaining a directory capability preserves object identity, not continuing
+  membership in its original namespace after directory relocation. Windows
+  replacement does not have an atomic expected-file-ID compare-and-swap.
+  Host-independent native ABI tests do not establish Windows runtime behavior.
+- POSIX publication and recovery still have namespace operands. Identity
+  checks detect the tested entry substitutions, but do not make hostile
+  concurrent rebinding impossible. A replacement with an unverified published
+  object reports incomplete recovery rather than an authored publication.
 - Do not assume `isReadOnly()` alone controls concurrency. Actual batching uses
   `isConcurrencySafe()`.
 - Do not assume a file-mutating tool result can safely retain the full source input. Route transcript-size or persistence changes through the four file-tool owners and their bounded-result tests.

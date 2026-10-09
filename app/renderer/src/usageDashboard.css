@@ -257,8 +257,8 @@ html[data-glass='on'] .usage-page { background:transparent; }
 .usage-page .usage-session-table thead th { font:600 11px var(--font-sans); letter-spacing:0; text-transform:none; }
 
 .usage-metric-delta { font:500 11px var(--font-mono); color:var(--usage-secondary); white-space:nowrap; }
-.usage-delta-up { color:var(--usage-delta-up); }
-.usage-delta-down { color:var(--usage-delta-down); }
+.usage-metric-cache .usage-delta-up { color:var(--usage-delta-up); }
+.usage-metric-cache .usage-delta-down { color:var(--usage-delta-down); }
 .usage-delta-flat { color:var(--usage-muted); }
 
 .usage-metric-sessions { --usage-metric-color:var(--usage-sessions); }

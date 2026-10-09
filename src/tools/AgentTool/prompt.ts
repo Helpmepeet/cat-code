@@ -124,16 +124,9 @@ Forks are cheap because they share your prompt cache. Don't set \`model\` on a f
 
 ## Writing the prompt
 
-${forkEnabled ? 'When spawning a fresh agent (with a `subagent_type`), it starts with zero context. ' : ''}Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
-- Explain what you're trying to accomplish and why.
-- Describe what you've already learned or ruled out.
-- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
-- If you need a short response, say so ("report in under 200 words").
-- Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
+A fresh agent has no conversation context. Give it the objective, scope, permissions, relevant evidence and constraints, and what completion means. Include existing changes or failed attempts when they affect the task; distinguish facts from hypotheses.
 
-${forkEnabled ? 'For fresh agents, terse' : 'Terse'} command-style prompts produce shallow, generic work.
-
-**Handoff completeness.** Include known files and evidence, relevant current state (uncommitted changes, prior failed attempts, or a dirty baseline), what "done" looks like, and the constraints the agent must follow. Distinguish established facts from hypotheses. If the affected files or solution are not yet known, make finding them part of the bounded assignment; do not invent paths or require the parent to solve the task first.
+Let the worker choose its method within that scope unless the user supplied a procedure or the approach is already decided. A fork inherits context, so give only the remaining assignment. Request a particular report format only when its consumer needs one.
 `
 
   const isGPTPromptStyle = provider === 'openai'
@@ -322,7 +315,7 @@ ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME
   }${canSendMessage ? `Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered in the worker's next model round and does not interrupt its current work. ` : ''}${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context; provide a complete task description.' : 'Each Agent invocation starts fresh; provide a complete task description.'}
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
-- If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+- Agent descriptions suggest suitable roles; they do not override the delegation criteria, user intent, or permission boundaries.
 - If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
 - You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${
     process.env.USER_TYPE === 'ant'

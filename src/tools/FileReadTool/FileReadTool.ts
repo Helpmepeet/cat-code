@@ -1,8 +1,13 @@
 import type { Base64ImageSource } from '@anthropic-ai/sdk/resources/index.mjs'
-import { readdir, readFile as readFileAsync } from 'fs/promises'
+import {
+  copyFile,
+  readdir,
+  readFile as readFileAsync,
+} from 'fs/promises'
 import * as path from 'path'
 import { posix, win32 } from 'path'
 import { z } from 'zod/v4'
+import { getSdkBetas } from '../../bootstrap/state.js'
 import {
   PDF_AT_MENTION_INLINE_THRESHOLD,
   PDF_EXTRACT_SIZE_THRESHOLD,
@@ -27,6 +32,7 @@ import {
 } from '../../skills/loadSkillsDir.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
+import { resolveContextWindowPolicy } from '../../utils/contextWindowPolicy.js'
 import { getCwd } from '../../utils/cwd.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../../utils/envUtils.js'
 import { getErrnoCode, isENOENT } from '../../utils/errors.js'
@@ -34,13 +40,18 @@ import {
   addLineNumbers,
   fileIdentitiesEqual,
   FILE_NOT_FOUND_CWD_NOTE,
-  findSimilarFile,
-  getFileIdentity,
   suggestPathUnderCwd,
 } from '../../utils/file.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { formatFileSize } from '../../utils/format.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
+import {
+  bindPreparedFileInput,
+  getPreparedFileRead,
+  prepareFileRead,
+  preparedFileIdentity,
+  type PreparedFileRead,
+} from '../../utils/fileAuthorization.js'
 import {
   compressImageBufferWithTokenLimit,
   createImageMetadataText,
@@ -67,20 +78,28 @@ import {
   parsePDFPageRange,
 } from '../../utils/pdfUtils.js'
 import {
+  checkReadableInternalPath,
   checkReadPermissionForTool,
   matchingRuleForInput,
+  pathInAllowedWorkingPath,
+  checkWritePermissionForTool,
 } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
+import {
+  getAskRuleForTool,
+  getDenyRuleForTool,
+} from '../../utils/permissions/permissions.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { readFileInRange } from '../../utils/readFileInRange.js'
+import {
+  createPrivateTempFile,
+  removePrivateTempFile,
+} from '../../utils/privateTemp.js'
 import { semanticNumber } from '../../utils/semanticNumber.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
-import {
-  DEFAULT_MAX_OUTPUT_TOKENS,
-  DEFAULT_PREFIX_TARGET_TOKENS,
-  getDefaultFileReadingLimits,
-} from './limits.js'
+import { getDefaultFileReadingLimits } from './limits.js'
+import { getTextReadBudget, measureTextReadTokens } from './textReadBudget.js'
 import {
   DESCRIPTION,
   FILE_READ_TOOL_NAME,
@@ -121,6 +140,8 @@ const BLOCKED_DEVICE_PATHS = new Set([
   '/dev/fd/2',
 ])
 
+const userMentionedFileReads = new WeakSet<object>()
+
 function isBlockedDevicePath(filePath: string): boolean {
   if (BLOCKED_DEVICE_PATHS.has(filePath)) return true
   // /proc/self/fd/0-2 and /proc/<pid>/fd/0-2 are Linux aliases for stdio
@@ -132,6 +153,128 @@ function isBlockedDevicePath(filePath: string): boolean {
   )
     return true
   return false
+}
+
+async function findSimilarPreparedFile(
+  prepared: NonNullable<ReturnType<typeof getPreparedFileRead>>,
+): Promise<string | undefined> {
+  try {
+    const files = await prepared.readSiblingNames()
+    const fileBaseName = path.basename(
+      prepared.canonicalPath,
+      path.extname(prepared.canonicalPath),
+    )
+    const match = files.find(
+      name =>
+        path.basename(name, path.extname(name)) === fileBaseName &&
+        name !== path.basename(prepared.canonicalPath),
+    )
+    return match
+      ? path.join(path.dirname(prepared.canonicalPath), match)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function checkReadPermissionForBoundPath(
+  input: Input,
+  canonicalInput: Record<string, unknown>,
+  filePath: string,
+  permissions: ReturnType<ToolUseContext['getAppState']>['toolPermissionContext'],
+  originalDecision: Extract<PermissionDecision, { behavior: 'allow' }>,
+  allowUserMentionedOutsideWorkingDirs = false,
+): PermissionDecision {
+  const denyRule = matchingRuleForInput(filePath, permissions, 'read', 'deny')
+  if (denyRule) {
+    return {
+      behavior: 'deny',
+      message: `Permission to read ${input.file_path} has been denied.`,
+      decisionReason: { type: 'rule', rule: denyRule },
+    }
+  }
+  const askRule = matchingRuleForInput(filePath, permissions, 'read', 'ask')
+  if (askRule) {
+    return {
+      behavior: 'ask',
+      message: `Claude requested permissions to read from ${input.file_path}, but you haven't granted it yet.`,
+      decisionReason: { type: 'rule', rule: askRule },
+    }
+  }
+  const editDecision = checkWritePermissionForTool(
+    FileReadTool,
+    { ...input, file_path: filePath },
+    permissions,
+    [filePath],
+  )
+  if (editDecision.behavior === 'allow') {
+    return { ...editDecision, updatedInput: canonicalInput }
+  }
+  if (pathInAllowedWorkingPath(filePath, permissions, [filePath])) {
+    return { ...originalDecision, updatedInput: canonicalInput }
+  }
+  const internalRead = checkReadableInternalPath(filePath, input)
+  if (internalRead.behavior === 'allow') {
+    return { ...internalRead, updatedInput: canonicalInput }
+  }
+  if (internalRead.behavior !== 'passthrough') return internalRead
+  const allowRule = matchingRuleForInput(filePath, permissions, 'read', 'allow')
+  if (allowRule) {
+    return {
+      behavior: 'allow',
+      updatedInput: canonicalInput,
+      decisionReason: { type: 'rule', rule: allowRule },
+    }
+  }
+  if (allowUserMentionedOutsideWorkingDirs) {
+    return { ...originalDecision, updatedInput: canonicalInput }
+  }
+  return {
+    behavior: 'ask',
+    message: `Claude requested permissions to read from ${input.file_path}, but you haven't granted it yet.`,
+    decisionReason: originalDecision.decisionReason,
+  }
+}
+
+export function checkApprovedUncReadTarget(
+  input: Input,
+  canonicalInput: Record<string, unknown>,
+  originalPath: string,
+  actualPath: string,
+  permissions: ReturnType<ToolUseContext['getAppState']>['toolPermissionContext'],
+): PermissionDecision {
+  const originalDecision = checkReadPermissionForTool(FileReadTool, input, permissions)
+  const denyRule =
+    getDenyRuleForTool(permissions, FileReadTool) ??
+    matchingRuleForInput(actualPath, permissions, 'read', 'deny')
+  if (denyRule) {
+    return {
+      behavior: 'deny',
+      message: `Permission to read ${input.file_path} has been denied.`,
+      decisionReason: { type: 'rule', rule: denyRule },
+    }
+  }
+  if (originalDecision.behavior === 'deny') return originalDecision
+  const approvedOriginal: Extract<PermissionDecision, { behavior: 'allow' }> = {
+    behavior: 'allow',
+    updatedInput: canonicalInput,
+    decisionReason: originalDecision.decisionReason,
+  }
+  // Execution already authorized this request. Repeating its ask would erase
+  // a one-time approval; only a different resolved route needs a new grant.
+  if (
+    win32.normalize(originalPath).toLowerCase() ===
+    win32.normalize(actualPath).toLowerCase()
+  ) {
+    return approvedOriginal
+  }
+  return checkReadPermissionForBoundPath(
+    input,
+    canonicalInput,
+    actualPath,
+    permissions,
+    approvedOriginal,
+  )
 }
 
 // Narrow no-break space (U+202F) used by some macOS versions in screenshot filenames
@@ -281,6 +424,13 @@ const outputSchema = lazySchema(() => {
           .describe('Number of lines in the returned content'),
         startLine: z.number().describe('The starting line number'),
         totalLines: z.number().describe('Total number of lines in the file'),
+        functionResolution: z
+          .object({
+            requestedPath: z.string(),
+            symbol: z.string(),
+            endLine: z.number(),
+          })
+          .optional(),
       }),
     }),
     z.object({
@@ -414,11 +564,112 @@ export const FileReadTool = buildTool({
   },
   async checkPermissions(input, context): Promise<PermissionDecision> {
     const appState = context.getAppState()
-    return checkReadPermissionForTool(
+    const prepared = getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)
+    const isUserMentionedRead =
+      prepared !== undefined && userMentionedFileReads.has(prepared)
+    if (isUserMentionedRead) {
+      const denyRule = getDenyRuleForTool(
+        appState.toolPermissionContext,
+        FileReadTool,
+      )
+      if (denyRule) {
+        return {
+          behavior: 'deny',
+          message: `Permission to use ${FILE_READ_TOOL_NAME} has been denied.`,
+          decisionReason: { type: 'rule', rule: denyRule },
+        }
+      }
+      const askRule = getAskRuleForTool(
+        appState.toolPermissionContext,
+        FileReadTool,
+      )
+      if (askRule) {
+        return {
+          behavior: 'ask',
+          message: `Claude requested permissions to use ${FILE_READ_TOOL_NAME}, but you haven't granted it yet.`,
+          decisionReason: { type: 'rule', rule: askRule },
+        }
+      }
+    }
+    const originalDecision = checkReadPermissionForTool(
       FileReadTool,
       input,
       appState.toolPermissionContext,
     )
+    if (
+      originalDecision.behavior !== 'allow' &&
+      !(
+        isUserMentionedRead &&
+        originalDecision.behavior === 'ask' &&
+        originalDecision.decisionReason?.type === 'workingDir'
+      )
+    ) {
+      return originalDecision
+    }
+    if (!prepared) return originalDecision
+    const approvedOriginal: Extract<PermissionDecision, { behavior: 'allow' }> =
+      originalDecision.behavior === 'allow'
+        ? originalDecision
+        : {
+            behavior: 'allow',
+            updatedInput: input,
+            decisionReason: originalDecision.decisionReason,
+          }
+    const canonicalInput =
+      context.preparedExecution?.toolName === FILE_READ_TOOL_NAME
+        ? context.preparedExecution.input
+        : input
+    const permissions = appState.toolPermissionContext
+    const boundPaths = [
+      ...new Set([
+        prepared.canonicalPath,
+        prepared.actualPath,
+        ...(prepared.alternate?.capability
+          ? [
+              prepared.alternate.canonicalPath,
+              prepared.alternate.actualPath,
+            ]
+          : []),
+      ]),
+    ]
+    for (const boundPath of boundPaths) {
+      const decision = checkReadPermissionForBoundPath(
+        input,
+        canonicalInput,
+        boundPath,
+        permissions,
+        approvedOriginal,
+        isUserMentionedRead,
+      )
+      if (decision.behavior !== 'allow') return decision
+    }
+    return { ...approvedOriginal, updatedInput: canonicalInput }
+  },
+  async prepareExecution(input) {
+    const prepared = await prepareFileRead(input.file_path)
+    const alternatePath = getAlternateScreenshotPath(prepared.originalPath)
+    let alternate: Awaited<ReturnType<typeof prepareFileRead>> | undefined
+    try {
+      if (prepared.capability === undefined && alternatePath) {
+        alternate = await prepareFileRead(alternatePath)
+      }
+    } catch (error) {
+      await prepared.cleanup()
+      throw error
+    }
+    if (alternate) {
+      prepared.alternate = alternate
+    }
+    bindPreparedFileInput(prepared, input, value => inputSchema().parse(value))
+    return {
+      state: prepared,
+      async cleanup() {
+        await Promise.all([
+          prepared.cleanup(),
+          ...(alternate ? [alternate.cleanup()] : []),
+        ])
+      },
+    }
   },
   renderToolUseMessage,
   renderToolUseTag,
@@ -432,7 +683,8 @@ export const FileReadTool = buildTool({
     return ''
   },
   renderToolUseErrorMessage,
-  async validateInput({ file_path, pages }, toolUseContext: ToolUseContext) {
+  async validateInput(input, toolUseContext: ToolUseContext) {
+    const { file_path, pages } = input
     // Validate pages parameter (pure string parsing, no I/O)
     if (pages !== undefined) {
       const parsed = parsePDFPageRange(pages)
@@ -466,6 +718,39 @@ export const FileReadTool = buildTool({
       'read',
       'deny',
     )
+    const prepared = getPreparedFileRead(
+      toolUseContext,
+      FILE_READ_TOOL_NAME,
+      input,
+    )
+    if (
+      prepared &&
+      [
+        prepared.canonicalPath,
+        prepared.actualPath,
+        ...(prepared.alternate?.capability
+          ? [
+              prepared.alternate.canonicalPath,
+              prepared.alternate.actualPath,
+            ]
+          : []),
+      ].some(
+        actualPath =>
+          matchingRuleForInput(
+            actualPath,
+            appState.toolPermissionContext,
+            'read',
+            'deny',
+          ) !== null,
+      )
+    ) {
+      return {
+        result: false,
+        message:
+          'File is in a directory that is denied by your permission settings.',
+        errorCode: 1,
+      }
+    }
     if (denyRule !== null) {
       return {
         result: false,
@@ -511,11 +796,20 @@ export const FileReadTool = buildTool({
     return { result: true }
   },
   async call(
-    { file_path, offset = 1, limit = undefined, pages },
+    input,
     context,
     _canUseTool?,
     parentMessage?,
   ) {
+    const { file_path, offset = 1, limit = undefined, pages } = input
+    const prepared = getPreparedFileRead(
+      context,
+      FILE_READ_TOOL_NAME,
+      input,
+    )
+    if (!prepared) {
+      throw new Error('FileRead requires a prepared filesystem capability')
+    }
     const { readFileState, fileReadingLimits } = context
 
     const defaults = getDefaultFileReadingLimits()
@@ -563,6 +857,7 @@ export const FileReadTool = buildTool({
     // point the model at the pre-edit Read content.
     if (
       existingState &&
+      prepared.capability !== undefined &&
       !existingState.isPartialView &&
       existingState.offset !== undefined &&
       existingState.fileIdentity !== undefined &&
@@ -575,7 +870,7 @@ export const FileReadTool = buildTool({
         existingState.offset === offset && existingState.limit === limit
       if (rangeMatch) {
         try {
-          const currentIdentity = getFileIdentity(fullFilePath)
+          const currentIdentity = await preparedFileIdentity(prepared)
           if (fileIdentitiesEqual(existingState.fileIdentity, currentIdentity)) {
             const analyticsExt = getFileExtensionForAnalytics(fullFilePath)
             logEvent('tengu_file_read_dedup', {
@@ -598,7 +893,10 @@ export const FileReadTool = buildTool({
     // Skip in simple mode - no skills available
     const cwd = getCwd()
     if (!isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
-      const newSkillDirs = await discoverSkillDirsForPaths([fullFilePath], cwd)
+      const newSkillDirs = await discoverSkillDirsForPaths(
+        [prepared.canonicalPath],
+        cwd,
+      )
       if (newSkillDirs.length > 0) {
         // Store discovered dirs for attachment display
         for (const dir of newSkillDirs) {
@@ -609,14 +907,66 @@ export const FileReadTool = buildTool({
       }
 
       // Activate conditional skills whose path patterns match this file
-      activateConditionalSkillsForPaths([fullFilePath], cwd)
+      activateConditionalSkillsForPaths([prepared.canonicalPath], cwd)
     }
 
+    let privateReadSnapshot: string | undefined
+    let snapshotIdentity:
+      | Awaited<ReturnType<typeof preparedFileIdentity>>
+      | undefined
     try {
+      let readSource = prepared
+      let readCapability: Awaited<ReturnType<typeof prepared.openFile>>
+      try {
+        readCapability = await prepared.openFile()
+      } catch (error) {
+        if (!prepared.alternate?.capability) throw error
+        readSource = prepared.alternate
+        readCapability = await readSource.openFile()
+      }
+      if (
+        readSource.pathnameLimited &&
+        process.platform === 'win32' &&
+        typeof context.getAppState === 'function'
+      ) {
+        const permissions = context.getAppState().toolPermissionContext
+        const canonicalInput =
+          context.preparedExecution?.input ?? (input as Record<string, unknown>)
+        const actualDecision = checkApprovedUncReadTarget(
+          input,
+          canonicalInput,
+          readSource.originalPath,
+          readCapability.path,
+          permissions,
+        )
+        if (actualDecision.behavior !== 'allow') {
+          throw new Error(
+            'Permission to read the resolved UNC target has not been granted.',
+          )
+        }
+      }
+      let resolvedReadPath = readCapability.descriptorPath
+      if (process.platform === 'win32' || readSource.pathnameLimited) {
+        const beforeSnapshot = await preparedFileIdentity(readSource)
+        privateReadSnapshot = await createPrivateTempFile(
+          'cat-code-read-',
+          path.extname(fullFilePath),
+        )
+        await readCapability.copyTo(privateReadSnapshot)
+        snapshotIdentity = await preparedFileIdentity(readSource)
+        if (!fileIdentitiesEqual(beforeSnapshot, snapshotIdentity)) {
+          throw new Error('File changed while it was being read. Read it again.')
+        }
+        resolvedReadPath = privateReadSnapshot
+      } else if (isPDFExtension(ext)) {
+        privateReadSnapshot = await createPrivateTempFile('cat-code-read-', '.pdf')
+        await copyFile(readCapability.descriptorPath, privateReadSnapshot)
+        resolvedReadPath = privateReadSnapshot
+      }
       return await callInner(
         file_path,
         fullFilePath,
-        fullFilePath,
+        resolvedReadPath,
         ext,
         offset,
         limit,
@@ -626,39 +976,31 @@ export const FileReadTool = buildTool({
         readFileState,
         context,
         parentMessage?.message.id,
+        readSource,
+        snapshotIdentity,
       )
     } catch (error) {
       // Handle file-not-found: suggest similar files
       const code = getErrnoCode(error)
       if (code === 'ENOENT') {
-        // macOS screenshots may use a thin space or regular space before
-        // AM/PM — try the alternate before giving up.
-        const altPath = getAlternateScreenshotPath(fullFilePath)
-        if (altPath) {
-          try {
-            return await callInner(
-              file_path,
-              fullFilePath,
-              altPath,
-              ext,
-              offset,
-              limit,
-              pages,
-              maxSizeBytes,
-              maxTokens,
-              readFileState,
-              context,
-              parentMessage?.message.id,
-            )
-          } catch (altError) {
-            if (!isENOENT(altError)) {
-              throw altError
-            }
-            // Alt path also missing — fall through to friendly error
-          }
+        // Ranges belong to the missing file, not to a different definition.
+        if (
+          prepared.capability === undefined &&
+          input.offset === undefined &&
+          input.limit === undefined &&
+          input.pages === undefined
+        ) {
+          const resolved = await resolveMissingFunctionRead(
+            input,
+            prepared,
+            context,
+            maxSizeBytes,
+            textReadBudgetForContext(context).hardTokenLimit,
+            parentMessage?.message.id,
+          )
+          if (resolved) return { data: resolved }
         }
-
-        const similarFilename = findSimilarFile(fullFilePath)
+        const similarFilename = await findSimilarPreparedFile(prepared)
         const cwdSuggestion = await suggestPathUnderCwd(fullFilePath)
         let message = `File does not exist. ${FILE_NOT_FOUND_CWD_NOTE} ${getCwd()}.`
         if (cwdSuggestion) {
@@ -669,6 +1011,10 @@ export const FileReadTool = buildTool({
         throw new Error(message)
       }
       throw error
+    } finally {
+      if (privateReadSnapshot) {
+        await removePrivateTempFile(privateReadSnapshot)
+      }
     }
   },
   mapToolResultToToolResultBlockParam(data, toolUseID) {
@@ -722,6 +1068,53 @@ export const FileReadTool = buildTool({
   },
 } satisfies ToolDef<InputSchema, Output>)
 
+export async function callFileReadToolWithPreparedCapability(
+  input: Input,
+  context: ToolUseContext,
+  canUseTool?: Parameters<typeof FileReadTool.call>[2],
+  parentMessage?: Parameters<typeof FileReadTool.call>[3],
+  options: { userMentioned?: boolean } = {},
+): Promise<Awaited<ReturnType<typeof FileReadTool.call>>> {
+  if (getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)) {
+    return FileReadTool.call(input, context, canUseTool, parentMessage)
+  }
+
+  const prepared = await FileReadTool.prepareExecution!(input)
+  if (options.userMentioned) userMentionedFileReads.add(prepared.state as object)
+  const preparedContext: ToolUseContext = {
+    ...context,
+    preparedExecution: {
+      toolName: FILE_READ_TOOL_NAME,
+      input,
+      state: prepared.state,
+    },
+  }
+  try {
+    if (typeof context.getAppState === 'function') {
+      const permission = await FileReadTool.checkPermissions(
+        input,
+        preparedContext,
+      )
+      if (permission.behavior !== 'allow') {
+        throw new Error('Internal FileRead permission check did not allow the read')
+      }
+      const validation = await FileReadTool.validateInput(input, preparedContext)
+      if (validation.result === false) {
+        throw new Error(validation.message ?? 'Internal FileRead validation failed')
+      }
+    }
+    return await FileReadTool.call(
+      input,
+      preparedContext,
+      canUseTool,
+      parentMessage,
+    )
+  } finally {
+    userMentionedFileReads.delete(prepared.state as object)
+    await prepared.cleanup()
+  }
+}
+
 function pickLineFormatInstruction(): string {
   return LINE_FORMAT_INSTRUCTION
 }
@@ -739,6 +1132,9 @@ function formatFileLines(file: { content: string; startLine: number }): string {
 export function formatFileReadTextForModel(
   data: Extract<Output, { type: 'text' }>,
 ): string {
+  if (data.file.functionResolution) {
+    return functionResolutionNotice(data) + formatFileLines(data.file)
+  }
   if (data.file.content) {
     return (
       memoryFileFreshnessPrefix(data) +
@@ -750,6 +1146,222 @@ export function formatFileReadTextForModel(
   return data.file.totalLines === 0
     ? '<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>'
     : `<system-reminder>Warning: the file exists but is shorter than the provided offset (${data.file.startLine}). The file has ${data.file.totalLines} lines.</system-reminder>`
+}
+
+function functionResolutionNotice(
+  data: Extract<Output, { type: 'text' }>,
+): string {
+  const resolution = data.file.functionResolution!
+  return [
+    `Requested file not found: ${JSON.stringify(resolution.requestedPath)}`,
+    `Returned complete function: ${resolution.symbol}`,
+    `Source: ${JSON.stringify(data.file.filePath)}, lines ${data.file.startLine}–${resolution.endLine}`,
+    'The rest of the file is not included.',
+    '',
+    '',
+  ].join('\n')
+}
+
+async function resolveMissingFunctionRead(
+  input: Input,
+  missing: PreparedFileRead,
+  context: ToolUseContext,
+  maxSizeBytes: number,
+  hardTokens: number,
+  messageId?: string,
+): Promise<Extract<Output, { type: 'text' }> | undefined> {
+  if (
+    !path.isAbsolute(input.file_path) ||
+    missing.pathnameLimited ||
+    typeof context.getAppState !== 'function'
+  ) {
+    return undefined
+  }
+  const {
+    exactFunctionName,
+    isFunctionResolutionSource,
+    findExactFunctionDefinitions,
+  } = await import('./exactFunctionResolution.js')
+  const symbol = exactFunctionName(missing.originalPath)
+  if (!symbol) return undefined
+  const permissions = context.getAppState().toolPermissionContext
+  // Approval of the missing path never transfers to another file.
+  if (
+    getDenyRuleForTool(permissions, FileReadTool) ||
+    getAskRuleForTool(permissions, FileReadTool)
+  ) return undefined
+
+  let names: string[]
+  try {
+    names = await missing.readSiblingNames()
+  } catch {
+    return undefined
+  }
+  const sources = names.filter(isFunctionResolutionSource)
+  // Bounded local recovery, not a repository index. An incomplete scan cannot
+  // establish uniqueness, so reaching either bound keeps the missing-file result.
+  if (sources.length > 1000) return undefined
+  let remainingBytes = 8 * 1024 * 1024
+  // These bounds cover source discovery, not the returned function's budget.
+  const perFileBytes = 512 * 1024
+  const observedSources = new Map<
+    string,
+    Awaited<ReturnType<typeof preparedFileIdentity>>
+  >()
+  let winner:
+    | {
+        prepared: PreparedFileRead
+        identity: Awaited<ReturnType<typeof preparedFileIdentity>>
+        data: Extract<Output, { type: 'text' }>
+      }
+    | undefined
+  try {
+    for (const name of sources) {
+      context.abortController.signal.throwIfAborted()
+      const candidatePath = path.join(path.dirname(missing.originalPath), name)
+      const canonicalCandidatePath = path.join(path.dirname(missing.canonicalPath), name)
+      const candidateInput = { file_path: candidatePath }
+      const decision = checkReadPermissionForTool(
+        FileReadTool,
+        candidateInput,
+        permissions,
+      )
+      if (decision.behavior !== 'allow') continue
+      let candidate: PreparedFileRead
+      try {
+        candidate = await prepareFileRead(candidatePath)
+      } catch {
+        // A changing/uninspectable candidate cannot prove a unique definition.
+        return undefined
+      }
+      let retained = false
+      try {
+        // Reject sibling symlinks and ancestry that resolves somewhere other
+        // than the requested directory's prepared canonical location.
+        if (
+          candidate.pathnameLimited ||
+          candidate.canonicalPath !== canonicalCandidatePath ||
+          candidate.actualPath !== canonicalCandidatePath
+        ) continue
+        const boundPaths = [
+          candidate.originalPath,
+          candidate.canonicalPath,
+          candidate.actualPath,
+        ]
+        if (
+          boundPaths.some(
+            boundPath =>
+              checkReadPermissionForBoundPath(
+                candidateInput,
+                candidateInput,
+                boundPath,
+                permissions,
+                decision,
+              ).behavior !== 'allow',
+          )
+        ) continue
+        const capability = candidate.capability
+        if (!capability) return undefined
+        const identity = await preparedFileIdentity(candidate)
+        if (identity.size > perFileBytes || identity.size > remainingBytes) {
+          return undefined
+        }
+        remainingBytes -= identity.size
+        const bytes = await capability.readFile()
+        if (
+          bytes.length > perFileBytes ||
+          !fileIdentitiesEqual(identity, await preparedFileIdentity(candidate))
+        ) return undefined
+        observedSources.set(candidate.originalPath, identity)
+        // UTF-8 source only; never reinterpret binary or UTF-16 file formats.
+        const raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+        if (raw.includes('\0')) return undefined
+        if (!raw.includes(symbol)) continue
+        const content = raw.replaceAll('\r\n', '\n')
+        const matches = findExactFunctionDefinitions(candidatePath, content, symbol)
+        if (matches.length > 1 || (matches.length === 1 && winner)) return undefined
+        const match = matches[0]
+        if (!match) continue
+        const numLines = match.endLine - match.startLine + 1
+        if (numLines > MAX_LINES_TO_READ) return undefined
+        const data: Extract<Output, { type: 'text' }> = {
+          type: 'text',
+          file: {
+            filePath: candidate.actualPath,
+            content: match.content,
+            numLines,
+            startLine: match.startLine,
+            totalLines: content.split('\n').length,
+            functionResolution: {
+              requestedPath: input.file_path,
+              symbol,
+              endLine: match.endLine,
+            },
+          },
+        }
+        winner = { prepared: candidate, identity, data }
+        retained = true
+      } catch (error) {
+        if (context.abortController.signal.aborted) throw error
+        return undefined
+      } finally {
+        if (!retained) await candidate.cleanup()
+      }
+    }
+    if (!winner) return undefined
+    // A previously nonmatching file could have gained a second definition.
+    // Recheck the local inventory and all inspected identities, without
+    // retaining hundreds of open capabilities or reading any source twice.
+    const currentSources = (await missing.readSiblingNames()).filter(isFunctionResolutionSource)
+    if (
+      jsonStringify(currentSources.sort()) !== jsonStringify(sources.sort())
+    ) return undefined
+    for (const [sourcePath, identity] of observedSources) {
+      context.abortController.signal.throwIfAborted()
+      let current: PreparedFileRead
+      try {
+        current = await prepareFileRead(sourcePath)
+      } catch {
+        return undefined
+      }
+      try {
+        if (
+          !current.capability ||
+          !fileIdentitiesEqual(identity, await preparedFileIdentity(current))
+        ) return undefined
+      } finally {
+        await current.cleanup()
+      }
+    }
+    // The byte bound is conservative and needs no provider/token-count request.
+    // Never truncate a recovered function: success promises a complete definition.
+    if (
+      Buffer.byteLength(formatFileReadTextForModel(winner.data), 'utf8') >
+        Math.min(hardTokens, maxSizeBytes) ||
+      !fileIdentitiesEqual(winner.identity, await preparedFileIdentity(winner.prepared))
+    ) return undefined
+    context.readFileState.set(winner.prepared.actualPath, {
+      content: winner.data.file.content,
+      timestamp: Math.floor(winner.identity.modifiedAtMs),
+      offset: winner.data.file.startLine,
+      limit: winner.data.file.numLines,
+      isPartialView: true,
+      ...(messageId !== undefined ? { isWriteAuthorizedRead: true } : {}),
+      fileIdentity: winner.identity,
+    })
+    logFileOperation({
+      operation: 'read',
+      tool: 'FileReadTool',
+      filePath: winner.prepared.actualPath,
+      content: winner.data.file.content,
+    })
+    return winner.data
+  } catch (error) {
+    if (context.abortController.signal.aborted) throw error
+    return undefined
+  } finally {
+    await winner?.prepared.cleanup()
+  }
 }
 
 /**
@@ -793,28 +1405,6 @@ const truncatedReads = new WeakSet<object>()
 /** Partial reads created to keep a token-overflow result usable. */
 const tokenTruncatedReads = new WeakSet<object>()
 
-function getFileIdentityIfAvailable(filePath: string) {
-  try {
-    return getFileIdentity(filePath)
-  } catch {
-    // A file can disappear or be retargeted while Read is in progress. Keep
-    // any useful result, but do not let it authorize a later replacement.
-    return undefined
-  }
-}
-
-function getStableFileIdentityIfAvailable(
-  filePath: string,
-  identityBeforeRead: ReturnType<typeof getFileIdentity> | undefined,
-) {
-  if (identityBeforeRead === undefined) return undefined
-  const identityAfterRead = getFileIdentityIfAvailable(filePath)
-  return identityAfterRead !== undefined &&
-    fileIdentitiesEqual(identityBeforeRead, identityAfterRead)
-    ? identityAfterRead
-    : undefined
-}
-
 function memoryFileFreshnessPrefix(data: object): string {
   const mtimeMs = memoryFileMtimes.get(data)
   if (mtimeMs === undefined) return ''
@@ -854,29 +1444,21 @@ async function validateContentTokens(
   }
 }
 
-const ESTIMATED_BYTES_PER_TOKEN = 1.4
+function textReadBudgetForContext(context: ToolUseContext) {
+  const model = context.options?.mainLoopModel
+  return getTextReadBudget(
+    model ? resolveContextWindowPolicy(model, getSdkBetas()).effective : undefined,
+    context.fileReadingLimits?.maxTokens ??
+      getDefaultFileReadingLimits().maxTokensOverride,
+  )
+}
 
 async function measureRenderedTokens(
   content: string,
   targetTokens: number,
   hardTokens: number,
 ): Promise<{ targetCount: number; hardCount: number }> {
-  const bytes = Buffer.byteLength(content, 'utf8')
-  if (bytes === 0) return { targetCount: 0, hardCount: 0 }
-
-  // The measured fallback keeps prefix sizing useful for ordinary text. The
-  // UTF-8 byte count is the guaranteed upper bound: a byte-level tokenizer
-  // cannot emit more tokens than input bytes. Only skip exact counting when
-  // both the normal target and the absolute ceiling are already satisfied.
-  const estimatedCount = Math.ceil(bytes / ESTIMATED_BYTES_PER_TOKEN)
-  if (estimatedCount <= targetTokens && bytes <= hardTokens) {
-    return { targetCount: estimatedCount, hardCount: bytes }
-  }
-  const apiCount = await countTokensWithAPI(content)
-  if (apiCount !== null) {
-    return { targetCount: apiCount, hardCount: apiCount }
-  }
-  return { targetCount: estimatedCount, hardCount: bytes }
+  return measureTextReadTokens(content, targetTokens, hardTokens, countTokensWithAPI)
 }
 
 async function fitTokenPrefix(
@@ -989,13 +1571,16 @@ async function callInner(
   readFileState: ToolUseContext['readFileState'],
   context: ToolUseContext,
   messageId: string | undefined,
+  boundRead: PreparedFileRead,
+  snapshotIdentity?: Awaited<ReturnType<typeof preparedFileIdentity>>,
 ): Promise<{
   data: Output
   newMessages?: ReturnType<typeof createUserMessage>[]
 }> {
   // --- Notebook ---
   if (ext === 'ipynb') {
-    const identityBeforeRead = getFileIdentityIfAvailable(resolvedFilePath)
+    const identityBeforeRead =
+      snapshotIdentity ?? (await preparedFileIdentity(boundRead))
     const cells = await readNotebook(resolvedFilePath)
     const cellsJson = jsonStringify(cells)
 
@@ -1015,10 +1600,11 @@ async function callInner(
 
     // Get mtime via async stat (single call, no prior existence check)
     const stats = await getFsImplementation().stat(resolvedFilePath)
-    const fileIdentity = getStableFileIdentityIfAvailable(
-      resolvedFilePath,
-      identityBeforeRead,
-    )
+    const identityAfterRead = await preparedFileIdentity(boundRead)
+    if (!fileIdentitiesEqual(identityBeforeRead, identityAfterRead)) {
+      throw new Error('File changed while it was being read. Read it again.')
+    }
+    const fileIdentity = identityAfterRead
     readFileState.set(fullFilePath, {
       content: cellsJson,
       timestamp: Math.floor(stats.mtimeMs),
@@ -1199,7 +1785,8 @@ async function callInner(
   }
 
   // --- Text file (single async read via readFileInRange) ---
-  const identityBeforeRead = getFileIdentityIfAvailable(resolvedFilePath)
+  const identityBeforeRead =
+    snapshotIdentity ?? (await preparedFileIdentity(boundRead))
   const lineOffset = offset === 0 ? 0 : offset - 1
   // The prompt promises a default line cap; apply it. Without this a no-limit
   // read selects the whole file and only then discovers it blew maxTokens,
@@ -1240,10 +1827,8 @@ async function callInner(
     readBytes = Buffer.byteLength(content, 'utf8')
   }
 
-  // The configured limit can lower the ceiling but cannot raise the hard
-  // default. On overflow, return a verified complete-line prefix when one can
-  // fit under the normal target; never expose an oversized rendered result.
-  const hardTokenLimit = Math.min(maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)
+  const { hardTokenLimit, prefixTargetTokens: targetTokens } =
+    textReadBudgetForContext(context)
   const freshnessPrefix = isAutoMemFile(fullFilePath)
     ? memoryFreshnessNote(mtimeMs)
     : ''
@@ -1264,7 +1849,6 @@ async function callInner(
   const tokenTruncated =
     renderedCandidateTokens.hardCount > hardTokenLimit
   if (tokenTruncated) {
-    const targetTokens = Math.min(DEFAULT_PREFIX_TARGET_TOKENS, hardTokenLimit)
     const suggestedPrefixLines = Math.max(
       1,
       suggestedRetryLimit(
@@ -1302,10 +1886,11 @@ async function callInner(
     truncated = true
   }
 
-  const fileIdentity = getStableFileIdentityIfAvailable(
-    resolvedFilePath,
-    identityBeforeRead,
-  )
+  const identityAfterRead = await preparedFileIdentity(boundRead)
+  if (!fileIdentitiesEqual(identityBeforeRead, identityAfterRead)) {
+    throw new Error('File changed while it was being read. Read it again.')
+  }
+  const fileIdentity = identityAfterRead
   readFileState.set(fullFilePath, {
     content,
     timestamp: Math.floor(mtimeMs),

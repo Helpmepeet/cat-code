@@ -1,6 +1,7 @@
 import { afterEach, expect, test, spyOn } from 'bun:test';
 import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir, rename } from 'node:fs/promises';
 import { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectIndexedUsage, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
@@ -15,25 +16,141 @@ const row = (id: string, timestamp = cutoff, tokens = 10) => ({ type: 'assistant
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'usage-index-')); roots.push(root); return { path: join(root, 'cache.sqlite'), file: join(root, 's.jsonl') }; }
 const opts = (path: string) => ({ path, deadline: Date.now() + 60000 });
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
-test('exhausted memory scratch spills without changing accounting or durable publication', async () => {
+test('exhausted memory scratch spills in bounded persistent-journal batches without changing accounting or durable publication', async () => {
     const { path, file } = await fixture();
     await writeFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
     const exec = Database.prototype.exec;
+    const close = Database.prototype.close;
     let bounded = false;
+    const batches: number[] = [];
+    let committedChanges = 0;
+    let diskChanges = 0;
+    let diskRows = 0;
+    let writerRows = 0;
+    let diskPath = '';
+    let journalRetained = false;
+    let transactionAtClose = false;
     const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        const wasInTransaction = this.inTransaction;
         const result = exec.call(this, sql);
         if (this.filename === ':memory:' && !bounded) {
             bounded = true;
-            exec.call(this, 'PRAGMA max_page_count=8');
+            exec.call(this, 'PRAGMA max_page_count=32');
+        }
+        if (this.filename.endsWith('/scratch.sqlite') && wasInTransaction && !this.inTransaction) {
+            const changes = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            batches.push(changes - committedChanges);
+            committedChanges = changes;
         }
         return result;
+    });
+    const observe = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        if (this.filename.endsWith('/scratch.sqlite')) {
+            diskPath = this.filename;
+            diskChanges = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            writerRows = this.query<{ count: number }, []>('SELECT count(*) AS count FROM identities').get()!.count;
+            journalRetained = existsSync(this.filename + '-journal');
+            transactionAtClose = this.inTransaction;
+            // A second connection only sees committed rows, including the final
+            // partial batch. The keys remain digests after the spill.
+            const reader = new Database(this.filename, { readonly: true });
+            try {
+                diskRows = reader.query<{ count: number }, []>('SELECT count(*) AS count FROM identities').get()!.count;
+                expect(reader.query('SELECT 1 FROM identities WHERE length(key) != 64 OR key GLOB \'*[^0-9a-f]*\' LIMIT 1').get()).toBeNull();
+            } finally { close.call(reader); }
+        }
+        return close.apply(this, args);
     });
     try {
         const indexed = await collectIndexedUsage([file], cutoff, opts(path));
         expect(bounded).toBe(true);
         expect(indexed.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
         expect(readSavedUsage(path)).toEqual(indexed);
-    } finally { limit.mockRestore(); }
+        expect(committedChanges).toBe(diskChanges);
+        expect(journalRetained).toBe(true);
+        expect(transactionAtClose).toBe(false);
+        expect(writerRows).toBeGreaterThan(0);
+        expect(diskRows).toBe(writerRows);
+        expect(batches.length).toBeGreaterThan(1);
+        expect(batches.every(count => count > 0 && count <= 256)).toBe(true);
+        expect(batches.at(-1)).toBeLessThan(256);
+        expect(existsSync(dirname(diskPath))).toBe(false);
+    } finally { observe.mockRestore(); limit.mockRestore(); }
+});
+for (const failure of ['copy-full', 'write-full', 'final-commit', 'deadline'] as const) test(`scratch ${failure} failure removes temporary state and preserves the last durable snapshot`, async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('saved')) + '\n');
+    const saved = await collectIndexedUsage([file], cutoff, opts(path));
+    await appendFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    const options = opts(path);
+    const exec = Database.prototype.exec;
+    const close = Database.prototype.close;
+    let injected = false;
+    let diskPath = '';
+    let fullRolledBack = false;
+    let pendingBatchAtClose = false;
+    let copyComplete = false;
+    let committedChanges = 0;
+    const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        if (this.filename === ':memory:') {
+            const result = exec.call(this, sql);
+            exec.call(this, 'PRAGMA max_page_count=8');
+            return result;
+        }
+        if (!this.filename.endsWith('/scratch.sqlite')) return exec.call(this, sql);
+        diskPath = this.filename;
+        const wasInTransaction = this.inTransaction;
+        // Fail only the last partial batch, after completed batches have really
+        // committed. Successful aggregation alone must not publish the snapshot.
+        if (failure === 'final-commit' && sql === 'COMMIT' && copyComplete) {
+            const changes = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            const batchChanges = changes - committedChanges;
+            if (batchChanges > 0 && batchChanges < 256) {
+                injected = true;
+                throw Object.assign(new Error('injected commit I/O error'), { code: 'SQLITE_IOERR' });
+            }
+        }
+        const result = exec.call(this, sql);
+        if (failure === 'copy-full' && !injected) {
+            exec.call(this, 'PRAGMA max_page_count=2');
+            injected = true;
+        }
+        if (wasInTransaction && !this.inTransaction) {
+            committedChanges = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
+            if (!injected && failure === 'write-full') {
+                const pages = this.query<{ page_count: number }, []>('PRAGMA page_count').get()!.page_count;
+                exec.call(this, `PRAGMA max_page_count=${pages}`);
+                injected = true;
+            }
+        }
+        if (!injected && failure === 'deadline' && copyComplete && !wasInTransaction && this.inTransaction) {
+            options.deadline = Date.now() - 1;
+            injected = true;
+        }
+        return result;
+    });
+    const observe = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        if (this.filename === ':memory:' && diskPath) copyComplete = true;
+        if (this.filename.endsWith('/scratch.sqlite')) {
+            if (failure.endsWith('full')) fullRolledBack = !this.inTransaction;
+            pendingBatchAtClose = this.inTransaction;
+        }
+        return close.apply(this, args);
+    });
+    try {
+        await expect(collectIndexedUsage([file], cutoff, options)).rejects.toThrow(failure === 'deadline' ? 'Usage collection timeout' : 'Usage identity storage limit or write failure');
+        expect(injected).toBe(true);
+        if (failure.endsWith('full')) expect(fullRolledBack).toBe(true);
+        else expect(pendingBatchAtClose).toBe(true);
+        expect(readSavedUsage(path)).toEqual(saved);
+        const reader = new Database(path, { readonly: true });
+        try { expect(reader.query<{ count: number }, []>('SELECT count(*) AS count FROM records').get()!.count).toBe(1); }
+        finally { reader.close(); }
+        expect(existsSync(dirname(diskPath))).toBe(false);
+    } finally { observe.mockRestore(); limit.mockRestore(); }
+    const recovered = await collectIndexedUsage([file], cutoff, opts(path));
+    expect(recovered.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+    expect(readSavedUsage(path)).toEqual(recovered);
 });
 test('append refresh retains existing rows, and interrupted tail publication rolls back atomically', async () => {
     const { path, file } = await fixture();
@@ -197,7 +314,7 @@ test('v14 comparison snapshots rebuild from indexed records without rereading so
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(19);
+    expect(rebuilt.countingVersion).toBe(21);
     expect(rebuilt.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
@@ -461,9 +578,98 @@ test('v17 grouped snapshots rebuild named categories from indexed records withou
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(19);
+    expect(rebuilt.countingVersion).toBe(21);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
+    const warm = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
+});
+
+test('v19 snapshots hiding edit tools rebuild diagnostics from unchanged indexed records', async () => {
+    const { path, file } = await fixture();
+    const rows = [];
+    for (const [tool, count, errors] of [['Bash', 20, 0], ['Read', 15, 0], ['Edit', 4, 3]] as const) {
+        for (let index = 0; index < count; index++) {
+            const id = `${tool}-${index}`;
+            rows.push({
+                ...row(id), version: '2.1.87-desktop.sha12345678',
+                message: { id, model: 'model', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id, name: tool }] },
+            });
+            rows.push({
+                type: 'user', sessionId: 's', uuid: `${id}-result`, timestamp: cutoff,
+                message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: index < errors }] },
+            });
+        }
+    }
+    await writeFile(file, rows.map(value => JSON.stringify(value)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const legacy = structuredClone(original) as any;
+    legacy.countingVersion = 19;
+    for (const range of ['7d', '30d', 'all'] as const) legacy.ranges[range] = groupUsageSummary(legacy.ranges[range], 8, 0, 0, 0);
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let reads = 0;
+    const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(rebuilt.countingVersion).toBe(21);
+    for (const range of ['7d', '30d', 'all'] as const) {
+        const edit = rebuilt.ranges[range].tools.find(tool => tool.label === 'Edit')!;
+        expect(edit).toMatchObject({ requests: 4, results: 4, errors: 3 });
+        expect(rebuilt.ranges[range].days.some(day => day.tools.find(tool => tool.id === edit.id)?.builds?.items[0]?.sha === '12345678')).toBe(true);
+    }
+    const warm = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
+});
+
+test('v20 grouped snapshots restore recent tool identities from indexed records without rereading sources', async () => {
+    const { path, file } = await fixture();
+    const tools = Array.from({ length: 6 }, (_, index) => `Recent tool ${index}`);
+    const models = Array.from({ length: 8 }, (_, index) => `model-${index}`);
+    const rows = [];
+    for (let day = 0; day < 60; day++) for (const [toolIndex, name] of tools.entries()) for (let build = 0; build < 3; build++) {
+        const id = `${day}-${toolIndex}-${build}`;
+        const timestamp = new Date(Date.UTC(2026, 6, 15 + day, 10, build)).toISOString();
+        rows.push({
+            type: 'assistant', sessionId: 's', uuid: id, timestamp,
+            version: `2.1.87-desktop.sha${build.toString(16).padStart(7, 'a')}`,
+            message: { id, model: models[(day + toolIndex + build) % models.length], usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id, name }] },
+        });
+        rows.push({
+            type: 'user', sessionId: 's', uuid: `${id}-result`, timestamp,
+            message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: toolIndex < 2 && build === 0 }] },
+        });
+    }
+    await writeFile(file, rows.map(value => JSON.stringify(value)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const stale = structuredClone(original) as any;
+    stale.countingVersion = 20;
+    stale.ranges['7d'] = groupUsageSummary(stale.ranges['7d'], 8, 4, 0, 1);
+    stale.ranges['30d'] = groupUsageSummary(stale.ranges['30d'], 8, 4, 0, 1);
+    stale.ranges.all = groupUsageSummary(stale.ranges.all, 8, 4, 0, 1);
+    expect(stale.ranges['7d'].tools.filter((tool: { kind: string }) => tool.kind === 'named')).toHaveLength(4);
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(stale)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+
+    let reads = 0;
+    const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(rebuilt.countingVersion).toBe(21);
+    for (const range of ['7d', '30d'] as const) {
+        expect(rebuilt.ranges[range].tools.filter(tool => tool.kind === 'named').map(tool => tool.label).sort()).toEqual([...tools].sort());
+        expect(rebuilt.ranges[range].tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(rebuilt.ranges[range].requests);
+        expect(rebuilt.ranges[range].tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
+    }
+    expect(rebuilt.ranges.all.requests).toBe(1080);
+    expect(rebuilt.ranges.all.days.reduce((sum, day) => sum + day.errors, 0)).toBe(120);
+    expect(rebuilt.ranges['7d'].days.some(day => day.tools.some(tool => (tool.builds?.items.length ?? 0) > 0))).toBe(true);
     const warm = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
     expect(warm.ranges).toEqual(rebuilt.ranges);

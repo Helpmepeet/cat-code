@@ -71,7 +71,9 @@ import {
 import { VirtualLineList } from './VirtualLineList.js'
 import {
   observePaneScroll,
+  compensatePanePrefix,
   reportPaneHeightCorrection,
+  reportPaneLayoutChange,
 } from './markdownScrollCoordinator.js'
 import {
   createCompositeChildState,
@@ -1205,6 +1207,7 @@ const DELEGATE_MEMBER_ESTIMATED_HEIGHT = 120
 function BoundedChildList({
   keys,
   estimatedChildHeight,
+  childGap = 0,
   renderChild,
   className,
   initialAnchorKey,
@@ -1216,6 +1219,7 @@ function BoundedChildList({
   /** One stable identity per child, in order. Length is the true child count. */
   keys: readonly string[]
   estimatedChildHeight: number
+  childGap?: number
   /** Draws the child at an index into `keys`. Called only for mounted children. */
   renderChild: (index: number) => ReactNode
   /** Layout classes the replaced wrapper carried, so spacing is unchanged. */
@@ -1241,16 +1245,22 @@ function BoundedChildList({
           entries,
           entries.slice(0, keys.indexOf(initialAnchorKey) < 0
             ? Math.max(0, entries.length - 1)
-            : keys.indexOf(initialAnchorKey)).reduce((total, entry) => total + entry.height, 0),
+            : keys.indexOf(initialAnchorKey)).reduce((total, entry) => total + entry.height + childGap, 0),
           INITIAL_CHILD_VIEWPORT_HEIGHT,
+          undefined,
+          undefined,
+          childGap,
         )
       : transcriptEntries
         ? selectCompositeChildWindow(
             entries,
             Math.max(0, entries.reduce((sum, entry) => sum + entry.height, 0) - INITIAL_CHILD_VIEWPORT_HEIGHT),
             INITIAL_CHILD_VIEWPORT_HEIGHT,
+            undefined,
+            undefined,
+            childGap,
           )
-        : selectInitialCompositeChildWindow(entries),
+        : selectInitialCompositeChildWindow(entries, undefined, childGap),
   )
   const rootRef = useRef<HTMLDivElement | null>(null)
   const entriesRef = useRef(entries)
@@ -1277,11 +1287,11 @@ function BoundedChildList({
       ? -1
       : entries.findIndex(entry => entry.key === retainedKey)
     if (retainedIndex >= 0 && retainedIndex !== previousWindow.start && paneScrollerRef.current) {
-      const oldPrefix = previousEntries.slice(0, previousWindow.start).reduce((sum, entry) => sum + entry.height, 0)
-      const newPrefix = entries.slice(0, retainedIndex).reduce((sum, entry) => sum + entry.height, 0)
+      const oldPrefix = previousEntries.slice(0, previousWindow.start).reduce((sum, entry) => sum + entry.height + childGap, 0)
+      const newPrefix = entries.slice(0, retainedIndex).reduce((sum, entry) => sum + entry.height + childGap, 0)
       const delta = newPrefix - oldPrefix
       if (delta !== 0) {
-        paneScrollerRef.current.scrollTop += delta
+        compensatePanePrefix(paneScrollerRef.current, delta)
         compensatedPrefixDeltaRef.current += delta
       }
       const root = rootRef.current
@@ -1293,6 +1303,9 @@ function BoundedChildList({
             entries,
             offset,
             scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
+            undefined,
+            undefined,
+            childGap,
           )
           return sameCompositeChildWindow(current, next) ? current : next
         })
@@ -1302,7 +1315,7 @@ function BoundedChildList({
     entriesRef.current = entries
     childWindowRef.current = childWindow
     scheduleRef.current()
-  }, [entries])
+  }, [entries, childGap])
 
   useEffect(() => {
     childWindowRef.current = childWindow
@@ -1328,6 +1341,9 @@ function BoundedChildList({
           entriesRef.current,
           scrollerRect.top - rootRect.top,
           scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
+          undefined,
+          undefined,
+          childGap,
         )
         return sameCompositeChildWindow(current, next) ? current : next
       })
@@ -1369,6 +1385,7 @@ function BoundedChildList({
     const compensatedPrefixDelta = compensatedPrefixDeltaRef.current
     compensatedPrefixDeltaRef.current = 0
     if (previous === null) return
+    if (rect.height > 0 || previous.height > 0) reportPaneLayoutChange(scroller)
     // Exclude only the prefix movement the keyed anchor already compensated.
     // Scrolling changes the spacer partition without changing document height.
     const delta = ownPaneHeightDelta(
@@ -1386,11 +1403,15 @@ function BoundedChildList({
     // An append changes the document below the viewport, not at the current
     // window's leading spacer. Locate list edits at their first changed entry.
     const unchangedPrefix = commonPrefix < Math.max(previous.entries.length, entries.length)
-      ? entries.slice(0, commonPrefix).reduce((sum, entry) => sum + entry.height, 0)
+      ? entries.slice(0, commonPrefix).reduce((sum, entry) => sum + entry.height + childGap, 0)
       : Math.min(previous.topSpacer, childWindow.topSpacerHeight)
-    const offset =
-      rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop + unchangedPrefix
-    reportPaneHeightCorrection(scroller, { offset, delta })
+    reportPaneHeightCorrection(scroller, {
+      delta,
+      readOffset: () => scroller.contains(root)
+        ? root.getBoundingClientRect().top - scroller.getBoundingClientRect().top +
+          scroller.scrollTop + unchangedPrefix
+        : null,
+    })
   })
 
   const mounted = useMemo(
@@ -1519,9 +1540,11 @@ function findPaneScroller(element: HTMLElement): HTMLElement {
 function NestedRowList({
   rows,
   className,
+  childGap = 0,
 }: {
   rows: NestedTranscriptRow[]
   className?: string
+  childGap?: number
 }) {
   const { mode } = useContext(ReasoningLayoutContext)
   const items = groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode))
@@ -1531,6 +1554,7 @@ function NestedRowList({
     <ReplyCopyInsetContext.Provider value>
       <BoundedChildList
         className={className}
+        childGap={childGap}
         estimatedChildHeight={NESTED_ROW_ESTIMATED_HEIGHT}
         keys={keys}
         renderChild={index => (
@@ -3247,7 +3271,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 border-l border-accent/20 pl-3">
-          <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+          <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
         </div>
       ) : null}
     </div>
@@ -4462,7 +4486,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       <div className="flex flex-col gap-2">
         {childCount > 0 ? (
           <div className="border-l border-accent/20 pl-3">
-            <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+            <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
           </div>
         ) : null}
         {/* A background agent's real outcome, joined in from its
@@ -4649,7 +4673,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
       {expanded ? (
         <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
           <div className="border-l border-accent/20 pl-3">
-            <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+            <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
           </div>
         </div>
       ) : null}
@@ -4740,6 +4764,7 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
       {/* Bounded: the header above keeps counting every member. */}
       <BoundedChildList
         className="flex flex-col gap-2 p-2"
+        childGap={8}
         estimatedChildHeight={DELEGATE_MEMBER_ESTIMATED_HEIGHT}
         keys={memberKeys}
         renderChild={index => <AgentToolCard row={members[index]} />}
@@ -4800,7 +4825,6 @@ function ToolCardBody({
       return (
         <BashBody
           content={content}
-          isError={errorTone}
           onOpenFull={openFull}
           toolUseId={row.toolUseId}
         />
@@ -4918,19 +4942,17 @@ function stringifyInput(input: Record<string, unknown>): string {
  * drawer (`:423,491,525,550-554`), while the Grep/Web/Mcp/Skill bodies take flat
  * `FE_T.t2` plus `hl()` syntax coloring (`:695,715,734,788`) instead.
  *
- * An errored result overrides every line to the danger tint rather than tinting
- * per line: the outcome is already known, and running the heuristic over a stack
- * trace would paint most of it as ordinary output.
+ * Failure belongs to the card's status, not every line of merged output:
+ * earlier steps in a compound command may have succeeded.
  */
 function renderLogLine(
   line: string,
-  isError: boolean,
   lineNumber: number,
 ) {
   return (
     <div key={lineNumber} className="flex">
       <span className={LOG_GUTTER_CLASS}>{lineNumber}</span>
-      <span className={isError ? 'text-tone-danger' : logLineClass(line)}>
+      <span className={logLineClass(line)}>
         {line || ' '}
       </span>
     </div>
@@ -4939,12 +4961,10 @@ function renderLogLine(
 
 function BashBody({
   content,
-  isError,
   onOpenFull,
   toolUseId,
 }: {
   content: string
-  isError: boolean
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
@@ -4974,7 +4994,6 @@ function BashBody({
       renderLine={(line, index) =>
         renderLogLine(
           line,
-          isError,
           index < window.head.length
             ? index + 1
             : window.tailStartLine + index - window.head.length,

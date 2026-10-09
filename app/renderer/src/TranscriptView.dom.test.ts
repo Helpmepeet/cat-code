@@ -572,6 +572,24 @@ function countScrollListeners(element: HTMLElement): () => number {
 }
 
 describe('bounded composite containers', () => {
+  test('generated-image children do not add phantom flex gaps to their spacers', async () => {
+    const row = generatedImageRow()
+    row.children = Array.from({ length: 200 }, (_, index) => historyTextRow(index))
+    const tree = await harness.mount(createElement(Pane, {
+      rows: [row], store: createToolCardExpansionStore(),
+    }))
+    await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+    const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]')!
+    const children = mountedChildren(pane)
+    expect(children.length).toBeGreaterThan(0)
+    expect(children.length).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+    const container = children[0]!.parentElement!
+    expect(container.className).toBe('')
+    const spacer = container.lastElementChild as HTMLElement
+    expect(spacer.hasAttribute('aria-hidden')).toBe(true)
+    expect(Number.parseFloat(spacer.style.height)).toBe((200 - children.length) * 120)
+  })
+
   test('an expanded nested agent transcript mounts a bounded number of rows', async () => {
     const store = createToolCardExpansionStore()
     store.set('toolu_agent_solo', true)

@@ -33,10 +33,7 @@ import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from 'src/tools/GrepTool/prompt.js'
 import { hasEmbeddedSearchTools } from 'src/utils/embeddedTools.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/AskUserQuestionTool/prompt.js'
-import {
-  EXPLORE_AGENT,
-  EXPLORE_AGENT_MIN_QUERIES,
-} from 'src/tools/AgentTool/built-in/exploreAgent.js'
+import { EXPLORE_AGENT } from 'src/tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from 'src/tools/AgentTool/builtInAgents.js'
 import {
   isScratchpadEnabled,
@@ -418,7 +415,7 @@ function getSessionSpecificGuidanceSection(
     !isForkSubagentEnabled()
       ? [
           `For simple, directed codebase searches (e.g. for a specific file/class/function) use ${searchTools} directly.`,
-          `For broader codebase exploration across many files, use the ${AGENT_TOOL_NAME} tool with subagent_type=${EXPLORE_AGENT.agentType} to locate code and answer structure/behavior questions — not to read each file in full to characterize, audit, or classify it (use a general-purpose worker for that, even across many files). This is slower than using ${searchTools} directly, so use this only when a simple, directed search proves to be insufficient or when your task will clearly require more than ${EXPLORE_AGENT_MIN_QUERIES} queries.`,
+          `When delegation is justified by independent parallel work, isolating substantial intermediate output, or an explicit user request, use ${EXPLORE_AGENT.agentType} for read-only discovery and concise answers. Use a general-purpose or coding worker for deep per-file analysis or implementation. Multiple searches or files alone do not require delegation.`,
         ]
       : []),
     hasAgentTool

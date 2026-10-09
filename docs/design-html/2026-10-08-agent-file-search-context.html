@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent context · The picture version</title>
+<style>
+@font-face{font-family:DM Sans;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');font-weight:100 900;font-display:swap}
+@font-face{font-family:DM Mono;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');font-display:swap}
+.x-page{margin:0;background:#fff;color:#666}
+.x-main{max-width:1000px;margin:auto;padding:32px 28px 56px}
+.x-header{display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid #ddd;padding-bottom:18px}
+.x-title,.x-label,.x-section-title{margin:0;color:#666;font:10px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase}
+.x-section{margin-top:36px}
+.x-section-title{border-bottom:1px solid #ddd;padding-bottom:12px;margin-bottom:18px}
+.x-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:36px}
+.x-cell{min-width:0}
+.x-label{margin-bottom:12px}
+.specimen{background:#fff;color:#18181b;font-family:'DM Sans',sans-serif;min-width:0}
+.specimen svg{display:block;width:100%;height:auto}
+.specimen .ink{fill:none;stroke:#18181b;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.specimen .soft{fill:none;stroke:#bbb;stroke-width:2;stroke-linecap:round}
+.specimen .ghost{fill:none;stroke:#aaa;stroke-width:2;stroke-dasharray:7 7}
+.specimen .paper{fill:#f7f7f9;stroke:#18181b;stroke-width:2.5;stroke-linejoin:round}
+.specimen text{fill:#18181b;font-family:'DM Sans',sans-serif;font-size:22px}
+.specimen .filename{font-family:'DM Mono',monospace;font-size:19px}
+.specimen .small{font-size:17px}
+.specimen .big{font-size:54px;font-weight:600}
+.specimen .faint{fill:#777}
+.specimen .note{font-size:23px;font-weight:500}
+.specimen .message{font:23px/1.45 'DM Sans',sans-serif;margin:0;padding:0 0 18px}
+.specimen .message code{font:20px 'DM Mono',monospace;white-space:nowrap}
+@media(max-width:650px){.x-main{padding:24px 16px 40px}.x-header{display:block}.x-header .x-label{margin-top:6px}.x-grid{grid-template-columns:1fr;gap:24px}.x-section{margin-top:26px}.specimen .message{font-size:20px}}
+</style>
+</head>
+<body class="x-page">
+<main class="x-main">
+<header class="x-header">
+<h1 class="x-title">Agent context / Picture version</h1>
+<div class="x-label">6e500981 · Simplified messages</div>
+</header>
+
+<section class="x-section" aria-labelledby="wrong-file">
+<h2 class="x-section-title" id="wrong-file">01 / The wrong file</h2>
+<div class="x-grid">
+<div class="x-cell">
+<div class="x-label">Your message → Agent</div>
+<div class="specimen">
+<p class="message">“TasksStrip is inside <code>App.tsx</code>.”</p>
+<svg viewBox="0 0 460 270" role="img" aria-label="A file named App.tsx, with TasksStrip inside it.">
+<path class="paper" d="M104 12H294L350 68V248H104Z"/>
+<path class="ink" d="M294 12V68H350"/>
+<text class="filename" x="130" y="59">App.tsx</text>
+<path class="soft" d="M132 96H318M132 117H298"/>
+<rect class="ink" x="129" y="139" width="195" height="48"/>
+<text class="filename" x="148" y="170">TasksStrip</text>
+<path class="soft" d="M132 208H278M132 228H309"/>
+</svg>
+</div>
+</div>
+<div class="x-cell">
+<div class="x-label">Agent → Tool</div>
+<div class="specimen">
+<p class="message">“Read <code>TasksStrip.tsx</code>.”</p>
+<svg viewBox="0 0 460 270" role="img" aria-label="The agent asks for a different file, TasksStrip.tsx. That file does not exist.">
+<path class="ghost" d="M104 12H294L350 68V248H104Z"/>
+<path class="ghost" d="M294 12V68H350"/>
+<text class="filename" x="122" y="103">TasksStrip.tsx</text>
+<path class="ink" d="M203 133L248 178M248 133L203 178"/>
+<text class="note" x="227" y="218" text-anchor="middle">No such file.</text>
+</svg>
+</div>
+</div>
+</div>
+</section>
+
+<section class="x-section" aria-labelledby="better-reply">
+<h2 class="x-section-title" id="better-reply">02 / A more helpful reply</h2>
+<div class="x-grid">
+<div class="x-cell">
+<div class="x-label">Current · Tool → Agent</div>
+<div class="specimen">
+<p class="message">“File does not exist.”</p>
+<svg viewBox="0 0 460 230" role="img" aria-label="The current response gives the agent an error, but no destination.">
+<path class="ink" d="M76 88H220M208 77L220 88L208 99"/>
+<circle class="ink" cx="284" cy="88" r="49"/>
+<text class="big" x="284" y="108" text-anchor="middle">?</text>
+<text x="230" y="191" text-anchor="middle">Where next?</text>
+</svg>
+</div>
+</div>
+<div class="x-cell">
+<div class="x-label">Proposed · Not implemented</div>
+<div class="specimen">
+<p class="message">“Here is the whole function.”</p>
+<svg viewBox="0 0 460 230" role="img" aria-label="For one exact, permitted match, the tool returns the complete TasksStrip function from App.tsx as a successful read, not an error.">
+<path class="paper" d="M18 8H119L147 36V155H18Z"/>
+<path class="ink" d="M119 8V36H147"/>
+<text class="filename" x="30" y="62">App.tsx</text>
+<path class="soft" d="M33 79H129M33 137H115"/>
+<rect class="ink" x="28" y="94" width="109" height="29"/>
+<text class="small" x="36" y="115">TasksStrip</text>
+<path class="ink" d="M151 108H206M194 97L206 108L194 119"/>
+<path class="paper" d="M221 8H440V155H221Z"/>
+<text class="filename" x="241" y="40">TasksStrip</text>
+<text x="239" y="69">{</text>
+<path class="soft" d="M259 66H417M259 83H389M259 100H407M259 117H378"/>
+<text x="239" y="142">}</text>
+<text class="small" x="230" y="189" text-anchor="middle">app/renderer/src/App.tsx</text>
+<text x="230" y="222" text-anchor="middle">Full function · Successful read</text>
+</svg>
+</div>
+</div>
+</div>
+</section>
+
+<section class="x-section" aria-labelledby="clipped-map">
+<h2 class="x-section-title" id="clipped-map">03 / A separate issue</h2>
+<div class="x-grid">
+<div class="x-cell">
+<div class="x-label">Agent request · Map</div>
+<div class="specimen">
+<p class="message">“Give me lines 1–160.”</p>
+<svg viewBox="0 0 460 300" role="img" aria-label="The agent requests 160 lines from the desktop routing map.">
+<path class="paper" d="M106 12H300L349 61V274H106Z"/>
+<path class="ink" d="M300 12V61H349"/>
+<text class="big" x="226" y="103" text-anchor="middle">160</text>
+<text class="small" x="226" y="134" text-anchor="middle">requested lines</text>
+<path class="soft" d="M133 162H319M133 182H298M133 202H313M133 222H281M133 242H307"/>
+</svg>
+</div>
+</div>
+<div class="x-cell">
+<div class="x-label">Tool response → Agent</div>
+<div class="specimen">
+<p class="message">“Here are lines 1–29.”</p>
+<svg viewBox="0 0 460 300" role="img" aria-label="The response contains only the first 29 lines. Its notice says to continue from line 30.">
+<path class="ghost" d="M106 175V274H349V175"/>
+<path class="paper" d="M106 12H300L349 61V160L327 174L306 160L284 174L262 160L240 174L218 160L196 174L174 160L152 174L130 160L106 174Z"/>
+<path class="ink" d="M300 12V61H349"/>
+<text class="big" x="226" y="103" text-anchor="middle">29</text>
+<text class="small" x="226" y="134" text-anchor="middle">returned lines</text>
+<text class="small faint" x="226" y="219" text-anchor="middle">30–160</text>
+<text class="small faint" x="226" y="248" text-anchor="middle">outside this response</text>
+</svg>
+</div>
+</div>
+</div>
+</section>
+</main>
+</body>
+</html>

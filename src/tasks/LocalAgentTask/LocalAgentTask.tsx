@@ -764,6 +764,7 @@ export function enqueueAgentMessageDeliveryReportsToOrigins({
         mode: 'task-notification',
         origin: toTaskNotificationOrigin(details),
         agentId: originAgentId,
+        taskRunId: runId,
       })
     } catch (enqueueError) {
       logForDebugging(
@@ -892,7 +893,9 @@ export function enqueueAgentNotification({
     enqueueNotification({
       value: formatTaskNotificationText(details),
       mode: 'task-notification',
-      origin: toTaskNotificationOrigin(details)
+      priority: 'next',
+      origin: toTaskNotificationOrigin(details),
+      taskRunId: runId,
     });
   } catch (enqueueError) {
     logForDebugging(

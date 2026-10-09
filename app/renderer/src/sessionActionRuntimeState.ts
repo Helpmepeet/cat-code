@@ -27,7 +27,7 @@ export type SessionActionRuntimeState = {
   lastBySession: Record<SessionId, SessionActionResultFrame | null>
   /** Correlated failures stay separate: ErrorFrame does not name an action verb. */
   errorBySession: Record<SessionId, SessionActionError | null>
-  /** Targeted Edit/Branch results retained by correlation id until consumed. */
+  /** Edit and fork results retained by correlation id until consumed. */
   targetedByRequestId: Record<string, SessionActionResultFrame>
 }
 
@@ -92,7 +92,9 @@ export function reduceSessionActionRuntimeState(
 
   if (frame.kind === 'session-action.result') {
     const targeted =
-      frame.verb === 'editFromMessage' || frame.verb === 'branchFromMessage'
+      frame.verb === 'editFromMessage' ||
+      frame.verb === 'branchFromMessage' ||
+      frame.verb === 'branch'
     const targetedByRequestId = targeted
       ? appendBoundedTargetedResult(state.targetedByRequestId, frame)
       : state.targetedByRequestId

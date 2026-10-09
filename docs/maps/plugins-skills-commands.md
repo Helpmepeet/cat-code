@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-09-29
+Last refreshed: 2026-10-06
 
 ## Purpose
 
@@ -183,7 +183,7 @@ Non-plugin output styles ignore `force-for-plugin` and can use
 | Scope server names | `src/utils/plugins/mcpPluginIntegration.ts` `addPluginScopeToServers` | Server names become `plugin:<pluginName>:<serverName>` with dynamic scope and plugin source. |
 | Resolve env/config | `src/utils/plugins/mcpPluginIntegration.ts` `resolvePluginMcpEnvironment` | Substitutes plugin vars, optional user config, and environment vars; adds `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` for stdio servers. |
 | Channel config prompts | `src/utils/plugins/mcpPluginIntegration.ts` `getUnconfiguredChannels` | Finds manifest `channels` whose required per-server user config is missing. |
-| MCPB storage/config | `src/utils/plugins/mcpbHandler.ts` | Handles MCP bundle extraction and per-server user config storage. |
+| MCPB storage/config | `src/utils/plugins/mcpbHandler.ts`, `src/utils/dxt/helpers.ts` | Extracts bundles through fresh staging in a private config-home cache, outside plugin-controlled content; validates the installed package's versioned manifest schemas. Per-server user config remains in its existing storage. |
 
 Top-level `manifest.userConfig` feeds MCP `${user_config.KEY}` substitution.
 Channel-specific `channels[].userConfig` is stored per server and wins on key
@@ -208,7 +208,7 @@ LSP command, args, env, and workspace folder.
 | Flow | Inspect first | Then inspect |
 |---|---|---|
 | Declared marketplace intent | `src/utils/plugins/marketplaceManager.ts` `getDeclaredMarketplaces` | settings files, `src/utils/plugins/addDirPluginSettings.ts` |
-| Materialized marketplace state | `src/utils/plugins/marketplaceManager.ts` | `~/.claude/plugins/known_marketplaces.json`, marketplace cache paths |
+| Materialized marketplace state | `src/utils/plugins/marketplaceManager.ts` | Config-home `plugins/known_marketplaces.json` (normally `~/.cat-code/`), marketplace cache paths |
 | Startup reconciliation | `src/utils/plugins/reconciler.ts` | `src/services/plugins/PluginInstallationManager.ts`, `src/utils/plugins/headlessPluginInstall.ts` |
 | Interactive `/plugin marketplace ...` | `src/commands/plugin/ManageMarketplaces.tsx`, `src/commands/plugin/AddMarketplace.tsx` | `src/utils/plugins/marketplaceManager.ts`, `src/utils/plugins/parseMarketplaceInput.ts` |
 | CLI marketplace subcommands | `src/main.tsx` plugin commander block | `src/cli/handlers/plugins.ts` |
@@ -222,6 +222,19 @@ The durable model is three layers:
 2. Materialization: marketplace and plugin cache under the plugins directory.
 3. Active session: AppState commands/agents/errors, registered hooks, MCP
    reconnect key, and LSP manager config.
+
+Marketplace materialization validates schema, reserved-name provenance, and
+seed-managed collisions before publication. Add and explicit Git/URL refresh
+retain the previous cache until config persistence succeeds, with rollback on
+failure. Git refresh updates a staged copy of the existing checkout. Cached
+reads also validate provenance and marketplace identity; configured admin seeds
+can supply official content only through matching authoritative seed records
+and canonical seed locations. Refresh and transport boundaries enforce current
+source policy, including official GCS requests after asynchronous waits.
+
+Cache-path guards are not filesystem object capabilities. Some bulk, recovery,
+and GCS flows publish validated content before a separate metadata save; a failed
+save can leave valid cache content with stale registration metadata.
 
 Install is settings-first. `installResolvedPlugin()` resolves dependency
 closure, writes all enabled plugin IDs to settings in one update, then caches

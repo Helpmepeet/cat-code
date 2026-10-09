@@ -202,6 +202,39 @@ describe('tags', () => {
     expect(settled.selected).toEqual(['a'])
   })
 
+  test('catalog-settled preserves a selection-only state when ready replaces the app id', () => {
+    const provisional = row({
+      sessionId: 'app-1',
+      appSessionId: 'app-1',
+      live: true,
+      inRegistry: true,
+      status: 'spawning',
+    })
+    const ready = row({
+      ...provisional,
+      sessionId: 'engine-1',
+      status: 'ready',
+    })
+    const state = apply([{ type: 'toggle-selected', sessionId: 'app-1' }])
+
+    const settled = reduceSessionsPageState(state, {
+      type: 'catalog-settled',
+      rows: [ready],
+      previousRows: [provisional],
+    })
+
+    expect(settled.selected).toEqual(['engine-1'])
+    expect(selectAllVisibleSelected(settled, ['engine-1'])).toBe(true)
+    expect(selectWritableSelection(settled, [ready])).toEqual(['app-1'])
+    expect(
+      reduceSessionsPageState(settled, {
+        type: 'catalog-settled',
+        rows: [ready],
+        previousRows: [ready],
+      }),
+    ).toBe(settled)
+  })
+
   test('catalog-settled migrates page state when ready replaces a fresh row app id with its engine id', () => {
     const provisional = row({
       sessionId: 'app-1',

@@ -1,9 +1,10 @@
-import { mkdir, unlink, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
 import { type AnsiToPngOptions, ansiToPng } from './ansiToPng.js'
 import { execFileNoThrowWithCwd } from './execFileNoThrow.js'
 import { logError } from './log.js'
+import {
+  removePrivateTempFile,
+  writePrivateTempFile,
+} from './privateTemp.js'
 import { getPlatform } from './platform.js'
 
 /**
@@ -17,28 +18,24 @@ export async function copyAnsiToClipboard(
   ansiText: string,
   options?: AnsiToPngOptions,
 ): Promise<{ success: boolean; message: string }> {
+  let pngPath: string | undefined
   try {
-    const tempDir = join(tmpdir(), 'claude-code-screenshots')
-    await mkdir(tempDir, { recursive: true })
-
-    const pngPath = join(tempDir, `screenshot-${Date.now()}.png`)
-    const pngBuffer = ansiToPng(ansiText, options)
-    await writeFile(pngPath, pngBuffer)
-
+    pngPath = await writePrivateTempFile(
+      ansiToPng(ansiText, options),
+      'cat-code-screenshot-',
+      '.png',
+    )
     const result = await copyPngToClipboard(pngPath)
-
-    try {
-      await unlink(pngPath)
-    } catch {
-      // Ignore cleanup errors
-    }
-
     return result
   } catch (error) {
     logError(error)
     return {
       success: false,
       message: `Failed to copy screenshot: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    }
+  } finally {
+    if (pngPath) {
+      await removePrivateTempFile(pngPath).catch(() => {})
     }
   }
 }

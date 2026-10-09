@@ -12,7 +12,7 @@ import {
 } from './utils/cuaDriver/run.js'
 import * as analytics from './services/analytics/index.js'
 import * as growthbook from './services/analytics/growthbook.js'
-import type { ToolUseContext } from './Tool.js'
+import type { ToolDef, ToolUseContext } from './Tool.js'
 import { query } from './query.js'
 import { TurnHandoff } from './app-runtime/handoff.js'
 import type { QueryDeps } from './query/deps.js'
@@ -32,11 +32,21 @@ import { buildTool } from './Tool.js'
 import { asSystemPrompt } from './utils/systemPromptType.js'
 import z from 'zod/v4'
 import {
+  enqueueAgentNotification,
+  registerAgentForeground,
+} from './tasks/LocalAgentTask/LocalAgentTask.js'
+import { spawnShellTask } from './tasks/LocalShellTask/LocalShellTask.js'
+import type { ExecResult, ShellCommand } from './utils/ShellCommand.js'
+import { TaskOutput } from './utils/task/TaskOutput.js'
+import { getDefaultAppState } from './state/AppStateStore.js'
+import type { Attachment } from './utils/attachments.js'
+import {
   resetStateForTests,
   setMainLoopModelOverride,
   setSessionProvider,
 } from './bootstrap/state.js'
 import { getMainLoopModel } from './utils/model/model.js'
+import { drainSdkEvents } from './utils/sdkEventQueue.js'
 
 function createAssistantMessage(text: string, uuid: string): AssistantMessage {
   return {
@@ -400,6 +410,126 @@ describe('query mid-turn drain gate', () => {
 
     expect(getCommandQueueSnapshot()).toHaveLength(0)
   })
+})
+
+describe('background completion delivery during an active turn', () => {
+  afterEach(resetCommandQueue)
+
+  for (const producer of ['agent', 'shell'] as const) {
+    for (const status of ['completed', 'failed', 'killed'] as const) {
+      for (const querySource of ['repl_main_thread', 'sdk'] as const) {
+        test(`${querySource} receives ${status} ${producer} results at the next tool boundary`, async () => {
+          const messages = [createUserMessage({ content: 'continue working' })]
+          const context = createToolUseContext(messages)
+          Object.assign(context.getAppState(), getDefaultAppState())
+          const taskId = `${producer}-${status}-${querySource}`
+          let finishShell!: (result: ExecResult) => void
+          let shellHandle: Awaited<ReturnType<typeof spawnShellTask>> | undefined
+          if (producer === 'agent') {
+            registerAgentForeground({
+              agentId: taskId, description: 'Boundary worker', prompt: 'fixture',
+              selectedAgent: {
+                agentType: 'general-purpose', whenToUse: 'fixture',
+                source: 'built-in', baseDir: 'built-in', getSystemPrompt: () => 'fixture',
+              },
+              setAppState: context.setAppState,
+            })
+          } else {
+            const shellCommand: ShellCommand = {
+              status: 'running', background: () => true, kill: () => {}, cleanup: () => {},
+              taskOutput: new TaskOutput(taskId, null),
+              result: new Promise(resolve => { finishShell = resolve }),
+            }
+            shellHandle = await spawnShellTask({
+              command: 'fixture', description: 'Boundary shell', shellCommand,
+            }, context)
+          }
+          const probe = buildTool({
+            name: 'CompletionBoundaryProbe', inputSchema: z.strictObject({}),
+            maxResultSizeChars: 1000,
+            isReadOnly: () => true, isConcurrencySafe: () => true,
+            async description() { return 'fixture' },
+            async prompt() { return 'fixture' },
+            async validateInput() { return { result: true as const } },
+            renderToolUseMessage: () => null, renderToolResultMessage: () => null,
+            renderToolUseErrorMessage: () => null,
+            mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
+              return { type: 'tool_result' as const, tool_use_id: toolUseID, content: 'ok' }
+            },
+            async call() {
+              if (producer === 'agent') {
+                enqueueAgentNotification({
+                  taskId, description: 'Boundary worker', status,
+                  finalMessage: 'Worker evidence', setAppState: context.setAppState,
+                })
+              } else {
+                if (status === 'killed') {
+                  context.setAppState(prev => ({
+                    ...prev, tasks: { ...prev.tasks, [taskId]: { ...prev.tasks[taskId]!, status } },
+                  }))
+                }
+                finishShell({ stdout: '', stderr: '', code: status === 'completed' ? 0 : 1, interrupted: status === 'killed' })
+                // Wait for the real shell completion callback, including its output flush.
+                for (let i = 0; i < 100 && !context.getAppState().tasks[taskId]?.notified; i++) {
+                  await Bun.sleep(1)
+                }
+                expect(context.getAppState().tasks[taskId]?.notified).toBe(true)
+              }
+              return { data: 'ok' }
+            },
+          } satisfies ToolDef)
+          context.options.tools = [probe]
+          let calls = 0
+          let delivered: Message[] = []
+          try {
+            for await (const _message of query({
+              messages, systemPrompt: asSystemPrompt(['fixture']), userContext: {}, systemContext: {},
+              toolUseContext: context, querySource,
+              canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+              deps: {
+                uuid: () => `completion-${taskId}`,
+                microcompact: async input => ({ messages: input }),
+                autocompact: async () => ({ wasCompacted: false }),
+                callModel: async function* ({ messages: requestMessages }) {
+                  calls++
+                  const assistant = createAssistantMessage('done', `${taskId}-${calls}`)
+                  if (calls === 1) {
+                    assistant.message.content = [{ type: 'tool_use', id: 'completion-probe', name: probe.name, input: {} }]
+                    assistant.message.stop_reason = 'tool_use'
+                  } else delivered = requestMessages
+                  yield assistant
+                },
+              },
+            })) { /* drain the active turn */ }
+          } finally {
+            shellHandle?.cleanup?.()
+          }
+          const completions = delivered.filter(message => {
+            if (message.type !== 'attachment') return false
+            const attachment = message.attachment as Attachment
+            return attachment.type === 'queued_command' &&
+              attachment.origin?.kind === 'task-notification' &&
+              attachment.origin.taskId === taskId
+          })
+          expect(completions).toHaveLength(1)
+          expect(completions[0]).toMatchObject({ attachment: { origin: { status } } })
+          expect(calls).toBe(2)
+          expect(getCommandQueueSnapshot()).toHaveLength(0)
+          if (querySource === 'sdk') {
+            const terminalEvents = drainSdkEvents().filter(
+              event =>
+                event.subtype === 'task_notification' &&
+                event.task_id === taskId,
+            )
+            expect(terminalEvents).toHaveLength(1)
+            expect(terminalEvents[0]).toMatchObject({
+              status: status === 'killed' ? 'stopped' : status,
+            })
+          }
+        })
+      }
+    }
+  }
 })
 
 describe('post-turn stall diagnostics', () => {

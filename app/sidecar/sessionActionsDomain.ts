@@ -46,6 +46,7 @@ import { deserializeMessages } from '../../src/utils/conversationRecovery.js'
 import { renderMessagesToPlainText } from '../../src/utils/exportRenderer.js'
 import { recursivelySanitizeUnicode } from '../../src/utils/sanitization.js'
 import {
+  flushCurrentTranscriptDurably,
   getLastSessionLog,
   getTranscriptPath,
   isLiteLog,
@@ -157,6 +158,8 @@ export function createRealSessionActionsExecutor(deps: {
       )
     },
     async branch() {
+      await deps.controller.waitUntilIdle()
+      await flushCurrentTranscriptDurably()
       return finalizeFork(await createFork())
     },
     async editFromMessage(userMessageId) {

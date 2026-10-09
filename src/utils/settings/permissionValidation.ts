@@ -1,5 +1,8 @@
 import { z } from 'zod/v4'
-import { mcpInfoFromString } from '../../services/mcp/mcpStringUtils.js'
+import {
+  mcpInfoFromString,
+  mcpPermissionIdentityFromRuleName,
+} from '../../services/mcp/mcpStringUtils.js'
 import { lazySchema } from '../lazySchema.js'
 import { permissionRuleValueFromString } from '../permissions/permissionRuleParser.js'
 import { capitalize } from '../stringUtils.js'
@@ -100,7 +103,9 @@ export function validatePermissionRule(rule: string): {
   const parsed = permissionRuleValueFromString(rule)
 
   // MCP validation - must be done before general tool validation
-  const mcpInfo = mcpInfoFromString(parsed.toolName)
+  const mcpInfo =
+    mcpPermissionIdentityFromRuleName(parsed.toolName) ??
+    mcpInfoFromString(parsed.toolName)
   if (mcpInfo) {
     // MCP rules support server-level, tool-level, and wildcard permissions
     // Valid formats:
@@ -119,7 +124,9 @@ export function validatePermissionRule(rule: string): {
         examples: [
           `mcp__${mcpInfo.serverName}`,
           `mcp__${mcpInfo.serverName}__*`,
-          mcpInfo.toolName && mcpInfo.toolName !== '*'
+          'toolName' in mcpInfo &&
+          mcpInfo.toolName &&
+          mcpInfo.toolName !== '*'
             ? `mcp__${mcpInfo.serverName}__${mcpInfo.toolName}`
             : undefined,
         ].filter(Boolean) as string[],

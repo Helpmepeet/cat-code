@@ -34,6 +34,18 @@ import type {
 
 const SID = 'session-1'
 
+test('an estimated deadline survives disconnect as display data, not a live control', () => {
+  const cacheExpiresAt = Date.now() - 1
+  let runControls = reduceRunControlsState(createRunControlsState(), frame({
+    kind: 'run-controls.snapshot', protocolVersion: 2, sessionId: SID,
+    runControls: { ...SNAPSHOT, cacheExpiresAt },
+  }))
+  runControls = reduceRunControlsState(runControls, frame(lifecycle()))
+  const rail = selectComposerRail(sources({ runControls, connectionStatus: 'disconnected' }))
+  expect(rail.cacheExpiresAt).toBe(cacheExpiresAt)
+  expect(rail.liveRunControls).toBeNull()
+})
+
 const SNAPSHOT: RunControlsSnapshot = {
   model: {
     current: 'gpt-5.6-sol',

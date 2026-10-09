@@ -3,6 +3,7 @@ import { resolve } from 'path'
 import { getErrnoCode } from '../errors.js'
 import { getFsImplementation } from '../fsOperations.js'
 import type { MarketplaceSource } from './schemas.js'
+import { isValidGitHubRepositoryPath } from './schemas.js'
 
 /**
  * Parses a marketplace input string and returns the appropriate marketplace source type.
@@ -151,6 +152,9 @@ export async function parseMarketplaceInput(
     const fragmentMatch = trimmed.match(/^([^#@]+)(?:[#@](.+))?$/)
     const repo = fragmentMatch?.[1] || trimmed
     const ref = fragmentMatch?.[2]
+    if (!isValidGitHubRepositoryPath(repo)) {
+      return null
+    }
     // Assume it's a GitHub repo
     return ref ? { source: 'github', repo, ref } : { source: 'github', repo }
   }

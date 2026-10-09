@@ -174,6 +174,8 @@ export type MergedSessionRow = {
    * the exact warp CC-2 removed.
    */
   transcriptActivityAtMs: number | null
+  /** Genuine message or active engine lease acquisition; absent/null means unknown. */
+  sessionActivityAtMs?: number | null
   gitBranch: string | null
   tag: string | null
   mode: 'coordinator' | 'normal' | null
@@ -264,6 +266,7 @@ export function selectMergedSessionRows(
       createdAtMs: entry?.createdAtMs ?? descriptor.createdAt,
       lastMessageSentAt: descriptor.lastMessageSentAt,
       transcriptActivityAtMs: entry?.modifiedAtMs ?? null,
+      sessionActivityAtMs: entry?.sessionActivityAtMs ?? null,
       gitBranch: entry?.gitBranch ?? null,
       tag: entry?.tag ?? null,
       mode: entry?.mode ?? null,
@@ -305,6 +308,7 @@ export function selectMergedSessionRows(
       createdAtMs: entry.createdAtMs,
       lastMessageSentAt: null,
       transcriptActivityAtMs: entry.modifiedAtMs,
+      sessionActivityAtMs: entry.sessionActivityAtMs ?? null,
       gitBranch: entry.gitBranch,
       tag: entry.tag,
       mode: entry.mode,

@@ -38,6 +38,7 @@ import {
   supportsPersistence,
 } from '../../utils/permissions/PermissionUpdate.js'
 import type { PermissionUpdate } from '../../utils/permissions/PermissionUpdateSchema.js'
+import { issueUserApprovalReceipt } from '../../services/tools/toolInputSecurity.js'
 import {
   logPermissionDecision,
   type PermissionDecisionArgs,
@@ -297,6 +298,7 @@ function createPermissionContext(
       contentBlocks?: ContentBlockParam[],
       decisionReason?: PermissionDecisionReason,
     ): Promise<PermissionAllowDecision> {
+      issueUserApprovalReceipt(tool.name, updatedInput, toolUseID)
       const acceptedPermanentUpdates =
         await this.persistPermissions(permissionUpdates)
       this.logDecision(

@@ -206,7 +206,7 @@ export function reduceSessionsPageState(
           : null
       if (
         confirmedTags === state.confirmedTags &&
-        selected.length === state.selected.length &&
+        selected === state.selected &&
         renaming === state.renaming &&
         tagPopover === state.tagPopover
       ) {

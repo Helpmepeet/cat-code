@@ -166,6 +166,11 @@ function paletteOf(
 }
 
 describe('theme.css', () => {
+  test('cache hover label is hidden at rest and does not intercept composer input', () => {
+    expect(CSS).toMatch(/\.composer-cache-label\s*\{[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;/)
+    expect(CSS).toMatch(/\.composer-cache-indicator:hover\s*>\s*\.composer-cache-label\s*\{[^}]*visibility:\s*visible;/)
+  })
+
   test('reduced motion neutralizes animation classes and geometry or opacity transitions', () => {
     const mediaRules = [...CSS.matchAll(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*([^{}]+)\s*\{\s*([^{}]+)\s*\}\s*\}/g,
@@ -198,7 +203,6 @@ describe('theme.css', () => {
         '.animate-spin',
         '.animate-tab-in',
         '.animate-toast-in',
-        '.animate-token-warn-in',
         '.animate-welcome-exit',
         // Arriving prose fades in; a reader who asked for less motion gets the
         // honest instant arrival instead (`proseArrival.ts`).

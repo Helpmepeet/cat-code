@@ -52,6 +52,12 @@ export type FileHistoryState = {
   snapshotSequence: number
 }
 
+export type FileHistoryTrackSource = {
+  sourcePath: string | null
+  copyTo?: (destinationPath: string) => Promise<void>
+  stats?: { size: number; mode: number }
+}
+
 const MAX_SNAPSHOTS = 100
 export type DiffStats =
   | {
@@ -90,6 +96,7 @@ export async function fileHistoryTrackEdit(
   ) => void,
   filePath: string,
   messageId: UUID,
+  source?: FileHistoryTrackSource,
 ): Promise<void> {
   if (!fileHistoryEnabled()) {
     return
@@ -121,7 +128,7 @@ export async function fileHistoryTrackEdit(
   // Phase 2: async backup.
   let backup: FileHistoryBackup
   try {
-    backup = await createBackup(trackingPath, 1)
+    backup = await createBackup(trackingPath, 1, source)
   } catch (error) {
     logError(error)
     logEvent('tengu_file_history_track_edit_failed', {})
@@ -749,6 +756,7 @@ function resolveBackupPath(backupFileName: string, sessionId?: string): string {
 async function createBackup(
   filePath: string | null,
   version: number,
+  source?: FileHistoryTrackSource,
 ): Promise<FileHistoryBackup> {
   if (filePath === null) {
     return { backupFileName: null, version, backupTime: new Date() }
@@ -756,19 +764,27 @@ async function createBackup(
 
   const backupFileName = getBackupFileName(filePath, version)
   const backupPath = resolveBackupPath(backupFileName)
+  const inputPath = source === undefined ? filePath : source.sourcePath
+  if (inputPath === null) {
+    return { backupFileName: null, version, backupTime: new Date() }
+  }
 
   // Stat first: if the source is missing, record a null backup and skip the
   // copy. Separates "source missing" from "backup dir missing" cleanly —
   // sharing a catch for both meant a file deleted between copyFile-success
   // and stat would leave an orphaned backup with a null state record.
-  let srcStats: Stats
-  try {
-    srcStats = await stat(filePath)
-  } catch (e: unknown) {
-    if (isENOENT(e)) {
-      return { backupFileName: null, version, backupTime: new Date() }
+  let srcStats: Pick<Stats, 'mode' | 'size'>
+  if (source?.stats) {
+    srcStats = source.stats
+  } else {
+    try {
+      srcStats = await stat(inputPath)
+    } catch (e: unknown) {
+      if (isENOENT(e)) {
+        return { backupFileName: null, version, backupTime: new Date() }
+      }
+      throw e
     }
-    throw e
   }
 
   // copyFile preserves content and avoids reading the whole file into the JS
@@ -776,11 +792,13 @@ async function createBackup(
   // on large tracked files). Lazy mkdir: 99% of calls hit the fast path
   // (directory already exists); on ENOENT, mkdir then retry.
   try {
-    await copyFile(filePath, backupPath)
+    if (source?.copyTo) await source.copyTo(backupPath)
+    else await copyFile(inputPath, backupPath)
   } catch (e: unknown) {
     if (!isENOENT(e)) throw e
     await mkdir(dirname(backupPath), { recursive: true })
-    await copyFile(filePath, backupPath)
+    if (source?.copyTo) await source.copyTo(backupPath)
+    else await copyFile(inputPath, backupPath)
   }
 
   // Preserve file permissions on the backup.

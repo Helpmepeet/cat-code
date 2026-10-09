@@ -6,25 +6,7 @@ function getTodoWriteDefaultPrompt(): string {
 It also helps the user understand the progress of the task and overall progress of their requests.
 
 ## When to Use This Tool
-Use this tool proactively in these scenarios:
-
-1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
-2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
-3. User explicitly requests todo list - When the user directly asks you to use the todo list
-4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
-5. After receiving new instructions - Immediately capture user requirements as todos
-6. When you start working on a task - Mark it as in_progress BEFORE beginning work. Ideally you should only have one todo as in_progress at a time
-7. After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
-
-## When NOT to Use This Tool
-
-Skip using this tool when:
-1. There is only a single, straightforward task
-2. The task is trivial and tracking it provides no organizational benefit
-3. The task can be completed in less than 3 trivial steps
-4. The task is purely conversational or informational
-
-NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+Use a task list when the user requests one, or when tracking several outcomes or dependencies will help prevent omissions. Step count and tool-call count alone do not require a list. Skip it for straightforward work or an informational conversation.
 
 ## Task States and Management
 
@@ -62,7 +44,6 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
      - content: "Fix authentication bug"
      - activeForm: "Fixing authentication bug"
 
-When in doubt, use this tool.
 `
 }
 
@@ -70,19 +51,7 @@ function getTodoWriteGptPrompt(): string {
   return `Use this tool to create and manage a structured task list for the current coding session.
 
 WHEN TO USE:
-1. The task requires 3 or more distinct steps.
-2. The task is non-trivial and needs planning or multiple operations.
-3. The user explicitly asks for a todo list.
-4. The user gives multiple requested tasks in one message.
-5. You receive new instructions that should be captured as tracked work.
-6. You begin work on a tracked task and need to mark it \`in_progress\`.
-7. You finish a tracked task and need to mark it \`completed\` or add follow-up tasks.
-
-WHEN NOT TO USE:
-1. There is only one straightforward task.
-2. The task is trivial and tracking it adds no value.
-3. The work can be completed in fewer than 3 trivial steps.
-4. The request is purely conversational or informational.
+Use a task list when the user requests one, or when tracking several outcomes or dependencies will help prevent omissions. Step count and tool-call count alone do not require a list. Skip it for straightforward work or an informational conversation.
 
 TASK STATE CONTRACT:
 - Valid states are \`pending\`, \`in_progress\`, and \`completed\`.
@@ -113,4 +82,4 @@ export function getPrompt(provider: APIProvider = getAPIProvider()): string {
 }
 
 export const DESCRIPTION =
-  'Update the todo list for the current session. To be used proactively and often to track progress and pending tasks. Always provide both content (imperative) and activeForm (present continuous) for each task.'
+  'Update the todo list for the current session. Use when requested or when tracking outcomes and dependencies helps. Always provide both content (imperative) and activeForm (present continuous) for each task.'

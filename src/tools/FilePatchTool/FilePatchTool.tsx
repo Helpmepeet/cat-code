@@ -11,6 +11,13 @@ import {
 } from '../../utils/diff.js'
 import { getCwd } from '../../utils/cwd.js'
 import {
+  bindPreparedFileInput,
+  getPreparedFileMutationSet,
+  prepareApprovedUncFileMutation,
+  prepareFileMutationAuthorization,
+  type PreparedFileMutation,
+} from '../../utils/fileAuthorization.js'
+import {
   fileIdentitiesEqual,
   getFileIdentity,
 } from '../../utils/file.js'
@@ -20,6 +27,7 @@ import {
   resolveDeepestExistingAncestorSync,
 } from '../../utils/fsOperations.js'
 import { isENOENT } from '../../utils/errors.js'
+import { ContainedPublicationPartialMutationError } from '../../utils/containedFs.js'
 import { expandPath } from '../../utils/path.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
@@ -140,15 +148,83 @@ export const FilePatchTool = buildTool({
         if (decision.behavior !== 'allow' && firstDenied === undefined) {
           firstDenied = decision
         }
+        const prepared = getPreparedFileMutationSet(
+          context,
+          FILE_PATCH_TOOL_NAME,
+          input,
+        )?.byPath.get(filePath)
+        if (prepared) {
+          const actualPaths = [
+            ...new Set([
+              prepared.canonicalPath,
+              prepared.actualPath ?? prepared.canonicalPath,
+            ]),
+          ]
+          for (const actualPath of actualPaths) {
+            const actualDecision = checkSingleFileWritePermissions(
+              FilePatchTool,
+              { file_path: actualPath },
+              context,
+              [actualPath],
+            )
+            if (
+              actualDecision.behavior !== 'allow' &&
+              firstDenied === undefined
+            ) {
+              firstDenied = actualDecision
+            }
+          }
+        }
       }
     }
     if (firstDenied !== undefined) {
       return firstDenied
     }
+    const canonicalInput =
+      context.preparedExecution?.toolName === FILE_PATCH_TOOL_NAME
+        ? context.preparedExecution.input
+        : input
     return {
       behavior: 'allow',
-      updatedInput: input,
+      updatedInput: canonicalInput,
       decisionReason: { type: 'mode', mode: appState.toolPermissionContext.mode },
+    }
+  },
+  async prepareExecution(input) {
+    const operations = normalizeOperations(input)
+    const byPath = new Map()
+    try {
+      for (const path of mutationPathsForOperations(operations)) {
+        byPath.set(
+          path,
+          isUncPath(path)
+            ? {
+                originalPath: path,
+                canonicalPath: path,
+                relativePath: path,
+                pathnameLimited: true,
+                async cleanup() {},
+              }
+            : await prepareFileMutationAuthorization(path),
+        )
+      }
+    } catch (error) {
+      await Promise.all([...byPath.values()].map(item => item.cleanup()))
+      throw error
+    }
+    const state = bindPreparedFileInput(
+      { byPath },
+      input,
+      value => inputSchema().parse(value),
+    )
+    let cleaned = false
+    return {
+      state,
+      async cleanup() {
+        if (cleaned) return
+        cleaned = true
+        await Promise.all([...byPath.values()].map(item => item.cleanup()))
+      },
     }
   },
   renderToolUseMessage,
@@ -157,6 +233,18 @@ export const FilePatchTool = buildTool({
   async validateInput(input: FilePatchToolInput, toolUseContext: ToolUseContext) {
     try {
       const operations = normalizeOperations(input)
+      const preparedFiles = getPreparedFileMutationSet(
+        toolUseContext,
+        FILE_PATCH_TOOL_NAME,
+        input,
+      )
+      if (!preparedFiles) {
+        return {
+          result: false,
+          message: 'FilePatch requires prepared filesystem capabilities.',
+          errorCode: 1,
+        }
+      }
 
       for (const operation of operations) {
         if (operation.type !== 'delete') {
@@ -175,15 +263,64 @@ export const FilePatchTool = buildTool({
         if (denyValidation) {
           return denyValidation
         }
+        const prepared = preparedFiles.byPath.get(path)
+        if (prepared) {
+          for (const actualPath of [
+            prepared.canonicalPath,
+            ...(prepared.actualPath ? [prepared.actualPath] : []),
+          ]) {
+            const actualDenyValidation = validateEditDenyRule(
+              actualPath,
+              toolUseContext,
+              2,
+            )
+            if (actualDenyValidation) return actualDenyValidation
+          }
+        }
       }
 
-      validateOperationIndependence(operations)
+      const preparedSnapshot = new Map<string, ApplyPatchFileState>()
+      for (const path of mutationPathsForOperations(operations)) {
+        if (isUncPath(path)) continue
+        const prepared = preparedFiles.byPath.get(path)
+        if (!prepared) {
+          return {
+            result: false,
+            message: `Missing prepared filesystem capability for ${path}.`,
+            errorCode: 1,
+          }
+        }
+        const file = await readFileForEdit(path, prepared)
+        preparedSnapshot.set(path, {
+          path,
+          exists: file.fileExists,
+          identity: file.identity,
+          buffer: {
+            content: file.content,
+            encoding: file.encoding,
+            lineEndings: file.lineEndings,
+            noNewlineAtEndOfFile:
+              file.content.length > 0 && !file.content.endsWith('\n'),
+          },
+        })
+      }
+      validateOperationIndependence(operations, preparedSnapshot)
 
       for (const operation of operations) {
         const fullFilePath = operation.path
+        const prepared = preparedFiles.byPath.get(fullFilePath)
+        if (!prepared) {
+          return {
+            result: false,
+            message: `Missing prepared filesystem capability for ${fullFilePath}.`,
+            errorCode: 1,
+          }
+        }
         if (isUncPath(fullFilePath)) continue
 
-        const sizeValidation = await validateEditableFileSize(fullFilePath)
+        const sizeValidation = prepared.existing
+          ? await validateEditableFileSize(prepared.existing)
+          : null
         if (sizeValidation) {
           return sizeValidation
         }
@@ -202,7 +339,9 @@ export const FilePatchTool = buildTool({
               },
             }
           }
-          const fileContent = await readFileContentForValidation(fullFilePath)
+          const fileContent = prepared.existing
+            ? await readFileContentForValidation(prepared.existing)
+            : null
           if (fileContent !== null) {
             return {
               result: false,
@@ -219,7 +358,9 @@ export const FilePatchTool = buildTool({
           continue
         }
 
-        const fileContent = await readFileContentForValidation(fullFilePath)
+        const fileContent = prepared.existing
+          ? await readFileContentForValidation(prepared.existing)
+          : null
         if (fileContent === null) {
           return {
             result: false,
@@ -261,7 +402,10 @@ export const FilePatchTool = buildTool({
               },
             }
           }
-          const currentIdentity = getFileIdentity(fullFilePath)
+          const currentIdentity = {
+            canonicalPath: prepared.canonicalPath,
+            ...prepared.existing!.identity,
+          }
           if (!fileIdentitiesEqual(readState.fileIdentity, currentIdentity)) {
             return {
               result: false,
@@ -322,7 +466,10 @@ export const FilePatchTool = buildTool({
 
         if (isUncPath(destPath)) continue
 
-        const destContent = await readFileContentForValidation(destPath)
+        const destination = preparedFiles.byPath.get(destPath)
+        const destContent = destination?.existing
+          ? await readFileContentForValidation(destination.existing)
+          : null
         if (destContent !== null) {
           return {
             result: false,
@@ -380,17 +527,53 @@ export const FilePatchTool = buildTool({
       throw error
     }
   },
-  async call(input, { readFileState, updateFileHistoryState }, _, parentMessage) {
+  async call(input, context, _, parentMessage) {
+    const { readFileState, updateFileHistoryState } = context
+    const preparedFiles = getPreparedFileMutationSet(
+      context,
+      FILE_PATCH_TOOL_NAME,
+      input,
+    )
+    if (!preparedFiles) {
+      throw new Error('FilePatch requires prepared filesystem capabilities')
+    }
+    const materializedUnc: PreparedFileMutation[] = []
+    try {
+      if (process.platform === 'win32') {
+        for (const path of mutationPathsForOperations(normalizeOperations(input))) {
+          const prepared = preparedFiles.byPath.get(path)
+          if (!prepared?.pathnameLimited) continue
+          const authorized = await prepareApprovedUncFileMutation(path)
+          const protectedPath = [
+            authorized.canonicalPath,
+            ...(authorized.actualPath ? [authorized.actualPath] : []),
+          ].find(actualPath =>
+            validateEditDenyRule(actualPath, context, 2),
+          )
+          if (protectedPath !== undefined) {
+            await authorized.cleanup()
+            throw new Error(`Permission to edit ${protectedPath} has been denied.`)
+          }
+          preparedFiles.byPath.set(path, authorized)
+          materializedUnc.push(authorized)
+        }
+      }
+    } catch (error) {
+      await Promise.all(materializedUnc.map(prepared => prepared.cleanup()))
+      throw error
+    }
     let operations: FilePatchOperation[]
     try {
       operations = normalizeOperations(input)
     } catch (error) {
+      await Promise.all(materializedUnc.map(prepared => prepared.cleanup()))
       throw errorWithMutationOutcome(error, 'no-mutation')
     }
 
     try {
       validateOperationIndependence(operations)
     } catch (error) {
+      await Promise.all(materializedUnc.map(prepared => prepared.cleanup()))
       throw errorWithMutationOutcome(error, 'no-mutation')
     }
 
@@ -400,6 +583,7 @@ export const FilePatchTool = buildTool({
         mutationPathsForOperations(operations),
       )
     } catch (error) {
+      await Promise.all(materializedUnc.map(prepared => prepared.cleanup()))
       throw errorWithMutationOutcome(error, 'no-mutation')
     }
 
@@ -414,7 +598,10 @@ export const FilePatchTool = buildTool({
         encoding,
         lineEndings,
         identity,
-      } = readFileForEdit(path)
+      } = await readFileForEdit(
+        path,
+        preparedFiles.byPath.get(path),
+      )
       currentFiles.set(path, {
         path,
         exists: fileExists,
@@ -544,9 +731,10 @@ export const FilePatchTool = buildTool({
         // record file history right before we touch disk.
         if (!isUncPath(file.path)) {
           await prepareFileMutation(
-            file.path,
+            preparedFiles.byPath.get(file.path)!.canonicalPath,
             updateFileHistoryState,
-            parentMessage.uuid,
+            parentMessage.uuid as never,
+            preparedFiles.byPath.get(file.path),
           )
         }
 
@@ -555,7 +743,11 @@ export const FilePatchTool = buildTool({
         // overwritten silently. Re-read and compare against that same buffer
         // right before touching disk. Please avoid async operations between
         // here and the mutation below to preserve atomicity.
-        const onDisk = readFileForEdit(file.path)
+        const preparedMutation = preparedFiles.byPath.get(file.path)
+        if (!preparedMutation) {
+          throw new Error(`Missing prepared filesystem capability for ${file.path}`)
+        }
+        const onDisk = await readFileForEdit(file.path, preparedMutation)
         if (
           onDisk.fileExists !== (originalState?.exists ?? false) ||
           onDisk.content !== (originalState?.buffer.content ?? '') ||
@@ -606,12 +798,13 @@ export const FilePatchTool = buildTool({
             lineEndings,
             readFileState,
             expectedIdentity: originalState.identity,
+            preparedMutation,
             onPublished: publication => writtenFiles.push(publication),
           })
           continue
         }
 
-        writeFileWithSideEffects({
+        await writeFileWithSideEffects({
           absoluteFilePath: file.path,
           originalFileContents: file.before,
           updatedFile: file.after ?? '',
@@ -619,6 +812,10 @@ export const FilePatchTool = buildTool({
           lineEndings,
           readFileState,
           expectedIdentity: originalState?.identity,
+          preparedMutation:
+            preparedMutation.parent === undefined
+              ? undefined
+              : preparedMutation,
           onPublished: publication => writtenFiles.push(publication),
         })
       }
@@ -629,7 +826,9 @@ export const FilePatchTool = buildTool({
           error,
           operationForResultFile(mutatingFile, operations),
         ),
-        writtenFiles.length === 0
+        error instanceof ContainedPublicationPartialMutationError
+          ? 'incomplete-recovery'
+          : writtenFiles.length === 0
           ? 'no-mutation'
           : rollback === 'complete-rollback'
             ? 'complete-rollback'
@@ -696,7 +895,11 @@ export const FilePatchTool = buildTool({
         error instanceof FilePatchError ? error.mutationOutcome : 'no-mutation',
       )
     } finally {
-      await releaseMutationLocks()
+      try {
+        await releaseMutationLocks()
+      } finally {
+        await Promise.all(materializedUnc.map(prepared => prepared.cleanup()))
+      }
     }
   },
   mapToolResultToToolResultBlockParam(output, toolUseID) {

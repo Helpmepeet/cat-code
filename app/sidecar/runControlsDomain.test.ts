@@ -342,6 +342,24 @@ test('buildRunControlsSnapshot degrades gracefully and reports effective plus se
   ).toBe(true)
 })
 
+test('LIVE: no desktop provider route claims prompt-cache expiry from local session state', () => {
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  try {
+    for (const provider of ['openai', 'firstParty', 'bedrock', 'vertex', 'foundry'] as const) {
+      setSessionProvider(provider)
+      for (const model of ['gpt-6.1-sol', 'claude-opus-5', 'custom-deployment']) {
+        setMainLoopModelOverride(model)
+        const domain = createSidecarRunControlsDomain(makeStore())
+        expect(domain.getSnapshot().cacheExpired).toBeNull()
+      }
+    }
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
 /**
  * The picker row's own effort ladder (`RunControlModelOption.effortOptions`),
  * which the composer's model card reads to know whether a row leads to a second

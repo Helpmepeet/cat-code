@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-10-04
+Last refreshed: 2026-10-08
 
 ## Purpose
 
@@ -20,7 +20,7 @@ for the config and persistence slice.
 | Settings, global config, and project-keyed user state | `src/utils/settings/settings.ts` | `src/utils/config.ts`, `src/utils/env.ts`, `src/utils/settings/settingsCache.ts` |
 | Environment application from config/settings | `src/utils/managedEnv.ts` | `src/utils/managedEnvConstants.ts`, `src/utils/sessionEnvVars.ts` |
 | Instruction memory and rule discovery | `src/utils/claudemd.ts` | `src/utils/config.ts`, `src/utils/settings/constants.ts` |
-| Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/conversationRecovery.ts`, `src/utils/sessionRestore.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
+| Transcript persistence and resume | `src/utils/sessionStorage.ts` | `src/utils/{transcriptLease,conversationRecovery,sessionRestore}.ts` (includes subagent metadata under `<session>/subagents/` such as `agentName`) |
 | Deferred continuation queue and resume safety | `src/services/deferredContinuation.ts` | `src/services/deferredContinuationRunner.ts`, `src/utils/sessionRestore.ts`, `src/types/logs.ts`, and `src/utils/sessionStorage.ts`; user-private, fsync-backed queue/history/locks live under `${CLAUDE_CONFIG_DIR:-~/.cat-code}/deferred-continuations/`. Jobs never persist prompts, credentials, account identity, transcript paths, or temporary permission grants. |
 | Interrupted-turn continuation record | `src/utils/interruptedTurn.ts` | `src/query.ts` (capture at the two abort branches), `src/utils/conversationRecovery.ts` (consume + leaf match on resume); one private record per session under `${CLAUDE_CONFIG_DIR:-~/.cat-code}/interrupted-turns/<sessionId>.json`, consumed on read, age-capped. Holds the interrupted turn's partial assistant text only, bound to the transcript leaf it was captured at. |
 | Persistent and session memory | `src/memdir/paths.ts`, `src/memdir/memdir.ts` | `src/memdir/teamMemPaths.ts`, `src/memdir/memoryTypes.ts`, `src/services/extractMemories/prompts.ts`, `src/services/SessionMemory/sessionMemory.ts` |
@@ -59,6 +59,7 @@ for the config and persistence slice.
 | Settings validation and diagnostics | `src/utils/settings/validation.ts` | `src/utils/settings/allErrors.ts`, `src/utils/settings/validationTips.ts`, `src/screens/Doctor.tsx` | Invalid permission rules can be filtered before schema validation. Use the validation surfaces before inventing new diagnostics. |
 | Transcript file path | `src/utils/sessionStorage.ts` | `src/bootstrap/state.ts`, `src/utils/path.ts`, `src/tools/EnterWorktreeTool/EnterWorktreeTool.ts` | Transcripts live under `getClaudeConfigHomeDir()/projects/<sanitized-project>/<sessionId>.jsonl`. `sessionProjectDir` can override path derivation for resumed sessions; `EnterWorktreeTool` pins it before changing the original cwd so the active transcript and hook path do not move. |
 | Transcript write path | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `src/utils/sessionStoragePortable.ts` | `recordTranscript()` dedupes by UUID and maintains parent chains. Progress and silent hook-success messages are not chain participants; attachments are persisted so queued input and resume state remain faithful. |
+| Transcript writer lease and activation evidence | `src/utils/transcriptLease.ts` | `src/utils/{atomicFile,sessionStorage}.ts`, `app/sidecar/sessionsCatalogDomain.ts` | The cross-process lease serializes transcript ownership. Each activation also writes a private atomic timestamp marker separately from transcript data; the desktop catalog uses it only as evidence of a real resume, including a no-prompt resume. Invalid, unreadable, oversized, or improperly owned markers fail closed. |
 | Transcript metadata entries | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `app/shared/transcriptRunFacts.ts` | Titles, tags, agent metadata, mode, worktree state, thread goals, content replacements, file history, attribution, context-collapse, and `system`/`run_facts` entries are separate JSONL entry types. Legacy `agent` mode metadata is normalized to `normal` at ingestion without rewriting JSONL; current runtime values are `coordinator` and `normal`. A main-thread run-facts record atomically captures the model, permission mode, effort, and actual context window used for a turn; preview backfill retains legacy derivation for transcripts that predate it. Rewind markers retain their metadata-only descendants until the first retained user/assistant child, so a continuation cannot anchor a discarded branch. |
 | Resume loading | `src/utils/conversationRecovery.ts` | `src/utils/sessionStorage.ts`, `src/commands/resume/`, `src/screens/ResumeConversation.tsx` | `loadConversationForResume()` loads the latest, a session ID, a `LogOption`, or a JSONL path, then deserializes and runs resume session-start hooks. |
 | Resume state restoration | `src/utils/sessionRestore.ts` | `src/screens/REPL.tsx`, `src/main.tsx` | Restore is split between transcript loading and process state: cwd/worktree, mode, cost state, file history, attribution, todos, agent setting, context collapse, and metadata adoption. |
@@ -120,6 +121,7 @@ Important exceptions:
 | Surface | Focused command |
 |---|---|
 | Session transcript persistence and worktree pinning | `bun test src/utils/sessionStorage.test.ts src/tools/EnterWorktreeTool/EnterWorktreeTool.test.ts` |
+| Transcript lease activation evidence | `bun test src/utils/transcriptLease.activity.test.ts src/utils/transcriptLease.probe.test.ts` |
 | Deferred queue, locks, identity, cancellation, and recovery | `bun test src/services/deferredContinuation.test.ts src/services/deferredContinuation.probe.test.ts src/utils/sessionRestore.deferred.test.ts` |
 | Full engine gate | `bun run build:dev:full` |
 
@@ -144,6 +146,9 @@ The reader reports actual source bytes, including its line-alignment probe, so
 `app/sidecar/subagentHistory.ts` charges rejected branches against a shared work
 budget. Partial branches retain the unavailable-history card state.
 `getAgentTranscriptForSession` continues to load full agent-resume history.
+The synthetic source-byte accounting probe is
+`scripts/benchmarks/resourceWasteHistory.ts`; it builds its transcript fixture
+under an isolated temporary config home.
 
 ## Traps And Stale Assumptions
 

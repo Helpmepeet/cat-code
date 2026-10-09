@@ -11,6 +11,7 @@ export function getWebSearchPrompt(): string {
 - Use targeted queries. For recent docs or current events, include the current year when it helps.
 - Use include_domains when the relevant site is known, such as official docs or GitHub repository documentation.
 - Use freshness when recency matters.
+- Use mode "standard" by default. Use "extended" when standard results are thin, off-target, or possibly outdated, or from the start for niche facts, very recent events, opinions and recommendations, and multi-step research.
 
 CRITICAL REQUIREMENT - You MUST follow this:
   - After answering the user's question, include a "Sources:" section at the end of your response when WebSearch results informed the answer.
