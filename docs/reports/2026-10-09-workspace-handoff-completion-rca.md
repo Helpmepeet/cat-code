@@ -4,6 +4,7 @@
 - Status: Analysis and fix proposal; no implementation or live-state repair performed
 - Investigation: GPT-6 Astra deep dive, followed by independent source inspection, transcript analysis, isolated production-function experiments, real QueryEngine persistence, and production-loader corpus comparison
 - Updated: 2026-10-09 after independently validating the user-supplied follow-up investigation
+- Second review: Additional reader/coordinator mechanisms validated; repair contract revised before implementation
 
 ## Result
 
@@ -13,7 +14,9 @@ There are three independently validated defects:
 
 1. The desktop waits at most 30 minutes for a continuation reply, but the engine replies only after the entire resumed turn finishes. Expiry deletes the request correlation entry. A later successful reply cannot settle that request, and there is no separate operation-level completion reconciliation path.
 2. A deferred connection-recovery or API-error message can first be persisted when a later ordinary prompt or handoff outcome is written. Transcript deduplication attaches the new records to an older prefix, bypassing already-persisted work. This affects ordinary submissions as well as handoff settlement. The original session's saved active branch excludes its implementation report.
-3. For eligible transcripts larger than 5 MiB, a pre-parse optimization keeps a single parent chain and discards parallel tool siblings before the reader can recover them. The active tip can remain correct while restored history is incomplete. Six saved sessions exhibited this defect; an isolated large-file reproduction confirmed the mechanism without compaction.
+3. For eligible transcripts larger than 5 MiB, a pre-parse optimization keeps a single parent chain and discards parallel tool siblings before the reader can recover them. It can also select the wrong branch because its starting entry follows physical file order rather than the selector's leaf/timestamp rules. Six saved sessions exhibited incomplete history with the same tip; separate isolated production-loader fixtures confirmed sibling loss and wrong-branch selection without compaction.
+
+The second review also identified a reconciliation notice lost during coordinator settlement and a separate engine-reservation release failure scenario. The former was reproduced with the actual coordinator in isolated state. The latter is source-backed and its controller consequence was exercised, but full release transport failure was not reproduced. These are additional mechanisms the lifecycle repair must cover, not observed explanations of every historical incident.
 
 The historical timeout transition is strongly supported by source and timing, but was not explicitly logged with its request identity. The late-reply behavior and transcript-writing defect were reproduced using existing production functions in isolation. The saved ancestry defect was also verified against this session's actual records.
 
@@ -63,6 +66,7 @@ Source line numbers below are investigation-time anchors. Verify the named funct
 | Original runtime log | [Operational log](/Users/pt/.cat-code/desktop/logs/operational-d5c859b3-ad87-4db9-a15a-6fec4042cfb4-1791477229956.jsonl) |
 | Later close and user turns | [Later operational log](/Users/pt/.cat-code/desktop/logs/operational-d5c859b3-ad87-4db9-a15a-6fec4042cfb4-1791506930683.jsonl) |
 | Follow-up investigation supplied by user | [Pasted investigation](</Users/pt/.codex/attachments/dcca2e9c-418b-4260-965d-c1e06023220a/Pasted text.txt>) |
+| Second adversarial review supplied by user | [Pasted repair-plan review](</Users/pt/.codex/attachments/82d1db54-240c-438a-a23e-6e585a73d044/Pasted text.txt>) |
 | Ordinary-prompt ancestry example | [b80eb44d transcript](/Users/pt/.cat-code/projects/-Users-pt-cat-code/b80eb44d-9e6e-4fb0-90e0-2545008aede1.jsonl) |
 | Second completed-then-warned example | [30de99df transcript](/Users/pt/.cat-code/projects/-Users-pt-cat-code/30de99df-0765-4924-a2ec-35b9a66198fc.jsonl) |
 | Unresolved uncertainty example | [27fcb7af transcript](/Users/pt/.cat-code/projects/-Users-pt-cat-code/27fcb7af-1034-4826-8e3a-1ee652814a3d.jsonl) |
@@ -277,7 +281,11 @@ The follow-up scan covered top-level session JSONL files one project directory b
 
 The earliest identified API-error gap dated to 9 August. These are observed corpus counts, not a prediction that every ordinary prompt loses history. The mechanism requires an eligible deferred message followed by later persistence.
 
-The scan used first-occurrence UUID positions, loaded selections, and gaps spanning at least three omitted user/assistant records. Counts exclude duplicate UUID inflation and do not imply physical deletion. The supplied investigation's nine backward references around `eff9c620` L9965-L9973 were duplicate records with earlier occurrences; those references do not independently prove nine new ancestry defects. For example, L9965 first occurs at L6507 and L9966 at L7013. The origin and general safety of duplicate records remain uninvestigated.
+The scan used first-occurrence UUID positions for unique-record accounting, production-selected message values for recovery parent UUIDs, and gaps spanning at least three omitted user/assistant records. Counts exclude duplicate UUID inflation and do not imply physical deletion. First occurrence is not the authoritative parent or payload: the loader's `messages.set(entry.uuid, entry)` and pre-parser UUID index use last-wins record values, while Map key insertion order remains at the first insertion.
+
+The nine backward references around `eff9c620` L9965-L9973 were duplicate UUIDs with earlier occurrences; backward physical position alone does not prove nine new forks. For example, L9965 first occurs at L6507 and L9966 at L7013. This does not establish identical or harmless duplicates. A targeted second-review audit of the 18 gap-bearing files found 202 duplicated UUIDs in `eff9c620`, of which 178 had differing fields across occurrences: 28 involved `parentUuid`, 29 involved `message`, and other differences included prompt identity, cwd, and slug. These field counts overlap. L6507/L9965 themselves differ in `message`.
+
+None of the 20 reported gap edges had conflicting first/last values at their child or effective-parent endpoints in this targeted check. The earlier corpus totals are retained as snapshot evidence; this audit was not a new whole-corpus scan or an explanation of duplicate origins. Future ancestry analysis must use production-effective values, distinguish identical from conflicting duplicates, and use first occurrence only for appropriate accounting/position questions.
 
 ## Defect 3: large-file pruning removes recoverable parallel history
 
@@ -305,7 +313,7 @@ Each file below has no tip record. The default loader was compared with the same
 | `04becfe9-f1c3-47b9-8bb8-39df6992c3cc` | 5,552,008 | 863 | 1,134 | 271 | 103 |
 | Total | | | | 1,252 | 620 |
 
-The omitted messages comprise 316 assistant tool-use messages and 936 tool-result messages. Crucially, **620 distinct tool-result IDs were omitted while their calls remained selected**. The supplied suggestion that pruning only removes complete call/result pairs is disproven by this comparison. Downstream API normalization was not exercised, so whether it repairs, rejects, or transmits those missing-result cases remains unknown; API validity is not established.
+The omitted messages comprise 316 assistant tool-use messages and 936 tool-result messages. Crucially, **620 distinct tool-result IDs were omitted while their calls remained selected**. The supplied suggestion that pruning only removes complete call/result pairs is disproven by this comparison. The second review validated that the pairing helper can insert synthetic error results or reject mismatches in strict mode; this does not recover actual omitted outputs. The full downstream request-building pipeline and provider acceptance were not exercised.
 
 For `04becfe9`, default loading retained 2,131 records and selected 863 messages. Both optimization-disabled loading and display-history loading retained 2,402 records and selected 1,134 messages, with the same final UUID `9b561f79-5620-4a43-8833-802594f1a7d2`.
 
@@ -319,6 +327,64 @@ An isolated 6,293,404-byte transcript contained six ordered records: a user root
 | Optimization disabled | 6 / 6 | Yes | Yes |
 
 This isolates the pruning defect from compaction and demonstrates why checking only the final tip is insufficient. The corpus comparison's disable flag also affects pre-compaction skipping; the no-compaction fixture removes that confound for the demonstrated mechanism.
+
+### Wrong-branch selection through the actual loader
+
+The pre-parser starts at the last physically written non-sidechain entry. The normal selector instead uses an eligible user/assistant leaf chosen by timestamp, unless a valid active-tip marker overrides it. These rules differ even when parallel closure is irrelevant.
+
+The second review's excerpt experiment was independently strengthened to an actual `loadTranscriptFile` plus `selectActiveConversation` experiment. Its five-record, 6,293,153-byte fixture contained user → tool call → large fixture tool result → final report, followed physically by an older recovery whose parent was the original user. There was no compaction or tip marker.
+
+| Fixture / mode | Loaded records | Selected tip | Final report retained? |
+|---|---:|---|---|
+| Late older recovery, default loader | 2 | Original user | No |
+| Same file, optimization disabled | 5 | Final assistant report | Yes |
+| Final report moved to physical end, default loader | 5 | Final assistant report | Yes |
+| Recovery still last, payload reduced to 1,714-byte file | 5 | Final assistant report | Yes |
+
+The loader reported no source truncation. This proves the wrong-branch mechanism at the production reader boundary. It does not establish that this exact fixture shape occurs in the saved corpus. The repair must preserve both unoptimized branch selection and recoverable content; completing parallel closure around a wrongly chosen leaf is insufficient.
+
+## Additional lifecycle failure mechanisms and durability gaps
+
+### A reconciliation notice can be dropped during settlement
+
+After outcome persistence, the sidecar's [`handleWorkspaceHandoff`](/Users/pt/cat-code/app/sidecar/sidecarServer.ts:1891) can release the controller reservation and drain a forced queued genuine-user prompt for a non-cancelled outcome. At durable input acceptance, [`publishUserHandoffAdmission`](/Users/pt/cat-code/app/sidecar/sidecarServer.ts:1847) emits `workspace.user-admitted`. The controller has already cleared its reconciliation gate in its input-persisted callback.
+
+Main's [frame handler](/Users/pt/cat-code/app/main/main.ts:2039) invokes `reconcileUser` and discards its boolean result. [`reconcileUser`](/Users/pt/cat-code/app/main/workspaceJumpCoordinator.ts:345) returns false while the operation is in `running`. This includes a window after the settlement reply resolves its promise but before `terminal` and its finalizer finish. A valid same-operation notice is rejected without being retained for later processing.
+
+An isolated experiment used the actual coordinator, actual ledger writer/reader under `/private/tmp`, and a deferred successful persistence dependency. It resolved the settlement reply and immediately delivered the admission notice before the pending continuations finished:
+
+```json
+{
+  "admissionAccepted": false,
+  "sourceOutcomePersisted": true,
+  "reconciliationStillRequired": true,
+  "transitionStillRunning": false
+}
+```
+
+The dependency controls timing; it does not implement reconciliation. The actual coordinator owns the guard and saved state. This validates notice loss at that boundary, not full socket delivery, real queued input, or a historical incident. Serialization must retain or durably recover eligible notices rather than implementing “busy” as permanent rejection.
+
+### Completion and release are separate convergence obligations
+
+Main's [state-change callback](/Users/pt/cat-code/app/main/main.ts:4384) sends a separate `release` control request and ignores its returned boolean. The [controller](/Users/pt/cat-code/src/app-runtime/AppSessionController.ts:143) retains its reservation until same-operation release is applied. That reservation rejects ordinary submission and fences automatic turns.
+
+A source-backed scenario is therefore: main settles completion and clears retention, but the release command is lost or refused while the engine remains alive. The next prompt can still be refused as reserved. Losing only the release reply is different: release may already have applied, so status must distinguish these cases.
+
+An actual-controller probe restored a reservation, deliberately did not apply release, and observed ordinary input refusal, automatic admission disabled, and zero turn executions. Applying the matching release enabled automatic admission. No main/socket release fault was injected. The repair must converge the durable operation and the engine gate, with exact-operation ownership retained.
+
+### Current success observations are not a completion durability barrier
+
+[`QueryEngine`](/Users/pt/cat-code/src/QueryEngine.ts:1020) deliberately does not await each assistant append: later provider events mutate usage and stop reason, and the lazy write queue must see those mutations. It captures `transcriptWriteFailure`, but the normal destination success path does not enforce the same explicit check as the source handoff boundary. Its final queue flush is conditional on environment flags.
+
+The sidecar emits its operational `ok`/`failed` observation in a `finally` block before the subsequent checks of successful result, failure state, and unexpected handoff. Neither that log observation nor final-looking text is an authoritative successful receipt.
+
+[`flushCurrentTranscriptDurably`](/Users/pt/cat-code/src/utils/sessionStorage.ts:2562) drains and syncs the owned file; absent persisted ownership can return without a file. [`verifyActiveTranscriptTipDurably`](/Users/pt/cat-code/src/utils/sessionStorage.ts:2637) checks tip/session and optionally genuine input, not all required preceding messages/results. The queue also retries failed batches rather than turning every append failure into a rejected per-entry promise. Receipt publication needs tracked write completion, a bounded failure policy, persisted ownership, and recoverable-content verification in addition to fsync.
+
+### Provider pairing can conceal missing real outputs
+
+The [API builder](/Users/pt/cat-code/src/services/api/claude.ts:1526) calls [`ensureToolResultPairing`](/Users/pt/cat-code/src/utils/messages.ts:5428) after normalization. Its permissive behavior can insert synthetic error results for retained calls lacking results and strip orphaned results. Strict mode rejects repaired mismatches.
+
+An isolated actual-helper probe with a retained call and no real result inserted one error result with the expected tool ID and content `[Tool result missing due to internal error]`; strict mode threw. This is helper-boundary evidence, not a provider request or a full normalization round-trip. Structural pairing or a successful response cannot substitute for preserving real result identity and content.
 
 ## Existing uncertainty that remains legitimate
 
@@ -416,9 +482,29 @@ Diagnostic artifacts were stored temporarily under `/private/tmp/handoff-validat
 - The deferred-persistence bug affects ordinary submissions; it does not fire on every ordinary prompt regardless of message state.
 - The `b80eb44d` example had an earlier workspace jump, but the demonstrated later fork was triggered by an ordinary prompt.
 - A usable active-tip marker bypasses the identified large-file pruning path. It does not fix deferred-message ancestry or prove complete parallel history on other paths.
-- Large-file pruning does not preserve complete call/result pairs in the observed corpus. Actual downstream API normalization remains unvalidated.
-- Duplicate UUID positions must be compared using their first occurrence; backward file positions alone do not prove new forks.
+- Large-file pruning does not preserve complete call/result pairs in the observed corpus. The pairing helper was exercised in this second review; full downstream normalization/provider shaping remains unvalidated.
+- First occurrence supports unique-record accounting; ancestry uses production-effective last-wins values. Conflicting duplicates need separate analysis; backward file positions alone do not prove new forks.
 - Small backward gaps, duplicate-record origins, other routing/peer/goal timers, deferred runners, lease races, and the full compaction/supervisor lifecycle were not exhaustively audited. No additional defect is claimed for them.
+
+### Second-review validation and limits
+
+The supplied second review read report snapshot SHA-256 prefix `ebeb900a070a`; the local report matched that hash before this revision. Its supplied excerpt results were not accepted as independent proof. New probes imported the actual loader/selector, coordinator, controller, and pairing helper, using isolated configuration and disk state. All intended controls/assertions passed and no network request occurred.
+
+The probes and summarized results are temporary `/private/tmp/handoff-review-validation-20261009/probes.ts`, `results.json`, and `duplicate-audit.json`. No production export, test seam, source edit, or live-state repair was added. The coordinator probe invokes its existing transition owner through the harness; it is not a public/socket integration regression.
+
+The second review's required changes are accepted with these evidence distinctions:
+
+| Review concern | Independent validation | Report change |
+|---|---|---|
+| Wrong-branch pruning | Actual loader and selector, large fixture plus two controls | Require branch-selection equivalence as well as content preservation |
+| Reconciliation notice loss | Actual coordinator and isolated durable ledger | Retain/recover eligible notices across settlement |
+| Release not applied | Source path and actual-controller consequence | Converge controller gate and main state |
+| Success/durability and cancellation | Source inspection; proposed contract below | Define write barrier and engine-owned outcome ordering |
+| Seeded writer test bypasses prevention | Source branch and existing scripted-provider seam inspected | Separate real-stream prevention from defensive legacy-state coverage |
+| Duplicate UUID semantics | Actual loader/index source and targeted saved-record comparison | Use effective values and separate conflicting duplicates |
+| Synthetic pairing masks loss | Actual helper in permissive/strict modes | Assert genuine result identity and content after shaping |
+
+No full provider normalization/request, full queued-input/socket experiment, write-failure fault injection, or cancellation-order experiment was run. No repository suites or live GUI were run for this report-only revision.
 
 ### Checks not performed
 
@@ -438,9 +524,11 @@ Ensure retained, loggable system messages cannot first be persisted later in the
 
 Do not simply relax `recordTranscript`'s prefix behavior: it also protects compaction/preserved-message ordering. Validate deferred recovery, repeated outcome persistence, parallel tool records, and compacted histories through the production reader.
 
+Preserve asynchronous assistant recording so later usage/stop-reason updates remain correct. Track pending work and enforce a terminal barrier rather than awaiting every streamed block. The primary prevention regression must drive the real system-message branch. A seeded inconsistent conversation is separate defensive coverage: preserve its already-persisted work or detect and refuse an unsafe append without publishing an incomplete tip.
+
 ### 2. Preserve parallel history before parsing
 
-Replace or constrain `walkChainBeforeParse` so pruning preserves everything the production selector needs: the chosen ancestry, eligible parallel assistant blocks sharing message identity, their tool results, and compaction/preserved-segment semantics. If the fast path cannot establish that closure safely, fall back to the correctness-preserving reader. Disabling this unsafe optimization is a possible interim mitigation, subject to explicit memory/performance validation; it is not an implemented fix.
+Replace or constrain `walkChainBeforeParse` so pruning preserves both the branch chosen by the unoptimized production selector and all content it would recover: eligible leaves, timestamp/tie behavior, valid active-tip overrides, effective duplicate values, parallel assistant blocks sharing message identity, tool results, and compaction/preserved-segment semantics. Determine the correct branch before pruning; physical-last-entry selection is insufficient. If the fast path cannot establish selection and recovery equivalence safely, fall back to the correctness-preserving reader. Disabling this unsafe optimization is a possible interim mitigation, subject to explicit memory/performance validation; it is not an implemented fix.
 
 Keep the default resume reader and display reader consistent about recoverable conversation content. A tip marker or a matching final UUID alone is not an adequate repair or validation oracle. Do not hide missing results by dropping retained calls; verify the expected full conversation and downstream API shaping. Establish a bounded performance strategy after correctness is demonstrated rather than retaining unsafe byte filtering for speed.
 
@@ -460,6 +548,20 @@ Main remains the sole owner of the workspace-jump ledger. Live completion and re
 
 The exact receipt schema, storage owner, and control/event shape remain implementation design work. They must be settled before code changes, with explicit success/failure/cancellation semantics and durability ordering.
 
+#### Required durability contract
+
+The receipt must certify this ordered barrier, not simply a returned success followed by fsync:
+
+1. The engine finishes the admitted continuation and classifies its actual terminal outcome after result, failure, abort, and unexpected-handoff checks. The operational observation is not this classification.
+2. After final usage/stop-reason mutations, seal the continuation's required transcript projection. Track every required append and metadata write through that point, preserve their order, await completion, and surface any captured or queue-level failure. A bounded wait that expires remains unconfirmed; it must not emit success or replay admitted work.
+3. Require the correct owned transcript/lease. Drain outstanding required writes and sync the file and directory. Absent persistence, lost ownership, partial write, or failed sync cannot produce a successful durable receipt.
+4. Reload through the corrected default resume reader and verify the intended branch plus required continuation ancestry, actual tool-result identity/content, and valid compaction transformations. Matching only the tip, final text, or structurally paired API messages is insufficient.
+5. Persist a terminal checkpoint identifying the operation, continuation, admitted identity, terminal outcome, and verified transcript projection; make it durable before publishing completion evidence. Recovery validates that checkpoint rather than trusting a success log or reconstructing success from prose.
+
+A concrete implementation candidate is a checkpoint anchored to the admission boundary and terminal tip, with a versioned count/digest of the canonical required continuation projection after permitted compaction transforms. The engine retains the expected projection while running and compares the corrected reader's output before publishing; restart validates the durable checkpoint's evidence. This need not rehash the whole historical file on every streamed block. Compaction rules, which records are required, digest canonicalization, failure deadlines, and bounded checkpoint layout remain design decisions to resolve explicitly before implementation. An alternative barrier is acceptable only if it proves the same recoverability and failure contract.
+
+Inject append, queue-drain, fsync, and reader/checkpoint failures separately. None may yield a successful receipt. Restart after transcript checkpoint but before main settlement must recover without re-execution.
+
 ### 5. Serialize lifecycle transitions and reconcile late success
 
 Give one coordinator transition owner responsibility for completion, status observation, timeout, Stop, close, process loss, warning persistence, and user reconciliation. Recheck state/identity after awaits.
@@ -468,10 +570,35 @@ Required behavior:
 
 - A confirmed completion clears the retained running operation even if an earlier RPC expired.
 - Close after confirmed completion closes normally.
-- Cancellation during active execution retains existing review semantics.
+- Cancellation intent, actual application to execution, and terminal execution outcome are tracked separately, under the ordering contract below.
 - Duplicate messages are idempotent.
-- Stale operations, replies, generations, and callbacks cannot overwrite newer cancellation, completion, or reconciliation.
+- Stale operations, replies, generations, and callbacks cannot overwrite a different operation's cancellation, completion, or reconciliation. A delayed authoritative receipt for the same operation must be evaluated against engine execution ordering, not discarded merely because cancellation intent arrived first at main.
 - Transcript-write failure cannot publish a successful durable receipt or advance an active tip as though persistence succeeded.
+
+#### Retain reconciliation across an active transition
+
+Eligible same-operation durable-input notices must be queued/coalesced for processing when the transition finishes, or recovered from durable input evidence. Validate operation, admitted engine/restore identity, and genuine-user provenance; enqueue acknowledgements, automatic turns, and peer input cannot reconcile. The current frame lacks a durable input UUID, so any new evidence-bearing shape requires receiving-boundary validation and protocol review.
+
+Do not clear state concurrently by removing the `running` guard. Instead, the transition owner must drain retained notices and recheck identity/state after settlement and awaits. Dropped transport notices require status/restart recovery from genuine accepted-input evidence. Completion means the main ledger, controller gate, and restored state converge on the same reconciliation result without submitting the prompt twice.
+
+#### Converge engine release
+
+Track release as an outstanding state transition until the matching current engine reservation is confirmed released, or authoritative restart/status reconciliation establishes that state. A completed execution receipt and a released admission gate are separate facts. A lost/refused release command must trigger bounded retry/status convergence; a lost reply must not assume that the command was unapplied.
+
+Make duplicate same-operation release idempotent, while preserving exact-operation ownership. A reply for an old operation must not clear a newer reservation. Keep an appropriate admission/retention fence until gate convergence is known; do not leave main displaying a freely usable completed chat while the engine still refuses ordinary input. No continuation replay is permitted during release recovery.
+
+#### Cancellation and terminal-outcome ordering
+
+Use engine-owned, operation-scoped ordering to distinguish cancellation requested, cancellation applied, and execution terminally settled. Main preserves the user's Stop/Close intent and desired chat lifetime independently of the execution verdict.
+
+| Ordering established by engine evidence | Execution verdict | Required main behavior |
+|---|---|---|
+| Successful terminal settlement before cancellation can apply; receipt arrives after main records intent | Completed, if the durability barrier passed | Accept the exact-operation receipt, retain cancellation/close intent as separate metadata, and converge release/close |
+| Cancellation actually interrupts execution before successful terminal settlement | Cancelled/interrupted | Never promote final-looking text to success; preserve review/reconciliation semantics |
+| Cancellation requested but applicability or terminal durability cannot be established | Uncertain | Recover status/evidence conservatively without replay |
+| Actual execution fails independently of cancellation | Failed | Preserve failure evidence and truthful uncertainty about persistence if its barrier fails |
+
+Do not compare wall-clock timestamps or main arrival order to infer execution causality. Specify an engine-local ordering/terminal record and how applied cancellation is persisted or conservatively recovered. Cancellation after execution settlement cannot retroactively change completed work into interrupted execution; failed durability still prevents a successful durable receipt. The exact new persisted/wire representation remains a pre-implementation decision.
 
 ### 6. Treat uncertainty as recoverable observation before committing a warning
 
@@ -499,11 +626,13 @@ The incident is currently reconstructable, but critical historical transitions r
 
 Use the real production writer and reader in isolated storage, with assertions about full selected history and tool identities:
 
-1. Ordinary prompt: persist assistant A and B/final, retain a deferred recovery between them in memory, and submit a normal user prompt through QueryEngine. With no tip record, flush and reload; B/final must remain selected. Repeat with an API-error message and with handoff outcome persistence.
-2. Large-file parallel recovery: create a transcript above 5 MiB, without compaction or a tip marker, with sibling tool calls/results and enough removable bytes to activate the optimization. Both siblings must survive normal loading with the same final tip. This fixture must fail against the current reader.
-3. Missing-result case: preserve a call on the selected parent chain while placing its result in a recoverable sibling. Assert that both remain selected and that actual downstream API normalization produces the expected complete conversation. Do not substitute a complete-pair-only fixture for this case.
-4. Reader boundaries: cover below/above the byte threshold, pruning below/above the half-buffer reduction threshold, usable/missing tip markers, multiple leaves, and display versus default resume reads. Assert content equality where semantics require it, not merely tip equality.
-5. Compaction and durability: retain preserved segments, valid compacted ancestry, idempotent repeated writes/outcomes, and parallel recovery. A transcript-write failure must neither advance a durable active tip nor publish successful completion.
+1. Primary writer prevention: drive a real QueryEngine turn through assistant A → recovery/API error → assistant B/final using scripted provider behavior at the existing engine seam, as demonstrated in [QueryEngine handoff tests](/Users/pt/cat-code/src/QueryEngine.handoff.test.ts:124). Then submit an ordinary genuine-user prompt, flush, and reload through the actual writer/reader. Preserve the completed work and correct ancestry. The pre-fix failure must arise from the real general-system branch failing to record inline, not from injecting an already-bad `initialMessages` array. Retain assistant usage/stop-reason updates and repeat with handoff outcome persistence.
+2. Defensive pre-existing state: separately seed persisted A/B with an unpersisted recovery between them in memory. Explicitly require either preservation of B/final or a detected unsafe append that leaves durable ancestry/tip unchanged. This tests handling of inconsistent state, not whether the inline prevention branch runs. It must not force a casual relaxation of deduplication or compaction ordering.
+3. Large-file parallel recovery: create a transcript above 5 MiB, without compaction or a tip marker, with sibling tool calls/results and enough removable bytes to activate the optimization. Both siblings must survive normal loading with the same final tip. This fixture must fail against the current reader.
+4. Wrong-branch recovery: use the five-record multiple-leaf fixture with the older recovery physically last and a large tool result. The default loader must select the same final assistant branch and content as an unoptimized read. Preserve the physical-order and below-threshold controls. Cover timestamp ties and valid tip overrides as distinct selection contracts.
+5. Missing-result case: preserve a call on the selected parent chain while placing its result in a recoverable sibling. Assert that both remain selected and that actual downstream API normalization preserves the real expected result content and identity. Synthetic placeholders, merely paired IDs, no exception, or a model response are insufficient. Do not substitute a complete-pair-only fixture for this case.
+6. Reader boundaries: cover below/above the byte threshold, pruning below/above the half-buffer reduction threshold, usable/missing tip markers, multiple leaves, identical/conflicting duplicate UUIDs, and display versus default resume reads. Assert production-effective values and content equality where semantics require it, not merely tip equality.
+7. Compaction and durability: retain preserved segments, valid compacted ancestry, idempotent repeated writes/outcomes, and parallel recovery. A transcript-write failure must neither advance a durable active tip nor publish successful completion. Exercise final metadata mutation while writes are pending, and queue failure/retry under the receipt barrier.
 
 Include the synthetic six-record reproduction as a focused failing fixture and a representative corpus-derived shape as independent coverage. Avoid copying large private transcripts into repository tests. Validate the safe fallback's resource use with representative large files after correctness checks; no performance claim has yet been established.
 
@@ -525,8 +654,14 @@ Distinct additional cases:
 
 - Lost acceptance acknowledgement and lost completion delivery, recovered without replay.
 - Process death before admission, during execution, after durable receipt, and before main-ledger settlement.
-- Completion racing Stop/close, duplicate events, and stale operation/generation messages.
+- Engine success/checkpoint before cancellation intent, with completion delivery delayed until after main records Stop/Close. Execution stays completed while the requested chat action converges.
+- Cancellation actually applied before terminal settlement, and cancellation requested while applicability is unknown. Assert interrupted and uncertain outcomes respectively; final-looking text never supplies success.
+- Completion classification followed by transcript/checkpoint failure. A successful SDK result or operational observation cannot publish durable success.
+- Duplicate events and stale operation/generation messages, including an old release arriving while a newer operation owns the controller reservation.
 - Long permission waits and queued genuine user input, with automatic/peer input still fenced.
+- Forced queued genuine input durably admitted around outcome settlement, including one delivery batch containing the settlement reply followed immediately by its admission notice. The actual sidecar/controller path must produce the notice; assert main ledger, controller gate, and restored state agree after transition completion.
+- Lost/delayed admission notices recovered from durable genuine-input evidence, with duplicates coalesced and stale-operation notices rejected.
+- Lost/refused release commands while the engine remains alive, lost release replies after application, duplicate same-operation release, and restart between completion and release. Verify the next ordinary prompt is admitted exactly once after convergence and automatic-turn fences remain correct.
 - Failed/interrupted turns, malformed receipts, and transcript-write failures remaining conservative.
 - An actually interrupted partial turn retaining uncertainty while preserving all saved ancestry.
 - Genuine-user reconciliation clearing both controller gating and model-facing stale pause semantics.
@@ -550,6 +685,6 @@ Repairing this already-affected session is separate from prevention. Code change
 
 ## Completion criteria
 
-The repair is complete when ordinary submissions and recovery warnings preserve full active ancestry; large-file resume loading preserves recoverable parallel calls/results; legitimate long-running continuations can finish without stale uncertainty; completion can be reconciled after lost replies without duplicate execution; close/cancellation races preserve correct state; genuine-user reconciliation agrees with model-facing context; and the relevant regressions and package checks pass with material limitations reported.
+The repair is complete when ordinary submissions and recovery warnings preserve full active ancestry; large-file resume loading preserves the correct selected branch and real recoverable parallel calls/results; successful receipts prove the specified durability barrier; legitimate long-running continuations can finish without stale uncertainty; completion and engine release converge after lost commands/replies without duplicate execution; cancellation ordering preserves the actual execution verdict and user intent; reconciliation notices survive settlement and main/controller/restored state agree; genuine-user reconciliation agrees with model-facing context; and the relevant regressions and package checks pass with material limitations reported.
 
-At this update, the three mechanisms and the follow-up corpus findings have been independently validated to the limits described above. Implementation, full-boundary lifecycle reproduction, downstream API normalization checks, proposed-fix validation, GUI verification, and any existing-session repair remain outstanding.
+At this update, the three core mechanisms, additional wrong-branch and reconciliation-notice mechanisms, and follow-up corpus findings have been independently validated to the limits described above. The report incorporates the supported second-review amendments. Implementation, final checkpoint/protocol design decisions, full-boundary lifecycle reproduction, full downstream API normalization checks, proposed-fix validation, GUI verification, and any existing-session repair remain outstanding. This is a revised repair contract, not a claim that the implementation is complete or its unresolved schema choices are settled.
