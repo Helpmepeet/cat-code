@@ -513,62 +513,112 @@ test('seal verifies full parallel results over the large-file threshold and fail
   await expect(runtime.sealResumeCheckpoint()).rejects.toThrow('projection differs')
 })
 
-test('equal-timestamp parallel results retain JSONL completion order through a handoff and follow-up', async () => {
+test.each([
+  {
+    label: 'equal-timestamp completion ties',
+    order: ['call-A', 'call-B', 'call-C', 'result-B', 'result-A', 'result-C'],
+  },
+  {
+    label: 'streamed ABaCbc interleaving',
+    order: ['call-A', 'call-B', 'result-A', 'call-C', 'result-B', 'result-C'],
+  },
+  {
+    label: 'delayed post-tool completion order despite older A timestamp',
+    order: ['call-A', 'call-B', 'call-C', 'result-B', 'result-A', 'result-C'],
+  },
+  {
+    label: 'parallel completions with retained hook context',
+    order: ['call-A', 'call-B', 'call-C', 'result-A', 'hook-A', 'result-B', 'result-C'],
+  },
+] as const)('parallel recovery preserves $label through a handoff and follow-up', async scenario => {
   const { createUserMessage } = await import('./utils/messages.js')
   const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
   const user = createUserMessage({ content: 'run three independent reads' })
+  const labels = ['A', 'B', 'C'] as const
   const messageId = randomUUID()
-  const calls = (['A', 'B', 'C'] as const).map(label => {
+  const calls = labels.map(label => {
     const call = assistant([{ type: 'tool_use', id: `parallel-${label}`, name: 'HistoricalTool', input: { label } }])
     call.message.id = messageId
-    call.timestamp = '2026-10-09T12:00:39.489Z'
     return call
   })
-  const [callA, callB, callC] = calls
-  if (!callA || !callB || !callC) throw new Error('Missing parallel calls')
-  const result = (call: AssistantMessage, label: string) => {
+  const callByLabel = new Map(labels.map((label, index) => [label, calls[index]!]))
+  const resultByLabel = new Map(labels.map(label => {
+    const call = callByLabel.get(label)!
     const message = createUserMessage({ sourceToolAssistantUUID: call.uuid as UUID,
       content: [{ type: 'tool_result', tool_use_id: `parallel-${label}`, content: `completed ${label}` }] })
-    message.timestamp = '2026-10-09T12:00:39.490Z'
-    return message
-  }
-  // The persisted JSONL order records completion B, A, C. C is the result
-  // attached to the selected final branch; A and B must be recovered beside it.
-  const resultB = result(callB, 'B')
-  const resultA = result(callA, 'A')
-  const resultC = result(callC, 'C')
+    return [label, message] as const
+  }))
+  const hook = { type: 'attachment', uuid: randomUUID(), timestamp: new Date().toISOString(), attachment: {
+    type: 'hook_additional_context', content: ['Use this important read context'],
+    hookName: 'PostToolUse:Read', toolUseID: 'parallel-A', hookEvent: 'PostToolUse',
+  } } as Message
+  const rowByLabel = new Map<string, Message>([
+    ...labels.map(label => [`call-${label}`, callByLabel.get(label)!] as const),
+    ...labels.map(label => [`result-${label}`, resultByLabel.get(label)!] as const),
+    ['hook-A', hook],
+  ])
   const final = assistant([{ type: 'text', text: 'all three reads completed' }])
-  final.timestamp = '2026-10-09T12:00:39.491Z'
-  const persisted = [user, ...calls, resultB, resultA, resultC, final]
+  const persisted = [user, ...scenario.order.map(label => rowByLabel.get(label)!), final]
+  if (scenario.label === 'equal-timestamp completion ties') {
+    user.timestamp = '2026-10-09T12:00:39.488Z'
+    for (const call of calls) call.timestamp = '2026-10-09T12:00:39.489Z'
+    for (const result of resultByLabel.values()) result.timestamp = '2026-10-09T12:00:39.490Z'
+    final.timestamp = '2026-10-09T12:00:39.491Z'
+  } else if (scenario.label.startsWith('delayed post-tool')) {
+    user.timestamp = '2026-10-09T12:00:39.488Z'
+    for (const call of calls) call.timestamp = '2026-10-09T12:00:39.489Z'
+    resultByLabel.get('A')!.timestamp = '2026-10-09T12:00:39.490Z'
+    resultByLabel.get('B')!.timestamp = '2026-10-09T12:00:39.491Z'
+    resultByLabel.get('C')!.timestamp = '2026-10-09T12:00:39.492Z'
+    final.timestamp = '2026-10-09T12:00:39.493Z'
+  } else {
+    persisted.forEach((message, index) => { message.timestamp = new Date(Date.UTC(2026, 9, 9, 12, 0, index)).toISOString() })
+  }
   await storage.recordTranscript(persisted)
   const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
   await storage.markActiveConversationTip(final.uuid as UUID)
   await storage.flushCurrentTranscriptDurably()
 
-  const toolResultOrder = (messages: Message[]) => messages.flatMap(message =>
-    message.type === 'user' && Array.isArray(message.message.content)
-      ? message.message.content.flatMap(block => block.type === 'tool_result' ? [block.tool_use_id] : [])
-      : [],
-  )
+  const activeRowLabels = (messages: Message[]) => messages.map(message => {
+    if (message.uuid === user.uuid) return 'prompt'
+    if (message.uuid === final.uuid) return 'answer'
+    if (message.type === 'assistant') {
+      const use = message.message.content.find(block => block.type === 'tool_use')
+      if (use?.type === 'tool_use') return `call-${use.id.slice(-1)}`
+    }
+    if (message.type === 'user' && Array.isArray(message.message.content)) {
+      const result = message.message.content.find(block => block.type === 'tool_result')
+      if (result?.type === 'tool_result') return `result-${result.tool_use_id.slice(-1)}`
+    }
+    if (message.type === 'attachment' && (message.attachment as import('./utils/attachments.js').Attachment).type === 'hook_additional_context') return 'hook-A'
+    return `other-${message.type}`
+  })
+  const expectedLabels = ['prompt', ...scenario.order.map(label => label), 'answer']
   const onDisk = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
-  expect(toolResultOrder([...onDisk.messages.values()])).toEqual(['parallel-B', 'parallel-A', 'parallel-C'])
+  const active = storage.selectActiveConversation(onDisk.messages, onDisk.leafUuids, onDisk.activeConversationTip)
+  expect(activeRowLabels(active.messages)).toEqual(expectedLabels)
   const resumed = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
   expect(resumed).not.toBeNull()
-  expect(toolResultOrder(resumed!.messages)).toEqual(['parallel-B', 'parallel-A', 'parallel-C'])
+  expect(activeRowLabels(resumed!.messages)).toEqual(expectedLabels)
 
   let providerCalls = 0
-  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+  const providerPrompts: string[] = []
+  const { normalizeMessagesForAPI } = await import('./utils/messages.js')
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages, tools }) {
     providerCalls++
+    providerPrompts.push(JSON.stringify(normalizeMessagesForAPI(messages, tools)))
     yield assistant([{ type: 'text', text: providerCalls === 1 ? 'continued at destination' : 'follow-up accepted' }])
   }))
-  const runtime = engine([], { initialMessages: persisted })
-  const prefixCheckpoint = await runtime.sealResumeCheckpoint()
+  const expectedRuntime = engine([], { initialMessages: persisted })
+  const prefixCheckpoint = await expectedRuntime.sealResumeCheckpoint()
   await storage.verifyResumeCheckpoint(prefixCheckpoint)
+  const runtime = engine([], { initialMessages: resumed!.messages })
   const controller = createQueryEngineSessionController(runtime)
   const configuration = handoffConfiguration()
   await controller.configureWorkspaceHandoff(configuration)
   await (await controller.startHandoffContinuation()).completion
   expect(providerCalls).toBe(1)
+  if (scenario.label.includes('hook context')) expect(providerPrompts[0]).toContain('Use this important read context')
   const success = controller.getWorkspaceHandoffSnapshot()
   if (success?.record.kind !== 'valid' || !success.record.record.terminal) throw new Error('Missing continuation checkpoint')
   await storage.verifyResumeCheckpoint(success.record.record.terminal.checkpoint)
@@ -576,6 +626,39 @@ test('equal-timestamp parallel results retain JSONL completion order through a h
   await controller.submit('send a follow-up after the move')
   expect(providerCalls).toBe(2)
   expect(controller.getWorkspaceHandoffSnapshot()?.gate).toMatchObject({ mode: 'open' })
+})
+
+test.each([
+  ['edited_text_file', { type: 'edited_text_file', filename: '/former/text.md', snippet: '@@ edited text' }],
+  ['edited_image_file', { type: 'edited_image_file', filename: '/former/image.png', content: {
+    type: 'image', file: { base64: 'aW1hZ2U=', type: 'image/png', originalSize: 5 },
+  } }],
+  ['opened_file_in_ide', { type: 'opened_file_in_ide', filename: '/former/notes.md' }],
+] as const)('resume preserves modern %s attachment bytes in the strict checkpoint', async (_kind, attachment) => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const sessionId = bootstrap.getSessionId()
+  const user = createUserMessage({ content: 'preserve current attachment history' })
+  const archivedAttachment = { type: 'attachment', uuid: randomUUID(), timestamp: new Date().toISOString(), attachment } as Message
+  const completed = assistant([{ type: 'text', text: 'finished with the attachment' }])
+  const persisted = [user, archivedAttachment, completed]
+  await storage.recordTranscript(persisted)
+  const path = storage.getTranscriptPathForSession(sessionId)
+  await storage.markActiveConversationTip(completed.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+
+  const raw = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  expect(raw.messages.get(archivedAttachment.uuid as UUID)).toMatchObject({
+    uuid: archivedAttachment.uuid, attachment,
+  })
+  const resumed = await loadConversationForResume(sessionId, path, { interruptedTurn: 'ignore' })
+  expect(resumed).not.toBeNull()
+  const runtime = engine([], { initialMessages: resumed!.messages })
+  const checkpoint = await runtime.sealResumeCheckpoint()
+  await storage.verifyResumeCheckpoint(checkpoint)
+  const resumedAttachment = resumed!.messages.find(message => message.uuid === archivedAttachment.uuid)
+  expect(resumedAttachment).toMatchObject({ uuid: archivedAttachment.uuid, type: 'attachment' })
+  if (resumedAttachment?.type !== 'attachment') throw new Error('Modern attachment was lost during resume')
+  expect(resumedAttachment.attachment).toEqual(attachment)
 })
 
 test('seal uses valid compaction logging transforms and preserves retained provenance', async () => {
@@ -656,6 +739,7 @@ test('relocated continuation keeps the archive intact and filters only former-wo
       { name: 'FormerSkill', path: join(formerCwd, '.cat-code', 'skills', 'former', 'SKILL.md'), content: 'FORMER_SKILL_MARKER' },
       { name: 'DestinationSkill', path: join(targetCwd, '.cat-code', 'skills', 'destination', 'SKILL.md'), content: 'CURRENT_SKILL_MARKER' },
       { name: 'GlobalSkill', path: join(process.env.CLAUDE_CONFIG_DIR!, 'skills', 'global', 'SKILL.md'), content: 'GLOBAL_SKILL_MARKER' },
+      { name: 'RelativeSkill', path: 'skills/relative/SKILL.md', content: 'RELATIVE_SKILL_MARKER' },
     ] } } as Message
   const toolCall = assistant([{ type: 'tool_use', id: 'archived-tool-use', name: 'HistoricalTool', input: {} }])
   const toolResult = createUserMessage({ sourceToolAssistantUUID: toolCall.uuid as UUID,
@@ -677,7 +761,7 @@ test('relocated continuation keeps the archive intact and filters only former-wo
     message.type === 'attachment' && message.uuid === invoked.uuid)
   expect(resumedListing).toMatchObject(listing)
   expect(resumedSkills).toMatchObject(invoked)
-  expect([...bootstrap.getInvokedSkills().values()].map(skill => skill.skillName).sort()).toEqual(['DestinationSkill', 'GlobalSkill'])
+  expect([...bootstrap.getInvokedSkills().values()].map(skill => skill.skillName).sort()).toEqual(['DestinationSkill', 'GlobalSkill', 'RelativeSkill'])
   const normalizedMessages = normalizeMessages(resumed!.messages)
   const normalizedListing = normalizedMessages.find((message): message is Extract<Message, { type: 'attachment' }> =>
     message.type === 'attachment' && message.uuid === listing.uuid)
@@ -697,10 +781,66 @@ test('relocated continuation keeps the archive intact and filters only former-wo
   expect(normalized).not.toContain('FORMER_SKILL_MARKER')
   expect(normalized).toContain('CURRENT_SKILL_MARKER')
   expect(normalized).toContain('GLOBAL_SKILL_MARKER')
+  expect(normalized).toContain('RELATIVE_SKILL_MARKER')
   expect(normalized).toContain('ARCHIVE_TOOL_RESULT_MARKER')
   const destinationListing = { type: 'attachment', uuid: randomUUID(), timestamp: new Date().toISOString(),
     attachment: { type: 'skill_listing', content: 'DESTINATION_LISTING_MARKER', skillCount: 1, isInitial: true } } as Message
   expect(JSON.stringify(normalizeMessagesForAPI([destinationListing]))).toContain('DESTINATION_LISTING_MARKER')
+
+  // A new fork persists the already-filtered view, then reloads without
+  // needing the source session's relocation ledger.
+  const { createFork } = await import('./commands/branch/branch.js')
+  const fork = await createFork('Workspace-filtered fork')
+  expect(await fsPromises.readFile(transcriptPath, 'utf8')).toBe(originalTranscript)
+  const forkTranscript = await storage.loadTranscriptFile(fork.forkPath, { keepAllLeaves: true, strict: true })
+  const forkRows = [...forkTranscript.messages.values()]
+  const forkArchive = JSON.stringify(forkRows)
+  expect(forkArchive).not.toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(forkArchive).not.toContain('FORMER_SKILL_MARKER')
+  expect(forkArchive).toContain('CURRENT_SKILL_MARKER')
+  expect(forkArchive).toContain('GLOBAL_SKILL_MARKER')
+  expect(forkArchive).toContain('RELATIVE_SKILL_MARKER')
+  expect(forkRows.some(message => message.type === 'attachment' && (message.attachment as import('./utils/attachments.js').Attachment).type === 'skill_listing')).toBe(false)
+  const forkSkills = forkRows.find(message =>
+    message.type === 'attachment' &&
+      (message.attachment as import('./utils/attachments.js').Attachment).type === 'invoked_skills',
+  )
+  if (forkSkills?.type !== 'attachment') throw new Error('Fork lost invoked skills')
+  expect(forkSkills.attachment).toMatchObject({
+    type: 'invoked_skills',
+    skills: [
+      { name: 'DestinationSkill', path: join(targetCwd, '.cat-code', 'skills', 'destination', 'SKILL.md') },
+      { name: 'GlobalSkill', path: join(process.env.CLAUDE_CONFIG_DIR!, 'skills', 'global', 'SKILL.md') },
+      { name: 'RelativeSkill', path: 'skills/relative/SKILL.md' },
+    ],
+  })
+  bootstrap.clearInvokedSkills()
+  const forkResume = await loadConversationForResume(fork.sessionId, fork.forkPath, { interruptedTurn: 'ignore' })
+  expect(forkResume).not.toBeNull()
+  const reopenedFork = JSON.stringify(forkResume!.messages)
+  expect(reopenedFork).not.toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(reopenedFork).not.toContain('FORMER_SKILL_MARKER')
+  expect(reopenedFork).toContain('CURRENT_SKILL_MARKER')
+  expect(reopenedFork).toContain('GLOBAL_SKILL_MARKER')
+  expect(reopenedFork).toContain('RELATIVE_SKILL_MARKER')
+  expect([...bootstrap.getInvokedSkills().values()].map(skill => skill.skillName).sort()).toEqual(['DestinationSkill', 'GlobalSkill', 'RelativeSkill'])
+
+  const { restoreHeadlessSessionFromLog } = await import('./cli/print.js')
+  let headlessState = getDefaultAppState()
+  const headlessFork = restoreHeadlessSessionFromLog(resumed!, true, update => {
+    headlessState = update(headlessState)
+  })
+  const headlessForkMessages = JSON.stringify(headlessFork.messages)
+  expect(headlessForkMessages).not.toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(headlessForkMessages).not.toContain('FORMER_SKILL_MARKER')
+  expect(headlessForkMessages).toContain('CURRENT_SKILL_MARKER')
+  expect(headlessForkMessages).toContain('GLOBAL_SKILL_MARKER')
+  expect(headlessForkMessages).toContain('RELATIVE_SKILL_MARKER')
+  if (resumedListing?.type !== 'attachment' || resumedSkills?.type !== 'attachment') {
+    throw new Error('Resume lost historical attachment rows')
+  }
+  expect(resumedListing).toMatchObject(listing)
+  expect(resumedSkills).toMatchObject(invoked)
 
   let providerCalls = 0
   const providerPrompts: string[] = []
@@ -719,16 +859,18 @@ test('relocated continuation keeps the archive intact and filters only former-wo
   expect(providerPrompts[0]).not.toContain('FORMER_SKILL_MARKER')
   expect(providerPrompts[0]).toContain('CURRENT_SKILL_MARKER')
   expect(providerPrompts[0]).toContain('GLOBAL_SKILL_MARKER')
+  expect(providerPrompts[0]).toContain('RELATIVE_SKILL_MARKER')
   const success = controller.getWorkspaceHandoffSnapshot()
   if (success?.record.kind !== 'valid' || !success.record.record.terminal) throw new Error('Missing continuation checkpoint')
   await storage.verifyResumeCheckpoint(success.record.record.terminal.checkpoint)
   expect(await controller.releaseWorkspaceHandoff(configuration.identity.operationId, 'open')).toBe('applied')
-  await drain(runtime.submitMessage('Continue with a destination follow up'))
+  await controller.submit('Continue with a destination follow up')
   expect(providerCalls).toBe(2)
   expect(providerPrompts[1]).not.toContain('SOURCE_ONLY_LISTING_MARKER')
   expect(providerPrompts[1]).not.toContain('FORMER_SKILL_MARKER')
   expect(providerPrompts[1]).toContain('CURRENT_SKILL_MARKER')
   expect(providerPrompts[1]).toContain('GLOBAL_SKILL_MARKER')
+  expect(providerPrompts[1]).toContain('RELATIVE_SKILL_MARKER')
   await storage.flushCurrentTranscriptDurably()
   expect((await fsPromises.readFile(transcriptPath, 'utf8'))).toContain('SOURCE_ONLY_LISTING_MARKER')
 
@@ -848,9 +990,10 @@ test('restart recovers genuine input committed before reconciliation receipt wit
     onHandoffInputCommitted: async () => { throw new Error('isolated process death before receipt') },
   }))).rejects.toThrow('before receipt')
   expect(providerCalls).toBe(0)
-  const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()), { keepAllLeaves: true, strict: true })
-  const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
-  const replacement = createQueryEngineSessionController(engine([], { initialMessages: storage.removeExtraFields(active.messages) }))
+  const transcriptPath = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const loaded = await loadConversationForResume(bootstrap.getSessionId(), transcriptPath, { interruptedTurn: 'ignore' })
+  expect(loaded).not.toBeNull()
+  const replacement = createQueryEngineSessionController(engine([], { initialMessages: loaded!.messages }))
   await replacement.configureWorkspaceHandoff({ ...configuration, recover: true, observerGeneration: randomUUID() })
   expect(replacement.getWorkspaceHandoffSnapshot()).toMatchObject({ gate: { mode: 'open', requiresUserReconciliation: false },
     record: { kind: 'valid', record: { reconciliation: { noticeUuid: notice.displayUuid, inputUuid, contextUuid } } } })

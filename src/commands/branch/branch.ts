@@ -19,6 +19,10 @@ import {
   resolveSelectableUserMessageByProducerPrefix,
 } from '../../utils/conversationRecovery.js'
 import {
+  markWorkspaceResumeAttachments,
+  materializeWorkspaceResumeAttachments,
+} from '../../utils/workspaceResumeAttachments.js'
+import {
   getProjectDir,
   getTranscriptPath,
   getTranscriptPathForSession,
@@ -119,6 +123,9 @@ async function createForkFromActiveConversation(
     sourcePrompt = target.message
     mainConversationEntries = prefix
   }
+
+  markWorkspaceResumeAttachments(mainConversationEntries, originalSessionId)
+  mainConversationEntries = materializeWorkspaceResumeAttachments(mainConversationEntries)
 
   const validToolResultIds = retainedToolResultIds(mainConversationEntries)
   const contentReplacementRecords = loaded.orderedContentReplacements.filter(

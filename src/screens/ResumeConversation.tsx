@@ -307,7 +307,7 @@ export function ResumeConversation({
       });
       setLogs([]);
       setResumeData({
-        messages: result_3.messages,
+        messages: restoreResult.messages ?? result_3.messages,
         fileHistorySnapshots: result_3.fileHistorySnapshots,
         contentReplacements: result_3.contentReplacements,
         agentName: result_3.agentName,

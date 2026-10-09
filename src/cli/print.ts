@@ -5097,10 +5097,11 @@ export function restoreHeadlessSessionFromLog(
   result: Parameters<typeof prepareSessionRestoreResult>[0],
   forkSession: boolean,
   setAppState: (f: (prev: AppState) => AppState) => void,
-): void {
+): ReturnType<typeof prepareSessionRestoreResult> {
   const restoreResult = prepareSessionRestoreResult(result, forkSession)
   restoreSessionStateFromLog(restoreResult, setAppState)
   restoreSessionMetadata(restoreResult)
+  return restoreResult
 }
 
 async function loadInitialMessages(
@@ -5171,7 +5172,7 @@ async function loadInitialMessages(
             }
           }
         }
-        restoreHeadlessSessionFromLog(
+        const restoredResult = restoreHeadlessSessionFromLog(
           result,
           !!options.forkSession,
           setAppState,
@@ -5187,7 +5188,7 @@ async function loadInitialMessages(
         }
 
         return {
-          messages: result.messages,
+          messages: restoredResult.messages ?? result.messages,
           turnInterruptionState: result.turnInterruptionState,
           agentSetting: result.agentSetting,
         }
@@ -5377,7 +5378,7 @@ async function loadInitialMessages(
           await resetSessionFilePointer()
         }
       }
-      restoreHeadlessSessionFromLog(result, !!options.forkSession, setAppState)
+      const restoredResult = restoreHeadlessSessionFromLog(result, !!options.forkSession, setAppState)
 
       // Write mode entry for the resumed session
       if (feature('COORDINATOR_MODE') && coordinatorModeModule) {
@@ -5387,7 +5388,7 @@ async function loadInitialMessages(
       }
 
       return {
-        messages: result.messages,
+        messages: restoredResult.messages ?? result.messages,
         turnInterruptionState: result.turnInterruptionState,
         agentSetting: result.agentSetting,
       }

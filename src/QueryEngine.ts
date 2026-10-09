@@ -1708,6 +1708,10 @@ export class QueryEngine {
         (Array.isArray(input.message.content) && input.message.content.some(block => block.type === 'tool_result'))) continue
       const context = this.mutableMessages[next + 1]
       if (context?.type !== 'user' || !context.isMeta || context.message.content !== handoffReconciliationPrompt()) return null
+      // Resume may append a synthetic sentinel and session-start rows after
+      // the accepted reconciliation context. Persist the independently
+      // retained runtime history before sealing its proof.
+      await (this.config.recordTranscript ?? recordTranscript)(this.mutableMessages)
       const checkpoint = await sealResumeCheckpoint(this.mutableMessages)
       return { inputUuid: input.uuid, contextUuid: context.uuid, checkpoint }
     }

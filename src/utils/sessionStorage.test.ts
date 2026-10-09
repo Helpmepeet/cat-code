@@ -2626,10 +2626,10 @@ describe('large transcript resume preserves selection and recoverable content', 
     expect(bytes > 5 * 1024 * 1024).toBe(siblingBytes + retainedBytes >= 5 * 1024 * 1024)
     const resumed = await readWithReference(path)
     expect(resumed.leafUuid).toBe(report.uuid)
-    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, rb.uuid, ra.uuid, report.uuid])
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, ra.uuid, rb.uuid, report.uuid])
     expect(shapedResults(resumed.messages)).toEqual([
-      { type: 'tool_result', tool_use_id: 'call-B', content: expectedB },
       { type: 'tool_result', tool_use_id: 'call-A', content: expectedA },
+      { type: 'tool_result', tool_use_id: 'call-B', content: expectedB },
     ])
     const display = await loadDisplayTranscriptFromJsonlPath(path, { maxMessages: 100, maxBytes: 20 * 1024 * 1024 })
     expect(display.truncated).toBe(false)
@@ -2673,6 +2673,34 @@ describe('large transcript resume preserves selection and recoverable content', 
     await readWithReference(path)
   })
 
+  test('parallel recovery retains pre-continuation hook metadata without resurrecting its discarded branch', async () => {
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read both files' } })
+    const a = call(prompt.uuid, 1, 'call-A')
+    const b = call(a.uuid, 2, 'call-B')
+    const resultA = result(a.uuid, 3, 'call-A', 'actual A result')
+    const hookA = row('attachment', resultA.uuid, 4, {
+      attachment: { type: 'hook_additional_context', content: ['retained context for A'], hookName: 'PostToolUse:Read', toolUseID: 'call-A', hookEvent: 'PostToolUse' },
+    })
+    const discardedContinuation = row('user', hookA.uuid, 5, {
+      userType: 'external', message: { role: 'user', content: 'discarded continuation from A' },
+    })
+    const laterMetadata = row('attachment', hookA.uuid, 6, {
+      attachment: { type: 'hook_additional_context', content: ['must not return'], hookName: 'PostToolUse:Read', toolUseID: 'call-A', hookEvent: 'PostToolUse' },
+    })
+    const resultB = result(b.uuid, 7, 'call-B', 'actual B result')
+    const report = final(resultB.uuid, 8)
+    const { path } = await write([prompt, a, b, resultA, hookA, discardedContinuation, laterMetadata, resultB, report])
+    const { selectActiveConversation } = await import('./sessionStorage.js')
+    const loaded = await loadTranscriptFile(path, { keepAllLeaves: true })
+    const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+
+    expect(active.messages.map(message => message.uuid)).toEqual([
+      prompt.uuid, a.uuid, b.uuid, resultA.uuid, hookA.uuid, resultB.uuid, report.uuid,
+    ])
+    expect(active.messages.some(message => message.uuid === discardedContinuation.uuid)).toBe(false)
+    expect(active.messages.some(message => message.uuid === laterMetadata.uuid)).toBe(false)
+  })
+
   test.each(['identical', 'conflicting'] as const)('duplicate UUIDs use production-effective %s payloads and parents', async kind => {
     const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read both files' } })
     const a = call(prompt.uuid, 1, 'call-A')
@@ -2695,10 +2723,10 @@ describe('large transcript resume preserves selection and recoverable content', 
     expect(effectiveResult?.type).toBe('user')
     if (effectiveResult?.type === 'user') expect(effectiveResult.message).toEqual(rb.message)
     const resumed = await readWithReference(path)
-    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, rb.uuid, ra.uuid, report.uuid])
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, ra.uuid, rb.uuid, report.uuid])
     expect(shapedResults(resumed.messages)).toEqual([
-      { type: 'tool_result', tool_use_id: 'call-B', content: `actual last result:${'d'.repeat(6 * 1024 * 1024)}` },
       { type: 'tool_result', tool_use_id: 'call-A', content: 'actual A' },
+      { type: 'tool_result', tool_use_id: 'call-B', content: `actual last result:${'d'.repeat(6 * 1024 * 1024)}` },
     ])
   })
 

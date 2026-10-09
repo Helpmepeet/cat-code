@@ -1,7 +1,7 @@
-import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
+import { assertSessionNotMoving } from './sessionRelocationState.js'
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
-import { basename, isAbsolute, relative } from 'path'
+import { basename, relative } from 'path'
 import { getCwd } from 'src/utils/cwd.js'
 import { addInvokedSkill } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'
@@ -29,7 +29,10 @@ import {
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../constants/xml.js'
 import { suppressNextSkillListing } from './attachments.js'
-import { getWorkspaceResumeAttachmentView, markWorkspaceResumeAttachment } from './workspaceResumeAttachments.js'
+import {
+  getWorkspaceResumeAttachmentView,
+  markWorkspaceResumeAttachments,
+} from './workspaceResumeAttachments.js'
 import {
   copyFileHistoryForResume,
   type FileHistorySnapshot,
@@ -176,8 +179,18 @@ function migrateLegacyAttachmentTypes(message: Message): Message {
     } as SerializedMessage // Cast entire message since we know the structure is correct
   }
 
-  // Backfill displayPath for attachments from old sessions
-  if (!('displayPath' in attachment)) {
+  // Backfill displayPath only for variants whose current schema carries it.
+  // Modern edit/open notices intentionally store only a filename.
+  const hasDisplayPathContract =
+    attachment.type === 'file' ||
+    attachment.type === 'compact_file_reference' ||
+    attachment.type === 'pdf_reference' ||
+    attachment.type === 'already_read_file' ||
+    attachment.type === 'directory' ||
+    attachment.type === 'selected_lines_in_ide' ||
+    attachment.type === 'nested_memory' ||
+    attachment.type === 'dynamic_skill'
+  if (hasDisplayPathContract && !('displayPath' in attachment)) {
     const path =
       'filename' in attachment
         ? (attachment.filename as string)
@@ -712,43 +725,10 @@ export async function loadConversationForResume(
 
     // Restore skill state from invoked_skills attachments before deserialization.
     // This ensures skills survive multiple compaction cycles after resume.
-    if (sessionId) {
-      assertSessionNotMoving(sessionId)
-      const relocation = readSessionRelocation(sessionId)
-      if (relocation) {
-        if (getCwd() !== relocation.target.cwd) throw new Error('Open this conversation from its current folder')
-        const wasInside = (root: string, path: string): boolean => {
-          if (!isAbsolute(path)) return false
-          const rel = relative(root, path)
-          return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'))
-        }
-        const formerRoots = new Set([
-          relocation.original.cwd,
-          relocation.source.cwd,
-          ...(relocation.transitions ?? []).flatMap(transition => [transition.source.cwd, transition.target.cwd]),
-        ])
-        formerRoots.delete(relocation.target.cwd)
-        const belongsToFormerProject = (path: string): boolean => {
-          if (wasInside(relocation.target.cwd, path)) return false
-          return [...formerRoots].some(root => wasInside(root, path))
-        }
-        // Keep the archived transcript and fixed V1 proof intact. The
-        // attachment view is applied only when restoring prompt skill state or
-        // rendering an attachment for the provider.
-        for (const message of messages!) {
-          if (message.type !== 'attachment') continue
-          const attachment = message.attachment as import('./attachments.js').Attachment
-          if (attachment.type === 'skill_listing') {
-            markWorkspaceResumeAttachment(attachment, null)
-          } else if (attachment.type === 'invoked_skills' && Array.isArray(attachment.skills)) {
-            markWorkspaceResumeAttachment(attachment, {
-              ...attachment,
-              skills: attachment.skills.filter(skill => !belongsToFormerProject(skill.path)),
-            })
-          }
-        }
-      }
-    }
+    // Keep the archived transcript and fixed V1 proof intact. The attachment
+    // view is applied only when restoring prompt skill state or rendering an
+    // attachment for the provider.
+    if (sessionId) markWorkspaceResumeAttachments(messages!, sessionId)
     restoreSkillStateFromMessages(messages!)
 
     const interruptedTurnPolicy = options?.interruptedTurn ?? 'consume'

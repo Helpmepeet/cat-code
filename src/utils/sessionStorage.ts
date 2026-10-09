@@ -3537,8 +3537,9 @@ export function buildDisplayConversationChain(
 }
 
 /**
- * Post-pass for buildConversationChain: recover sibling assistant blocks and
- * tool_results that the single-parent walk orphaned.
+ * Post-pass for buildConversationChain: recover same-response assistant
+ * siblings, tool_results, and their retained metadata that the single-parent
+ * walk orphaned.
  *
  * Streaming (claude.ts:~2024) emits one AssistantMessage per content_block_stop
  * — N parallel tool_uses → N messages, distinct uuid, same message.id. Each
@@ -3561,7 +3562,7 @@ export function buildDisplayConversationChain(
 function recoverOrphanedParallelToolResults(
   messages: Map<UUID, TranscriptMessage>,
   chain: TranscriptMessage[],
-  seen: Set<UUID>,
+  seen: Set<string>,
 ): TranscriptMessage[] {
   type ChainAssistant = Extract<TranscriptMessage, { type: 'assistant' }>
   const chainAssistants = chain.filter(
@@ -3569,26 +3570,36 @@ function recoverOrphanedParallelToolResults(
   )
   if (chainAssistants.length === 0) return chain
 
-  // Anchor = last on-chain member of each sibling group. chainAssistants is
-  // already in chain order, so later iterations overwrite → last wins.
-  const anchorByMsgId = new Map<string, ChainAssistant>()
-  for (const a of chainAssistants) {
-    if (a.message.id) anchorByMsgId.set(a.message.id, a)
-  }
+  const groupKey = (message: ChainAssistant): string => JSON.stringify([
+    message.sessionId ?? null,
+    message.isSidechain,
+    message.agentId ?? null,
+    message.message.id,
+  ])
+  const sameRecoveryIdentity = (a: TranscriptMessage, b: TranscriptMessage): boolean =>
+    a.sessionId === b.sessionId &&
+    a.isSidechain === b.isSidechain &&
+    a.agentId === b.agentId
 
-  // O(n) precompute: sibling groups and TR index.
-  // TRs indexed by parentUuid — insertMessageChain:~894 already wrote that
-  // as the srcUUID, and --fork-session strips srcUUID but keeps parentUuid.
-  const siblingsByMsgId = new Map<string, TranscriptMessage[]>()
-  const toolResultsByAsst = new Map<UUID, TranscriptMessage[]>()
+  // O(n) indexes preserve the parser's effective JSONL order, including the
+  // first insertion position of duplicate UUIDs.
+  const siblingsByGroup = new Map<string, ChainAssistant[]>()
+  const toolResultsByAsst = new Map<string, TranscriptMessage[]>()
+  const childrenByParent = new Map<string, TranscriptMessage[]>()
   const insertionOrdinalByUuid = new Map<string, number>()
   let insertionOrdinal = 0
   for (const m of messages.values()) {
     insertionOrdinalByUuid.set(m.uuid, insertionOrdinal++)
+    if (m.parentUuid) {
+      const children = childrenByParent.get(m.parentUuid)
+      if (children) children.push(m)
+      else childrenByParent.set(m.parentUuid, [m])
+    }
     if (m.type === 'assistant' && m.message.id) {
-      const group = siblingsByMsgId.get(m.message.id)
+      const key = groupKey(m)
+      const group = siblingsByGroup.get(key)
       if (group) group.push(m)
-      else siblingsByMsgId.set(m.message.id, [m])
+      else siblingsByGroup.set(key, [m])
     } else if (
       m.type === 'user' &&
       m.parentUuid &&
@@ -3601,44 +3612,122 @@ function recoverOrphanedParallelToolResults(
     }
   }
 
-  // For each message.id group touching the chain: collect off-chain siblings,
-  // then off-chain TRs for ALL members. Splice right after the last on-chain
-  // member so the group stays contiguous for normalizeMessagesForAPI's merge
-  // and every TR lands after its tool_use.
-  const processedGroups = new Set<string>()
-  const inserts = new Map<UUID, TranscriptMessage[]>()
-  let recoveredCount = 0
-  for (const asst of chainAssistants) {
-    const msgId = asst.message.id
-    if (!msgId || processedGroups.has(msgId)) continue
-    processedGroups.add(msgId)
-
-    const group = siblingsByMsgId.get(msgId) ?? [asst]
-    const orphanedSiblings = group.filter(s => !seen.has(s.uuid))
-    const orphanedTRs: TranscriptMessage[] = []
-    for (const member of group) {
-      const trs = toolResultsByAsst.get(member.uuid)
-      if (!trs) continue
-      for (const tr of trs) {
-        if (!seen.has(tr.uuid)) orphanedTRs.push(tr)
+  // A metadata walk follows attachment/system children only. It stops at the
+  // first reachable user/assistant row, which bounds metadata to the prefix
+  // before a discarded continuation branch.
+  const metadataByRoot = new Map<string, TranscriptMessage[]>()
+  const collectMetadata = (root: TranscriptMessage): TranscriptMessage[] => {
+    if (metadataByRoot.has(root.uuid)) return metadataByRoot.get(root.uuid)!
+    const pending: string[] = [root.uuid]
+    const visited = new Set<string>(pending)
+    const metadata: TranscriptMessage[] = []
+    let earliestConversationOrdinal = Number.POSITIVE_INFINITY
+    for (let index = 0; index < pending.length; index++) {
+      const parentUuid = pending[index]!
+      for (const child of childrenByParent.get(parentUuid) ?? []) {
+        if (visited.has(child.uuid) || !sameRecoveryIdentity(child, root)) continue
+        const ordinal = insertionOrdinalByUuid.get(child.uuid) ?? Number.MAX_SAFE_INTEGER
+        if (child.type === 'user' || child.type === 'assistant') {
+          if (ordinal < earliestConversationOrdinal) earliestConversationOrdinal = ordinal
+          continue
+        }
+        if (child.type !== 'attachment' && child.type !== 'system') continue
+        visited.add(child.uuid)
+        metadata.push(child)
+        pending.push(child.uuid)
       }
     }
-    if (orphanedSiblings.length === 0 && orphanedTRs.length === 0) continue
+    const retained = metadata.filter(
+      message => (insertionOrdinalByUuid.get(message.uuid) ?? Number.MAX_SAFE_INTEGER) < earliestConversationOrdinal,
+    )
+    metadataByRoot.set(root.uuid, retained)
+    return retained
+  }
 
-    // Timestamp gives completion order; the transcript Map ordinal preserves
-    // JSONL write order when multiple results share a timestamp.
-    const compareTranscriptOrder = (a: TranscriptMessage, b: TranscriptMessage) =>
-      a.timestamp.localeCompare(b.timestamp) ||
-      (insertionOrdinalByUuid.get(a.uuid) ?? Number.MAX_SAFE_INTEGER) -
-        (insertionOrdinalByUuid.get(b.uuid) ?? Number.MAX_SAFE_INTEGER)
-    orphanedSiblings.sort(compareTranscriptOrder)
-    orphanedTRs.sort(compareTranscriptOrder)
+  // Map iteration reflects JSONL append order. Tool results can be persisted
+  // after PostToolUse hooks, so their timestamps do not reliably encode when
+  // the rows entered the transcript.
+  const compareTranscriptOrder = (a: TranscriptMessage, b: TranscriptMessage) =>
+    (insertionOrdinalByUuid.get(a.uuid) ?? Number.MAX_SAFE_INTEGER) -
+    (insertionOrdinalByUuid.get(b.uuid) ?? Number.MAX_SAFE_INTEGER)
+  const chainPositionByUuid = new Map<string, number>()
+  chain.forEach((message, index) => chainPositionByUuid.set(message.uuid, index))
+  const before = new Map<string, TranscriptMessage[]>()
+  const after = new Map<string, TranscriptMessage[]>()
+  const processedGroups = new Set<string>()
+  let recoveredCount = 0
+  for (const anchorAssistant of chainAssistants) {
+    const msgId = anchorAssistant.message.id
+    if (!msgId) continue
+    const key = groupKey(anchorAssistant)
+    if (processedGroups.has(key)) continue
+    processedGroups.add(key)
 
-    const anchor = anchorByMsgId.get(msgId)!
-    const recovered = [...orphanedSiblings, ...orphanedTRs]
-    for (const r of recovered) seen.add(r.uuid)
-    recoveredCount += recovered.length
-    inserts.set(anchor.uuid, recovered)
+    const group = siblingsByGroup.get(key) ?? [anchorAssistant]
+    const related = new Map<string, TranscriptMessage>()
+    const roots: TranscriptMessage[] = []
+    const toolResults: TranscriptMessage[] = []
+    for (const member of group) {
+      if (!sameRecoveryIdentity(member, anchorAssistant)) continue
+      related.set(member.uuid, member)
+      roots.push(member)
+      for (const result of toolResultsByAsst.get(member.uuid) ?? []) {
+        if (!sameRecoveryIdentity(result, anchorAssistant)) continue
+        related.set(result.uuid, result)
+        roots.push(result)
+        toolResults.push(result)
+      }
+    }
+
+    // Metadata belongs to the parallel tool topology only. Text-only
+    // assistant groups keep the existing sibling recovery behavior.
+    const hasToolCall = group.some(member =>
+      member.message.content.some(block => block.type === 'tool_use'),
+    ) || toolResults.length > 0
+    if (hasToolCall) {
+      for (const root of roots) {
+        for (const descendant of collectMetadata(root)) related.set(descendant.uuid, descendant)
+      }
+    }
+
+    const missing = [...related.values()].filter(message => !seen.has(message.uuid))
+    if (missing.length === 0) continue
+    missing.sort(compareTranscriptOrder)
+    const relatedAnchors = [...related.values()]
+      .filter(message => chainPositionByUuid.has(message.uuid))
+      .sort((a, b) => chainPositionByUuid.get(a.uuid)! - chainPositionByUuid.get(b.uuid)!)
+    if (relatedAnchors.length === 0) continue
+
+    let missingIndex = 0
+    let insertedCount = 0
+    let lastRelatedAnchor: string | null = null
+    for (const message of relatedAnchors) {
+      lastRelatedAnchor = message.uuid
+      const toInsert: TranscriptMessage[] = []
+      while (
+        missingIndex < missing.length &&
+        compareTranscriptOrder(missing[missingIndex]!, message) < 0
+      ) {
+        const candidate = missing[missingIndex++]!
+        if (seen.has(candidate.uuid)) continue
+        seen.add(candidate.uuid)
+        toInsert.push(candidate)
+        insertedCount++
+      }
+      if (toInsert.length) before.set(message.uuid, [...(before.get(message.uuid) ?? []), ...toInsert])
+    }
+    if (missingIndex < missing.length && lastRelatedAnchor) {
+      const trailing: TranscriptMessage[] = []
+      while (missingIndex < missing.length) {
+        const candidate = missing[missingIndex++]!
+        if (seen.has(candidate.uuid)) continue
+        seen.add(candidate.uuid)
+        trailing.push(candidate)
+        insertedCount++
+      }
+      if (trailing.length) after.set(lastRelatedAnchor, [...(after.get(lastRelatedAnchor) ?? []), ...trailing])
+    }
+    recoveredCount += insertedCount
   }
 
   if (recoveredCount === 0) return chain
@@ -3648,9 +3737,9 @@ function recoverOrphanedParallelToolResults(
 
   const result: TranscriptMessage[] = []
   for (const m of chain) {
+    result.push(...(before.get(m.uuid) ?? []))
     result.push(m)
-    const toInsert = inserts.get(m.uuid)
-    if (toInsert) result.push(...toInsert)
+    result.push(...(after.get(m.uuid) ?? []))
   }
   return result
 }
