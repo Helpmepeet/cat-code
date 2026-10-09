@@ -523,6 +523,7 @@ export const FileReadTool = buildTool({
       pickLineFormatInstruction(),
       maxSizeInstruction,
       offsetInstruction,
+      isPDFSupported(),
     )
   },
   get inputSchema(): InputSchema {
@@ -1453,21 +1454,12 @@ function textReadBudgetForContext(context: ToolUseContext) {
   )
 }
 
-async function measureRenderedTokens(
-  content: string,
-  targetTokens: number,
-  hardTokens: number,
-): Promise<{ targetCount: number; hardCount: number }> {
-  return measureTextReadTokens(content, targetTokens, hardTokens, countTokensWithAPI)
-}
-
 async function fitTokenPrefix(
   content: string,
   startLine: number,
   totalLines: number,
   initialLineCount: number,
-  targetTokens: number,
-  hardTokens: number,
+  tokenLimit: number,
   renderedPrefix: string,
 ): Promise<{ content: string; lineCount: number } | null> {
   const lines = content.split('\n')
@@ -1486,21 +1478,21 @@ async function fitTokenPrefix(
         { startLine, numLines: lineCount, totalLines },
         true,
       )
-    const renderedTokens = await measureRenderedTokens(
+    const renderedTokens = await measureTextReadTokens(
       rendered,
-      targetTokens,
-      hardTokens,
+      tokenLimit,
+      countTokensWithAPI,
     )
     if (
-      renderedTokens.targetCount <= targetTokens &&
-      renderedTokens.hardCount <= hardTokens
+      renderedTokens.targetCount <= tokenLimit &&
+      renderedTokens.hardCount <= tokenLimit
     ) {
       return { content: prefix, lineCount }
     }
 
     const overshoot = Math.max(
-      renderedTokens.targetCount / targetTokens,
-      renderedTokens.hardCount / hardTokens,
+      renderedTokens.targetCount / tokenLimit,
+      renderedTokens.hardCount / tokenLimit,
     )
     const nextLineCount = Math.floor(lineCount / overshoot)
     lineCount = Math.min(lineCount - 1, nextLineCount)
@@ -1827,8 +1819,7 @@ async function callInner(
     readBytes = Buffer.byteLength(content, 'utf8')
   }
 
-  const { hardTokenLimit, prefixTargetTokens: targetTokens } =
-    textReadBudgetForContext(context)
+  const { hardTokenLimit } = textReadBudgetForContext(context)
   const freshnessPrefix = isAutoMemFile(fullFilePath)
     ? memoryFreshnessNote(mtimeMs)
     : ''
@@ -1841,10 +1832,10 @@ async function callInner(
           false,
         )
       : '')
-  const renderedCandidateTokens = await measureRenderedTokens(
+  const renderedCandidateTokens = await measureTextReadTokens(
     renderedCandidate,
     hardTokenLimit,
-    hardTokenLimit,
+    countTokensWithAPI,
   )
   const tokenTruncated =
     renderedCandidateTokens.hardCount > hardTokenLimit
@@ -1853,7 +1844,7 @@ async function callInner(
       1,
       suggestedRetryLimit(
         lineCount,
-        targetTokens,
+        hardTokenLimit,
         renderedCandidateTokens.targetCount,
       ),
     )
@@ -1862,7 +1853,6 @@ async function callInner(
       offset,
       totalLines,
       suggestedPrefixLines,
-      targetTokens,
       hardTokenLimit,
       freshnessPrefix,
     )

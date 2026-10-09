@@ -283,19 +283,6 @@ export function buildWindowsRenameInformation(
   return value
 }
 
-export function buildWindowsLinkInformation(
-  rootHandle: bigint,
-  name: string,
-): Buffer {
-  const nameBytes = Buffer.from(name, 'utf16le')
-  const value = Buffer.alloc(20 + nameBytes.length)
-  value.writeUInt8(0, 0)
-  value.writeBigUInt64LE(rootHandle, 8)
-  value.writeUInt32LE(nameBytes.length, 16)
-  nameBytes.copy(value, 20)
-  return value
-}
-
 export async function openWindowsContainedFs(
   requestedRoot: string,
 ): Promise<ContainedFs> {
@@ -318,7 +305,7 @@ async function openWindowsContainedFsWithApi(
 ): Promise<ContainedFs> {
   let rootHandle: WinHandle
   try {
-    rootHandle = openRootHandle(api, requestedRoot)
+    rootHandle = createWindowsRootHandle(api, requestedRoot)
   } catch (error) {
     api.close()
     throw error
@@ -917,23 +904,6 @@ function windowsStatusError(status: number): Error {
   return error
 }
 
-function createObjectAttributes(
-  api: WindowsNativeApi,
-  rootHandle: WinHandle | null,
-  name: string,
-): { nameBuffer: Buffer; unicode: Buffer; attributes: Buffer } {
-  const nameBuffer = wideString(name)
-  const unicode = buildWindowsUnicodeString(
-    pointerNumber(api.ptr(nameBuffer)),
-    nameBuffer.length - 2,
-  )
-  const attributes = buildWindowsObjectAttributes(
-    rootHandle === null ? 0n : BigInt(rootHandle),
-    pointerNumber(api.ptr(unicode)),
-  )
-  return { nameBuffer, unicode, attributes }
-}
-
 function createWindowsRootHandle(
   api: WindowsNativeApi,
   path: string,
@@ -975,10 +945,6 @@ function finalPathForHandle(
   )
 }
 
-function openRootHandle(api: WindowsNativeApi, rootPath: string): WinHandle {
-  return createWindowsRootHandle(api, rootPath)
-}
-
 function getWindowsFileInfo(
   api: WindowsNativeApi,
   handle: WinHandle,
@@ -1013,7 +979,6 @@ export function parseWindowsFileInformation(
   }
   const high = BigInt(info.readUInt32LE(44))
   const low = BigInt(info.readUInt32LE(48))
-  const fileIndex = Number((high << 32n) | low)
   const size = Number(
     (BigInt(info.readUInt32LE(32)) << 32n) | BigInt(info.readUInt32LE(36)),
   )

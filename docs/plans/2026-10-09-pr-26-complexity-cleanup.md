@@ -232,3 +232,71 @@ they did not prove fallback/native equivalence. The adversarial ANSI objection
 was independently reproduced. No implementation tests, application build, or GUI
 acceptance was performed for the proposed changes. Validating this Markdown
 plan is separate from validating a future implementation.
+
+## Implementation outcome: 2026-10-09
+
+All 18 ranked cuts are implemented. The original implementation session
+`27fcb7af-1034-4826-8e3a-1ee652814a3d` stopped after partial output, before item
+16, the root manifest/lockfile cleanup, and final integration validation. Those
+steps were completed in the continuation. Historical source anchors above
+describe the pre-cleanup files; the maintained maps describe the current tree.
+
+The final text-read path takes one token limit, while preserving distinct
+`targetCount` and `hardCount` measurements, the UTF-8 byte guard, exact-count
+admission, and complete-line prefix fitting. Removing unused analytics imports
+also exposed a previously masked import cycle: `FileReadTool/prompt.ts` imported
+PDF model policy, which reached `microCompact.ts` before the Read tool name was
+initialized. The prompt renderer now receives PDF support from `FileReadTool`,
+which already owns that model-policy check. The existing 78-test file-read suite
+failed before this repair and passes afterward; an isolated comparison with
+only the analytics metadata cleanup reproduced the import failure.
+
+Regression coverage retains the live stacked-area endpoint/control-point and
+repeated-x checks, the Lord Howe `02:30` slot, and mixed-source/unequal-denominator
+auto-mode scenarios. Marketplace coverage exercises first-attempt success,
+fallback success with staging cleanup, and selection of the final failed
+attempt's error in both SSH configurations.
+
+The completed cleanup diff removes **4,425 net source/tooling lines** and
+**18 direct dependency declarations**: 16 root declarations and two app lint
+declarations. Tests grow by 169 net lines. These counts exclude manifests,
+lockfiles, and documentation prose from source/tooling. Lockfile regeneration
+preserves the version and integrity of every retained resolution, including
+hoisted entries; required OTEL, ANSI, width, and scheduler transitives remain.
+These are source/manifest measurements, not installation, bundle, or performance
+savings. Restored pinning, `strip-ansi`, filesystem copy modes and hooks, resolved
+permission polling, and public no-op analytics APIs remain.
+
+### Validation
+
+| Check | Result |
+|---|---|
+| Text-read budget and limit provenance | 18 pass |
+| Live file-read behavior, including rendered prefix limits | 78 pass |
+| Focused filesystem, permissions, queue, accounting, task, edit-helper, and terminal tests | 143 pass, two Windows-only cases skipped |
+| Marketplace cache/retry, refresh policy, and publication suites | 37 pass, run in separate processes |
+| Affected renderer suites | 29 pass |
+| Offline study isolation and edit-ledger suites | 12 pass; sandbox enforcement verified outside the enclosing sandbox |
+| Synthetic measurement probes | Markdown and synthetic transcript/cache output fields preserved; no live state sampled |
+| Synthetic tool-output/interceptor checks | Output decoding, network blocking, independent thread progress, and request-header redaction pass |
+| Supported Bun terminal-width path | 11 samples match the previous selected Bun path; no JavaScript-fallback equivalence claim |
+| Both manifests and frozen lockfiles | Pass; retained resolution versions/integrities unchanged |
+| Dev-full engine build, including maps and undefined-name gates | Pass |
+| Desktop typecheck and scoped sidecar typecheck | Pass |
+| Renderer production build | Pass; existing chunk-size advisory remains |
+| Owned root-source ESLint and whitespace check | Pass; the two study prep scripts have no matching ESLint configuration and were checked through executable fixtures |
+| Full `bun test app/` | 5,713 pass, three skips, nine failures; see limitations below |
+
+The full desktop run's eight assertion failures also reproduce in an isolated
+snapshot with the cleanup paths restored to pre-cleanup HEAD: two assertions in
+`app/sidecar/runControlsDomain.test.ts` expect effort support that the isolated
+model state does not expose, and six in `app/sidecar/createPeerTool.test.ts`
+require authentication configuration that the isolated state deliberately lacks.
+The ninth failure is a missing module in an old ignored test copy under
+`tmp/pr22-merged-2026-09-12-evidence/`, also selected by Bun's `app/` path filter.
+No expectations were weakened and no archived files were deleted to pass.
+
+Root typecheck retains existing diagnostics. The final continuation introduces
+no new diagnostic signatures relative to its starting tree, and the runtime
+undefined-name gate passes. No Electron/GUI launch, packaged installation,
+live-account probe, push, or unrelated shared-tree cleanup was performed.

@@ -22,13 +22,11 @@ const config = probeConfig()
 const cases: CaseResult[] = []
 const APPENDS = config.smoke ? 4 : 24
 
-type Path = 'unattributed'
-
 /**
  * Planner calls are timed without attributing internal transformation paths:
  * tree identity is not evidence of which plugin transforms ran.
  */
-function plan(cache: MarkdownPlanCache, source: string): { ms: number; path: Path } {
+function plan(cache: MarkdownPlanCache, source: string): number {
   const start = performance.now()
   planMarkdownLeaves('perf-row', source, {
     rehypePlugins: TRANSCRIPT_REHYPE_PLUGINS,
@@ -37,8 +35,7 @@ function plan(cache: MarkdownPlanCache, source: string): { ms: number; path: Pat
     recognizeCallouts: true,
     cache,
   })
-  const ms = performance.now() - start
-  return { ms, path: 'unattributed' }
+  return performance.now() - start
 }
 
 /** Primes a fresh cache untimed, then times `APPENDS` successive appends; a repetition scores the median append. */
@@ -50,8 +47,7 @@ function appendCase(name: string, params: Record<string, unknown>, base: string,
     const times: number[] = []
     for (let i = 0; i < APPENDS; i++) {
       source += suffix
-      const result = plan(cache, source)
-      times.push(result.ms)
+      times.push(plan(cache, source))
     }
     return median(times)
   })
@@ -79,32 +75,27 @@ for (const characters of config.smoke ? [2_000] : [16_000, 64_000, 128_000, 256_
 const reply = realisticReply(config.smoke ? 1_500 : 12_000)
 for (const wordsPerPiece of [1, 4]) {
   const pieces = streamPieces(reply, wordsPerPiece)
-  let last: { times: number[]; paths: Record<Path, number> } = {
-    times: [], paths: { unattributed: 0 },
-  }
+  let lastTimes: number[] = []
   const streamConfig = { ...config, reps: Math.min(config.reps, 3) }
   const samples = repeat(streamConfig, () => {
     const cache = createMarkdownPlanCache()
     let source = ''
     const times: number[] = []
-    const paths: Record<Path, number> = { unattributed: 0 }
     for (const piece of pieces) {
       source += piece
-      const result = plan(cache, source)
-      times.push(result.ms)
-      paths[result.path]++
+      times.push(plan(cache, source))
     }
-    last = { times, paths }
+    lastTimes = times
     return times.reduce((sum, value) => sum + value, 0)
   })
   cases.push(summarize(`stream-reply/${wordsPerPiece}-word-pieces`, {
     replyCharacters: reply.length, updates: pieces.length, scoredValue: 'total ms for the whole reply',
   }, samples, {
-    updatesByPath: last.paths,
-    perUpdateP50Ms: round(percentile(last.times, 50)),
-    perUpdateP95Ms: round(percentile(last.times, 95)),
-    perUpdateMaxMs: round(Math.max(...last.times)),
-    updatesOver16_7Ms: last.times.filter(t => t > 16.7).length,
+    updatesByPath: { unattributed: lastTimes.length },
+    perUpdateP50Ms: round(percentile(lastTimes, 50)),
+    perUpdateP95Ms: round(percentile(lastTimes, 95)),
+    perUpdateMaxMs: round(Math.max(...lastTimes)),
+    updatesOver16_7Ms: lastTimes.filter(t => t > 16.7).length,
   }))
 }
 
@@ -113,12 +104,12 @@ for (const wordsPerPiece of [1, 4]) {
 // cost with the current planner, which parses before comparing settled bodies.
 const longReply = realisticReply(config.smoke ? 3_000 : 28_822)
 cases.push(summarize('tab-return/cold-plan', { replyCharacters: longReply.length }, repeat(config, () => {
-  return plan(createMarkdownPlanCache(), longReply).ms
+  return plan(createMarkdownPlanCache(), longReply)
 })))
 cases.push(summarize('tab-return/primed-cache-same-source', { replyCharacters: longReply.length }, repeat(config, () => {
   const cache = createMarkdownPlanCache()
   plan(cache, longReply)
-  return plan(cache, longReply).ms
+  return plan(cache, longReply)
 })))
 
 emit('markdown', cases, [

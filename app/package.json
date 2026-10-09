@@ -35,8 +35,6 @@
     "diff": "^8.0.4",
     "electron": "^33.2.1",
     "eslint": "^9.39.2",
-    "eslint-plugin-jsx-a11y": "^6.10.2",
-    "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
     "hast-util-to-jsx-runtime": "^2.3.6",
     "katex": "^0.16.47",

@@ -169,24 +169,6 @@ const FILE_FLAGS =
   (constants.O_NONBLOCK ?? 0)
 const MAX_SYMLINKS = 40
 
-async function readHandlePositionally(
-  handle: Awaited<ReturnType<typeof open>>,
-): Promise<Buffer> {
-  const size = (await handle.stat()).size
-  const chunks: Buffer[] = []
-  let offset = 0
-  while (offset < size) {
-    const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, size - offset))
-    const result = await handle.read(chunk, 0, chunk.length, offset)
-    if (result.bytesRead <= 0) {
-      throw new Error('Unable to read prepared filesystem object')
-    }
-    chunks.push(chunk.subarray(0, result.bytesRead))
-    offset += result.bytesRead
-  }
-  return Buffer.concat(chunks, offset)
-}
-
 async function copyHandlePositionally(
   handle: Awaited<ReturnType<typeof open>>,
   destinationPath: string,
@@ -551,6 +533,104 @@ export async function openContainedFs(
     ffi.close()
   }
 
+  const createFileCapability = (
+    path: string,
+    descriptorFd: number,
+    handle: Awaited<ReturnType<typeof open>>,
+    info: {
+      dev: number
+      ino: number
+      size: number
+      mtimeMs: number
+      ctimeMs: number
+      mode: number
+    },
+  ): ContainedFileCapability => {
+    let capabilityClosed = false
+    const readAt = async (buffer: Buffer, offset: number): Promise<number> =>
+      Number(
+        ffi.symbols.pread(
+          descriptorFd,
+          ffi.ptr(buffer),
+          buffer.length,
+          BigInt(offset),
+        ),
+      )
+
+    return {
+      path,
+      descriptorPath: pathForFd(descriptorFd),
+      get identity() {
+        return {
+          device: info.dev,
+          inode: info.ino,
+          size: info.size,
+          modifiedAtMs: info.mtimeMs,
+          changedAtMs: info.ctimeMs,
+          mode: info.mode,
+        }
+      },
+      async currentIdentity() {
+        if (capabilityClosed) {
+          throw new Error('Contained file capability is closed')
+        }
+        const current = await handle.stat()
+        return {
+          device: current.dev,
+          inode: current.ino,
+          size: current.size,
+          modifiedAtMs: current.mtimeMs,
+          changedAtMs: current.ctimeMs,
+          mode: current.mode,
+        }
+      },
+      async digest() {
+        if (capabilityClosed) {
+          throw new Error('Contained file capability is closed')
+        }
+        return digestHandlePositionally(handle)
+      },
+      async readFile() {
+        if (capabilityClosed) {
+          throw new Error('Contained file capability is closed')
+        }
+        const size = (await handle.stat()).size
+        const chunks: Buffer[] = []
+        let offset = 0
+        while (offset < size) {
+          const chunk = Buffer.allocUnsafe(
+            Math.min(1024 * 1024, size - offset),
+          )
+          const count = await readAt(chunk, offset)
+          if (count <= 0) {
+            throw new Error('Unable to read prepared filesystem object')
+          }
+          chunks.push(chunk.subarray(0, count))
+          offset += count
+        }
+        return Buffer.concat(chunks, offset)
+      },
+      async copyTo(destinationPath, options) {
+        if (capabilityClosed) {
+          throw new Error('Contained file capability is closed')
+        }
+        await copyHandlePositionally(
+          handle,
+          destinationPath,
+          readAt,
+          options?.mode,
+          testHooks?.afterCopyDestinationOpen,
+        )
+      },
+      async close() {
+        if (capabilityClosed) return
+        capabilityClosed = true
+        await handle.close()
+        ffi.symbols.close(descriptorFd)
+      },
+    }
+  }
+
   return {
     canonicalRoot,
     async readdir(relativePath = '') {
@@ -643,93 +723,7 @@ export async function openContainedFs(
         ) {
           throw new Error('Contained path is not a regular file')
         }
-        let capabilityClosed = false
-        return {
-          path: opened.path,
-          async digest() {
-            if (capabilityClosed) {
-              throw new Error('Contained file capability is closed')
-            }
-            return digestHandlePositionally(handle!)
-          },
-          descriptorPath: pathForFd(opened.fd),
-          get identity() {
-            return {
-              device: info.dev,
-              inode: info.ino,
-              size: info.size,
-              modifiedAtMs: info.mtimeMs,
-              changedAtMs: info.ctimeMs,
-              mode: info.mode,
-            }
-          },
-          async currentIdentity() {
-            if (capabilityClosed) {
-              throw new Error('Contained file capability is closed')
-            }
-            const current = await handle!.stat()
-            return {
-              device: current.dev,
-              inode: current.ino,
-              size: current.size,
-              modifiedAtMs: current.mtimeMs,
-              changedAtMs: current.ctimeMs,
-              mode: current.mode,
-            }
-          },
-          async readFile() {
-            if (capabilityClosed) {
-              throw new Error('Contained file capability is closed')
-            }
-            const size = (await handle!.stat()).size
-            const chunks: Buffer[] = []
-            let offset = 0
-            while (offset < size) {
-              const chunk = Buffer.allocUnsafe(
-                Math.min(1024 * 1024, size - offset),
-              )
-              const count = ffi.symbols.pread(
-                opened.fd,
-                ffi.ptr(chunk),
-                chunk.length,
-                BigInt(offset),
-              )
-              if (count <= 0n) {
-                throw new Error('Unable to read prepared filesystem object')
-              }
-              const bytesRead = Number(count)
-              chunks.push(chunk.subarray(0, bytesRead))
-              offset += bytesRead
-            }
-            return Buffer.concat(chunks, offset)
-          },
-          async copyTo(destinationPath, options) {
-            if (capabilityClosed) {
-              throw new Error('Contained file capability is closed')
-            }
-            await copyHandlePositionally(
-              handle!,
-              destinationPath,
-              async (chunk, offset) => {
-                const count = ffi.symbols.pread(
-                  opened.fd,
-                  ffi.ptr(chunk),
-                  chunk.length,
-                  BigInt(offset),
-                )
-                return Number(count)
-              },
-              options?.mode,
-              testHooks?.afterCopyDestinationOpen,
-            )
-          },
-          async close() {
-            if (capabilityClosed) return
-            capabilityClosed = true
-            await handle!.close()
-            ffi.symbols.close(opened.fd)
-          },
-        }
+        return createFileCapability(opened.path, opened.fd, handle, info)
       } catch (error) {
         await handle?.close()
         ffi.symbols.close(opened.fd)
@@ -760,93 +754,7 @@ export async function openContainedFs(
           ) {
             throw new Error('Contained file descriptor escaped its root')
           }
-          let capabilityClosed = false
-          return {
-            path: canonicalPath,
-            async digest() {
-              if (capabilityClosed) {
-                throw new Error('Contained file capability is closed')
-              }
-              return digestHandlePositionally(handle)
-            },
-            descriptorPath: pathForFd(fd),
-            get identity() {
-              return {
-                device: info.dev,
-                inode: info.ino,
-                size: info.size,
-                modifiedAtMs: info.mtimeMs,
-                changedAtMs: info.ctimeMs,
-                mode: info.mode,
-              }
-            },
-            async currentIdentity() {
-              if (capabilityClosed) {
-                throw new Error('Contained file capability is closed')
-              }
-              const current = await handle.stat()
-              return {
-                device: current.dev,
-                inode: current.ino,
-                size: current.size,
-                modifiedAtMs: current.mtimeMs,
-                changedAtMs: current.ctimeMs,
-                mode: current.mode,
-              }
-            },
-            async readFile() {
-              if (capabilityClosed) {
-                throw new Error('Contained file capability is closed')
-              }
-              const size = (await handle.stat()).size
-              const chunks: Buffer[] = []
-              let offset = 0
-              while (offset < size) {
-                const chunk = Buffer.allocUnsafe(
-                  Math.min(1024 * 1024, size - offset),
-                )
-                const count = ffi.symbols.pread(
-                  fd!,
-                  ffi.ptr(chunk),
-                  chunk.length,
-                  BigInt(offset),
-                )
-                if (count <= 0n) {
-                  throw new Error('Unable to read prepared filesystem object')
-                }
-                const bytesRead = Number(count)
-                chunks.push(chunk.subarray(0, bytesRead))
-                offset += bytesRead
-              }
-              return Buffer.concat(chunks, offset)
-            },
-            async copyTo(destinationPath, options) {
-              if (capabilityClosed) {
-                throw new Error('Contained file capability is closed')
-              }
-              await copyHandlePositionally(
-                handle,
-                destinationPath,
-                async (chunk, offset) =>
-                  Number(
-                    ffi.symbols.pread(
-                      fd!,
-                      ffi.ptr(chunk),
-                      chunk.length,
-                      BigInt(offset),
-                    ),
-                  ),
-                options?.mode,
-                testHooks?.afterCopyDestinationOpen,
-              )
-            },
-            async close() {
-              if (capabilityClosed) return
-              capabilityClosed = true
-              await handle.close()
-              ffi.symbols.close(fd!)
-            },
-          }
+          return createFileCapability(canonicalPath, fd, handle, info)
         } catch (error) {
           await handle.close()
           throw error
@@ -1365,288 +1273,4 @@ function loadPosixFfi(): PosixFfi {
     CString: ffi.CString,
     close: loaded.close,
   }
-}
-
-function isPortableENOENT(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    error.code === 'ENOENT'
-  )
-}
-
-function openPortableContainedFs(
-  rootPath: string,
-  canonicalRoot: string,
-  testHooks?: ContainedFsTestHooks,
-): Promise<ContainedFs> {
-  return (async () => {
-    const { lstat, readFile, readdir, realpath, stat } = await import(
-      'fs/promises'
-    )
-    const withinRoot = (path: string): boolean => {
-      const rel = relative(canonicalRoot, path)
-      return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
-    }
-    return {
-      canonicalRoot,
-      async readdir(relativePath = '') {
-        const fullPath = relativePath
-          ? `${rootPath}${sep}${relativePath}`
-          : rootPath
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) throw new Error('Path escapes contained root')
-        return readdir(resolved)
-      },
-      async statDir(relativePath = '') {
-        const fullPath = relativePath
-          ? `${rootPath}${sep}${relativePath}`
-          : rootPath
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) throw new Error('Path escapes contained root')
-        return stat(resolved, { bigint: true })
-      },
-      async lstat(relativePath) {
-        const fullPath = `${rootPath}${sep}${relativePath}`
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) {
-          return lstat(fullPath)
-        }
-        return lstat(fullPath)
-      },
-      async readFile(relativePath) {
-        const fullPath = `${rootPath}${sep}${relativePath}`
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) throw new Error('Path escapes contained root')
-        const info = await stat(resolved)
-        return { content: await readFile(resolved), mode: info.mode }
-      },
-      async openFileCapability(relativePath) {
-        const fullPath = join(rootPath, relativePath)
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) throw new Error('Path escapes contained root')
-        const handle = await open(resolved, 'r')
-        const opened = await handle.stat()
-        const now = await stat(resolved)
-        if (
-          !opened.isFile() ||
-          opened.dev !== now.dev ||
-          opened.ino !== now.ino
-        ) {
-          await handle.close()
-          throw new Error('Contained file changed while opening')
-        }
-        let capabilityClosed = false
-        const identity = () => ({
-          device: opened.dev,
-          inode: opened.ino,
-          size: opened.size,
-          modifiedAtMs: opened.mtimeMs,
-          changedAtMs: opened.ctimeMs,
-          mode: opened.mode,
-        })
-        return {
-          path: resolved,
-          async digest() {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            return digestHandlePositionally(handle)
-          },
-          descriptorPath: resolved,
-          get identity() {
-            return identity()
-          },
-          async currentIdentity() {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            const current = await handle.stat()
-            return {
-              device: current.dev,
-              inode: current.ino,
-              size: current.size,
-              modifiedAtMs: current.mtimeMs,
-              changedAtMs: current.ctimeMs,
-              mode: current.mode,
-            }
-          },
-          async readFile() {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            return readHandlePositionally(handle)
-          },
-          async copyTo(destinationPath, options) {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            await copyHandlePositionally(
-              handle,
-              destinationPath,
-              undefined,
-              options?.mode,
-              testHooks?.afterCopyDestinationOpen,
-            )
-          },
-          async close() {
-            if (capabilityClosed) return
-            capabilityClosed = true
-            await handle.close()
-          },
-        }
-      },
-      async openFileCapabilityNoFollow(relativePath) {
-        const fullPath = join(rootPath, relativePath)
-        const entry = await lstat(fullPath)
-        if (entry.isSymbolicLink()) {
-          throw new Error('Contained file path cannot be a symbolic link')
-        }
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) throw new Error('Path escapes contained root')
-        const handle = await open(resolved, 'r')
-        const opened = await handle.stat()
-        let capabilityClosed = false
-        const identity = () => ({
-          device: opened.dev,
-          inode: opened.ino,
-          size: opened.size,
-          modifiedAtMs: opened.mtimeMs,
-          changedAtMs: opened.ctimeMs,
-          mode: opened.mode,
-        })
-        return {
-          path: resolved,
-          async digest() {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            return digestHandlePositionally(handle)
-          },
-          descriptorPath: resolved,
-          get identity() {
-            return identity()
-          },
-          async currentIdentity() {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            const current = await handle.stat()
-            return {
-              device: current.dev,
-              inode: current.ino,
-              size: current.size,
-              modifiedAtMs: current.mtimeMs,
-              changedAtMs: current.ctimeMs,
-              mode: current.mode,
-            }
-          },
-          async readFile() {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            return readHandlePositionally(handle)
-          },
-          async copyTo(destinationPath, options) {
-            if (capabilityClosed) throw new Error('Contained file capability is closed')
-            await copyHandlePositionally(
-              handle,
-              destinationPath,
-              undefined,
-              options?.mode,
-              testHooks?.afterCopyDestinationOpen,
-            )
-          },
-          async close() {
-            if (capabilityClosed) return
-            capabilityClosed = true
-            await handle.close()
-          },
-        }
-      },
-      async publishFile(relativePath, content, expected, createMode, expectedDigest) {
-        return (
-          (await this.publishFileWithIdentity(
-            relativePath,
-            content,
-            expected,
-            createMode,
-            expectedDigest,
-          )) !== null
-        )
-      },
-      async publishFileWithIdentity(relativePath, content, expected, createMode, expectedDigest) {
-        const targetPath = join(rootPath, relativePath)
-        const parentPath = dirname(targetPath)
-        await (await import('fs/promises')).mkdir(parentPath, { recursive: true })
-        const resolvedParent = await realpath(parentPath)
-        if (!withinRoot(resolvedParent)) {
-          throw new Error('Path escapes contained root')
-        }
-        const boundTargetPath = join(resolvedParent, parse(targetPath).base)
-        const tempPath = join(
-          resolvedParent,
-          `.${parse(targetPath).base}.tmp.${process.pid}.${randomBytes(12).toString('hex')}`,
-        )
-        let tempHandle: Awaited<ReturnType<typeof open>> | undefined
-        try {
-          if (expected !== undefined) {
-            const current = await stat(boundTargetPath).catch(() => undefined)
-            if (
-              !current ||
-              current.dev !== expected.device ||
-              current.ino !== expected.inode ||
-              current.size !== expected.size ||
-              current.mtimeMs !== expected.modifiedAtMs ||
-              current.ctimeMs !== expected.changedAtMs
-            ) {
-              return null
-            }
-          } else {
-            try {
-              await lstat(boundTargetPath)
-              return null
-            } catch (error) {
-              if (!isPortableENOENT(error)) throw error
-            }
-          }
-          tempHandle = await open(
-            tempPath,
-            'wx',
-            createMode ?? expected?.mode ?? 0o666,
-          )
-          await tempHandle.writeFile(content)
-          await tempHandle.sync()
-          if (expected !== undefined) await tempHandle.chmod(expected.mode)
-          if (expected === undefined) {
-            const { link, unlink } = await import('fs/promises')
-            await link(tempPath, boundTargetPath)
-            await unlink(tempPath)
-          } else {
-            const { rename } = await import('fs/promises')
-            await rename(tempPath, boundTargetPath)
-          }
-          const published = await tempHandle.stat()
-          return {
-            canonicalPath: boundTargetPath,
-            device: published.dev,
-            inode: published.ino,
-            size: published.size,
-            modifiedAtMs: published.mtimeMs,
-            changedAtMs: published.ctimeMs,
-            mode: published.mode,
-          }
-        } finally {
-          await tempHandle?.close()
-          const { unlink } = await import('fs/promises')
-          await unlink(tempPath).catch(() => {})
-        }
-      },
-      async removeFile(relativePath, expected, expectedDigest) {
-        const fullPath = join(rootPath, relativePath)
-        const resolved = await realpath(fullPath)
-        if (!withinRoot(resolved)) throw new Error('Path escapes contained root')
-        const current = await stat(resolved).catch(() => undefined)
-        if (
-          !current ||
-          current.dev !== expected.device ||
-          current.ino !== expected.inode ||
-          current.size !== expected.size ||
-          current.mtimeMs !== expected.modifiedAtMs ||
-          current.ctimeMs !== expected.changedAtMs
-        ) {
-          return false
-        }
-        await (await import('fs/promises')).unlink(resolved)
-        return true
-      },
-      async close() {},
-    }
-  })()
 }

@@ -5,7 +5,6 @@ import {
   prepareFileRead,
 } from './fileAuthorization.js'
 import {
-  buildWindowsLinkInformation,
   buildWindowsObjectAttributes,
   buildWindowsRenameInformation,
   buildWindowsUnicodeString,
@@ -95,7 +94,7 @@ describe('Windows native filesystem ABI layouts', () => {
     expect(attributes.readUInt32LE(24)).toBe(0x40)
   })
 
-  test('packs handle-relative rename and no-clobber link names', () => {
+  test('packs handle-relative rename information', () => {
     const rename = buildWindowsRenameInformation(0x1234n, 'nested\\new.txt', true)
     expect(rename.readUInt32LE(0)).toBe(0x3)
     expect(rename.readBigUInt64LE(8)).toBe(0x1234n)
@@ -106,13 +105,6 @@ describe('Windows native filesystem ABI layouts', () => {
 
     const noReplace = buildWindowsRenameInformation(0x1234n, 'created.txt', false)
     expect(noReplace.readUInt32LE(0)).toBe(0)
-
-    const link = buildWindowsLinkInformation(0x5678n, 'created.txt')
-    expect(link.readUInt8(0)).toBe(0)
-    expect(link.readBigUInt64LE(8)).toBe(0x5678n)
-    expect(link.toString('utf16le', 20, 20 + link.readUInt32LE(16))).toBe(
-      'created.txt',
-    )
   })
 })
 

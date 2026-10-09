@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Chip, ChipStrip } from './Chip.js'
+import { Chip } from './Chip.js'
 import { toneClasses, TONE_CLASSES, type Tone } from './tone.js'
 
 test('every tone maps to its P0-2 token text class', () => {
@@ -45,27 +45,4 @@ test('an active chip pins the tint; an inactive one is quiet with a hover tint',
   const quiet = renderToStaticMarkup(<Chip tone="accent" label="Model" />)
   expect(quiet).toContain('bg-transparent')
   expect(quiet).toContain('hover:bg-accent/10')
-})
-
-test('ChipStrip interleaves · separators only between chips when separated', () => {
-  const html = renderToStaticMarkup(
-    <ChipStrip separated>
-      <Chip label="a" />
-      <Chip label="b" />
-      <Chip label="c" />
-    </ChipStrip>,
-  )
-  // Two separators for three chips (never a leading/trailing one).
-  const separators = html.split('·').length - 1
-  expect(separators).toBe(2)
-})
-
-test('ChipStrip without separated renders no dividers', () => {
-  const html = renderToStaticMarkup(
-    <ChipStrip>
-      <Chip label="a" />
-      <Chip label="b" />
-    </ChipStrip>,
-  )
-  expect(html).not.toContain('·')
 })

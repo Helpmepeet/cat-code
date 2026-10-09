@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-10-08
+Last refreshed: 2026-10-09
 
 ## Purpose
 
@@ -18,7 +18,7 @@ active local features.
 
 | Area | Inspect first | Then inspect | Notes |
 |---|---|---|---|
-| Analytics API and gates | `src/services/analytics/index.ts`, `src/services/analytics/growthbook.ts` | `src/services/analytics/{sink,config,metadata}.ts`, analytics call sites | Public logging remains a compatibility boundary; inspect metadata redaction and gate/config fallbacks before changing a call site. |
+| Analytics API and gates | `src/services/analytics/index.ts`, `src/services/analytics/growthbook.ts` | `src/services/analytics/{sink,config,metadata}.ts`, analytics call sites | Public logging remains a compatibility boundary; metadata retains sanitizers and extraction helpers, not event enrichment. |
 | Local telemetry and tracing | `src/utils/telemetry/instrumentation.ts`, `src/utils/telemetry/perfettoTracing.ts` | `src/utils/telemetry/{events,sessionTracing,betaSessionTracing}.ts`, `src/entrypoints/init.ts` | OTEL entrypoints are inert in this build; Perfetto remains the env-enabled local trace writer. |
 | Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. Turn lifecycle is priority-preserved and exempt from short rate dedupe; peer-routing records are metadata-only with no message-text field. |
 | Desktop analytics dashboard and auto-mode diagnostics | `app/renderer/src/UsagePage.tsx`, `app/renderer/src/UsageWorkPatterns.tsx`, `app/shared/usageDashboard.ts` | `app/main/usageStatsRunner.ts`, `app/sidecar/{usageStatsWorker,usageSummary}.ts`, `app/renderer/src/{UsageDashboardCharts,UsageActivityCharts,UsageValuesTable,UsageAutoMode,usageWorkPatternsState,usageChartHover}.ts*`, `src/utils/{statsUsage,usageWindow,autoModeUsage}.ts`, `src/utils/permissions/autoModeObservation.ts` | The main-supervised worker projects redacted transcript-derived aggregates. Work-pattern panels count distinct active minutes with 1, 2, or 3+ main sessions and attribute request/token totals only to recorded reasoning effort; partial and unavailable states remain explicit. Effort levels are defined by `USAGE_EFFORT_LEVELS` in the shared dashboard contract (currently including `ultra`) and must stay aligned across collection, worker validation, and renderer labels; changing the persisted dimension requires matching snapshot counting and derived-index generation updates. Ten-minute peaks use the snapshot timezone and DST-aware local-day slots. The renderer keeps period and selected-day state, formats freshness in that timezone, and can request a bounded manual refresh; charts preserve partial coverage and recorded cache counts. Auto-mode observations retain only typed decision metadata, so no tool input, rule text, transcript content, or identity reaches the renderer. For historical dashboard-gap candidates and their recorded cut decisions, see `docs/analytics/2026-09-30-dashboard-gap-research.md`; revalidate its captured source revision before relying on details. |
@@ -30,11 +30,10 @@ active local features.
 
 | Topic | Routing decision |
 |---|---|
-| Product analytics | Treat `src/services/analytics/index.ts` as the public compatibility API. Do not chase telemetry behavior from call sites alone; most calls terminate in no-op functions in this build. |
+| Product analytics | Treat `src/services/analytics/index.ts` as the public compatibility API. Do not chase telemetry behavior from call sites alone; most calls terminate in no-op functions in this build. The first-party exporter and per-sink killswitch are absent. |
 | Analytics disable checks | `src/services/analytics/config.ts:isAnalyticsDisabled()` is still used by API helper paths and startup guards. It disables analytics in tests, 3P cloud provider modes, Foundry, and privacy levels that disallow telemetry. |
 | GrowthBook initialization | `src/services/analytics/growthbook.ts:isGrowthBookEnabled()` delegates to `is1PEventLoggingEnabled()`, which returns false in this build. Feature getter helpers still exist and usually fall back to env overrides, config overrides, disk cache, or defaults. |
 | Config Gates tab | GrowthBook override helpers live in `growthbook.ts`. The Settings Gates tab is ant-only in source and may be compiled out in external builds; inspect `src/components/Settings/Settings.tsx`, `src/components/Settings/Config.tsx`, and `src/commands/config/` before assuming it is visible. |
-| Sink killswitch | `src/services/analytics/sinkKillswitch.ts` reads GrowthBook dynamic config `tengu_frond_boric` for per-sink kills. It is only meaningful if sink dispatch is enabled. |
 | OpenTelemetry | `src/utils/telemetry/instrumentation.ts` and `events.ts` are stubs. API logging still calls `logOTelEvent`, but the current implementation returns without export. |
 | Perfetto | Perfetto is the local tracing exception. It is env-enabled, writes under `~/.claude/traces/trace-<session-id>.json` by default, and has its own span/event lifecycle. |
 | API logging vs cost | `src/services/api/logging.ts` records request analytics metadata and duration; `src/cost-tracker.ts` owns accumulated cost/token state. The successful API path connects them through `src/services/api/claude.ts`. |
@@ -47,7 +46,7 @@ active local features.
 |---|---|---|
 | Add or remove a `logEvent` call | Call site, then `src/services/analytics/index.ts` | `src/services/analytics/metadata.ts` for PII-safe fields; `src/services/api/logging.ts` for API-specific events. |
 | Change file-operation analytics | `src/utils/fileOperationAnalytics.ts` | `src/tools/FilePatchTool/FilePatchTool.tsx`, `src/services/analytics/index.ts` | Keep file-patch operation labels aligned with emitted result categories; do not infer mutation success from an unvalidated destination. |
-| Change event sampling or first-party event behavior | `src/services/analytics/firstPartyEventLogger.ts` | `src/services/analytics/firstPartyEventLoggingExporter.ts`, `src/services/analytics/growthbook.ts`, `src/services/analytics/sinkKillswitch.ts` |
+| Change event sampling or first-party event behavior | `src/services/analytics/firstPartyEventLogger.ts` | `src/services/analytics/growthbook.ts` |
 | Change Datadog behavior | `src/services/analytics/datadog.ts` | `src/services/analytics/sink.ts` |
 | Change GrowthBook feature reads | `src/services/analytics/growthbook.ts` | Search for `getFeatureValue_CACHED_MAY_BE_STALE`, `getDynamicConfig_CACHED_MAY_BE_STALE`, `checkGate_CACHED_OR_BLOCKING`, and `checkSecurityRestrictionGate`. |
 | Change config overrides | `src/services/analytics/growthbook.ts` | `src/components/Settings/Settings.tsx`, `src/components/Settings/Config.tsx`, `src/commands/config/`, `src/utils/config.ts` |

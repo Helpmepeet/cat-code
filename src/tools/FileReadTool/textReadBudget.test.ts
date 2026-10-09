@@ -20,7 +20,6 @@ describe('text read budget', () => {
     ] as const) {
       expect(getTextReadBudget(context)).toEqual({
         hardTokenLimit: expected,
-        prefixTargetTokens: expected,
       })
     }
   })
@@ -31,7 +30,6 @@ describe('text read budget', () => {
     for (const context of [0, -20_000, 7]) {
       expect(getTextReadBudget(context, 100_000)).toEqual({
         hardTokenLimit: 0,
-        prefixTargetTokens: 0,
       })
     }
   })
@@ -49,7 +47,6 @@ describe('text read budget', () => {
     for (const override of [4_000, 8_000, 25_000, 60_000]) {
       expect(getTextReadBudget(980_000, override)).toEqual({
         hardTokenLimit: override,
-        prefixTargetTokens: override,
       })
     }
     expect(getTextReadBudget(980_000, 4_000.5).hardTokenLimit).toBe(4_000)
@@ -74,7 +71,7 @@ describe('text read budget', () => {
 
 describe('rendered text read measurement', () => {
   test('document-sized rendered output fits offline on a large model', async () => {
-    const { hardTokenLimit, prefixTargetTokens } = getTextReadBudget(980_000)
+    const { hardTokenLimit } = getTextReadBudget(980_000)
     // Fixed synthetic rendered output, not a fixture tied to a mutable repo map.
     const rendered = Array.from(
       { length: 160 },
@@ -84,7 +81,6 @@ describe('rendered text read measurement', () => {
     let countCalls = 0
     const measured = await measureTextReadTokens(
       rendered,
-      prefixTargetTokens,
       hardTokenLimit,
       async () => {
         countCalls++
@@ -97,7 +93,6 @@ describe('rendered text read measurement', () => {
     const legacyBudget = getTextReadBudget(200_000)
     const legacyMeasured = await measureTextReadTokens(
       rendered,
-      legacyBudget.prefixTargetTokens,
       legacyBudget.hardTokenLimit,
       async () => null,
     )
@@ -110,12 +105,11 @@ describe('rendered text read measurement', () => {
     const budget = getTextReadBudget(980_000)
     const measured = await measureTextReadTokens(
       'x'.repeat(100_001),
-      budget.prefixTargetTokens,
       budget.hardTokenLimit,
       async () => null,
     )
     expect(measured.targetCount).toBe(Math.ceil(100_001 / 1.4))
-    expect(measured.targetCount).toBeLessThan(budget.prefixTargetTokens)
+    expect(measured.targetCount).toBeLessThan(budget.hardTokenLimit)
     expect(measured.hardCount).toBe(100_001)
     expect(measured.hardCount).toBeGreaterThan(budget.hardTokenLimit)
   })
@@ -124,7 +118,6 @@ describe('rendered text read measurement', () => {
     const rendered = '界'.repeat(40_000)
     const measured = await measureTextReadTokens(
       rendered,
-      100_000,
       100_000,
       async () => null,
     )
@@ -138,7 +131,6 @@ describe('rendered text read measurement', () => {
     let countCalls = 0
     const measured = await measureTextReadTokens(
       'x'.repeat(120_000),
-      100_000,
       100_000,
       async content => {
         countCalls++
@@ -155,7 +147,6 @@ describe('rendered text read measurement', () => {
       await measureTextReadTokens(
         'x'.repeat(150_000),
         100_000,
-        100_000,
         async () => 110_000,
       ),
     ).toEqual({ targetCount: 110_000, hardCount: 110_000 })
@@ -163,7 +154,7 @@ describe('rendered text read measurement', () => {
 
   test('empty output does not need a token counter', async () => {
     expect(
-      await measureTextReadTokens('', 0, 0, async () => {
+      await measureTextReadTokens('', 0, async () => {
         throw new Error('The empty result must not be counted')
       }),
     ).toEqual({ targetCount: 0, hardCount: 0 })

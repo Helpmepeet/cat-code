@@ -11,11 +11,9 @@
  * `--color-source-*` tokens in `theme.css`).
  */
 
-import { Fragment } from 'react'
 import type { ReactNode } from 'react'
 import type { SettingSourceId } from '../../shared/protocol.js'
 import { SOURCE_LABEL } from './settingsFieldModel.js'
-import { SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
 
 /**
  * Badge text/background/border classes per source, on the `--color-source-*`
@@ -223,25 +221,5 @@ export function PaneSection({
       ) : null}
       <div>{children}</div>
     </section>
-  )
-}
-
-/**
- * The "Resolution order" legend (Settings.jsx): the five sources in display
- * precedence (highest wins), each as a `SourceBadge`. Reads the real precedence
- * order — no fixture.
- */
-export function ResolutionOrderLegend() {
-  return (
-    <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-shell-seam bg-shell-hover px-3 py-2 text-[11.5px] text-text-subtle">
-      <span className="text-text-muted">Resolution order:</span>
-      {SETTING_SOURCE_PRECEDENCE.map((source, index) => (
-        <Fragment key={source}>
-          {index > 0 ? <span className="text-text-subtle">▸</span> : null}
-          <SourceBadge source={source} />
-        </Fragment>
-      ))}
-      <span className="ml-1">highest wins</span>
-    </div>
   )
 }

@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test'
 import {
-  autoModeCommandRate,
   classifyHistoricalAutoModeToolResult,
   createAutoModeUsageAccumulator,
   projectAutoModeCapability,
@@ -153,7 +152,7 @@ test('projects only validated events or minimal data-quality markers', () => {
   expect(untrustedEnd).toEqual({ subtype: 'auto_permission_invalid' })
 })
 
-test('reconciles the deterministic 100-attempt fixture and command-only rate', () => {
+test('reconciles the deterministic 100-attempt fixture and command population', () => {
   const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture())
   expect(accumulated(hundredAttemptAutoModeFixture())).toEqual(summary)
 
@@ -168,12 +167,6 @@ test('reconciles the deterministic 100-attempt fixture and command-only rate', (
   })
   expect(summary.commands.outcomes.policy_blocked).toBe(4)
   expect(Object.values(summary.commands.outcomes).reduce((total, count) => total + count, 0)).toBe(40)
-  expect(autoModeCommandRate(summary)).toEqual({
-    numerator: 4,
-    denominator: 40,
-    rate: 0.1,
-    state: 'confirmed',
-  })
   expect(summary.categories.reduce((total, category) => total + category.count, 0)).toBe(7)
 })
 
@@ -217,7 +210,7 @@ test('excludes invalid starts and orphan records from every denominator', () => 
   expect(summary.allTools.coverage).toMatchObject({ state: 'partial', invalidRecords: 1, orphanRecords: 2 })
 })
 
-test('suppresses the primary command rate for mixed source coverage', () => {
+test('marks command coverage partial for mixed source evidence', () => {
   const summary = reduce(
     [start('covered'), end('covered', 'policy_blocked')],
     [
@@ -228,7 +221,6 @@ test('suppresses the primary command rate for mixed source coverage', () => {
 
   expect(summary.commands.outcomes.policy_blocked).toBe(1)
   expect(summary.commands.coverage.state).toBe('partial')
-  expect(autoModeCommandRate(summary)).toMatchObject({ numerator: 1, denominator: 1, rate: null, state: 'unavailable' })
 })
 
 test('sums unequal command denominators instead of averaging daily rates', () => {
@@ -245,14 +237,28 @@ test('sums unequal command denominators instead of averaging daily rates', () =>
     rangeStart: '2026-09-10T00:00:00.000Z',
     rangeEnd: '2026-09-11T23:59:59.999Z',
     cutoff: '2026-09-12T00:00:00.000Z',
+    timezone: 'UTC',
   })
 
-  expect(autoModeCommandRate(summary)).toEqual({
-    numerator: 2,
-    denominator: 100,
-    rate: 0.02,
-    state: 'confirmed',
+  expect(summary.commands.outcomes).toEqual({
+    allowed: 98,
+    policy_blocked: 2,
+    review_required: 0,
+    operational_error: 0,
+    cancelled: 0,
+    unknown_outcome: 0,
+    incomplete: 0,
   })
+  expect(summary.commands.coverage.state).toBe('complete')
+  const dailyCommandCounts = summary.buckets.map(bucket => ({
+    date: bucket.date,
+    denominator: Object.values(bucket.commands.outcomes).reduce((total, count) => total + count, 0),
+    policyBlocked: bucket.commands.outcomes.policy_blocked,
+  }))
+  expect(dailyCommandCounts).toEqual([
+    { date: '2026-09-10', denominator: 10, policyBlocked: 1 },
+    { date: '2026-09-11', denominator: 90, policyBlocked: 1 },
+  ])
 })
 
 test('salvages a malformed correlated End as one Unknown instead of Incomplete', () => {
