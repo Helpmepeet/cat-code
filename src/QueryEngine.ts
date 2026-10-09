@@ -49,7 +49,7 @@ import {
 import { alignProviderFileEditTool, assembleToolPool } from './tools.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
-import type { Message, MessageOrigin, UserMessage } from './types/message.js'
+import type { Message, MessageOrigin, SystemMessage, UserMessage } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
 import { createAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
@@ -394,6 +394,19 @@ export class QueryEngine {
     const startTime = Date.now()
     const turnHandoff = new TurnHandoff()
     let transcriptWriteFailure: unknown = null
+    const pendingTranscriptWrites: Promise<unknown>[] = []
+    const recordTranscriptAsync = (snapshot: Message[]) => {
+      // Snapshot the ordering, but keep message objects live until the writer's
+      // lazy serialization sees the provider's usage/stop-reason mutations.
+      const pending = recordTranscriptFn([...snapshot]).catch(error => {
+        transcriptWriteFailure ??= error
+      })
+      pendingTranscriptWrites.push(pending)
+    }
+    const settleTranscriptWrites = async () => {
+      await Promise.all(pendingTranscriptWrites)
+      if (transcriptWriteFailure) throw transcriptWriteFailure
+    }
 
     // Wrap canUseTool to track permission denials
     const wrappedCanUseTool: CanUseToolFn = async (
@@ -641,7 +654,7 @@ export class QueryEngine {
     if (persistSession && messagesFromUserInput.length > 0) {
       const transcriptPromise = recordTranscriptFn(messages)
       if (isBareMode() && !options?.handoffReconciliationAdmission) {
-        void transcriptPromise.catch(error => { transcriptWriteFailure ??= error })
+        pendingTranscriptWrites.push(transcriptPromise.catch(error => { transcriptWriteFailure ??= error }))
       } else {
         inputTranscriptTip = await transcriptPromise
         inputPersisted = true
@@ -869,6 +882,7 @@ export class QueryEngine {
 
       if (persistSession) {
         await recordTranscriptFn(messages)
+        await settleTranscriptWrites()
         if (
           isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
           isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1029,7 +1043,7 @@ export class QueryEngine {
           // useLogMessages.ts fire-and-forgets. enqueueWrite is
           // order-preserving so fire-and-forget here is safe.
           if (message.type === 'assistant') {
-            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
+            recordTranscriptAsync(messages)
           } else {
             await recordTranscriptFn(messages)
           }
@@ -1084,7 +1098,7 @@ export class QueryEngine {
           // forking the chain and orphaning the conversation on resume.
           if (persistSession) {
             messages.push(message)
-            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
+            recordTranscriptAsync(messages)
           }
           yield* normalizeMessage(message)
           break
@@ -1140,7 +1154,7 @@ export class QueryEngine {
           // Record inline (same reason as progress above).
           if (persistSession) {
             messages.push(message)
-            void recordTranscriptFn(messages).catch(error => { transcriptWriteFailure ??= error })
+            recordTranscriptAsync(messages)
           }
 
           // Extract structured output from StructuredOutput tool calls
@@ -1150,6 +1164,7 @@ export class QueryEngine {
           // Handle max turns reached signal from query.ts
           else if (message.attachment.type === 'max_turns_reached') {
             if (persistSession) {
+              await settleTranscriptWrites()
               if (
                 isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
                 isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1229,6 +1244,13 @@ export class QueryEngine {
             break
           }
           this.mutableMessages.push(message)
+          // Retained system messages must enter the same ordered snapshots as
+          // assistant blocks. Deferring recovery until the next input creates
+          // a new ancestor before an already-recorded completed response.
+          if (persistSession && message.subtype !== 'compact_boundary') {
+            messages.push(message as SystemMessage)
+            recordTranscriptAsync(messages)
+          }
           // Yield compact boundary messages to SDK
           if (
             message.subtype === 'compact_boundary' &&
@@ -1305,6 +1327,7 @@ export class QueryEngine {
       // Check if USD budget has been exceeded
       if (maxBudgetUsd !== undefined && getTotalCost() >= maxBudgetUsd) {
         if (persistSession) {
+          await settleTranscriptWrites()
           if (
             isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
             isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1348,6 +1371,7 @@ export class QueryEngine {
         )
         if (callsThisQuery >= maxRetries) {
           if (persistSession) {
+            await settleTranscriptWrites()
             if (
               isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
               isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -1399,6 +1423,13 @@ export class QueryEngine {
         }
       }
       this.mutableMessages = [...messages]
+    } finally {
+      // Drain recorder promises only after the provider can finish mutating
+      // streamed messages. This is an enqueue barrier, not an fsync guarantee.
+      await Promise.all(pendingTranscriptWrites)
+      if (transcriptWriteFailure && !turnHandoff.requested) {
+        throw transcriptWriteFailure
+      }
     }
 
     if (turnHandoff.accepted || queryTerminal?.reason === 'handoff_failed') {

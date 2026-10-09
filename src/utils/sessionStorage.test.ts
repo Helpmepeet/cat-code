@@ -11,7 +11,7 @@ import { asAgentId, asSessionId } from '../types/ids.js'
 import type { AssistantMessage } from '../types/message.js'
 import { createAttachmentMessage, getQueuedCommandAttachments } from './attachments.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
-import { createUserMessage } from './messages.js'
+import { createUserMessage, ensureToolResultPairing, normalizeMessagesForAPI } from './messages.js'
 import { assertSessionNotMoving } from './sessionRelocationState.js'
 import { activateTranscriptLease, releaseActiveTranscriptLease } from './transcriptLease.js'
 import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, verifyHandoffTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
@@ -813,7 +813,7 @@ describe('session storage', () => {
     expect(resumed?.messages).toEqual([])
   })
 
-  test('active tip selects a retained chain through large-transcript pruning', async () => {
+  test('active tip selects a retained chain in a large transcript', async () => {
     const firstUserUuid = randomUUID()
     const firstAssistantUuid = randomUUID()
     const discardedUserUuid = randomUUID()
@@ -1094,7 +1094,7 @@ describe('session storage', () => {
     ).toEqual([`${sessionId}.jsonl`])
   })
 
-  test('display history crosses compact boundaries without changing the resume chain', async () => {
+  test.each([0, 6 * 1024 * 1024])('display history crosses compact boundaries without changing the resume chain (%s archival bytes)', async archivalBytes => {
     const beforeUserUuid = randomUUID()
     const beforeAssistantUuid = randomUUID()
     const boundaryUuid = randomUUID()
@@ -1111,7 +1111,7 @@ describe('session storage', () => {
         userType: 'external',
         version: 'test',
         timestamp: '2026-07-31T17:59:00.000Z',
-        message: { role: 'user', content: 'recognizable archival prompt' },
+        message: { role: 'user', content: `recognizable archival prompt${'x'.repeat(archivalBytes)}` },
       },
       {
         type: 'assistant',
@@ -1181,7 +1181,7 @@ describe('session storage', () => {
 
     const display = await loadDisplayTranscriptFromJsonlPath(path, {
       maxMessages: 100,
-      maxBytes: 1024 * 1024,
+      maxBytes: 20 * 1024 * 1024,
     })
     expect(display.truncated).toBe(false)
     expect(display.messages.map(message => message.uuid)).toEqual([
@@ -1193,7 +1193,7 @@ describe('session storage', () => {
     ])
   })
 
-  test('display history keeps preserved segments once and places them after the compact seam', async () => {
+  test.each([0, 6 * 1024 * 1024])('display history keeps preserved segments once and places them after the compact seam (%s preserved bytes)', async preservedBytes => {
     const archivalUuid = randomUUID()
     const preservedHeadUuid = randomUUID()
     const preservedTailUuid = randomUUID()
@@ -1223,7 +1223,7 @@ describe('session storage', () => {
         userType: 'external',
         version: 'test',
         timestamp: '2026-07-31T17:59:01.000Z',
-        message: { role: 'user', content: 'preserved head' },
+        message: { role: 'user', content: `preserved head${'p'.repeat(preservedBytes)}` },
       },
       {
         type: 'assistant',
@@ -1305,7 +1305,7 @@ describe('session storage', () => {
 
     const display = await loadDisplayTranscriptFromJsonlPath(path, {
       maxMessages: 100,
-      maxBytes: 1024 * 1024,
+      maxBytes: 20 * 1024 * 1024,
     })
     expect(display.truncated).toBe(false)
     expect(display.messages.map(message => message.uuid)).toEqual([
@@ -2517,5 +2517,202 @@ describe('auto-mode observation diagnostics', () => {
     expect(() => recordAutoModeObservation(startEvent)).toThrow(
       `No active transcript lease for session ${sessionId}`,
     )
+  })
+})
+
+// This boundary owns large-file resume equivalence: helper-only chain tests
+// cannot detect records discarded before the production parser sees them.
+describe('large transcript resume preserves selection and recoverable content', () => {
+  let root: string
+  let sessionId: UUID
+  let originalSkip: string | undefined
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'transcript-load-equivalence-'))
+    sessionId = randomUUID()
+    originalSkip = process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP
+    delete process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP
+  })
+
+  afterEach(() => {
+    if (originalSkip === undefined) delete process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP
+    else process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP = originalSkip
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  function row<T extends Record<string, unknown>>(type: string, parentUuid: UUID | null, second: number, fields: T) {
+    return {
+      parentUuid,
+      isSidechain: false,
+      sessionId,
+      cwd: root,
+      version: 'test',
+      type,
+      ...fields,
+      uuid: randomUUID(),
+      timestamp: new Date(Date.UTC(2026, 9, 9, 0, 0, second)).toISOString(),
+    }
+  }
+
+  function call(parentUuid: UUID, second: number, id: string, messageId = 'parallel-response') {
+    return row('assistant', parentUuid, second, {
+      message: {
+        id: messageId,
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: id } }],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 10, output_tokens: 2 },
+      },
+    })
+  }
+
+  function result(parentUuid: UUID, second: number, id: string, content: string) {
+    return row('user', parentUuid, second, {
+      userType: 'external',
+      sourceToolAssistantUUID: parentUuid,
+      message: { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: id, content }] },
+    })
+  }
+
+  function final(parentUuid: UUID, second = 6) {
+    return row('assistant', parentUuid, second, {
+      message: { id: 'completed-response', role: 'assistant', content: [{ type: 'text', text: 'completed report' }] },
+    })
+  }
+
+  async function write(entries: unknown[]) {
+    const path = join(root, `${sessionId}.jsonl`)
+    const bytes = `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`
+    await writeFile(path, bytes)
+    return { path, bytes: Buffer.byteLength(bytes) }
+  }
+
+  async function readWithReference(path: string) {
+    const { removeExtraFields, selectActiveConversation } = await import('./sessionStorage.js')
+    // keepAllLeaves is used by production history/durability callers and bypasses
+    // branch pre-filtering while retaining normal compaction/duplicate semantics.
+    const complete = await loadTranscriptFile(path, { keepAllLeaves: true })
+    const reference = selectActiveConversation(complete.messages, complete.leafUuids, complete.activeConversationTip)
+    const resumed = await loadTranscriptFromFile(path)
+    expect(resumed.messages).toEqual(removeExtraFields(reference.messages))
+    return resumed
+  }
+
+  function shapedResults(messages: Parameters<typeof normalizeMessagesForAPI>[0]) {
+    return ensureToolResultPairing(normalizeMessagesForAPI(messages)).flatMap(message =>
+      message.type === 'user' && Array.isArray(message.message.content)
+        ? message.message.content.filter(block => block.type === 'tool_result')
+        : [],
+    )
+  }
+
+  test.each([
+    { label: 'below the 5 MiB threshold', siblingBytes: 4 * 1024 * 1024, retainedBytes: 0 },
+    { label: 'above 5 MiB with less than half removable bytes', siblingBytes: 2 * 1024 * 1024, retainedBytes: 4 * 1024 * 1024 },
+    { label: 'above 5 MiB with more than half removable bytes', siblingBytes: 6 * 1024 * 1024, retainedBytes: 0 },
+  ])('parallel siblings retain actual results $label', async ({ siblingBytes, retainedBytes }) => {
+    // Six-record no-compaction/no-tip reproduction. The final parent walk
+    // follows A, while B and its large real result require sibling recovery.
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read both files' } })
+    const a = call(prompt.uuid, 1, 'call-A')
+    const b = call(a.uuid, 2, 'call-B')
+    const expectedA = `actual A:${'a'.repeat(retainedBytes)}`
+    const expectedB = `actual B:${'b'.repeat(siblingBytes)}`
+    const ra = result(a.uuid, 3, 'call-A', expectedA)
+    const rb = result(b.uuid, 4, 'call-B', expectedB)
+    const report = final(ra.uuid)
+    const { path, bytes } = await write([prompt, a, b, ra, rb, report])
+    expect(bytes > 5 * 1024 * 1024).toBe(siblingBytes + retainedBytes >= 5 * 1024 * 1024)
+    const resumed = await readWithReference(path)
+    expect(resumed.leafUuid).toBe(report.uuid)
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, rb.uuid, ra.uuid, report.uuid])
+    expect(shapedResults(resumed.messages)).toEqual([
+      { type: 'tool_result', tool_use_id: 'call-B', content: expectedB },
+      { type: 'tool_result', tool_use_id: 'call-A', content: expectedA },
+    ])
+    const display = await loadDisplayTranscriptFromJsonlPath(path, { maxMessages: 100, maxBytes: 20 * 1024 * 1024 })
+    expect(display.truncated).toBe(false)
+    expect(display.messages).toEqual(resumed.messages)
+  })
+
+  test.each([
+    { label: 'large result and older recovery physically last', payloadBytes: 6 * 1024 * 1024, recoveryLast: true },
+    { label: 'below threshold and older recovery physically last', payloadBytes: 1024, recoveryLast: true },
+    { label: 'large result and completed report physically last', payloadBytes: 6 * 1024 * 1024, recoveryLast: false },
+  ])('timestamp/leaf selection survives $label', async ({ payloadBytes, recoveryLast }) => {
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'implement' } })
+    const a = call(prompt.uuid, 2, 'call-completed')
+    const actual = `completed tool output:${'x'.repeat(payloadBytes)}`
+    const ra = result(a.uuid, 3, 'call-completed', actual)
+    const report = final(ra.uuid)
+    const recovery = row('system', prompt.uuid, 1, { subtype: 'transport_recovery', content: 'older recovery', level: 'info' })
+    const { path } = await write(recoveryLast ? [prompt, a, ra, report, recovery] : [prompt, a, ra, recovery, report])
+    const resumed = await readWithReference(path)
+    expect(resumed.leafUuid).toBe(report.uuid)
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, ra.uuid, report.uuid])
+    expect(shapedResults(resumed.messages)).toEqual([{ type: 'tool_result', tool_use_id: 'call-completed', content: actual }])
+  })
+
+  test('a retained call recovers its actual result outside the linear parent chain before API pairing', async () => {
+    // Sanitized corpus-derived progress/recovery-fork topology: the call is
+    // on the selected chain while its real result is a sibling. No private
+    // transcript content is copied into this fixture.
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read file' } })
+    const a = call(prompt.uuid, 1, 'retained-call')
+    const recovery = row('system', a.uuid, 3, { subtype: 'transport_recovery', content: 'recovered', level: 'info' })
+    const actual = `real result outside parent chain:${'z'.repeat(6 * 1024 * 1024)}`
+    const ra = result(a.uuid, 2, 'retained-call', actual)
+    const report = final(recovery.uuid)
+    const { path } = await write([prompt, a, ra, recovery, report])
+    const resumed = await loadTranscriptFromFile(path)
+    // Pairing alone passes with the broken loader by manufacturing an error;
+    // the actual identity/content and non-error status are the contract.
+    expect(shapedResults(resumed.messages)).toEqual([{ type: 'tool_result', tool_use_id: 'retained-call', content: actual }])
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, ra.uuid, recovery.uuid, report.uuid])
+    await readWithReference(path)
+  })
+
+  test.each(['identical', 'conflicting'] as const)('duplicate UUIDs use production-effective %s payloads and parents', async kind => {
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read both files' } })
+    const a = call(prompt.uuid, 1, 'call-A')
+    const b = call(a.uuid, 2, 'call-B')
+    const ra = result(a.uuid, 3, 'call-A', 'actual A')
+    const rb = result(b.uuid, 4, 'call-B', `actual last result:${'d'.repeat(6 * 1024 * 1024)}`)
+    const report = final(ra.uuid)
+    const first = kind === 'identical' ? rb : {
+      ...rb,
+      parentUuid: prompt.uuid,
+      message: { role: 'user', content: 'obsolete first payload' },
+    }
+    const { path } = await write([prompt, a, b, ra, first, rb, report])
+    const loaded = await loadTranscriptFile(path)
+    // Map insertion position comes from the first occurrence, but the payload
+    // and recovery parent come from the last occurrence, even when conflicting.
+    expect([...loaded.messages.keys()]).toEqual([prompt.uuid, a.uuid, b.uuid, ra.uuid, rb.uuid, report.uuid])
+    expect(loaded.messages.get(rb.uuid)?.parentUuid).toBe(b.uuid)
+    const effectiveResult = loaded.messages.get(rb.uuid)
+    expect(effectiveResult?.type).toBe('user')
+    if (effectiveResult?.type === 'user') expect(effectiveResult.message).toEqual(rb.message)
+    const resumed = await readWithReference(path)
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, rb.uuid, ra.uuid, report.uuid])
+    expect(shapedResults(resumed.messages)).toEqual([
+      { type: 'tool_result', tool_use_id: 'call-B', content: `actual last result:${'d'.repeat(6 * 1024 * 1024)}` },
+      { type: 'tool_result', tool_use_id: 'call-A', content: 'actual A' },
+    ])
+  })
+
+  test.each([false, true])('equal-timestamp leaves retain insertion-order selection with active-tip override=%s', async useTip => {
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'prompt' } })
+    const first = final(prompt.uuid)
+    const last = final(prompt.uuid)
+    last.message = { id: 'second-response', role: 'assistant', content: [{ type: 'text', text: 'second leaf' }] }
+    const discarded = row('user', prompt.uuid, 1, { userType: 'external', message: { role: 'user', content: 'discarded'.repeat(1024 * 1024) } })
+    const entries: unknown[] = [prompt, first, last, discarded]
+    if (useTip) entries.push({ type: 'active-conversation-tip', sessionId, tipUuid: last.uuid })
+    const { path } = await write(entries)
+    const resumed = await readWithReference(path)
+    expect(resumed.leafUuid).toBe(useTip ? last.uuid : first.uuid)
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, useTip ? last.uuid : first.uuid])
   })
 })
