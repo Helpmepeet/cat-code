@@ -24,6 +24,10 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
+import { AttachmentGate } from '../main/attachmentGate.js'
+import { FrameReplayBuffer, isReplayTruncationFrame } from '../main/replayBuffer.js'
+import { stampHistoryViewAnchor } from '../main/mainDecisions.js'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import {
   getSessionProjectDir,
@@ -132,6 +136,43 @@ function errors(received: ServerFrame[]) {
   return received.filter(f => f.kind === 'error')
 }
 
+test.each([
+  ['attach', 'clone'], ['recovery', 'clone'],
+  ['attach', 'credential'], ['recovery', 'credential'],
+] as const)(
+  'an omitted child preserves partial-worker availability on %s after %s rejection',
+  async (route, rejection) => {
+    const parent = 'toolu_partial_worker'
+    const retained = { ...historyMessage('child-kept', 'kept child'), parent_tool_use_id: parent }
+    const omitted = {
+      ...historyMessage('child-omitted', 'omitted child'),
+      parent_tool_use_id: parent,
+      message: { role: 'user', content: rejection === 'clone' ? () => {} : { api_key: 'blocked-fixture' } },
+    } as unknown as SDKMessage
+    const anchor = historyMessage('anchor', 'main tail')
+    const history = [omitted, retained, anchor]
+    const server = makeServer({
+      history: route === 'attach' ? history : [anchor],
+      loadEarlierHistory: async () => ({ messages: history, truncated: false }),
+    })
+    const { socket, received } = makeSocket()
+    const connection = server.addConnection(socket)
+    if (route === 'recovery') {
+      server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'partial-child' }))
+      await waitForResult(received, 'partial-child')
+    }
+    expect(received.filter(f => f.kind === 'history.availability').at(-1)).toMatchObject({
+      unavailableParentToolUseIds: [parent],
+      ...(route === 'recovery' ? { recovered: true } : {}),
+    })
+    const children = received.filter(f => f.kind === 'event' &&
+      f.event.type === 'message' && f.event.message.parent_tool_use_id === parent)
+    expect(children).toHaveLength(1)
+    expect(JSON.stringify(children)).toContain('kept child')
+    expect(JSON.stringify(received)).not.toContain('blocked-fixture')
+  },
+)
+
 /**
  * The live path is genuinely asynchronous (a real file read), so poll for the
  * answer instead of guessing a sleep. A fixed sleep here is a flake: the first
@@ -217,6 +258,30 @@ test('an unknown extra property is REJECTED, not stripped', async () => {
   expect(error).toMatchObject({ kind: 'error', code: 'bad_request' })
   expect((error as { message: string }).message).toContain('before')
 })
+
+test.each([false, 'true', 1, null])(
+  'an invalid view truncation marker %j is rejected before reading disk',
+  async viewTruncated => {
+    let reads = 0
+    const server = makeServer({
+      loadEarlierHistory: async () => {
+        reads += 1
+        return { messages: [], truncated: false }
+      },
+    })
+    const { socket, received } = makeSocket()
+    const connection = server.addConnection(socket)
+    server.handleData(connection, frame({
+      type: 'history.loadEarlier',
+      requestId: 'invalid-truncation',
+      viewTruncated,
+    }))
+    await Bun.sleep(0)
+    expect(errors(received).at(-1)).toMatchObject({ code: 'bad_request' })
+    expect(results(received)).toHaveLength(0)
+    expect(reads).toBe(0)
+  },
+)
 
 test('a wrong-typed sessionId does not address this sidecar', async () => {
   let read = 0
@@ -371,6 +436,7 @@ test('a main-authored view anchor is accepted and used as the diff anchor', asyn
       type: 'history.loadEarlier',
       requestId: 'anchored',
       viewAnchorUuid: held,
+      viewTruncated: true,
     }),
   )
   await Bun.sleep(0)
@@ -958,6 +1024,52 @@ test('an empty sidecar history is NOT reported complete over a truncated view', 
     },
   ])
 })
+
+test.each(['fresh', 'restored'] as const)(
+  'an anchorless truncated main replay recovers real persisted history after %s reload',
+  async mode => {
+    const texts = mintTranscript(6)
+    const persisted = await replayedTail(6)
+    const replay = new FrameReplayBuffer(10, 64)
+    // Each complete message exceeds this isolated ring's byte cap. No message
+    // UUID survives, even though the authoritative display history is present.
+    for (const message of persisted) {
+      replay.record(SESSION, {
+        kind: 'event',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: SESSION,
+        event: createMessageEvent(message),
+      })
+    }
+    expect(replay.snapshotSession(SESSION).filter(f => f.kind === 'event')).toHaveLength(0)
+    expect(replay.snapshotSession(SESSION).some(isReplayTruncationFrame)).toBe(true)
+    expect(replay.viewAnchorUuid(SESSION)).toBeUndefined()
+
+    const gate = new AttachmentGate(replay)
+    const server = makeServer(
+      mode === 'restored' ? { history: persisted.slice(-2) } : {},
+    )
+    const { socket, received } = makeSocket()
+    const connection = server.addConnection(socket)
+    for (const requestId of ['anchorless-reload', 'anchorless-repeat']) {
+      const before = received.length
+      const message = stampHistoryViewAnchor(
+        { type: 'history.loadEarlier', requestId },
+        gate.viewAnchorUuid(SESSION),
+        gate.viewTruncated(SESSION),
+      )
+      server.handleData(connection, frame(message))
+      await waitForResult(received, requestId)
+      expect(replayedText(received.slice(before))).toEqual(texts)
+      expect(results(received).at(-1)).toMatchObject({
+        requestId,
+        ok: true,
+        added: 6,
+        complete: true,
+      })
+    }
+  },
+)
 
 /**
  * The other half, so the branch above is narrowed rather than removed: with no

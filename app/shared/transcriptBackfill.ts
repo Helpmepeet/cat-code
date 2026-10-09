@@ -11,6 +11,7 @@
 
 import { isAbsolute, basename } from 'node:path'
 import { isCacheExpiryTimestamp } from './promptCacheEstimate.js'
+import { isUnavailableParentToolUseIds } from './historyAvailability.js'
 
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
@@ -165,11 +166,13 @@ export function parseTranscriptBackfillResult(
     !isUuid(value.appSessionId) ||
     !isUuid(value.engineSessionId) ||
     !Array.isArray(value.frames) ||
-    value.frames.length > MAX_HISTORY_REPLAY_FRAMES + 1
+    value.frames.length > MAX_HISTORY_REPLAY_FRAMES + 2
   ) {
     return null
   }
   const frames: ServerFrame[] = []
+  let messageCount = 0
+  let availabilityCount = 0
   for (let i = 0; i < value.frames.length; i++) {
     const frame = parseTranscriptFrame(
       value.frames[i],
@@ -178,6 +181,8 @@ export function parseTranscriptBackfillResult(
       i === 0,
     )
     if (!frame) return null
+    if (frame.kind === 'event' && ++messageCount > MAX_HISTORY_REPLAY_FRAMES) return null
+    if (frame.kind === 'history.availability' && ++availabilityCount > 1) return null
     frames.push(frame)
   }
   const runFacts = parseTranscriptRunFacts(value.runFacts)
@@ -266,6 +271,11 @@ function parseTranscriptFrame(
 ): ServerFrame | null {
   if (!isRecord(value) || value.protocolVersion !== PROTOCOL_VERSION) return null
   if (value.sessionId !== appSessionId) return null
+  if (value.kind === 'history.availability') {
+    if (!hasExactKeys(value, ['kind', 'protocolVersion', 'sessionId', 'unavailableParentToolUseIds']) ||
+      !isUnavailableParentToolUseIds(value.unavailableParentToolUseIds)) return null
+    return value as unknown as ServerFrame
+  }
   if (value.kind === 'error') {
     if (!first) return null
     if (

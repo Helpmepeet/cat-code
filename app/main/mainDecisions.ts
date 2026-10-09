@@ -521,8 +521,9 @@ export function createRendererRecoveryPolicy({
  * the wrong side of it (SECURITY-MINIMUM §2 R2, CLAUDE.md §8 mistake 5).
  *
  * WHY IT CANNOT BE FORGED. The renderer-supplied key is DESTRUCTURED AWAY
- * first, unconditionally, and re-added only from `anchor`. A frame arriving
- * with a forged `viewAnchorUuid` therefore leaves here carrying main's value or
+ * first, unconditionally, and re-added only from main's retained view.
+ * The loss marker survives when no display UUID remains to anchor. A frame
+ * arriving with a forged `viewAnchorUuid` therefore leaves here carrying main's value or
  * carrying none — there is no branch in which the inbound one survives. This
  * runs at `forward`, the single point every renderer frame passes through on
  * its way to a sidecar, so the property holds for every route into the verb
@@ -534,11 +535,19 @@ export function createRendererRecoveryPolicy({
 export function stampHistoryViewAnchor<T extends { type: string }>(
   message: T,
   anchor: string | undefined,
+  truncated: boolean = false,
 ): T {
   if (message.type !== 'history.loadEarlier') return message
-  const { viewAnchorUuid: _rendererAuthored, ...rest } =
-    message as T & { viewAnchorUuid?: unknown }
-  return (anchor === undefined ? rest : { ...rest, viewAnchorUuid: anchor }) as T
+  const {
+    viewAnchorUuid: _rendererAnchor,
+    viewTruncated: _rendererTruncated,
+    ...rest
+  } = message as T & { viewAnchorUuid?: unknown; viewTruncated?: unknown }
+  return {
+    ...rest,
+    ...(anchor === undefined ? {} : { viewAnchorUuid: anchor }),
+    ...(truncated ? { viewTruncated: true } : {}),
+  } as T
 }
 
 /**

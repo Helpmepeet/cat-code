@@ -563,6 +563,8 @@ type TranscriptSessionState = {
    * the same way the orphaned-agent placeholder is synthesized.
    */
   historyTruncated: boolean
+  /** Saved worker branches omitted independently of the main transcript. */
+  unavailableParentToolUseIds: ReadonlySet<string>
   imagePreviewNotice: string | null
   /**
    * Head-insertion cursor for the recovery batch currently arriving, or `null`
@@ -620,6 +622,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     slashCommands: [],
     hiddenFrameIds: {},
     historyTruncated: false,
+    unavailableParentToolUseIds: new Set(),
     imagePreviewNotice: null,
     recoveryInsertAt: null,
     compacting: false,
@@ -837,13 +840,13 @@ export type NestedTranscriptRow =
        * Agent cards intact and empty (`app/sidecar/subagentHistory.ts`
        * `withRestoredSubagentHistory`;
        * `docs/migration/reviews/2026-08-19-transcript-message-visibility-ux-review.md`
-       * finding 5). Nothing on the wire says so, and the card is otherwise
-       * indistinguishable from an agent that ran and produced nothing.
+       * finding 5). The availability snapshot distinguishes this from an agent
+       * that ran and produced nothing, even when the main transcript is whole.
        *
-       * DERIVED at read time from `TranscriptSessionState.historyTruncated` plus
+       * DERIVED at read time from history availability, `historyTruncated`, and
        * the session's own rows, like the boundary and orphan placeholders:
        * nothing is stored and no stored row is rewritten. Absent unless it is
-       * true, so every card in a whole transcript keeps exactly the shape it had.
+       * true, so cards with complete steps keep exactly the shape they had.
        */
       stepsNotLoaded?: true
     })
@@ -972,7 +975,7 @@ const orphanedAgentRowByFirstRow = new WeakMap<TranscriptRow, NestedTranscriptRo
 // identity across slices or the memoized view re-renders it on every streamed
 // delta. Keyed on the OLDEST surviving row, which is the row it sits above and
 // the only thing about it that can change.
-const historyBoundaryRowByFirstRow = new WeakMap<TranscriptRow, NestedTranscriptRow>()
+const historyBoundaryRowByFirstRow = new WeakMap<TranscriptRow | TranscriptSessionState, NestedTranscriptRow>()
 
 function sameReferences<T>(left: readonly T[], right: readonly T[]) {
   return left.length === right.length && left.every((item, index) => item === right[index])
@@ -1033,18 +1036,21 @@ export function selectNestedTranscriptRows(
   }
 
   const attachChildren = (row: TranscriptRow): NestedTranscriptRow => {
+    const explicitlyUnavailable = row.kind === 'tool-use' && row.toolFamily === 'agent' &&
+      session.unavailableParentToolUseIds.has(row.toolUseId)
     if (parentsWithRows !== null && hasUnloadedSteps(row, parentsWithRows)) {
       return unloadedStepsRow(row)
     }
     const childRows =
       row.kind === 'tool-use' ? (childrenByParentId.get(row.toolUseId) ?? []) : []
     const cached = nestedRowBySource.get(row)
+    const cachedUnavailable = cached?.kind === 'tool-use' && cached.stepsNotLoaded === true
     // LEAF FAST PATH, and the reason the deep check below is affordable: nothing
     // can have changed beneath a row that has no children, so the overwhelming
     // majority of a transcript (every prose, thinking, user and childless tool
     // row) still returns in O(1) and allocates nothing. Only a row that owns
     // children pays to look down.
-    if (cached && childRows.length === 0 && cached.children.length === 0) {
+    if (cached && !explicitlyUnavailable && !cachedUnavailable && childRows.length === 0 && cached.children.length === 0) {
       return cached
     }
 
@@ -1055,9 +1061,11 @@ export function selectNestedTranscriptRows(
     // `selectTranscriptRows` preserves unchanged rows — so a source-level
     // comparison kept serving a subtree that was missing the new row until some
     // direct child happened to change for an unrelated reason.
-    if (cached && sameReferences(cached.children, children)) return cached
+    if (cached && cachedUnavailable === explicitlyUnavailable && sameReferences(cached.children, children)) return cached
 
-    const nested = { ...row, children }
+    const nested: NestedTranscriptRow = row.kind === 'tool-use' && explicitlyUnavailable
+      ? { ...row, children, stepsNotLoaded: true }
+      : { ...row, children }
     nestedRowBySource.set(row, nested)
     return nested
   }
@@ -1103,8 +1111,8 @@ export function selectNestedTranscriptRows(
   }
 
   const oldestRow = rows[0]
-  const boundary = session.historyTruncated && oldestRow !== undefined
-    ? historyBoundaryRow(oldestRow)
+  const boundary = session.historyTruncated
+    ? historyBoundaryRow(sessionId!, oldestRow ?? session)
     : null
   const offset = boundary ? 1 : 0
   let start = prior && boundary && prior[0] === boundary ? 1 : 0
@@ -1207,21 +1215,21 @@ const HISTORY_BOUNDARY_FRAME_ID = 'history-boundary'
  * No `isHidden`, in either view: this describes the PANE, not a message, so the
  * reveal control has nothing to dim about it.
  */
-function historyBoundaryRow(oldestRow: TranscriptRow): NestedTranscriptRow {
-  const cached = historyBoundaryRowByFirstRow.get(oldestRow)
+function historyBoundaryRow(sessionId: SessionId, anchor: TranscriptRow | TranscriptSessionState): NestedTranscriptRow {
+  const cached = historyBoundaryRowByFirstRow.get(anchor)
   if (cached) return cached
   const row: NestedTranscriptRow = {
     kind: 'history-boundary',
     id: frameRowId(
-      oldestRow.sessionId,
+      sessionId,
       HISTORY_BOUNDARY_FRAME_ID,
       'history_boundary',
     ),
-    sessionId: oldestRow.sessionId,
+    sessionId,
     frameId: HISTORY_BOUNDARY_FRAME_ID,
     children: [],
   }
-  historyBoundaryRowByFirstRow.set(oldestRow, row)
+  historyBoundaryRowByFirstRow.set(anchor, row)
   return row
 }
 
@@ -1433,6 +1441,15 @@ export function projectServerFrames(
     }
     if (frame.kind === 'generated-image-preview') {
       projectImagePreviewFrame(draft, frame)
+      continue
+    }
+    if (frame.kind === 'history.availability') {
+      const unavailable = new Set(frame.unavailableParentToolUseIds)
+      if (unavailable.size !== draft.session.unavailableParentToolUseIds.size ||
+        [...unavailable].some(id => !draft.session.unavailableParentToolUseIds.has(id))) {
+        draft.session.unavailableParentToolUseIds = unavailable
+        draft.changed = true
+      }
       continue
     }
     if (frame.kind === 'history.loadEarlier.result') {

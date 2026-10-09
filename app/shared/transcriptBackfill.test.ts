@@ -10,6 +10,7 @@ const NO_RUN_FACTS = {
 
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
+import { MAX_HISTORY_REPLAY_FRAMES } from './limits.js'
 
 import {
   PROTOCOL_VERSION,
@@ -26,6 +27,26 @@ import {
 
 const APP_ID = '11111111-1111-4111-8111-111111111111'
 const ENGINE_ID = '22222222-2222-4222-8222-222222222222'
+
+test('worker availability metadata crosses the strict boundary once, with bounded parent IDs', () => {
+  const availability: ServerFrame = { kind: 'history.availability', protocolVersion: PROTOCOL_VERSION,
+    sessionId: APP_ID, unavailableParentToolUseIds: ['toolu_parent'] }
+  const result: TranscriptBackfillSessionResult = { type: 'session', appSessionId: APP_ID,
+    engineSessionId: ENGINE_ID, frames: [eventFrame(), availability], runFacts: NO_RUN_FACTS }
+  expect(parseTranscriptBackfillResult(result)).toEqual(result)
+  for (const malformed of [
+    { ...availability, unavailableParentToolUseIds: [7] },
+    { ...availability, unavailableParentToolUseIds: [''] },
+    { ...availability, unavailableParentToolUseIds: ['x'.repeat(4097)] },
+    { ...availability, unavailableParentToolUseIds: Array(4001).fill('parent') },
+    { ...availability, recovered: true },
+    { ...availability, extra: true },
+  ]) expect(parseTranscriptBackfillResult({ ...result, frames: [eventFrame(), malformed] })).toBeNull()
+  expect(parseTranscriptBackfillResult({ ...result, frames: [availability, availability] })).toBeNull()
+  const atCap = Array(MAX_HISTORY_REPLAY_FRAMES).fill(eventFrame())
+  expect(parseTranscriptBackfillResult({ ...result, frames: [...atCap, availability] })).not.toBeNull()
+  expect(parseTranscriptBackfillResult({ ...result, frames: [...atCap, eventFrame()] })).toBeNull()
+})
 
 test('run-facts boundary accepts optional estimated deadlines without opening extra keys', () => {
   expect(parseTranscriptRunFacts(NO_RUN_FACTS)).toEqual(NO_RUN_FACTS)

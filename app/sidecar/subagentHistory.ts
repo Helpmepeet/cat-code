@@ -40,6 +40,17 @@ export type SubagentBranch = {
   frames: SDKMessage[]
 }
 
+/** Display completeness is independent of the parent transcript's byte tail. */
+export type RestoredSubagentHistory = {
+  history: SDKMessage[]
+  unavailableParentToolUseIds: string[]
+}
+
+export type RestoredSubagentBranches = {
+  branches: SubagentBranch[]
+  unavailableParentToolUseIds: string[]
+}
+
 /** A subagent worth reading: metadata that actually carries the join key. */
 export type BranchCandidate = {
   agentId: Parameters<typeof getDisplayAgentTranscriptForSession>[1]
@@ -214,33 +225,69 @@ export async function loadBranchesWithinBudget(
     readMessages: MAX_HISTORY_REPLAY_FRAMES,
     frameBytes: MAX_HISTORY_REPLAY_BYTES,
   },
-): Promise<SubagentBranch[]> {
+  onError?: (message: string) => void,
+): Promise<RestoredSubagentBranches> {
   const branches: SubagentBranch[] = []
+  const unavailable = new Set<string>()
   let remaining = budget
   for (const candidate of candidates) {
-    // Reserve the optional one-byte alignment probe inside the shared budget.
-    if (remaining <= 0 || work.readBytes <= 1 || work.readMessages <= 0 || work.frameBytes <= 0) break
-    const transcript = await loadTranscript(sessionId, candidate.agentId, {
-      maxBytes: work.readBytes - 1,
-      maxMessages: work.readMessages,
-    })
-    if (transcript === null) continue
+    const omit = () => {
+      if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) {
+        unavailable.add(candidate.parentToolUseId)
+      }
+    }
+    // Exhaustion prevents reads, but does not make a reachable branch empty.
+    if (remaining <= 0 || work.readBytes <= 1 || work.readMessages <= 0 || work.frameBytes <= 0) {
+      omit()
+      continue
+    }
+    let transcript: Awaited<ReturnType<typeof loadTranscript>>
+    try {
+      transcript = await loadTranscript(sessionId, candidate.agentId, {
+        maxBytes: work.readBytes - 1,
+        maxMessages: work.readMessages,
+      })
+    } catch (error) {
+      // A failed read has no byte receipt. Do not give its siblings a fresh
+      // allowance that could exceed the aggregate source budget.
+      work.readBytes = 0
+      omit()
+      onError?.(`[sidecar] subagent history unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`)
+      continue
+    }
+    if (transcript === null) {
+      omit()
+      continue
+    }
     work.readBytes -= transcript.bytesRead
     work.readMessages -= transcript.messages.length
-    if (transcript.truncated) continue
+    if (transcript.truncated) {
+      omit()
+      continue
+    }
     const frames = projectBranchFrames(
       transcript.messages,
       candidate.parentToolUseId,
       candidate.agentName,
       seenUuids,
     )
-    if (frames.length === 0 || frames.length > remaining) continue
+    // Empty and inherited-only branches have no omitted display steps.
+    if (frames.length === 0) continue
+    if (frames.length > remaining) {
+      omit()
+      continue
+    }
     let frameBytes = 0
     for (const frame of frames) {
       frameBytes += Buffer.byteLength(JSON.stringify(frame), 'utf8')
       if (frameBytes > work.frameBytes) break
     }
-    if (frameBytes > work.frameBytes) continue
+    if (frameBytes > work.frameBytes) {
+      omit()
+      continue
+    }
     const branch = { parentToolUseId: candidate.parentToolUseId, frames }
     branches.push(branch)
     remaining -= frames.length
@@ -249,7 +296,7 @@ export async function loadBranchesWithinBudget(
       if (typeof frame.uuid === 'string') seenUuids.add(frame.uuid)
     }
   }
-  return branches
+  return { branches, unavailableParentToolUseIds: [...unavailable] }
 }
 
 /**
@@ -270,12 +317,14 @@ export async function withRestoredSubagentHistory(
   sessionId: string,
   history: readonly SDKMessage[],
   onError?: (message: string) => void,
-): Promise<SDKMessage[]> {
-  if (history.length === 0) return [...history]
+): Promise<RestoredSubagentHistory> {
+  let assembled: SDKMessage[] = [...history]
+  const unavailable = new Set<string>()
+  const result = () => ({ history: assembled, unavailableParentToolUseIds: [...unavailable] })
+  if (history.length === 0) return result()
   try {
     let pending = await loadBranchCandidates(sessionId)
-    if (pending.length === 0) return [...history]
-    let assembled: SDKMessage[] = [...history]
+    if (pending.length === 0) return result()
     // The display load already spent this budget down to the wire cap
     // (`index.ts` passes `MAX_HISTORY_REPLAY_FRAMES` as its own `maxMessages`),
     // so branches take only the headroom that is left. Without this the splice
@@ -287,7 +336,7 @@ export async function withRestoredSubagentHistory(
       readMessages: MAX_HISTORY_REPLAY_FRAMES,
       frameBytes: Math.max(0, MAX_HISTORY_REPLAY_BYTES - Buffer.byteLength(JSON.stringify(assembled), 'utf8')),
     }
-    while (pending.length > 0 && budget > 0 && work.readBytes > 1 && work.readMessages > 0 && work.frameBytes > 0) {
+    while (pending.length > 0) {
       const reachable = collectToolUseIds(assembled)
       const matched = pending.filter(candidate =>
         reachable.has(candidate.parentToolUseId),
@@ -297,27 +346,31 @@ export async function withRestoredSubagentHistory(
         candidate => !reachable.has(candidate.parentToolUseId),
       )
       const seenUuids = collectUuids(assembled)
-      const branches = await loadBranchesWithinBudget(
+      const loaded = await loadBranchesWithinBudget(
         sessionId,
         matched,
         budget,
         seenUuids,
         getDisplayAgentTranscriptForSession,
         work,
+        onError,
       )
-      for (const branch of branches) {
+      for (const id of loaded.unavailableParentToolUseIds) {
+        if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)
+      }
+      for (const branch of loaded.branches) {
         budget -= branch.frames.length
       }
-      if (branches.length === 0) break
-      assembled = spliceSubagentBranches(assembled, branches)
+      if (loaded.branches.length === 0) break
+      assembled = spliceSubagentBranches(assembled, loaded.branches)
     }
-    return assembled
+    return result()
   } catch (error) {
     onError?.(
       `[sidecar] subagent history unavailable: ${
         error instanceof Error ? error.message : String(error)
       }`,
     )
-    return [...history]
+    return result()
   }
 }

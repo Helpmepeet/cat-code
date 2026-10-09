@@ -187,7 +187,11 @@ type SidecarArgs = {
 
 async function projectCurrentDisplayHistory(
   retainedMessages: Message[],
-): Promise<{ history: ReturnType<typeof projectResumedHistory>; truncated: boolean }> {
+): Promise<{
+  history: ReturnType<typeof projectResumedHistory>
+  truncated: boolean
+  unavailableParentToolUseIds: string[]
+}> {
   const seedHistoryEvents = projectResumedHistory(retainedMessages)
   const display = await loadDisplayTranscriptFromJsonlPath(getTranscriptPath(), {
     maxMessages: MAX_HISTORY_REPLAY_FRAMES,
@@ -197,14 +201,15 @@ async function projectCurrentDisplayHistory(
     display.messages,
     seedHistoryEvents,
   )
-  const history = await withRestoredSubagentHistory(
+  const restored = await withRestoredSubagentHistory(
     getSessionId(),
     merged.history,
     message => process.stderr.write(`${message}\n`),
   )
   return {
-    history,
+    history: restored.history,
     truncated: display.truncated || merged.truncated,
+    unavailableParentToolUseIds: restored.unavailableParentToolUseIds,
   }
 }
 
@@ -522,6 +527,7 @@ async function main(): Promise<void> {
   // Both projections run AFTER resume so getSessionId() stamps the adopted id.
   let historyEvents: ReturnType<typeof projectResumedHistory> | undefined
   let historySourceTruncated = false
+  let unavailableParentToolUseIds: string[] = []
   if (resumedMessages !== undefined) {
     const projected = await projectCurrentDisplayHistory(resumedMessages)
     historyEvents = projected.history
@@ -529,6 +535,7 @@ async function main(): Promise<void> {
       ...projectUndeliveredPrompts(undeliveredPrompts, getSessionId()),
     )
     historySourceTruncated = projected.truncated
+    unavailableParentToolUseIds = projected.unavailableParentToolUseIds
   }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
@@ -563,6 +570,7 @@ async function main(): Promise<void> {
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     ...(historySourceTruncated ? { historySourceTruncated: true } : {}),
+    unavailableParentToolUseIds,
     projectHistory: projectCurrentDisplayHistory,
     ...(turnInterrupted ? { turnInterrupted: true } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its

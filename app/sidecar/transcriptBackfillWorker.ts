@@ -197,8 +197,9 @@ async function main(): Promise<void> {
       )
       const frames = buildBoundedFrames(
         item.appSessionId,
-        nested.map(createMessageEvent),
+        nested.history.map(createMessageEvent),
         display.truncated || merged.truncated,
+        nested.unavailableParentToolUseIds,
       )
       const result: TranscriptBackfillSessionResult = {
         type: 'session',
@@ -262,54 +263,88 @@ function buildBoundedFrames(
   appSessionId: string,
   events: Array<{ type: 'message'; message: unknown }>,
   sourceTruncated = false,
+  unavailableParentToolUseIds: readonly string[] = [],
 ): ServerFrame[] {
   const retained: ServerFrame[] = []
-  let retainedBytes = 0
+  const unavailable = new Set(unavailableParentToolUseIds)
+  const retainedUnavailable = new Set<string>()
+  const availability: ServerFrame & { kind: 'history.availability' } = {
+    kind: 'history.availability', protocolVersion: PROTOCOL_VERSION,
+    sessionId: appSessionId, unavailableParentToolUseIds: [],
+  }
+  const truncationFrame = (count: number): ServerFrame => ({
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
+    requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID, code: 'internal_error',
+    message: `Only the ${count} most recent messages are shown.`, retryable: false,
+  })
+  // Reserve both metadata frames and array punctuation inside the existing
+  // replay ceiling. The maximum-count error is at least as large as the one
+  // eventually emitted, even if trimming discovers truncation later.
+  let retainedBytes = 2 + Buffer.byteLength(JSON.stringify(availability), 'utf8') +
+    Buffer.byteLength(JSON.stringify(truncationFrame(MAX_HISTORY_REPLAY_FRAMES)), 'utf8') + 1
   let truncated = sourceTruncated
+  const noteOmittedChild = (message: unknown) => {
+    if (typeof message !== 'object' || message === null) return
+    const parent = (message as Record<string, unknown>).parent_tool_use_id
+    if (typeof parent === 'string' && parent.length > 0) unavailable.add(parent)
+  }
   for (let i = events.length - 1; i >= 0; i--) {
     let event: (typeof events)[number]
     try {
       event = structuredClone(events[i]!)
     } catch {
       truncated = true
+      noteOmittedChild(events[i]!.message)
       continue
     }
     omitUndefinedObjectProperties(event)
     if (!checkJsonSafe(event).ok || !scanForSecrets(event).ok) {
       truncated = true
+      noteOmittedChild(event.message)
       continue
     }
     const frame: ServerFrame = {
-      kind: 'event',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: appSessionId,
-      replay: true,
-      event: event as never,
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
+      replay: true, event: event as never,
+    }
+    const ids: string[] = []
+    const message = event.message as { type?: string; message?: { content?: unknown[] } }
+    if (message.type === 'assistant' && Array.isArray(message.message?.content)) {
+      for (const block of message.message.content) {
+        if (typeof block !== 'object' || block === null) continue
+        const value = block as Record<string, unknown>
+        if (value.type === 'tool_use' && typeof value.id === 'string' &&
+          unavailable.has(value.id) && !retainedUnavailable.has(value.id) && !ids.includes(value.id)) {
+          ids.push(value.id)
+        }
+      }
+    }
+    // Parent frames precede their spliced children. Walking backward learns
+    // about omitted children before deciding whether their card fits, and
+    // reserves each retained card's full marker alongside that frame.
+    let markerBytes = 0
+    for (const [index, id] of ids.entries()) {
+      markerBytes += Buffer.byteLength(JSON.stringify(id), 'utf8') +
+        (retainedUnavailable.size + index > 0 ? 1 : 0)
     }
     const bytes = Buffer.byteLength(JSON.stringify(frame), 'utf8')
     if (
       bytes > MAX_OUTBOUND_FRAME_BYTES ||
       retained.length + 1 > MAX_HISTORY_REPLAY_FRAMES ||
-      retainedBytes + bytes > MAX_HISTORY_REPLAY_BYTES
+      retainedUnavailable.size + ids.length > MAX_HISTORY_REPLAY_FRAMES ||
+      retainedBytes + bytes + 1 + markerBytes > MAX_HISTORY_REPLAY_BYTES
     ) {
       truncated = true
       break
     }
     retained.push(frame)
-    retainedBytes += bytes
+    retainedBytes += bytes + 1 + markerBytes
+    for (const id of ids) retainedUnavailable.add(id)
   }
   retained.reverse()
-  if (truncated) {
-    retained.unshift({
-      kind: 'error',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: appSessionId,
-      requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
-      code: 'internal_error',
-      message: `Only the ${retained.length} most recent messages are shown.`,
-      retryable: false,
-    })
-  }
+  if (truncated) retained.unshift(truncationFrame(retained.length))
+  availability.unavailableParentToolUseIds = [...retainedUnavailable]
+  retained.push(availability)
   return retained
 }
 

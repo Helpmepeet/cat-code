@@ -548,8 +548,8 @@ export type AppParkMessage = {
  * RENDERER-PARAMETERLESS BY DECISION, and that is the entire security story.
  * The renderer names a session and a verb; it authors no cursor, no offset, no
  * count, no path, so there is nothing renderer-supplied on it for the sidecar
- * to trust and nothing for a compromised renderer to aim. The one non-verb
- * field, `viewAnchorUuid`, is authored by ELECTRON MAIN and overwritten there
+ * to trust and nothing for a compromised renderer to aim. The view fields,
+ * `viewAnchorUuid` and `viewTruncated`, are authored by ELECTRON MAIN and overwritten there
  * on every forward (`stampHistoryViewAnchor`, `app/main/mainDecisions.ts`), so
  * a renderer-supplied value never survives the hop. The sidecar still owns
  * every number: the read ceiling (`MAX_HISTORY_LOAD_EARLIER_BYTES`), how much
@@ -614,6 +614,8 @@ export type HistoryLoadEarlierMessage = {
    * nothing to add", which is the pre-existing behaviour.
    */
   viewAnchorUuid?: string
+  /** Main's replay ring is lossy, including when no message UUID survives. */
+  viewTruncated?: true
 }
 
 /* ------------------------------------------------------------------------- *
@@ -1051,6 +1053,16 @@ export type HistoryReplayCompleteFrame = {
   kind: 'history.replay.complete'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
+}
+
+/** Display-only nested-history availability, retained across renderer reloads. */
+export type HistoryAvailabilityFrame = {
+  kind: 'history.availability'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  unavailableParentToolUseIds: string[]
+  /** Applies to recovered rows, which main deliberately excludes from its ring. */
+  recovered?: true
 }
 
 /**
@@ -3824,6 +3836,7 @@ export type ActivityFrame = {
 export type ServerFramePayload =
   | ReadyFrame
   | HistoryReplayCompleteFrame
+  | HistoryAvailabilityFrame
   | SessionTitleFrame
   | EventFrame
   | TranscriptResetFrame
@@ -3888,6 +3901,7 @@ export type ServerFrameKind = ServerFramePayload['kind']
 const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   ready: true,
   'history.replay.complete': true,
+  'history.availability': true,
   'session-title': true,
   event: true,
   'transcript.reset': true,

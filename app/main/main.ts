@@ -4093,6 +4093,7 @@ function handOff(
   message = stampHistoryViewAnchor(
     message,
     attachmentGate.viewAnchorUuid(sessionId),
+    attachmentGate.viewTruncated(sessionId),
   )
 
   if (!supervisor) {

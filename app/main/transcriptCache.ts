@@ -12,7 +12,7 @@
  * Security posture (approved 2026-07-14; SECURITY-MINIMUM trust-domain parity
  * with the transcript JSONL already at rest engine-side):
  *   - Content is an ALLOWLIST: message `event` frames, generated-image
- *     previews, and truncation-boundary error frames survive `distill`.
+ *     previews, history availability, and truncation-boundary error frames survive `distill`.
  *     `ready`, permission frames, and every operational snapshot (accounts/settings/tasks/goals/agent-config/
  *     extensions/diagnostics) are dropped, so cache hydration can mark nothing
  *     connected/input-enabled and resurrect no stale actionable prompt
@@ -64,6 +64,7 @@ import {
   type TranscriptRunFacts,
 } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { isUnavailableParentToolUseIds } from '../shared/historyAvailability.js'
 import {
   DEFAULT_MAX_BUFFERED_BYTES,
   DEFAULT_MAX_BUFFERED_PREVIEW_BYTES,
@@ -142,10 +143,12 @@ function isUuid(value: unknown): value is string {
 
 /**
  * The distill allowlist: keep only transcript-bearing frames. A `ready`,
- * permission, snapshot, pong, lifecycle, result, or session-title frame is
+ * permission, operational snapshot, pong, lifecycle, result, or session-title frame is
  * DROPPED so a replayed cache can touch nothing but transcript rows.
  */
 function isTranscriptCacheFrame(frame: ServerFrame): boolean {
+  if (frame.kind === 'history.availability') return frame.recovered === undefined &&
+    isUnavailableParentToolUseIds(frame.unavailableParentToolUseIds)
   if (frame.kind === 'generated-image-preview') {
     return (
       typeof frame.toolUseId === 'string' &&

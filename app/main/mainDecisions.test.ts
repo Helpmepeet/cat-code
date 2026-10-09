@@ -1411,6 +1411,7 @@ test('a renderer-authored view anchor is overwritten, never merged', () => {
     type: 'history.loadEarlier',
     requestId: 'req-1',
     viewAnchorUuid: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    viewTruncated: true,
   }
 
   expect(
@@ -1432,6 +1433,7 @@ test('a renderer-authored view anchor is dropped when main has none', () => {
     type: 'history.loadEarlier',
     requestId: 'req-1',
     viewAnchorUuid: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    viewTruncated: true,
   }
 
   expect(stampHistoryViewAnchor(forged, undefined)).toEqual({
@@ -1452,6 +1454,27 @@ test('main stamps its anchor onto a frame that carried none', () => {
     type: 'history.loadEarlier',
     requestId: 'req-2',
     viewAnchorUuid: '00000000-0000-4000-8000-000000000009',
+  })
+})
+
+test('main preserves a truncated view without a surviving anchor', () => {
+  const forged: {
+    type: string
+    requestId: string
+    viewAnchorUuid?: string
+    viewTruncated?: boolean
+  } = {
+    type: 'history.loadEarlier',
+    requestId: 'empty-lossy',
+    viewAnchorUuid: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    viewTruncated: false,
+  }
+  expect(
+    stampHistoryViewAnchor(forged, undefined, true),
+  ).toEqual({
+    type: 'history.loadEarlier',
+    requestId: 'empty-lossy',
+    viewTruncated: true,
   })
 })
 

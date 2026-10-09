@@ -432,13 +432,14 @@ export type SidecarServerOptions = {
   history?: readonly SDKMessage[]
   /** Display loader omitted an older archival prefix before wire capping. */
   historySourceTruncated?: boolean
+  unavailableParentToolUseIds?: readonly string[]
   /**
    * Rebuild the marker-aware display transcript from a retained engine seed.
    * Production supplies the same projector used during initial resume.
    */
   projectHistory?: (
     retainedMessages: Message[],
-  ) => Promise<{ history: SDKMessage[]; truncated: boolean }>
+  ) => Promise<{ history: SDKMessage[]; truncated: boolean; unavailableParentToolUseIds?: string[] }>
   /**
    * The deeper transcript read behind `history.loadEarlier`
    * (decisions/HISTORY-LOAD-EARLIER.md). Defaults to the REAL engine-backed
@@ -574,9 +575,10 @@ export class SidecarServer {
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private history: readonly SDKMessage[]
   private historySourceTruncated: boolean
+  private unavailableParentToolUseIds: readonly string[]
   private readonly projectHistory: ((
     retainedMessages: Message[],
-  ) => Promise<{ history: SDKMessage[]; truncated: boolean }>) | null
+  ) => Promise<{ history: SDKMessage[]; truncated: boolean; unavailableParentToolUseIds?: string[] }>) | null
   private readonly loadEarlierHistory: HistoryLoadEarlierReader
   /**
    * One deeper read per session at a time (decisions/HISTORY-LOAD-EARLIER.md
@@ -842,6 +844,7 @@ export class SidecarServer {
     this.history = options.history ?? []
     this.seedConsumedPeerMessages()
     this.historySourceTruncated = options.historySourceTruncated ?? false
+    this.unavailableParentToolUseIds = options.unavailableParentToolUseIds ?? []
     this.projectHistory = options.projectHistory ?? null
     this.loadEarlierHistory =
       options.loadEarlierHistory ?? readEarlierDisplayHistory
@@ -1257,7 +1260,7 @@ export class SidecarServer {
     this.sendActivity(connection, attachPresence)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
-    this.sendHistoryReplay(connection)
+    this.sendHistoryAvailability(connection, this.sendHistoryReplay(connection))
     this.send(connection, {
       kind: 'history.replay.complete',
       protocolVersion: PROTOCOL_VERSION,
@@ -1265,6 +1268,15 @@ export class SidecarServer {
     })
     queueMicrotask(() => this.publishHandoffReady())
     return connection
+  }
+
+  private sendHistoryAvailability(connection: Connection, ids = this.unavailableParentToolUseIds, recovered = false): void {
+    this.send(connection, {
+      kind: 'history.availability', protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      unavailableParentToolUseIds: [...ids],
+      ...(recovered ? { recovered: true as const } : {}),
+    })
   }
 
   /**
@@ -1295,8 +1307,9 @@ export class SidecarServer {
    * prepareOutboundPayload (clone + JSON-safe) and send (secretGuard + size
    * cap) — the replay adds no security bypass.
    */
-  private sendHistoryReplay(connection: Connection): void {
-    if (this.history.length === 0 && !this.historySourceTruncated) return
+  private sendHistoryReplay(connection: Connection): string[] {
+    const unavailable = new Set(this.unavailableParentToolUseIds)
+    if (this.history.length === 0 && !this.historySourceTruncated) return [...unavailable]
 
     const retained: ServerFrame[] = []
     let retainedBytes = 0
@@ -1307,15 +1320,12 @@ export class SidecarServer {
     // never a mid-history hole.
     for (let i = this.history.length - 1; i >= 0; i--) {
       const message = this.history[i]!
-      const prepared = this.prepareOutboundPayload(
-        createMessageEvent(message),
-        'event',
-        'history replay',
-      )
+      const prepared = this.prepareHistoryPayload(connection, message, 'history replay')
       if (!prepared) {
         // Un-serializable restored message (should not happen for
         // JSONL-round-tripped content) — an omission, so the replay is lossy.
         truncated = true
+        if (typeof message.parent_tool_use_id === 'string') unavailable.add(message.parent_tool_use_id)
         continue
       }
       const frame: ServerFrame = {
@@ -1366,6 +1376,7 @@ export class SidecarServer {
     for (const frame of retained) {
       this.send(connection, frame)
     }
+    return [...unavailable]
   }
 
   removeConnection(connection: Connection): void {
@@ -3884,16 +3895,18 @@ export class SidecarServer {
         ) {
           this.history = []
           this.historySourceTruncated = true
+          this.unavailableParentToolUseIds = []
           this.broadcastTranscriptReset()
           refuse('Conversation history could not be rebuilt after editing.')
           return
         }
-        let projected: { history: SDKMessage[]; truncated: boolean }
+        let projected: { history: SDKMessage[]; truncated: boolean; unavailableParentToolUseIds?: string[] }
         try {
           projected = await this.projectHistory(result.retainedMessages)
         } catch (error) {
           this.history = []
           this.historySourceTruncated = true
+          this.unavailableParentToolUseIds = []
           this.broadcastTranscriptReset()
           refuse(
             error instanceof Error
@@ -3904,6 +3917,7 @@ export class SidecarServer {
         }
         this.history = projected.history
         this.historySourceTruncated = projected.truncated
+        this.unavailableParentToolUseIds = projected.unavailableParentToolUseIds ?? []
         this.broadcastTranscriptResetAndReplay()
         this.sendSessionActionResult(connection, {
           kind: 'session-action.result',
@@ -3983,7 +3997,7 @@ export class SidecarServer {
         protocolVersion: PROTOCOL_VERSION,
         sessionId: this.sessionId,
       })
-      this.sendHistoryReplay(connection)
+      this.sendHistoryAvailability(connection, this.sendHistoryReplay(connection))
     }
   }
 
@@ -4408,6 +4422,20 @@ export class SidecarServer {
     }
 
     return cloned
+  }
+
+  private prepareHistoryPayload(connection: Connection, message: SDKMessage, detail: string) {
+    const prepared = this.prepareOutboundPayload(createMessageEvent(message), 'event', detail)
+    if (prepared && !scanForSecrets(prepared).ok) {
+      // Preserve send's credential rejection/reporting, and let history record
+      // the omitted child rather than publish a complete availability verdict.
+      this.send(connection, {
+        kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: this.sessionId,
+        replay: true, event: prepared,
+      })
+      return null
+    }
+    return prepared
   }
 
   private broadcastEvent(event: AppSessionEvent): void {
@@ -4861,7 +4889,7 @@ export class SidecarServer {
       )
       return
     }
-    const { requestId, viewAnchorUuid } = parsed.data
+    const { requestId, viewAnchorUuid, viewTruncated } = parsed.data
 
     if (this.loadEarlierInFlight) {
       this.sendLoadEarlierResult(connection, requestId, {
@@ -4876,7 +4904,11 @@ export class SidecarServer {
     // Already whole for this reader: a previous read reached the head, so there
     // is provably nothing above it. Answered from the latch, because the read
     // that would confirm it costs the full ceiling plus every subagent file.
-    if (connection.loadEarlierComplete && viewAnchorUuid === undefined) {
+    if (
+      connection.loadEarlierComplete &&
+      viewAnchorUuid === undefined &&
+      !viewTruncated
+    ) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
         message: loadEarlierMessage(0, true),
@@ -4890,16 +4922,16 @@ export class SidecarServer {
     // earlier to reach for: a fresh session's whole conversation was emitted
     // live, not replayed.
     //
-    // Conditional on main having stamped no view anchor, and that condition is
-    // the whole of the fix. "The sidecar replayed nothing" is not the same fact
+    // Conditional on main having reported neither an anchor nor a lossy view. "The sidecar replayed nothing" is not the same fact
     // as "the reader is holding everything": a session started in the app is
     // rebuilt after a renderer reload from main's ring alone, and that ring can
     // have evicted its head. Answering `complete: true` from this side's empty
     // `history` then cleared the boundary row over a truncated transcript and
     // left no route back to the missing prefix, which is the defect this branch
-    // used to cause (2026-09-02 idle-park assessment §6).
+    // used to cause (HISTORY-LOAD-EARLIER.md §The view anchor).
     if (
       viewAnchorUuid === undefined &&
+      !viewTruncated &&
       this.history.length === 0 &&
       !this.historySourceTruncated
     ) {
@@ -4922,13 +4954,18 @@ export class SidecarServer {
     // through that ring — so preferring it can at worst re-send messages the
     // renderer already has (which its uuid dedupe absorbs), and can never leave
     // a gap, which the connection anchor alone can and did.
-    const anchorUuid = viewAnchorUuid ?? connection.loadEarlierAnchorUuid
+    // An explicitly lossy main view with no UUID holds no recoverable display
+    // message. Its empty view supersedes the connection's stale restored tail.
+    const anchorlessView = viewTruncated === true && viewAnchorUuid === undefined
+    const anchorUuid = anchorlessView
+      ? null
+      : viewAnchorUuid ?? connection.loadEarlierAnchorUuid
     // History WAS restored, yet none of what reached this reader carries an
     // identity to diff a deeper read against. Everything read would look
     // missing and the reader would see the conversation twice, so refuse rather
     // than duplicate it. (Not the same case as an empty replay below, where
     // nothing went out and everything read really is missing.)
-    if (anchorUuid === null && connection.loadEarlierReplayed) {
+    if (anchorUuid === null && connection.loadEarlierReplayed && !anchorlessView) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: false,
         message: 'Earlier messages could not be loaded.',
@@ -4966,19 +5003,17 @@ export class SidecarServer {
       }
 
       const missing = read.messages.slice(0, anchorIndex)
+      const unavailable = new Set(read.unavailableParentToolUseIds ?? [])
       let omitted = false
       let oldestSentUuid: string | undefined
       let added = 0
       for (const message of missing) {
-        const prepared = this.prepareOutboundPayload(
-          createMessageEvent(message),
-          'event',
-          'load earlier',
-        )
+        const prepared = this.prepareHistoryPayload(connection, message, 'load earlier')
         if (!prepared) {
           // Un-serializable recovered message: an omission, so the transcript
           // above this point stays incomplete no matter what the loader said.
           omitted = true
+          if (typeof message.parent_tool_use_id === 'string') unavailable.add(message.parent_tool_use_id)
           continue
         }
         this.send(connection, {
@@ -5012,6 +5047,7 @@ export class SidecarServer {
         connection.loadEarlierReplayed = true
       }
       const complete = !read.truncated && !omitted
+      this.sendHistoryAvailability(connection, [...unavailable], true)
       // Latch the head so a repeat request answers without touching disk.
       if (complete) connection.loadEarlierComplete = true
       this.sendLoadEarlierResult(connection, requestId, {
@@ -6332,15 +6368,13 @@ function checkStrictKeys(message: unknown): string | null {
     // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md).
     // Renderer-parameterless by decision: the renderer authors NOTHING but a
     // correlation id, so there is no cursor, offset, count or path to forge.
-    // `viewAnchorUuid` is the one exception and is not renderer-authored: main
-    // stamps it at `forward` from its OWN replay ring, dropping whatever the
-    // renderer sent, so a forged one cannot reach here. It is allowlisted and
-    // uuid-shape-checked all the same, because the sidecar is the trust
-    // boundary and a main-side check is never sufficient on its own
-    // (SECURITY-MINIMUM §2 R2). It authorizes nothing: it is compared for
-    // equality against uuids from this sidecar's own disk read. Any OTHER key
+    // The view anchor and truncation marker are main-authored: main
+    // stamps them at `forward` from its OWN replay ring, dropping whatever the
+    // renderer sent. Both are validated here too, because this is the trust
+    // boundary (SECURITY-MINIMUM §2 R2). Neither steers the file or read budget;
+    // the anchor is equality-compared against the sidecar's own read. Any OTHER key
     // is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
-    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid'])],
+    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid', 'viewTruncated'])],
     // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds. No preload
     // channel forwards either one and no renderer can author one, but they are
     // on the closed allowlist all the same, because the sidecar is the trust
@@ -6457,21 +6491,22 @@ const appParkMessageSchema = z.object({
  * engine's shared `appClientMessageSchema`. The frame carries no
  * renderer-authored state beyond a length-bounded `requestId`, and
  * `checkStrictKeys` has already REJECTED (not stripped) any key beyond
- * `{type, requestId, viewAnchorUuid}`, so this parse only enforces the value
- * types. Everything the read is bounded by — which file, how many bytes,
+ * `{type, requestId, viewAnchorUuid, viewTruncated}`. This parse enforces their
+ * value types. Everything the read is bounded by — which file, how many bytes,
  * whether one is already running — is decided on this side of the boundary and
  * appears nowhere here.
  *
  * `viewAnchorUuid` is main-authored (see the allowlist comment above) and
- * optional: absent means main had nothing to add, which is the pre-existing
- * behaviour. Shape-checked with the same uuid regex the edit-from-message verbs
- * use, because it is only ever equality-compared against `randomUUID()` values
+ * optional: absent alone does not establish completeness. `viewTruncated`
+ * retains main's loss evidence even without a message UUID. The anchor uses
+ * the same uuid regex as the edit-from-message verbs, because it is only ever equality-compared against `randomUUID()` values
  * this sidecar read off its own transcript — anything else could never match,
  * so admitting it would buy nothing.
  */
 const historyLoadEarlierMessageSchema = z.object({
   type: z.literal('history.loadEarlier'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  viewTruncated: z.literal(true).optional(),
   viewAnchorUuid: z
     .string()
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i)

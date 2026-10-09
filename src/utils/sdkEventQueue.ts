@@ -72,47 +72,67 @@ export type SdkEvent =
   | SessionStateChangedEvent
 
 const MAX_QUEUE_SIZE = 1000
-const queue: SdkEvent[] = []
+const queue: { event: SdkEvent; terminalKey?: string }[] = []
 const recentTerminalTaskRuns = new Set<string>()
+let capacityError: Error | undefined
 
-export function enqueueSdkEvent(event: SdkEvent, taskRunId?: string): void {
+export function enqueueSdkEvent(event: SdkEvent, taskRunId?: string): boolean {
   // SDK events are only consumed (drained) in headless/streaming mode.
   // In TUI mode they would accumulate up to the cap and never be read.
   if (!getIsNonInteractiveSession()) {
-    return
+    return false
   }
-  if (event.type === 'system' && event.subtype === 'task_started') {
+  const terminalKey =
+    event.subtype === 'task_notification' && event.task_id
+      ? `${JSON.stringify(event.task_id)}:${JSON.stringify(taskRunId ?? null)}`
+      : undefined
+  if (
+    terminalKey &&
+    (recentTerminalTaskRuns.has(terminalKey) ||
+      queue.some(entry => entry.terminalKey === terminalKey))
+  ) {
+    return false
+  }
+  if (queue.length >= MAX_QUEUE_SIZE) {
+    // Progress is expendable; accepted lifecycle bookends are not. In the
+    // lifecycle-only case report backpressure at the consumer boundary, after
+    // draining retained rows. Throwing here could interrupt task kill/finally
+    // cleanup, and claiming the rejected terminal would prevent its retry.
+    const progressIndex = queue.findIndex(
+      entry => entry.event.subtype === 'task_progress',
+    )
+    if (progressIndex >= 0) {
+      queue.splice(progressIndex, 1)
+    } else if (event.subtype === 'task_progress') {
+      return false
+    } else {
+      capacityError ??= new Error('SDK lifecycle event queue capacity exceeded')
+      return false
+    }
+  }
+  if (event.subtype === 'task_started') {
     const taskKeyPrefix = `${JSON.stringify(event.task_id)}:`
     for (const key of recentTerminalTaskRuns) {
       if (key.startsWith(taskKeyPrefix)) recentTerminalTaskRuns.delete(key)
     }
-  } else if (
-    event.type === 'system' &&
-    event.subtype === 'task_notification' &&
-    !claimTaskTerminatedSdkEvent(event.task_id, taskRunId)
-  ) {
-    return
+    // Keep the earlier terminal row in order, but do not let its identity
+    // suppress the closing bookend of a newly accepted start with the same ID.
+    for (const entry of queue) {
+      if (entry.terminalKey?.startsWith(taskKeyPrefix)) {
+        entry.terminalKey = undefined
+      }
+    }
   }
-  if (queue.length >= MAX_QUEUE_SIZE) {
-    queue.shift()
-  }
-  queue.push(event)
+  queue.push({ event, terminalKey })
+  return true
 }
 
-/** Claim the single terminal SDK bookend for one task run across queue consumers. */
-export function claimTaskTerminatedSdkEvent(
-  taskId: string,
-  taskRunId?: string,
-): boolean {
-  if (!taskId) return true
-  const key = `${JSON.stringify(taskId)}:${JSON.stringify(taskRunId ?? null)}`
-  if (recentTerminalTaskRuns.has(key)) return false
+function rememberDeliveredTerminal(key: string): void {
   recentTerminalTaskRuns.add(key)
   if (recentTerminalTaskRuns.size > MAX_QUEUE_SIZE) {
     const oldest = recentTerminalTaskRuns.values().next()
     if (!oldest.done) recentTerminalTaskRuns.delete(oldest.value)
   }
-  return true
 }
 
 export function drainSdkEvents(): Array<
@@ -122,11 +142,26 @@ export function drainSdkEvents(): Array<
     return []
   }
   const events = queue.splice(0)
-  return events.map(e => ({
-    ...e,
-    uuid: randomUUID(),
-    session_id: getSessionId(),
-  }))
+  return events.map(({ event, terminalKey }) => {
+    if (terminalKey) rememberDeliveredTerminal(terminalKey)
+    return {
+      ...event,
+      uuid: randomUUID(),
+      session_id: getSessionId(),
+    }
+  })
+}
+
+/** Transfer accepted lifecycle rows before reporting rejected SDK output. */
+export function flushSdkEvents(output: {
+  enqueue(event: SdkEvent & { uuid: UUID; session_id: string }): void
+}): void {
+  for (const event of drainSdkEvents()) {
+    output.enqueue(event)
+  }
+  const error = capacityError
+  capacityError = undefined
+  if (error) throw error
 }
 
 /**

@@ -1,4 +1,11 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { getSessionId, getSessionProjectDir, switchSession } from '../../src/bootstrap/state.js'
+import { asAgentId, asSessionId } from '../../src/types/ids.js'
+import { getAgentTranscriptPathForSession, writeAgentMetadata } from '../../src/utils/sessionStorage.js'
 
 import { MAX_HISTORY_REPLAY_BYTES, MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
 
@@ -12,6 +19,7 @@ import {
   loadBranchesWithinBudget,
   projectBranchFrames,
   spliceSubagentBranches,
+  withRestoredSubagentHistory,
 } from './subagentHistory.js'
 
 function spawnFrame(toolUseId: string, uuid: string): SDKMessage {
@@ -183,7 +191,7 @@ describe('restored subagent branches', () => {
 
   test('stops reading reachable sidechains as soon as the replay budget is full', async () => {
     const calls: string[] = []
-    const branches = await loadBranchesWithinBudget(
+    const { branches, unavailableParentToolUseIds } = await loadBranchesWithinBudget(
       'session' as never,
       [
         { agentId: 'first' as never, parentToolUseId: 'tu-1', agentName: undefined },
@@ -199,11 +207,12 @@ describe('restored subagent branches', () => {
 
     expect(calls).toEqual(['first'])
     expect(branches).toHaveLength(1)
+    expect(unavailableParentToolUseIds).toEqual(['tu-2'])
   })
 
   test('skips an oversized branch but still reads a later branch that fits', async () => {
     const calls: string[] = []
-    const branches = await loadBranchesWithinBudget(
+    const { branches, unavailableParentToolUseIds } = await loadBranchesWithinBudget(
       'session' as never,
       [
         { agentId: 'oversized' as never, parentToolUseId: 'tu-large', agentName: undefined },
@@ -228,11 +237,12 @@ describe('restored subagent branches', () => {
 
     expect(calls).toEqual(['oversized', 'small'])
     expect(branches.map(branch => branch.parentToolUseId)).toEqual(['tu-small'])
+    expect(unavailableParentToolUseIds).toEqual(['tu-large'])
   })
 
   test('rejected branches spend the aggregate source byte budget', async () => {
     const calls: string[] = []
-    const branches = await loadBranchesWithinBudget(
+    const { branches, unavailableParentToolUseIds } = await loadBranchesWithinBudget(
       'session',
       [
         { agentId: 'oversized' as never, parentToolUseId: 'large', agentName: undefined },
@@ -251,11 +261,12 @@ describe('restored subagent branches', () => {
     )
     expect(calls).toEqual(['oversized'])
     expect(branches).toEqual([])
+    expect(unavailableParentToolUseIds).toEqual(['large', 'small'])
   })
 
   test('rejected branches also spend the aggregate message work budget', async () => {
     const calls: string[] = []
-    const branches = await loadBranchesWithinBudget(
+    const { branches, unavailableParentToolUseIds } = await loadBranchesWithinBudget(
       'session',
       [
         { agentId: 'many' as never, parentToolUseId: 'many', agentName: undefined },
@@ -274,10 +285,11 @@ describe('restored subagent branches', () => {
     )
     expect(calls).toEqual(['many'])
     expect(branches).toEqual([])
+    expect(unavailableParentToolUseIds).toEqual(['many', 'small'])
   })
 
   test('a branch cannot spend more than the projected byte budget', async () => {
-    const branches = await loadBranchesWithinBudget(
+    const { branches, unavailableParentToolUseIds } = await loadBranchesWithinBudget(
       'session',
       [{ agentId: 'large' as never, parentToolUseId: 'large', agentName: undefined }],
       2,
@@ -289,6 +301,7 @@ describe('restored subagent branches', () => {
       }) as never,
     )
     expect(branches).toEqual([])
+    expect(unavailableParentToolUseIds).toEqual(['large'])
   })
 
   test('ignores non-tool_use content when looking for a parent', () => {
@@ -301,5 +314,70 @@ describe('restored subagent branches', () => {
     // The join is on the tool_use block id, never on a frame uuid that happens
     // to match.
     expect(uuidsOf(spliced)).toEqual(['text-only'])
+  })
+})
+
+// Exercises the real bounded reader and metadata join: complete parent history
+// must not advertise an omitted worker as having no steps.
+describe('restored subagent history availability', () => {
+  const originalId = getSessionId()
+  const originalProject = getSessionProjectDir()
+  let directory: string
+  let sessionId: string
+
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'cc-subagent-availability-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), directory)
+  })
+  afterEach(() => {
+    switchSession(originalId, originalProject)
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  async function branch(agent: string, parent: string, messages: string[], inheritedUuid?: string): Promise<void> {
+    const agentId = asAgentId(agent)
+    await writeAgentMetadata(agentId, {
+      agentType: 'Explore', parentSessionId: sessionId, parentToolUseId: parent,
+      spawnedAt: '2026-10-09T00:00:00.000Z',
+    })
+    const path = getAgentTranscriptPathForSession(sessionId, agentId)
+    mkdirSync(dirname(path), { recursive: true })
+    const uuids = messages.map((_, index) => index === 0 && inheritedUuid ? inheritedUuid : randomUUID())
+    writeFileSync(path, messages.map((text, index) => JSON.stringify({
+      type: 'assistant', agentId, sessionId, isSidechain: true,
+      uuid: uuids[index], parentUuid: index === 0 ? null : uuids[index - 1],
+      timestamp: '2026-10-09T00:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    })).join('\n') + '\n')
+  }
+
+  test('a reachable worker omitted by the byte cap is identified without truncating parent history', async () => {
+    await branch('large', 'tu-large', ['x'.repeat(MAX_HISTORY_REPLAY_BYTES + 1024), 'recent work'])
+    await branch('unreachable', 'tu-absent', ['not in this restored window'])
+    const history = [spawnFrame('tu-large', 'spawn'), plainFrame('completed')]
+    const restored = await withRestoredSubagentHistory(sessionId, history)
+    expect(restored.unavailableParentToolUseIds).toEqual(['tu-large'])
+    expect(restored.history).toEqual(history)
+  })
+
+  test('exhausted replay headroom identifies reachable workers without reading their steps', async () => {
+    await branch('worker', 'tu-worker', ['saved work'])
+    const history = [spawnFrame('tu-worker', 'spawn'), ...Array.from(
+      { length: MAX_HISTORY_REPLAY_FRAMES - 1 }, (_, index) => plainFrame(`row-${index}`),
+    )]
+    const restored = await withRestoredSubagentHistory(sessionId, history)
+    expect(restored.unavailableParentToolUseIds).toEqual(['tu-worker'])
+    expect(restored.history).toHaveLength(MAX_HISTORY_REPLAY_FRAMES)
+  })
+
+  test('empty workers and unreachable branches are not reported as omitted steps', async () => {
+    await branch('empty', 'tu-empty', [])
+    await branch('inherited', 'tu-inherited', ['parent context'], 'inherited-uuid')
+    await branch('unreachable', 'tu-absent', ['unreachable steps'])
+    const history = [spawnFrame('tu-empty', 'spawn'), spawnFrame('tu-inherited', 'inherited-spawn'), plainFrame('inherited-uuid')]
+    const restored = await withRestoredSubagentHistory(sessionId, history)
+    expect(restored.unavailableParentToolUseIds).toEqual([])
+    expect(restored.history).toEqual(history)
   })
 })

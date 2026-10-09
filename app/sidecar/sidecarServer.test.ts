@@ -8057,12 +8057,13 @@ test('message-targeted edit resets, replays retained history, then returns the p
   expect(first.received.map(frame => frame.kind)).toEqual([
     'transcript.reset',
     'event',
+    'history.availability',
     'session-action.result',
   ])
   expect(
     first.received[1]?.kind === 'event' && first.received[1].replay,
   ).toBe(true)
-  expect(first.received[2]).toMatchObject({
+  expect(first.received[3]).toMatchObject({
     kind: 'session-action.result',
     requestId: 'edit-1',
     verb: 'editFromMessage',
@@ -8090,7 +8091,8 @@ test('message-targeted edit resets, replays retained history, then returns the p
     frame.event.type === 'message' && frame.event.message.uuid === retainedMessage.uuid,
   )
   const completeIndex = later.received.findIndex(frame => frame.kind === 'history.replay.complete')
-  expect(completeIndex).toBe(replayIndex + 1)
+  expect(later.received[replayIndex + 1]?.kind).toBe('history.availability')
+  expect(completeIndex).toBe(replayIndex + 2)
 })
 
 test('message-targeted actions reject forged fields and malformed targets before effect', async () => {

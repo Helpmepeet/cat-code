@@ -6401,6 +6401,14 @@ test('an incomplete transcript offers the way out of itself', () => {
   expect(html).toContain('Load earlier messages')
 })
 
+test('an empty truncated chat renders its recovery control through the projector', () => {
+  let state = projectServerFrame(createTranscriptState(), inspectorReady('empty-history'))
+  state = projectServerFrame(state, { kind: 'error', protocolVersion: 3, sessionId: 'empty-history',
+    requestId: 'catcode.history-truncated', code: 'internal_error', message: 'incomplete', retryable: false })
+  const html = renderToStaticMarkup(<TranscriptView state={state} activeSessionId="empty-history" onLoadEarlier={() => {}} />)
+  expect(html).toContain('Load earlier messages')
+})
+
 test('a whole transcript has no boundary row, so it has no control', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView

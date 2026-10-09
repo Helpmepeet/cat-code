@@ -35,6 +35,7 @@ import {
   type TranscriptBackfillSessionResult,
 } from '../shared/transcriptBackfill.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
+import { MAX_HISTORY_REPLAY_BYTES, MAX_TEXT_FIELD_CHARS } from '../shared/limits.js'
 import type {
   SessionLocation,
   SessionRelocation,
@@ -497,4 +498,121 @@ test('backfill reads a real moved conversation from another launch folder withou
   expect(unreadable.result.stderr).toContain('Conversation move record could not be read')
   expect(readFileSync(transcriptPath, 'utf8')).toBe(rawTranscript)
   expect(readFileSync(recoveryPath, 'utf8')).toBe(recoveryText)
+}, 120_000)
+
+// The parent events fit the replay ceiling independently. A large omitted-worker
+// snapshot must share that same ceiling rather than invalidate the whole cache.
+test('worker availability shares the replay byte budget without losing markers for retained Agent cards', async () => {
+  const configHome = temp('catcode-plb-availability-config-')
+  const cwd = temp('catcode-plb-availability-cwd-')
+  const engineSessionId = randomUUID()
+  const appSessionId = randomUUID()
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configHome, TEST_ENABLE_SESSION_PERSISTENCE: '1' }
+  const minted = await spawnAndCollect(['bun', 'run', minter, engineSessionId, 'availability-budget'], { cwd, env })
+  expect(minted.code).toBe(0)
+  const transcriptLine = minted.stdout.split('\n').find(line => line.startsWith('MINTED_TRANSCRIPT_PATH='))
+  expect(transcriptLine).toBeDefined()
+  const transcriptPath = transcriptLine!.slice('MINTED_TRANSCRIPT_PATH='.length)
+  const seed = readFileSync(transcriptPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const assistant = seed.find(entry => entry.type === 'assistant')!
+  const user = seed.find(entry => entry.type === 'user')!
+  const agentDir = join(dirname(transcriptPath), engineSessionId, 'subagents')
+  mkdirSync(agentDir, { recursive: true })
+  const records: Record<string, unknown>[] = []
+  let parentUuid: string | null = null
+  const append = (base: typeof user, content: unknown[]) => {
+    const uuid = randomUUID()
+    records.push({ ...base, uuid, parentUuid, timestamp: new Date(Date.parse('2026-10-09T00:00:00.000Z') + records.length).toISOString(),
+      message: { ...base.message, content, ...(base.type === 'assistant' ? { id: randomUUID() } : {}) } })
+    parentUuid = uuid
+  }
+  append(user, [{ type: 'text', text: 'Investigate all workers' }])
+  for (let index = 0; index < 100; index++) {
+    const toolId = `long-parent-${index}-`.padEnd(MAX_TEXT_FIELD_CHARS, 'x')
+    append(assistant, [{ type: 'tool_use', id: toolId, name: 'Agent', input: { description: 'saved worker' } }])
+    append(user, [{ type: 'tool_result', tool_use_id: toolId, content: 'Completed' }])
+    writeFileSync(join(agentDir, `agent-worker-${index}.meta.json`), JSON.stringify({
+      agentType: 'Explore', parentSessionId: engineSessionId, parentToolUseId: toolId,
+      spawnedAt: new Date(Date.parse('2026-10-09T00:00:00.000Z') + index).toISOString(),
+    }))
+  }
+  const recentText = 'recent answer ' + 'x'.repeat(Math.floor(MAX_HISTORY_REPLAY_BYTES * 0.80))
+  append(assistant, [{ type: 'text', text: recentText }])
+  writeFileSync(transcriptPath, records.map(record => JSON.stringify(record)).join('\n') + '\n')
+  // The first reachable sidechain consumes the aggregate source-read budget,
+  // leaving all known worker cards with unavailable history, without live runs.
+  writeFileSync(join(agentDir, 'agent-worker-0.jsonl'), JSON.stringify({
+    ...assistant, uuid: randomUUID(), parentUuid: null, isSidechain: true, agentId: 'worker-0',
+    message: { ...assistant.message, content: [{ type: 'text', text: 'x'.repeat(MAX_HISTORY_REPLAY_BYTES + 2048) }] },
+  }) + '\n')
+  const run = await spawnAndCollect(['bun', 'run', worker, '--bare'], { cwd, env }, JSON.stringify({
+    version: TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+    items: [{ appSessionId, engineSessionId, transcriptPath }],
+  }))
+  expect(run.code).toBe(0)
+  const parsed = run.stdout.trim().split('\n').map(line => parseTranscriptBackfillResult(JSON.parse(line)))
+  expect(parsed.every(Boolean)).toBe(true)
+  const sessions = parsed.filter((record): record is TranscriptBackfillSessionResult => record?.type === 'session')
+  expect(sessions).toHaveLength(1)
+  const frames = sessions[0]!.frames
+  const availability = frames.find(frame => frame.kind === 'history.availability')!
+  expect(availability.kind).toBe('history.availability')
+  if (availability.kind !== 'history.availability') throw new Error('missing availability snapshot')
+  const retainedParents = frames.flatMap(frame => {
+    if (frame.kind !== 'event' || frame.event.type !== 'message') return []
+    const message = frame.event.message as { type: string; message?: { content?: unknown[] } }
+    if (message.type !== 'assistant') return []
+    return (message.message?.content ?? []).flatMap(block => {
+      const value = block as { type: string; id?: string }
+      return value.type === 'tool_use' ? [value.id!] : []
+    })
+  })
+  expect(retainedParents.length).toBeGreaterThan(0)
+  expect(retainedParents.length).toBeLessThan(100)
+  expect(new Set(availability.unavailableParentToolUseIds)).toEqual(new Set(retainedParents))
+  expect(Buffer.byteLength(JSON.stringify(frames), 'utf8')).toBeLessThanOrEqual(MAX_HISTORY_REPLAY_BYTES)
+  expect(frames.some(frame => frame.kind === 'error')).toBe(true)
+  const last = frames.findLast(frame => frame.kind === 'event')
+  expect(JSON.stringify(last)).toContain(recentText)
+}, 120_000)
+
+test('an omitted child event keeps its retained Agent card marked unavailable beside surviving child steps', async () => {
+  const configHome = temp('catcode-plb-partial-child-config-')
+  const cwd = temp('catcode-plb-partial-child-cwd-')
+  const engineSessionId = randomUUID()
+  const appSessionId = randomUUID()
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configHome, TEST_ENABLE_SESSION_PERSISTENCE: '1' }
+  const minted = await spawnAndCollect(['bun', 'run', minter, engineSessionId, 'partial-child', '--subagent-branch'], { cwd, env })
+  expect(minted.code).toBe(0)
+  const transcriptPath = minted.stdout.split('\n').find(line => line.startsWith('MINTED_TRANSCRIPT_PATH='))!
+    .slice('MINTED_TRANSCRIPT_PATH='.length)
+  const parentId = minted.stdout.split('\n').find(line => line.startsWith('MINTED_SUBAGENT_TOOL_USE_ID='))!
+    .slice('MINTED_SUBAGENT_TOOL_USE_ID='.length)
+  const agentPath = join(dirname(transcriptPath), engineSessionId, 'subagents', 'agent-branch-agent-partial-child.jsonl')
+  const child = JSON.parse(readFileSync(agentPath, 'utf8').split('\n').find(Boolean)!)
+  const blockedUuid = randomUUID()
+  const blocked = { ...child, uuid: blockedUuid, parentUuid: null,
+    message: { ...child.message, id: randomUUID(), content: [
+      { type: 'tool_use', id: 'child-hidden-tool', name: 'Read', input: { api_key: 'blocked-fixture' } },
+    ] },
+  }
+  const visible = { ...child, uuid: randomUUID(), parentUuid: blockedUuid,
+    message: { ...child.message, id: randomUUID(), content: [{ type: 'text', text: 'surviving child step' }] },
+  }
+  writeFileSync(agentPath, JSON.stringify(blocked) + '\n' + JSON.stringify(visible) + '\n')
+  const run = await spawnAndCollect(['bun', 'run', worker, '--bare'], { cwd, env }, JSON.stringify({
+    version: TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+    items: [{ appSessionId, engineSessionId, transcriptPath }],
+  }))
+  expect(run.code).toBe(0)
+  const records = run.stdout.trim().split('\n').map(line => parseTranscriptBackfillResult(JSON.parse(line)))
+  expect(records.every(Boolean)).toBe(true)
+  const result = records.find((record): record is TranscriptBackfillSessionResult => record?.type === 'session')
+  expect(result).toBeDefined()
+  expect(JSON.stringify(result)).toContain('surviving child step')
+  expect(JSON.stringify(result)).not.toContain('blocked-fixture')
+  const availability = result!.frames.find(frame => frame.kind === 'history.availability')
+  expect(availability?.kind).toBe('history.availability')
+  if (availability?.kind !== 'history.availability') throw new Error('missing availability snapshot')
+  expect(availability.unavailableParentToolUseIds).toEqual([parentId])
 }, 120_000)

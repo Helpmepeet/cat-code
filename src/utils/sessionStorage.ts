@@ -5893,9 +5893,8 @@ export async function getDisplayAgentTranscriptForSession(
         ({ isSidechain, parentUuid, ...message }) => message,
       ),
       bytesRead: loaded.sourceBytesRead,
-      // A partial branch has no independent truncation row on the wire. Keep
-      // its card in the existing unavailable-history state rather than present
-      // a suffix as though it were a complete worker conversation.
+      // The display join reports this omission against its parent card instead
+      // of presenting a suffix as a complete worker conversation.
       truncated: loaded.sourceTruncated || capped,
     }
   } catch (error) {

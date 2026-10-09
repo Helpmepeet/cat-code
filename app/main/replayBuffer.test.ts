@@ -48,6 +48,7 @@ const SID: SessionId = 'sess-1'
  */
 const ATTACH_BURST_KINDS = [
   'permission.context',
+  'history.availability',
   'settings.snapshot',
   'agent-config.snapshot',
   'thread-goal.snapshot',
@@ -186,6 +187,7 @@ test('transcript reset is a ring barrier that keeps ready and sticky state', () 
   const buffer = new FrameReplayBuffer(2)
   buffer.record(SID, readyFrame())
   buffer.record(SID, attachSnapshotFrame('settings.snapshot'))
+  buffer.record(SID, attachSnapshotFrame('history.availability'))
   buffer.record(SID, pongFrame('discarded-a'))
   buffer.record(SID, pongFrame('discarded-b'))
   buffer.record(SID, pongFrame('discarded-c'))
