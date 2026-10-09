@@ -305,7 +305,8 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   const projectContextProbe = await child([resumeProbe, engineSessionId, marker, '--catalog'], projectCwd, configHome)
   if (projectContextProbe.code !== 0) throw new Error(projectContextProbe.stderr)
   const projectContext = JSON.parse(value(projectContextProbe.stdout, 'RESUME_RESULT')) as {
-    instructionContext: string; invokedSkillPaths: string[]; discoveredSkillNames: string[]; hasHistoricalSkillListing: boolean
+    instructionContext: string; invokedSkillPaths: string[]; discoveredSkillNames: string[]; hasArchivedHistoricalSkillListing: boolean
+    archivedInvokedSkillPaths: string[]
     historyCwd: string; historyBinding: string; catalog: SessionsCatalogSnapshot
   }
   expect(projectContext.instructionContext).toContain('PROJECT_CONTEXT_MARKER')
@@ -314,7 +315,9 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   expect(projectContext.invokedSkillPaths.some(path => path.startsWith(configHome))).toBe(true)
   expect(projectContext.discoveredSkillNames).toContain('project-only')
   expect(projectContext.discoveredSkillNames).not.toContain('chat-only')
-  expect(projectContext.hasHistoricalSkillListing).toBe(false)
+  expect(projectContext.hasArchivedHistoricalSkillListing).toBe(true)
+  expect(projectContext.archivedInvokedSkillPaths.some(path => path.startsWith(original.cwd))).toBe(true)
+  expect(projectContext.archivedInvokedSkillPaths.some(path => path.startsWith(configHome))).toBe(true)
   expect(projectContext.historyCwd).toBe(projectCwd)
   expect(projectContext.historyBinding).toBe('project')
   expect(resolveOpenHistorySession(engineSessionId, [], projectContext.catalog)).toMatchObject({
@@ -501,7 +504,9 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   expect(chatContext.invokedSkillPaths.some(path => path.startsWith(configHome))).toBe(true)
   expect(chatContext.discoveredSkillNames).toContain('chat-only')
   expect(chatContext.discoveredSkillNames).not.toContain('project-only')
-  expect(chatContext.hasHistoricalSkillListing).toBe(false)
+  expect(chatContext.hasArchivedHistoricalSkillListing).toBe(true)
+  expect(chatContext.archivedInvokedSkillPaths.some(path => path.startsWith(original.cwd))).toBe(true)
+  expect(chatContext.archivedInvokedSkillPaths.some(path => path.startsWith(configHome))).toBe(true)
   expect(chatContext.historyCwd).toBe(original.cwd)
   expect(chatContext.historyBinding).toBe('managed')
   expect(resolveOpenHistorySession(engineSessionId, [], chatContext.catalog)).toMatchObject({

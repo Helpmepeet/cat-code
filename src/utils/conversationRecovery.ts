@@ -29,6 +29,7 @@ import {
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../constants/xml.js'
 import { suppressNextSkillListing } from './attachments.js'
+import { getWorkspaceResumeAttachmentView, markWorkspaceResumeAttachment } from './workspaceResumeAttachments.js'
 import {
   copyFileHistoryForResume,
   type FileHistorySnapshot,
@@ -524,8 +525,12 @@ export function restoreSkillStateFromMessages(messages: Message[]): void {
     if (message.type !== 'attachment') {
       continue
     }
-    if (message.attachment.type === 'invoked_skills') {
-      for (const skill of message.attachment.skills) {
+    const archivedAttachment = message.attachment as import('./attachments.js').Attachment
+    const projectedAttachment = getWorkspaceResumeAttachmentView(archivedAttachment)
+    if (projectedAttachment === null) continue
+    const attachment = projectedAttachment ?? archivedAttachment
+    if (attachment.type === 'invoked_skills') {
+      for (const skill of attachment.skills) {
         if (skill.name && skill.path && skill.content) {
           // Resume only happens for the main session, so agentId is null
           addInvokedSkill(skill.name, skill.path, skill.content, null)
@@ -536,7 +541,7 @@ export function restoreSkillStateFromMessages(messages: Message[]): void {
     // in the transcript the model is about to see. sentSkillNames is
     // process-local, so without this every resume re-announces the same
     // ~600 tokens. Fire-once latch; consumed on the first attachment pass.
-    if (message.attachment.type === 'skill_listing') {
+    if (attachment.type === 'skill_listing') {
       suppressNextSkillListing()
     }
   }
@@ -727,17 +732,21 @@ export async function loadConversationForResume(
           if (wasInside(relocation.target.cwd, path)) return false
           return [...formerRoots].some(root => wasInside(root, path))
         }
-        // Historical discussion stays; automatic skill reinjection must follow
-        // the destination. This also prevents old listing suppression after compaction.
-        messages = messages!.flatMap<Message>(message => {
-          if (message.type !== 'attachment') return [message]
-          const attachment = message.attachment as { type?: string; skills?: Array<{ name: string; path: string; content: string }> }
-          if (attachment.type === 'skill_listing') return []
-          if (attachment.type !== 'invoked_skills' || !Array.isArray(attachment.skills)) return [message]
-          return [{ ...message, attachment: { ...attachment,
-            skills: attachment.skills.filter(skill => !belongsToFormerProject(skill.path)),
-          } } as Message]
-        })
+        // Keep the archived transcript and fixed V1 proof intact. The
+        // attachment view is applied only when restoring prompt skill state or
+        // rendering an attachment for the provider.
+        for (const message of messages!) {
+          if (message.type !== 'attachment') continue
+          const attachment = message.attachment as import('./attachments.js').Attachment
+          if (attachment.type === 'skill_listing') {
+            markWorkspaceResumeAttachment(attachment, null)
+          } else if (attachment.type === 'invoked_skills' && Array.isArray(attachment.skills)) {
+            markWorkspaceResumeAttachment(attachment, {
+              ...attachment,
+              skills: attachment.skills.filter(skill => !belongsToFormerProject(skill.path)),
+            })
+          }
+        }
       }
     }
     restoreSkillStateFromMessages(messages!)

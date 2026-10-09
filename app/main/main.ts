@@ -3211,8 +3211,10 @@ function registerHostControlPlane(): void {
         return Promise.resolve({ ok: false, error: { code: 'branch_unavailable', message: 'Wait for the branch switch to finish before closing this chat.' } })
       }
       if (workspaceJump?.isReserved(sessionId)) {
-        void workspaceJump.cancel(sessionId, undefined, 'close')
-        return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Workspace change cancelled. Wait for it to settle before closing.' } })
+        void workspaceJump.cancel(sessionId, undefined, 'close').catch(() => {
+          logOperational('diagnostic', 'warn', { source: 'workspaceJumpClose', reason: 'cancel_rejected' }, sessionId)
+        })
+        return Promise.resolve({ ok: false, error: { code: 'session_busy', message: 'This chat is finishing a workspace change. Try closing it again shortly.' } })
       }
       return host.closeSession(sessionId)
     },

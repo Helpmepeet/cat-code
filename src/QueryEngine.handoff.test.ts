@@ -58,6 +58,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   process.env.CLAUDE_CODE_SIMPLE = '1'
+  bootstrap.clearInvokedSkills()
   for (const spy of spies.splice(0)) spy.mockRestore()
   await storage.flushSessionStorage()
   await releaseActiveTranscriptLease()
@@ -564,6 +565,136 @@ function handoffConfiguration(admission = true) {
     observerGeneration: generation, origin: 'fresh' as const, recover: false }
 }
 
+test('relocated continuation keeps the archive intact and filters only former-workspace skill context', async () => {
+  const { createUserMessage, normalizeMessages, normalizeMessagesForAPI } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const { writeSessionRelocation } = await import('./utils/sessionRelocationState.js')
+  const sessionId = bootstrap.getSessionId()
+  const targetCwd = await fsPromises.realpath(join(root, 'workspace'))
+  const formerCwd = join(root, 'former-project')
+  mkdirSync(formerCwd, { recursive: true })
+  bootstrap.switchSession(asSessionId(sessionId), targetCwd)
+  shell.setCwd(targetCwd)
+  expect(bootstrap.getCwdState()).toBe(targetCwd)
+  const original = { cwd: formerCwd, binding: { kind: 'managed' as const, storageRootId: randomUUID(), storageId: randomUUID() } }
+  const target = { cwd: targetCwd, binding: { kind: 'project' as const } }
+  const relocation = { version: 1 as const, engineSessionId: sessionId, appSessionId: randomUUID(), phase: 'complete' as const,
+    original, source: original, target, controls: { mode: 'default' as const }, backup: join(root, 'backup'), movedAt: 1,
+    transitions: [{ id: randomUUID(), afterFrameId: null, source: original, target, movedAt: 1 }] }
+  writeSessionRelocation(relocation)
+
+  const user = createUserMessage({ content: 'ARCHIVE_USER_MARKER preserve this request' })
+  const listing = { type: 'attachment', uuid: randomUUID(), timestamp: new Date().toISOString(),
+    attachment: { type: 'skill_listing', content: 'SOURCE_ONLY_LISTING_MARKER', skillCount: 1, isInitial: true } } as Message
+  const invoked = { type: 'attachment', uuid: randomUUID(), timestamp: new Date().toISOString(),
+    attachment: { type: 'invoked_skills', skills: [
+      { name: 'FormerSkill', path: join(formerCwd, '.cat-code', 'skills', 'former', 'SKILL.md'), content: 'FORMER_SKILL_MARKER' },
+      { name: 'DestinationSkill', path: join(targetCwd, '.cat-code', 'skills', 'destination', 'SKILL.md'), content: 'CURRENT_SKILL_MARKER' },
+      { name: 'GlobalSkill', path: join(process.env.CLAUDE_CONFIG_DIR!, 'skills', 'global', 'SKILL.md'), content: 'GLOBAL_SKILL_MARKER' },
+    ] } } as Message
+  const toolCall = assistant([{ type: 'tool_use', id: 'archived-tool-use', name: 'HistoricalTool', input: {} }])
+  const toolResult = createUserMessage({ sourceToolAssistantUUID: toolCall.uuid as UUID,
+    content: [{ type: 'tool_result', tool_use_id: 'archived-tool-use', content: 'ARCHIVE_TOOL_RESULT_MARKER' }] })
+  const savedProgress = assistant([{ type: 'text', text: 'saved progress before the move' }])
+  const archived = [user, listing, invoked, toolCall, toolResult, savedProgress]
+  await storage.recordTranscript(archived)
+  await storage.markActiveConversationTip(savedProgress.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+  const transcriptPath = storage.getTranscriptPathForSession(sessionId)
+  const originalTranscript = await fsPromises.readFile(transcriptPath, 'utf8')
+
+  bootstrap.clearInvokedSkills()
+  const resumed = await loadConversationForResume(sessionId, transcriptPath, { interruptedTurn: 'ignore' })
+  expect(resumed).not.toBeNull()
+  const resumedListing = resumed!.messages.find((message): message is Extract<Message, { type: 'attachment' }> =>
+    message.type === 'attachment' && message.uuid === listing.uuid)
+  const resumedSkills = resumed!.messages.find((message): message is Extract<Message, { type: 'attachment' }> =>
+    message.type === 'attachment' && message.uuid === invoked.uuid)
+  expect(resumedListing).toMatchObject(listing)
+  expect(resumedSkills).toMatchObject(invoked)
+  expect([...bootstrap.getInvokedSkills().values()].map(skill => skill.skillName).sort()).toEqual(['DestinationSkill', 'GlobalSkill'])
+  const normalizedMessages = normalizeMessages(resumed!.messages)
+  const normalizedListing = normalizedMessages.find((message): message is Extract<Message, { type: 'attachment' }> =>
+    message.type === 'attachment' && message.uuid === listing.uuid)
+  const normalizedSkills = normalizedMessages.find((message): message is Extract<Message, { type: 'attachment' }> =>
+    message.type === 'attachment' && message.uuid === invoked.uuid)
+  if (normalizedListing?.type !== 'attachment' || normalizedSkills?.type !== 'attachment') throw new Error('Attachment normalization lost a historical row')
+  expect(normalizedListing.attachment).toBe(resumedListing!.attachment)
+  expect(normalizedSkills.attachment).toBe(resumedSkills!.attachment)
+  const historicalTool = buildTool({
+    name: 'HistoricalTool', inputSchema: z.object({}), description: async () => 'historical', prompt: async () => 'historical',
+    maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+    async call() { return { data: 'unused' } },
+    mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: data }),
+  })
+  const normalized = JSON.stringify(normalizeMessagesForAPI(normalizedMessages, [historicalTool]))
+  expect(normalized).not.toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(normalized).not.toContain('FORMER_SKILL_MARKER')
+  expect(normalized).toContain('CURRENT_SKILL_MARKER')
+  expect(normalized).toContain('GLOBAL_SKILL_MARKER')
+  expect(normalized).toContain('ARCHIVE_TOOL_RESULT_MARKER')
+  const destinationListing = { type: 'attachment', uuid: randomUUID(), timestamp: new Date().toISOString(),
+    attachment: { type: 'skill_listing', content: 'DESTINATION_LISTING_MARKER', skillCount: 1, isInitial: true } } as Message
+  expect(JSON.stringify(normalizeMessagesForAPI([destinationListing]))).toContain('DESTINATION_LISTING_MARKER')
+
+  let providerCalls = 0
+  const providerPrompts: string[] = []
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages, tools }) {
+    providerCalls++
+    providerPrompts.push(JSON.stringify(normalizeMessagesForAPI(messages, tools)))
+    yield assistant([{ type: 'text', text: 'continued successfully at the destination' }])
+  }))
+  const runtime = engine([historicalTool], { initialMessages: resumed!.messages })
+  const controller = createQueryEngineSessionController(runtime)
+  const configuration = handoffConfiguration()
+  await controller.configureWorkspaceHandoff(configuration)
+  await (await controller.startHandoffContinuation()).completion
+  expect(providerCalls).toBe(1)
+  expect(providerPrompts[0]).not.toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(providerPrompts[0]).not.toContain('FORMER_SKILL_MARKER')
+  expect(providerPrompts[0]).toContain('CURRENT_SKILL_MARKER')
+  expect(providerPrompts[0]).toContain('GLOBAL_SKILL_MARKER')
+  const success = controller.getWorkspaceHandoffSnapshot()
+  if (success?.record.kind !== 'valid' || !success.record.record.terminal) throw new Error('Missing continuation checkpoint')
+  await storage.verifyResumeCheckpoint(success.record.record.terminal.checkpoint)
+  expect(await controller.releaseWorkspaceHandoff(configuration.identity.operationId, 'open')).toBe('applied')
+  await drain(runtime.submitMessage('Continue with a destination follow up'))
+  expect(providerCalls).toBe(2)
+  expect(providerPrompts[1]).not.toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(providerPrompts[1]).not.toContain('FORMER_SKILL_MARKER')
+  expect(providerPrompts[1]).toContain('CURRENT_SKILL_MARKER')
+  expect(providerPrompts[1]).toContain('GLOBAL_SKILL_MARKER')
+  await storage.flushCurrentTranscriptDurably()
+  expect((await fsPromises.readFile(transcriptPath, 'utf8'))).toContain('SOURCE_ONLY_LISTING_MARKER')
+
+  // A later relocation record cannot reinterpret the fixed V1 proof: the
+  // checkpoint remains anchored to the exact archived prefix bytes.
+  writeSessionRelocation({ ...relocation, movedAt: 3, backup: join(root, 'later-backup'), transitions: [
+    ...relocation.transitions,
+    { id: randomUUID(), afterFrameId: savedProgress.uuid, source: target, target: original, movedAt: 2 },
+    { id: randomUUID(), afterFrameId: savedProgress.uuid, source: original, target, movedAt: 3 },
+  ] })
+  await storage.verifyResumeCheckpoint(success.record.record.terminal.checkpoint)
+
+  const completeTranscript = await fsPromises.readFile(transcriptPath, 'utf8')
+  for (const [retained, changed] of [
+    ['ARCHIVE_USER_MARKER', 'ALTERED_USER_MARKER'],
+    ['ARCHIVE_TOOL_RESULT_MARKER', 'ALTERED_TOOL_RESULT_MARKER'],
+    ['CURRENT_SKILL_MARKER', 'ALTERED_SKILL_MARKER'],
+    ['FORMER_SKILL_MARKER', 'ALTERED_FORMER_SKILL_MARKER'],
+    ['SOURCE_ONLY_LISTING_MARKER', 'ALTERED_SOURCE_ONLY_LISTING_MARKER'],
+  ]) {
+    const corrupted = completeTranscript.replace(retained, changed)
+    expect(corrupted).not.toBe(completeTranscript)
+    await fsPromises.writeFile(transcriptPath, corrupted)
+    await expect(runtime.sealResumeCheckpoint()).rejects.toThrow('Transcript resume projection differs')
+    await expect(runtime.verifyResumeCheckpoint(success.record.record.terminal.checkpoint)).rejects.toThrow('prefix digest differs')
+    await fsPromises.writeFile(transcriptPath, completeTranscript)
+  }
+  expect(await fsPromises.readFile(transcriptPath, 'utf8')).toContain('SOURCE_ONLY_LISTING_MARKER')
+  expect(originalTranscript).toContain('SOURCE_ONLY_LISTING_MARKER')
+})
+
 test.each(['before_claim', 'while_running', 'after_success', 'after_failure'] as const)('real engine cancellation ordering preserves %s execution evidence', async ordering => {
   const { createUserMessage } = await import('./utils/messages.js')
   const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
@@ -839,6 +970,59 @@ test('warning receipt recovery preserves an existing warning kind and duplicate 
   expect(controller.getWorkspaceHandoffSnapshot()?.gate.mode).toBe('open')
   expect(await fsPromises.readFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()), 'utf8')).toBe(before)
   expect(calls).toBe(1)
+})
+
+test('restart recovery durably settles an existing warning with restored runtime rows and never replays continuation', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const { updateWorkspaceHandoffExecution } = await import('./utils/workspaceHandoffExecutionState.js')
+  const seed = createUserMessage({ content: 'accepted work before process restart' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably()
+  const configuration = handoffConfiguration()
+  const sourceRuntime = engine([], { initialMessages: [seed] })
+  const savedWarning = await sourceRuntime.persistHandoffOutcome(configuration.identity.operationId, 'uncertain')
+  await updateWorkspaceHandoffExecution(configuration.identity, () => ({
+    ...configuration.identity,
+    version: 1,
+    origin: 'fresh',
+    revision: 1,
+    consumed: true,
+    inputCommitted: false,
+    cancellation: { cancelId: randomUUID(), application: 'too_late', order: 1 },
+    terminal: null,
+    notice: null,
+    reconciliation: null,
+  }))
+
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const resumed = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(resumed?.messages.some(message => message.type === 'assistant' && message.isInternalNoResponseSentinel)).toBe(true)
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'must not replay recovered continuation' }])
+  }))
+
+  const runtime = engine([], { initialMessages: resumed!.messages })
+  const controller = createQueryEngineSessionController(runtime)
+  await controller.configureWorkspaceHandoff({ ...configuration, recover: true, observerGeneration: randomUUID() })
+  await controller.settleWorkspaceHandoff('failed')
+
+  const settled = controller.getWorkspaceHandoffSnapshot()
+  expect(settled).toMatchObject({ execution: 'unconfirmed', gate: { mode: 'review', requiresUserReconciliation: true },
+    record: { kind: 'valid', record: { consumed: true, terminal: null,
+      notice: { displayUuid: savedWarning[0]!.uuid, contextUuid: savedWarning[1]!.uuid, outcome: 'uncertain' } } } })
+  expect(runtime.getMessages().filter(message => message.uuid === savedWarning[0]!.uuid)).toHaveLength(1)
+  expect(runtime.getMessages().filter(message => message.uuid === savedWarning[1]!.uuid)).toHaveLength(1)
+  expect(runtime.getMessages().some(message => message.type === 'assistant' && message.isInternalNoResponseSentinel)).toBe(true)
+  if (settled?.record.kind !== 'valid' || !settled.record.record.notice) throw new Error('Missing recovered warning checkpoint')
+  await storage.verifyResumeCheckpoint(settled.record.record.notice.checkpoint)
+  const loaded = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  expect(active.messages.some(message => message.type === 'assistant' && message.isInternalNoResponseSentinel)).toBe(true)
+  expect(providerCalls).toBe(0)
+  await expect(controller.startHandoffContinuation()).rejects.toThrow()
 })
 
 test.each(['fresh', 'legacy'] as const)('replacement with absent %s execution evidence preserves historical uncertainty without inventing no-start or replay', async origin => {

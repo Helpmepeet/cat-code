@@ -86,6 +86,7 @@ import {
   type HookPermissionDecisionAttachment,
   memoryHeader,
 } from './attachments.js'
+import { getWorkspaceResumeAttachmentView } from './workspaceResumeAttachments.js'
 import { quote } from './bash/shellQuote.js'
 import { formatNumber, formatTokens } from './format.js'
 import { getPewterLedgerVariant } from './planModeV2.js'
@@ -3657,6 +3658,10 @@ function getAutoModeSparseInstructions(): UserMessage[] {
 export function normalizeAttachmentForAPI(
   attachment: Attachment,
 ): UserMessage[] {
+  const resumeView = getWorkspaceResumeAttachmentView(attachment)
+  if (resumeView === null) return []
+  if (resumeView !== undefined) attachment = resumeView
+
   if (isAgentSwarmsEnabled()) {
     if (attachment.type === 'teammate_mailbox') {
       return [

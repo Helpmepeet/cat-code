@@ -230,6 +230,8 @@ export type HostErrorCode =
   | 'invalid_cwd'
   /** Id not in live map ∪ registry (HC2). */
   | 'session_not_found'
+  /** The requested control action must wait for an in-progress operation. */
+  | 'session_busy'
   /** `MAX_LIVE_SESSIONS` or the spawn rate cap hit (HC4). */
   | 'session_limit'
   /** Sidecar process failed to start / never sent a valid ready frame. */

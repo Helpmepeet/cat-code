@@ -123,11 +123,16 @@ test('repeated project corrections retain old outputs and rollback drops only it
   const resumed = await fixture(resumeProbe, [engineSessionId, 'compacted-a'], b.cwd, configHome, blocker)
   const payload = JSON.parse(outputPath(resumed, 'RESUME_RESULT')) as {
     hasCompactBoundary: boolean
+    hasArchivedHistoricalSkillListing: boolean
+    archivedInvokedSkillPaths: string[]
     invokedSkillPaths: string[]
     historyCwd: string
   }
   expect(payload.hasCompactBoundary).toBe(true)
   expect(payload.historyCwd).toBe(b.cwd)
+  expect(payload.hasArchivedHistoricalSkillListing).toBe(true)
+  expect(payload.archivedInvokedSkillPaths.some(path => path.startsWith(a.cwd))).toBe(true)
+  expect(payload.archivedInvokedSkillPaths.some(path => path.startsWith(configHome))).toBe(true)
   expect(payload.invokedSkillPaths.some(path => path.startsWith(a.cwd))).toBe(false)
   expect(payload.invokedSkillPaths.some(path => path.startsWith(configHome))).toBe(true)
 }, 120_000)

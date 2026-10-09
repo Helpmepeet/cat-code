@@ -141,6 +141,14 @@ the host reservation is cleared. Replacement validates unresolved evidence and
 never replays the original continuation. Historical converged receipts do not
 re-arm holds after later authorized conversation changes.
 
+Relocation resume preserves historical skill-listing and invoked-skill
+attachments verbatim in the transcript. A verified destination snapshot
+supplies an attachment-identity-bound view that omits former-workspace skill
+context from prompt rendering and restored skill state while retaining
+destination, global, and relative-path skills. The view is captured during
+resume; later relocation metadata changes do not reinterpret the fixed V1
+checkpoint or archived rows.
+
 Protocol V3 addresses controls to supervisor-minted UUID generations and keeps
 these control frames out of renderer replay. No new renderer authority, session
 lifetime, trust grant, transcript repair or migration of existing conversations

@@ -1723,6 +1723,24 @@ export class QueryEngine {
     const persisted = await findHandoffOutcomeInActiveTranscript(operationId)
     if (persisted) {
       if (persisted.outcome !== outcome) throw new Error('Handoff terminal outcome conflicts with saved history')
+      const [savedDisplay, savedContext] = persisted.messages
+      const runtimeIndex = this.mutableMessages.findIndex(message => message.uuid === savedDisplay?.uuid)
+      const runtimeDisplay = this.mutableMessages[runtimeIndex]
+      const runtimeContext = this.mutableMessages[runtimeIndex + 1]
+      const runtimeData = runtimeDisplay?.type === 'system'
+        ? readHandoffOutcomeData(runtimeDisplay.data)
+        : null
+      if (runtimeIndex < 0 || runtimeDisplay?.type !== 'system' || runtimeDisplay.subtype !== 'workspace_handoff_outcome' ||
+        runtimeData?.operationId !== operationId || runtimeData.outcome !== persisted.outcome ||
+        runtimeDisplay.content !== handoffOutcomeText(persisted.outcome) || runtimeDisplay.level !== 'warning' ||
+        runtimeContext?.type !== 'user' || runtimeContext.uuid !== savedContext?.uuid || !runtimeContext.isMeta ||
+        runtimeContext.message.content !== handoffTerminalPrompt(persisted.outcome)) {
+        throw new Error('Saved handoff outcome does not match runtime history')
+      }
+      // Recovery can append an internal no-response sentinel and session-start
+      // hook messages after the durable warning. Keep those independently
+      // retained rows durable before the controller seals the review proof.
+      await (this.config.recordTranscript ?? recordTranscript)(this.mutableMessages)
       return toSDKMessages(persisted.messages)
     }
     const localIndex = this.mutableMessages.findLastIndex(m => m.type === 'system' && m.subtype === 'workspace_handoff_outcome' && readHandoffOutcomeData(m.data)?.operationId === operationId)

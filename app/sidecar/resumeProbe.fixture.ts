@@ -24,6 +24,7 @@ import { loadMessageLogs } from '../../src/utils/sessionStorage.js'
 import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 import { enumerateSessionsCatalog } from './sessionsCatalogDomain.js'
 import { getSkillDirCommands } from '../../src/skills/loadSkillsDir.js'
+import type { Attachment } from '../../src/utils/attachments.js'
 
 async function main(): Promise<void> {
   const engineSessionId = process.argv[2]
@@ -40,6 +41,16 @@ async function main(): Promise<void> {
     await loadAgentDefinitionsForRuntime(cwd),
   )
   const historyRow = (await loadMessageLogs()).find(log => log.sessionId === engineSessionId)
+  const skillAttachments = result.messages.flatMap(message => {
+    if (message.type !== 'attachment') return []
+    const attachment = message.attachment as Attachment
+    return attachment.type === 'skill_listing' || attachment.type === 'invoked_skills'
+      ? [attachment]
+      : []
+  })
+  const archivedInvokedSkillPaths = skillAttachments.flatMap(attachment =>
+    attachment.type === 'invoked_skills' ? attachment.skills.map(skill => skill.path) : [],
+  )
 
   const payload = {
     engineSessionId: result.engineSessionId,
@@ -48,10 +59,8 @@ async function main(): Promise<void> {
     instructionContext: getClaudeMds(await getMemoryFiles()),
     invokedSkillPaths: [...getInvokedSkills().values()].map(skill => skill.skillPath),
     discoveredSkillNames: (await getSkillDirCommands(cwd)).map(command => command.name),
-    hasHistoricalSkillListing: result.messages.some(message =>
-      message.type === 'attachment' && typeof message.attachment === 'object' &&
-      message.attachment !== null && 'type' in message.attachment &&
-      message.attachment.type === 'skill_listing'),
+    hasArchivedHistoricalSkillListing: skillAttachments.some(attachment => attachment.type === 'skill_listing'),
+    archivedInvokedSkillPaths,
     historyCwd: historyRow?.projectPath ?? null,
     historyBinding: historyRow?.sessionBinding?.kind ?? null,
     ...(process.argv.includes('--catalog') ? { catalog: await enumerateSessionsCatalog() } : {}),
