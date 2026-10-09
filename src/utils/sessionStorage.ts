@@ -3581,7 +3581,10 @@ function recoverOrphanedParallelToolResults(
   // as the srcUUID, and --fork-session strips srcUUID but keeps parentUuid.
   const siblingsByMsgId = new Map<string, TranscriptMessage[]>()
   const toolResultsByAsst = new Map<UUID, TranscriptMessage[]>()
+  const insertionOrdinalByUuid = new Map<string, number>()
+  let insertionOrdinal = 0
   for (const m of messages.values()) {
+    insertionOrdinalByUuid.set(m.uuid, insertionOrdinal++)
     if (m.type === 'assistant' && m.message.id) {
       const group = siblingsByMsgId.get(m.message.id)
       if (group) group.push(m)
@@ -3622,10 +3625,14 @@ function recoverOrphanedParallelToolResults(
     }
     if (orphanedSiblings.length === 0 && orphanedTRs.length === 0) continue
 
-    // Timestamp sort keeps content-block / completion order; stable-sort
-    // preserves JSONL write order on ties.
-    orphanedSiblings.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-    orphanedTRs.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    // Timestamp gives completion order; the transcript Map ordinal preserves
+    // JSONL write order when multiple results share a timestamp.
+    const compareTranscriptOrder = (a: TranscriptMessage, b: TranscriptMessage) =>
+      a.timestamp.localeCompare(b.timestamp) ||
+      (insertionOrdinalByUuid.get(a.uuid) ?? Number.MAX_SAFE_INTEGER) -
+        (insertionOrdinalByUuid.get(b.uuid) ?? Number.MAX_SAFE_INTEGER)
+    orphanedSiblings.sort(compareTranscriptOrder)
+    orphanedTRs.sort(compareTranscriptOrder)
 
     const anchor = anchorByMsgId.get(msgId)!
     const recovered = [...orphanedSiblings, ...orphanedTRs]

@@ -513,6 +513,71 @@ test('seal verifies full parallel results over the large-file threshold and fail
   await expect(runtime.sealResumeCheckpoint()).rejects.toThrow('projection differs')
 })
 
+test('equal-timestamp parallel results retain JSONL completion order through a handoff and follow-up', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const user = createUserMessage({ content: 'run three independent reads' })
+  const messageId = randomUUID()
+  const calls = (['A', 'B', 'C'] as const).map(label => {
+    const call = assistant([{ type: 'tool_use', id: `parallel-${label}`, name: 'HistoricalTool', input: { label } }])
+    call.message.id = messageId
+    call.timestamp = '2026-10-09T12:00:39.489Z'
+    return call
+  })
+  const [callA, callB, callC] = calls
+  if (!callA || !callB || !callC) throw new Error('Missing parallel calls')
+  const result = (call: AssistantMessage, label: string) => {
+    const message = createUserMessage({ sourceToolAssistantUUID: call.uuid as UUID,
+      content: [{ type: 'tool_result', tool_use_id: `parallel-${label}`, content: `completed ${label}` }] })
+    message.timestamp = '2026-10-09T12:00:39.490Z'
+    return message
+  }
+  // The persisted JSONL order records completion B, A, C. C is the result
+  // attached to the selected final branch; A and B must be recovered beside it.
+  const resultB = result(callB, 'B')
+  const resultA = result(callA, 'A')
+  const resultC = result(callC, 'C')
+  const final = assistant([{ type: 'text', text: 'all three reads completed' }])
+  final.timestamp = '2026-10-09T12:00:39.491Z'
+  const persisted = [user, ...calls, resultB, resultA, resultC, final]
+  await storage.recordTranscript(persisted)
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  await storage.markActiveConversationTip(final.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+
+  const toolResultOrder = (messages: Message[]) => messages.flatMap(message =>
+    message.type === 'user' && Array.isArray(message.message.content)
+      ? message.message.content.flatMap(block => block.type === 'tool_result' ? [block.tool_use_id] : [])
+      : [],
+  )
+  const onDisk = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  expect(toolResultOrder([...onDisk.messages.values()])).toEqual(['parallel-B', 'parallel-A', 'parallel-C'])
+  const resumed = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(resumed).not.toBeNull()
+  expect(toolResultOrder(resumed!.messages)).toEqual(['parallel-B', 'parallel-A', 'parallel-C'])
+
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: providerCalls === 1 ? 'continued at destination' : 'follow-up accepted' }])
+  }))
+  const runtime = engine([], { initialMessages: persisted })
+  const prefixCheckpoint = await runtime.sealResumeCheckpoint()
+  await storage.verifyResumeCheckpoint(prefixCheckpoint)
+  const controller = createQueryEngineSessionController(runtime)
+  const configuration = handoffConfiguration()
+  await controller.configureWorkspaceHandoff(configuration)
+  await (await controller.startHandoffContinuation()).completion
+  expect(providerCalls).toBe(1)
+  const success = controller.getWorkspaceHandoffSnapshot()
+  if (success?.record.kind !== 'valid' || !success.record.record.terminal) throw new Error('Missing continuation checkpoint')
+  await storage.verifyResumeCheckpoint(success.record.record.terminal.checkpoint)
+  expect(await controller.releaseWorkspaceHandoff(configuration.identity.operationId, 'open')).toBe('applied')
+  await controller.submit('send a follow-up after the move')
+  expect(providerCalls).toBe(2)
+  expect(controller.getWorkspaceHandoffSnapshot()?.gate).toMatchObject({ mode: 'open' })
+})
+
 test('seal uses valid compaction logging transforms and preserves retained provenance', async () => {
   const { createUserMessage, createCompactBoundaryMessage } = await import('./utils/messages.js')
   const { annotateBoundaryWithPreservedSegment } = await import('./services/compact/compact.js')
