@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs'
-import { readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, upgradeWorkspaceJumpState, workspaceJumpRequiresRetention } from '../../src/utils/workspaceJumpState.js'
 import { bootstrapWorkerEngine } from './workerRuntime.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
 import { readSessionRelocation, type SessionLocation } from '../../src/utils/sessionRelocationState.js'
@@ -12,13 +12,13 @@ function sameBinding(left: SessionBinding, right: SessionBinding): boolean {
 /** Runs before runtime init, instruction discovery, or resume hooks. The
  * replacement's own canonical identity and saved engine trust are authoritative. */
 export async function validateWorkspaceJumpStartup(appSessionId: string, cwd: string, engineSessionId: string | undefined, binding: SessionBinding): Promise<void> {
-  const state = readWorkspaceJump(appSessionId)
+  const saved = readWorkspaceJump(appSessionId)
+  const state = saved ? upgradeWorkspaceJumpState(saved) : null
   let location: SessionLocation
   if (state) {
     if (state.engineSessionId !== engineSessionId) throw new Error('Workspace change belongs to another conversation')
     location = cwd === state.source.cwd ? state.source : state.target
-    const settled = state.phase === 'settled' && state.continuation.state === 'settled' &&
-      !state.requiresUserReconciliation && (state.outcome === 'completed' || state.sourceOutcomePersisted)
+    const settled = !workspaceJumpRequiresRetention(state)
     if (settled) {
       const relocation = readSessionRelocation(state.engineSessionId)
       if (relocation) {

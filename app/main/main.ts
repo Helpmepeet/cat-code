@@ -2,7 +2,8 @@ import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
-import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput, type WorkspaceJumpState } from './workspaceJumpCoordinator.js'
+import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput, type WorkspaceJumpStateV2 } from './workspaceJumpCoordinator.js'
+import { WorkspaceHandoffControl, type WorkspaceControlAction, type WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
 import {
   parseProjectRouteCommand,
@@ -649,7 +650,8 @@ let host: Host | null = null
 let projectRouting: ProjectRoutingController | null = null
 let workspaceJump: WorkspaceJumpCoordinator | null = null
 const observedWorkspaceHandoffs = new Map<string, { generation: string; operationId: string; tipUuid: string; toolUseId: string }>()
-const workspaceControlRequests = new Map<string, { sessionId: string; generation: string; operationId: string; settle: (ok: boolean) => void }>()
+let workspaceControl: WorkspaceHandoffControl | null = null
+let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null
 let mainWindow: BrowserWindow | null = null
 let registryForDebug: SessionRegistry | null = null
 /**
@@ -2030,14 +2032,11 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       void peerPlane?.handleRequest(event.sessionId, frame)
       return
     }
-    if (frame.kind === 'workspace.handoff.result') {
-      const pending = workspaceControlRequests.get(frame.requestId)
-      if (pending && pending.sessionId === event.sessionId && pending.operationId === frame.operationId &&
-          pending.generation === host?.getSessionGeneration(event.sessionId) && typeof frame.ok === 'boolean') pending.settle(frame.ok)
-      return
-    }
-    if (frame.kind === 'workspace.user-admitted') {
-      try { if (workspaceJump?.snapshot(event.sessionId)?.operationId === frame.operationId) void workspaceJump.reconcileUser(event.sessionId, frame.operationId) } catch { /* keep recovery gate */ }
+    if (frame.kind === 'workspace.handoff.result' || frame.kind === 'workspace.handoff.state') {
+      const received = traceFrame(frame, 'supervisor.socket.received')
+      traceFrame(received, 'host.received')
+      const { deliveryTrace: _deliveryTrace, ...controlFrame } = frame
+      workspaceControl?.receiveFrame(event.sessionId, controlFrame)
       return
     }
     if (frame.kind === 'event' && !frame.replay && frame.event.type === 'message' &&
@@ -2051,7 +2050,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
       try {
         const recovery = workspaceJump?.snapshot(event.sessionId)
-        if (recovery?.phase === 'settled' && recovery.requiresUserReconciliation && !recovery.sourceOutcomePersisted) void workspaceJump?.settleRecovery(event.sessionId, recovery.operationId)
+        if (recovery) workspaceJump?.queryStatus(event.sessionId, true)
       } catch { /* unreadable state remains retained */ }
       flushAccountInvalidationNotices(event.sessionId)
       // §4 step 5/6 — releases anything waiting on this row's wake and re-sends
@@ -2084,7 +2083,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     if (isTerminalLifecycleFrame(frame)) {
       projectRouting?.interrupted(event.sessionId)
       observedWorkspaceHandoffs.delete(event.sessionId)
-      for (const pending of workspaceControlRequests.values()) if (pending.sessionId === event.sessionId) pending.settle(false)
+      workspaceControl?.disconnect(event.sessionId)
       accountInvalidation.clear(event.sessionId)
       // Presence is a fact about a LIVE row. Absence means not live, nothing
       // else, so it is cleared here rather than left to read as stale.
@@ -2288,7 +2287,7 @@ function registerIpcHandlers(): void {
     (_e, arg: { sessionId: SessionId; requestId: string; reason?: string }) => {
       if (typeof arg?.sessionId !== 'string' || typeof arg?.requestId !== 'string') return
       projectRouting?.cancel(arg.sessionId)
-      void workspaceJump?.cancel(arg.sessionId)
+      if (workspaceJump?.isReserved(arg.sessionId)) { void workspaceJump.cancel(arg.sessionId, undefined, 'stop'); workspaceJump.queryStatus(arg.sessionId); return }
       forward(arg.sessionId, {
         type: 'app.abort',
         requestId: arg.requestId,
@@ -3164,7 +3163,7 @@ function registerHostControlPlane(): void {
         return Promise.resolve({ ok: false, error: { code: 'branch_unavailable', message: 'Wait for the branch switch to finish before closing this chat.' } })
       }
       if (workspaceJump?.isReserved(sessionId)) {
-        void workspaceJump.cancel(sessionId)
+        void workspaceJump.cancel(sessionId, undefined, 'close')
         return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Workspace change cancelled. Wait for it to settle before closing.' } })
       }
       return host.closeSession(sessionId)
@@ -4023,11 +4022,12 @@ function handOff(
 ): ErrorFrame['code'] | null {
   if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
   if (host?.isMoving(sessionId) && message.type !== 'host.result' && message.type !== 'app.abort' && message.type !== 'workspace.handoff') return 'session_not_ready'
-  if ((message.type === 'app.submit' || message.type === 'peer.deliver') && workspaceJump?.isReserved(sessionId)) {
-    let state: WorkspaceJumpState | null = null
+  if ((message.type === 'app.submit' || message.type === 'peer.deliver') && (workspaceJump?.isReserved(sessionId) || workspaceJump?.requiresReview(sessionId))) {
+    workspaceJump?.queryStatus(sessionId)
+    let state: WorkspaceJumpStateV2 | null = null
     try { state = workspaceJump.snapshot(sessionId) } catch { return 'session_not_ready' }
     if (!state || state.phase !== 'settled' || message.type === 'peer.deliver' || message.options?.isMeta ||
-        (state.continuation.state === 'admitted' && !workspaceJumpAllowsQueuedInput(state))) return 'session_not_ready'
+        (!state.review.required && !workspaceJumpAllowsQueuedInput(state, workspaceJump.liveObservation(sessionId)))) return 'session_not_ready'
   }
   if (switchingSessionIds.has(sessionId) && (message.type === 'app.submit' || message.type === 'peer.deliver')) {
     return 'session_not_ready'
@@ -4219,19 +4219,8 @@ function coercePermissionResponse(response: unknown): CoercedPermissionResponse 
   return null
 }
 
-type WorkspaceControlAction =
-  | { action: 'verify'; tipUuid: string; toolUseId: string }
-  | { action: 'continue' | 'settle_failed' | 'settle_cancelled' | 'settle_uncertain' | 'release' | 'reconcile' }
-function requestWorkspaceControl(sessionId: string, operationId: string, action: WorkspaceControlAction): Promise<boolean> {
-  const generation = host?.getSessionGeneration(sessionId)
-  if (!generation || workspaceControlRequests.size >= 128) return Promise.resolve(false)
-  const requestId = randomUUID()
-  return new Promise(resolve => {
-    const timer = setTimeout(() => settle(false), action.action === 'continue' ? 30 * 60_000 : 20_000)
-    const settle = (ok: boolean) => { clearTimeout(timer); workspaceControlRequests.delete(requestId); resolve(ok) }
-    workspaceControlRequests.set(requestId, { sessionId, generation, operationId, settle })
-    if (forwardInternal(sessionId, { type: 'workspace.handoff', requestId, operationId, ...action }) !== null) settle(false)
-  })
+function requestWorkspaceControl(sessionId: string, operationId: string, action: WorkspaceControlAction): Promise<WorkspaceControlDelivery> {
+  return workspaceControl?.request(sessionId, operationId, action) ?? Promise.resolve({ kind: 'unavailable' })
 }
 
 function generateRequestId(): string {
@@ -4355,6 +4344,21 @@ function ensureHost(): Host {
     log: line => logLegacyDiagnostic(line, 'project-routing', 'host'),
   })
 
+  workspaceControl?.dispose()
+  workspaceControl = new WorkspaceHandoffControl({
+    generation: id => host?.getSessionGeneration(id),
+    send: (id, message) => forwardInternal(id, message) === null,
+    acceptsStatus: (id, status) => registry.sessions.find(row => row.appSessionId === id)?.engineSessionId === status.engineSessionId,
+    observe: (id, status) => { try { workspaceJump?.observe(id, status) } catch { /* retain unreadable state */ } },
+    recover: (id, _operationId) => { try { workspaceJump?.queryStatus(id) } catch { /* retain unreadable state */ } },
+  })
+  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
+  workspaceStatusTimer = setInterval(() => {
+    for (const row of registry.sessions) if (host?.getSessionGeneration(row.appSessionId)) {
+      try { workspaceJump?.queryStatus(row.appSessionId) } catch { /* retained for next attachment */ }
+    }
+  }, 30_000)
+  workspaceStatusTimer.unref()
   workspaceJump = new WorkspaceJumpCoordinator({
     host,
     row: appSessionId => registry.sessions.find(row => row.appSessionId === appSessionId),
@@ -4374,20 +4378,12 @@ function ensureHost(): Host {
       const observed = observedWorkspaceHandoffs.get(identity.appSessionId)
       if (!observed || observed.generation !== identity.generation || observed.operationId !== state.operationId ||
           observed.tipUuid !== boundary.tipUuid || observed.toolUseId !== boundary.toolUseId) return false
-      return requestWorkspaceControl(identity.appSessionId, state.operationId,
+      const delivery = await requestWorkspaceControl(identity.appSessionId, state.operationId,
         { action: 'verify', tipUuid: boundary.tipUuid, toolUseId: boundary.toolUseId })
+      return delivery.kind === 'result' && ['accepted','already_applied'].includes(delivery.result.disposition)
     },
-    persistTerminalOutcome: state => requestWorkspaceControl(state.appSessionId, state.operationId,
-      { action: state.outcome === 'failed' ? 'settle_failed' : state.outcome === 'cancelled' ? 'settle_cancelled' : state.outcome === 'uncertain' ? 'settle_uncertain' : state.continuation.state === 'admitted' || state.continuation.state === 'uncertain' || (state.continuation.state === 'settled' && state.consumed) ? 'settle_uncertain' : state.cancelled ? 'settle_cancelled' : 'settle_failed' }),
-    continueDestination: async state => {
-      if (!(await requestWorkspaceControl(state.appSessionId, state.operationId, { action: 'continue' }))) throw new Error('Workspace continuation did not settle')
-    },
-    onStateChanged: state => {
-      host?.publishWorkspaceJumpDisplay(state)
-      if (state.phase === 'settled' && state.continuation.state === 'settled' && !state.requiresUserReconciliation) {
-        void requestWorkspaceControl(state.appSessionId, state.operationId, { action: 'release' })
-      }
-    },
+    control: (state, action) => requestWorkspaceControl(state.appSessionId, state.operationId, action),
+    onStateChanged: state => { host?.publishWorkspaceJumpDisplay(state) },
   })
   // Reconcile durable operations before any restored sidecar can start turns.
   for (const appSessionId of recoveredJumps.appSessionIds) {
@@ -4653,7 +4649,9 @@ app.on('window-all-closed', () => {
   projectRouting = null
   peerPlane = null
   observedWorkspaceHandoffs.clear()
-  for (const pending of workspaceControlRequests.values()) pending.settle(false)
+  workspaceControl?.dispose()
+  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
+  workspaceStatusTimer = null
   registryForDebug = null
   scheduleDebugStateExport.cancel()
   // F2 — drop buffered frames from the closed window so a macOS reopen never

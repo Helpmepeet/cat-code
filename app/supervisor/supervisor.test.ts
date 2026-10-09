@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { MAX_PROMPT_BYTES, PARKED_EXIT_CODE } from '../shared/limits.js'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { OperationalFields, OperationalLogLevel } from '../shared/operationalLog.js'
 import {
   createPrivateSocketDir,
@@ -49,7 +50,7 @@ function readyScript({
         open(socket) {
           writeFrame(socket, {
             kind: 'ready',
-            protocolVersion: 2,
+            protocolVersion: ${PROTOCOL_VERSION},
             sessionId: ${sessionIdExpression},
             ${omitEngineSessionId ? '' : `engineSessionId: ${engineSessionIdExpression},`}
             payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true }
@@ -143,6 +144,27 @@ test('clears an inherited resume id when the session does not request a resume',
     'sidecar did not report its resume environment',
   )
   expect(readFileSync(observedResumePath, 'utf8')).toBe('')
+})
+
+test('the child receives the supervisor generation and replacement cannot inherit it', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-generation-')
+  const observed = join(socketDir, 'generation.txt')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', `require('node:fs').writeFileSync(process.argv[1], process.env.CATCODE_SIDECAR_GENERATION ?? 'missing'); setInterval(() => {}, 1000)`, observed],
+    sidecarEnv: { CATCODE_SIDECAR_GENERATION: 'forged-generation' },
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('generation-session')
+  const first = supervisor.getSessionGeneration('generation-session')!
+  await waitFor(() => existsSync(observed) && readFileSync(observed, 'utf8').length > 0, 'child did not report generation')
+  expect(readFileSync(observed, 'utf8')).toBe(first)
+  expect(first).toMatch(/^[0-9a-f-]{36}$/)
+  supervisor.restartSession('generation-session')
+  const second = supervisor.getSessionGeneration('generation-session')!
+  await waitFor(() => readFileSync(observed, 'utf8') === second, 'replacement did not report generation')
+  expect(second).not.toBe(first)
 })
 
 test('only a host-marked managed recreation reaches the sidecar spawn environment', async () => {
@@ -570,7 +592,7 @@ test('outbound frame sessionId tripwire drops and logs a mis-stamped frame', asy
   const logs: string[] = []
   const script = readyScript({
     afterOpen:
-      "writeFrame(socket, { kind: 'pong', protocolVersion: 2, sessionId: 'wrong-session', nonce: 'bad' })",
+      `writeFrame(socket, { kind: 'pong', protocolVersion: ${PROTOCOL_VERSION}, sessionId: 'wrong-session', nonce: 'bad' })`,
   })
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.execPath,

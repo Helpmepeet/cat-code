@@ -378,14 +378,14 @@ const SEND_SESSION_ID = 'session-1'
 const READY = { status: 'ready' as const, inputEnabled: true }
 const CONNECTING = { status: 'connecting' as const, inputEnabled: false }
 const readyFrame: ServerFrame = {
-  kind: 'ready', protocolVersion: 2, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
+  kind: 'ready', protocolVersion: 3, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
   payload: {
     type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
     abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   },
 }
 const messageFrame = (message: SDKMessage): ServerFrame => ({
-  kind: 'event', protocolVersion: 2, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
+  kind: 'event', protocolVersion: 3, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
 })
 const userText = (uuid: string, text: string): SDKMessage => ({
   type: 'user', uuid: uuid as never, parent_tool_use_id: null,

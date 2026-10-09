@@ -1,5 +1,5 @@
 /**
- * CatCode desktop IPC protocol — v2.
+ * CatCode desktop IPC protocol — v3.
  *
  * This is the versioned engine/session protocol (PROGRAM-PLAN §5, layer 1): the
  * typed seam between the renderer, the Electron main process, the Electron-free
@@ -32,12 +32,16 @@
  *    it against `result.modelUsage` keys, so re-spelling it would break the
  *    live gauge.
  *
- *  - **Breaking account logout target.** `PROTOCOL_VERSION` is 2 because
+ *  - **Breaking account logout target.** Version 2 introduced
  *    `account.logout` now requires an account id and its expected credential
  *    generation. The active-only `{type, requestId}` shape is no longer valid.
  *    This preserves the targeted lifecycle and stale-request protections from
  *    `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` and
  *    `docs/migration/decisions/SECURITY-MINIMUM.md`.
+ *
+ *  - **Breaking handoff lifecycle.** Version 3 changes continuation replies to
+ *    durable admission acknowledgements and adds cumulative generation-bound
+ *    execution/gate status. See CHAT-RELOCATION's 2026-10-09 amendment.
  *
  *  - **Inbound = the allowlisted client message types (SECURITY-MINIMUM §2).**
  *    `app.submit` / `app.abort` / `permission.response` / `app.ping` reuse the
@@ -87,7 +91,7 @@ import type {
 } from './settingsEditable.js'
 
 /** Protocol wire version. Bump only on a breaking frame-shape change. */
-export const PROTOCOL_VERSION = 2 as const
+export const PROTOCOL_VERSION = 3 as const
 
 /**
  * A session address. In P1-0 there is exactly one sidecar and one sessionId,
@@ -951,24 +955,35 @@ export type WorkspaceHandoffMessage = {
   type: 'workspace.handoff'
   requestId: string
   operationId: string
+  forGeneration: string
 } & (
   | { action: 'verify'; tipUuid: string; toolUseId: string }
-  | { action: 'continue' | 'settle_failed' | 'settle_cancelled' | 'settle_uncertain' | 'release' | 'reconcile' }
+  | { action: 'continue'; continuationId: string }
+  | { action: 'status' }
+  | { action: 'cancel'; cancelId: string }
+  | { action: 'settle'; outcome: 'failed' | 'cancelled' | 'uncertain' }
+  | { action: 'release'; authorizationRevision: number }
 )
+export type { ResumeCheckpointV1, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
+  WorkspaceHandoffSnapshot, WorkspaceHandoffAction, WorkspaceHandoffDisposition, WorkspaceHandoffReason } from './workspaceHandoff.js'
 export type WorkspaceHandoffResultFrame = {
   kind: 'workspace.handoff.result'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   requestId: string
   operationId: string
-  ok: boolean
+  action: import('./workspaceHandoff.js').WorkspaceHandoffAction
+  disposition: import('./workspaceHandoff.js').WorkspaceHandoffDisposition
+  reason?: import('./workspaceHandoff.js').WorkspaceHandoffReason
+  status?: import('./workspaceHandoff.js').WorkspaceHandoffSnapshot
 }
-/** Engine receipt for genuine user input, emitted after its durable admission. */
-export type WorkspaceUserAdmittedFrame = {
-  kind: 'workspace.user-admitted'
+/** Cumulative execution and gate evidence; main consumes it without UI replay. */
+export type WorkspaceHandoffStateFrame = {
+  kind: 'workspace.handoff.state'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   operationId: string
+  status: import('./workspaceHandoff.js').WorkspaceHandoffSnapshot
 }
 
 /**
@@ -3849,7 +3864,7 @@ export type ServerFramePayload =
   | HistoryLoadEarlierResultFrame
   | HostRequestFrame
   | WorkspaceHandoffResultFrame
-  | WorkspaceUserAdmittedFrame
+  | WorkspaceHandoffStateFrame
   | ActivityFrame
 
 /**
@@ -3913,7 +3928,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'history.loadEarlier.result': true,
   'host.request': true,
   'workspace.handoff.result': true,
-  'workspace.user-admitted': true,
+  'workspace.handoff.state': true,
   activity: true,
 }
 

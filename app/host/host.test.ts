@@ -216,7 +216,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'ready',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId,
         engineSessionId,
         payload: { type: 'app.ready' } as never,
@@ -239,7 +239,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'event',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId,
         ...(opts.replay ? { replay: true } : {}),
         event,
@@ -441,11 +441,11 @@ function makeHost(
 
 function emitMoveReadyContext(supervisor: FakeSupervisor, appSessionId: SessionId): void {
   supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
-    kind: 'run-controls.snapshot', protocolVersion: 2, sessionId: appSessionId,
+    kind: 'run-controls.snapshot', protocolVersion: 3, sessionId: appSessionId,
     runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
   } as never })
   supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
-    kind: 'permission.context', protocolVersion: 2, sessionId: appSessionId,
+    kind: 'permission.context', protocolVersion: 3, sessionId: appSessionId,
     context: { mode: 'default', permissionClassifierEnabled: false },
   } as never })
 }
@@ -605,11 +605,11 @@ test.each(['pending delivery', 'in-flight reservation'] as const)(
 
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
   const replay = {
-    kind: 'event', protocolVersion: 2, sessionId: appSessionId, replay: true,
+    kind: 'event', protocolVersion: 3, sessionId: appSessionId, replay: true,
     event: { type: 'message', message: { type: 'user', message: { role: 'user', content: 'retained' } } },
   } as never
   expect(gate.onFrame(appSessionId, replay)).toEqual([])
-  const complete = { kind: 'history.replay.complete', protocolVersion: 2, sessionId: appSessionId } as never
+  const complete = { kind: 'history.replay.complete', protocolVersion: 3, sessionId: appSessionId } as never
   const released = gate.onFrame(appSessionId, complete)
   expect(released).toContainEqual(replay)
   expect(released).toContainEqual(complete)
@@ -671,14 +671,14 @@ test('a worker-refused move keeps the reopened conversation behind replay comple
   expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
   expect(sourceCachePreservationRequested).toBe(true)
 
-  const ready = { kind: 'ready', protocolVersion: 2, sessionId: appSessionId,
+  const ready = { kind: 'ready', protocolVersion: 3, sessionId: appSessionId,
     engineSessionId, payload: { type: 'app.ready' } } as never
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
-  const replay = { kind: 'event', protocolVersion: 2, sessionId: appSessionId,
+  const replay = { kind: 'event', protocolVersion: 3, sessionId: appSessionId,
     replay: true, event: { type: 'message', message: { type: 'user' } } } as never
   expect(gate.onFrame(appSessionId, replay)).toEqual([])
   const released = gate.onFrame(appSessionId, {
-    kind: 'history.replay.complete', protocolVersion: 2, sessionId: appSessionId,
+    kind: 'history.replay.complete', protocolVersion: 3, sessionId: appSessionId,
   } as never)
   expect(released[0]).toMatchObject(ready)
   expect(released).toContainEqual(replay)

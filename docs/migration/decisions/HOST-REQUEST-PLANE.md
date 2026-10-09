@@ -174,6 +174,20 @@ does not grant reusable movement authority. The source engine saves its own
 terminal note before releasing the local hold. An unreadable durable operation
 cannot be reported as never accepted.
 
+### Handoff lifecycle control amendment, 2026-10-09
+
+The [handoff plan](../../reports/2026-10-09-handoff-fix-plan.md) replaces whole-turn
+control requests with generation-addressed command acknowledgements and cumulative
+operation evidence. Protocol V3 allows verify, continue, status, cancel, settle
+and revision-authorized release on the existing main-only control path. The
+supervisor supplies the generation before spawn and prevents environment overrides.
+Status is metadata, strictly validated and bounded at 16 KiB, with 32 state
+frames per session per 10 seconds. Overflow retains latest evidence and schedules
+bounded status recovery. Late authenticated replies remain evidence after RPC
+expiry; a timeout never proves execution failure. These frames are consumed by
+main and never replayed to the renderer. The engine remains the permission and
+durability owner; main remains the sole authorization/ledger writer.
+
 ### Initial discovery amendment, 2026-10-01
 
 Eligible managed conversations may observe the existing `workspaces.list` verb

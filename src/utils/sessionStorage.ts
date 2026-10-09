@@ -1,7 +1,7 @@
 import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
-import { randomUUID } from 'crypto'
+import { randomUUID, createHash } from 'crypto'
 import type { UUID } from 'crypto'
 import { constants as fsConstants, type Dirent } from 'fs'
 // Sync fs primitives for readFileTailSync — separate from fs/promises
@@ -90,6 +90,7 @@ import { getWorktreePaths } from './getWorktreePaths.js'
 import { getBranch } from './git.js'
 import { gracefulShutdownSync, isShuttingDown } from './gracefulShutdown.js'
 import { parseJSONL } from './json.js'
+import { canonicalResumeJson, resumeProjectionV1, resumeProjectionSha256, type ResumeCheckpointV1 } from './resumeCheckpoint.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import { sanitizePath } from './path.js'
@@ -1702,6 +1703,13 @@ class Project {
     }
   }
 
+  async appendFinalizedAssistantMetadata(entries: TranscriptMessage[]): Promise<void> {
+    assertActiveTranscriptLease(getSessionId())
+    if (!this.sessionFile) throw new Error('No owned transcript')
+    for (const entry of entries) void this.enqueueWrite(this.sessionFile, entry)
+    await this.flush()
+  }
+
   async flush(): Promise<void> {
     // Cancel pending timer
     if (this.flushTimer) {
@@ -2644,6 +2652,98 @@ export async function verifyHandoffTranscriptDurably(
   }
   if (!sawHandoff || uses.size !== results.size) throw new Error('Workspace handoff exchange is incomplete')
   return { tip_uuid: expected.tip_uuid, tool_use_id: expected.tool_use_id }
+}
+
+/** resume-projection-v1 uses logging transforms and the normal active selection.
+ * Trailing non-user/assistant rows do not anchor resume and are excluded.
+ */
+export function intendedResumeProjection(messages: Message[]): Message[] {
+  const logged = cleanMessagesForLogging(messages).map(message => {
+    if (message.type !== 'system' || message.subtype !== 'api_error') return message
+    // The existing JSONL writer serializes SDK APIError/Error/Headers objects
+    // in these two fields to their enumerable JSON representation. Apply that
+    // exact logging transform before canonicalization; message content and all
+    // other fields still reject non-JSON values.
+    const jsonErrorField = (value: unknown) => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+    const fields = message as typeof message & { error?: unknown; cause?: unknown }
+    return { ...message, error: jsonErrorField(fields.error), cause: jsonErrorField(fields.cause) }
+  })
+  const end = logged.findLastIndex(message => message.type === 'user' || message.type === 'assistant')
+  return logged.slice(0, end + 1)
+}
+
+async function hashTranscriptPrefix(path: string, prefixBytes: number): Promise<string> {
+  const handle = await fsOpen(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try {
+    const info = await handle.stat()
+    if (!info.isFile() || info.size < prefixBytes) throw new Error('Transcript prefix is unavailable')
+    const hash = createHash('sha256')
+    const chunk = Buffer.alloc(64 * 1024)
+    for (let offset = 0; offset < prefixBytes;) {
+      const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, prefixBytes - offset), offset)
+      if (!bytesRead) throw new Error('Incomplete transcript prefix')
+      hash.update(chunk.subarray(0, bytesRead))
+      offset += bytesRead
+    }
+    return hash.digest('hex')
+  } finally { await handle.close() }
+}
+
+export async function verifyResumeCheckpoint(checkpoint: ResumeCheckpointV1, transcriptPath = getOwnedTranscriptPath()): Promise<void> {
+  if (!transcriptPath) throw new Error('Persisted conversation ownership is required')
+  if (await hashTranscriptPrefix(transcriptPath, checkpoint.prefixBytes) !== checkpoint.prefixSha256) {
+    throw new Error('Transcript prefix digest differs')
+  }
+  const loaded = await loadTranscriptFile(transcriptPath, { keepAllLeaves: true, prefixBytes: checkpoint.prefixBytes, strict: true })
+  const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  if (loaded.sourceTruncated || active.sessionId !== getSessionId() || active.tip?.uuid !== checkpoint.activeTipUuid ||
+    active.messages.length !== checkpoint.messageCount || resumeProjectionSha256(active.messages) !== checkpoint.projectionSha256) {
+    throw new Error('Transcript resume projection differs')
+  }
+}
+
+export async function sealResumeCheckpoint(expectedResumeProjection: Message[]): Promise<ResumeCheckpointV1> {
+  assertActiveTranscriptLease(getSessionId())
+  const expected = intendedResumeProjection(expectedResumeProjection)
+  // Capture independently retained engine state before inspecting the file.
+  const intendedDigest = resumeProjectionSha256(expected)
+  const tip = expected.at(-1)
+  if (!tip || (tip.type !== 'user' && tip.type !== 'assistant')) throw new Error('Resume checkpoint has no active tip')
+  await flushCurrentTranscriptDurably()
+  const path = getOwnedTranscriptPath()
+  if (!path) throw new Error('Persisted conversation ownership is required')
+  const before = await loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  const updates: TranscriptMessage[] = []
+  for (const message of expected) {
+    if (message.type !== 'assistant') continue
+    const persisted = before.messages.get(message.uuid as UUID)
+    if (!persisted || persisted.type !== 'assistant') throw new Error('Assistant message was not persisted')
+    const withoutFinalMetadata = (value: unknown) => {
+      const projected = resumeProjectionV1([value])[0] as Record<string, unknown>
+      const body = { ...(projected.message as Record<string, unknown>) }
+      delete body.usage; delete body.stop_reason; delete body.stop_sequence
+      return { ...projected, message: body }
+    }
+    if (canonicalResumeJson(withoutFinalMetadata(message)) !== canonicalResumeJson(withoutFinalMetadata(persisted))) {
+      throw new Error('Persisted assistant content differs')
+    }
+    if (resumeProjectionSha256([message]) !== resumeProjectionSha256([persisted])) {
+      // The provider mutates these fields after streamed blocks are emitted.
+      // Preserve the stored topology and content while publishing their final values.
+      updates.push({ ...persisted, message: { ...persisted.message,
+        usage: message.message.usage, stop_reason: message.message.stop_reason,
+        stop_sequence: message.message.stop_sequence } })
+    }
+  }
+  if (updates.length) await getProject().appendFinalizedAssistantMetadata(updates)
+  await markActiveConversationTip(tip.uuid as UUID)
+  await flushCurrentTranscriptDurably()
+  const info = await stat(path)
+  const checkpoint: ResumeCheckpointV1 = { version: 1, prefixBytes: info.size,
+    prefixSha256: await hashTranscriptPrefix(path, info.size), activeTipUuid: tip.uuid,
+    projectionSha256: intendedDigest, messageCount: expected.length }
+  await verifyResumeCheckpoint(checkpoint, path)
+  return checkpoint
 }
 
 /** Used for trusted outcomes and genuine-user reconciliation admission. */
@@ -4657,6 +4757,9 @@ export async function loadTranscriptFile(
     keepAllLeaves?: boolean
     keepCompactedHistory?: boolean
     maxReadBytes?: number
+    /** Exact newline-aligned prefix for durable resume proof. */
+    prefixBytes?: number
+    strict?: boolean
   },
 ): Promise<{
   messages: Map<UUID, TranscriptMessage>
@@ -4776,7 +4879,24 @@ export async function loadTranscriptFile(
     // via a cheap byte-level forward scan of [0, boundary).
     let buf: Buffer | null = null
     let metadataLines: string[] | null = null
-    if (opts?.keepCompactedHistory) {
+    if (opts?.prefixBytes !== undefined) {
+      const prefixBytes = opts.prefixBytes
+      if (!Number.isSafeInteger(prefixBytes) || prefixBytes <= 0) throw new Error('Invalid transcript prefix')
+      const handle = await fsOpen(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      try {
+        const info = await handle.stat()
+        if (!info.isFile() || info.size < prefixBytes) throw new Error('Transcript prefix is unavailable')
+        buf = Buffer.alloc(prefixBytes)
+        let offset = 0
+        while (offset < prefixBytes) {
+          const { bytesRead } = await handle.read(buf, offset, Math.min(64 * 1024, prefixBytes - offset), offset)
+          if (!bytesRead) throw new Error('Incomplete transcript prefix')
+          offset += bytesRead
+        }
+        if (buf[prefixBytes - 1] !== 10) throw new Error('Transcript prefix is not newline aligned')
+        sourceBytesRead = prefixBytes
+      } finally { await handle.close() }
+    } else if (opts?.keepCompactedHistory) {
       const tail = await readDisplayTranscriptTail(
         filePath,
         opts.maxReadBytes ?? Number.MAX_SAFE_INTEGER,
@@ -4784,7 +4904,7 @@ export async function loadTranscriptFile(
       buf = tail.buffer
       sourceTruncated = tail.truncated
       sourceBytesRead = tail.bytesRead
-    } else if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP)) {
+    } else if (!opts?.strict && !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP)) {
       const { size } = await stat(filePath)
       if (size > SKIP_PRECOMPACT_THRESHOLD) {
         const scan = await readTranscriptForLoad(filePath, size)
@@ -4825,6 +4945,13 @@ export async function loadTranscriptFile(
       }
     }
 
+    if (opts?.strict) {
+      for (const line of buf.toString('utf8').split('\n')) {
+        if (!line.trim()) continue
+        const entry: unknown = JSON.parse(line)
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Invalid transcript entry')
+      }
+    }
     const entries = parseJSONL<Entry>(buf)
 
     // Bridge map for legacy progress entries: progress_uuid → progress_parent_uuid.
@@ -4944,7 +5071,8 @@ export async function loadTranscriptFile(
         })
       }
     }
-  } catch {
+  } catch (error) {
+    if (opts?.strict) throw error
     // File doesn't exist or can't be read
   }
 
@@ -5057,6 +5185,7 @@ export async function loadTranscriptFile(
   }
 
   if (hasCycle) {
+    if (opts?.strict) throw new Error('Transcript parent cycle')
     logEvent('tengu_transcript_parent_cycle', {})
   }
 

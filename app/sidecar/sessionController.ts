@@ -1,5 +1,5 @@
 import { createWorkspaceJumpTools } from './workspaceJumpTools.js'
-import { hasVerifiedSourceCompensation, readWorkspaceJump, workspaceJumpRequiresRetention } from '../../src/utils/workspaceJumpState.js'
+import { hasVerifiedSourceCompensation, readWorkspaceJump, workspaceJumpRequiresRetention, upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate } from '../../src/utils/workspaceJumpState.js'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtime/createQueryEngineAppSessionConfigFromSetup.js'
 import { createQueryEngineSessionController } from '../../src/app-runtime/createQueryEngineSessionController.js'
@@ -729,6 +729,7 @@ export async function createSidecarSessionController({
   probe,
   cwd,
   appSessionId,
+  generation,
   binding = { kind: 'project' },
   recreatedFolderNotice = false,
   initialMessages,
@@ -741,6 +742,7 @@ export async function createSidecarSessionController({
   cwd: string
   /** Trusted app-session identity, supplied by the sidecar entrypoint. */
   appSessionId?: string
+  generation?: string
   /** Validated host binding; legacy launches retain project behavior. */
   binding?: SessionBinding
   /** Host-validated durable marker; appended to the model prompt, not history. */
@@ -844,15 +846,26 @@ export async function createSidecarSessionController({
 
   const controller = createRuntimeBackedAppSession({
     queryEngineConfig,
-    initializeController: controller => {
+    initializeController: async controller => {
       if (!appSessionId) return
-      const handoff = readWorkspaceJump(appSessionId)
-      if (!handoff) return
+      const saved = readWorkspaceJump(appSessionId)
+      if (!saved) return
+      const handoff = upgradeWorkspaceJumpState(saved)
       if (handoff.engineSessionId !== getSessionId()) throw new Error('Workspace change belongs to another conversation')
-      if (workspaceJumpRequiresRetention(handoff) && !handoff.sourceOutcomePersisted) controller.restoreHandoffReservation(handoff.operationId)
-      if (handoff.requiresUserReconciliation) controller.restoreHandoffReconciliation()
+      if (!generation) throw new Error('Workspace change process identity is unavailable')
+      // Converged history is evidence only. Later authorized transcript changes
+      // must not re-arm or invalidate an old handoff.
+      const historical = handoff.continuation.outcome === 'legacy_settled' || handoff.release.target === 'open' && !handoff.review.required && workspaceJumpHasConfirmedGate(handoff)
+      await controller.configureWorkspaceHandoff({ identity: {
+        appSessionId, engineSessionId: getSessionId(), operationId: handoff.operationId,
+        continuationId: handoff.continuation.id, sourceGeneration: handoff.sourceGeneration,
+        admissionGeneration: handoff.continuation.admissionGeneration,
+        operationSha256: workspaceJumpOperationSha256(handoff),
+      }, observerGeneration: generation, origin: handoff.origin, recover: true, ...(historical ? { historical: true as const } : {}) })
+
     },
   })
+  await controller.waitForInitialization()
   return {
     controller,
     permissions: createSidecarPermissionDomain(appStateStore),

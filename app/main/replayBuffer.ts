@@ -151,7 +151,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   // Main consumes these operation acknowledgements before renderer forwarding.
   // Replaying them must never admit work or reconcile a saved operation.
   'workspace.handoff.result': 'none',
-  'workspace.user-admitted': 'none',
+  'workspace.handoff.state': 'none',
 
   'permission.context': 'sticky',
   'settings.snapshot': 'sticky',

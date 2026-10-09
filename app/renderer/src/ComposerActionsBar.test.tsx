@@ -1139,7 +1139,7 @@ test('snapshot delivery isolates expiry by session and clears it on refresh or d
       type: 'frame',
       frame: {
         kind: 'run-controls.snapshot',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId,
         runControls: runControls({ cacheExpired }),
       },
@@ -1156,7 +1156,7 @@ test('snapshot delivery isolates expiry by session and clears it on refresh or d
   deliver('s1', true)
   state = reduceRunControlsState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 3, sessionId: 's1', status: 'disconnected' },
   })
   expect(display('s1')).not.toContain('Estimated cache expiry passed')
 })

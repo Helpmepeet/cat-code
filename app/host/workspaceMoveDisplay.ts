@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { handoffOutcomeText } from '../../src/app-runtime/handoff.js'
-import type { WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
+import { upgradeWorkspaceJumpState, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 import type { SessionLocation, SessionLocationTransition } from '../../src/utils/sessionRelocationState.js'
 import type { WorkspaceMoveDisplay } from '../shared/hostApi.js'
 
@@ -20,6 +20,7 @@ export function workspaceJumpDisplay(
   state: WorkspaceJumpState,
   transitions: readonly SessionLocationTransition[],
 ): WorkspaceMoveDisplay | null {
+  const normalized = upgradeWorkspaceJumpState(state)
   const latest = transitions.at(-1)
   // A later manual move owns the current seam, even after reopening the app.
   if (latest && latest.movedAt > state.acceptedAt && latest.target.cwd !== state.target.cwd) return null
@@ -27,7 +28,7 @@ export function workspaceJumpDisplay(
     ? latest : undefined
   const phase = state.phase !== 'settled' ? 'moving'
     : state.location === 'destination' ? 'arrived'
-    : state.outcome === 'cancelled' ? 'stopped' : 'failed'
+    : (state.version === 1 && state.outcome === 'cancelled') || normalized.legacy?.outcome === 'cancelled' || normalized.cancellation?.application === 'prevented_start' || normalized.cancellation?.application === 'abort_signalled' ? 'stopped' : 'failed'
   return {
     id: state.operationId.slice(0, 128),
     target: moveDisplayTarget(state.target),

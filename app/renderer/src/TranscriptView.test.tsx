@@ -567,7 +567,7 @@ function projectedAskQuestionRow(fields: {
   let state = createTranscriptState()
   state = projectServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -582,7 +582,7 @@ function projectedAskQuestionRow(fields: {
   })
   state = projectServerFrame(state, {
     kind: 'event',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId,
     event: {
       type: 'message',
@@ -611,7 +611,7 @@ function projectedAskQuestionRow(fields: {
   if (!fields.pending) {
     state = projectServerFrame(state, {
       kind: 'event',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId,
       event: {
         type: 'message',
@@ -4800,7 +4800,7 @@ test('P4-18c: a near-total line rewrite skips word-highlight (line-level), no th
 function inspectorReady(sessionId: string) {
   return {
     kind: 'ready' as const,
-    protocolVersion: 2 as const,
+    protocolVersion: 3 as const,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -4818,7 +4818,7 @@ function inspectorReady(sessionId: string) {
 function inspectorMessage(sessionId: string, message: SDKMessage) {
   return {
     kind: 'event' as const,
-    protocolVersion: 2 as const,
+    protocolVersion: 3 as const,
     sessionId,
     event: { type: 'message' as const, message },
   }
@@ -4908,7 +4908,7 @@ test('P4-36: a revealed hidden row renders DIMMED, and only when revealed', () =
   let state = createTranscriptState()
   state = projectServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 's',
     engineSessionId: 'engine-s',
     payload: {
@@ -4931,7 +4931,7 @@ test('P4-36: a revealed hidden row renders DIMMED, and only when revealed', () =
   }
   state = projectServerFrame(state, {
     kind: 'event',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 's',
     event: { type: 'message', message: hiddenFrame },
   })
@@ -4960,7 +4960,7 @@ test('an orphaned subagent tail renders as an agent frame, never as user or assi
   let state = createTranscriptState()
   state = projectServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 's',
     engineSessionId: 'engine-s',
     payload: {
@@ -5001,7 +5001,7 @@ test('an orphaned subagent tail renders as an agent frame, never as user or assi
   for (const message of orphaned) {
     state = projectServerFrame(state, {
       kind: 'event',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId: 's',
       event: { type: 'message', message },
     })
@@ -6300,7 +6300,7 @@ test('a restored Agent card whose steps did not survive says so, and quietly', (
   let state = createTranscriptState()
   state = projectServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 's',
     engineSessionId: 'engine-s',
     payload: {
@@ -6315,7 +6315,7 @@ test('a restored Agent card whose steps did not survive says so, and quietly', (
   })
   state = projectServerFrame(state, {
     kind: 'error',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 's',
     requestId: 'catcode.history-truncated',
     code: 'internal_error',
@@ -6361,7 +6361,7 @@ test('a restored Agent card whose steps did not survive says so, and quietly', (
   for (const message of restored) {
     state = projectServerFrame(state, {
       kind: 'event',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId: 's',
       event: { type: 'message', message },
     })

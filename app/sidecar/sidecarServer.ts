@@ -1,4 +1,4 @@
-import { readWorkspaceJump, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { isPathTrusted } from '../../src/utils/config.js'
@@ -25,6 +25,7 @@ import { isPathTrusted } from '../../src/utils/config.js'
  */
 
 import { randomUUID } from 'crypto'
+import type { WorkspaceHandoffDisposition, WorkspaceHandoffReason, WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import { open } from 'node:fs/promises'
 import z from 'zod/v4'
 import type {
@@ -83,8 +84,11 @@ import {
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   HOST_REQUEST_TIMEOUT_MS,
+  HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
+  MAX_HANDOFF_STATE_BYTES,
+  MAX_HANDOFF_STATES_PER_WINDOW,
   MAX_FRAMES_PER_WINDOW,
   MAX_GENERATED_IMAGE_PREVIEW_BYTES,
   MAX_HISTORY_REPLAY_BYTES,
@@ -268,6 +272,8 @@ export type SidecarTurnLifecycleEvent =
 export type SidecarServerOptions = {
   sessionId: SessionId
   engineSessionId: string
+  /** Trusted process identity minted by the supervisor before spawn. */
+  generation?: string
   controller: AppSessionController
   /**
    * Optional socket-only wrapper. Production uses this to carry metadata-only
@@ -528,6 +534,7 @@ const UUID_SHAPE =
 export class SidecarServer {
   private readonly sessionId: SessionId
   private readonly engineSessionId: string
+  private readonly generation: string
   private readonly controller: AppSessionController
   private readonly permissions: SidecarPermissionDomain | null
   private readonly settings: SidecarSettingsDomain | null
@@ -610,6 +617,11 @@ export class SidecarServer {
   private deliveryConnectionEpoch = 0
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
+  private unsubscribeHandoffStatus: (() => void) | null = null
+  private handoffExecutionTask: Promise<void> | null = null
+  private handoffStateWindow = 0
+  private handoffStateCount = 0
+  private handoffStateTimer: ReturnType<typeof setTimeout> | null = null
   private unsubscribePermissionContext: (() => void) | null = null
   private unsubscribeAgentConfigSnapshot: (() => void) | null = null
   private unsubscribeGoalSnapshot: (() => void) | null = null
@@ -797,6 +809,7 @@ export class SidecarServer {
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
     this.engineSessionId = options.engineSessionId
+    this.generation = options.generation ?? randomUUID()
     this.controller = options.controller
     this.permissions = options.permissions ?? null
     this.settings = options.settings ?? null
@@ -855,6 +868,7 @@ export class SidecarServer {
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
+    this.unsubscribeHandoffStatus = this.controller.subscribeHandoffStatus(() => this.publishHandoffState())
     this.unsubscribe = this.controller.subscribe(event => {
       this.runControls?.observeSessionEvent?.(event)
       // Before the broadcast: `broadcastEvent` returns early with no clients
@@ -1132,6 +1146,7 @@ export class SidecarServer {
         payload: preparedPayload,
       })
     }
+    this.publishHandoffState(connection)
     // C3 — snapshot on attach, immediately after `ready` (a separate app-owned
     // frame; the engine-owned AppReadyPayload is deliberately not widened).
     if (this.permissions) {
@@ -1415,6 +1430,10 @@ export class SidecarServer {
     this.closed = true
     this.clearIdleTimer()
     this.clearTurnStallTimer()
+    if (this.handoffStateTimer) clearTimeout(this.handoffStateTimer)
+    this.handoffStateTimer = null
+    this.unsubscribeHandoffStatus?.()
+    this.unsubscribeHandoffStatus = null
     this.unsubscribe?.()
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
@@ -1735,7 +1754,8 @@ export class SidecarServer {
           return
         }
         const operationId = this.controller.getHandoffReservation()
-        if (operationId) this.requestHandoffCancellation(operationId)
+        if (operationId) { this.requestHandoffCancellation(operationId); return }
+        if (this.controller.getWorkspaceHandoffSnapshot()?.gate.mode === 'review') return
         this.controller.abort(message.reason)
         return
 
@@ -1844,13 +1864,26 @@ export class SidecarServer {
     })
   }
 
-  private publishUserHandoffAdmission(): void {
-    let state
-    try { state = readWorkspaceJump(this.sessionId) } catch { return }
-    if (!state?.requiresUserReconciliation) return
-    this.broadcastToConnections(connection => this.send(connection, { kind: 'workspace.user-admitted', protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId, operationId: state.operationId }))
+  private publishHandoffState(connection?: Connection): void {
+    const status = this.controller.getWorkspaceHandoffSnapshot()
+    if (!status) return
+    const now = Date.now()
+    if (now - this.handoffStateWindow >= HANDOFF_STATE_WINDOW_MS) { this.handoffStateWindow = now; this.handoffStateCount = 0 }
+    if (this.handoffStateCount >= MAX_HANDOFF_STATES_PER_WINDOW) {
+      if (!this.handoffStateTimer) this.handoffStateTimer = setTimeout(() => {
+        this.handoffStateTimer = null
+        if (!this.closed) this.publishHandoffState()
+      }, Math.max(1, HANDOFF_STATE_WINDOW_MS - (now - this.handoffStateWindow)))
+      return
+    }
+    this.handoffStateCount++
+    const frame = { kind: 'workspace.handoff.state' as const, protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId, operationId: status.operationId, status }
+    if (connection) this.send(connection, frame)
+    else this.broadcastToConnections(client => this.send(client, frame))
   }
+
+  private publishUserHandoffAdmission(): void { this.publishHandoffState() }
 
   private publishHandoffReady(): void {
     if (this.closed) return
@@ -1889,62 +1922,113 @@ export class SidecarServer {
   }
 
   private async handleWorkspaceHandoff(connection: Connection, raw: unknown): Promise<void> {
+    if (Buffer.byteLength(JSON.stringify(raw)) > MAX_HANDOFF_STATE_BYTES) { this.log('[sidecar] rejected oversized workspace handoff control'); return }
     const parsed = workspaceHandoffSchema.safeParse(raw)
     if (!parsed.success) { this.log('[sidecar] rejected workspace handoff control'); return }
     const message: WorkspaceHandoffMessage = parsed.data
-    let ok = false
+    let disposition: WorkspaceHandoffDisposition = 'refused'
+    let reason: WorkspaceHandoffReason | undefined = 'invalid_state'
+    let status: WorkspaceHandoffSnapshot | undefined
     try {
-      const state = readWorkspaceJump(this.sessionId)
-      if (!state || state.engineSessionId !== this.engineSessionId || state.operationId !== message.operationId) throw new Error('Obsolete handoff')
+      if (message.forGeneration !== this.generation) { reason = 'wrong_generation'; throw new Error() }
+      const saved = readWorkspaceJump(this.sessionId)
+      if (!saved || saved.engineSessionId !== this.engineSessionId || saved.operationId !== message.operationId) {
+        reason = 'wrong_identity'; throw new Error()
+      }
+      const state = upgradeWorkspaceJumpState(saved)
+      const prior = this.controller.getWorkspaceHandoffSnapshot()
+      const operationSha256 = workspaceJumpOperationSha256(state)
+      if (prior && (prior.operationId !== state.operationId || prior.continuationId !== state.continuation.id ||
+          prior.sourceGeneration !== state.sourceGeneration || prior.operationSha256 !== operationSha256)) {
+        reason = 'conflict'; throw new Error()
+      }
+      // Verification establishes the source boundary that is part of the
+      // immutable execution identity. Do not configure against its earlier null.
+      const configure = message.action !== 'verify' && (message.action !== 'status' || !!state.boundary)
+      if (configure && (!prior || prior.admissionGeneration !== state.continuation.admissionGeneration)) {
+        if (prior?.admissionGeneration !== undefined && prior.admissionGeneration !== null) {
+          reason = 'wrong_generation'; throw new Error()
+        }
+        await this.controller.configureWorkspaceHandoff({ identity: {
+          appSessionId: this.sessionId, engineSessionId: this.engineSessionId,
+          operationId: state.operationId, continuationId: state.continuation.id,
+          sourceGeneration: state.sourceGeneration, admissionGeneration: state.continuation.admissionGeneration,
+          operationSha256,
+        }, observerGeneration: this.generation, origin: state.origin,
+          recover: state.origin === 'legacy' || state.continuation.admissionGeneration !== this.generation })
+      }
+      status = this.controller.getWorkspaceHandoffSnapshot() ?? undefined
       if (message.action === 'verify') {
         const observed = this.handoffResult
         if (!this.isParkGateOpen() || !observed || observed.operationId !== message.operationId ||
             observed.tipUuid !== message.tipUuid || observed.toolUseId !== message.toolUseId ||
-            this.controller.getHandoffReservation() !== message.operationId) throw new Error('Handoff boundary changed')
+            this.controller.getHandoffReservation() !== message.operationId) throw new Error()
         await verifyActiveTranscriptTipDurably(message.tipUuid)
-        if (!this.isParkGateOpen()) throw new Error('Handoff is active')
+        if (!this.isParkGateOpen()) throw new Error()
       } else if (message.action === 'continue') {
-        if (!this.isParkGateOpen() || state.continuation.state !== 'admitted' || state.cancelled ||
-            state.location !== 'destination' || getCwd() !== state.target.cwd || !isPathTrusted(getCwd()) ||
-            this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') throw new Error('Continuation unavailable')
-        if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
-        this.activeTurn = true
-        this.destinationHandoffOperation = message.operationId
-        this.beginTurnObservation()
-        try { await this.controller.continueHandoff(message.operationId, { uuid: state.continuation.id }) }
-        finally {
-          this.destinationHandoffOperation = null
-          this.activeTurn = false
-          this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
+        if (state.origin !== 'fresh' || state.continuation.id !== message.continuationId ||
+            state.continuation.admissionGeneration !== this.generation || state.cancellation ||
+            state.location !== 'destination' || getCwd() !== state.target.cwd) throw new Error()
+        if (!isPathTrusted(getCwd()) || this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') {
+          reason = 'not_trusted'; throw new Error()
         }
-        if (!this.turnResultSucceeded || this.turnResultFailed || this.handoffResult) throw new Error('Continuation did not settle successfully')
-      } else if (message.action === 'settle_failed' || message.action === 'settle_cancelled' || message.action === 'settle_uncertain') {
-        // Cancellation may arrive while the source tool exchange is settling.
-        // Wait without releasing its reservation or starting another turn.
-        const deadline = Date.now() + 15_000
-        while (this.activeTurn || this.controller.isTurnActive()) {
-          if (Date.now() >= deadline || this.closed) throw new Error('Source is not idle')
-          await new Promise(resolve => setTimeout(resolve, 10))
-        }
-        if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
-        await this.controller.settleHandoff(message.operationId, message.action === 'settle_uncertain' ? 'uncertain' : message.action === 'settle_failed' ? 'failed' : 'cancelled')
-        if (message.action === 'settle_cancelled') {
-          this.forcedReconciliationPromptIds.clear()
+        if (status?.record.kind === 'valid' && status.record.record.consumed) {
+          disposition = 'already_applied'
         } else {
-          this.drainOneQueuedPrompt(true)
+          if (this.handoffExecutionTask || !this.isParkGateOpen()) { disposition = 'busy'; throw new Error() }
+          this.activeTurn = true
+          this.destinationHandoffOperation = message.operationId
+          this.beginTurnObservation()
+          try {
+            const started = await this.controller.startHandoffContinuation()
+            this.handoffExecutionTask = started.completion
+            void started.completion.catch(() => this.log('[sidecar] workspace continuation proof unconfirmed')).finally(() => {
+              this.handoffExecutionTask = null
+              this.destinationHandoffOperation = null
+              this.activeTurn = false
+              this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
+              this.publishHandoffState()
+              this.publishHandoffReady()
+            })
+          } catch (error) {
+            this.activeTurn = false
+            this.destinationHandoffOperation = null
+            this.endTurnObservation('failed')
+            reason = 'durability_unconfirmed'
+            throw error
+          }
         }
+      } else if (message.action === 'cancel') {
+        if (!state.cancellation || state.cancellation.cancelId !== message.cancelId) throw new Error()
+        this.inFlightDurableWrites++
+        try { await this.controller.cancelWorkspaceHandoff(message.cancelId) }
+        finally { this.inFlightDurableWrites-- }
+        this.forcedReconciliationPromptIds.clear()
+      } else if (message.action === 'settle') {
+        if (this.handoffExecutionTask || this.activeTurn || this.controller.isTurnActive()) { disposition = 'busy'; throw new Error() }
+        this.inFlightDurableWrites++
+        try { await this.controller.settleWorkspaceHandoff(message.outcome) }
+        finally { this.inFlightDurableWrites-- }
+        if (message.outcome === 'cancelled') this.forcedReconciliationPromptIds.clear()
+        else this.drainOneQueuedPrompt(true)
       } else if (message.action === 'release') {
-        if (state.continuation.state !== 'settled' || state.requiresUserReconciliation) throw new Error('Outcome is not settled')
-        this.controller.releaseHandoffReservation(message.operationId)
-        this.scheduleBoundaryDrain()
-      } else {
-        if (state.requiresUserReconciliation) throw new Error('User admission is not reconciled')
-        this.controller.releaseHandoffReservation(message.operationId)
+        if (state.release.authorizedRevision !== message.authorizationRevision || state.release.target === 'held') throw new Error()
+        this.inFlightDurableWrites++
+        let applied: 'applied' | 'already_applied' | 'refused'
+        try { applied = await this.controller.releaseWorkspaceHandoff(message.operationId, state.release.target) }
+        finally { this.inFlightDurableWrites-- }
+        if (applied === 'refused') { reason = 'conflict'; throw new Error() }
+        disposition = applied === 'already_applied' ? 'already_applied' : 'accepted'
+        if (state.release.target === 'open') this.scheduleBoundaryDrain()
       }
-      ok = true
+      if (disposition === 'refused') disposition = 'accepted'
+      reason = undefined
     } catch { this.log('[sidecar] workspace handoff control refused') }
+    status = this.controller.getWorkspaceHandoffSnapshot() ?? status
+    if (status?.operationId !== message.operationId || reason === 'wrong_identity' || reason === 'wrong_generation') status = undefined
     this.send(connection, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId, ok })
+      sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId,
+      action: message.action, disposition, ...(reason ? { reason } : {}), ...(status ? { status } : {}) })
   }
 
   private drainOneQueuedPrompt(allowUserReconciliation = false): boolean {
@@ -2858,7 +2942,7 @@ export class SidecarServer {
         try {
           const state = readWorkspaceJump(this.sessionId)
           canQueue = !!state && state.engineSessionId === this.engineSessionId &&
-            state.operationId === reservation && workspaceJumpAllowsQueuedInput(state)
+            state.operationId === reservation && workspaceJumpAllowsQueuedInput(state, this.controller.getWorkspaceHandoffSnapshot() ?? undefined)
         } catch { /* An unreadable move ledger keeps admission closed. */ }
       }
       if (!canQueue) {
@@ -5543,6 +5627,11 @@ export class SidecarServer {
   }
 
   private send(connection: Connection, frame: ServerFrame): void {
+    if ((frame.kind === 'workspace.handoff.state' || frame.kind === 'workspace.handoff.result') &&
+        Buffer.byteLength(JSON.stringify(frame)) > MAX_HANDOFF_STATE_BYTES) {
+      this.log('[sidecar] rejected oversized workspace handoff state')
+      return
+    }
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
     // separate from JSON-safety (a token object is valid JSON). An error frame
@@ -6265,7 +6354,7 @@ function checkStrictKeys(message: unknown): string | null {
     // main-derived hop chain, all of which the sidecar treats as DATA: it is
     // never read as authority, and the chain is never authored on this side.
     ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
-    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'action', 'tipUuid', 'toolUseId'])],
+    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'forGeneration', 'action', 'tipUuid', 'toolUseId', 'continuationId', 'cancelId', 'outcome', 'authorizationRevision'])],
     [
       'peer.deliver',
       new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
@@ -6408,10 +6497,14 @@ const historyLoadEarlierMessageSchema = z.object({
  * be a string or null here rather than trusted from a frame; nothing downstream
  * has to re-derive that.
  */
-const workspaceHandoffBase = { type: z.literal('workspace.handoff'), requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS), operationId: z.string().uuid() }
+const workspaceHandoffBase = { type: z.literal('workspace.handoff'), requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS), operationId: z.string().uuid(), forGeneration: z.string().uuid() }
 const workspaceHandoffSchema = z.union([
   z.object({ ...workspaceHandoffBase, action: z.literal('verify'), tipUuid: z.string().uuid(), toolUseId: z.string().min(1).max(256) }).strict(),
-  z.object({ ...workspaceHandoffBase, action: z.enum(['continue', 'settle_failed', 'settle_cancelled', 'settle_uncertain', 'release', 'reconcile']) }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('continue'), continuationId: z.string().uuid() }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('status') }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('cancel'), cancelId: z.string().uuid() }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('settle'), outcome: z.enum(['failed', 'cancelled', 'uncertain']) }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('release'), authorizationRevision: z.number().int().safe().positive() }).strict(),
 ])
 
 const hostResultEnvelopeSchema = z.object({

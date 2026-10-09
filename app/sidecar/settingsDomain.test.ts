@@ -180,7 +180,7 @@ test('carries no secret material even when a source holds tokens (redaction proo
   ]
   const frame: SettingsSnapshotFrame = {
     kind: 'settings.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 'sess-1',
     settings: buildSettingsSnapshot(withSecrets, null),
   }
@@ -824,7 +824,7 @@ test('P4-41 — the reserved token can never be captured as a live style option'
 test('availableOptions carries no secret material (secretGuard-clean)', () => {
   const frame: SettingsSnapshotFrame = {
     kind: 'settings.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 'sess-1',
     settings: buildSettingsSnapshot([], null, OUTPUT_STYLE_OPTIONS),
   }

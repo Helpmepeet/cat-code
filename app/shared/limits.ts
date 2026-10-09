@@ -18,6 +18,11 @@
 /** Max serialized INBOUND frame size (hostile renderer traffic). */
 export const MAX_FRAME_BYTES = 128 * 1024
 
+/** Handoff evidence is metadata; it must never grow into a transcript channel. */
+export const MAX_HANDOFF_STATE_BYTES = 16 * 1024
+export const MAX_HANDOFF_STATES_PER_WINDOW = 32
+export const HANDOFF_STATE_WINDOW_MS = 10_000
+
 /** Closed startup refusal codes for a host-restored Auto mode. */
 export const AUTO_RESTORE_UNAVAILABLE_EXIT = {
   feature: 72,

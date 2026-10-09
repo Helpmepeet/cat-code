@@ -93,6 +93,19 @@ compound command can include successful output before a later step fails.
 
 ## Tests And Validation
 
+Workspace handoff lifecycle coverage routes through
+`src/QueryEngine.handoff.test.ts` (real W/R and execution/storage ordering),
+`app/main/{workspaceJumpCoordinator,workspaceHandoffControl}.test.ts`
+(coordination and command expiry), `app/sidecar/workspaceJumpBoundary.test.ts`
+(strict controls, queue and parking fences), and
+`app/sidecar/{workspaceHandoff.integration.test,workspaceHandoffRestore.process.test}.ts`
+(real cross-boundary release/reconciliation and replacement). The production
+owners are `src/app-runtime/handoffExecution.ts`,
+`src/utils/workspaceHandoffExecutionState.ts`,
+`app/main/workspaceHandoffControl.ts`, and
+`app/shared/workspaceHandoff.ts`. Protocol V3 continuation replies acknowledge
+consumption; execution and gate convergence arrive as cumulative status.
+
 | Change area | Command |
 |---|---|
 | Docs-only map sanity | `git diff --check -- docs/maps/web-app-runtime.md docs/maps/WORKSPACE_MAP.md docs/maps/build-release-testing.md` |

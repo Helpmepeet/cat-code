@@ -116,14 +116,15 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     writeFileSync(join(target, 'CLAUDE.md'), 'CANDIDATE_INSTRUCTIONS_MUST_NOT_LOAD')
     const row: PeerRegistryRow = { appSessionId: setup.appSessionId, engineSessionId: bootstrap.getSessionId(), cwd: setup.source,
       binding: setup.binding, lastAttachedAt: 1, lastMessageSentAt: 1, shutdown: null }
+    const generation = randomUUID()
     const coordinator = new WorkspaceJumpCoordinator({
       row: id => id === setup.appSessionId ? row : undefined,
       knownProjects: () => [{ path: target, lastUsedAt: 10 }],
       validateCwd: path => ({ ok: true, realpath: realpathSync(path) }), trustedProjectRoots: async roots => roots,
-      host: { getSessionGeneration: () => 'source-generation',
+      host: { getSessionGeneration: () => generation,
         reserveWorkspaceJump: async () => ({ ok: true, value: undefined }), releaseWorkspaceJump() {},
         moveWorkspaceJump: async () => { throw new Error('acceptance must not move') } },
-      verifyReady: () => false, persistTerminalOutcome: async () => false, continueDestination: async () => {},
+      verifyReady: () => false, control: async () => ({ kind: 'unavailable' }),
     })
     const hostCalls: string[] = []
     let selectedHandle = ''
