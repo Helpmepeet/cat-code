@@ -35,6 +35,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Menu,
   nativeImage,
   nativeTheme,
   screen,
@@ -288,6 +289,7 @@ import {
   isAppOrigin,
   type NavigationConfig,
 } from './navigationPolicy.js'
+import { decodeImageDataUrl, planContextMenu } from './contextMenuPolicy.js'
 import { MAX_SUGGESTION_SELECTIONS, MAX_TEXT_FIELD_CHARS } from '../shared/limits.js'
 import { createOperationalLogSink } from './operationalLogSink.js'
 import { createOperationalRecord } from '../shared/operationalLog.js'
@@ -1772,6 +1774,52 @@ function createWindow(): void {
       void shell.openExternal(decision.openExternal)
     }
     return { action: 'deny' }
+  })
+
+  // Electron ships no right-click menu. Controls that own a menu (sidebar rows,
+  // file paths) preventDefault the DOM event, so this only fires for the rest.
+  window.webContents.on('context-menu', (_event, params) => {
+    const plan = planContextMenu(params)
+    const template: Electron.MenuItemConstructorOptions[] = []
+    if (plan.copyImage) {
+      template.push({
+        label: 'Copy Image',
+        click: () => window.webContents.copyImageAt(params.x, params.y),
+      })
+    }
+    if (plan.saveImage) {
+      template.push({
+        label: 'Save Image As…',
+        click: () => {
+          const decoded = decodeImageDataUrl(params.srcURL)
+          if (!decoded) return
+          void dialog
+            .showSaveDialog(window, { defaultPath: `image.${decoded.extension}` })
+            .then(async result => {
+              if (result.canceled || !result.filePath) return
+              await writeFile(result.filePath, decoded.bytes)
+            })
+            .catch(error => {
+              process.stderr.write(`[main] save-image failed: ${errText(error)}\n`)
+              dialog.showErrorBox('Could not save image', 'Try another location.')
+            })
+        },
+      })
+    }
+    if (plan.edit === 'editable') {
+      if (template.length > 0) template.push({ type: 'separator' })
+      template.push(
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { type: 'separator' },
+        { role: 'selectAll' },
+      )
+    } else if (plan.edit === 'selection') {
+      if (template.length > 0) template.push({ type: 'separator' })
+      template.push({ role: 'copy' }, { role: 'selectAll' })
+    }
+    if (template.length > 0) Menu.buildFromTemplate(template).popup({ window })
   })
 
   window.once('ready-to-show', () => {
