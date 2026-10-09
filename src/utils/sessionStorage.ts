@@ -1942,7 +1942,9 @@ class Project {
         if (
           message.type === 'user' &&
           'sourceToolAssistantUUID' in message &&
-          message.sourceToolAssistantUUID
+          message.sourceToolAssistantUUID &&
+          Array.isArray(message.message.content) &&
+          message.message.content.some(block => block.type === 'tool_result')
         ) {
           effectiveParentUuid = message.sourceToolAssistantUUID
         }
@@ -3612,8 +3614,26 @@ function recoverOrphanedParallelToolResults(
     }
   }
 
-  // A metadata walk follows attachment/system children only. It stops at the
-  // first reachable user/assistant row, which bounds metadata to the prefix
+  const isSupplementalToolOutput = (child: TranscriptMessage, root: TranscriptMessage): boolean => {
+    if (child.type !== 'user' || root.type !== 'user' || !root.parentUuid ||
+      !Array.isArray(root.message.content) || !root.message.content.some(block => block.type === 'tool_result')) return false
+    if (child.sourceToolAssistantUUID) return child.sourceToolAssistantUUID === root.parentUuid
+    // Older PDF reads did not stamp ownership on their extra page images or
+    // document blocks (Read's persisted output types are "parts" and "pdf").
+    // Recognize only their direct media child; isMeta alone also describes
+    // unrelated inputs and cannot justify recovering a discarded branch.
+    const result = root.toolUseResult
+    return child.parentUuid === root.uuid && child.isMeta === true && !child.origin &&
+      !child.isVirtual && !child.isCompactSummary &&
+      typeof result === 'object' && result !== null && 'type' in result &&
+      Array.isArray(child.message.content) && child.message.content.length > 0 &&
+      ((result.type === 'parts' && child.message.content.every(block => block.type === 'image')) ||
+        (result.type === 'pdf' && child.message.content.every(block => block.type === 'document' &&
+          block.source.type === 'base64' && block.source.media_type === 'application/pdf')))
+  }
+
+  // Follow retained metadata and owned supplemental tool output. Stop at the
+  // first actual conversation input/assistant, bounding recovery to the prefix
   // before a discarded continuation branch.
   const metadataByRoot = new Map<string, TranscriptMessage[]>()
   const collectMetadata = (root: TranscriptMessage): TranscriptMessage[] => {
@@ -3627,11 +3647,12 @@ function recoverOrphanedParallelToolResults(
       for (const child of childrenByParent.get(parentUuid) ?? []) {
         if (visited.has(child.uuid) || !sameRecoveryIdentity(child, root)) continue
         const ordinal = insertionOrdinalByUuid.get(child.uuid) ?? Number.MAX_SAFE_INTEGER
-        if (child.type === 'user' || child.type === 'assistant') {
+        const supplemental = isSupplementalToolOutput(child, root)
+        if ((child.type === 'user' && !supplemental) || child.type === 'assistant') {
           if (ordinal < earliestConversationOrdinal) earliestConversationOrdinal = ordinal
           continue
         }
-        if (child.type !== 'attachment' && child.type !== 'system') continue
+        if (child.type !== 'attachment' && child.type !== 'system' && !supplemental) continue
         visited.add(child.uuid)
         metadata.push(child)
         pending.push(child.uuid)

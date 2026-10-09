@@ -117,6 +117,7 @@ export type UserMessage = {
     structuredContent?: Record<string, unknown>
   }
   imagePasteIds?: number[]
+  /** Owns both tool_result blocks and supplemental user-role tool output. */
   sourceToolAssistantUUID?: UUID
   permissionMode?: string
   origin?: MessageOrigin

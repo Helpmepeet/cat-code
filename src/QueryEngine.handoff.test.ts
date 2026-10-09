@@ -713,6 +713,58 @@ function handoffConfiguration(admission = true) {
     observerGeneration: generation, origin: 'fresh' as const, recover: false }
 }
 
+test.each(['image', 'text'] as const)('parallel tool supplemental %s output survives sealing and allows the next prompt', async kind => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const supplement = createUserMessage({ isMeta: true, content: kind === 'image'
+    ? [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jT1kAAAAASUVORK5CYII=' } }]
+    : 'Extra tool context that must survive resume' })
+  let releaseSibling!: () => void
+  const supplementDelivered = new Promise<void>(resolve => { releaseSibling = resolve })
+  const supplementalTool = buildTool({
+    name: 'SupplementalRead', inputSchema: z.object({}), description: async () => 'read', prompt: async () => 'read',
+    maxResultSizeChars: 1000, isConcurrencySafe: () => true, renderToolUseMessage: () => null,
+    async call() { return { data: 'first result', newMessages: [supplement] } },
+    mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: data }),
+  })
+  const siblingTool = buildTool({
+    name: 'SiblingRead', inputSchema: z.object({}), description: async () => 'read', prompt: async () => 'read',
+    maxResultSizeChars: 1000, isConcurrencySafe: () => true, renderToolUseMessage: () => null,
+    async call() { await supplementDelivered; return { data: 'second result' } },
+    mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: data }),
+  })
+  const firstCall = assistant([{ type: 'tool_use', id: 'supplemental-read', name: 'SupplementalRead', input: {} }])
+  const siblingCall = assistant([{ type: 'tool_use', id: 'sibling-read', name: 'SiblingRead', input: {} }])
+  siblingCall.message.id = firstCall.message.id
+  let providerCalls = 0
+  const providerHistory: Message[][] = []
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    providerCalls++
+    providerHistory.push([...messages])
+    if (providerCalls === 1) { yield firstCall; yield siblingCall }
+    else yield assistant([{ type: 'text', text: 'Both reads finished.' }])
+  }))
+  const runtime = engine([supplementalTool, siblingTool])
+  const controller = createQueryEngineSessionController(runtime)
+  const unsubscribe = controller.subscribe(event => {
+    if (event.type === 'message' && event.message.uuid === supplement.uuid) releaseSibling()
+  })
+  const configuration = handoffConfiguration()
+  await controller.configureWorkspaceHandoff(configuration)
+  try { await (await controller.startHandoffContinuation()).completion }
+  finally { unsubscribe(); releaseSibling() }
+  const snapshot = controller.getWorkspaceHandoffSnapshot()!
+  if (snapshot.record.kind !== 'valid' || !snapshot.record.record.terminal) throw new Error('Missing completed continuation receipt')
+  expect(snapshot.record.record.terminal.outcome).toBe('success')
+  await storage.verifyResumeCheckpoint(snapshot.record.record.terminal.checkpoint)
+  const resumed = await storage.loadTranscriptFromFile(storage.getTranscriptPath())
+  expect(resumed.messages.find(message => message.type === 'user' && message.uuid === supplement.uuid)).toMatchObject({ message: supplement.message })
+  expect(await controller.releaseWorkspaceHandoff(configuration.identity.operationId, 'open')).toBe('applied')
+  await controller.submit('Follow up after both reads')
+  expect(providerCalls).toBe(3)
+  expect(providerHistory[2]!.find(message => message.type === 'user' && message.uuid === supplement.uuid)).toMatchObject({ message: supplement.message })
+})
+
 test('relocated continuation keeps the archive intact and filters only former-workspace skill context', async () => {
   const { createUserMessage, normalizeMessages, normalizeMessagesForAPI } = await import('./utils/messages.js')
   const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')

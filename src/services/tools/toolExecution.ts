@@ -1995,7 +1995,11 @@ async function checkPermissionsAndCallTool(
     // If the tool provided new messages, add them to the list to return.
     if (result.newMessages && result.newMessages.length > 0) {
       for (const message of result.newMessages) {
-        resultingMessages.push({ message })
+        // Supplemental tool output uses the user role too (for example PDF
+        // page images). Keep its ownership across persistence and resume.
+        resultingMessages.push({ message: message.type === 'user'
+          ? { ...message, sourceToolAssistantUUID: assistantMessage.uuid }
+          : message })
       }
     }
     // If hook indicated to prevent continuation after successful execution, yield a stop reason message

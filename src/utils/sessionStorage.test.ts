@@ -2673,6 +2673,28 @@ describe('large transcript resume preserves selection and recoverable content', 
     await readWithReference(path)
   })
 
+  test.each(['parts', 'pdf'] as const)('legacy PDF %s output survives parallel recovery without reviving unrelated meta input', async kind => {
+    const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read both files' } })
+    const a = call(prompt.uuid, 1, 'call-A')
+    const b = call(a.uuid, 2, 'call-B')
+    const resultA = { ...result(a.uuid, 3, 'call-A', 'PDF read'), toolUseResult: { type: kind, file: { filePath: 'assignment.pdf', originalSize: 100,
+      ...(kind === 'parts' ? { count: 1, outputDir: 'extracted-pages' } : { base64: 'saved-document' }) } } }
+    const pages = row('user', resultA.uuid, 4, { userType: 'external', isMeta: true,
+      message: { role: 'user', content: kind === 'parts'
+        ? [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'saved-page' } }]
+        : [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'saved-document' } }] } })
+    const unrelatedMeta = row('user', pages.uuid, 5, { userType: 'external', isMeta: true,
+      message: { role: 'user', content: 'discarded meta continuation' } })
+    const laterPages = row('user', unrelatedMeta.uuid, 6, { userType: 'external', isMeta: true,
+      message: { role: 'user', content: pages.message.content } })
+    const resultB = result(b.uuid, 7, 'call-B', 'other file')
+    const report = final(resultB.uuid, 8)
+    const { path } = await write([prompt, a, b, resultA, pages, unrelatedMeta, laterPages, resultB, report])
+    const resumed = await readWithReference(path)
+    expect(resumed.messages.map(message => message.uuid)).toEqual([prompt.uuid, a.uuid, b.uuid, resultA.uuid, pages.uuid, resultB.uuid, report.uuid])
+    expect(resumed.messages.find(message => message.type === 'user' && message.uuid === pages.uuid)).toMatchObject({ message: pages.message })
+  })
+
   test('parallel recovery retains pre-continuation hook metadata without resurrecting its discarded branch', async () => {
     const prompt = row('user', null, 0, { userType: 'external', message: { role: 'user', content: 'read both files' } })
     const a = call(prompt.uuid, 1, 'call-A')
@@ -2682,7 +2704,7 @@ describe('large transcript resume preserves selection and recoverable content', 
       attachment: { type: 'hook_additional_context', content: ['retained context for A'], hookName: 'PostToolUse:Read', toolUseID: 'call-A', hookEvent: 'PostToolUse' },
     })
     const discardedContinuation = row('user', hookA.uuid, 5, {
-      userType: 'external', message: { role: 'user', content: 'discarded continuation from A' },
+      userType: 'external', isMeta: true, message: { role: 'user', content: 'discarded continuation from A' },
     })
     const laterMetadata = row('attachment', hookA.uuid, 6, {
       attachment: { type: 'hook_additional_context', content: ['must not return'], hookName: 'PostToolUse:Read', toolUseID: 'call-A', hookEvent: 'PostToolUse' },

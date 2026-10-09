@@ -131,6 +131,15 @@ Success requires independently intended conversation equality through the real
 bounded-prefix reader, final execution classification, and durable record
 publication. Operational acknowledgements and SDK results do not supply proof.
 
+Tool-generated supplemental user-role output retains its assistant ownership,
+including PDF page images, PDF documents and extra text context. Only actual
+tool-result rows override the sequential transcript parent with that assistant.
+Parallel recovery includes owned supplemental descendants before any discarded
+conversation continuation. Older PDF reads without the ownership field retain
+their direct meta media output using Read's persisted `parts`/`pdf` result shape;
+unrelated meta input still bounds recovery. This keeps resume sealing faithful to
+the intended conversation rather than weakening the checkpoint or release gate.
+
 Continuation acknowledges durable consumption and runs independently of the
 20-second command deadline. Cumulative status retains committed warning and
 genuine-input reconciliation evidence during overlapping coordination. Stop and
