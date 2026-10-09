@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-10-09
+Last refreshed: 2026-10-10
 
 ## Purpose
 
@@ -28,12 +28,12 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-10-09 |
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-09-29 |
 | [`docs/maps/codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-09-30 |
-| [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-09 |
-| [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, project identity, workspace path discovery, transcripts, memory, migrations, and persistence scope. | 2026-10-09 |
+| [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-10 |
+| [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, project identity, workspace path discovery, transcripts, memory, migrations, and persistence scope. | 2026-10-10 |
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-09-21 |
 | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-10-09 |
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
-| [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-09 |
+| [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-10 |
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-09-29 |
 | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. | 2026-10-09 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-09-29 |
