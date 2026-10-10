@@ -688,8 +688,14 @@ export function SessionPane({
     (scrollCapturePumpRef.current ??= createTranscriptScrollCapturePump())
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
+  const jumpMove = activeDescriptor?.workspaceMove?.agentJump === true
+    ? activeDescriptor.workspaceMove : null
+  const jumpHeld = turnStartedAt !== null && jumpMove !== null &&
+    jumpMove.continuation !== undefined && jumpMove.continuation !== 'finished' &&
+    (jumpMove.phase === 'moving' || jumpMove.phase === 'arrived')
+  const activityRunning = generating || jumpHeld
   const latestEntrance = useEntranceOnChange(
-    generating, !generating && showLatest, 'animate-settle',
+    activityRunning, !activityRunning && showLatest, 'animate-settle',
   )
   const questionEntrance = useEntranceOnChange(
     askQuestion?.request.requestId ?? null, askQuestion !== null, 'animate-toast-in',
@@ -769,7 +775,11 @@ export function SessionPane({
   // Compaction is the one activity the rows cannot report: it runs between
   // turns of the loop and mints nothing until its boundary lands at the end.
   const compacting = selectIsCompacting(transcript, activeSessionId)
-  const activity = deriveActivity(nestedRows, compacting)
+  const activity = jumpHeld && jumpMove?.phase === 'moving'
+    ? { verb: 'Moving', target: null }
+    : jumpHeld && !generating
+      ? { verb: 'Working', target: null }
+      : deriveActivity(nestedRows, compacting)
   // Same slice-cached projection `deriveActivity` reads, so the plan cannot
   // disagree with the verb beside it (`todoPlan.ts`).
   const todoPlan = selectTodoPlan(nestedRows)
@@ -870,8 +880,8 @@ export function SessionPane({
   // The activity row mounts when the turn goes live, before the engine echoes
   // the user row. Its entrance must start on that mount, not on the echo.
   const activityEntrance = useEntranceOnChange(
-    generating,
-    generating && liftAwaitingTurnRef.current && nestedRows.length > 0 &&
+    activityRunning,
+    activityRunning && liftAwaitingTurnRef.current && nestedRows.length > 0 &&
       atBottomRef.current && restorePhase === null && !historyLoadEarlierPending &&
       !prefersReducedMotion(),
     'animate-arrive',
@@ -1152,7 +1162,7 @@ export function SessionPane({
   // of turn time) with it.
   const [elapsedMs, setElapsedMs] = useState(0)
   useEffect(() => {
-    if (!generating || turnStartedAt === null) {
+    if (!activityRunning || turnStartedAt === null) {
       setElapsedMs(0)
       return
     }
@@ -1160,7 +1170,7 @@ export function SessionPane({
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [generating, turnStartedAt])
+  }, [activityRunning, turnStartedAt])
 
   // Live per-turn token count for the activity byline: real output tokens for
   // the turn's finished messages, a character estimate for the one still
@@ -1175,10 +1185,10 @@ export function SessionPane({
   // display yet.
   const liveTokens = useMemo(
     () =>
-      generating && elapsedMs > SHOW_TOKENS_AFTER_MS
+      generating && jumpMove?.phase !== 'moving' && elapsedMs > SHOW_TOKENS_AFTER_MS
         ? selectLiveTokenEstimate(nestedRows, activeLog.messages)
         : 0,
-    [generating, nestedRows, activeLog.messages, elapsedMs],
+    [generating, jumpMove?.phase, nestedRows, activeLog.messages, elapsedMs],
   )
 
   // Stop → the real `app.abort` boundary. The requestId is a message envelope
@@ -1900,14 +1910,14 @@ export function SessionPane({
             type="button"
             onClick={jumpToBottom}
             className={`absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] shadow-lg backdrop-blur transition-colors duration-[var(--motion-arrive)] ${
-              generating
+              activityRunning
                 ? paused
                   ? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'
                   : 'border-accent/50 bg-shell-chrome/90 text-accent'
                 : 'border-shell-seam bg-shell-chrome/90 text-text-muted'
             }`}
           >
-            {generating ? (
+            {activityRunning ? (
               <>
                 <span
                   className={`h-1.5 w-1.5 animate-pulse rounded-full ${
@@ -2068,7 +2078,7 @@ export function SessionPane({
       {/* Outside the scroller: one row, fixed height, and it is the row that
        * hugs the composer. Scrolling it away from the input it belongs to would
        * be the opposite of what it is for. */}
-      {generating && askQuestion === null ? (
+      {activityRunning && askQuestion === null ? (
         <div
           className={activityEntrance.active ? 'animate-arrive' : undefined}
           ref={activityEntrance.ref}
@@ -2698,7 +2708,7 @@ type SessionPaneProps = {
    * the real outcome; no optimistic UI, mirrors AccountsPage's `pendingRef`. */
   accountsLastResult: AccountResultFrame | null
   activeConnection: ConnectionSnapshot
-  /** When this session's running turn started, or null when no turn is running.
+  /** When this session's running turn started, or the source turn of a pending jump.
    * Owned by App (`reduceTurnStarts`) because a pane is unmounted while its
    * session is off screen, and the elapsed clock must survive that. */
   turnStartedAt?: number | null

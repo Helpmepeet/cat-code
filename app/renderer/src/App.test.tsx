@@ -1715,6 +1715,36 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   expect(activityRow).not.toContain('border-b')
 })
 
+test('an accepted workspace jump keeps the activity row through source idle', () => {
+  const move = {
+    id: 'jump-1', phase: 'moving' as const, agentJump: true as const, continuation: 'waiting' as const,
+    target: { kind: 'project' as const, name: 'destination', path: '/tmp/destination' },
+  }
+  const props = {
+    ...idleSessionPaneProps(),
+    turnStartedAt: 1_000,
+    activeDescriptor: {
+      appSessionId: 'session-1', engineSessionId: 'engine-1', cwd: '/tmp/source',
+      title: null, forked: false, titleUpdatedAt: null, name: null,
+      createdBy: null, peerWakeBlocked: false, status: 'ready' as const,
+      restorable: false, parked: false, createdAt: 0, lastAttachedAt: 0,
+      lastMessageSentAt: null,
+      workspaceMove: move,
+    },
+  }
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...props}
+    />,
+  )
+  expect(html).toContain('>Moving</span>')
+  expect(html).not.toContain('JumpWorkspace')
+  const arrived = renderToStaticMarkup(<SessionPane {...props} activeDescriptor={{ ...props.activeDescriptor, workspaceMove: { ...move, phase: 'arrived' } }} />)
+  expect(arrived).toContain('>Working</span>')
+  const finished = renderToStaticMarkup(<SessionPane {...props} activeDescriptor={{ ...props.activeDescriptor, workspaceMove: { ...move, phase: 'arrived', continuation: 'finished' } }} />)
+  expect(finished).not.toMatch(/<div class="[^"]*gap-2\.5[^"]*text-xs"/)
+})
+
 test('a question card replaces the generating activity row', () => {
   const html = renderToStaticMarkup(
     <SessionPane

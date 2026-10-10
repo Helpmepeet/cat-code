@@ -17,7 +17,8 @@ export function readWorkspaceMoveDisplay(value: unknown): WorkspaceMoveDisplay |
       (v.afterFrameId !== undefined && v.afterFrameId !== null && !string(v.afterFrameId, 256)) ||
       (v.toolUseId !== undefined && !string(v.toolUseId, 256)) ||
       (v.replacedNotice !== undefined && !string(v.replacedNotice, 512)) ||
-      (v.agentJump !== undefined && v.agentJump !== true)) return null
+      (v.agentJump !== undefined && v.agentJump !== true) ||
+      (v.continuation !== undefined && !['waiting', 'dispatched', 'finished'].includes(v.continuation as string))) return null
   return value as WorkspaceMoveDisplay
 }
 

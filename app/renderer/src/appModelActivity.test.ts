@@ -144,6 +144,12 @@ function project(messages: unknown[]) {
 
 const kinds = (rows: ReturnType<typeof project>) => rows.map(row => row.kind)
 
+test('the workspace jump tool name is never an activity target', () => {
+  const rows = project([userTurn('move workspaces'), toolCalls([{ id: 'toolu_jump', name: 'JumpWorkspace' }])])
+  expect(kinds(rows)).toContain('tool-use')
+  expect(deriveActivity(rows)).toEqual({ verb: 'Working', target: null })
+})
+
 test('a pending tool is reported even when it is not the last row', () => {
   // THE REGRESSION. Three tools dispatched together, the LAST one finishing
   // first: the tail-only read reported "Working" with two still executing.

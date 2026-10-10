@@ -29,11 +29,19 @@ export function workspaceJumpDisplay(
   const phase = state.phase !== 'settled' ? 'moving'
     : state.location === 'destination' ? 'arrived'
     : (state.version === 1 && state.outcome === 'cancelled') || normalized.legacy?.outcome === 'cancelled' || normalized.cancellation?.application === 'prevented_start' || normalized.cancellation?.application === 'abort_signalled' ? 'stopped' : 'failed'
+  const continuation = normalized.continuation.outcome !== 'pending' ||
+    normalized.review.required ||
+    (phase === 'arrived' && normalized.continuation.dispatch === 'none') ||
+    normalized.cancellation?.application === 'prevented_start' ||
+    normalized.cancellation?.application === 'abort_signalled'
+    ? 'finished'
+    : normalized.continuation.dispatch === 'consumed' ? 'dispatched' : 'waiting'
   return {
     id: state.operationId.slice(0, 128),
     target: moveDisplayTarget(state.target),
     phase,
     agentJump: true,
+    continuation,
     ...(phase === 'failed' || phase === 'stopped'
       ? { replacedNotice: handoffOutcomeText(phase === 'stopped' ? 'cancelled' : 'failed').slice(0, 512) } : {}),
     ...(arrival ? { transitionId: arrival.id, afterFrameId: arrival.afterFrameId } : {}),
