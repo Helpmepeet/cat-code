@@ -3872,6 +3872,9 @@ Read the team config to discover your teammates' names. Check the task list peri
       ])
     }
     case 'todo_reminder': {
+      if (attachment.compactState) {
+        return wrapMessagesInSystemReminder([createUserMessage({ content: attachment.compactState.text, isMeta: true })])
+      }
       const todoItems = attachment.content
         .map((todo, index) => `${index + 1}. [${todo.status}] ${todo.content}`)
         .join('\n')
@@ -3889,6 +3892,9 @@ Read the team config to discover your teammates' names. Check the task list peri
       ])
     }
     case 'task_reminder': {
+      if (attachment.compactState) {
+        return wrapMessagesInSystemReminder([createUserMessage({ content: attachment.compactState.text, isMeta: true })])
+      }
       if (!isTodoV2Enabled()) {
         return []
       }

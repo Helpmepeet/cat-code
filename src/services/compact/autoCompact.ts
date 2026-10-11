@@ -40,6 +40,7 @@ import {
 } from './compact.js'
 import { runPostCompactCleanup } from './postCompactCleanup.js'
 import { trySessionMemoryCompaction } from './sessionMemoryCompact.js'
+import { POST_COMPACT_TASK_TOKEN_BUDGET, isCompactTaskRestoreEnabled } from './taskRestoration.js'
 
 /**
  * The window every threshold below is derived from: the model's advertised
@@ -703,10 +704,10 @@ export async function autoCompactIfNeeded(
     toolUseContext.agentId,
     recompactionInfo.autoCompactThreshold,
     null,
-    toolUseContext.agentId === undefined &&
+    (toolUseContext.agentId === undefined &&
       toolUseContext.getPostCompactRuntimeAttachments
       ? POST_COMPACT_RUNTIME_ATTACHMENT_TOKEN_BUDGET
-      : 0,
+      : 0) + (isCompactTaskRestoreEnabled() ? POST_COMPACT_TASK_TOKEN_BUDGET : 0),
   )
   if (sessionMemoryResult) {
     // Reset lastSummarizedMessageId since session memory compaction prunes messages
@@ -726,6 +727,7 @@ export async function autoCompactIfNeeded(
       compactionResult: await appendPostCompactRuntimeAttachments(
         sessionMemoryResult,
         toolUseContext,
+        messages,
       ),
     }
   }
@@ -752,6 +754,7 @@ export async function autoCompactIfNeeded(
           recompactionInfo,
         )),
       toolUseContext,
+      messages,
     )
 
     // Reset lastSummarizedMessageId since legacy compaction replaces all messages

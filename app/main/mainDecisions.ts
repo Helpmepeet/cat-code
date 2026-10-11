@@ -52,6 +52,7 @@ import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js
 export const SIDECAR_RUNTIME_ARGS = [
   '--feature=TRANSCRIPT_CLASSIFIER',
   '--feature=REACTIVE_COMPACT',
+  '--feature=COMPACT_TASK_RESTORE',
   'run',
 ] as const
 

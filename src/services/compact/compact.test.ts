@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { feature } from 'bun:bundle'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -13,10 +14,13 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import {
   createUserMessage,
+  createAssistantMessage as makeAssistant,
   normalizeAttachmentForAPI,
 } from '../../utils/messages.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
+import { TodoWriteTool } from '../../tools/TodoWriteTool/TodoWriteTool.js'
+const candidateTest = feature('COMPACT_TASK_RESTORE') ? test : test.skip
 
 function createAssistantMessage(text: string): AssistantMessage {
   return {
@@ -142,6 +146,10 @@ describe('compactConversation', () => {
         (key: string, defaultValue: boolean) =>
           key === 'tengu_compact_cache_prefix' ? false : defaultValue,
       ),
+      getDynamicConfig_BLOCKS_ON_INIT: mock((key: string, defaultValue: unknown) =>
+        key === 'tengu_sm_compact_config'
+          ? { minTokens: 1, minTextBlockMessages: 1, maxTokens: 10_000 }
+          : defaultValue),
     }))
 
     await mock.module('../api/claude.js', () => ({
@@ -158,6 +166,67 @@ describe('compactConversation', () => {
     switchSession(originalSessionId, originalProjectDir)
     rmSync(tempDir, { recursive: true, force: true })
   })
+
+  for (const strategy of ['full', 'manual', 'auto', 'session-memory', 'partial-from', 'partial-up-to', ...(feature('REACTIVE_COMPACT') ? ['reactive' as const] : [])] as const) {
+    candidateTest(`${strategy}: selected compaction restores lost task state`, async () => {
+      const keys = ['CAT_CODE_EVAL_COMPACT_TASK_RESTORE', 'ENABLE_CLAUDE_CODE_SM_COMPACT', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 'ANTHROPIC_API_KEY']
+      const saved = keys.map(k => process.env[k])
+      const { setSessionMemoryCompactConfig, getSessionMemoryCompactConfig } = await import('./sessionMemoryCompact.js')
+      const smConfig = getSessionMemoryCompactConfig()
+      try {
+        process.env.CAT_CODE_EVAL_COMPACT_TASK_RESTORE = '1'
+        process.env.ANTHROPIC_API_KEY = 'sk-ant-offline-harness'
+        process.env.ENABLE_CLAUDE_CODE_SM_COMPACT = strategy === 'session-memory' ? '1' : '0'
+        process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '1'
+        const todos = [{ content: 'Verify restored work', status: 'in_progress', activeForm: 'Running the required checks' }]
+        const messages: Message[] = [
+          createUserMessage({ content: 'Implement and verify the work.' }),
+          makeAssistant({ content: [{ type: 'tool_use', id: 'todo-write', name: 'TodoWrite', input: { todos } }] }),
+          createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'todo-write', content: 'success' }] }),
+          ...Array.from({ length: 8 }, () => makeAssistant({ content: 'Investigating unrelated details.' })),
+        ]
+        const context = createToolUseContext(messages)
+        context.options.tools = [TodoWriteTool]
+        const state = context.getAppState()
+        context.getAppState = () => ({ ...state, todos: { [getSessionId()]: todos } }) as never
+        const cacheSafeParams = { systemPrompt: asSystemPrompt(['system prompt']), userContext: {}, systemContext: {}, toolUseContext: context, forkContextMessages: messages }
+        let result: import('./compact.js').CompactionResult | undefined
+        if (strategy === 'full') {
+          const compact = await import('./compact.js')
+          result = await compact.appendPostCompactRuntimeAttachments(await compact.compactConversation(messages, context, cacheSafeParams, true), context, messages)
+        } else if (strategy === 'partial-from' || strategy === 'partial-up-to') {
+          const { partialCompactConversation } = await import('./compact.js')
+          result = await partialCompactConversation(messages, strategy === 'partial-from' ? 1 : 3, context, cacheSafeParams, undefined, strategy === 'partial-from' ? 'from' : 'up_to')
+        } else if (strategy === 'manual') {
+          const command = await import('../../commands/compact/compact.js')
+          const response = await command.call('', context as unknown as Parameters<typeof command.call>[1])
+          if (response.type === 'compact') result = response.compactionResult
+        } else if (strategy === 'reactive') {
+          const { tryReactiveCompact } = await import('./reactiveCompact.js')
+          result = await tryReactiveCompact({ hasAttempted: false, aborted: false, querySource: 'repl_main_thread', messages, cacheSafeParams }) ?? undefined
+        } else {
+          if (strategy === 'session-memory') {
+            const { getSessionMemoryPath, getSessionMemoryDir } = await import('../../utils/permissions/filesystem.js')
+            mkdirSync(getSessionMemoryDir(), { recursive: true })
+            writeFileSync(getSessionMemoryPath(), '## Current work\nImplement the requested repair; verification remains unfinished.')
+            setSessionMemoryCompactConfig({ minTokens: 0, minTextBlockMessages: 0 })
+          }
+          const { autoCompactIfNeeded } = await import('./autoCompact.js')
+          result = (await autoCompactIfNeeded(messages, context, cacheSafeParams, 'repl_main_thread')).compactionResult
+        }
+        expect(result).toBeDefined()
+        // This pair must lose TodoWrite; otherwise it does not test restoration.
+        expect(result!.messagesToKeep?.some(m => m.type === 'assistant' && m.message.content.some(b => b.type === 'tool_use' && b.name === 'TodoWrite')) ?? false).toBe(false)
+        const snapshots = result!.attachments.filter(m => (m.attachment as { compactState?: unknown }).compactState)
+        expect(snapshots).toHaveLength(1)
+        expect(JSON.stringify(normalizeAttachmentForAPI(snapshots[0]!.attachment as never))).toContain('Verify restored work')
+        if (strategy === 'session-memory') expect(streamingRequests).toHaveLength(0)
+      } finally {
+        keys.forEach((k, i) => { if (saved[i] === undefined) delete process.env[k]; else process.env[k] = saved[i] })
+        setSessionMemoryCompactConfig(smConfig)
+      }
+    })
+  }
 
   test('full compaction reads session state without mode-specific options', async () => {
     const { compactConversation, buildPostCompactMessages } = await import(

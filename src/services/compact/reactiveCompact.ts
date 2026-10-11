@@ -641,7 +641,7 @@ export async function tryReactiveCompact(params: {
         undefined,
         true,
       )
-      return await appendPostCompactRuntimeAttachments(result, context)
+      return await appendPostCompactRuntimeAttachments(result, context, messages)
     } catch (error) {
       logError(error)
       return null
@@ -700,6 +700,7 @@ export async function tryReactiveCompact(params: {
     return appendPostCompactRuntimeAttachments(
       { ...outcome.result, userDisplayMessage },
       context,
+      messages,
     )
   } catch (error) {
     logError(error)

@@ -3,6 +3,7 @@ import {
   logEvent,
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
 } from 'src/services/analytics/index.js'
+import { isDeepStrictEqual } from 'node:util'
 import {
   toolMatchesName,
   type Tools,
@@ -497,11 +498,13 @@ export type Attachment =
       type: 'todo_reminder'
       content: TodoList
       itemCount: number
+      compactState?: { scope: string; text: string }
     }
   | {
       type: 'task_reminder'
       content: Task[]
       itemCount: number
+      compactState?: { scope: string; text: string }
     }
   | {
       type: 'nested_memory'
@@ -3362,7 +3365,9 @@ function hasUnchangedReminder(
     }
     return (
       'content' in attachment &&
-      JSON.stringify(attachment.content) === JSON.stringify(content)
+      ('compactState' in attachment
+        ? isDeepStrictEqual(attachment.content, content)
+        : JSON.stringify(attachment.content) === JSON.stringify(content))
     )
   }
   return false

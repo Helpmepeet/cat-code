@@ -61,6 +61,7 @@ test('the production sidecar runtime enables the desktop engine features', () =>
   expect(SIDECAR_RUNTIME_ARGS).toEqual([
     '--feature=TRANSCRIPT_CLASSIFIER',
     '--feature=REACTIVE_COMPACT',
+    '--feature=COMPACT_TASK_RESTORE',
     'run',
   ])
 })
@@ -79,6 +80,7 @@ describe('sidecar launch resolution (P5-1)', () => {
     expect(plan.argsFor('session')).toEqual([
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
+      '--feature=COMPACT_TASK_RESTORE',
       'run',
       '/repo/app/sidecar/index.ts',
     ])
@@ -115,6 +117,7 @@ describe('sidecar launch resolution (P5-1)', () => {
     expect(resolveSidecarLaunch(DEV).argsFor('debug-cleanup')).toEqual([
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
+      '--feature=COMPACT_TASK_RESTORE',
       'run',
       '/repo/app/sidecar/debugCleanupWorker.ts',
     ])

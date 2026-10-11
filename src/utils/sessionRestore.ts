@@ -127,6 +127,13 @@ export function prepareSessionRestoreResult(
 function extractTodosFromTranscript(messages: Message[]): TodoList {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
+    if (msg?.type === 'attachment' && msg.attachment && typeof msg.attachment === 'object') {
+      const attachment = msg.attachment as { type?: unknown; compactState?: unknown; content?: unknown }
+      if (attachment.type === 'todo_reminder' && attachment.compactState) {
+        const parsed = TodoListSchema().safeParse(attachment.content)
+        if (parsed.success) return parsed.data
+      }
+    }
     if (msg?.type !== 'assistant') continue
     const toolUse = msg.message.content.find(
       block => block.type === 'tool_use' && block.name === TODO_WRITE_TOOL_NAME,

@@ -84,6 +84,7 @@ export const call: LocalCommandCall = async (args, context) => {
           compactionResult: await appendPostCompactRuntimeAttachments(
             sessionMemoryResult,
             context,
+            messages,
           ),
           displayText: buildDisplayText(context),
         }
@@ -115,6 +116,7 @@ export const call: LocalCommandCall = async (args, context) => {
           compactionResult: await appendPostCompactRuntimeAttachments(
             reactiveResult.compactionResult,
             context,
+            messages,
           ),
         }
       }
@@ -151,6 +153,7 @@ export const call: LocalCommandCall = async (args, context) => {
       compactionResult: await appendPostCompactRuntimeAttachments(
         result,
         context,
+        messages,
       ),
       displayText: buildDisplayText(context, result.userDisplayMessage),
     }

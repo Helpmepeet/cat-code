@@ -3440,7 +3440,20 @@ export function buildConversationChain(
     currentMsg = parentUuid ? messages.get(parentUuid) : undefined
   }
   transcript.reverse()
-  return recoverOrphanedParallelToolResults(messages, transcript, seen)
+  const recovered = recoverOrphanedParallelToolResults(messages, transcript, seen)
+  const recoveredIds = new Set(recovered.map(row => row.uuid))
+  // A restart immediately after compaction has no newer conversation message
+  // parenting the task snapshot. Retain that snapshot along the selected
+  // metadata branch, stopping before any discarded conversation continuation.
+  const descendants = collectActiveConversationMetadataDescendants(messages.values(), leafMessage.uuid as UUID, leafMessage.isSidechain)
+  for (const row of messages.values()) {
+    if (!descendants.has(row.uuid as UUID) || recoveredIds.has(row.uuid) || row.type !== 'attachment' ||
+      row.sessionId !== leafMessage.sessionId || row.agentId !== leafMessage.agentId) continue
+    const attachment = row.attachment as { type?: unknown; compactState?: { text?: unknown } } | null
+    if ((attachment?.type === 'todo_reminder' || attachment?.type === 'task_reminder') &&
+      typeof attachment.compactState?.text === 'string' && attachment.compactState.text.length <= 3000) recovered.push(row)
+  }
+  return recovered
 }
 
 /**
@@ -3452,12 +3465,13 @@ export function buildConversationChain(
 function collectActiveConversationMetadataDescendants(
   messages: Iterable<TranscriptMessage>,
   root: UUID | null,
+  sidechain = false,
 ): Set<UUID> {
   const descendants = new Set<UUID>()
   let rootSeen = root === null
 
   for (const message of messages) {
-    if (message.isSidechain) continue
+    if (Boolean(message.isSidechain) !== Boolean(sidechain)) continue
     if (message.uuid === root) {
       rootSeen = true
       continue

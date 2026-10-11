@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
+import { getPostCompactTaskAttachments } from './taskRestoration.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const sessionTranscriptModule = feature('KAIROS')
@@ -356,21 +357,28 @@ export function buildPostCompactMessages(result: CompactionResult): Message[] {
 export async function appendPostCompactRuntimeAttachments(
   result: CompactionResult,
   context: ToolUseContext,
+  messages: Message[] = context.messages,
 ): Promise<CompactionResult> {
   const provider = context.getPostCompactRuntimeAttachments
-  if (!provider) return result
-
-  let attachments: Attachment[]
+  let attachments: Attachment[] = []
+  if (provider) {
+    try {
+      const runtime = await provider({
+        preservedMessages: result.messagesToKeep ?? [],
+        agentId: context.agentId,
+      })
+      if (Array.isArray(runtime)) attachments = [...runtime]
+    } catch (error) {
+      // Runtime state is advisory. A host outage must not fail compaction.
+      logError(error)
+    }
+  }
   try {
-    attachments = await provider({
-      preservedMessages: result.messagesToKeep ?? [],
-      agentId: context.agentId,
-    })
+    attachments.push(...await getPostCompactTaskAttachments(
+      messages, [...(result.messagesToKeep ?? []), ...result.attachments], context,
+    ))
   } catch (error) {
-    // Runtime state is advisory. A host outage or provider bug must never turn
-    // a successful compaction into a failed turn.
     logError(error)
-    return result
   }
 
   if (!Array.isArray(attachments) || attachments.length === 0) {
@@ -385,7 +393,8 @@ export async function appendPostCompactRuntimeAttachments(
     ],
   }
 
-  if (result.truePostCompactTokenCount !== undefined) {
+  if (result.truePostCompactTokenCount !== undefined || attachments.some(a =>
+    (a.type === 'todo_reminder' || a.type === 'task_reminder') && a.compactState)) {
     nextResult.truePostCompactTokenCount =
       roughTokenCountEstimationForMessages(
         buildPostCompactMessages(nextResult),
@@ -1225,7 +1234,7 @@ export async function partialCompactConversation(
       postCompactTokenCount,
       compactionUsage,
     }
-    return appendPostCompactRuntimeAttachments(result, context)
+    return appendPostCompactRuntimeAttachments(result, context, allMessages)
   } catch (error) {
     addErrorNotificationIfNeeded(error, context)
     throw error
