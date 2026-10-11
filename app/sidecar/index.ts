@@ -165,6 +165,7 @@ function parseIdleTtlMs(raw: string | undefined): number {
 type SidecarArgs = {
   socketPath: string
   sessionId: string
+  generation: string
   /**
    * Caller-chosen session root (REGISTRY.md §7). Host-owned input (T8/HC1); the
    * supervisor also sets it as the child's spawn cwd, so the engine's project
@@ -186,7 +187,11 @@ type SidecarArgs = {
 
 async function projectCurrentDisplayHistory(
   retainedMessages: Message[],
-): Promise<{ history: ReturnType<typeof projectResumedHistory>; truncated: boolean }> {
+): Promise<{
+  history: ReturnType<typeof projectResumedHistory>
+  truncated: boolean
+  unavailableParentToolUseIds: string[]
+}> {
   const seedHistoryEvents = projectResumedHistory(retainedMessages)
   const display = await loadDisplayTranscriptFromJsonlPath(getTranscriptPath(), {
     maxMessages: MAX_HISTORY_REPLAY_FRAMES,
@@ -196,14 +201,15 @@ async function projectCurrentDisplayHistory(
     display.messages,
     seedHistoryEvents,
   )
-  const history = await withRestoredSubagentHistory(
+  const restored = await withRestoredSubagentHistory(
     getSessionId(),
     merged.history,
     message => process.stderr.write(`${message}\n`),
   )
   return {
-    history,
+    history: restored.history,
     truncated: display.truncated || merged.truncated,
+    unavailableParentToolUseIds: restored.unavailableParentToolUseIds,
   }
 }
 
@@ -216,6 +222,10 @@ function parseArgs(): SidecarArgs {
     )
   }
   const probeOnAttach = process.env.CATCODE_SIDECAR_PROBE === '1'
+  const generation = process.env.CATCODE_SIDECAR_GENERATION
+  if (!generation || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation)) {
+    throw new Error('Invalid session process identity')
+  }
   let binding: SessionBinding = { kind: 'project' }
   const bindingJson = process.env.CATCODE_SESSION_BINDING_JSON
   if (bindingJson) {
@@ -253,6 +263,7 @@ function parseArgs(): SidecarArgs {
   return {
     socketPath,
     sessionId,
+    generation,
     cwd: cwd ?? process.cwd(),
     resumeEngineSessionId,
     freshEngineSessionId,
@@ -447,6 +458,7 @@ async function main(): Promise<void> {
     probe: args.probeOnAttach,
     cwd: runtimeCwd,
     appSessionId: args.sessionId,
+    generation: args.generation,
     binding: args.binding,
     recreatedFolderNotice: args.recreatedFolderNotice,
     // Mutually exclusive by construction: a resume seeds the restored
@@ -515,6 +527,7 @@ async function main(): Promise<void> {
   // Both projections run AFTER resume so getSessionId() stamps the adopted id.
   let historyEvents: ReturnType<typeof projectResumedHistory> | undefined
   let historySourceTruncated = false
+  let unavailableParentToolUseIds: string[] = []
   if (resumedMessages !== undefined) {
     const projected = await projectCurrentDisplayHistory(resumedMessages)
     historyEvents = projected.history
@@ -522,6 +535,7 @@ async function main(): Promise<void> {
       ...projectUndeliveredPrompts(undeliveredPrompts, getSessionId()),
     )
     historySourceTruncated = projected.truncated
+    unavailableParentToolUseIds = projected.unavailableParentToolUseIds
   }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
@@ -530,6 +544,7 @@ async function main(): Promise<void> {
   const server = new SidecarServer({
     sessionId: args.sessionId,
     engineSessionId,
+    generation: args.generation,
     controller,
     ...(permissions ? { permissions } : {}),
     ...(settings ? { settings } : {}),
@@ -555,6 +570,7 @@ async function main(): Promise<void> {
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     ...(historySourceTruncated ? { historySourceTruncated: true } : {}),
+    unavailableParentToolUseIds,
     projectHistory: projectCurrentDisplayHistory,
     ...(turnInterrupted ? { turnInterrupted: true } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its

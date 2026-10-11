@@ -3,17 +3,19 @@
  */
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
+import { isWorkspaceHandoffSnapshot, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
+import type { WorkspaceControlAction, WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import type { Host, CwdValidation } from '../host/host.js'
 import type { HostRequestValues, HostRequestError, HostRequestVerb } from '../shared/protocol.js'
 import type { PeerRegistryRow, ValidatedHostRequest } from './peerRequestPlane.js'
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 import {
   hasVerifiedSourceCompensation, loadWorkspaceJumpRetention, readWorkspaceJump, workspaceJumpDirectory, workspaceJumpRequiresRetention, writeWorkspaceJump,
-  type WorkspaceJumpBoundary, type WorkspaceJumpState,
+  upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate, type WorkspaceJumpBoundary, type WorkspaceJumpStateV2,
 } from '../../src/utils/workspaceJumpState.js'
 
 export { loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
-export type { WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
+export type { WorkspaceJumpState, WorkspaceJumpStateV2 } from '../../src/utils/workspaceJumpState.js'
 
 type WorkspaceVerb = Extract<HostRequestVerb, 'workspaces.list' | 'workspace.jump' | 'workspace.ready' | 'workspace.cancel'>
 type WorkspaceRequest = Extract<ValidatedHostRequest, { verb: WorkspaceVerb }>
@@ -29,15 +31,10 @@ export type WorkspaceJumpCoordinatorDeps = {
   /** Source receiving boundary checks both controller and sidecar turn owners,
    * its observed SDKResultHandoff, and the current active-chain boundary.
    */
-  verifyReady: (identity: WorkspaceJumpIdentity, boundary: WorkspaceJumpBoundary, state: WorkspaceJumpState) => boolean | Promise<boolean>
-  /** Engine-owned persistence writes trusted failure/cancellation, never main. */
-  persistTerminalOutcome: (state: WorkspaceJumpState) => Promise<boolean>
-  /** Ledger admission is already durable. Admit this exact id once via the real
-   * controller; resolve only on settlement. Throw/lost acknowledgement is uncertain.
-   */
-  continueDestination: (state: WorkspaceJumpState) => Promise<void>
+  verifyReady: (identity: WorkspaceJumpIdentity, boundary: WorkspaceJumpBoundary, state: WorkspaceJumpStateV2) => boolean | Promise<boolean>
+  control: (state: WorkspaceJumpStateV2, action: WorkspaceControlAction) => Promise<WorkspaceControlDelivery>
   /** Holds source/destination turn admission and user reconciliation gates. */
-  onStateChanged?: (state: WorkspaceJumpState) => void
+  onStateChanged?: (state: WorkspaceJumpStateV2) => void
   directory?: string
   now?: () => number
 }
@@ -51,11 +48,15 @@ export class WorkspaceJumpCoordinator {
   private readonly directory: string
   private readonly handles = new Map<string, { appSessionId: string; generation: string; path: string }>()
   private readonly running = new Map<string, Promise<void>>()
+  private readonly observations = new Map<string, WorkspaceHandoffSnapshot>()
+  private readonly effects = new Set<Promise<void>>()
+  private readonly redeliveries = new Map<string, number>()
+  private readonly effectKeys = new Set<string>()
   private readonly accepting = new Map<string, string>()
   private readonly cancellations = new Map<string, GenerationCancellations>()
   constructor(private readonly deps: WorkspaceJumpCoordinatorDeps) { this.directory = deps.directory ?? workspaceJumpDirectory() }
 
-  snapshot(appSessionId: string): WorkspaceJumpState | null { return readWorkspaceJump(appSessionId, this.directory) }
+  snapshot(appSessionId: string): WorkspaceJumpStateV2 | null { const state = readWorkspaceJump(appSessionId, this.directory); return state ? upgradeWorkspaceJumpState(state) : null }
   loadRetention(): ReturnType<typeof loadWorkspaceJumpRetention> { return loadWorkspaceJumpRetention(this.directory) }
   /** Retire only ephemeral discovery authority; durable history is never erased. */
   forgetHandles(appSessionId: string): void {
@@ -63,16 +64,24 @@ export class WorkspaceJumpCoordinator {
     if (!this.identity(appSessionId)) this.cancellations.delete(appSessionId)
   }
   retains(appSessionId: string): boolean {
-    try { const s = this.snapshot(appSessionId); return !!s && workspaceJumpRequiresRetention(s) }
+    try { const s = this.snapshot(appSessionId); return !!s && workspaceJumpRequiresRetention(s, this.identity(appSessionId)?.generation) }
     catch { return true }
   }
   isReserved(appSessionId: string): boolean {
-    try { const s = this.snapshot(appSessionId); return !!s && workspaceJumpRequiresRetention(s) }
-    catch { return true }
+    try {
+      const state = this.snapshot(appSessionId)
+      if (!state) return false
+      if (state.continuation.outcome === 'legacy_settled' && !state.review.required) return false
+      return !workspaceJumpHasConfirmedGate(state)
+    } catch { return true }
   }
-  private save(state: WorkspaceJumpState): void {
-    writeWorkspaceJump(state, this.directory)
-    this.deps.onStateChanged?.(state)
+  requiresReview(appSessionId: string): boolean {
+    try { return this.snapshot(appSessionId)?.review.required === true } catch { return true }
+  }
+  private save(state: WorkspaceJumpStateV2): void {
+    const saved = { ...state, revision: state.revision + 1 }
+    writeWorkspaceJump(saved, this.directory)
+    this.deps.onStateChanged?.(saved)
   }
   private identity(appSessionId: string): WorkspaceJumpIdentity | null {
     const row = this.deps.row(appSessionId)
@@ -181,14 +190,14 @@ export class WorkspaceJumpCoordinator {
       }
       const row = this.deps.row(appSessionId)!
       const previous = this.snapshot(appSessionId)
-      this.save({ version: 1, sourceGeneration: identity.generation,
+      this.save({ version: 2, revision: 1, origin: 'fresh', sourceGeneration: identity.generation,
         appSessionId, engineSessionId: identity.engineSessionId, operationId,
         source: { cwd: row.cwd, binding: row.binding! }, target: { cwd: destination.path, binding: { kind: 'project' } },
-        acceptedAt: (this.deps.now ?? Date.now)(), phase: 'accepted', location: 'source', consumed: false, cancelled: false,
-        requiresUserReconciliation: false, sourceOutcomePersisted: false,
+        acceptedAt: (this.deps.now ?? Date.now)(), phase: 'accepted', location: 'source', consumed: false, cancellation: null,
+        review: { required: false, noticeUuid: null, reconciledInputUuid: null }, release: { target: 'held', authorizedRevision: null, confirmed: null },
         ...(previous?.compensation ? { compensation: previous.compensation } : {}),
-        continuation: { id: randomUUID(), state: 'not_admitted' },
-      } as WorkspaceJumpState)
+        continuation: { id: randomUUID(), admissionGeneration: null, dispatch: 'none', outcome: 'pending', receiptRevision: null, checkpointSha256: null },
+      } as WorkspaceJumpStateV2)
       return { ok: true, value: { operationId, status: 'accepted' } }
     } catch {
       if (reserved) {
@@ -206,7 +215,7 @@ export class WorkspaceJumpCoordinator {
     const state = this.snapshot(appSessionId)
     const identity = this.identity(appSessionId)
     if (!state || !identity || state.operationId !== request.operationId || state.engineSessionId !== identity.engineSessionId ||
-        state.sourceGeneration !== identity.generation || state.cancelled) return refuse('This workspace change is no longer awaiting readiness')
+        state.sourceGeneration !== identity.generation || state.cancellation) return refuse('This workspace change is no longer awaiting readiness')
     const boundary = { tipUuid: request.tipUuid, toolUseId: request.toolUseId }
     if (state.phase === 'ready' && state.boundary?.tipUuid === boundary.tipUuid && state.boundary.toolUseId === boundary.toolUseId) {
       return { ok: true, value: { operationId: state.operationId, status: 'ready' } }
@@ -217,7 +226,7 @@ export class WorkspaceJumpCoordinator {
     if (!canonical.ok || canonical.realpath !== state.target.cwd || !this.roots().includes(state.target.cwd) ||
       !(await this.deps.trustedProjectRoots([state.target.cwd])).includes(state.target.cwd)) return refuse('This project is no longer available and trusted')
     const current = this.snapshot(appSessionId)
-    if (!current || current.operationId !== state.operationId || current.phase !== 'accepted' || current.cancelled ||
+    if (!current || current.operationId !== state.operationId || current.phase !== 'accepted' || current.cancellation ||
         this.identity(appSessionId)?.generation !== state.sourceGeneration) return refuse('This workspace change was cancelled or replaced')
     this.save({ ...current, phase: 'ready', boundary })
     return { ok: true, value: { operationId: state.operationId, status: 'ready' } }
@@ -245,60 +254,99 @@ export class WorkspaceJumpCoordinator {
     const task = this.move(appSessionId, request.operationId).catch(() => undefined).finally(() => this.running.delete(appSessionId))
     this.running.set(appSessionId, task)
   }
-  async cancel(appSessionId: string, operationId?: string): Promise<boolean> {
+  async cancel(appSessionId: string, operationId?: string, requestedBy: 'stop' | 'close' = 'stop'): Promise<boolean> {
     const state = this.snapshot(appSessionId)
     const identity = this.identity(appSessionId)
     if (!identity) return false
-    const pendingOperation = this.accepting.get(appSessionId)
-    const requestedOperation = operationId ?? pendingOperation ?? state?.operationId
+    const requestedOperation = operationId ?? this.accepting.get(appSessionId) ?? state?.operationId
     if (!requestedOperation || !UUID.test(requestedOperation)) return false
-    if (state?.operationId !== requestedOperation) {
-      this.cancelUnaccepted(identity, requestedOperation)
-      return true
-    }
+    if (state?.operationId !== requestedOperation) { this.cancelUnaccepted(identity, requestedOperation); return true }
     if (state.engineSessionId !== identity.engineSessionId) return false
-    if (state.continuation.state === 'settled' && (!state.requiresUserReconciliation || state.sourceOutcomePersisted)) {
-      return state.cancelled && state.sourceOutcomePersisted
+    if (!workspaceJumpRequiresRetention(state, identity.generation)) return false
+    const cancellation = state.cancellation ?? { cancelId: randomUUID(), requestedBy, application: 'unknown' as const }
+    this.save({ ...state, cancellation: { ...cancellation, requestedBy: requestedBy === 'close' ? 'close' : cancellation.requestedBy } })
+    this.effect(appSessionId, { action: 'cancel', cancelId: cancellation.cancelId })
+    if (state.phase === 'accepted' || state.phase === 'ready') this.settleWarning(appSessionId, 'cancelled')
+    return true
+  }
+  private effect(appSessionId: string, action: WorkspaceControlAction): void {
+    const state = this.snapshot(appSessionId)
+    const generation = this.identity(appSessionId)?.generation
+    if (!state || !generation) return
+    const key = `${state.operationId}:${generation}:${JSON.stringify(action)}`
+    if (this.effectKeys.has(key)) return
+    this.effectKeys.add(key)
+    const task = Promise.resolve().then(() => {
+      const current = this.snapshot(appSessionId)
+      if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation || action.action === 'release' && current.release.authorizedRevision !== action.authorizationRevision || action.action === 'continue' && (current.cancellation || current.continuation.admissionGeneration !== generation || current.continuation.dispatch === 'consumed')) return { kind: 'unavailable' } as const
+      return this.deps.control(current, action)
+    }).then(delivery => {
+      const current = this.snapshot(appSessionId)
+      if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation) return
+      if (delivery.kind === 'result' && delivery.result.status) this.observe(appSessionId, delivery.result.status)
+    }).catch(() => undefined).finally(() => { this.effectKeys.delete(key); this.effects.delete(task) })
+    this.effects.add(task)
+  }
+  private settleWarning(appSessionId: string, outcome: 'failed' | 'cancelled' | 'uncertain'): void {
+    const state = this.snapshot(appSessionId)
+    if (!state || state.location === 'unknown') return
+    this.save({ ...state, phase: 'settled', review: { ...state.review, required: true } })
+    this.effect(appSessionId, { action: 'settle', outcome })
+  }
+  /** Observation is a short durable transition, never locked by an RPC. */
+  observe(appSessionId: string, status: WorkspaceHandoffSnapshot): boolean {
+    if (!isWorkspaceHandoffSnapshot(status)) return false
+    const state = this.snapshot(appSessionId)
+    const generation = this.identity(appSessionId)?.generation
+    if (!state || !generation || status.observerGeneration !== generation || status.appSessionId !== appSessionId || status.engineSessionId !== state.engineSessionId || status.operationId !== state.operationId || status.continuationId !== state.continuation.id || status.sourceGeneration !== state.sourceGeneration || status.admissionGeneration !== state.continuation.admissionGeneration || status.operationSha256 !== workspaceJumpOperationSha256(state)) return false
+    const previous = this.observations.get(appSessionId)
+    if (previous?.operationId === state.operationId && previous.observerGeneration === generation && previous.statusSeq >= status.statusSeq) return false
+    let next = state
+    if (status.record.kind === 'valid') {
+      const record = status.record.record
+      if (state.review.noticeUuid && record.notice?.displayUuid !== state.review.noticeUuid || state.review.reconciledInputUuid && record.reconciliation?.inputUuid !== state.review.reconciledInputUuid || record.terminal && state.continuation.checkpointSha256 && record.terminal.checkpoint.prefixSha256 !== state.continuation.checkpointSha256 || record.admissionGeneration !== state.continuation.admissionGeneration || record.terminal && !['pending','unknown',record.terminal.outcome].includes(state.continuation.outcome) || record.revision < (state.continuation.receiptRevision ?? 0)) return false
+      const prior = previous?.operationId === state.operationId && previous.record.kind === 'valid' ? previous.record.record : undefined
+      if (prior && (prior.consumed && !record.consumed || prior.inputCommitted && !record.inputCommitted || prior.terminal && JSON.stringify(prior.terminal) !== JSON.stringify(record.terminal) || prior.notice && JSON.stringify(prior.notice) !== JSON.stringify(record.notice) || prior.reconciliation && JSON.stringify(prior.reconciliation) !== JSON.stringify(record.reconciliation) || prior.cancellation && JSON.stringify(prior.cancellation) !== JSON.stringify(record.cancellation) || prior.revision === record.revision && JSON.stringify(prior) !== JSON.stringify(record))) return false
+      next = { ...next, continuation: { ...next.continuation, dispatch: record.consumed ? 'consumed' : next.continuation.dispatch, receiptRevision: record.revision } }
+      if (record.cancellation && next.cancellation?.cancelId === record.cancellation.cancelId) next = { ...next, cancellation: { ...next.cancellation, application: record.cancellation.application } }
+      if (record.terminal) next = { ...next, continuation: { ...next.continuation, outcome: record.terminal.outcome, checkpointSha256: record.terminal.checkpoint.prefixSha256 } }
+      if (record.notice) next = { ...next, review: { ...next.review, required: true, noticeUuid: record.notice.displayUuid } }
+      if (record.reconciliation && record.notice?.displayUuid === record.reconciliation.noticeUuid) next = { ...next, review: { required: false, noticeUuid: record.reconciliation.noticeUuid, reconciledInputUuid: record.reconciliation.inputUuid } }
+      if (next.continuation.outcome === 'success' || next.review.reconciledInputUuid) next = { ...next, release: { ...next.release, target: 'open' } }
+      else if (record.notice) next = { ...next, release: { ...next.release, target: 'review' } }
     }
-    this.save({ ...state, cancelled: true, requiresUserReconciliation: true })
-    if (state.phase === 'accepted' || state.phase === 'ready' ||
-        (state.phase === 'settled' && !state.sourceOutcomePersisted && state.location !== 'unknown')) {
-      // The source tool may itself be waiting for this cancellation reply. Its
-      // durable terminal note needs idle, so acknowledgement cannot await it.
-      this.startTerminal(appSessionId, 'cancelled')
+    if (status.execution === 'unconfirmed' && next.continuation.outcome === 'pending') next = { ...next, continuation: { ...next.continuation, outcome: 'unknown' } }
+    this.observations.set(appSessionId, status)
+    if (next.release.target !== state.release.target) next = { ...next, release: { ...next.release, authorizedRevision: null, confirmed: null } }
+    if (next.release.target !== 'held' && next.release.authorizedRevision === null) next = { ...next, release: { ...next.release, authorizedRevision: next.revision + 1 } }
+    const gateMatches = next.release.authorizedRevision !== null && status.gate.mode === next.release.target && status.gate.reservationOperationId === null && status.gate.requiresUserReconciliation === (next.release.target === 'review')
+    if (gateMatches) next = { ...next, release: { ...next.release, confirmed: { generation, mode: status.gate.mode as 'review' | 'open' } } }
+    if (JSON.stringify(next) !== JSON.stringify(state)) this.save(next)
+    if (gateMatches) this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
+    else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
+    else if (status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
+    else if (['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
+    else if (status.execution === 'idle' && status.record.kind === 'absent' && next.continuation.admissionGeneration === generation && next.continuation.dispatch === 'unknown' && next.continuation.outcome === 'pending' && !next.cancellation) {
+      const attempts = this.redeliveries.get(next.operationId) ?? 0
+      if (attempts < 1) { this.redeliveries.set(next.operationId, attempts + 1); this.effect(appSessionId, { action: 'continue', continuationId: next.continuation.id }) }
     }
     return true
   }
-  private startTerminal(appSessionId: string, outcome: 'failed' | 'cancelled' | 'uncertain'): Promise<void> | null {
-    if (this.running.has(appSessionId)) return null
-    const task = Promise.resolve().then(() => this.terminal(appSessionId, outcome))
-      .catch(() => undefined).finally(() => this.running.delete(appSessionId))
-    this.running.set(appSessionId, task)
-    return task
-  }
-  private async terminal(appSessionId: string, outcome: 'failed' | 'cancelled' | 'uncertain'): Promise<void> {
-    const state = this.snapshot(appSessionId)!
-    // A lost acknowledgement may already have saved this exact engine note.
-    // Subsequent Stop/recovery must retry its chosen kind, never replace it.
-    const chosen = state.outcome && state.outcome !== 'completed' ? state.outcome : outcome
-    this.save({ ...state, phase: 'settled', outcome: chosen, requiresUserReconciliation: true })
-    const persisted = await this.deps.persistTerminalOutcome(this.snapshot(appSessionId)!)
-    const current = this.snapshot(appSessionId)!
-    if (persisted) {
-      this.save({ ...current, sourceOutcomePersisted: true })
-      this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
-    }
+  liveObservation(appSessionId: string): WorkspaceHandoffSnapshot | undefined { return this.observations.get(appSessionId) }
+  queryStatus(appSessionId: string, attachment = false): void {
+    try { if (attachment || this.retains(appSessionId)) this.effect(appSessionId, { action: 'status' }) } catch { /* Unreadable state remains retained. */ }
   }
   private async move(appSessionId: string, operationId: string): Promise<void> {
     const state = this.snapshot(appSessionId)
-    if (!state || state.operationId !== operationId || state.phase !== 'ready' || state.cancelled) return
+    if (!state || state.operationId !== operationId || state.phase !== 'ready' || state.cancellation) return
     const moved = await this.deps.host.moveWorkspaceJump(appSessionId, operationId, state.target.cwd, () => {
       const current = this.snapshot(appSessionId)
-      if (!current || current.operationId !== operationId || current.cancelled || current.phase !== 'ready') return false
+      if (!current || current.operationId !== operationId || current.cancellation || current.phase !== 'ready') return false
       this.save({ ...current, phase: 'moving', location: 'unknown' })
       return true
     })
-    const current = this.snapshot(appSessionId)!
+    const current = this.snapshot(appSessionId)
+    if (!current || current.operationId !== operationId || current.engineSessionId !== state.engineSessionId || current.sourceGeneration !== state.sourceGeneration || this.identity(appSessionId)?.engineSessionId !== state.engineSessionId) return
     const compensation = moved.location === 'source' && moved.relocation?.phase === 'complete' &&
       moved.relocation.source.cwd === current.target.cwd && moved.relocation.source.binding.kind === 'project' &&
       JSON.stringify(moved.relocation.target) === JSON.stringify(current.source)
@@ -306,61 +354,35 @@ export class WorkspaceJumpCoordinator {
       : current.compensation
     this.save({ ...current, location: moved.location, consumed: current.consumed || moved.location === 'destination',
       ...(compensation ? { compensation } : {}) })
-    if (!moved.result.ok || moved.location !== 'destination' || current.cancelled) {
-      await this.terminal(appSessionId, current.cancelled ? 'cancelled' : 'failed')
+    if (!moved.result.ok || moved.location !== 'destination' || current.cancellation) {
+      this.settleWarning(appSessionId, current.cancellation ? 'cancelled' : 'failed')
       return
     }
     const next = this.snapshot(appSessionId)!
-    this.save({ ...next, phase: 'settled', outcome: 'completed', continuation: { ...next.continuation, state: 'admitted' } })
-    // Once admitted, a thrown/lost reply is uncertain work, not permission to retry.
-    try {
-      await this.deps.continueDestination(this.snapshot(appSessionId)!)
-      const settled = this.snapshot(appSessionId)!
-      this.save({ ...settled, continuation: { ...settled.continuation, state: 'settled' } })
-      if (settled.cancelled) await this.terminal(appSessionId, 'cancelled')
-      else this.deps.host.releaseWorkspaceJump(appSessionId, operationId)
-    } catch {
-      const uncertain = this.snapshot(appSessionId)!
-      const outcome = 'uncertain' as const
-      this.save({ ...uncertain, outcome, requiresUserReconciliation: true,
-        continuation: { ...uncertain.continuation, state: 'uncertain' } })
-      await this.terminal(appSessionId, outcome)
-    }
+    const generation = this.identity(appSessionId)?.generation
+    if (!generation) return
+    this.save({ ...next, phase: 'settled', continuation: { ...next.continuation, admissionGeneration: generation, dispatch: 'unknown' } })
+    this.effect(appSessionId, { action: 'continue', continuationId: next.continuation.id })
   }
-  /** Explicit user admission/recovery only. It never resubmits previous work. */
   async settleRecovery(appSessionId: string, operationId: string): Promise<boolean> {
     const state = this.snapshot(appSessionId)
-    if (!state || state.operationId !== operationId || state.phase !== 'settled' ||
-        !state.requiresUserReconciliation || state.location === 'unknown' || this.running.has(appSessionId)) return false
-    if (state.sourceOutcomePersisted) return true
-    const outcome = state.continuation.state === 'admitted' || state.continuation.state === 'uncertain'
-      ? 'uncertain' : state.cancelled ? 'cancelled' : 'failed'
-    const task = this.startTerminal(appSessionId, outcome)
-    if (!task) return false
-    await task
-    return this.snapshot(appSessionId)?.sourceOutcomePersisted === true
+    if (!state || state.operationId !== operationId) return false
+    this.queryStatus(appSessionId)
+    return true
   }
-
-  /** Called after genuine input's durable engine receipt, never enqueue acknowledgement. */
+  /** Legacy notice callers request fresh cumulative evidence, never clear it. */
   async reconcileUser(appSessionId: string, operationId?: string): Promise<boolean> {
     const state = this.snapshot(appSessionId)
     if (!state) return true
-    if (operationId !== undefined && state.operationId !== operationId) return false
-    if (this.running.has(appSessionId) || state.location === 'unknown') return false
-    if (!state.requiresUserReconciliation) return state.phase === 'settled'
-    if (!state.sourceOutcomePersisted && state.outcome !== 'completed') {
-      if (!(await this.deps.persistTerminalOutcome(state))) return false
-    }
-    this.save({ ...state, phase: 'settled', sourceOutcomePersisted: true, requiresUserReconciliation: false,
-      continuation: { ...state.continuation, state: 'settled' } })
-    this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
-    return true
+    if (operationId !== undefined && operationId !== state.operationId) return false
+    this.queryStatus(appSessionId)
+    return !state.review.required
   }
   /** Main restart/process loss: never replay accepted, ready, or admitted work. */
-  recover(appSessionId: string): WorkspaceJumpState | null {
+  recover(appSessionId: string): WorkspaceJumpStateV2 | null {
     const state = this.snapshot(appSessionId)
     if (!state || !workspaceJumpRequiresRetention(state)) return state
-    let location: WorkspaceJumpState['location'] = 'unknown'
+    let location: WorkspaceJumpStateV2['location'] = 'unknown'
     let compensation = state.compensation
     try {
       const move = readSessionRelocation(state.engineSessionId)
@@ -376,14 +398,12 @@ export class WorkspaceJumpCoordinator {
         }
       }
     } catch { /* Retain unreadable relocation and refuse recovery admission. */ }
-    const recovered: WorkspaceJumpState = { ...state, phase: 'settled', location, consumed: state.consumed || location === 'destination',
+    const recovered: WorkspaceJumpStateV2 = { ...state, phase: 'settled', location, consumed: state.consumed || location === 'destination',
       ...(compensation ? { compensation } : {}),
-      requiresUserReconciliation: true, outcome: state.outcome && state.outcome !== 'completed' ? state.outcome
-        : state.continuation.state === 'admitted' || state.continuation.state === 'uncertain'
-          ? 'uncertain' : state.cancelled ? 'cancelled' : 'failed',
-      continuation: { ...state.continuation, state: state.continuation.state === 'admitted' ? 'uncertain' : state.continuation.state } }
+      continuation: { ...state.continuation, outcome: state.continuation.outcome === 'pending' ? 'unknown' : state.continuation.outcome },
+      release: { ...state.release, confirmed: null } }
     this.save(recovered)
     return recovered
   }
-  async waitForSettlement(appSessionId: string): Promise<void> { await this.running.get(appSessionId) }
+  async waitForSettlement(appSessionId: string): Promise<void> { await this.running.get(appSessionId); while (this.effects.size) await Promise.all([...this.effects]) }
 }

@@ -1,7 +1,6 @@
 import { useContext, useState } from 'react';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { isRetiredUsageModel } from '../../shared/usageModelStatus.js';
-import { UsageAreaTrend } from './UsageAreaTrend.js';
 import { UsageCacheChart } from './UsageDashboardCharts.js';
 import { UsageToolErrorTrend } from './UsageToolErrorTrend.js';
 import { usageCacheReadRate, usageCacheWrites, usageCompact, usageNumber, usagePercent, usageTotal } from './usageDashboardState.js';
@@ -65,13 +64,6 @@ export function UsageCacheSummary({ summary, partial, selected = '', onSelect }:
     const writes = summary.cacheWriteReporting === 'reported' ? usageCompact(summary.tokens.write)
         : summary.cacheWriteReporting === 'partial' && summary.tokens.write > 0 ? `${usageCompact(summary.tokens.write)} reported` : '–';
     return <div className="usage-details-summary"><header className="usage-details-card-header"><div><h2 className="usage-panel-heading">Prompt cache <span className="usage-info" role="img" aria-label="Cache reads divided by cache reads plus input" title="Cache reads / (cache reads + input)">i</span></h2></div>{readRate !== null && <strong aria-label={`Cache reads divided by cache reads plus input${partial ? ', partial history' : ''}: ${usagePercent(readRate)}`}>{usagePercent(readRate)}</strong>}</header><UsageCacheChart summary={summary} partial={partial} selected={selected} onSelect={onSelect}/><dl className="usage-cache-values usage-details-values"><DetailValue color="usage-details-cache-read" label="Cache reads" value={usageCompact(summary.tokens.read)} total={measured ? share(summary.tokens.read, total) : undefined} title={usageNumber(summary.tokens.read)}/><DetailValue color="usage-details-cache-write" label="Cache writes" value={writes} total={measured ? share(summary.tokens.write, total) : undefined} title={usageCacheWrites(summary.tokens.write, summary.cacheWriteReporting)}/><DetailValue color="usage-details-fresh" label="Input" value={usageCompact(summary.tokens.fresh)} total={measured ? share(summary.tokens.fresh, total) : undefined} title={`Uncached input: ${usageNumber(summary.tokens.fresh)}`}/></dl></div>;
-}
-
-export function UsageToolActivity({ summary, partial = false, selected = '', onSelect }: { summary: UsageRangeSummary; partial?: boolean; selected?: string; onSelect?: (date: string) => void }) {
-    const [metric, setMetric] = useState<'errors' | 'requests'>('errors');
-    const results = summary.tools.reduce((sum, tool) => sum + tool.results, 0), errors = summary.tools.reduce((sum, tool) => sum + tool.errors, 0);
-    const successful = results - errors, unmatched = summary.requests - results;
-    return <div className="usage-details-summary"><header className="usage-details-card-header"><div><h2 className="usage-panel-heading">Tool activity</h2><p>{metric === 'errors' ? 'Errors / results' : 'Daily tool requests'}</p></div><div className="usage-details-tool-metric"><div className="usage-range" role="group" aria-label="Tool trend measure"><button type="button" aria-pressed={metric === 'errors'} onClick={() => setMetric('errors')}>Error rate</button><button type="button" aria-pressed={metric === 'requests'} onClick={() => setMetric('requests')}>Requests</button></div><strong>{metric === 'errors' ? results ? usagePercent(errors / results * 100) : 'Not available' : usageCompact(summary.requests)}</strong></div></header><UsageAreaTrend key={metric} summary={summary} metric={metric} partial={partial} selected={selected} onSelect={onSelect}/><dl className="usage-outcome-values usage-details-values"><DetailValue color="usage-tool-ok" label="Successful" value={usageNumber(successful)} total={share(successful, summary.requests)}/><DetailValue color="usage-tool-error" label="Errors" value={usageNumber(errors)} total={share(errors, summary.requests)}/><DetailValue color="usage-tool-unmatched" label="No matched result" value={usageNumber(unmatched)} total={share(unmatched, summary.requests)}/></dl></div>;
 }
 
 export function UsageToolBreakdown({ summary, timezone, showTrend = true }: { summary: UsageRangeSummary; timezone?: string; showTrend?: boolean }) {

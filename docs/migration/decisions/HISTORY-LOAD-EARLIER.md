@@ -93,6 +93,17 @@ and the honest count of what was added.
 
 ## The view anchor (amendment, 2026-09-02)
 
+### Anchorless replay amendment, 2026-10-09
+
+Main also stamps `viewTruncated: true` when its ring is lossy. It strips both
+main-owned fields from renderer input before authoring them from ring state.
+With this flag and no surviving message UUID, the sidecar performs its existing
+bounded authoritative read from the empty display instead of treating an absent
+anchor as completeness. The flag supersedes older connection anchors and
+completeness latches. Empty truncated panes retain the recovery boundary/control.
+Recovered events and their completion verdict remain outside the retained ring;
+their omission marks that retained view incomplete so reload can recover again.
+
 **Status: DECIDED and IMPLEMENTED 2026-09-02.** The decision above says the
 renderer names a session and a verb and nothing else. The frame now carries a
 third piece of information, `viewAnchorUuid`. This section records what it is,
@@ -403,6 +414,9 @@ layout difference; a live pane is what would.
 
 `withRestoredSubagentHistory` keeps its existing budget, so on a session
 already at the replay cap a recovered Agent card can arrive without children.
-That degrades to the card built for exactly this case (CC-73, "This agent's
-steps aren't loaded.") and is never a wrong tree, so it is acceptable as-is and
-recorded rather than fixed.
+The join returns explicit `unavailableParentToolUseIds`. The sidecar publishes
+them in a display-only `history.availability` snapshot, independently of main
+truncation. It uses `recovered: true` for the load-earlier view: main forwards
+that verdict but retains the initial availability snapshot alongside the rows
+it actually keeps. A renderer reload therefore cannot reuse a complete verdict
+whose recovered worker rows were deliberately omitted from the ring.

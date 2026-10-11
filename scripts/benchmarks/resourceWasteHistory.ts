@@ -52,7 +52,7 @@ try {
   const baselineReadBytes = bytes
   bytes = 0
   const accepted = await loadBranchesWithinBudget(sessionId, candidates, 1, new Set())
-  console.log(JSON.stringify({ candidates: candidates.length, baselineAccepted, accepted: accepted.length, baselineReadBytes, boundedReadBytes: bytes }))
+  console.log(JSON.stringify({ candidates: candidates.length, baselineAccepted, accepted: accepted.branches.length, baselineReadBytes, boundedReadBytes: bytes }))
 } finally {
   prototype.read = originalRead
   await rm(fixture, { recursive: true, force: true })

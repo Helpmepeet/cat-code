@@ -58,7 +58,7 @@ const MEMORY: MemorySnapshot = {
 function goalFrame(sessionId: SessionId, goal: ThreadGoalSnapshot | null): ServerFrame {
   return {
     kind: 'thread-goal.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId,
     goal,
   }
@@ -67,7 +67,7 @@ function goalFrame(sessionId: SessionId, goal: ThreadGoalSnapshot | null): Serve
 function memoryFrame(sessionId: SessionId, memory: MemorySnapshot): ServerFrame {
   return {
     kind: 'memory.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId,
     memory,
   }
@@ -76,7 +76,7 @@ function memoryFrame(sessionId: SessionId, memory: MemorySnapshot): ServerFrame 
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
   return {
     kind: 'lifecycle',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId,
     status: 'disconnected',
   }

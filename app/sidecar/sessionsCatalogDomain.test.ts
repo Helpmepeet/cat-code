@@ -503,7 +503,7 @@ describe('buildSessionsCatalogSnapshot', () => {
     )
     const frame: SessionsCatalogSnapshotFrame = {
       kind: 'sessions.snapshot',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId: 's1',
       catalog: snapshot,
     }

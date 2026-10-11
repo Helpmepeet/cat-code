@@ -388,6 +388,7 @@ export class SidecarSupervisor {
       rmSync(socketPath, { force: true })
     }
 
+    const generation = globalThis.crypto.randomUUID()
     const child = spawn(this.options.sidecarCommand, this.options.sidecarArgs ?? [], {
       // FD 3 is a separate NDJSON diagnostics stream. stdout/stderr deliberately
       // stay inherited for development and are never persisted wholesale.
@@ -401,6 +402,7 @@ export class SidecarSupervisor {
         ...this.options.sidecarEnv,
         CATCODE_SIDECAR_SOCKET: socketPath,
         CATCODE_SIDECAR_SESSION_ID: sessionId,
+        CATCODE_SIDECAR_GENERATION: generation,
         // Host-owned inputs (T8/HC1). Only set the cwd env when we have one so
         // the sidecar's own missing-cwd guard still fires for misconfigured
         // callers. The resume id rides env only when a resume was requested.
@@ -438,7 +440,7 @@ export class SidecarSupervisor {
 
     const record: SidecarRecord = {
       sessionId,
-      generation: globalThis.crypto.randomUUID(),
+      generation,
       child,
       socketPath,
       socket: null,

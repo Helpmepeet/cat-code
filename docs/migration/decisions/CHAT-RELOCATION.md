@@ -121,6 +121,49 @@ preview is neither a move nor a real resume.
 
 ## Contract
 
+### Handoff lifecycle amendment, 2026-10-09
+
+The [handoff implementation plan](../../reports/2026-10-09-handoff-fix-plan.md)
+separates movement, command delivery, execution, review and gate convergence.
+Main owns a V2 jump ledger with conservative V1 read compatibility. The engine
+owns one bounded execution record per operation and sealed resume checkpoints.
+Success requires independently intended conversation equality through the real
+bounded-prefix reader, final execution classification, and durable record
+publication. Operational acknowledgements and SDK results do not supply proof.
+
+Tool-generated supplemental user-role output retains its assistant ownership,
+including PDF page images, PDF documents and extra text context. Only actual
+tool-result rows override the sequential transcript parent with that assistant.
+Parallel recovery includes owned supplemental descendants before any discarded
+conversation continuation. Older PDF reads without the ownership field retain
+their direct meta media output using Read's persisted `parts`/`pdf` result shape;
+unrelated meta input still bounds recovery. This keeps resume sealing faithful to
+the intended conversation rather than weakening the checkpoint or release gate.
+
+Continuation acknowledges durable consumption and runs independently of the
+20-second command deadline. Cumulative status retains committed warning and
+genuine-input reconciliation evidence during overlapping coordination. Stop and
+Close retain operation-scoped cancellation intent; cancellation after execution
+closure cannot rewrite its outcome or abort a later turn. Release requires main's
+durable authorization and a matching current-generation gate observation before
+the host reservation is cleared. Replacement validates unresolved evidence and
+never replays the original continuation. Historical converged receipts do not
+re-arm holds after later authorized conversation changes.
+
+Relocation resume preserves historical skill-listing and invoked-skill
+attachments verbatim in the transcript. A verified destination snapshot
+supplies an attachment-identity-bound view that omits former-workspace skill
+context from prompt rendering and restored skill state while retaining
+destination, global, and relative-path skills. The view is captured during
+resume; later relocation metadata changes do not reinterpret the fixed V1
+checkpoint or archived rows.
+
+Protocol V3 addresses controls to supervisor-minted UUID generations and keeps
+these control frames out of renderer replay. No new renderer authority, session
+lifetime, trust grant, transcript repair or migration of existing conversations
+is introduced. Storage migration initializes a private execution-record directory;
+only main upgrades a touched V1 ledger.
+
 The session menu offers **Move to project…** for a saved managed Chat. Main resolves a one-time native directory-picker token, and the host validates the resulting real path. The destination must already have engine-persisted trust. The same `appSessionId`, `engineSessionId`, transcript, sidebar row, and original managed-folder ownership survive every move. **Move back** returns the working context to the original Chat folder; it does not rewind messages, files, hooks, or external effects. Chat-created working files stay in that folder. The model's desktop prompt names the original and current directories and explains how to interpret earlier relative file references. It grants no additional filesystem access.
 
 An idle Chat may move while ready, parked, or closed. The host internally starts a parked or closed source through its normal restore owner, waits for its control snapshots, parks it, relocates it, verifies the destination engine, and parks the destination again. A closed Chat remains closed; these internal starts do not publish a tab-opening event or change focus. If no engine ID has been allocated, the normal sidecar startup allocates one before relocation. The host uses `app.park` and accepts only its dedicated parked exit. Active turns, pending permissions, queued prompts, workers, in-flight writes, sign-in, a concurrent branch switch, another move or restore, and a persisted worktree or deferred continuation block it. Peer sessions themselves cannot move. Retained child peer rows remain in their original project with their history; a child with active work, or a pending unconsumed peer delivery, blocks its parent's move. Closed children do not. Main's peer plane rechecks both live project associations before forwarding or redelivering, so old-project messages cannot enter the new context. Bypass-mode relocation remains outside this decision; classifier-backed Auto is supported.
@@ -145,7 +188,7 @@ The disposable Bun worker holds the engine transcript lease, copies a private ba
 
 The move record also holds selected model, effort, Fast, permission mode, and Plan's engine-owned return mode. The host passes them on move, return, restore, restart, idle wake, and project-side history reopen, including before the first user message. The sidecar applies mode changes through engine transitions, checks classifier and Fast availability, and reports its effective snapshots before the host clears Moving. Auto refusal reports the engine's reason and reopens the source when possible. Invalid controls, including `null`, cannot be written. Fast is retained when the destination model and account support it; Plan entered from Auto retains Auto as its return mode. Later control changes refresh the record.
 
-Destination instructions, settings, permissions, tools, skills, memory, and hooks come from a new engine process at the destination cwd. A move runs `SessionStart:resume`, not `SessionStart:startup`. Historical conversation text remains, while active resume filtering excludes invoked-skill attachments rooted in former workspaces and allows a fresh destination listing; global invoked skills remain. This filtering also applies after compaction and repeated moves. The sidecar's prompt identifies the latest source and destination and whether a project is attached. It explicitly treats former-project instructions retained in history or summaries as historical context, preserves applicable global instructions and user requests, and directs the agent to consult a former project's applicable instructions when working on its files. It also explains earlier relative paths without silently moving working files. This prompt guidance supplements the context loading and filtering; it does not erase historical text.
+Destination instructions, settings, permissions, tools, skills, memory, and hooks come from a new engine process at the destination cwd. A move runs `SessionStart:resume`, not `SessionStart:startup`. Historical conversation text remains, while active resume filtering excludes invoked-skill attachments rooted in former workspaces and allows a fresh destination listing; global invoked skills remain. This filtering also applies after compaction and repeated moves. New forks persist the filtered attachment view without rewriting the source archive or copying its relocation record. The sidecar's prompt identifies the latest source and destination and whether a project is attached. It explicitly treats former-project instructions retained in history or summaries as historical context, preserves applicable global instructions and user requests, and directs the agent to consult a former project's applicable instructions when working on its files. It also explains earlier relative paths without silently moving working files. This prompt guidance supplements the context loading and filtering; it does not erase historical text.
 
 The lease and `moving` record block resume before transcript consumption or hooks. An interrupted or unreadable record keeps the row visible but refuses restore and preview. Recovery from an interrupted move remains manual from the saved backup; automatic repair and alias cleanup are outside this slice. A completed record reconciles registry and history association after row eviction, verifying the original app identity.
 

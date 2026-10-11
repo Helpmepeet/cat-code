@@ -51,17 +51,33 @@ export function createQueryEngineAppSession(
       try {
         if (options?.handoffContinuation) {
           if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
-          yield* engine.continueHandoff(options.handoffContinuation.operationId, { uuid: options.uuid, onInputPersisted: options.onInputPersisted })
+          yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
         } else yield* engine.submitMessage(prompt, {
           uuid: options?.uuid,
           isMeta: options?.isMeta,
           origin: options?.origin,
           onInputPersisted: options?.onInputPersisted,
           handoffReconciliationAdmission: options?.handoffReconciliationAdmission,
+          onHandoffInputCommitted: options?.onHandoffInputCommitted,
+          onExecutionClosed: options?.onExecutionClosed,
+          handoffReconciliationContext: options?.handoffReconciliationContext,
         })
       } finally {
         currentPermissionHandler = undefined
       }
+    },
+    readHandoffOutcome(operationId) { return engine.readHandoffOutcome?.(operationId) ?? Promise.resolve(null) },
+    recoverHandoffReconciliation(notice) {
+      if (!engine.recoverHandoffReconciliation) return Promise.resolve(null)
+      return engine.recoverHandoffReconciliation(notice)
+    },
+    sealResumeCheckpoint() {
+      if (!engine.sealResumeCheckpoint) throw new Error('Resume checkpoint sealing unavailable')
+      return engine.sealResumeCheckpoint()
+    },
+    verifyResumeCheckpoint(checkpoint) {
+      if (!engine.verifyResumeCheckpoint) throw new Error('Resume checkpoint verification unavailable')
+      return engine.verifyResumeCheckpoint(checkpoint)
     },
     persistHandoffOutcome(operationId, outcome) {
       if (!engine.persistHandoffOutcome) throw new Error('Workspace outcome persistence is unavailable')

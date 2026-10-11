@@ -367,10 +367,11 @@ import { isBackgroundTask } from '../tasks/types.js'
 import { formatHeadlessTextResult } from './headlessTextResult.js'
 import { toObservedTask } from './pendingTaskNotifications.js'
 import { createHeadlessWaitLoop } from './headlessWaitLoop.js'
+import { finalizeHeadlessRun } from './headlessRunFinalization.js'
 import { stopTask } from '../tasks/stopTask.js'
 import {
-  claimTaskTerminatedSdkEvent,
-  drainSdkEvents,
+  enqueueSdkEvent,
+  flushSdkEvents as flushQueuedSdkEvents,
 } from '../utils/sdkEventQueue.js'
 import { initializeGrowthBook } from '../services/analytics/growthbook.js'
 import { errorMessage, toError } from '../utils/errors.js'
@@ -1145,6 +1146,36 @@ function runHeadlessStreaming(
   let pauseGoalOnAbort: (() => void) | null = null
   // Same queue sendRequest() enqueues to — one FIFO for everything.
   const output = structuredIO.outbound
+
+  function flushSdkEvents(): void {
+    flushQueuedSdkEvents(output)
+  }
+
+  async function reportExecutionError(error: unknown): Promise<void> {
+    // Write directly so a transport failure cannot hide the failure result.
+    try {
+      await structuredIO.write({
+        type: 'result',
+        subtype: 'error_during_execution',
+        duration_ms: 0,
+        duration_api_ms: 0,
+        is_error: true,
+        num_turns: 0,
+        stop_reason: null,
+        session_id: getSessionId(),
+        total_cost_usd: 0,
+        usage: EMPTY_USAGE,
+        modelUsage: {},
+        permission_denials: [],
+        uuid: randomUUID(),
+        errors: [errorMessage(error), ...getInMemoryErrors().map(_ => _.error)],
+      })
+    } catch {
+      // Continue shutdown when the failure result cannot be written.
+    }
+    suggestionState.abortController?.abort()
+    gracefulShutdownSync(1)
+  }
 
   // Ctrl+C in -p mode: abort the in-flight query, then shut down gracefully.
   // gracefulShutdown persists session state and flushes analytics, with a
@@ -2208,14 +2239,8 @@ function runHeadlessStreaming(
             // default to 'completed' and falsely close the task for SDK
             // consumers. Terminal bookends are now emitted directly via
             // emitTaskTerminatedSdk, so skipping statusless events is safe.
-            if (
-              statusMatch &&
-              claimTaskTerminatedSdkEvent(
-                taskIdMatch?.[1] ?? '',
-                command.taskRunId,
-              )
-            ) {
-              output.enqueue({
+            if (statusMatch) {
+              enqueueSdkEvent({
                 type: 'system',
                 subtype: 'task_notification',
                 task_id: taskIdMatch?.[1] ?? '',
@@ -2233,9 +2258,8 @@ function runHeadlessStreaming(
                           : 0,
                       }
                     : undefined,
-                session_id: getSessionId(),
-                uuid: randomUUID(),
-              })
+              }, command.taskRunId)
+              flushSdkEvents()
             }
             // No continue -- fall through to ask() so the model processes the result
           }
@@ -2383,17 +2407,13 @@ function runHeadlessStreaming(
 
               if (message.type === 'result') {
                 // Flush pending SDK events so they appear before result on the stream.
-                for (const event of drainSdkEvents()) {
-                  output.enqueue(event)
-                }
+                flushSdkEvents()
 
                 waitLoop.onTurnResult(message)
               } else {
                 // Flush SDK events (task_started, task_progress) so background
                 // agent progress is streamed in real-time, not batched until result.
-                for (const event of drainSdkEvents()) {
-                  output.enqueue(event)
-                }
+                flushSdkEvents()
                 // Observe mid-turn. The wait loop only runs BETWEEN turns, so
                 // an agent that both starts and goes terminal inside one turn
                 // is never seen running by the seed above, and its handover
@@ -2526,11 +2546,7 @@ function runHeadlessStreaming(
 
       await waitLoop.runWaitLoop({
         drainCommandQueue,
-        flushSdkEvents: () => {
-          for (const event of drainSdkEvents()) {
-            output.enqueue(event)
-          }
-        },
+        flushSdkEvents,
         hasMainThreadQueued: () => peek(isMainThread) !== undefined,
         requestGoalContinuation: headlessGoalLoop
           ? async () => {
@@ -2553,55 +2569,31 @@ function runHeadlessStreaming(
         },
       })
     } catch (error) {
-      // Emit error result message before shutting down
-      // Write directly to structuredIO to ensure immediate delivery
-      try {
-        await structuredIO.write({
-          type: 'result',
-          subtype: 'error_during_execution',
-          duration_ms: 0,
-          duration_api_ms: 0,
-          is_error: true,
-          num_turns: 0,
-          stop_reason: null,
-          session_id: getSessionId(),
-          total_cost_usd: 0,
-          usage: EMPTY_USAGE,
-          modelUsage: {},
-          permission_denials: [],
-          uuid: randomUUID(),
-          errors: [
-            errorMessage(error),
-            ...getInMemoryErrors().map(_ => _.error),
-          ],
-        })
-      } catch {
-        // If we can't emit the error result, continue with shutdown anyway
-      }
-      suggestionState.abortController?.abort()
-      gracefulShutdownSync(1)
+      await reportExecutionError(error)
       return
     } finally {
-      runPhase = 'finally_flush'
-      // Flush pending internal events before going idle
-      await structuredIO.flushInternalEvents()
-      runPhase = 'finally_post_flush'
-      if (!isShuttingDown()) {
-        notifySessionStateChanged('idle')
-        // Drain so the idle session_state_changed SDK event (plus any
-        // terminal task_notification bookends emitted during bg-agent
-        // teardown) reach the output stream before we block on the next
-        // command. The do-while drain above only runs while
-        // waitingForAgents; once we're here the next drain would be the
-        // top of the next run(), which won't come if input is idle.
-        for (const event of drainSdkEvents()) {
-          output.enqueue(event)
-        }
-      }
-      running = false
-      // Start idle timer when we finish processing and are waiting for input
-      idleTimeout.start()
+      await finalizeHeadlessRun({
+        flushInternalEvents: async () => {
+          runPhase = 'finally_flush'
+          await structuredIO.flushInternalEvents()
+          runPhase = 'finally_post_flush'
+        },
+        goIdle: () => {
+          if (!isShuttingDown()) {
+            notifySessionStateChanged('idle')
+            // Final task bookends must reach SDK output before waiting for input.
+            flushSdkEvents()
+          }
+        },
+        onError: reportExecutionError,
+        release: () => {
+          running = false
+          if (!isShuttingDown()) idleTimeout.start()
+        },
+      })
     }
+
+    if (isShuttingDown()) return
 
     // Proactive tick: if proactive is active and queue is empty, inject a tick
     if (
@@ -5097,10 +5089,11 @@ export function restoreHeadlessSessionFromLog(
   result: Parameters<typeof prepareSessionRestoreResult>[0],
   forkSession: boolean,
   setAppState: (f: (prev: AppState) => AppState) => void,
-): void {
+): ReturnType<typeof prepareSessionRestoreResult> {
   const restoreResult = prepareSessionRestoreResult(result, forkSession)
   restoreSessionStateFromLog(restoreResult, setAppState)
   restoreSessionMetadata(restoreResult)
+  return restoreResult
 }
 
 async function loadInitialMessages(
@@ -5171,7 +5164,7 @@ async function loadInitialMessages(
             }
           }
         }
-        restoreHeadlessSessionFromLog(
+        const restoredResult = restoreHeadlessSessionFromLog(
           result,
           !!options.forkSession,
           setAppState,
@@ -5187,7 +5180,7 @@ async function loadInitialMessages(
         }
 
         return {
-          messages: result.messages,
+          messages: restoredResult.messages ?? result.messages,
           turnInterruptionState: result.turnInterruptionState,
           agentSetting: result.agentSetting,
         }
@@ -5377,7 +5370,7 @@ async function loadInitialMessages(
           await resetSessionFilePointer()
         }
       }
-      restoreHeadlessSessionFromLog(result, !!options.forkSession, setAppState)
+      const restoredResult = restoreHeadlessSessionFromLog(result, !!options.forkSession, setAppState)
 
       // Write mode entry for the resumed session
       if (feature('COORDINATOR_MODE') && coordinatorModeModule) {
@@ -5387,7 +5380,7 @@ async function loadInitialMessages(
       }
 
       return {
-        messages: result.messages,
+        messages: restoredResult.messages ?? result.messages,
         turnInterruptionState: result.turnInterruptionState,
         agentSetting: result.agentSetting,
       }

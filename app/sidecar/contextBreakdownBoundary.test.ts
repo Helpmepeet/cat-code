@@ -78,6 +78,8 @@ function probeAdapter(): AppSessionControllerAdapter {
 
 class TestSessionController {
   private readonly listeners = new Set<(event: AppSessionEvent) => void>()
+  subscribeHandoffStatus(): () => void { return () => {} }
+  getWorkspaceHandoffSnapshot() { return null }
   subscribe(listener: (event: AppSessionEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

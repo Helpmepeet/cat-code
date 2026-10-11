@@ -21,6 +21,7 @@ import { notifyVscodeFileUpdated } from 'src/services/mcp/vscodeSdkMcp.js'
 import type { LogOption } from 'src/types/logs.js'
 import { inspect } from 'util'
 import { getGlobalConfig } from './config.js'
+import type { ContainedFileCopyOptions } from './containedFs.js'
 import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
@@ -54,7 +55,10 @@ export type FileHistoryState = {
 
 export type FileHistoryTrackSource = {
   sourcePath: string | null
-  copyTo?: (destinationPath: string) => Promise<void>
+  copyTo?: (
+    destinationPath: string,
+    options?: ContainedFileCopyOptions,
+  ) => Promise<void>
   stats?: { size: number; mode: number }
 }
 
@@ -748,10 +752,18 @@ function resolveBackupPath(backupFileName: string, sessionId?: string): string {
   )
 }
 
+async function ensurePrivateBackupDirectory(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  if (process.platform !== 'win32') {
+    await chmod(dirname(directory), 0o700)
+    await chmod(directory, 0o700)
+  }
+}
+
 /**
  * Creates a backup of the file at filePath. If the file does not exist
  * (ENOENT), records a null backup (file-did-not-exist marker). All IO is
- * async. Lazy mkdir: tries copyFile first, creates the directory on ENOENT.
+ * async. Backup directories and in-progress prepared copies are private.
  */
 async function createBackup(
   filePath: string | null,
@@ -787,18 +799,24 @@ async function createBackup(
     }
   }
 
+  await ensurePrivateBackupDirectory(dirname(backupPath))
+
   // copyFile preserves content and avoids reading the whole file into the JS
-  // heap (which the previous readFileSync+writeFileSync pipeline did, OOMing
-  // on large tracked files). Lazy mkdir: 99% of calls hit the fast path
-  // (directory already exists); on ENOENT, mkdir then retry.
+  // heap. Prepared copies start with owner-only permissions before writing.
   try {
-    if (source?.copyTo) await source.copyTo(backupPath)
-    else await copyFile(inputPath, backupPath)
+    if (source?.copyTo) {
+      await source.copyTo(backupPath, { mode: 0o600 })
+    } else {
+      await copyFile(inputPath, backupPath)
+    }
   } catch (e: unknown) {
     if (!isENOENT(e)) throw e
-    await mkdir(dirname(backupPath), { recursive: true })
-    if (source?.copyTo) await source.copyTo(backupPath)
-    else await copyFile(inputPath, backupPath)
+    await ensurePrivateBackupDirectory(dirname(backupPath))
+    if (source?.copyTo) {
+      await source.copyTo(backupPath, { mode: 0o600 })
+    } else {
+      await copyFile(inputPath, backupPath)
+    }
   }
 
   // Preserve file permissions on the backup.

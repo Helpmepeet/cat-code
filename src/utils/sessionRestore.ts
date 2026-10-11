@@ -75,6 +75,7 @@ import { TodoListSchema } from './todo/types.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import type { ThreadGoal } from './threadGoal.js'
 import { activateTranscriptLease } from './transcriptLease.js'
+import { materializeWorkspaceResumeAttachments } from './workspaceResumeAttachments.js'
 import {
   getCurrentWorktreeSession,
   restoreWorktreeSession,
@@ -107,9 +108,15 @@ export function prepareSessionRestoreResult(
   result: ResumeResult,
   forkSession: boolean,
 ): ResumeResult {
-  return forkSession
-    ? { ...result, threadGoal: null, worktreeSession: undefined }
-    : result
+  if (!forkSession) return result
+  return {
+    ...result,
+    messages: result.messages
+      ? materializeWorkspaceResumeAttachments(result.messages)
+      : result.messages,
+    threadGoal: null,
+    worktreeSession: undefined,
+  }
 }
 
 /**
@@ -909,7 +916,7 @@ export async function processResumedConversation(
     : []
 
   return {
-    messages: [...result.messages, ...stallReminders],
+    messages: [...(restoreResult.messages ?? result.messages), ...stallReminders],
     fileHistorySnapshots: result.fileHistorySnapshots,
     contentReplacements: result.contentReplacements,
     agentName: result.agentName,

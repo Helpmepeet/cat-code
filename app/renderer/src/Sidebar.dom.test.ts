@@ -412,7 +412,7 @@ for (const kind of ['live', 'restorable', 'history'] as const) {
   })
 }
 
-test('every row kebab uses the merged identity, archived menus carry true, and menus never activate the row', async () => {
+test('row menus preserve identity and pinning stays separate from row activation', async () => {
   const live = sessionRow('Live')
   const history = sessionRow('History', {
     appSessionId: null, inRegistry: false, live: false, status: 'history', modifiedAtMs: 0,
@@ -439,9 +439,16 @@ test('every row kebab uses the merged identity, archived menus carry true, and m
   expect(calls.map(call => call.id)).toEqual([live.sessionId, history.sessionId, orphan.sessionId])
   expect(calls.every(call => call.archived === undefined)).toBe(true)
   expect(opens).toEqual([])
-  expect(tree.container.querySelector('[aria-label^="Pin Live"]')).toBeNull()
+  expect(tree.container.querySelector('[aria-label="Pin Live"]')).not.toBeNull()
   expect(tree.container.querySelector('[aria-label^="Unpin Live"]')).toBeNull()
   expect(tree.container.textContent).not.toContain('Pinned')
+  await act(async () => {
+    tree.container.querySelector<HTMLButtonElement>('[aria-label="Pin Live"]')!.click()
+  })
+  expect(opens).toEqual([])
+  expect(tree.container.textContent).toContain('Pinned')
+  expect(tree.container.querySelector('[aria-label="Unpin Live"]')).not.toBeNull()
+  expect(tree.container.querySelectorAll('[aria-label^="session Live,"]')).toHaveLength(1)
 
   await tree.render(sidebar({
     ...props, archivedSessions: [{ sessionId: history.sessionId, archivedAt: Date.now() }],

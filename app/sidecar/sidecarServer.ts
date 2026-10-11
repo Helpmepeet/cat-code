@@ -1,4 +1,4 @@
-import { readWorkspaceJump, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
+import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { isPathTrusted } from '../../src/utils/config.js'
@@ -25,6 +25,7 @@ import { isPathTrusted } from '../../src/utils/config.js'
  */
 
 import { randomUUID } from 'crypto'
+import type { WorkspaceHandoffDisposition, WorkspaceHandoffReason, WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import { open } from 'node:fs/promises'
 import z from 'zod/v4'
 import type {
@@ -83,8 +84,11 @@ import {
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   HOST_REQUEST_TIMEOUT_MS,
+  HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
+  MAX_HANDOFF_STATE_BYTES,
+  MAX_HANDOFF_STATES_PER_WINDOW,
   MAX_FRAMES_PER_WINDOW,
   MAX_GENERATED_IMAGE_PREVIEW_BYTES,
   MAX_HISTORY_REPLAY_BYTES,
@@ -268,6 +272,8 @@ export type SidecarTurnLifecycleEvent =
 export type SidecarServerOptions = {
   sessionId: SessionId
   engineSessionId: string
+  /** Trusted process identity minted by the supervisor before spawn. */
+  generation?: string
   controller: AppSessionController
   /**
    * Optional socket-only wrapper. Production uses this to carry metadata-only
@@ -426,13 +432,14 @@ export type SidecarServerOptions = {
   history?: readonly SDKMessage[]
   /** Display loader omitted an older archival prefix before wire capping. */
   historySourceTruncated?: boolean
+  unavailableParentToolUseIds?: readonly string[]
   /**
    * Rebuild the marker-aware display transcript from a retained engine seed.
    * Production supplies the same projector used during initial resume.
    */
   projectHistory?: (
     retainedMessages: Message[],
-  ) => Promise<{ history: SDKMessage[]; truncated: boolean }>
+  ) => Promise<{ history: SDKMessage[]; truncated: boolean; unavailableParentToolUseIds?: string[] }>
   /**
    * The deeper transcript read behind `history.loadEarlier`
    * (decisions/HISTORY-LOAD-EARLIER.md). Defaults to the REAL engine-backed
@@ -528,6 +535,7 @@ const UUID_SHAPE =
 export class SidecarServer {
   private readonly sessionId: SessionId
   private readonly engineSessionId: string
+  private readonly generation: string
   private readonly controller: AppSessionController
   private readonly permissions: SidecarPermissionDomain | null
   private readonly settings: SidecarSettingsDomain | null
@@ -567,9 +575,10 @@ export class SidecarServer {
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private history: readonly SDKMessage[]
   private historySourceTruncated: boolean
+  private unavailableParentToolUseIds: readonly string[]
   private readonly projectHistory: ((
     retainedMessages: Message[],
-  ) => Promise<{ history: SDKMessage[]; truncated: boolean }>) | null
+  ) => Promise<{ history: SDKMessage[]; truncated: boolean; unavailableParentToolUseIds?: string[] }>) | null
   private readonly loadEarlierHistory: HistoryLoadEarlierReader
   /**
    * One deeper read per session at a time (decisions/HISTORY-LOAD-EARLIER.md
@@ -610,6 +619,11 @@ export class SidecarServer {
   private deliveryConnectionEpoch = 0
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
+  private unsubscribeHandoffStatus: (() => void) | null = null
+  private handoffExecutionTask: Promise<void> | null = null
+  private handoffStateWindow = 0
+  private handoffStateCount = 0
+  private handoffStateTimer: ReturnType<typeof setTimeout> | null = null
   private unsubscribePermissionContext: (() => void) | null = null
   private unsubscribeAgentConfigSnapshot: (() => void) | null = null
   private unsubscribeGoalSnapshot: (() => void) | null = null
@@ -797,6 +811,7 @@ export class SidecarServer {
   constructor(options: SidecarServerOptions) {
     this.sessionId = options.sessionId
     this.engineSessionId = options.engineSessionId
+    this.generation = options.generation ?? randomUUID()
     this.controller = options.controller
     this.permissions = options.permissions ?? null
     this.settings = options.settings ?? null
@@ -829,6 +844,7 @@ export class SidecarServer {
     this.history = options.history ?? []
     this.seedConsumedPeerMessages()
     this.historySourceTruncated = options.historySourceTruncated ?? false
+    this.unavailableParentToolUseIds = options.unavailableParentToolUseIds ?? []
     this.projectHistory = options.projectHistory ?? null
     this.loadEarlierHistory =
       options.loadEarlierHistory ?? readEarlierDisplayHistory
@@ -855,6 +871,7 @@ export class SidecarServer {
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
+    this.unsubscribeHandoffStatus = this.controller.subscribeHandoffStatus(() => this.publishHandoffState())
     this.unsubscribe = this.controller.subscribe(event => {
       this.runControls?.observeSessionEvent?.(event)
       // Before the broadcast: `broadcastEvent` returns early with no clients
@@ -1132,6 +1149,7 @@ export class SidecarServer {
         payload: preparedPayload,
       })
     }
+    this.publishHandoffState(connection)
     // C3 — snapshot on attach, immediately after `ready` (a separate app-owned
     // frame; the engine-owned AppReadyPayload is deliberately not widened).
     if (this.permissions) {
@@ -1242,7 +1260,7 @@ export class SidecarServer {
     this.sendActivity(connection, attachPresence)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
-    this.sendHistoryReplay(connection)
+    this.sendHistoryAvailability(connection, this.sendHistoryReplay(connection))
     this.send(connection, {
       kind: 'history.replay.complete',
       protocolVersion: PROTOCOL_VERSION,
@@ -1250,6 +1268,15 @@ export class SidecarServer {
     })
     queueMicrotask(() => this.publishHandoffReady())
     return connection
+  }
+
+  private sendHistoryAvailability(connection: Connection, ids = this.unavailableParentToolUseIds, recovered = false): void {
+    this.send(connection, {
+      kind: 'history.availability', protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      unavailableParentToolUseIds: [...ids],
+      ...(recovered ? { recovered: true as const } : {}),
+    })
   }
 
   /**
@@ -1280,8 +1307,9 @@ export class SidecarServer {
    * prepareOutboundPayload (clone + JSON-safe) and send (secretGuard + size
    * cap) — the replay adds no security bypass.
    */
-  private sendHistoryReplay(connection: Connection): void {
-    if (this.history.length === 0 && !this.historySourceTruncated) return
+  private sendHistoryReplay(connection: Connection): string[] {
+    const unavailable = new Set(this.unavailableParentToolUseIds)
+    if (this.history.length === 0 && !this.historySourceTruncated) return [...unavailable]
 
     const retained: ServerFrame[] = []
     let retainedBytes = 0
@@ -1292,15 +1320,12 @@ export class SidecarServer {
     // never a mid-history hole.
     for (let i = this.history.length - 1; i >= 0; i--) {
       const message = this.history[i]!
-      const prepared = this.prepareOutboundPayload(
-        createMessageEvent(message),
-        'event',
-        'history replay',
-      )
+      const prepared = this.prepareHistoryPayload(connection, message, 'history replay')
       if (!prepared) {
         // Un-serializable restored message (should not happen for
         // JSONL-round-tripped content) — an omission, so the replay is lossy.
         truncated = true
+        if (typeof message.parent_tool_use_id === 'string') unavailable.add(message.parent_tool_use_id)
         continue
       }
       const frame: ServerFrame = {
@@ -1351,6 +1376,7 @@ export class SidecarServer {
     for (const frame of retained) {
       this.send(connection, frame)
     }
+    return [...unavailable]
   }
 
   removeConnection(connection: Connection): void {
@@ -1415,6 +1441,10 @@ export class SidecarServer {
     this.closed = true
     this.clearIdleTimer()
     this.clearTurnStallTimer()
+    if (this.handoffStateTimer) clearTimeout(this.handoffStateTimer)
+    this.handoffStateTimer = null
+    this.unsubscribeHandoffStatus?.()
+    this.unsubscribeHandoffStatus = null
     this.unsubscribe?.()
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
@@ -1735,7 +1765,8 @@ export class SidecarServer {
           return
         }
         const operationId = this.controller.getHandoffReservation()
-        if (operationId) this.requestHandoffCancellation(operationId)
+        if (operationId) { this.requestHandoffCancellation(operationId); return }
+        if (this.controller.getWorkspaceHandoffSnapshot()?.gate.mode === 'review') return
         this.controller.abort(message.reason)
         return
 
@@ -1844,13 +1875,26 @@ export class SidecarServer {
     })
   }
 
-  private publishUserHandoffAdmission(): void {
-    let state
-    try { state = readWorkspaceJump(this.sessionId) } catch { return }
-    if (!state?.requiresUserReconciliation) return
-    this.broadcastToConnections(connection => this.send(connection, { kind: 'workspace.user-admitted', protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId, operationId: state.operationId }))
+  private publishHandoffState(connection?: Connection): void {
+    const status = this.controller.getWorkspaceHandoffSnapshot()
+    if (!status) return
+    const now = Date.now()
+    if (now - this.handoffStateWindow >= HANDOFF_STATE_WINDOW_MS) { this.handoffStateWindow = now; this.handoffStateCount = 0 }
+    if (this.handoffStateCount >= MAX_HANDOFF_STATES_PER_WINDOW) {
+      if (!this.handoffStateTimer) this.handoffStateTimer = setTimeout(() => {
+        this.handoffStateTimer = null
+        if (!this.closed) this.publishHandoffState()
+      }, Math.max(1, HANDOFF_STATE_WINDOW_MS - (now - this.handoffStateWindow)))
+      return
+    }
+    this.handoffStateCount++
+    const frame = { kind: 'workspace.handoff.state' as const, protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId, operationId: status.operationId, status }
+    if (connection) this.send(connection, frame)
+    else this.broadcastToConnections(client => this.send(client, frame))
   }
+
+  private publishUserHandoffAdmission(): void { this.publishHandoffState() }
 
   private publishHandoffReady(): void {
     if (this.closed) return
@@ -1889,62 +1933,113 @@ export class SidecarServer {
   }
 
   private async handleWorkspaceHandoff(connection: Connection, raw: unknown): Promise<void> {
+    if (Buffer.byteLength(JSON.stringify(raw)) > MAX_HANDOFF_STATE_BYTES) { this.log('[sidecar] rejected oversized workspace handoff control'); return }
     const parsed = workspaceHandoffSchema.safeParse(raw)
     if (!parsed.success) { this.log('[sidecar] rejected workspace handoff control'); return }
     const message: WorkspaceHandoffMessage = parsed.data
-    let ok = false
+    let disposition: WorkspaceHandoffDisposition = 'refused'
+    let reason: WorkspaceHandoffReason | undefined = 'invalid_state'
+    let status: WorkspaceHandoffSnapshot | undefined
     try {
-      const state = readWorkspaceJump(this.sessionId)
-      if (!state || state.engineSessionId !== this.engineSessionId || state.operationId !== message.operationId) throw new Error('Obsolete handoff')
+      if (message.forGeneration !== this.generation) { reason = 'wrong_generation'; throw new Error() }
+      const saved = readWorkspaceJump(this.sessionId)
+      if (!saved || saved.engineSessionId !== this.engineSessionId || saved.operationId !== message.operationId) {
+        reason = 'wrong_identity'; throw new Error()
+      }
+      const state = upgradeWorkspaceJumpState(saved)
+      const prior = this.controller.getWorkspaceHandoffSnapshot()
+      const operationSha256 = workspaceJumpOperationSha256(state)
+      if (prior && (prior.operationId !== state.operationId || prior.continuationId !== state.continuation.id ||
+          prior.sourceGeneration !== state.sourceGeneration || prior.operationSha256 !== operationSha256)) {
+        reason = 'conflict'; throw new Error()
+      }
+      // Verification establishes the source boundary that is part of the
+      // immutable execution identity. Do not configure against its earlier null.
+      const configure = message.action !== 'verify' && (message.action !== 'status' || !!state.boundary)
+      if (configure && (!prior || prior.admissionGeneration !== state.continuation.admissionGeneration)) {
+        if (prior?.admissionGeneration !== undefined && prior.admissionGeneration !== null) {
+          reason = 'wrong_generation'; throw new Error()
+        }
+        await this.controller.configureWorkspaceHandoff({ identity: {
+          appSessionId: this.sessionId, engineSessionId: this.engineSessionId,
+          operationId: state.operationId, continuationId: state.continuation.id,
+          sourceGeneration: state.sourceGeneration, admissionGeneration: state.continuation.admissionGeneration,
+          operationSha256,
+        }, observerGeneration: this.generation, origin: state.origin,
+          recover: state.origin === 'legacy' || state.continuation.admissionGeneration !== this.generation })
+      }
+      status = this.controller.getWorkspaceHandoffSnapshot() ?? undefined
       if (message.action === 'verify') {
         const observed = this.handoffResult
         if (!this.isParkGateOpen() || !observed || observed.operationId !== message.operationId ||
             observed.tipUuid !== message.tipUuid || observed.toolUseId !== message.toolUseId ||
-            this.controller.getHandoffReservation() !== message.operationId) throw new Error('Handoff boundary changed')
+            this.controller.getHandoffReservation() !== message.operationId) throw new Error()
         await verifyActiveTranscriptTipDurably(message.tipUuid)
-        if (!this.isParkGateOpen()) throw new Error('Handoff is active')
+        if (!this.isParkGateOpen()) throw new Error()
       } else if (message.action === 'continue') {
-        if (!this.isParkGateOpen() || state.continuation.state !== 'admitted' || state.cancelled ||
-            state.location !== 'destination' || getCwd() !== state.target.cwd || !isPathTrusted(getCwd()) ||
-            this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') throw new Error('Continuation unavailable')
-        if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
-        this.activeTurn = true
-        this.destinationHandoffOperation = message.operationId
-        this.beginTurnObservation()
-        try { await this.controller.continueHandoff(message.operationId, { uuid: state.continuation.id }) }
-        finally {
-          this.destinationHandoffOperation = null
-          this.activeTurn = false
-          this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
+        if (state.origin !== 'fresh' || state.continuation.id !== message.continuationId ||
+            state.continuation.admissionGeneration !== this.generation || state.cancellation ||
+            state.location !== 'destination' || getCwd() !== state.target.cwd) throw new Error()
+        if (!isPathTrusted(getCwd()) || this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') {
+          reason = 'not_trusted'; throw new Error()
         }
-        if (!this.turnResultSucceeded || this.turnResultFailed || this.handoffResult) throw new Error('Continuation did not settle successfully')
-      } else if (message.action === 'settle_failed' || message.action === 'settle_cancelled' || message.action === 'settle_uncertain') {
-        // Cancellation may arrive while the source tool exchange is settling.
-        // Wait without releasing its reservation or starting another turn.
-        const deadline = Date.now() + 15_000
-        while (this.activeTurn || this.controller.isTurnActive()) {
-          if (Date.now() >= deadline || this.closed) throw new Error('Source is not idle')
-          await new Promise(resolve => setTimeout(resolve, 10))
-        }
-        if (!this.controller.getHandoffReservation()) this.controller.restoreHandoffReservation(message.operationId)
-        await this.controller.settleHandoff(message.operationId, message.action === 'settle_uncertain' ? 'uncertain' : message.action === 'settle_failed' ? 'failed' : 'cancelled')
-        if (message.action === 'settle_cancelled') {
-          this.forcedReconciliationPromptIds.clear()
+        if (status?.record.kind === 'valid' && status.record.record.consumed) {
+          disposition = 'already_applied'
         } else {
-          this.drainOneQueuedPrompt(true)
+          if (this.handoffExecutionTask || !this.isParkGateOpen()) { disposition = 'busy'; throw new Error() }
+          this.activeTurn = true
+          this.destinationHandoffOperation = message.operationId
+          this.beginTurnObservation()
+          try {
+            const started = await this.controller.startHandoffContinuation()
+            this.handoffExecutionTask = started.completion
+            void started.completion.catch(() => this.log('[sidecar] workspace continuation proof unconfirmed')).finally(() => {
+              this.handoffExecutionTask = null
+              this.destinationHandoffOperation = null
+              this.activeTurn = false
+              this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
+              this.publishHandoffState()
+              this.publishHandoffReady()
+            })
+          } catch (error) {
+            this.activeTurn = false
+            this.destinationHandoffOperation = null
+            this.endTurnObservation('failed')
+            reason = 'durability_unconfirmed'
+            throw error
+          }
         }
+      } else if (message.action === 'cancel') {
+        if (!state.cancellation || state.cancellation.cancelId !== message.cancelId) throw new Error()
+        this.inFlightDurableWrites++
+        try { await this.controller.cancelWorkspaceHandoff(message.cancelId) }
+        finally { this.inFlightDurableWrites-- }
+        this.forcedReconciliationPromptIds.clear()
+      } else if (message.action === 'settle') {
+        if (this.handoffExecutionTask || this.activeTurn || this.controller.isTurnActive()) { disposition = 'busy'; throw new Error() }
+        this.inFlightDurableWrites++
+        try { await this.controller.settleWorkspaceHandoff(message.outcome) }
+        finally { this.inFlightDurableWrites-- }
+        if (message.outcome === 'cancelled') this.forcedReconciliationPromptIds.clear()
+        else this.drainOneQueuedPrompt(true)
       } else if (message.action === 'release') {
-        if (state.continuation.state !== 'settled' || state.requiresUserReconciliation) throw new Error('Outcome is not settled')
-        this.controller.releaseHandoffReservation(message.operationId)
-        this.scheduleBoundaryDrain()
-      } else {
-        if (state.requiresUserReconciliation) throw new Error('User admission is not reconciled')
-        this.controller.releaseHandoffReservation(message.operationId)
+        if (state.release.authorizedRevision !== message.authorizationRevision || state.release.target === 'held') throw new Error()
+        this.inFlightDurableWrites++
+        let applied: 'applied' | 'already_applied' | 'refused'
+        try { applied = await this.controller.releaseWorkspaceHandoff(message.operationId, state.release.target) }
+        finally { this.inFlightDurableWrites-- }
+        if (applied === 'refused') { reason = 'conflict'; throw new Error() }
+        disposition = applied === 'already_applied' ? 'already_applied' : 'accepted'
+        if (state.release.target === 'open') this.scheduleBoundaryDrain()
       }
-      ok = true
+      if (disposition === 'refused') disposition = 'accepted'
+      reason = undefined
     } catch { this.log('[sidecar] workspace handoff control refused') }
+    status = this.controller.getWorkspaceHandoffSnapshot() ?? status
+    if (status?.operationId !== message.operationId || reason === 'wrong_identity' || reason === 'wrong_generation') status = undefined
     this.send(connection, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId, ok })
+      sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId,
+      action: message.action, disposition, ...(reason ? { reason } : {}), ...(status ? { status } : {}) })
   }
 
   private drainOneQueuedPrompt(allowUserReconciliation = false): boolean {
@@ -2858,7 +2953,7 @@ export class SidecarServer {
         try {
           const state = readWorkspaceJump(this.sessionId)
           canQueue = !!state && state.engineSessionId === this.engineSessionId &&
-            state.operationId === reservation && workspaceJumpAllowsQueuedInput(state)
+            state.operationId === reservation && workspaceJumpAllowsQueuedInput(state, this.controller.getWorkspaceHandoffSnapshot() ?? undefined)
         } catch { /* An unreadable move ledger keeps admission closed. */ }
       }
       if (!canQueue) {
@@ -3604,14 +3699,35 @@ export class SidecarServer {
             ? 'branch'
             : 'tag'
 
-    const run =
-      verb.type === 'session.rename'
-        ? domain.rename(verb.title)
-        : verb.type === 'session.export'
-          ? domain.export()
-          : verb.type === 'session.branch'
-            ? domain.branch()
-            : domain.tag(verb.tag)
+    const isWholeConversationFork = verb.type === 'session.branch'
+    if (isWholeConversationFork) {
+      if (
+        this.parking ||
+        this.conversationMutationInFlight ||
+        this.controller.getHandoffReservation()
+      ) {
+        this.sendSessionActionResult(connection, {
+          kind: 'session-action.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbName,
+          ok: false,
+          message: 'Another conversation update is already in progress.',
+        })
+        return
+      }
+      // Fork waits for idle and then flushes before reading the transcript. Block
+      // new submits across that entire asynchronous boundary, not just the write.
+      this.conversationMutationInFlight = true
+    }
+
+    const run = (async () => {
+      if (verb.type === 'session.rename') return await domain.rename(verb.title)
+      if (verb.type === 'session.export') return await domain.export()
+      if (verb.type === 'session.branch') return await domain.branch()
+      return await domain.tag(verb.tag)
+    })()
 
     // IDLE-PARK gate 4: a fork writes a new transcript, so hold the park off
     // until this settles (see isParkGateOpen).
@@ -3683,6 +3799,10 @@ export class SidecarServer {
       })
       .finally(() => {
         this.inFlightDurableWrites -= 1
+        if (isWholeConversationFork) {
+          this.conversationMutationInFlight = false
+          this.scheduleBoundaryDrain()
+        }
       })
   }
 
@@ -3775,16 +3895,18 @@ export class SidecarServer {
         ) {
           this.history = []
           this.historySourceTruncated = true
+          this.unavailableParentToolUseIds = []
           this.broadcastTranscriptReset()
           refuse('Conversation history could not be rebuilt after editing.')
           return
         }
-        let projected: { history: SDKMessage[]; truncated: boolean }
+        let projected: { history: SDKMessage[]; truncated: boolean; unavailableParentToolUseIds?: string[] }
         try {
           projected = await this.projectHistory(result.retainedMessages)
         } catch (error) {
           this.history = []
           this.historySourceTruncated = true
+          this.unavailableParentToolUseIds = []
           this.broadcastTranscriptReset()
           refuse(
             error instanceof Error
@@ -3795,6 +3917,7 @@ export class SidecarServer {
         }
         this.history = projected.history
         this.historySourceTruncated = projected.truncated
+        this.unavailableParentToolUseIds = projected.unavailableParentToolUseIds ?? []
         this.broadcastTranscriptResetAndReplay()
         this.sendSessionActionResult(connection, {
           kind: 'session-action.result',
@@ -3874,7 +3997,7 @@ export class SidecarServer {
         protocolVersion: PROTOCOL_VERSION,
         sessionId: this.sessionId,
       })
-      this.sendHistoryReplay(connection)
+      this.sendHistoryAvailability(connection, this.sendHistoryReplay(connection))
     }
   }
 
@@ -4299,6 +4422,20 @@ export class SidecarServer {
     }
 
     return cloned
+  }
+
+  private prepareHistoryPayload(connection: Connection, message: SDKMessage, detail: string) {
+    const prepared = this.prepareOutboundPayload(createMessageEvent(message), 'event', detail)
+    if (prepared && !scanForSecrets(prepared).ok) {
+      // Preserve send's credential rejection/reporting, and let history record
+      // the omitted child rather than publish a complete availability verdict.
+      this.send(connection, {
+        kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: this.sessionId,
+        replay: true, event: prepared,
+      })
+      return null
+    }
+    return prepared
   }
 
   private broadcastEvent(event: AppSessionEvent): void {
@@ -4752,7 +4889,7 @@ export class SidecarServer {
       )
       return
     }
-    const { requestId, viewAnchorUuid } = parsed.data
+    const { requestId, viewAnchorUuid, viewTruncated } = parsed.data
 
     if (this.loadEarlierInFlight) {
       this.sendLoadEarlierResult(connection, requestId, {
@@ -4767,7 +4904,11 @@ export class SidecarServer {
     // Already whole for this reader: a previous read reached the head, so there
     // is provably nothing above it. Answered from the latch, because the read
     // that would confirm it costs the full ceiling plus every subagent file.
-    if (connection.loadEarlierComplete && viewAnchorUuid === undefined) {
+    if (
+      connection.loadEarlierComplete &&
+      viewAnchorUuid === undefined &&
+      !viewTruncated
+    ) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
         message: loadEarlierMessage(0, true),
@@ -4781,16 +4922,16 @@ export class SidecarServer {
     // earlier to reach for: a fresh session's whole conversation was emitted
     // live, not replayed.
     //
-    // Conditional on main having stamped no view anchor, and that condition is
-    // the whole of the fix. "The sidecar replayed nothing" is not the same fact
+    // Conditional on main having reported neither an anchor nor a lossy view. "The sidecar replayed nothing" is not the same fact
     // as "the reader is holding everything": a session started in the app is
     // rebuilt after a renderer reload from main's ring alone, and that ring can
     // have evicted its head. Answering `complete: true` from this side's empty
     // `history` then cleared the boundary row over a truncated transcript and
     // left no route back to the missing prefix, which is the defect this branch
-    // used to cause (2026-09-02 idle-park assessment §6).
+    // used to cause (HISTORY-LOAD-EARLIER.md §The view anchor).
     if (
       viewAnchorUuid === undefined &&
+      !viewTruncated &&
       this.history.length === 0 &&
       !this.historySourceTruncated
     ) {
@@ -4813,13 +4954,18 @@ export class SidecarServer {
     // through that ring — so preferring it can at worst re-send messages the
     // renderer already has (which its uuid dedupe absorbs), and can never leave
     // a gap, which the connection anchor alone can and did.
-    const anchorUuid = viewAnchorUuid ?? connection.loadEarlierAnchorUuid
+    // An explicitly lossy main view with no UUID holds no recoverable display
+    // message. Its empty view supersedes the connection's stale restored tail.
+    const anchorlessView = viewTruncated === true && viewAnchorUuid === undefined
+    const anchorUuid = anchorlessView
+      ? null
+      : viewAnchorUuid ?? connection.loadEarlierAnchorUuid
     // History WAS restored, yet none of what reached this reader carries an
     // identity to diff a deeper read against. Everything read would look
     // missing and the reader would see the conversation twice, so refuse rather
     // than duplicate it. (Not the same case as an empty replay below, where
     // nothing went out and everything read really is missing.)
-    if (anchorUuid === null && connection.loadEarlierReplayed) {
+    if (anchorUuid === null && connection.loadEarlierReplayed && !anchorlessView) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: false,
         message: 'Earlier messages could not be loaded.',
@@ -4857,19 +5003,17 @@ export class SidecarServer {
       }
 
       const missing = read.messages.slice(0, anchorIndex)
+      const unavailable = new Set(read.unavailableParentToolUseIds ?? [])
       let omitted = false
       let oldestSentUuid: string | undefined
       let added = 0
       for (const message of missing) {
-        const prepared = this.prepareOutboundPayload(
-          createMessageEvent(message),
-          'event',
-          'load earlier',
-        )
+        const prepared = this.prepareHistoryPayload(connection, message, 'load earlier')
         if (!prepared) {
           // Un-serializable recovered message: an omission, so the transcript
           // above this point stays incomplete no matter what the loader said.
           omitted = true
+          if (typeof message.parent_tool_use_id === 'string') unavailable.add(message.parent_tool_use_id)
           continue
         }
         this.send(connection, {
@@ -4903,6 +5047,7 @@ export class SidecarServer {
         connection.loadEarlierReplayed = true
       }
       const complete = !read.truncated && !omitted
+      this.sendHistoryAvailability(connection, [...unavailable], true)
       // Latch the head so a repeat request answers without touching disk.
       if (complete) connection.loadEarlierComplete = true
       this.sendLoadEarlierResult(connection, requestId, {
@@ -5518,6 +5663,11 @@ export class SidecarServer {
   }
 
   private send(connection: Connection, frame: ServerFrame): void {
+    if ((frame.kind === 'workspace.handoff.state' || frame.kind === 'workspace.handoff.result') &&
+        Buffer.byteLength(JSON.stringify(frame)) > MAX_HANDOFF_STATE_BYTES) {
+      this.log('[sidecar] rejected oversized workspace handoff state')
+      return
+    }
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
     // separate from JSON-safety (a token object is valid JSON). An error frame
@@ -6218,15 +6368,13 @@ function checkStrictKeys(message: unknown): string | null {
     // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md).
     // Renderer-parameterless by decision: the renderer authors NOTHING but a
     // correlation id, so there is no cursor, offset, count or path to forge.
-    // `viewAnchorUuid` is the one exception and is not renderer-authored: main
-    // stamps it at `forward` from its OWN replay ring, dropping whatever the
-    // renderer sent, so a forged one cannot reach here. It is allowlisted and
-    // uuid-shape-checked all the same, because the sidecar is the trust
-    // boundary and a main-side check is never sufficient on its own
-    // (SECURITY-MINIMUM §2 R2). It authorizes nothing: it is compared for
-    // equality against uuids from this sidecar's own disk read. Any OTHER key
+    // The view anchor and truncation marker are main-authored: main
+    // stamps them at `forward` from its OWN replay ring, dropping whatever the
+    // renderer sent. Both are validated here too, because this is the trust
+    // boundary (SECURITY-MINIMUM §2 R2). Neither steers the file or read budget;
+    // the anchor is equality-compared against the sidecar's own read. Any OTHER key
     // is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
-    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid'])],
+    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid', 'viewTruncated'])],
     // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds. No preload
     // channel forwards either one and no renderer can author one, but they are
     // on the closed allowlist all the same, because the sidecar is the trust
@@ -6240,7 +6388,7 @@ function checkStrictKeys(message: unknown): string | null {
     // main-derived hop chain, all of which the sidecar treats as DATA: it is
     // never read as authority, and the chain is never authored on this side.
     ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
-    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'action', 'tipUuid', 'toolUseId'])],
+    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'forGeneration', 'action', 'tipUuid', 'toolUseId', 'continuationId', 'cancelId', 'outcome', 'authorizationRevision'])],
     [
       'peer.deliver',
       new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
@@ -6343,21 +6491,22 @@ const appParkMessageSchema = z.object({
  * engine's shared `appClientMessageSchema`. The frame carries no
  * renderer-authored state beyond a length-bounded `requestId`, and
  * `checkStrictKeys` has already REJECTED (not stripped) any key beyond
- * `{type, requestId, viewAnchorUuid}`, so this parse only enforces the value
- * types. Everything the read is bounded by — which file, how many bytes,
+ * `{type, requestId, viewAnchorUuid, viewTruncated}`. This parse enforces their
+ * value types. Everything the read is bounded by — which file, how many bytes,
  * whether one is already running — is decided on this side of the boundary and
  * appears nowhere here.
  *
  * `viewAnchorUuid` is main-authored (see the allowlist comment above) and
- * optional: absent means main had nothing to add, which is the pre-existing
- * behaviour. Shape-checked with the same uuid regex the edit-from-message verbs
- * use, because it is only ever equality-compared against `randomUUID()` values
+ * optional: absent alone does not establish completeness. `viewTruncated`
+ * retains main's loss evidence even without a message UUID. The anchor uses
+ * the same uuid regex as the edit-from-message verbs, because it is only ever equality-compared against `randomUUID()` values
  * this sidecar read off its own transcript — anything else could never match,
  * so admitting it would buy nothing.
  */
 const historyLoadEarlierMessageSchema = z.object({
   type: z.literal('history.loadEarlier'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  viewTruncated: z.literal(true).optional(),
   viewAnchorUuid: z
     .string()
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i)
@@ -6383,10 +6532,14 @@ const historyLoadEarlierMessageSchema = z.object({
  * be a string or null here rather than trusted from a frame; nothing downstream
  * has to re-derive that.
  */
-const workspaceHandoffBase = { type: z.literal('workspace.handoff'), requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS), operationId: z.string().uuid() }
+const workspaceHandoffBase = { type: z.literal('workspace.handoff'), requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS), operationId: z.string().uuid(), forGeneration: z.string().uuid() }
 const workspaceHandoffSchema = z.union([
   z.object({ ...workspaceHandoffBase, action: z.literal('verify'), tipUuid: z.string().uuid(), toolUseId: z.string().min(1).max(256) }).strict(),
-  z.object({ ...workspaceHandoffBase, action: z.enum(['continue', 'settle_failed', 'settle_cancelled', 'settle_uncertain', 'release', 'reconcile']) }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('continue'), continuationId: z.string().uuid() }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('status') }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('cancel'), cancelId: z.string().uuid() }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('settle'), outcome: z.enum(['failed', 'cancelled', 'uncertain']) }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.literal('release'), authorizationRevision: z.number().int().safe().positive() }).strict(),
 ])
 
 const hostResultEnvelopeSchema = z.object({

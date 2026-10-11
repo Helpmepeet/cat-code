@@ -35,7 +35,7 @@ for (const mode of ['unresolved jump', 'later manual location', 'manual move', '
     trust(true)
     const original = { cwd: realpathSync(source), binding: { kind: 'managed' as const, storageRootId: randomUUID(), storageId: randomUUID() } }
     if (!empty) {
-      const mint = Bun.spawn(['bun', `--preload=${blocker}`, 'run', resolve('app/sidecar/mintTranscript.fixture.ts'), engineSessionId, 'jump-startup-history'], { cwd: manual ? original.cwd : cwd, env, stdout: 'pipe', stderr: 'pipe' })
+      const mint = Bun.spawn(['bun', `--preload=${blocker}`, `--preload=${resolve('src/QueryEngine.ts')}`, 'run', resolve('app/sidecar/mintTranscript.fixture.ts'), engineSessionId, 'jump-startup-history'], { cwd: manual ? original.cwd : cwd, env, stdout: 'pipe', stderr: 'pipe' })
       processes.push(mint)
       const [code, stderr] = await Promise.all([mint.exited, new Response(mint.stderr).text(), new Response(mint.stdout).text()])
       if (code !== 0) throw new Error(stderr)
@@ -49,7 +49,7 @@ for (const mode of ['unresolved jump', 'later manual location', 'manual move', '
       continuation: { id: randomUUID(), state: settled ? 'settled' as const : 'not_admitted' as const } }
     if (manual) {
       await runSessionRelocationWorker({
-        command: 'bun', args: [`--preload=${blocker}`, 'run', resolve('app/sidecar/sessionRelocationWorker.ts')], cwd: original.cwd, env,
+        command: 'bun', args: [`--preload=${blocker}`, `--preload=${resolve('src/QueryEngine.ts')}`, 'run', resolve('app/sidecar/sessionRelocationWorker.ts')], cwd: original.cwd, env,
         request: { type: 'session-relocation', version: 1, appSessionId, engineSessionId, source: original,
           target: { cwd, binding: { kind: 'project' } }, controls: { mode: 'default' } },
       })
@@ -63,6 +63,7 @@ for (const mode of ['unresolved jump', 'later manual location', 'manual move', '
       const child = Bun.spawn(['bun', `--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/index.ts')], { cwd, env: { ...env,
         CATCODE_SIDECAR_SOCKET: join(root, 'session.sock'), CATCODE_SIDECAR_SESSION_ID: appSessionId,
         CATCODE_SIDECAR_CWD: cwd,
+        CATCODE_SIDECAR_GENERATION: randomUUID(),
         ...(empty ? { CATCODE_SIDECAR_FRESH_SESSION_ID: engineSessionId } : { CATCODE_SIDECAR_RESUME_SESSION_ID: engineSessionId }),
         CATCODE_SESSION_BINDING_JSON: JSON.stringify(binding),
       }, stdout: 'pipe', stderr: 'pipe' })

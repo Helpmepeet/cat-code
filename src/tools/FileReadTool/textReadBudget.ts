@@ -6,7 +6,6 @@ const ESTIMATED_BYTES_PER_TOKEN = 1.4
 
 export type TextReadBudget = {
   hardTokenLimit: number
-  prefixTargetTokens: number
 }
 
 /** Keep an absent configured limit distinct from the legacy 25k default. */
@@ -51,7 +50,7 @@ export function getTextReadBudget(
 
   // suggestedRetryLimit already leaves headroom for prefix rendering. There
   // is no second, much smaller output budget after crossing the ceiling.
-  return { hardTokenLimit, prefixTargetTokens: hardTokenLimit }
+  return { hardTokenLimit }
 }
 
 /**
@@ -61,15 +60,14 @@ export function getTextReadBudget(
  */
 export async function measureTextReadTokens(
   content: string,
-  targetTokens: number,
-  hardTokens: number,
+  tokenLimit: number,
   countTokens: (content: string) => Promise<number | null>,
 ): Promise<{ targetCount: number; hardCount: number }> {
   const bytes = Buffer.byteLength(content, 'utf8')
   if (bytes === 0) return { targetCount: 0, hardCount: 0 }
 
   const estimatedCount = Math.ceil(bytes / ESTIMATED_BYTES_PER_TOKEN)
-  if (estimatedCount <= targetTokens && bytes <= hardTokens) {
+  if (estimatedCount <= tokenLimit && bytes <= tokenLimit) {
     return { targetCount: estimatedCount, hardCount: bytes }
   }
   const exactCount = await countTokens(content)

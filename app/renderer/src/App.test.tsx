@@ -490,6 +490,19 @@ test('close navigation waits for a successful host result and focuses the chosen
   expect(focusIndex).toBeGreaterThan(-1)
 })
 
+test('archiving a session changes sidebar visibility without closing it', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const archiveSession = (row:')
+  const end = source.indexOf('\n  const switchBranchForSession', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const body = source.slice(start, end)
+
+  expect(body).toContain('reduceSessionArchived')
+  expect(body).not.toContain('closeTab')
+  expect(body).not.toContain('releasePendingSubmit')
+})
+
 test('message actions use one stable App dispatcher and correlate targeted results across sessions', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const dispatchStart = source.indexOf(
@@ -1518,7 +1531,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={ desktopCommand ? !canExecuteDesktopCommand : projectRoute !== null || branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
     'attachDisabled={ !composerGate.editable || managedFolderUnavailable || preparingImage || pickingFile }',
@@ -1697,6 +1710,36 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   const activityRow = html.match(/<div class="[^"]*gap-2\.5[^"]*text-xs"/)?.[0] ?? ''
   expect(activityRow).not.toBe('')
   expect(activityRow).not.toContain('border-b')
+})
+
+test('an accepted workspace jump keeps the activity row through source idle', () => {
+  const move = {
+    id: 'jump-1', phase: 'moving' as const, agentJump: true as const, continuation: 'waiting' as const,
+    target: { kind: 'project' as const, name: 'destination', path: '/tmp/destination' },
+  }
+  const props = {
+    ...idleSessionPaneProps(),
+    turnStartedAt: 1_000,
+    activeDescriptor: {
+      appSessionId: 'session-1', engineSessionId: 'engine-1', cwd: '/tmp/source',
+      title: null, forked: false, titleUpdatedAt: null, name: null,
+      createdBy: null, peerWakeBlocked: false, status: 'ready' as const,
+      restorable: false, parked: false, createdAt: 0, lastAttachedAt: 0,
+      lastMessageSentAt: null,
+      workspaceMove: move,
+    },
+  }
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...props}
+    />,
+  )
+  expect(html).toContain('>Moving</span>')
+  expect(html).not.toContain('JumpWorkspace')
+  const arrived = renderToStaticMarkup(<SessionPane {...props} activeDescriptor={{ ...props.activeDescriptor, workspaceMove: { ...move, phase: 'arrived' } }} />)
+  expect(arrived).toContain('>Working</span>')
+  const finished = renderToStaticMarkup(<SessionPane {...props} activeDescriptor={{ ...props.activeDescriptor, workspaceMove: { ...move, phase: 'arrived', continuation: 'finished' } }} />)
+  expect(finished).not.toMatch(/<div class="[^"]*gap-2\.5[^"]*text-xs"/)
 })
 
 test('a question card replaces the generating activity row', () => {
@@ -2342,7 +2385,9 @@ test('a foreground subagent is handed to the transcript, and a backgrounded one 
   // The gate is `!isBackgrounded`, over `subagents` — NOT over `items`, which
   // excludes a foreground worker by construction (`tasksDomain.ts`).
   expect(paneSource).toContain('subagents.filter(item => !item.isBackgrounded)')
-  expect(paneSource).toContain('agentBackground={agentBackground}')
+  expect(paneSource).toContain(
+    'agentBackground={activeDescriptor?.moving ? null : agentBackground}',
+  )
   // The verb names a tool-use id; a renderer-authored task id would be the defect.
   expect(source).toContain("type: 'task.background.one',")
   expect(source).toContain('toolUseId,')
@@ -3003,7 +3048,7 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // waits through, which retired the wrong copy; pin the batch call so nobody
   // reintroduces a per-frame guess.
   expect(subscribeBody).toContain(
-    'const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)',
+    'const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames.filter(frame => {',
   )
   expect(subscribeBody).toContain('restoreRefusedSubmits(sessionId, retained)')
   expect(subscribeBody).toContain('const restoredBySession = new Map<SessionId, RetainedSubmit[]>()')

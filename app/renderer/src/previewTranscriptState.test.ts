@@ -199,9 +199,10 @@ test('a truncation-only cache still reads as incomplete, with no message rows', 
 
   const projected = selectPreviewTranscript(preview, SID)!
   expect(selectTranscriptRows(projected, SID)).toEqual([])
-  // No surviving row to sit above, so no boundary row: the pane draws its
-  // restore/welcome state rather than a hairline over nothing.
-  expect(selectNestedTranscriptRows(projected, SID)).toEqual([])
+  // Empty previews still carry loss evidence; live handover can recover it.
+  expect(selectNestedTranscriptRows(projected, SID)).toMatchObject([
+    { kind: 'history-boundary', sessionId: SID },
+  ])
 
   let liveLog = reduceServerFrame(createRawMessageLogState(), ready())
   liveLog = reduceServerFrame(liveLog, boundary)

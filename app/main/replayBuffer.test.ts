@@ -48,6 +48,7 @@ const SID: SessionId = 'sess-1'
  */
 const ATTACH_BURST_KINDS = [
   'permission.context',
+  'history.availability',
   'settings.snapshot',
   'agent-config.snapshot',
   'thread-goal.snapshot',
@@ -186,6 +187,7 @@ test('transcript reset is a ring barrier that keeps ready and sticky state', () 
   const buffer = new FrameReplayBuffer(2)
   buffer.record(SID, readyFrame())
   buffer.record(SID, attachSnapshotFrame('settings.snapshot'))
+  buffer.record(SID, attachSnapshotFrame('history.availability'))
   buffer.record(SID, pongFrame('discarded-a'))
   buffer.record(SID, pongFrame('discarded-b'))
   buffer.record(SID, pongFrame('discarded-c'))
@@ -437,11 +439,17 @@ test('workspace control receipts never survive renderer replay', () => {
   buffer.record(SID, ready)
   buffer.record(SID, {
     kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
-    sessionId: SID, requestId: 'handoff-check', operationId: 'jump-1', ok: true,
+    sessionId: SID, requestId: 'handoff-check', operationId: 'jump-1', action: 'status', disposition: 'refused', reason: 'wrong_identity',
   })
   buffer.record(SID, {
-    kind: 'workspace.user-admitted', protocolVersion: PROTOCOL_VERSION,
+    kind: 'workspace.handoff.state', protocolVersion: PROTOCOL_VERSION,
     sessionId: SID, operationId: 'jump-1',
+    status: {
+      appSessionId: SID, engineSessionId: 'engine-1', operationId: 'jump-1', continuationId: 'continuation-1',
+      sourceGeneration: 'source-1', admissionGeneration: null, operationSha256: 'a'.repeat(64),
+      observerGeneration: 'observer-1', statusSeq: 1, execution: 'unconfirmed', record: { kind: 'absent' },
+      gate: { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true },
+    },
   })
   expect(buffer.snapshotSession(SID)).toEqual([ready])
   expect(buffer.snapshot()).toEqual([ready])

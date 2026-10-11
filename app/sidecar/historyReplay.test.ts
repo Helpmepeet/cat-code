@@ -104,7 +104,7 @@ test('attach replays history after ready as replay:true event frames in order; l
   // `activity` closes the attach burst, before history replay
   // (HOST-REQUEST-PLANE §4 step 4a). This server has no snapshot domains, so
   // the burst is that one frame.
-  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'event', 'event', 'history.replay.complete'])
+  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'event', 'event', 'history.availability', 'history.replay.complete'])
 
   const replayFrames = received.filter(f => f.kind === 'event')
   for (const frame of replayFrames) {
@@ -135,7 +135,7 @@ test('a fresh session (no history) sends no transcript frames on attach', () => 
   // Ready plus the attach burst, which for a domain-less server is the single
   // `activity` presence frame. What matters is what is ABSENT: no `event`, no
   // truncation boundary. The completion marker closes even an empty replay.
-  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'history.replay.complete'])
+  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'history.availability', 'history.replay.complete'])
 })
 
 test('restored GenerateImage history cannot authorize a generated-image file read', () => {
@@ -222,7 +222,7 @@ test('frames cap keeps the NEWEST contiguous tail and announces the loss BEFORE 
     expect(boundary.retryable).toBe(false)
   }
   expect(received.at(-1)).toEqual({ kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION })
-  const events = received.slice(3, -1)
+  const events = received.filter(frame => frame.kind === 'event')
   expect(events.length).toBe(MAX_HISTORY_REPLAY_FRAMES)
   // The oldest message (index 0) was dropped; the tail is contiguous newest.
   expect(JSON.stringify(events[0])).toContain('"restored message 1"')
@@ -254,7 +254,7 @@ test('byte cap: oversized history retains only the newest frames that fit, loss 
   // Newest tail: the small newest message + the mid one that still fits; the
   // oldest overflows and everything older stops (contiguous, no gaps).
   expect(received.at(-1)).toEqual({ kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION })
-  const events = received.slice(3, -1)
+  const events = received.filter(frame => frame.kind === 'event')
   expect(events.length).toBe(2)
   expect(JSON.stringify(events[0])).toContain('mid ')
   expect(JSON.stringify(events[1])).toContain('newest small restored message')

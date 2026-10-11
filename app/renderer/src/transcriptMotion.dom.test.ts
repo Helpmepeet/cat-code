@@ -19,14 +19,14 @@ afterAll(async () => { await harness.teardown() })
 
 const sessionId = 'motion-session'
 const ready: ServerFrame = {
-  kind: 'ready', protocolVersion: 2, sessionId, engineSessionId: 'engine-motion',
+  kind: 'ready', protocolVersion: 3, sessionId, engineSessionId: 'engine-motion',
   payload: {
     type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
     abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   },
 }
 const frame = (message: SDKMessage): ServerFrame => ({
-  kind: 'event', protocolVersion: 2, sessionId, event: { type: 'message', message },
+  kind: 'event', protocolVersion: 3, sessionId, event: { type: 'message', message },
 })
 type Uuid = `${string}-${string}-${string}-${string}-${string}`
 const assistant = (uuid: Uuid, toolId: string, name: string, input: Record<string, unknown>): SDKMessage => ({

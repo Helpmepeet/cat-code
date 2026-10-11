@@ -460,7 +460,6 @@ function TouchAllDialog({
     const verb = touchAllVerb()
     requestIdRef.current = verb.requestId
     onVerb(verb)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const matched =

@@ -140,7 +140,7 @@ test('CC-13: an unread settings snapshot reads as unknown, and claims nothing ab
 
   expect(unread).toContain('Default permission mode: unknown')
   expect(unread).not.toContain('is not set')
-  expect(unread).toContain('have not been read yet')
+  expect(unread).toContain('Settings files have not been read for this configuration.')
 
   // The loaded case is the ONLY one allowed to speak for the settings files.
   expect(read).toContain('Default permission mode: not set')

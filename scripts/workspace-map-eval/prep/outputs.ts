@@ -38,18 +38,3 @@ export function outputs(path: string): Output[] {
   }
   return res
 }
-
-const PORCELAIN = /^(?: M|M |MM|AM|A | D|D |R |\?\?) (\S.*)$/
-/** `git status --short` blocks: every output whose lines are mostly porcelain. */
-export function statusBlocks(list: Output[]): { ts: string; entries: { code: string; path: string }[] }[] {
-  const blocks = []
-  for (const o of list) {
-    if (!/git status/.test(o.command)) continue
-    const entries = o.text.split('\n').flatMap(l => { const m = PORCELAIN.exec(l.replace(/^\s*\d+\t/, '')); return m ? [{ code: l.slice(0, 2), path: m[1]! }] : [] })
-    // An empty result proves a clean tree only when the call ran git status alone.
-    const alone = /^\{"command":"git (?:--no-optional-locks )?status(?: --short| -s| --porcelain)*"/.test(o.command)
-    const clean = alone && !o.text.split('\n').some(l => l.trim() && !/fsmonitor|^Exit code 0$/.test(l))
-    if (entries.length || clean) blocks.push({ ts: o.ts, entries })
-  }
-  return blocks
-}

@@ -201,7 +201,7 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
     })
     const frame: AccountsSnapshotFrame = {
       kind: 'accounts.snapshot',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId: 's1',
       accounts: snapshot,
     }
@@ -1917,7 +1917,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     for (const progress of captured) {
       const frame: OAuthLoginProgressFrame = {
         kind: 'oauth.login.progress',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         progress,
       }

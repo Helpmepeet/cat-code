@@ -458,7 +458,7 @@ test('does not expose prompt bodies, hook payloads, or inline MCP config objects
 
   const frame: AgentConfigSnapshotFrame = {
     kind: 'agent-config.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 'sess-1',
     agents: snapshot,
   }

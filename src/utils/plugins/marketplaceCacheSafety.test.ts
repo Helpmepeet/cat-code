@@ -24,12 +24,28 @@ import { MarketplaceSourceSchema } from './schemas.js'
 type GitMode = 'fail-clone' | 'successful-clone'
 let gitMode: GitMode = 'successful-clone'
 let cloneTargets: string[] = []
+let cloneAttempts: Array<{
+  url: string
+  targetPath: string
+  hadPartialClone: boolean
+}> = []
+let cloneResponses: Array<{ code: number; stderr: string }> | null = null
+let sshConfigured = false
 let pullCount = 0
 
 const actualExecFileNoThrow = await import('../execFileNoThrow.js')
 mock.module('../execFileNoThrow.js', () => ({
   ...actualExecFileNoThrow,
-  execFileNoThrow: async () => ({ stdout: '', stderr: '', code: 0 }),
+  execFileNoThrow: async (_file: string, args: string[]) =>
+    args[0] === '-T'
+      ? sshConfigured
+        ? {
+            stdout: '',
+            stderr: 'Hi test! You have successfully authenticated.',
+            code: 1,
+          }
+        : { stdout: '', stderr: '', code: 255 }
+      : { stdout: '', stderr: '', code: 0 },
   execFileNoThrowWithCwd: async (
     _file: string,
     args: string[],
@@ -38,9 +54,19 @@ mock.module('../execFileNoThrow.js', () => ({
     const cloneIndex = args.indexOf('clone')
     if (cloneIndex !== -1) {
       const targetPath = args.at(-1)!
+      const url = args.at(-2)!
       cloneTargets.push(targetPath)
+      cloneAttempts.push({
+        url,
+        targetPath,
+        hadPartialClone: existsSync(join(targetPath, 'partial-clone')),
+      })
       mkdirSync(targetPath, { recursive: true })
-      if (gitMode === 'successful-clone') {
+      const response = cloneResponses?.shift()
+      const cloneSucceeded = response
+        ? response.code === 0
+        : gitMode === 'successful-clone'
+      if (cloneSucceeded) {
         mkdirSync(join(targetPath, '.git'))
         mkdirSync(join(targetPath, '.claude-plugin'))
         writeFileSync(
@@ -51,10 +77,10 @@ mock.module('../execFileNoThrow.js', () => ({
             plugins: [],
           }),
         )
-        return { stdout: '', stderr: '', code: 0 }
+        return response ?? { stdout: '', stderr: '', code: 0 }
       }
       writeFileSync(join(targetPath, 'partial-clone'), 'incomplete')
-      return { stdout: '', stderr: 'mock clone failure', code: 1 }
+      return response ?? { stdout: '', stderr: 'mock clone failure', code: 1 }
     }
 
     if (args[0] === 'pull') {
@@ -93,6 +119,9 @@ beforeEach(() => {
   mkdirSync(getMarketplacesCacheDir(), { recursive: true })
   gitMode = 'successful-clone'
   cloneTargets = []
+  cloneAttempts = []
+  cloneResponses = null
+  sshConfigured = false
   pullCount = 0
 })
 
@@ -205,6 +234,111 @@ describe('marketplace cache path safety', () => {
     expect(readFileSync(parentSentinel, 'utf-8')).toBe('parent')
     expect(readFileSync(siblingSentinel, 'utf-8')).toBe('sibling')
   })
+
+  test('configured SSH is tried first and a successful clone stops retries', async () => {
+    sshConfigured = true
+    cloneResponses = [{ code: 0, stderr: '' }]
+    const progress: string[] = []
+
+    await addMarketplaceSource(
+      { source: 'github', repo: 'valid/repository' },
+      message => progress.push(message),
+    )
+
+    expect(cloneAttempts.map(attempt => attempt.url)).toEqual([
+      'git@github.com:valid/repository.git',
+    ])
+    expect(cloneAttempts).toHaveLength(1)
+    expect(progress).toContain(
+      'Cloning via SSH: git@github.com:valid/repository.git',
+    )
+  })
+
+  test('unconfigured SSH uses HTTPS first and a successful clone stops retries', async () => {
+    cloneResponses = [{ code: 0, stderr: '' }]
+    const progress: string[] = []
+
+    await addMarketplaceSource(
+      { source: 'github', repo: 'valid/repository' },
+      message => progress.push(message),
+    )
+
+    expect(cloneAttempts.map(attempt => attempt.url)).toEqual([
+      'https://github.com/valid/repository.git',
+    ])
+    expect(cloneAttempts).toHaveLength(1)
+    expect(progress).toContain(
+      'SSH not configured, cloning via HTTPS: https://github.com/valid/repository.git',
+    )
+  })
+
+  test('configured SSH failure cleans staging before HTTPS fallback succeeds', async () => {
+    sshConfigured = true
+    cloneResponses = [
+      { code: 1, stderr: 'SSH attempt failed' },
+      { code: 0, stderr: '' },
+    ]
+    const progress: string[] = []
+
+    await addMarketplaceSource(
+      { source: 'github', repo: 'valid/repository' },
+      message => progress.push(message),
+    )
+
+    expect(cloneAttempts.map(attempt => attempt.url)).toEqual([
+      'git@github.com:valid/repository.git',
+      'https://github.com/valid/repository.git',
+    ])
+    expect(cloneAttempts[1]?.targetPath).toBe(cloneAttempts[0]?.targetPath)
+    expect(cloneAttempts[1]?.hadPartialClone).toBe(false)
+    expect(progress).toContain(
+      'SSH clone failed, retrying with HTTPS: https://github.com/valid/repository.git',
+    )
+  })
+
+  test('unconfigured HTTPS failure cleans staging before SSH fallback succeeds', async () => {
+    cloneResponses = [
+      { code: 1, stderr: 'HTTPS attempt failed' },
+      { code: 0, stderr: '' },
+    ]
+    const progress: string[] = []
+
+    await addMarketplaceSource(
+      { source: 'github', repo: 'valid/repository' },
+      message => progress.push(message),
+    )
+
+    expect(cloneAttempts.map(attempt => attempt.url)).toEqual([
+      'https://github.com/valid/repository.git',
+      'git@github.com:valid/repository.git',
+    ])
+    expect(cloneAttempts[1]?.targetPath).toBe(cloneAttempts[0]?.targetPath)
+    expect(cloneAttempts[1]?.hadPartialClone).toBe(false)
+    expect(progress).toContain(
+      'HTTPS clone failed, retrying with SSH: git@github.com:valid/repository.git',
+    )
+  })
+
+  for (const configured of [true, false]) {
+    test(`both attempts fail with the final error when SSH is ${configured ? 'configured' : 'unconfigured'}`, async () => {
+      sshConfigured = configured
+      cloneResponses = [
+        { code: 1, stderr: 'first attempt error' },
+        { code: 1, stderr: 'final attempt error' },
+      ]
+
+      await expect(
+        addMarketplaceSource({ source: 'github', repo: 'valid/repository' }),
+      ).rejects.toThrow('final attempt error')
+
+      const sshUrl = 'git@github.com:valid/repository.git'
+      const httpsUrl = 'https://github.com/valid/repository.git'
+      expect(cloneAttempts.map(attempt => attempt.url)).toEqual(
+        configured ? [sshUrl, httpsUrl] : [httpsUrl, sshUrl],
+      )
+      expect(cloneAttempts[1]?.hadPartialClone).toBe(false)
+    })
+  }
 
   test('valid marketplace add and refresh still work with mocked Git', async () => {
     const added = await addMarketplaceSource({

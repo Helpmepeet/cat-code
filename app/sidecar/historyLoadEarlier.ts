@@ -51,6 +51,8 @@ export type EarlierHistoryRead = {
    * knows whether the root it returned had a predecessor it could not reach.
    */
   truncated: boolean
+  /** Reachable worker cards whose saved steps could not fit or be read. */
+  unavailableParentToolUseIds?: string[]
 }
 
 /** The seam the sidecar server calls. Defaulted to the real read below. */
@@ -71,10 +73,14 @@ export const readEarlierDisplayHistory: HistoryLoadEarlierReader = async (
   // The child join shares restore's aggregate source-byte, message, and output
   // budgets. A deeper parent read never buys a fresh budget for each branch;
   // omitted children retain the existing unavailable-history card state.
-  const messages = await withRestoredSubagentHistory(
+  const restored = await withRestoredSubagentHistory(
     getSessionId(),
     history,
     onError,
   )
-  return { messages, truncated: display.truncated }
+  return {
+    messages: restored.history,
+    truncated: display.truncated,
+    unavailableParentToolUseIds: restored.unavailableParentToolUseIds,
+  }
 }

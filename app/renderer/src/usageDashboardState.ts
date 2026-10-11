@@ -28,30 +28,6 @@ export const usageShare = (t: UsageTokens): number | null => t.fresh + t.read + 
 export const usageCacheReadRate = (t: UsageTokens): number | null => t.fresh + t.read > 0 ? t.read / (t.fresh + t.read) * 100 : null;
 export const usageNumber = (n: number): string => n.toLocaleString('en-US');
 export const usagePercent = (n: number | null): string => n === null ? 'Not applicable' : `${n.toFixed(1)}%`;
-export function usageColors(ids: readonly string[]): Record<string, string> {
-    const palette = ['#F5B942', '#4C9AFF', '#2DD4BF', '#F4729A', '#A78BFA', '#38BDF8', '#14B8A6', '#FBBF24', '#E9A83B', '#22C3A6', '#84CC16', '#F97316', '#818CF8', '#ED6D91', '#06B6D4', '#D4A6FF', '#A3D977', '#FB923C', '#E879C2', '#60A5FA'];
-    const result: Record<string, string> = {}, taken = new Set<number>();
-    for (const id of [...ids].sort()) {
-        let hash = 2166136261;
-        for (const char of id)
-            hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-        let index = (hash >>> 0) % palette.length;
-        while (taken.has(index) && taken.size < palette.length)
-            index = (index + 1) % palette.length;
-        taken.add(index);
-        result[id] = palette[index]!;
-    }
-    return result;
-}
-
-export function usageCacheBounds(shares: readonly (number | null)[]): { min: number; max: number } {
-    const values = shares.filter((value): value is number => value !== null && Number.isFinite(value));
-    if (!values.length) return { min: 0, max: 100 };
-    const low = Math.min(...values), high = Math.max(...values);
-    const padding = Math.max(2, (high - low) * 0.15);
-    return { min: Math.max(0, Math.floor(low - padding)), max: Math.min(100, Math.ceil(high + padding)) };
-}
-
 export function useUsageChartWidth() {
     const ref = useRef<SVGSVGElement>(null);
     const [width, setWidth] = useState(640);

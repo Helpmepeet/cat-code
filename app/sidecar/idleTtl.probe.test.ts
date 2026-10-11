@@ -74,6 +74,7 @@ function spawnSidecar(idleTtlMs: number): Spawned {
       ...process.env,
       CATCODE_SIDECAR_SOCKET: socketPath,
       CATCODE_SIDECAR_SESSION_ID: `cc3-${randomUUID()}`,
+      CATCODE_SIDECAR_GENERATION: randomUUID(),
       CATCODE_SIDECAR_PROBE: '1',
       CATCODE_SIDECAR_IDLE_TTL_MS: String(idleTtlMs),
     },

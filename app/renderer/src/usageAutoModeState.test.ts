@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test'
 import { hundredAttemptAutoModeFixture } from '../../../src/utils/autoModeUsage.fixture.js'
-import { reduceAutoModeUsage } from '../../../src/utils/autoModeUsage.js'
+import {
+  reduceAutoModeUsage,
+  type RetainedAutoModeRecord,
+} from '../../../src/utils/autoModeUsage.js'
 import {
   autoModeAttempts,
-  autoModeDisplayCounts,
   autoModeCommandRateHeadline,
   autoModeCommandRatePoints,
   autoModeOverviewEdges,
-  autoModeOutcomeSeries,
-  autoModeRouteEdges,
   confirmedRateSegments,
   sortedAutoModeCategories,
 } from './usageAutoModeState.js'
@@ -21,6 +21,83 @@ test('derives canonical attempt totals and exact command-rate math', () => {
     numerator: 4,
     denominator: 40,
     rate: 0.1,
+    state: 'confirmed',
+  })
+})
+
+test('reports mixed-source command coverage as unavailable in the headline', () => {
+  const fixture = hundredAttemptAutoModeFixture()
+  const mixedSourceSummary = reduceAutoModeUsage({
+    ...fixture,
+    sources: [
+      ...fixture.sources,
+      { sourceScope: 'unsupported-source', allTools: 'unavailable', commands: 'unavailable' },
+    ],
+  })
+
+  expect(mixedSourceSummary.commands.coverage.state).toBe('partial')
+  expect(autoModeCommandRateHeadline(mixedSourceSummary)).toEqual({
+    numerator: 4,
+    denominator: 40,
+    rate: null,
+    state: 'unavailable',
+  })
+})
+
+test('derives the headline from unequal daily command denominators', () => {
+  const sourceScope = 'rate-source'
+  const records: RetainedAutoModeRecord[] = []
+  for (let index = 0; index < 100; index++) {
+    const id = `rate-${index}`
+    const date = index < 10 ? '2026-09-10' : '2026-09-11'
+    const observedAt = `${date}T12:00:00.000Z`
+    const disposition = index === 0 || index === 10 ? 'policy_blocked' : 'allowed'
+    records.push({
+      sourceScope,
+      recordId: `start-${id}`,
+      observedAt,
+      diagnosticKind: 'auto_mode_observation',
+      payload: {
+        schema_version: 1,
+        subtype: 'auto_permission_start',
+        attempt_id: id,
+        tool_use_id: `tool-${id}`,
+        tool_kind: 'bash',
+        auto_mode: 'auto',
+        initial: true,
+      },
+    })
+    records.push({
+      sourceScope,
+      recordId: `end-${id}`,
+      observedAt: `${date}T12:01:00.000Z`,
+      diagnosticKind: 'auto_mode_observation',
+      payload: {
+        schema_version: 1,
+        subtype: 'auto_permission_end',
+        attempt_id: id,
+        raw_result: disposition === 'allowed' ? 'allow' : 'deny',
+        disposition,
+        route: 'base',
+      },
+    })
+  }
+  const summary = reduceAutoModeUsage({
+    records,
+    sources: [{ sourceScope, allTools: 'complete', commands: 'complete' }],
+    rangeStart: '2026-09-10T00:00:00.000Z',
+    rangeEnd: '2026-09-11T23:59:59.999Z',
+    cutoff: '2026-09-12T00:00:00.000Z',
+    timezone: 'UTC',
+  })
+
+  expect(summary.buckets.map(bucket =>
+    Object.values(bucket.commands.outcomes).reduce((total, count) => total + count, 0),
+  )).toEqual([10, 90])
+  expect(autoModeCommandRateHeadline(summary)).toEqual({
+    numerator: 2,
+    denominator: 100,
+    rate: 0.02,
     state: 'confirmed',
   })
 })
@@ -39,20 +116,8 @@ test('keeps unavailable and provisional points out of confirmed segments', () =>
   expect(confirmedRateSegments([points[0]!, { ...points[0]!, date: '2026-09-12' }])).toHaveLength(2)
 })
 
-test('uses stable outcome/category order and conserves route edges', () => {
-  expect(autoModeOutcomeSeries(summary).map(series => series.outcome)).toEqual([
-    'allowed', 'policy_blocked', 'review_required', 'operational_error', 'cancelled', 'unknown_outcome', 'incomplete',
-  ])
+test('sorts auto-mode categories by count then key', () => {
   expect(sortedAutoModeCategories(summary)).toEqual([...summary.categories].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key)))
-  const edges = autoModeRouteEdges(summary)
-  expect(edges.filter(edge => edge.from === 'Attempts').reduce((total, edge) => total + edge.count, 0)).toBe(100)
-  expect(edges.filter(edge => edge.to === 'allowed' || edge.to === 'policy_blocked' || edge.to === 'review_required' || edge.to === 'operational_error').reduce((total, edge) => total + edge.count, 0)).toBe(100)
-  expect(new Set(edges.map(edge => `${edge.from}:${edge.to}`)).size).toBe(edges.length)
-  for (const node of ['Base checks', 'Stage 1', 'Stage 2']) {
-    expect(edges.filter(edge => edge.to === node).reduce((total, edge) => total + edge.count, 0)).toBe(
-      edges.filter(edge => edge.from === node).reduce((total, edge) => total + edge.count, 0),
-    )
-  }
 })
 
 test('builds a conserved flow for allowed and blocked outcomes', () => {
@@ -64,12 +129,6 @@ test('builds a conserved flow for allowed and blocked outcomes', () => {
   ])
   expect(edges.filter(edge => edge.from === 'Base paths' || edge.from === 'Stage 1' || edge.from === 'Stage 2').reduce((total, edge) => total + edge.count, 0)).toBe(92)
   expect(edges.every(edge => edge.to !== 'error' && edge.to !== 'cancelled')).toBe(true)
-  expect(autoModeDisplayCounts(summary)).toEqual([
-    { group: 'allowed', label: 'Allowed', count: 85 },
-    { group: 'blocked', label: 'Blocked', count: 7 },
-    { group: 'error', label: 'Error', count: 8 },
-    { group: 'cancelled', label: 'Cancelled', count: 0 },
-  ])
   const variedRoutes = structuredClone(summary)
   variedRoutes.routes = [
     { route: 'base', outcome: 'allowed', count: 1 },

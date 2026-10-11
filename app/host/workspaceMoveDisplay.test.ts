@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { moveDisplayTarget, workspaceJumpDisplay } from './workspaceMoveDisplay.js'
-import type { WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
+import { upgradeWorkspaceJumpState, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 import type { SessionLocationTransition } from '../../src/utils/sessionRelocationState.js'
 
 const state: WorkspaceJumpState = {
@@ -37,4 +37,18 @@ test('accepted targets and durable location drive display, independently of cont
   const oversized = moveDisplayTarget({ cwd: '/projects/' + 'x'.repeat(5000), binding: { kind: 'project' } })
   expect(oversized.name.length).toBe(256)
   expect(oversized.path?.length).toBe(4096)
+})
+
+test('the display projects durable continuation dispatch and outcome', () => {
+  const base = upgradeWorkspaceJumpState(state)
+  const arrived = { ...base, phase: 'settled' as const, location: 'destination' as const,
+    continuation: { ...base.continuation, dispatch: 'unknown' as const } }
+  expect(workspaceJumpDisplay(arrived, [seam])?.continuation).toBe('waiting')
+  expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, dispatch: 'consumed' } }, [seam])?.continuation).toBe('dispatched')
+  for (const outcome of ['success', 'failed', 'interrupted', 'not_started', 'unknown'] as const) {
+    expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, outcome } }, [seam])?.continuation).toBe('finished')
+  }
+  expect(workspaceJumpDisplay({ ...arrived, review: { ...arrived.review, required: true } }, [seam])?.continuation).toBe('finished')
+  expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, dispatch: 'none' } }, [seam])?.continuation).toBe('finished')
+  expect(workspaceJumpDisplay({ ...arrived, cancellation: { cancelId: 'cancel', requestedBy: 'stop', application: 'abort_signalled' } }, [seam])?.continuation).toBe('finished')
 })

@@ -2493,13 +2493,8 @@ export async function bashCommandIsSafeAsync_DEPRECATED(
   // (via extractHeredocs), so the two outputs can never match. Logging
   // divergence for every heredoc command would poison the signal.
   //
-  // onDivergence callback: when called in a fanout loop (bashPermissions.ts
-  // Promise.all over subcommands), the caller batches divergences into a
-  // single logEvent instead of N separate calls. Each logEvent triggers
-  // getEventMetadata() → buildProcessMetrics() → process.memoryUsage() →
-  // /proc/self/stat read; with memoized metadata these resolve as microtasks
-  // and starve the event loop (CC-643). Single-command callers omit the
-  // callback and get the original per-call logEvent behavior.
+  // onDivergence callback: fanout callers batch divergences into one event
+  // with an aggregate count; single-command callers emit the event directly.
   if (!tsAnalysis.dangerousPatterns.hasHeredoc) {
     const hasDivergence =
       tsQuote.fullyUnquoted !== regexQuote.fullyUnquoted ||

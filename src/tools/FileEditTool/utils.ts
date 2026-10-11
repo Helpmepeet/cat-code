@@ -548,57 +548,6 @@ export function getSnippetForTwoFileDiff(
   return `${kept}\n\n... [${remaining} lines truncated] ...`
 }
 
-const CONTEXT_LINES = 4
-
-/**
- * Gets a snippet from a file showing the context around a patch with line numbers.
- * @param originalFile The original file content before applying the patch
- * @param patch The diff hunks to use for determining snippet location
- * @param newFile The file content after applying the patch
- * @returns The snippet text with line numbers and the starting line number
- */
-export function getSnippetForPatch(
-  patch: StructuredPatchHunk[],
-  newFile: string,
-): { formattedSnippet: string; startLine: number } {
-  if (patch.length === 0) {
-    // No changes, return empty snippet
-    return { formattedSnippet: '', startLine: 1 }
-  }
-
-  // Find the first and last changed lines across all hunks
-  let minLine = Infinity
-  let maxLine = -Infinity
-
-  for (const hunk of patch) {
-    if (hunk.oldStart < minLine) {
-      minLine = hunk.oldStart
-    }
-    // For the end line, we need to consider the new lines count since we're showing the new file
-    const hunkEnd = hunk.oldStart + (hunk.newLines || 0) - 1
-    if (hunkEnd > maxLine) {
-      maxLine = hunkEnd
-    }
-  }
-
-  // Calculate the range with context
-  const startLine = Math.max(1, minLine - CONTEXT_LINES)
-  const endLine = maxLine + CONTEXT_LINES
-
-  // Split the new file into lines and get the snippet
-  const fileLines = newFile.split(/\r?\n/)
-  const snippetLines = fileLines.slice(startLine - 1, endLine)
-  const snippet = snippetLines.join('\n')
-
-  // Add line numbers
-  const formattedSnippet = addLineNumbers({
-    content: snippet,
-    startLine,
-  })
-
-  return { formattedSnippet, startLine }
-}
-
 /**
  * Gets a snippet from a file showing the context around a single edit.
  * This is a convenience function that uses the original algorithm.

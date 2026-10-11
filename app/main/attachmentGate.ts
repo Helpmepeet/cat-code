@@ -260,6 +260,11 @@ export class AttachmentGate {
     return this.buffer.viewAnchorUuid(sessionId)
   }
 
+  /** Preserve loss even when eviction leaves no display message to anchor. */
+  viewTruncated(sessionId: SessionId): boolean {
+    return this.buffer.viewTruncated(sessionId)
+  }
+
   /** Drop stale replay for one restarting session without detaching the renderer. */
   clearSession(sessionId: SessionId): void {
     this.replayCoalescing.delete(sessionId)

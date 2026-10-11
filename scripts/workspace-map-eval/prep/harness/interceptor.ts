@@ -29,7 +29,6 @@ function redact(headers: Record<string, string> = {}) {
   return out
 }
 
-const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? String(input)
   if (url.startsWith('https://chatgpt.com/backend-api/codex/responses') && typeof init?.body === 'string') {
@@ -61,7 +60,6 @@ globalThis.fetch = (async (input: any, init?: any) => {
   log(`fetch BLOCKED ${init?.method ?? 'GET'} ${url}`)
   return new Response('Network disabled by offline harness', { status: 503 })
 }) as typeof fetch
-void realFetch
 
 type Item = Record<string, any>
 const ids = { n: 0 }
@@ -119,10 +117,6 @@ function toolNamed(body: Item, name: string): Item | undefined {
 
 function inputText(body: Item): string {
   return JSON.stringify(body.input ?? [])
-}
-
-function hasOutput(body: Item, callId: string): boolean {
-  return (body.input ?? []).some((i: Item) => (i.type === 'function_call_output' || i.type === 'custom_tool_call_output') && i.call_id === callId)
 }
 
 // Probe script: main thread does one broad Grep (hook dispatch), then spawns one

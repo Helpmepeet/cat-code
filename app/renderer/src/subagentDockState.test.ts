@@ -124,3 +124,49 @@ test('a second resume ignores its first settled ResumeAgent card and returns beh
   expect(enriched.active.some(row => row.agentId === 'a')).toBe(false)
 
 })
+
+
+test('implicit background dispatch keeps its successful launch active until terminal worker evidence', () => {
+  const launch = agentRow({ status: 'success', result: { isError: false, content: 'Started', diff: null, agentId: 'a' } })
+  const facts = { workers: [worker({ isBackgrounded: true })], tasks: { items: [task({ isBackgrounded: true })], subagents: [] }, transcriptRows: [launch] }
+  const running = view(createSubagentDockState(), facts)
+  expect(running.active.map(row => row.state)).toEqual(['background'])
+  expect(running.finished).toEqual([])
+  const missing = view(running.state, { transcriptRows: [launch], nowMs: 1100 })
+  expect(missing.active.map(row => row.state)).toEqual(['background'])
+  expect(view(missing.state, { transcriptRows: [launch], nowMs: 3100 }).finished).toEqual([])
+  const terminal = view(running.state, { ...facts, workers: [worker({ status: 'completed', isBackgrounded: true })], nowMs: 2000, reducedMotion: true })
+  expect(terminal.finished.map(row => row.state)).toEqual(['completed'])
+})
+
+test('alias resumes use canonical task identity and keep their transcript join after eviction and restore', () => {
+  const original = agentRow({ status: 'success', result: { isError: false, content: 'Done', diff: null, agentId: 'a', agentName: 'Ada' } })
+  const resume = agentRow({ toolName: 'ResumeAgent', toolUseId: 'resume-alias', input: { agentId: '@Ada' }, status: 'success', agentCompletion: null })
+  const facts = { workers: [worker({ isBackgrounded: true })], tasks: { items: [task({ isBackgrounded: true, resumedAt: 2000 })], subagents: [{ toolUseId: 'resume-alias', agentId: 'a', agentName: 'Ada', agentType: 'Explore', isSidechain: true as const, spawnedAt: 2000, isBackgrounded: true }] }, transcriptRows: [original, resume], nowMs: 2100 }
+  const running = view(createSubagentDockState(), facts)
+  expect(running.active.map(row => [row.agentId, row.state, row.toolUseId])).toEqual([['a', 'resumed', 'resume-alias']])
+  const completion = { ...resume, agentCompletion: { status: 'completed' as const, summary: 'Done', result: 'Checked', usage: { toolUses: 1, totalTokens: 500, durationMs: 100 } } }
+  const finished = view(running.state, { transcriptRows: [completion], nowMs: 3000, reducedMotion: true })
+  expect(finished.active).toEqual([])
+  expect(finished.finished.map(row => [row.agentId, row.toolUseId, row.usageLabel])).toEqual([['a', 'resume-alias', '1 tool call · 500 tokens']])
+  const restored = view(createSubagentDockState(), { transcriptRows: [original, completion], reducedMotion: true })
+  expect(restored.finished.map(row => row.agentId)).toEqual(['a'])
+  const unresolved = view(createSubagentDockState(), { transcriptRows: [completion], reducedMotion: true })
+  expect(unresolved.finished).toEqual([])
+})
+
+test('an exhausted account failover never claims a successful move or a held lease', () => {
+  const failedLease: LeaseSnapshot = { ...leases, owners: [{ ...leases.owners[0]!, state: 'failed' }] }
+  const result = view(createSubagentDockState(), { workers: [worker({ isBackgrounded: true })], leases: failedLease })
+  expect(result.active[0]).toMatchObject({ account: null, chipLines: [null, null], stripLines: [null, null] })
+})
+
+test('a rejected resume preserves the cleared finished run and its transcript target', () => {
+  const launch = agentRow({ status: 'success', result: { isError: false, content: 'Done', diff: null, agentId: 'a' } })
+  const finished = view(createSubagentDockState(), { transcriptRows: [launch], reducedMotion: true })
+  const clearMarkers = [{ agentId: 'a', runKey: finished.finished[0]!.runKey }]
+  const rejected = agentRow({ toolName: 'ResumeAgent', toolUseId: 'rejected-resume', input: { agentId: 'a' }, status: 'success', result: { isError: false, content: JSON.stringify({ success: false, message: 'No transcript to resume' }), diff: null } })
+  const unchanged = view(finished.state, { transcriptRows: [launch, rejected], clearMarkers, nowMs: 2000 })
+  expect(unchanged.finished).toEqual([])
+  expect(unchanged.state.entries.a).toMatchObject({ runKey: 'launch-a', toolUseId: 'launch-a' })
+})

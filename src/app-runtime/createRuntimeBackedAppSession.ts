@@ -19,7 +19,7 @@ export type RuntimeBackedAppSessionOptions = {
    */
   hasExternalScheduler?: () => boolean
   /** Restore trusted handoff ownership before automatic turn owners attach. */
-  initializeController?: (controller: AppSessionController) => void
+  initializeController?: (controller: AppSessionController) => void | Promise<void>
 }
 
 export function createRuntimeBackedAppSession({
@@ -67,14 +67,14 @@ export function createRuntimeBackedAppSession({
   // A cancelled request may never have created an accepted host operation.
   // Its saved terminal note still owns the hold across process replacement.
   if (requiresReconciliation) controller.restoreHandoffReconciliation()
-  initializeController?.(controller)
+  const initialization = initializeController?.(controller)
 
   // The goal loop attaches HERE because this factory is the one seam the
   // desktop sidecar uses. Before this, submitted turns returned idle: `/goal`
   // was terminal-only behaviour dressed as a harness guarantee. The scheduler
   // is the same module the terminal drives, so the runtimes cannot drift apart.
-  attachThreadGoalScheduler({
-    controller,
+  const attachScheduler = () => attachThreadGoalScheduler({
+    controller: controller!,
     ownerId: `app-runtime:${getSessionId()}`,
     getGoal: () => queryEngineConfig.getAppState().threadGoal ?? null,
     saveGoal: nextGoal => {
@@ -87,6 +87,8 @@ export function createRuntimeBackedAppSession({
     },
     ...(hasExternalScheduler ? { hasExternalScheduler } : {}),
   })
+  if (initialization) controller.initializeBeforeAdmission(initialization.then(() => { attachScheduler() }))
+  else attachScheduler()
 
   return controller
 }

@@ -314,7 +314,7 @@ async function mountPane(
   restorePhase: RestorePhase | null = null,
 ) {
   const tree = await harness.mount(createElement(Pane, { rows, store, restorePhase }))
-  await harness.nextFrame()
+  await act(async () => { await harness.nextFrame() })
   const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]')
   expect(pane).not.toBeNull()
   return { tree, pane: pane as HTMLElement, store }
@@ -497,6 +497,33 @@ test('clicking a generated image opens the shared image preview', async () => {
 
   await click(document.body.querySelector<HTMLElement>('[data-window-overlay]'))
   expect(dialog?.isConnected).toBe(false)
+})
+
+test('right-clicking a generated image offers the image and its file outside the workspace', async () => {
+  const tree = await harness.mount(
+    createElement(TranscriptRowsView, { rows: [generatedImageRow()], cwd: '/repo' }),
+  )
+  const image = tree.container.querySelector<HTMLElement>(
+    'button[aria-label="Expand generated image"] img',
+  )
+  const event = new globalThis.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 100,
+    clientY: 150,
+  })
+  await act(async () => {
+    image?.dispatchEvent(event)
+  })
+  await harness.nextFrame()
+
+  expect(event.defaultPrevented).toBe(true)
+  const menu = tree.container.querySelector('[role="menu"][aria-label="File actions for cat.png"]')
+  const labels = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map(
+    item => item.textContent,
+  )
+  // /tmp/cat.png is outside /repo: Open is offered only because the host validates it.
+  expect(labels).toEqual(['Copy image', 'Copy', 'Open in'])
 })
 
 test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {
@@ -1138,17 +1165,46 @@ describe('the face stamp across a restore', () => {
 })
 
 
-test('an agent reveal materializes an evicted transcript window and expands its card', async () => {
-  const agent = agentRow('old', [readRow(1)], { messageId: 'old-message' })
-  const rows = [agent, ...Array.from({ length: 240 }, (_, index) => historyTextRow(index))]
-  const store = createToolCardExpansionStore()
-  const tree = await harness.mount(createElement(Pane, { rows, store }))
-  expect(tree.container.querySelector('[data-agent-tool-id="toolu_agent_old"]')).toBeNull()
-  await tree.render(createElement(Pane, { rows, store, revealAgent: { toolUseId: agent.toolUseId, sequence: 1 } }))
-  await harness.nextFrame()
-  const card = tree.container.querySelector('[data-agent-tool-id="toolu_agent_old"]')
-  expect(card).not.toBeNull()
-  expect(card?.querySelector('[aria-expanded="true"]')).not.toBeNull()
-  expect(store.get(agent.toolUseId)).toBe(true)
-  expect(tree.container.querySelectorAll('[data-transcript-entry]').length).toBeLessThanOrEqual(80)
+test('an agent reveal scrolls a distant viewport to its evicted card and expands it', async () => {
+  const originalRect = HTMLElement.prototype.getBoundingClientRect
+  const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+  // happy-dom has no layout engine. Supply only the viewport geometry;
+  // production BoundedChildList still owns range selection and scrolling.
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this.classList.contains('transcript-virtual-column')) {
+      const pane = this.closest<HTMLElement>('[data-testid="pane"]')!
+      return new DOMRect(0, -pane.scrollTop, 1000, 20000)
+    }
+    return originalRect.call(this)
+  }
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get(this: HTMLElement) { return this.getAttribute('data-testid') === 'pane' ? 800 : 0 },
+  })
+  try {
+    const agent = agentRow('old', [readRow(1)], { messageId: 'old-message' })
+    const rows = [agent, ...Array.from({ length: 240 }, (_, index) => historyTextRow(index))]
+    const store = createToolCardExpansionStore()
+    const { tree, pane } = await mountPane(rows, store)
+    await act(async () => {
+      pane.scrollTop = 9000
+      await scrollPane(pane)
+      await harness.nextFrame()
+      await harness.nextFrame()
+    })
+    expect(tree.container.querySelector('[data-agent-tool-id="toolu_agent_old"]')).toBeNull()
+    expect(pane.scrollTop).toBe(9000)
+    await tree.render(createElement(Pane, { rows, store, revealAgent: { toolUseId: agent.toolUseId, sequence: 1 } }))
+    await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+    expect(pane.scrollTop).toBe(0)
+    const card = tree.container.querySelector('[data-agent-tool-id="toolu_agent_old"]')
+    expect(card).not.toBeNull()
+    expect(card?.querySelector('[aria-expanded="true"]')).not.toBeNull()
+    expect(store.get(agent.toolUseId)).toBe(true)
+    expect(tree.container.querySelectorAll('[data-transcript-entry]').length).toBeLessThanOrEqual(80)
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = originalRect
+    if (originalHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalHeight)
+    else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+  }
 })

@@ -3,7 +3,7 @@
  * 2026-07-14-instant-session-open-design.md M1 + implementation-plan IS-A).
  *
  * Covers the security-load-bearing behavior: the distill ALLOWLIST (transcript
- * frames survive; ready / permission / every snapshot are dropped), the atomic
+ * frames and history availability survive; operational snapshots are dropped), the atomic
  * write→read round-trip with 0600 perms, the FAIL-CLOSED read (oversize /
  * corrupt / schema-drift / version mismatch / secret hit ⇒ null + file deleted),
  * and the pure `resolvePreview` boundary (an id the host does not vouch for never
@@ -220,7 +220,7 @@ test('distill keeps message events + both truncation boundaries; drops ready/per
   ])
 })
 
-test('no sticky once-per-attach snapshot reaches a cached transcript, via the REAL buffer', () => {
+test('only transcript availability from the sticky snapshots reaches a cached transcript, via the REAL buffer', () => {
   // The buffer keeps each once-per-attach snapshot in a sticky slot so a
   // renderer reload still gets session state. `snapshotSession` is also the
   // persist path's input, so drive the real buffer and prove the allowlist
@@ -233,6 +233,7 @@ test('no sticky once-per-attach snapshot reaches a cached transcript, via the RE
       kind,
       protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
+      ...(kind === 'history.availability' ? { unavailableParentToolUseIds: ['toolu_parent'] } : {}),
     } as unknown as ServerFrame)
   }
   buffer.record(SID, eventFrame(0))
@@ -242,10 +243,13 @@ test('no sticky once-per-attach snapshot reaches a cached transcript, via the RE
   expect(
     STICKY_FRAME_KINDS.every(kind => persisted.some(f => f.kind === kind)),
   ).toBe(true)
-  // ...and none of them survives distillation.
+  // Display availability belongs to the transcript; session controls do not.
   const cache = distill(persisted)
-  expect(cache.frames.map(f => f.kind)).toEqual(['event'])
+  expect(cache.frames.map(f => f.kind)).toEqual(['history.availability', 'event'])
   expect(cache.header.appSessionId).toBe(SID)
+  const dir = tempDir()
+  writeCache(dir, cache)
+  expect(readCache(dir, SID)?.frames).toEqual(cache.frames)
 })
 
 test('distill reads the two-id header from the ready head, then drops it', () => {

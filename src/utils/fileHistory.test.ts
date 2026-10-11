@@ -1,8 +1,18 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import {
   getOriginalCwd,
   getIsInteractive,
@@ -16,11 +26,21 @@ import { getDefaultAppState } from '../state/AppStateStore.js'
 import { asSessionId } from '../types/ids.js'
 import { getCwd } from './cwd.js'
 import type { FileHistorySnapshot, FileHistoryState } from './fileHistory.js'
-import { fileHistoryRestoreStateFromLog, fileHistoryRewind } from './fileHistory.js'
+import {
+  fileHistoryRestoreStateFromLog,
+  fileHistoryRewind,
+  fileHistoryTrackEdit,
+} from './fileHistory.js'
+import {
+  openContainedFs,
+  type ContainedFileCapability,
+} from './containedFs.js'
 import { exitRestoredWorktree, restoreSessionStateFromLog, restoreWorktreeForResume } from './sessionRestore.js'
 import { resetProjectForTesting } from './sessionStorage.js'
 import { setCwd } from './Shell.js'
 import { getCurrentWorktreeSession, restoreWorktreeSession } from './worktree.js'
+
+const posixOnly = process.platform === 'win32' ? test.skip : test
 
 test('restoring file history binds legacy relative keys to the current base', () => {
   const originalCwd = getOriginalCwd()
@@ -181,6 +201,125 @@ test('legacy checkpoint restore after switching worktree A to B targets only B',
     rmSync(sandbox, { recursive: true, force: true })
   }
 })
+
+posixOnly(
+  'prepared file-history backups stay private while the copy is in progress',
+  async () => {
+    const originalCwd = getOriginalCwd()
+    const originalUmask = process.umask()
+    const originalProcessCwd = process.cwd()
+    const originalShellCwd = getCwd()
+    const originalInteractive = getIsInteractive()
+    const originalSessionId = getSessionId()
+    const originalProjectDir = getSessionProjectDir()
+    const originalWorktree = getCurrentWorktreeSession()
+    const envKeys = [
+      'CLAUDE_CONFIG_DIR',
+      'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
+      'CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING',
+    ] as const
+    const originalEnv = envKeys.map(key => process.env[key])
+    const sandbox = realpathSync(
+      mkdtempSync(join(tmpdir(), 'file-history-mode-')),
+    )
+    const sourcePath = join(sandbox, 'restricted.txt')
+    const sourceContents = 'restricted contents\n'.repeat(1024)
+    writeFileSync(sourcePath, sourceContents)
+    chmodSync(sourcePath, 0o600)
+    let continueCopy!: () => void
+    const copyGate = new Promise<void>(resolve => {
+      continueCopy = resolve
+    })
+    let copyOpened!: () => void
+    const copyOpenedPromise = new Promise<void>(resolve => {
+      copyOpened = resolve
+    })
+    let backupPath = ''
+    let contained: Awaited<ReturnType<typeof openContainedFs>> | undefined
+    let capability: ContainedFileCapability | undefined
+    let trackEdit: Promise<void> | undefined
+
+    try {
+      process.umask(0o022)
+      process.env.CLAUDE_CONFIG_DIR = join(sandbox, 'config')
+      process.env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = '1'
+      delete process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
+      setIsInteractive(false)
+      resetProjectForTesting()
+      restoreWorktreeSession(null)
+      switchSession(asSessionId(randomUUID()), null)
+      setOriginalCwd(sandbox)
+      setCwd(sandbox)
+      process.chdir(sandbox)
+
+      contained = await openContainedFs(sandbox, {
+        async afterCopyDestinationOpen(destinationPath) {
+          backupPath = destinationPath
+          copyOpened()
+          await copyGate
+        },
+      })
+      capability = await contained.openFileCapability('restricted.txt')
+      let state: FileHistoryState = {
+        snapshots: [
+          {
+            messageId: randomUUID(),
+            trackedFileBackups: {},
+            timestamp: new Date(),
+          },
+        ],
+        trackedFiles: new Set(),
+        snapshotSequence: 0,
+      }
+      trackEdit = fileHistoryTrackEdit(
+        updater => {
+          state = updater(state)
+        },
+        sourcePath,
+        randomUUID(),
+        {
+          sourcePath: capability.path,
+          copyTo: (destinationPath, options) =>
+            capability!.copyTo(destinationPath, options),
+          stats: {
+            size: capability.identity.size,
+            mode: capability.identity.mode,
+          },
+        },
+      )
+
+      await copyOpenedPromise
+      expect(statSync(backupPath).size).toBe(0)
+      expect(statSync(backupPath).mode & 0o777).toBe(0o600)
+      expect(statSync(dirname(backupPath)).mode & 0o777).toBe(0o700)
+      expect(statSync(dirname(dirname(backupPath))).mode & 0o777).toBe(0o700)
+
+      continueCopy()
+      await trackEdit
+      expect(readFileSync(backupPath, 'utf8')).toBe(sourceContents)
+      expect(statSync(backupPath).mode & 0o777).toBe(0o600)
+      expect(state.snapshots[0]?.trackedFileBackups[sourcePath]).toBeDefined()
+    } finally {
+      continueCopy()
+      await trackEdit?.catch(() => {})
+      await capability?.close()
+      await contained?.close()
+      resetProjectForTesting()
+      restoreWorktreeSession(originalWorktree)
+      process.chdir(originalProcessCwd)
+      setCwd(originalShellCwd)
+      setOriginalCwd(originalCwd)
+      switchSession(originalSessionId, originalProjectDir)
+      setIsInteractive(originalInteractive)
+      envKeys.forEach((key, index) => {
+        if (originalEnv[index] === undefined) delete process.env[key]
+        else process.env[key] = originalEnv[index]
+      })
+      process.umask(originalUmask)
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  },
+)
 
 test('REPL wiring restores checkpoint state after the worktree or fork branch', () => {
   // Source-order tripwire only; the helper test above exercises filesystem effects.

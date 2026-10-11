@@ -52,7 +52,8 @@ export function animateDockMorph(root: HTMLElement, panel: HTMLElement, chip: Do
   animations.push(panel.animate(ordered({ clipPath: clip }, { clipPath: 'inset(0 round 10px)' }), { duration, easing: EASING, fill: 'both' }))
   for (const face of panel.querySelectorAll<HTMLElement>('[data-dock-face]')) {
     const row = face.closest<HTMLElement>('[data-dock-row]')
-    if (!row || row.closest('[inert]')) continue
+    const inertAncestor = row?.closest('[inert]')
+    if (!row || inertAncestor && inertAncestor !== panel) continue
     const faceBox = face.getBoundingClientRect()
     const from = chip.faces.get(face.dataset.dockFace ?? '') ?? chip.box
     const offset = `translate(${from.left - faceBox.left}px, ${from.top - faceBox.top}px)`

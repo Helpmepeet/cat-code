@@ -19,7 +19,7 @@ const ENGINE = 'engine-1'
 
 const ready = {
   kind: 'ready',
-  protocolVersion: 2,
+  protocolVersion: 3,
   sessionId: SESSION,
   engineSessionId: ENGINE,
   payload: {
@@ -40,7 +40,7 @@ const uuid = () =>
 const frame = (message: unknown) =>
   ({
     kind: 'event',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: SESSION,
     event: { type: 'message', message },
   }) as never
@@ -143,6 +143,12 @@ function project(messages: unknown[]) {
 }
 
 const kinds = (rows: ReturnType<typeof project>) => rows.map(row => row.kind)
+
+test('the workspace jump tool name is never an activity target', () => {
+  const rows = project([userTurn('move workspaces'), toolCalls([{ id: 'toolu_jump', name: 'JumpWorkspace' }])])
+  expect(kinds(rows)).toContain('tool-use')
+  expect(deriveActivity(rows)).toEqual({ verb: 'Working', target: null })
+})
 
 test('a pending tool is reported even when it is not the last row', () => {
   // THE REGRESSION. Three tools dispatched together, the LAST one finishing

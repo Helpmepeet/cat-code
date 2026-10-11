@@ -1,9 +1,9 @@
 import { UsageBarsIcon } from './AccountsUsageCharts.js'
 /**
  * Sidebar — the shell's left rail: a hover-expanding rail (48px → 240px, pin,
- * shadow, easing), a paw logo, session search, a New chat action,
- * workspace ("Projects") grouping by cwd, and a footer that carries the
- * active account plus the nav destinations.
+ * shadow, easing), a paw logo, session search, a New chat action, pinned
+ * sessions, workspace ("Projects") grouping by cwd, and a footer that carries
+ * the active account plus the nav destinations.
  *
  * One-line rows (operator, 2026-09-27, `docs/design-html/2026-09-27-sidebar-one-line-rows.html`):
  * a row is its title and the live dot, nothing else. The recency and the session
@@ -35,7 +35,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    inside a project. That is not built. A manual per-project row order would
  *    fight the CC-2 float-to-top ruling (a row rises only when its session sends
  *    a message, `sidebarState.ts`), and the two orders cannot both win. Manual
- *    workspace headers retain their manual order.
+ *    workspace headers and the separate Pinned list retain their own order.
  *  - 🔁 adapted: "New chat" opens a session in the ACTIVE workspace with no
  *    picker, or creates a chat without a project when no project is active.
  *  - Rows render NO visible status chip: the design source's rows are bare, and
@@ -65,6 +65,9 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *  - Every row offers a hover/focus-revealed ⋮ and right-click, keyed on the
  *    merged session id, including history rows. App owns the menu. Archived rows
  *    appear below the archive count toggle; opening one unarchives it first.
+ *  - Pinned sessions are lifted from Chats or Projects into a manually ordered
+ *    section. The versioned renderer preference keeps pin IDs not yet in the
+ *    current roster and reconciles pre-ready app IDs when the engine ID arrives.
  *  - Per-workspace "+" (#10/#15): each group header carries a "+" that spawns a
  *    fresh session DIRECTLY in THAT workspace — no native picker. It calls
  *    `onNewSessionInWorkspace(repId)` with the group's active row id (else its
@@ -88,8 +91,8 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    exceed it — 168 sessions meant the 64 newest were held in an arrangement
  *    below the 104 oldest, so the group read "22d" at the top while the real
  *    newest row sat far below. Raising the cap defers that; it cannot fix it.
- *    Inside a group, CC-2
- *    activity order is the only rule. Reverted 2026-08-02.
+ *    Inside a group, CC-2 activity order is the only rule. The separate Pinned
+ *    section remains operator-ordered.
  */
 
 import {
@@ -137,6 +140,21 @@ import {
   selectArchivedSidebarRows,
   type ArchivedSessions,
 } from './sidebarArchivedSessions.js'
+import {
+  createPinnedSessions,
+  isSessionPinned,
+  PINNED_SESSION_DRAG_MIME,
+  readPinnedSessionsFromStorage,
+  reducePinnedSessionsMoved,
+  reducePinnedSessionsReconciled,
+  reducePinnedSessionsStepped,
+  reducePinnedSessionsToggled,
+  selectPinnedDropEdge,
+  selectPinnedRows,
+  selectUnpinnedRows,
+  writePinnedSessionsToStorage,
+  type PinnedSessions,
+} from './sidebarPinnedSessions.js'
 import {
   createWorkspaceOrder,
   readWorkspaceOrderFromStorage,
@@ -201,6 +219,19 @@ export type WorkspaceReorderHandlers = {
   onDrop: (cwd: string) => void
   onDragEnd: () => void
   onStep: (cwd: string, direction: 'up' | 'down') => void
+}
+
+export type RowDropEdge = 'before' | 'after'
+
+/** Reorder handlers for the operator-owned pinned-session list. */
+export type RowReorderHandlers = {
+  mime: string
+  onDragStart: (id: string) => void
+  onDragOver: (id: string) => void
+  onDragLeave: (id: string) => void
+  onDrop: (id: string) => void
+  onDragEnd: () => void
+  onStep: (id: string, direction: 'up' | 'down') => void
 }
 
 type NavItem = {
@@ -309,9 +340,10 @@ export function Sidebar({
    * with nothing here to anchor.
    */
   menuActive?: boolean
-  /** Where the operator's workspace order and hidden projects are persisted. Injectable for
-   * tests (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
-   * renderer's own `localStorage`, and `null` disables persistence entirely. */
+  /** Where workspace order, session pins, and hidden projects are persisted.
+   * Injectable for tests (`ReasoningLayoutProvider`'s `storage` prop idiom);
+   * defaults to the renderer's own `localStorage`, and `null` disables
+   * persistence entirely. */
   storage?: ViewPreferenceStorage | null
 }) {
   const [search, setSearch] = useState('')
@@ -334,6 +366,9 @@ export function Sidebar({
   const [workspaceOrder, setWorkspaceOrder] = useState<WorkspaceOrder>(
     () => readWorkspaceOrderFromStorage(orderStore) ?? createWorkspaceOrder(),
   )
+  const [pinnedSessions, setPinnedSessions] = useState<PinnedSessions>(
+    () => readPinnedSessionsFromStorage(orderStore) ?? createPinnedSessions(),
+  )
   const [archivesExpanded, setArchivesExpanded] = useState(false)
   const [hiddenWorkspaces, setHiddenWorkspaces] = useState<HiddenWorkspaces>(
     () => readHiddenWorkspacesFromStorage(orderStore) ?? createHiddenWorkspaces(),
@@ -347,6 +382,7 @@ export function Sidebar({
   } | null>(null)
   /** The in-flight workspace header drag. */
   const [headerDrag, setHeaderDrag] = useState<ReorderDrag>(null)
+  const [pinDrag, setPinDrag] = useState<ReorderDrag>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
@@ -356,6 +392,8 @@ export function Sidebar({
    * moved — see the re-focus effect below `reorderHandlers`. */
   const headerRefs = useRef(new Map<string, HTMLButtonElement>())
   const refocusCwd = useRef<string | null>(null)
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
+  const refocusRowId = useRef<string | null>(null)
   /** Expanded nav buttons by destination, plus a collapsed rail destination
    * whose focus must survive the branch replacement. */
   const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
@@ -535,9 +573,17 @@ export function Sidebar({
     () => selectArchivedSidebarRows(railRows, archivedSessions),
     [railRows, archivedSessions],
   )
-  const groupRows = useMemo(
+  const sidebarRows = useMemo(
     () => unarchivedRows.filter(isSidebarVisibleRow),
     [unarchivedRows],
+  )
+  const pinnedRows = useMemo(
+    () => selectPinnedRows(sidebarRows, pinnedSessions).filter(matchesQuery),
+    [sidebarRows, pinnedSessions, query],
+  )
+  const groupRows = useMemo(
+    () => selectUnpinnedRows(sidebarRows, pinnedSessions),
+    [sidebarRows, pinnedSessions],
   )
   const matchingArchivedRows = archivedRows.filter(matchesQuery)
   const managedRows = useMemo(
@@ -626,10 +672,20 @@ export function Sidebar({
     () => allGroups.map(group => group.cwd),
     [allGroups],
   )
+  const pinnedIds = useMemo(
+    () => pinnedRows.map(row => row.sessionId),
+    [pinnedRows],
+  )
   const commitWorkspaceOrder = (next: WorkspaceOrder) => {
     if (next === workspaceOrder) return
     setWorkspaceOrder(next)
     writeWorkspaceOrderToStorage(orderStore, next)
+  }
+
+  const commitPinnedSessions = (next: PinnedSessions) => {
+    if (next === pinnedSessions) return
+    setPinnedSessions(next)
+    writePinnedSessionsToStorage(orderStore, next)
   }
 
   const commitHiddenWorkspaces = (next: HiddenWorkspaces) => {
@@ -671,12 +727,59 @@ export function Sidebar({
     },
   }
 
+  const pinnedReorderHandlers: RowReorderHandlers = {
+    mime: PINNED_SESSION_DRAG_MIME,
+    ...reorderDragHandlers(setPinDrag),
+    onDrop: id => {
+      if (pinDrag) {
+        commitPinnedSessions(
+          reducePinnedSessionsMoved(
+            pinnedSessions,
+            pinnedIds,
+            pinDrag.from,
+            id,
+          ),
+        )
+      }
+      setPinDrag(null)
+    },
+    onStep: (id, direction) => {
+      const next = reducePinnedSessionsStepped(
+        pinnedSessions,
+        pinnedIds,
+        id,
+        direction,
+      )
+      if (next === pinnedSessions) return
+      refocusRowId.current = id
+      commitPinnedSessions(next)
+    },
+  }
+
+  const togglePin = (sessionId: string) =>
+    commitPinnedSessions(
+      reducePinnedSessionsToggled(pinnedSessions, sessionId),
+    )
+
   useLayoutEffect(() => {
     const cwd = refocusCwd.current
     if (cwd == null) return
     refocusCwd.current = null
     headerRefs.current.get(cwd)?.focus()
   }, [workspaceOrder])
+
+  useLayoutEffect(() => {
+    commitPinnedSessions(
+      reducePinnedSessionsReconciled(pinnedSessions, railRows),
+    )
+  }, [pinnedSessions, railRows])
+
+  useLayoutEffect(() => {
+    const id = refocusRowId.current
+    if (id == null) return
+    refocusRowId.current = null
+    rowRefs.current.get(id)?.focus()
+  }, [pinnedSessions])
 
   // The band the footer list answers to is the collapsed icon column, so it is
   // measured while that column is on screen.
@@ -730,6 +833,7 @@ export function Sidebar({
     onRestore,
     onOpenHistory,
     onOpenRowActions,
+    onTogglePin: togglePin,
   }
 
   return (
@@ -903,6 +1007,44 @@ export function Sidebar({
               aria-label="Sessions"
               className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
+              {pinnedRows.length > 0 ? (
+                <section className="mb-[18px]">
+                  <div className="flex items-center gap-1 pb-[5px] pl-2 pr-1 pt-0.5">
+                    <span className="shrink-0 truncate text-[11px] font-medium text-text-ghost">
+                      Pinned
+                    </span>
+                    <span aria-hidden="true" className="ml-1.5 mr-1 h-px min-w-0 flex-1 bg-shell-seam" />
+                  </div>
+                  {pinnedRows.map(row => (
+                    <SidebarRowItem
+                      key={row.sessionId}
+                      row={row}
+                      isActive={
+                        row.appSessionId != null &&
+                        row.appSessionId === activeSessionId
+                      }
+                      pinned={isSessionPinned(pinnedSessions, row.sessionId)}
+                      reorder={pinnedReorderHandlers}
+                      rowRef={element => {
+                        if (element) rowRefs.current.set(row.sessionId, element)
+                        else rowRefs.current.delete(row.sessionId)
+                      }}
+                      dragging={pinDrag?.from === row.sessionId}
+                      dropEdge={
+                        pinDrag != null && pinDrag.over === row.sessionId
+                          ? selectPinnedDropEdge(
+                              pinnedIds,
+                              pinDrag.from,
+                              row.sessionId,
+                            )
+                          : null
+                      }
+                      {...rowProps}
+                    />
+                  ))}
+                </section>
+              ) : null}
+
               <section className="mb-[18px]">
                 <div className="flex items-center gap-1 pb-[5px] pl-2 pr-1 pt-0.5">
                   <span className="shrink-0 truncate text-[11px] font-medium text-text-ghost">
@@ -1060,6 +1202,7 @@ export function Sidebar({
                       key={row.sessionId}
                       row={row}
                       isActive={false}
+                      pinned={isSessionPinned(pinnedSessions, row.sessionId)}
                       archived
                       onUnarchiveSession={onUnarchiveSession}
                       {...rowProps}
@@ -1299,6 +1442,7 @@ export function SessionGroup({
   onRestore,
   onOpenHistory,
   onOpenRowActions,
+  onTogglePin,
   onNewSessionInWorkspace,
   onOpenWorkspaceActions,
   reorder,
@@ -1318,6 +1462,7 @@ export function SessionGroup({
     anchor: SessionActionsAnchor,
     archived?: boolean,
   ) => void
+  onTogglePin?: (sessionId: string) => void
   onNewSessionInWorkspace?: (repId: SessionId) => void
   /** ➕ Project menu (operator, 2026-08-02: the Projects header could add a
    * project but nothing could remove one). Optional + additive: without it the
@@ -1557,6 +1702,7 @@ export function SessionGroup({
               onRestore={onRestore}
               onOpenHistory={onOpenHistory}
               onOpenRowActions={onOpenRowActions}
+              onTogglePin={onTogglePin}
             />
           ))}
           {shouldShowSidebarGroupExpansionToggle(
@@ -1587,6 +1733,12 @@ export function SidebarRowItem({
   onRestore,
   onOpenHistory,
   onOpenRowActions,
+  pinned = false,
+  onTogglePin,
+  reorder,
+  rowRef,
+  dragging = false,
+  dropEdge = null,
   archived = false,
   onUnarchiveSession,
 }: {
@@ -1600,6 +1752,12 @@ export function SidebarRowItem({
     anchor: SessionActionsAnchor,
     archived?: boolean,
   ) => void
+  pinned?: boolean
+  onTogglePin?: (sessionId: string) => void
+  reorder?: RowReorderHandlers
+  rowRef?: (element: HTMLDivElement | null) => void
+  dragging?: boolean
+  dropEdge?: RowDropEdge | null
   archived?: boolean
   onUnarchiveSession?: (row: MergedSessionRow) => void
 }) {
@@ -1614,6 +1772,9 @@ export function SidebarRowItem({
 
   const openable = visual.openable
   const showKebab = onOpenRowActions != null
+  const showPin = openable && onTogglePin != null
+  const showActions = showKebab || showPin
+  const reorderable = reorder != null
   const actionable = openable || (archived && onUnarchiveSession != null)
 
   // A live registry row focuses its tab; a restorable row re-spawns via restore;
@@ -1632,22 +1793,29 @@ export function SidebarRowItem({
 
   return (
     <div
+      ref={rowRef}
       className={
         'group relative flex select-none items-center gap-[7px] rounded-[5px] border py-[5.5px] pl-[5px] pr-1.5 transition-colors ' +
         // Exactly one cursor class: two of them in the same attribute would be
         // resolved by Tailwind's own emit order, not by the order written here.
-        (actionable ? 'cursor-pointer ' : 'cursor-default ') +
+        (reorderable
+          ? 'cursor-grab '
+          : actionable
+            ? 'cursor-pointer '
+            : 'cursor-default ') +
+        (dragging ? 'opacity-50 ' : '') +
         (isActive
           ? 'border-accent/[0.18] bg-accent/[0.09]'
-          : openable || showKebab
+          : openable || showActions
             ? 'border-transparent hover:border-accent/[0.22] hover:bg-accent/[0.07]'
             : 'border-transparent')
       }
       role="button"
       tabIndex={actionable ? 0 : -1}
       aria-current={isActive ? 'true' : undefined}
-      aria-disabled={actionable || showKebab ? undefined : 'true'}
+      aria-disabled={actionable || showActions ? undefined : 'true'}
       aria-label={`session ${title}, ${visual.label}${openable ? '' : ', open from terminal'}`}
+      aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
       title={
         openable
           ? `${name ? `${name} · ` : ''}${row.binding?.kind === 'managed' ? title : row.cwd || title}${
@@ -1656,9 +1824,63 @@ export function SidebarRowItem({
                 : visual.kind === 'history'
                   ? ' · open'
                   : ''
-            }`
+            }${reorderable ? '. Drag to reorder, or ⌥↑/⌥↓' : ''}`
           : 'This session has no recorded workspace. Open it from the terminal.'
       }
+      draggable={reorderable ? true : undefined}
+      onDragStart={
+        reorderable
+          ? event => {
+              event.dataTransfer.setData(reorder!.mime, row.sessionId)
+              event.dataTransfer.effectAllowed = 'move'
+              reorder?.onDragStart(row.sessionId)
+              event.stopPropagation()
+            }
+          : undefined
+      }
+      onDragOver={
+        reorderable
+          ? event => {
+              if (
+                !event.dataTransfer.types.some(
+                  type => type.toLowerCase() === reorder!.mime,
+                )
+              ) {
+                return
+              }
+              event.preventDefault()
+              event.stopPropagation()
+              event.dataTransfer.dropEffect = 'move'
+              reorder?.onDragOver(row.sessionId)
+            }
+          : undefined
+      }
+      onDragLeave={
+        reorderable
+          ? event => {
+              const entering = event.relatedTarget as Node | null
+              if (entering && event.currentTarget.contains(entering)) return
+              reorder?.onDragLeave(row.sessionId)
+            }
+          : undefined
+      }
+      onDrop={
+        reorderable
+          ? event => {
+              if (
+                !event.dataTransfer.types.some(
+                  type => type.toLowerCase() === reorder!.mime,
+                )
+              ) {
+                return
+              }
+              event.preventDefault()
+              event.stopPropagation()
+              reorder?.onDrop(row.sessionId)
+            }
+          : undefined
+      }
+      onDragEnd={reorderable ? () => reorder?.onDragEnd() : undefined}
       onClick={actionable ? activate : undefined}
       onContextMenu={
         showKebab
@@ -1681,8 +1903,20 @@ export function SidebarRowItem({
           : undefined
       }
       onKeyDown={
-        actionable
+        actionable || reorderable
           ? event => {
+              if (
+                reorderable &&
+                event.altKey &&
+                (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+              ) {
+                event.preventDefault()
+                reorder?.onStep(
+                  row.sessionId,
+                  event.key === 'ArrowUp' ? 'up' : 'down',
+                )
+                return
+              }
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 activate()
@@ -1691,6 +1925,19 @@ export function SidebarRowItem({
           : undefined
       }
     >
+      {dropEdge === 'before' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 top-0 h-[2px] rounded-full bg-accent"
+        />
+      ) : null}
+      {dropEdge === 'after' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 bottom-0 h-[2px] rounded-full bg-accent"
+        />
+      ) : null}
+
       {/* O1 (operator ruling 2026-07-31) — the live-only dot. One tone, no
        * label. The LANE renders on every row and only the dot inside it is
        * conditional, so a live row and a not-live row share one text edge and
@@ -1712,6 +1959,7 @@ export function SidebarRowItem({
       <span
         className={
           'min-w-0 flex-1 truncate text-[12.5px] leading-[17px] ' +
+          (pinned && showActions ? 'pr-5 ' : '') +
           (archived
             ? 'text-text-faint'
             : isActive
@@ -1729,40 +1977,66 @@ export function SidebarRowItem({
        * pointer. The backing is the row's own tint flattened onto the panel
        * (`.sidebar-row-actions` in `theme.css`, accent-derived so it tracks the
        * theme, and painted only under hover/focus). */}
-      {showKebab ? (
+      {showActions ? (
         <div
           className={
             'absolute inset-y-0 right-1 flex items-center gap-0.5 pl-3.5 transition-opacity ' +
-            'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 focus-within:opacity-100 ' +
+            (pinned
+              ? 'opacity-100 '
+              : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 focus-within:opacity-100 ') +
             (isActive
               ? 'sidebar-row-actions-active'
               : 'sidebar-row-actions')
           }
         >
-          <button
-            type="button"
-            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle transition-[opacity,background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft"
-            onClick={event => {
-              event.stopPropagation()
-              const rect = event.currentTarget.getBoundingClientRect()
-              if (onOpenRowActions) {
-                // P4-39 — the trigger's rect, right-aligned to the kebab; the
-                // menu owns the gap, the clamp and the bottom-flip.
-                onOpenRowActions(row.sessionId, {
-                  top: rect.top,
-                  bottom: rect.bottom,
-                  left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
-                }, archived || undefined)
+          {showKebab ? (
+            <button
+              type="button"
+              className={
+                'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-text-subtle transition-[opacity,background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft ' +
+                (pinned
+                  ? 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                  : '')
               }
-            }}
-            // Keep key events off the row's activate handler (Enter/Space on
-            // the kebab opens the menu, it must not also fire onKeyDown).
-            onKeyDown={event => event.stopPropagation()}
-            title="Session actions"
-            aria-label={`Session actions for ${title}`}
-          >
-            <KebabIcon />
-          </button>
+              onClick={event => {
+                event.stopPropagation()
+                const rect = event.currentTarget.getBoundingClientRect()
+                if (onOpenRowActions) {
+                  // P4-39 — the trigger's rect, right-aligned to the kebab; the
+                  // menu owns the gap, the clamp and the bottom-flip.
+                  onOpenRowActions(row.sessionId, {
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
+                  }, archived || undefined)
+                }
+              }}
+              onKeyDown={event => event.stopPropagation()}
+              title="Session actions"
+              aria-label={`Session actions for ${title}`}
+            >
+              <KebabIcon />
+            </button>
+          ) : null}
+          {showPin ? (
+            <button
+              type="button"
+              className={
+                'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded transition-[background-color,color] hover:bg-accent/[0.16] hover:text-accent-soft ' +
+                (pinned ? 'text-accent' : 'text-text-faint')
+              }
+              aria-pressed={pinned}
+              onClick={event => {
+                event.stopPropagation()
+                onTogglePin?.(row.sessionId)
+              }}
+              onKeyDown={event => event.stopPropagation()}
+              title={pinned ? 'Unpin' : 'Pin to top'}
+              aria-label={`${pinned ? 'Unpin' : 'Pin'} ${title}`}
+            >
+              {pinned ? <PinFilledIcon /> : <PinIcon />}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

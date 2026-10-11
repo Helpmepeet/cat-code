@@ -490,7 +490,7 @@ test('a full extensions frame carries no secret material', () => {
 
   const frame: ExtensionsSnapshotFrame = {
     kind: 'extensions.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 'sess-1',
     extensions: { mcp, plugins, skills, hooks },
   }

@@ -116,9 +116,12 @@ Child restoration uses an engine-owned bounded display reader rather than the
 full agent-resume reader. One join shares a 4 MiB source-read budget (including
 alignment probes), a 4,000 selected-message budget, and the remaining projected
 output budget across siblings and nested waves. Rejected oversized branches
-consume the read budget. Partial branches are omitted because the wire has no
-independent child truncation marker; their existing unavailable-history card
-remains truthful. Reachability, parent splicing, compaction projection, accepted
+consume the read budget. Partial branches are omitted and the join reports their
+reachable parent IDs in `history.availability`, a display-only sticky snapshot
+retained by main and transcript caches. The renderer shows unavailable steps on
+those Agent cards while preserving any retained children, without marking the
+main transcript truncated. Empty, inherited-only and unreachable branches do
+not acquire an unavailable marker. Reachability, parent splicing, compaction projection, accepted
 UUID deduplication, and the engine's full resume semantics stay in their existing
 owners. Load-earlier uses the same join budget rather than renewing it per child.
 

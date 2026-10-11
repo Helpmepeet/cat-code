@@ -3,6 +3,7 @@ import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -411,6 +412,7 @@ import {
   hostErrorMessage,
   reducePromptDrafts,
   reduceTurnStarts,
+  type TurnStart,
   selectPromptDraft,
   sendPermissionResponse,
   shouldShowAnthropicPoolAccount,
@@ -458,7 +460,7 @@ const EMPTY_BANNERS: readonly BannerNotice[] = []
 /** Stable identity so a session with no worker snapshot never re-renders. */
 const EMPTY_WORKERS: readonly LiveWorkerItem[] = []
   /** Stable identity for the pre-first-turn map, so the initial state is one object. */
-const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
+const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, TurnStart> = new Map()
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
@@ -771,12 +773,9 @@ export function App() {
   // When each session's turn started, held above the panes because a pane only
   // exists while its session is on screen (`reduceTurnStarts`). The panes read
   // their own start from here to tick the activity clock.
-  const [turnStarts, setTurnStarts] = useState<ReadonlyMap<SessionId, number>>(
+  const [turnStarts, setTurnStarts] = useState<ReadonlyMap<SessionId, TurnStart>>(
     EMPTY_TURN_STARTS,
   )
-  useEffect(() => {
-    setTurnStarts(prev => reduceTurnStarts(prev, connection, Date.now()))
-  }, [connection])
   // Where the reader is in each session's transcript, held above the panes for
   // the same reason `turnStarts` is: a pane is unmounted while its session is
   // off screen, so it cannot remember its own place across a tab switch. A ref
@@ -975,6 +974,9 @@ export function App() {
   )
   const dockObservedSessions = useMemo(() => selectShellDescriptors(shell), [shell])
   useSubagentDockObservation({ sessions: dockObservedSessions, workers: workersState, tasks, transcript, leases })
+  useLayoutEffect(() => {
+    setTurnStarts(prev => reduceTurnStarts(prev, connection, shell.byId, Date.now()))
+  }, [connection, shell])
   // Mirror the roster so the host-event handler (subscribed once) can read the
   // live order without re-subscribing — used to compute the neighbour tab when
   // the active tab is removed.
@@ -2834,21 +2836,10 @@ export function App() {
     }
   }, [navigateAfterClosedSession, releasePendingSubmit])
 
-  const archiveSession = async (row: MergedSessionRow) => {
+  const archiveSession = (row: MergedSessionRow) => {
     const archivedAt = Date.now()
+    // Archive changes sidebar visibility, not the session lifecycle.
     setArchivedSessions(current => reduceSessionArchived(current, row, archivedAt))
-    if (row.live && row.appSessionId && !(await closeTab(row.appSessionId))) {
-      // A refused close must not hide a still-running session.
-      const currentRow = {
-        ...row,
-        sessionId: shellRef.current.byId[row.appSessionId]?.engineSessionId ?? row.sessionId,
-      }
-      setArchivedSessions(current =>
-        current.some(entry => entry.sessionId === currentRow.sessionId && entry.archivedAt === archivedAt)
-          ? reduceSessionUnarchived(current, currentRow)
-          : current,
-      )
-    }
   }
 
   const switchBranchForSession = useCallback(async (
@@ -3878,7 +3869,7 @@ export function App() {
 	            activeAccount={panelActiveCodexAccount}
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
-            turnStartedAt={turnStarts.get(sessionId) ?? null}
+            turnStartedAt={turnStarts.get(sessionId)?.at ?? null}
             onSwitchAccount={rail.canSwitchAccount ? verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not

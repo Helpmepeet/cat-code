@@ -13,6 +13,7 @@ import type {
   ConnectionState,
 } from './connectionState.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
+import type { WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import type {
   NestedTranscriptRow,
   TranscriptRow,
@@ -184,6 +185,7 @@ export function deriveActivity(
       // been made; until it is, this reports one tool that is genuinely running
       // rather than inventing a format.
       if (row.kind === 'tool-use' && row.status === 'pending') {
+        if (row.toolName === 'JumpWorkspace') continue
         return { verb: 'Running', target: row.toolName }
       }
     }
@@ -212,15 +214,21 @@ export function isTurnRunning(snapshot: ConnectionSnapshot): boolean {
  * (gated on 30s of turn time) disappeared with it. Connection frames arrive for
  * background sessions too, so a start recorded here is stamped once, when that
  * session's turn begins, and held until the turn ends whatever is on screen.
+ * An accepted workspace jump holds that start across source idle and engine
+ * replacement. Once the destination turn has run, its live idle edge releases
+ * the start even if the host's final outcome has not arrived yet.
  *
  * Returns the map it was given when nothing moved, so the caller's `setState`
  * is a no-op on the frames that change something else.
  */
+export type TurnStart = { at: number; jumpId: string | null; continuationStarted: boolean }
+
 export function reduceTurnStarts(
-  starts: ReadonlyMap<SessionId, number>,
+  starts: ReadonlyMap<SessionId, TurnStart>,
   connection: ConnectionState,
+  descriptors: Readonly<Record<SessionId, { workspaceMove?: WorkspaceMoveDisplay | null } | undefined>>,
   now: number,
-): ReadonlyMap<SessionId, number> {
+): ReadonlyMap<SessionId, TurnStart> {
   const next = new Map(starts)
   let changed = false
   for (const sessionId of next.keys()) {
@@ -233,11 +241,29 @@ export function reduceTurnStarts(
     SessionId,
     ConnectionSnapshot,
   ][]) {
+    const move = descriptors[sessionId]?.workspaceMove
+    const jumpActive = move?.agentJump === true &&
+      move.continuation !== undefined && move.continuation !== 'finished' &&
+      (move.phase === 'moving' || move.phase === 'arrived')
+    const previous = next.get(sessionId)
     if (isTurnRunning(snapshot)) {
-      if (!next.has(sessionId)) {
-        next.set(sessionId, now)
+      if (!previous) {
+        next.set(sessionId, {
+          at: now,
+          jumpId: jumpActive ? move.id : null,
+          continuationStarted: jumpActive && move.phase === 'arrived',
+        })
         changed = true
       }
+      else if (jumpActive && previous.jumpId !== move.id) {
+        next.set(sessionId, { ...previous, jumpId: move.id, continuationStarted: move.phase === 'arrived' })
+        changed = true
+      } else if (jumpActive && move.phase === 'arrived' && !previous.continuationStarted) {
+        next.set(sessionId, { ...previous, continuationStarted: true })
+        changed = true
+      }
+    } else if (jumpActive && previous?.jumpId === move.id && !previous.continuationStarted) {
+      continue
     } else if (next.delete(sessionId)) {
       changed = true
     }

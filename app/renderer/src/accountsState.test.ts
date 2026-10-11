@@ -85,7 +85,7 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
 }
 
 function snapFrame(sessionId: string, accounts: AccountsSnapshot): AccountsSnapshotFrame {
-  return { kind: 'accounts.snapshot', protocolVersion: 2, sessionId, accounts }
+  return { kind: 'accounts.snapshot', protocolVersion: 3, sessionId, accounts }
 }
 
 function signOutResult(
@@ -93,7 +93,7 @@ function signOutResult(
 ): AccountResultFrame {
   return {
     kind: 'account.result',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: 's1',
     requestId: receipt.operationId,
     verb: 'account.logout',
@@ -133,7 +133,7 @@ describe('accountsState reducer', () => {
     let state = createAccountsState()
     const result: AccountResultFrame = {
       kind: 'account.result',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId: 's1',
       requestId: 'r1',
       verb: 'account.switch',
@@ -157,7 +157,7 @@ describe('accountsState reducer', () => {
     state = reduceAccountsState(state, { type: 'frame', frame: snapFrame('s1', snapshot()) })
     const death: LifecycleFrame = {
       kind: 'lifecycle',
-      protocolVersion: 2,
+      protocolVersion: 3,
       sessionId: 's1',
       status: 'exited',
     } as LifecycleFrame
@@ -171,7 +171,7 @@ describe('P4-15 OAuth login progress projection', () => {
     progress: OAuthLoginProgressFrame['progress'],
     sessionId = 's1',
   ): OAuthLoginProgressFrame {
-    return { kind: 'oauth.login.progress', protocolVersion: 2, sessionId, progress }
+    return { kind: 'oauth.login.progress', protocolVersion: 3, sessionId, progress }
   }
 
   test('reduces oauth.login.progress into the per-session view; selector reads it', () => {
@@ -220,7 +220,7 @@ describe('P4-15 OAuth login progress projection', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         status: 'exited',
       } as never,
@@ -264,7 +264,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -292,7 +292,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'account.result',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         requestId: 'mutation',
         verb: 'account.rename',
@@ -312,7 +312,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -327,7 +327,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         accounts: snapshot(),
       } as AccountsSnapshotFrame,
@@ -337,7 +337,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         status: 'exited',
       } as LifecycleFrame,
@@ -695,7 +695,7 @@ describe('accountsState selectors', () => {
       type: 'frame',
       frame: {
         kind: 'stats.usage.snapshot',
-        protocolVersion: 2,
+        protocolVersion: 3,
         sessionId: 's1',
         stats: snap7d,
       },

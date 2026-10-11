@@ -30,7 +30,7 @@ Object.defineProperty(app, 'isPackaged', {
 const frames: ServerFrame[] = [
   {
     kind: 'ready',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: HARDENING_SESSION_ID,
     engineSessionId: 'hardening-engine-session',
     payload: {
@@ -45,7 +45,7 @@ const frames: ServerFrame[] = [
   },
   {
     kind: 'event',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: HARDENING_SESSION_ID,
     event: {
       type: 'message',
@@ -91,13 +91,13 @@ const frames: ServerFrame[] = [
 const gateFrames: ServerFrame[] = [
   {
     kind: 'workspace-trust.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: HARDENING_SESSION_ID,
     workspaceTrust: { trusted: true, detectedRepo: null, trustRoot: null },
   },
   {
     kind: 'accounts.snapshot',
-    protocolVersion: 2,
+    protocolVersion: 3,
     sessionId: HARDENING_SESSION_ID,
     accounts: {
       accounts: [],

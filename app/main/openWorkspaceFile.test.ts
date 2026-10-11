@@ -220,3 +220,45 @@ test('relocated conversations refuse ambiguous relative links while retaining cu
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('opens image files under the generated-images root outside the workspace, and nothing else there', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'catcode-open-generated-'))
+  try {
+    const workspace = join(base, 'workspace')
+    const imagesRoot = join(base, 'config', 'generated-images')
+    const elsewhere = join(base, 'elsewhere')
+    for (const dir of [workspace, imagesRoot, elsewhere]) mkdirSync(dir, { recursive: true })
+    const image = join(imagesRoot, 'cat.png')
+    const note = join(imagesRoot, 'notes.md')
+    const strayImage = join(elsewhere, 'stray.png')
+    const linked = join(imagesRoot, 'linked.png')
+    for (const file of [image, note, strayImage]) writeFileSync(file, 'x')
+    symlinkSync(strayImage, linked)
+
+    const opened: string[] = []
+    const opener = async (path: string): Promise<string> => {
+      opened.push(path)
+      return ''
+    }
+    const open = (path: string, options?: { generatedImagesRoot?: string }) =>
+      openWorkspaceFile(
+        { appSessionId: 'session-1', path },
+        [session(workspace)],
+        opener,
+        options,
+      )
+    const options = { generatedImagesRoot: imagesRoot }
+
+    expect(await open(image, options)).toBe(true)
+    expect(opened).toEqual([realpathSync(image)])
+
+    expect(await open(note, options)).toBe(false)
+    expect(await open(strayImage, options)).toBe(false)
+    expect(await open(linked, options)).toBe(false)
+    expect(await open(image)).toBe(false)
+    expect(await open(image, { generatedImagesRoot: join(base, 'missing') })).toBe(false)
+    expect(opened).toHaveLength(1)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})

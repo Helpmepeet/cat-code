@@ -1,7 +1,5 @@
 import tsParser from '@typescript-eslint/parser'
-import jsxA11y from 'eslint-plugin-jsx-a11y'
 import reactRefresh from 'eslint-plugin-react-refresh'
-import reactHooks from 'eslint-plugin-react-hooks'
 
 export default [
   {
@@ -15,9 +13,7 @@ export default [
       },
     },
     plugins: {
-      'jsx-a11y': jsxA11y,
       'react-refresh': reactRefresh,
-      'react-hooks': reactHooks,
     },
     rules: {
       'react-refresh/only-export-components': [

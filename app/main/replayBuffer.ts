@@ -148,10 +148,13 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   ready: 'head',
   'history.replay.complete': 'none',
+  // Branch availability must survive renderer reload independently of the
+  // evictable main transcript and its prefix-recovery completion.
+  'history.availability': 'sticky',
   // Main consumes these operation acknowledgements before renderer forwarding.
   // Replaying them must never admit work or reconcile a saved operation.
   'workspace.handoff.result': 'none',
-  'workspace.user-admitted': 'none',
+  'workspace.handoff.state': 'none',
 
   'permission.context': 'sticky',
   'settings.snapshot': 'sticky',
@@ -315,7 +318,11 @@ export class FrameReplayBuffer {
     if (retention === 'none') {
       return
     }
+    // This verdict describes recovered rows that the ring deliberately drops.
+    // Keep the initial availability snapshot for the retained view on reload.
+    if (frame.kind === 'history.availability' && frame.recovered === true) return
     if (frame.kind === 'transcript.reset') {
+      entry.sticky.delete('history.availability')
       entry.recent = []
       entry.recentBytes = 0
       entry.openStreamPartials.clear()
@@ -543,6 +550,11 @@ export class FrameReplayBuffer {
       if (uuid !== undefined) return uuid
     }
     return undefined
+  }
+
+  /** A lossy retained view can have no message UUID left to use as an anchor. */
+  viewTruncated(sessionId: SessionId): boolean {
+    return this.sessions.get(sessionId)?.truncated ?? false
   }
 
   /** Forget a session's buffer (e.g. its sidecar was torn down). */

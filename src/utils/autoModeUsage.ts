@@ -95,13 +95,6 @@ export function classifyHistoricalAutoModeToolResult(
   return null
 }
 
-export type AutoModeCommandRate = Readonly<{
-  numerator: number
-  denominator: number
-  rate: number | null
-  state: 'confirmed' | 'provisional' | 'unavailable'
-}>
-
 type Marker = {
   timestamp: number
   recordId: string
@@ -117,8 +110,6 @@ type Terminal = {
 }
 
 type Attempt = {
-  scope: string
-  attemptId: string
   timestamp: number
   date: string
   toolKind: 'bash' | 'powershell' | 'other'
@@ -136,15 +127,6 @@ type Attempt = {
 }
 
 const AUTO_MODE_DIAGNOSTIC_KIND = 'auto_mode_observation'
-const OUTCOMES: readonly AutoModeUsageOutcome[] = [
-  'allowed',
-  'policy_blocked',
-  'review_required',
-  'operational_error',
-  'cancelled',
-  'unknown_outcome',
-  'incomplete',
-]
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -286,10 +268,6 @@ function emptyOutcomes(): AutoModeUsageOutcomeCounts {
     unknown_outcome: 0,
     incomplete: 0,
   }
-}
-
-function cloneCoverage(coverage: AutoModeUsageCoverage): AutoModeUsageCoverage {
-  return { ...coverage }
 }
 
 function sourceCoverage(
@@ -561,8 +539,6 @@ export function createAutoModeUsageAccumulator(input: AutoModeUsageAccumulatorOp
         const previous = starts.get(joinKey)
         if (!previous) {
           starts.set(joinKey, {
-            scope: record.sourceScope,
-            attemptId,
             timestamp,
             date: localDateKey(timestamp, timezone),
             toolKind: parsed.tool_kind,
@@ -827,20 +803,4 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
   }
   for (const records of recordsByScope.values()) accumulator.addSource(records)
   return accumulator.finish(input.sources)
-}
-
-export function autoModeCommandRate(summary: AutoModeUsageSummary): AutoModeCommandRate {
-  const numerator = summary.commands.outcomes.policy_blocked
-  const denominator = OUTCOMES.reduce((total, outcome) => total + summary.commands.outcomes[outcome], 0)
-  const coverage = summary.commands.coverage
-  if (coverage.state !== 'complete' || denominator === 0) {
-    return { numerator, denominator, rate: null, state: 'unavailable' }
-  }
-  const unresolved = summary.commands.outcomes.incomplete + summary.commands.outcomes.unknown_outcome
-  return {
-    numerator,
-    denominator,
-    rate: numerator / denominator,
-    state: unresolved > 0 ? 'provisional' : 'confirmed',
-  }
 }

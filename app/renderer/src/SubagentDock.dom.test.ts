@@ -4,6 +4,7 @@ import { act, createElement, useState } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { placeSubagentTooltip } from './subagentDockLayout.js'
 import { SubagentDock } from './SubagentDock.js'
+import { animateDockMorph, dockMorphStart } from './subagentDockMotion.js'
 import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
 
 let harness: DomTestHarness
@@ -154,4 +155,28 @@ test('row details attach on the left when possible and stay within narrow or sho
   expect(short.left).toBe(8)
   expect(short.height).toBe(44)
   expect(short.top).toBe(8)
+})
+
+
+test('closing an inert panel keeps live faces and names travelling and excludes undisclosed Finished rows', () => {
+  const originalAnimate = HTMLElement.prototype.animate
+  HTMLElement.prototype.animate = function () { return { cancel() {} } as Animation }
+  const root = document.createElement('div')
+  document.body.append(root)
+  root.innerHTML = '<button class="chip"><span data-dock-face="a">a</span></button><div class="panel" inert><div><button data-dock-row="a"><span data-dock-face="a">a</span><span class="subagent-dock-name">Ada</span></button></div><div inert><button data-dock-row="b"><span data-dock-face="b">b</span><span class="subagent-dock-name">Grace</span></button></div></div>'
+  let cancel: (() => void) | undefined
+  try {
+    const panel = root.querySelector<HTMLElement>('.panel')!
+    const start = dockMorphStart(root.querySelector<HTMLElement>('.chip')!)
+    cancel = animateDockMorph(root, panel, start, false, () => {})
+    expect([...root.querySelectorAll('.subagent-dock-flyer')].map(element => element.textContent)).toEqual(['a', 'Ada'])
+    cancel()
+    panel.removeAttribute('inert')
+    cancel = animateDockMorph(root, panel, start, true, () => {})
+    expect([...root.querySelectorAll('.subagent-dock-flyer')].map(element => element.textContent)).toEqual(['a', 'Ada'])
+  } finally {
+    cancel?.()
+    root.remove()
+    HTMLElement.prototype.animate = originalAnimate
+  }
 })

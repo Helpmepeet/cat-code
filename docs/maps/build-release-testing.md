@@ -1,6 +1,6 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-10-08 against `CLAUDE.md`,
+Last refreshed: 2026-10-09 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/workspace-map-eval/`,
 `scripts/test-codex-*.ts`,
@@ -80,13 +80,18 @@ Do not adopt another session's edits. A live review holds a six-hour lease;
 Use `block` to record incomplete work without invoking the validator.
 
 Check this boundary with
-`bun test scripts/workspaceMapRefreshState.test.ts scripts/workspaceMapLint.test.ts`.
+`bun test scripts/workspaceMapRefreshState.test.ts scripts/workspaceMapLint.test.ts`
+
+Evaluation inventory and isolated-attempt guards:
+`bun test scripts/workspace-map-eval/taskInventory.test.ts scripts/workspace-map-eval/prep/editLedger.test.ts scripts/workspace-map-eval/prep/isolation.test.ts`.
 
 The offline study inventory in `scripts/workspace-map-eval/taskInventory.ts`
 selects first substantive user prompts from Cat Code, Claude Code, and Codex
 sessions rooted in this repository. It strips recognized client-supplied Codex
 context blocks and deduplicates by the full normalized prompt. Its output
-contains raw prompts, so `--out` must point outside the repo. Keyword `kind`
+contains raw prompts. `taskInventory.ts` requires an absolute `--out` path,
+refuses a symlink target, and checks the resolved path against the repository
+real path. Pass `--repo` when targeting another checkout. Keyword `kind`
 labels only generate candidates; verify authorship, eligibility, and category
 manually. The study reconstruction and selection protocol lives in
 `docs/reports/2026-10-06-workspace-map-evaluation-plan.md`.
@@ -97,6 +102,15 @@ paired copies, and `verifyPair.ts` invokes the production sidecar harness plus
 the comparison and transcript-detection checks. Read these with the preparation
 record at `docs/reports/2026-10-07-workspace-map-study-preparation.md`; passing
 the scripts alone does not establish prompt eligibility or study completeness.
+
+`attemptPath.ts` allocates unique output directories; `attemptWorkspace.ts`
+clones each prepared source into a unique stage and records completion
+state. The source copy stays untouched, and failed runs remain available
+for inspection.
+`pathEvidence.ts` and `reconstructionEvidence.ts` require task-time evidence,
+so a later commit alone cannot establish the historical file.
+`privateModes.ts` and `harness/runtimeAllowances.ts` own copied home-state
+permissions and explicit runtime allowances.
 
 ## Build Script Details
 

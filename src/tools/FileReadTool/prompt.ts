@@ -1,4 +1,3 @@
-import { isPDFSupported } from '../../utils/pdfUtils.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 
 // Use a string constant for tool names to avoid circular dependencies
@@ -28,6 +27,7 @@ export function renderPromptTemplate(
   lineFormat: string,
   maxSizeInstruction: string,
   offsetInstruction: string,
+  pdfSupported: boolean,
 ): string {
   return `Reads a file from the local filesystem. You can access any file directly by using this tool.
 Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. A missing JS/TS file requested without offset, limit, or pages may resolve to exactly one permitted complete function definition with the exact basename as its name, in a file directly in the same directory. Such a successful result identifies the function, missing path and actual source line range, and states that the rest of the file is not included. Otherwise a missing file returns an error.
@@ -38,7 +38,7 @@ Usage:
 ${offsetInstruction}
 ${lineFormat}
 - This tool allows Cat Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Cat Code is a multimodal LLM.${
-    isPDFSupported()
+    pdfSupported
       ? '\n- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: "1-5"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.'
       : ''
   }

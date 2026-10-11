@@ -74,13 +74,43 @@ export function createSubagentDockState(restoredEntries: readonly SubagentDockEn
   return { entries, initialized: false, nextLaunchOrder: Math.max(0, ...restoredEntries.map(entry => entry.launchOrder + 1)) }
 }
 
-function latestAgentRows(rows: readonly NestedTranscriptRow[], tasks: TasksSnapshot | null): Map<string, NestedToolUseRow> {
+function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'tasks' | 'workers'>, state: SubagentDockState): Map<string, NestedToolUseRow> {
+  const { transcriptRows: rows, tasks, workers } = input
   const agentByToolUseId = new Map((tasks?.subagents ?? []).map(agent => [agent.toolUseId, agent.agentId]))
+  const knownAgents = new Map(Object.values(state.entries).map(entry => [entry.agentId, entry.name]))
+  const rememberedByToolUseId = new Map(Object.values(state.entries).filter(entry => entry.toolUseId !== null).map(entry => [entry.toolUseId!, entry.agentId]))
+  for (const worker of workers) knownAgents.set(worker.agentId, selectWorkerDisplayName(worker))
+  for (const agent of tasks?.subagents ?? []) knownAgents.set(agent.agentId, agent.agentName ?? null)
+  for (const row of rows) {
+    if (row.kind === 'tool-use' && row.toolFamily === 'agent' && row.toolName !== 'ResumeAgent' && row.result?.agentId) {
+      knownAgents.set(row.result.agentId, row.result.agentName ?? knownAgents.get(row.result.agentId) ?? null)
+    }
+  }
+  const idsByName = new Map<string, string[]>()
+  for (const [id, name] of knownAgents) {
+    if (name === null) continue
+    const key = name.replace(/^@/, '')
+    idsByName.set(key, [...idsByName.get(key) ?? [], id])
+  }
   const byId = new Map<string, NestedToolUseRow>()
   // Only parent agent cards belong in the parent's dock; nested agents have their own owner.
   for (const row of rows) {
     if (row.kind !== 'tool-use' || row.toolFamily !== 'agent') continue
-    const agentId = agentIdOf(row) ?? agentByToolUseId.get(row.toolUseId) ?? null
+    if (row.toolName === 'ResumeAgent' && row.result) {
+      // A rejected resume is a successful tool invocation with success:false.
+      // It cannot replace the last actual run or its Clear marker.
+      try {
+        const result: unknown = JSON.parse(row.result.content)
+        if (typeof result === 'object' && result !== null && 'success' in result && result.success === false) continue
+      } catch { /* Older/non-JSON display results carry no rejection evidence. */ }
+    }
+    const target = agentIdOf(row)
+    // Resume targets may be aliases. Engine metadata owns the canonical join;
+    // remembered tool-use bindings and unique recorded names survive eviction.
+    const named = target ? idsByName.get(target.replace(/^@/, '')) : undefined
+    const fallback = row.toolName !== 'ResumeAgent' ? target : target && knownAgents.has(target) ? target
+      : named?.length === 1 ? named[0]! : target && /^a(?:[\w-]+-)?[0-9a-f]{16}$/.test(target) ? target : null
+    const agentId = agentByToolUseId.get(row.toolUseId) ?? rememberedByToolUseId.get(row.toolUseId) ?? fallback
     if (agentId !== null) byId.set(agentId, row)
   }
   return byId
@@ -91,7 +121,7 @@ function stringField(value: unknown): string | null {
 
 /** Retains observed terminal evidence after workers.snapshot evicts it. */
 export function reconcileSubagentDockState(previous: SubagentDockState, input: SubagentDockInput): SubagentDockState {
-  const rows = latestAgentRows(input.transcriptRows, input.tasks)
+  const rows = latestAgentRows(input, previous)
   const workers = new Map(input.workers.map(worker => [worker.agentId, worker]))
   const tasks = new Map((input.tasks?.items ?? []).filter(task => task.type === 'local_agent').map(task => [task.id, task]))
   const entries: Record<string, SubagentDockEntry> = {}
@@ -103,7 +133,13 @@ export function reconcileSubagentDockState(previous: SubagentDockState, input: S
     const row = rows.get(agentId)
     const task = tasks.get(agentId)
     const rowState = row ? deriveAgentToolState(agentToolSourceOf(row)) : null
-    const transcriptTerminal = rowState === 'completed' || rowState === 'failed' || rowState === 'stopped'
+    // Engine-selected background agents can launch without an explicit input flag.
+    // Their successful tool result acknowledges dispatch, not completion.
+    const backgroundLaunch = row?.status === 'success' && (row.toolName === 'Agent' || row.toolName === 'Task') && row.agentCompletion === null && (
+      worker?.isBackgrounded === true || task?.isBackgrounded === true ||
+      input.tasks?.subagents?.some(agent => agent.agentId === agentId && agent.isBackgrounded) ||
+      old?.state === 'background' || old?.state === 'resumed')
+    const transcriptTerminal = !backgroundLaunch && (rowState === 'completed' || rowState === 'failed' || rowState === 'stopped')
     const resumeTime = task?.resumedAt ?? null
     const freshResume = worker?.status === 'running' && resumeTime !== null &&
       (old?.terminalAt === null || old?.terminalAt === undefined || resumeTime > old.terminalAt)
@@ -171,14 +207,15 @@ function join(parts: (string | null | undefined)[]): string | null {
   return present.length ? present.join(' · ') : null
 }
 export function selectSubagentDock(state: SubagentDockState, input: SubagentDockInput): DerivedSubagentDock {
-  const rows = latestAgentRows(input.transcriptRows, input.tasks)
+  const rows = latestAgentRows(input, state)
   const active: SubagentDockRow[] = []
   const finished: SubagentDockRow[] = []
   let nextUpdateAt: number | null = null
   for (const entry of Object.values(state.entries)) {
     const terminal = isSubagentDockTerminal(entry.state)
     if (terminal && input.clearMarkers?.some(marker => marker.agentId === entry.agentId && marker.runKey === entry.runKey)) continue
-    const lease = terminal || entry.state === 'waiting' ? null : selectLeaseForOwner(input.leases, entry.agentId)
+    const observedLease = terminal || entry.state === 'waiting' ? null : selectLeaseForOwner(input.leases, entry.agentId)
+    const lease = observedLease?.state === 'active' ? observedLease : null
     const account = lease ? leaseAccountShortLabel(lease) : entry.recordedAccount
     const model = entry.model ? formatModelDisplayName(entry.model) : null
     const rowModel = !terminal && entry.state !== 'waiting' && entry.model && entry.model !== input.parentModel ? model : null

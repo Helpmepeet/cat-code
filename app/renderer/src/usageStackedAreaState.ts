@@ -110,10 +110,6 @@ function usageCurvePath(points: readonly UsageStackedPoint[], curves: readonly U
     return path;
 }
 
-export function usageSmoothCurve(points: readonly UsageStackedPoint[], tension = 1.2): string {
-    return usageCurvePath(points, usageCurveSegments(points, tension));
-}
-
 export function usageStackedAreaGeometry(
     samples: readonly UsageStackedSample[],
     ceiling: number,

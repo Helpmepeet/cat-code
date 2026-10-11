@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
@@ -9,11 +9,24 @@ export type { OpenWorkspaceFileTarget }
 
 const MAX_OPEN_FILE_PATH_CHARS = 4_096
 const ALLOWED_TARGETS = new Set<string>(['default', 'vscode', 'zed', 'cursor', 'finder'])
+const GENERATED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
+
+/** True when `target` is `root` itself or beneath it, by canonical relative path. */
+function isInside(root: string, target: string): boolean {
+  const rel = relative(root, target)
+  return !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+}
 
 export async function openWorkspaceFile(
   input: unknown,
   sessions: readonly SessionDescriptor[],
   openPath: (path: string, target?: OpenWorkspaceFileTarget) => Promise<boolean | string>,
+  /**
+   * The default GenerateImage output folder sits in the config home, outside any
+   * workspace. Image files beneath it open like workspace files; nothing else
+   * outside the workspace does.
+   */
+  options: { generatedImagesRoot?: string } = {},
 ): Promise<boolean> {
   if (input === null || typeof input !== 'object') return false
   const record = input as Record<string, unknown>
@@ -46,6 +59,9 @@ export async function openWorkspaceFile(
       return false
     }
     const workspace = await realpath(session.cwd)
+    const imagesRoot = options.generatedImagesRoot
+      ? await realpath(options.generatedImagesRoot).catch(() => null)
+      : null
     // A trailing :line[:column] is ambiguous on POSIX. Prefer a real literal
     // file first; only fall back to source-location parsing when that literal
     // cannot pass the same canonical containment and file checks.
@@ -57,14 +73,12 @@ export async function openWorkspaceFile(
     for (const candidate of candidates) {
       try {
         const requested = await realpath(resolve(workspace, candidate))
-        const fromWorkspace = relative(workspace, requested)
-        if (
-          fromWorkspace === '' ||
-          fromWorkspace === '..' ||
-          fromWorkspace.startsWith(`..${sep}`) ||
-          isAbsolute(fromWorkspace) ||
-          !(await stat(requested)).isFile()
-        ) {
+        const allowed =
+          isInside(workspace, requested) ||
+          (imagesRoot !== null &&
+            GENERATED_IMAGE_EXTENSIONS.has(extname(requested).toLowerCase()) &&
+            isInside(imagesRoot, requested))
+        if (!allowed || !(await stat(requested)).isFile()) {
           continue
         }
         const result = await openPath(requested, validTarget)
