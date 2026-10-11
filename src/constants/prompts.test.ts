@@ -82,14 +82,14 @@ describe('Normal mode static delegation guidance', () => {
 })
 
 describe('GPT read discipline guidance', () => {
-  test('keeps dedicated-search guidance when embedded search is disabled', () => {
+  test('keeps Grep output bounds when the tool is enabled', () => {
     const savedEmbeddedSearch = process.env.EMBEDDED_SEARCH_TOOLS
     delete process.env.EMBEDDED_SEARCH_TOOLS
 
     try {
       const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
 
-      expect(guidance).toContain('Grep to locate')
+      expect(guidance).not.toContain('Prefer Grep to locate')
       expect(guidance).toContain('Read files systematically when the requested coverage requires it')
       expect(guidance).not.toContain('do not sweep a directory file-by-file')
       expect(guidance).toContain('head_limit')
@@ -114,7 +114,7 @@ describe('GPT read discipline guidance', () => {
       expect(guidance).toContain('READ DISCIPLINE:')
       expect(guidance).toContain('Read files systematically when the requested coverage requires it')
       expect(guidance).not.toContain('do not sweep a directory file-by-file')
-      expect(guidance).toContain('`find` or `grep` via the Bash tool')
+      expect(guidance).toContain('Keep output bounded to what the task needs')
       expect(guidance).not.toContain('Grep')
       expect(guidance).not.toContain('Glob')
       expect(guidance).not.toContain('head_limit')
@@ -565,9 +565,9 @@ describe('available tools in assembled prompts', () => {
     const dedicated = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'AskUserQuestion']
       .map(name => ({ name })) as unknown as Parameters<typeof getSystemPrompt>[0]
     const prompt = (await getSystemPrompt(dedicated, 'claude-opus-5-5', [], [], 'firstParty')).join('\n')
-    expect(prompt).toContain('To read files use Read')
-    expect(prompt).toContain('To edit files use Edit')
-    expect(prompt).toContain('To search the content of files, use Grep')
+    expect(prompt).toContain('Read: file contents.')
+    expect(prompt).toContain('Edit: exact string replacements.')
+    expect(prompt).toContain('Grep: content searches.')
     expect(prompt).toContain('Escalate to the user with AskUserQuestion')
   })
 

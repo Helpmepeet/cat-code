@@ -2,8 +2,14 @@
 
 Date: 2026-10-11
 
-Status: offline execution completed on 2026-10-11; gated P2 candidate implemented;
-P1/P3 and live screening/default promotion deferred by the evidence gates.
+Final status: subscription evaluations completed; keep the resume repair, leave
+the P2 reminder disabled, and stop evaluation for now. P1/P3 remain deferred.
+See the [consolidated report and final decision](../reports/2026-10-11-harness-improvement-final-report.md)
+for all rounds, corrected results and cumulative usage.
+
+The execution summary below records the earlier offline stage. Its no-live-run
+statement and the proposal's future steps are historical, superseded by the final
+report.
 
 Execution baseline: `b0bbbaa94aafbec6b04c009748a0ee74d0619cb3`. See the
 [execution report](../reports/2026-10-11-harness-improvement-execution.md) and

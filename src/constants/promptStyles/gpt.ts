@@ -32,11 +32,9 @@ import type { Tools } from '../../Tool.js'
 import type { Command } from '../../types/command.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
-import { GLOB_TOOL_NAME } from '../../tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
 import { WEB_FETCH_TOOL_NAME } from '../../tools/WebFetchTool/prompt.js'
 import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
-import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import { EXPLORE_AGENT } from '../../tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents.js'
@@ -233,37 +231,9 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     return [`# Using Your Tools`, ...prependBullets(items)].join('\n')
   }
 
-  const embedded = hasEmbeddedSearchTools()
   const editToolName = getPreferredEditToolName(enabledTools)
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
-  const searchTools = embedded
-    ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
-    : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
-  const hasReadTool = enabledTools.has(FILE_READ_TOOL_NAME)
   const hasBashTool = enabledTools.has(BASH_TOOL_NAME)
-  // Reads and search stay open through Bash when it is available: they are
-  // cheap and lossless, so only mutations are steered to a dedicated tool.
-  const shellReadRule = hasReadTool
-    ? hasBashTool
-      ? `\`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run through the ${BASH_TOOL_NAME} tool. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
-      : `Shell reads such as \`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are permitted when a shell is available. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
-    : null
-  // Each branch routes to a named search tool, so a session without that tool
-  // gets no rule rather than a pointer to something it cannot call.
-  const readDisciplineLead = embedded
-    ? hasBashTool
-      ? `READ DISCIPLINE: Prefer targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range when that can answer the question. Read files systematically when the requested coverage requires it. For large files, prefer offset/limit to read in manageable chunks.`
-      : null
-    : enabledTools.has(GREP_TOOL_NAME)
-      ? `READ DISCIPLINE: Prefer ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range when that can answer the question. Read files systematically when the requested coverage requires it. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, prefer offset/limit to read in manageable chunks.`
-      : hasBashTool
-        ? `READ DISCIPLINE: Prefer targeted \`rg\` or \`rg --files\` through the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range when that can answer the question. Read files systematically when the requested coverage requires it. For large files, prefer offset/limit to read in manageable chunks.`
-        : null
-  const readDiscipline =
-    hasReadTool && readDisciplineLead !== null
-      ? [readDisciplineLead, shellReadRule].filter(part => part !== null).join(' ')
-      : null
-
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()
       ? `AGENT FORK: Calling ${AGENT_TOOL_NAME} without a subagent_type creates a background fork. Use it when research or multi-step implementation would fill your context with output you won't need again. IF YOU ARE THE FORK: execute directly; do not re-delegate.`
@@ -273,7 +243,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const items = [
     ...(editToolName && !hasBashTool
       ? [
-          `RULE — File mutations: Dedicated tools let the user review your work. Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
+          `Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
         ]
       : []),
     ...(hasBashTool
@@ -283,13 +253,16 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
             ? `RULE — Inspect changes: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
             : `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
         ]),
-    readDiscipline,
+    `READ DISCIPLINE: Read files systematically when the requested coverage requires it. Keep output bounded to what the task needs.`,
+    ...(enabledTools.has(GREP_TOOL_NAME)
+      ? [`Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match.`]
+      : []),
     agentToolRule,
     ...(hasAgentTool &&
     areExplorePlanAgentsEnabled() &&
     !isForkSubagentEnabled()
       ? [
-          `SEARCH RULE: For simple, directed codebase searches (a specific file/class/function) use ${searchTools} directly.`,
+          `SEARCH RULE: For simple, directed codebase searches (a specific file/class/function), work directly.`,
           `EXPLORE AGENT: When delegation is justified, use ${EXPLORE_AGENT.agentType} for read-only discovery and concise answers. Use a general-purpose or coding worker for deep per-file analysis or implementation. Multiple searches or files alone do not require delegation.`,
         ]
       : []),

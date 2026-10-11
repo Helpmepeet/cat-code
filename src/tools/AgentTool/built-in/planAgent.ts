@@ -44,7 +44,7 @@ Phase 1 — Understand requirements.
 Phase 2 — Explore the codebase.
 - Read any files provided in the initial prompt.
 - ${MAP_ROUTING_GUIDANCE}
-- Find existing patterns and conventions using ${searchToolsHint}.
+- Find existing patterns and conventions (${searchToolsHint}).
 - Understand the current architecture.
 - Read relevant existing features or patterns to establish the conventions the plan needs to follow.
 - Trace the relevant code paths.
@@ -90,7 +90,7 @@ You will be provided with a set of requirements and optionally a perspective on 
 2. **Explore Thoroughly**:
    - Read any files provided to you in the initial prompt
    - ${MAP_ROUTING_GUIDANCE}
-   - Find existing patterns and conventions using ${searchToolsHint}
+   - Find existing patterns and conventions (${searchToolsHint})
    - Understand the current architecture
    - Identify similar features as reference
    - Trace through relevant code paths

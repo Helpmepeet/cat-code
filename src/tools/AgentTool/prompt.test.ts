@@ -117,7 +117,7 @@ describe('Agent tool prompt', () => {
       )
 
       expect(prompt).toContain(
-        'searching for a specific class definition like "class Foo", use the Grep tool',
+        'searching for a specific class definition like "class Foo", search directly (e.g., the Grep tool)',
       )
       expect(prompt).not.toContain(
         'searching for a specific class definition like "class Foo", use the Glob tool',

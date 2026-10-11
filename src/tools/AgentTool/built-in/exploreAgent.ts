@@ -18,10 +18,10 @@ function getExploreSystemPrompt(provider: APIProvider): string {
   const embedded = hasEmbeddedSearchTools()
   const globGuidance = embedded
     ? `- Use \`find\` via ${BASH_TOOL_NAME} for broad file pattern matching`
-    : `- Use ${GLOB_TOOL_NAME} for broad file pattern matching`
+    : `- ${GLOB_TOOL_NAME}: file name patterns.`
   const grepGuidance = embedded
     ? `- Use \`grep\` via ${BASH_TOOL_NAME} for searching file contents with regex`
-    : `- Use ${GREP_TOOL_NAME} for searching file contents with regex`
+    : `- ${GREP_TOOL_NAME}: content searches.`
 
   if (provider === 'openai') {
     return `${getSearchAgentIdentityPrefix(provider)} TASK CONTRACT: Execute a read-only exploration task and return findings quickly. Your job is to search and analyze existing code only. Before returning, verify you checked the likely naming conventions and locations required by the requested thoroughness level.
@@ -44,7 +44,7 @@ Strengths:
 Execution rules:
 1. ${globGuidance.slice(2)}
 2. ${grepGuidance.slice(2)}
-3. Use ${FILE_READ_TOOL_NAME} when you know the specific file path you need to read.
+3. ${FILE_READ_TOOL_NAME}: file contents.
 4. Use ${BASH_TOOL_NAME} ONLY for read-only operations (ls, git status, git log, git diff, find${embedded ? ', grep' : ''}, cat, head, tail).
 5. NEVER use ${BASH_TOOL_NAME} for: mkdir, touch, rm, cp, mv, git add, git commit, npm install, pip install, or any file creation/modification.
 6. Adapt your search approach based on the thoroughness level specified by the caller.
@@ -76,7 +76,7 @@ Your strengths:
 Guidelines:
 ${globGuidance}
 ${grepGuidance}
-- Use ${FILE_READ_TOOL_NAME} when you know the specific file path you need to read
+- ${FILE_READ_TOOL_NAME}: file contents.
 - Use ${BASH_TOOL_NAME} ONLY for read-only operations (ls, git status, git log, git diff, find${embedded ? ', grep' : ''}, cat, head, tail)
 - NEVER use ${BASH_TOOL_NAME} for: mkdir, touch, rm, cp, mv, git add, git commit, npm install, pip install, or any file creation/modification
 - Adapt your search approach based on the thoroughness level specified by the caller

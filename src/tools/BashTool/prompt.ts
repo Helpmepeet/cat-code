@@ -19,11 +19,8 @@ import {
 } from '../../utils/undercover.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
-import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
-import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
-import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import { BASH_TOOL_NAME } from './toolName.js'
 
 export function getDefaultTimeoutMs(): number {
@@ -205,8 +202,7 @@ export function getBashPrompt(
   provider: APIProvider = getAPIProvider(),
   enabledToolNames?: ReadonlySet<string>,
 ): string {
-  // Ant-native builds alias find/grep to embedded bfs/ugrep in Claude's shell,
-  // so we don't steer away from them (and Glob/Grep tools are removed).
+  // Embedded builds use bfs for find, whose regex semantics need guidance.
   const embedded = hasEmbeddedSearchTools()
 
   // The registry swaps Edit for apply_patch by SESSION provider
@@ -221,23 +217,6 @@ export function getBashPrompt(
       : isGPTPromptStyle(provider)
         ? FILE_PATCH_TOOL_NAME
         : FILE_EDIT_TOOL_NAME
-
-  const toolPreferenceItems = [
-    ...(embedded
-      ? []
-      : [
-          `File search: Use ${GLOB_TOOL_NAME} (NOT find or ls)`,
-          `Content search: Use ${GREP_TOOL_NAME} (NOT grep or rg)`,
-        ]),
-    `Read files: Use ${FILE_READ_TOOL_NAME} (NOT cat/head/tail)`,
-    `Edit files: Use ${editToolName} (NOT sed/awk)`,
-    `Write files: Use ${FILE_WRITE_TOOL_NAME} (NOT echo >/cat <<EOF)`,
-    'Communication: Output text directly (NOT echo/printf)',
-  ]
-
-  const avoidCommands = embedded
-    ? '`cat`, `head`, `tail`, `sed`, `awk`, or `echo`'
-    : '`find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo`'
 
   const multipleCommandsSubitems = [
     `If the commands are independent and can run in parallel, make multiple ${BASH_TOOL_NAME} tool calls in a single message. Example: if you need to run "git status" and "git diff", send a single message with two ${BASH_TOOL_NAME} tool calls in parallel.`,
@@ -300,35 +279,18 @@ export function getBashPrompt(
   ]
 
   if (isGPTPromptStyle(provider)) {
-    // Mutations are steered to a dedicated tool so the user can review them;
-    // reads and search stay open because they are cheap and lossless.
-    const gptToolPreferenceItems = [
-      ...(embedded
-        ? []
-        : [
-            `File search: Use ${GLOB_TOOL_NAME}, or \`rg --files\``,
-            `Content search: Use ${GREP_TOOL_NAME}, or \`rg\``,
-          ]),
-      `Read files: Use ${FILE_READ_TOOL_NAME} for whole files; \`sed -n\` line ranges are fine here for a slice`,
-      `Edit files: Use ${editToolName}`,
-      `Write files: Use ${FILE_WRITE_TOOL_NAME}`,
-      'Communication: Output text directly (NOT echo/printf)',
-    ]
-
     return [
       'Executes a given bash command and returns its output.',
       '',
       workingDirectoryNote,
       '',
-      `FILE MUTATIONS: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
+      `Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
       '',
       isManagedSession()
         ? `INSPECT CHANGES: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
         : `SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
       '',
-      `READS AND SEARCH: \`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run here. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`,
-      '',
-      ...prependBullets(gptToolPreferenceItems),
+      'Communication: Output text directly (NOT echo/printf)',
       '',
       'COMMAND EXECUTION RULES',
       ...prependBullets(instructionItems),
@@ -342,10 +304,7 @@ export function getBashPrompt(
     '',
     workingDirectoryNote,
     '',
-    `IMPORTANT: Avoid using this tool to run ${avoidCommands} commands, unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool as this will provide a much better experience for the user:`,
-    '',
-    ...prependBullets(toolPreferenceItems),
-    `While the ${BASH_TOOL_NAME} tool can do similar things, it’s better to use the built-in tools as they provide a better user experience and make it easier to review tool calls and give permission.`,
+    'Communication: Output text directly (NOT echo/printf)',
     '',
     '# Instructions',
     ...prependBullets(instructionItems),

@@ -100,17 +100,17 @@ describe('Bash prompt commit authority', () => {
   })
 })
 
-describe('Bash prompt edit-tool naming', () => {
+describe('Bash prompt diff-check tool naming', () => {
   // The registry swaps Edit for apply_patch on the OpenAI path
   // (getProviderFileEditTool, src/tools.ts), so naming Edit there points GPT at
   // a tool it was never given.
-  test('names the edit tool the provider actually ships', () => {
+  test('names the shipped GPT editor in the diff check', () => {
     const gpt = getBashPrompt('openai')
-    expect(gpt).toContain('Edit files: Use apply_patch')
-    expect(gpt).not.toContain('Edit files: Use Edit')
+    expect(gpt).toContain('rather than by apply_patch, Write, or NotebookEdit')
+    expect(gpt).not.toContain('rather than by Edit, Write, or NotebookEdit')
 
     const claude = getBashPrompt('firstParty')
-    expect(claude).toContain('Edit files: Use Edit (NOT sed/awk)')
+    expect(claude).toContain('Communication: Output text directly (NOT echo/printf)')
     expect(claude).not.toContain('apply_patch')
   })
 
@@ -122,20 +122,20 @@ describe('Bash prompt edit-tool naming', () => {
       'openai',
       new Set(['Bash', 'Edit']),
     )
-    expect(gptRequestWithEditShipped).toContain('Edit files: Use Edit')
-    expect(gptRequestWithEditShipped).not.toContain('Edit files: Use apply_patch')
+    expect(gptRequestWithEditShipped).toContain('rather than by Edit, Write, or NotebookEdit')
+    expect(gptRequestWithEditShipped).not.toContain('rather than by apply_patch, Write, or NotebookEdit')
 
-    const claudeRequestWithPatchShipped = getBashPrompt(
-      'firstParty',
+    const gptRequestWithPatchShipped = getBashPrompt(
+      'openai',
       new Set(['Bash', 'apply_patch']),
     )
-    expect(claudeRequestWithPatchShipped).toContain(
-      'Edit files: Use apply_patch',
+    expect(gptRequestWithPatchShipped).toContain(
+      'rather than by apply_patch, Write, or NotebookEdit',
     )
 
     // No edit tool in the pool at all: fall back to the provider.
     expect(getBashPrompt('openai', new Set(['Bash']))).toContain(
-      'Edit files: Use apply_patch',
+      'rather than by apply_patch, Write, or NotebookEdit',
     )
   })
 
@@ -147,20 +147,16 @@ describe('Bash prompt edit-tool naming', () => {
       provider: 'openai',
     })
 
-    expect(prompt).toContain('Edit files: Use Edit')
+    expect(prompt).toContain('rather than by Edit, Write, or NotebookEdit')
   })
 })
 
 describe('Bash prompt file-mutation policy', () => {
-  test('the GPT branch carries the hybrid rule and the diff check', () => {
+  test('the GPT branch retains scripting discipline and the diff check', () => {
     const prompt = getBashPrompt('openai')
 
-    expect(prompt).toContain('Use apply_patch for local file edits.')
     expect(prompt).toContain(
-      'Do not create or edit files with cat, heredocs, or other shell write tricks.',
-    )
-    expect(prompt).toContain(
-      'Formatting commands and bulk mechanical rewrites do not need apply_patch.',
+      'Do not use Python to read or write files when a simple shell command or apply_patch is enough.',
     )
     expect(prompt).toContain(
       'After any file mutation performed by a command rather than by apply_patch, Write, or NotebookEdit',
@@ -175,31 +171,18 @@ describe('Bash prompt file-mutation policy', () => {
     expect(prompt).not.toContain('no dedicated tool')
   })
 
-  test('the GPT branch allows targeted shell reads and search', () => {
-    const prompt = getBashPrompt('openai')
-
-    expect(prompt).toContain('`rg`')
-    expect(prompt).toContain('`sed -n` line ranges')
-    expect(prompt).toContain('`git blame`')
-    expect(prompt).toContain('bounded (offset/limit) and numbered')
-
-    expect(prompt).not.toContain('Content search: Use Grep (NOT grep or rg)')
-    expect(prompt).not.toContain('Read files: Use Read (NOT cat/head/tail)')
-  })
-
-  test('the Claude branch keeps its dedicated-tool wording', () => {
-    const prompt = getBashPrompt('firstParty')
-
-    expect(prompt).toContain('IMPORTANT: Avoid using this tool to run')
-    expect(prompt).toContain(
-      'after you have verified that a dedicated tool cannot accomplish your task',
-    )
-    expect(prompt).toContain('Read files: Use Read (NOT cat/head/tail)')
-    expect(prompt).toContain('Content search: Use Grep (NOT grep or rg)')
-    expect(prompt).toContain('Write files: Use Write (NOT echo >/cat <<EOF)')
-
-    expect(prompt).not.toContain('Use apply_patch for local file edits')
-    expect(prompt).not.toContain('Never skip the check.')
+  test('both providers omit dedicated-tool restrictions while retaining command guidance', () => {
+    for (const provider of ['openai', 'firstParty'] as const) {
+      const prompt = getBashPrompt(provider)
+      expect(prompt).not.toContain('Avoid using this tool to run')
+      expect(prompt).not.toContain('verified that a dedicated tool cannot accomplish')
+      expect(prompt).not.toContain('stays the default for whole-file reads')
+      expect(prompt).not.toContain('Use apply_patch for local file edits')
+      expect(prompt).not.toContain('Do not create or edit files with cat')
+      expect(prompt).toContain('Always quote file paths that contain spaces')
+      expect(prompt).toContain('Communication: Output text directly')
+    }
+    expect(getBashPrompt('firstParty')).not.toContain('Never skip the check.')
   })
 })
 

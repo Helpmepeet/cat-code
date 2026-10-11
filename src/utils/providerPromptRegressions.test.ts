@@ -423,16 +423,11 @@ describe('provider and prompt regressions', () => {
     expect(withPatchTool).not.toContain('PATHS:')
   })
 
-  test('GPT retains mutation and diff rules when Bash cannot carry them', () => {
+  test('GPT retains scripting and diff rules when Bash cannot carry them', () => {
     const section = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
 
-    expect(section).toContain('Use apply_patch for local file edits.')
-    expect(section).toContain(
-      'Do not create or edit files with cat, heredocs, or other shell write tricks.',
-    )
-    expect(section).toContain(
-      'Formatting commands and bulk mechanical rewrites do not need apply_patch.',
-    )
+    expect(section).not.toContain('Use apply_patch for local file edits.')
+    expect(section).not.toContain('Do not create or edit files with cat')
     expect(section).toContain(
       'Do not use Python to read or write files when a simple shell command or apply_patch is enough.',
     )
@@ -448,12 +443,13 @@ describe('provider and prompt regressions', () => {
     expect(section).not.toContain('no dedicated tool')
   })
 
-  test('Bash owns mutation and diff rules without a duplicate GPT system block', () => {
+  test('Bash owns scripting and diff rules without a duplicate GPT system block', () => {
     const section = getGPTUsingToolsSection(new Set(['Bash', FILE_PATCH_TOOL_NAME]))
     const bash = getBashPrompt('openai')
     expect(section).not.toContain('RULE — File mutations:')
     expect(section).not.toContain('RULE — Show the diff:')
-    expect(bash).toContain('Use apply_patch for local file edits')
+    expect(bash).toContain('Do not use Python to read or write files')
+    expect(section).not.toContain('Do not use Python to read or write files')
     expect(bash).toContain('show the resulting git diff before moving on')
     expect(bash).toContain('Never skip the check')
   })
@@ -503,36 +499,37 @@ describe('provider and prompt regressions', () => {
     expect(taskCreate).toContain('Check TaskList first to avoid creating duplicate tasks')
   })
 
-  test('GPT read discipline permits shell reads and states why Read is the default', () => {
+  test('GPT retains bounded reading and Grep parameters without prescribing a reader', () => {
     const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
-
-    expect(guidance).toContain('`rg`')
-    expect(guidance).toContain('`sed -n` line ranges')
-    expect(guidance).toContain('`git blame`')
-    expect(guidance).toContain('bounded (offset/limit) and numbered')
+    expect(guidance).toContain('Read files systematically when the requested coverage requires it')
+    expect(guidance).toContain('Keep output bounded to what the task needs')
+    expect(guidance).toContain("Keep Grep's default head_limit")
+    expect(guidance).not.toContain('stays the default for whole-file reads')
+    expect(guidance).not.toContain('Prefer Grep to locate')
   })
 
-  test('the Claude system prompt keeps its own dedicated-tool wording', async () => {
+  test('Claude advertises file capabilities without excluding shell commands', async () => {
     setSessionProvider('firstParty')
-
     const tools = getTools(getEmptyToolPermissionContext())
     const prompt = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
-
-    expect(prompt).toContain('To edit files use Edit instead of sed or awk')
-    expect(prompt).toContain(
-      'To read files use Read instead of cat, head, tail, or sed',
-    )
+    expect(prompt).toContain('Read: file contents.')
+    expect(prompt).toContain('Edit: exact string replacements.')
+    expect(prompt).not.toContain('Do NOT use the Bash to run commands')
+    expect(prompt).not.toContain('instead of cat, head, tail, or sed')
     expect(prompt).not.toContain('Use apply_patch for local file edits')
     expect(prompt).not.toContain('show the resulting git diff before moving on')
   })
 
-  test('GrepTool prompt on GPT allows rg in Bash while Claude strictly forbids it', () => {
-    const gptPrompt = getGrepDescription('openai')
-    expect(gptPrompt).toContain('Targeted `rg` commands through Bash are also permitted')
-    expect(gptPrompt).not.toContain('NEVER invoke `grep` or `rg` as a Bash command')
-
-    const claudePrompt = getGrepDescription('firstParty')
-    expect(claudePrompt).toContain('NEVER invoke `grep` or `rg` as a Bash command')
+  test('Grep describes search inputs and outputs without prohibiting shell search', () => {
+    for (const provider of ['openai', 'firstParty'] as const) {
+      const prompt = getGrepDescription(provider)
+      expect(prompt).toContain('regex')
+      expect(prompt).toContain('glob')
+      expect(prompt).toContain('files_with_matches')
+      expect(prompt).toContain('multiline')
+      expect(prompt).not.toContain('ALWAYS use Grep')
+      expect(prompt).not.toContain('NEVER invoke `grep` or `rg`')
+    }
   })
 
   test('FilePatchTool prompt refers to apply_patch as a tool, not a shell command', () => {
@@ -547,27 +544,35 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('PowerShellTool prompt distinguishes GPT hybrid policy from Claude strict policy', async () => {
-    const gptPsPrompt = await getPowerShellPrompt('openai')
-    expect(gptPsPrompt).toContain('FILE MUTATIONS: Use apply_patch for local file edits')
-    expect(gptPsPrompt).toContain('READS AND SEARCH: `rg`, `rg --files`')
-    expect(gptPsPrompt).toContain('Edit files: Use apply_patch')
-
-    const claudePsPrompt = await getPowerShellPrompt('firstParty')
-    expect(claudePsPrompt).toContain('DO NOT use it for file operations')
-    expect(claudePsPrompt).toContain('Edit files: Use Edit')
-    expect(claudePsPrompt).not.toContain('apply_patch')
+  test('PowerShell retains command syntax and GPT diff checks without file-tool restrictions', async () => {
+    for (const provider of ['openai', 'firstParty'] as const) {
+      const prompt = await getPowerShellPrompt(provider)
+      expect(prompt).not.toContain('DO NOT use it for file operations')
+      expect(prompt).not.toContain('FILE MUTATIONS:')
+      expect(prompt).not.toContain('stays the default for whole-file reads')
+      expect(prompt).not.toContain('Tool routing:')
+      expect(prompt).not.toContain('\n\n\n')
+      expect(prompt).toContain('PowerShell Syntax Notes:')
+      expect(prompt).toContain('Communication: Output text directly')
+      if (provider === 'openai') {
+        expect(prompt).toContain('rather than by apply_patch, Write, or NotebookEdit')
+        expect(prompt).toContain('Do not use Python to read or write files')
+        expect(prompt).toContain('Never skip the check.')
+      } else {
+        expect(prompt).not.toContain('apply_patch')
+      }
+    }
   })
 
   test('Implementor prompt names the session edit tool rather than both aliases simultaneously', () => {
     setSessionProvider('openai')
     const openaiPrompt = getImplementorSystemPrompt('openai')
-    expect(openaiPrompt).toContain('Use apply_patch and Write for code changes')
+    expect(openaiPrompt).toContain('apply_patch, Write: code changes.')
     expect(openaiPrompt).not.toContain('Use Edit, apply_patch, and Write')
 
     setSessionProvider('firstParty')
     const claudePrompt = getImplementorSystemPrompt('firstParty')
-    expect(claudePrompt).toContain('Use Edit and Write for code changes')
+    expect(claudePrompt).toContain('Edit, Write: code changes.')
     expect(claudePrompt).not.toContain('apply_patch')
   })
 
@@ -657,7 +662,7 @@ describe('provider and prompt regressions', () => {
     expect(restrictedSection).not.toContain('File editing →')
     // The rules that hold for any tool set still ship.
     expect(restrictedSection).toContain('READ DISCIPLINE:')
-    expect(restrictedSection).toContain('through the Bash tool')
+    expect(restrictedSection).toContain('Keep output bounded to what the task needs')
     expect(restrictedSection).not.toContain('RULE — Show the diff:')
     expect(restrictedSection).toContain('PARALLELISM:')
     expect(restrictedSection).toContain(

@@ -315,8 +315,7 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
   )
 
   // In REPL mode, Read/Write/Edit/Glob/Grep/Bash/Agent are hidden from direct
-  // use (REPL_ONLY_TOOLS). The "prefer dedicated tools over Bash" guidance is
-  // irrelevant — REPL's own prompt covers how to call them from scripts.
+  // use (REPL_ONLY_TOOLS). REPL's prompt covers scripted tool calls.
   if (isReplModeEnabled()) {
     const items = [
       taskToolName
@@ -333,35 +332,32 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
 
   const providedToolSubitems = [
     enabledTools.has(FILE_READ_TOOL_NAME)
-      ? `To read files use ${FILE_READ_TOOL_NAME} instead of cat, head, tail, or sed`
+      ? `${FILE_READ_TOOL_NAME}: file contents.`
       : null,
     enabledTools.has(FILE_EDIT_TOOL_NAME)
-      ? `To edit files use ${FILE_EDIT_TOOL_NAME} instead of sed or awk`
+      ? `${FILE_EDIT_TOOL_NAME}: exact string replacements.`
       : null,
     enabledTools.has(FILE_WRITE_TOOL_NAME)
-      ? `To create files use ${FILE_WRITE_TOOL_NAME} instead of cat with heredoc or echo redirection`
+      ? `${FILE_WRITE_TOOL_NAME}: create or replace files.`
       : null,
     !embedded && enabledTools.has(GLOB_TOOL_NAME)
-      ? `To search for files use ${GLOB_TOOL_NAME} instead of find or ls`
+      ? `${GLOB_TOOL_NAME}: file name patterns.`
       : null,
     !embedded && enabledTools.has(GREP_TOOL_NAME)
-      ? `To search the content of files, use ${GREP_TOOL_NAME} instead of grep`
+      ? `${GREP_TOOL_NAME}: content searches.`
       : null,
   ].filter(item => item !== null)
 
   const items = [
     ...(providedToolSubitems.length > 0
       ? [
-          enabledTools.has(BASH_TOOL_NAME)
-            ? `Do NOT use the ${BASH_TOOL_NAME} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work:`
-            : 'Use the available dedicated tools for file operations:',
+          'Available file tools:',
           providedToolSubitems,
         ]
       : []),
     ...(enabledTools.has(BASH_TOOL_NAME)
       ? [
-          `Use ${BASH_TOOL_NAME} for system commands and operations without a relevant dedicated tool.`,
-          `\`rg\` and read-only git commands (\`git diff\`, \`git show\`, \`git blame\`) are fine through ${BASH_TOOL_NAME}`,
+          `${BASH_TOOL_NAME}: shell commands.`,
         ]
       : []),
     taskToolName
@@ -412,14 +408,6 @@ function getSessionSpecificGuidanceSection(
   const hasSkills =
     skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
-  const dedicatedSearchTools = hasEmbeddedSearchTools()
-    ? []
-    : [GLOB_TOOL_NAME, GREP_TOOL_NAME].filter(name => enabledTools.has(name))
-  const searchTools = dedicatedSearchTools.length > 0
-    ? `the ${dedicatedSearchTools.join(' or ')}`
-    : enabledTools.has(BASH_TOOL_NAME)
-      ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
-      : 'available tools'
 
   const items = [
     hasAskUserQuestionTool
@@ -435,7 +423,7 @@ function getSessionSpecificGuidanceSection(
     areExplorePlanAgentsEnabled() &&
     !isForkSubagentEnabled()
       ? [
-          `For simple, directed codebase searches (e.g. for a specific file/class/function) use ${searchTools} directly.`,
+          `For simple, directed codebase searches (e.g. for a specific file/class/function), work directly.`,
           `When delegation is justified by independent parallel work, isolating substantial intermediate output, or an explicit user request, use ${EXPLORE_AGENT.agentType} for read-only discovery and concise answers. Use a general-purpose or coding worker for deep per-file analysis or implementation. Multiple searches or files alone do not require delegation.`,
         ]
       : []),

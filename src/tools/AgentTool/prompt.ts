@@ -4,7 +4,6 @@ import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import { isTeammate } from '../../utils/teammate.js'
 import { isInProcessTeammate } from '../../utils/teammateContext.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
-import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
@@ -252,12 +251,7 @@ ${
     return `${shared}\n\n${delegationGuidance}`
   }
 
-  // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
-  // dedicated Glob/Grep tools, so point at find via Bash instead.
   const embedded = hasEmbeddedSearchTools()
-  const fileSearchHint = embedded
-    ? '`find` via the Bash tool'
-    : `the ${GLOB_TOOL_NAME} tool`
   // The "class Foo" example is a content search, so both paths point at a
   // content searcher: embedded builds have no dedicated Grep tool and use grep
   // via Bash; everywhere else uses the Grep tool. Glob matches file names only.
@@ -269,15 +263,15 @@ ${
     : isGPTPromptStyle
       ? `
 WHEN NOT TO USE THE ${AGENT_TOOL_NAME} TOOL:
-- If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead.
-- If you are searching for a specific class definition like "class Foo", use ${contentSearchHint} instead.
-- If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead.
+- If you want to read a specific file path, read directly (e.g., ${FILE_READ_TOOL_NAME}) instead.
+- If you are searching for a specific class definition like "class Foo", search directly (e.g., ${contentSearchHint}) instead.
+- If you are searching for code within a specific file or set of 2-3 files, inspect directly (e.g., ${FILE_READ_TOOL_NAME}) instead.
 - Do not use ${AGENT_TOOL_NAME} for tasks unrelated to the available agent roles.`
       : `
 When NOT to use the ${AGENT_TOOL_NAME} tool:
-- If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
-- If you are searching for a specific class definition like "class Foo", use ${contentSearchHint} instead, to find the match more quickly
-- If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
+- If you want to read a specific file path, read directly (e.g., ${FILE_READ_TOOL_NAME}) instead of using ${AGENT_TOOL_NAME}
+- If you are searching for a specific class definition like "class Foo", search directly (e.g., ${contentSearchHint}) instead
+- If you are searching for code within a specific file or set of 2-3 files, inspect directly (e.g., ${FILE_READ_TOOL_NAME}) instead of using ${AGENT_TOOL_NAME}
 - Other tasks that are not related to the agent descriptions above
 `
 
