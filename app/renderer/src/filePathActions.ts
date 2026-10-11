@@ -10,7 +10,7 @@ import { basename } from './pathUtils.js'
 
 /** What a surface adds to the menu beyond the path itself. */
 export type FilePathMenuExtras = {
-  /** Offer Open for a path outside the workspace that the host still validates (generated images). */
+  /** A surface may suppress Open; host availability still decides whether it can be offered. */
   canOpen?: boolean
   /** One row above the file actions, for the thing the path belongs to. */
   leading?: { label: string; onSelect: () => void }
@@ -151,7 +151,7 @@ function resolvePathFromCwd(cwd: string, relativePath: string): string {
 export function resolveFilePathActionItems(
   parts: FilePathParts,
   platform: string = typeof navigator !== 'undefined' ? navigator.userAgent : '',
-  canOpen = true,
+  canOpen = false,
 ): FilePathActionItem[] {
   const isMac = /mac|darwin/i.test(platform)
   const finderLabel = isMac ? 'Reveal in Finder' : 'Show in file manager'
@@ -217,39 +217,6 @@ export function resolveFilePathActionItems(
         ]
       : []),
   ]
-}
-
-/** A renderer-side presentation check; the host still enforces canonical containment. */
-export function canOpenFilePathInSession(
-  parts: FilePathParts,
-  cwd: string | null | undefined,
-): boolean {
-  if (!cwd || !parts.absolutePath || isAbsoluteUrlLike(parts.absolutePath)) {
-    return false
-  }
-  const windows = WINDOWS_ABSOLUTE_PATH_PATTERN.test(cwd)
-  const target = normalizeComparablePath(stripLineSuffix(parts.absolutePath))
-  const root = normalizeComparablePath(cwd)
-  const normalizedTarget = windows ? target.toLowerCase() : target
-  const normalizedRoot = windows ? root.toLowerCase() : root
-  return (
-    normalizedTarget === normalizedRoot ||
-    normalizedTarget.startsWith(`${normalizedRoot}/`)
-  )
-}
-
-function normalizeComparablePath(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
-  const drive = normalized.match(/^[A-Za-z]:/)
-  const prefix = drive?.[0] ?? (normalized.startsWith('/') ? '/' : '')
-  const segments = normalized.slice(prefix.length).split('/').filter(Boolean)
-  const clean: string[] = []
-  for (const segment of segments) {
-    if (segment === '.') continue
-    if (segment === '..') clean.pop()
-    else clean.push(segment)
-  }
-  return `${prefix}${prefix && prefix !== '/' ? '/' : ''}${clean.join('/')}`
 }
 
 export const FILE_PATH_MENU_WIDTH = 200

@@ -4,7 +4,7 @@ import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 
 const noop = () => {}
 
-test('renders file path menu with scrim, aria label and flyout hosts', () => {
+test('renders a copy-only file path menu before host availability is known', () => {
   const html = renderToStaticMarkup(
     <FilePathActionsMenu
       anchor={{ type: 'pointer', x: 100, y: 150 }}
@@ -18,7 +18,7 @@ test('renders file path menu with scrim, aria label and flyout hosts', () => {
   expect(html).toContain('role="menu"')
   expect(html).toContain('aria-label="File actions for Header.tsx"')
   expect(html).toContain('Copy')
-  expect(html).toContain('Open in')
+  expect(html).not.toContain('Open in')
   expect(html).toContain('aria-haspopup="menu"')
   expect(html).toContain('aria-expanded="false"')
   expect(html).toContain('<svg')

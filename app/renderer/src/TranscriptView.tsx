@@ -168,6 +168,8 @@ import {
   LeaseSnapshotContext,
 } from './leaseState.js'
 import { ToolInspector } from './ToolInspector.js'
+import { FileDiffNavigator } from './FileDiffNavigator.js'
+import { selectToolDiffs } from './toolDiffs.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import {
   FilePathMenuContext,
@@ -301,7 +303,7 @@ const AGENT_BACKGROUND_ANCHOR_CLASS: Record<ToolCardStyle, string> = {
   lines: 'right-0 h-[25px]',
 }
 
-const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | null>(
+const ToolInspectorContext = createContext<((row: ToolUseNestedRow, fileIndex?: number) => void) | null>(
   null,
 )
 const TurnErrorActionsContext = createContext<{
@@ -654,9 +656,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
   // overlay is a sibling of the transcript column, not nested in a scrolling row.
-  const [inspectedId, setInspectedId] = useState<string | null>(null)
-  const openInspector = useCallback((row: ToolUseNestedRow) => setInspectedId(row.id), [])
-  const closeInspector = useCallback(() => setInspectedId(null), [])
+  const [inspection, setInspection] = useState<{ id: string; fileIndex: number } | null>(null)
+  const openInspector = useCallback((row: ToolUseNestedRow, fileIndex = 0) => setInspection({ id: row.id, fileIndex }), [])
+  const closeInspector = useCallback(() => setInspection(null), [])
   const [filePathMenuState, setFilePathMenuState] = useState<{
     anchor: FilePathActionsAnchor
     rawPath: string
@@ -716,7 +718,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const faceRegistry = inheritedFaces ?? ownFaces
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
-  const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
+  const inspected = inspection === null ? null : findNestedToolUseRow(rows, inspection.id)
   const moveView = useWorkspaceMoveView(workspaceMove, boundaryRows, restorePhase === null && !loadEarlierPending)
   const displayRows = useMemo(() => withoutReplacedMoveNotice(withoutWorkspaceTools(rows), workspaceMove), [rows, workspaceMove])
   const moveTransition = useMemo(() => workspaceMove ? {
@@ -928,7 +930,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                 >
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                     {content}
-                    <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+                    <ToolInspectorOverlay row={inspected} initialFileIndex={inspection?.fileIndex} onClose={closeInspector} />
                     {filePathMenuState ? (
                       <FilePathActionsMenu
                         anchor={filePathMenuState.anchor}
@@ -964,9 +966,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
  */
 export function ToolInspectorOverlay({
   row,
+  initialFileIndex,
   onClose,
 }: {
   row: ToolUseNestedRow | null
+  initialFileIndex?: number
   onClose: () => void
 }) {
   const scrimEntrance = useEntranceOnChange(row !== null, row !== null, 'animate-scrim-in')
@@ -999,7 +1003,7 @@ export function ToolInspectorOverlay({
         aria-label="Full output"
         tabIndex={-1}
       >
-        <ToolInspector row={row} onClose={onClose} />
+        <ToolInspector row={row} initialFileIndex={initialFileIndex} onClose={onClose} />
       </div>
     </div>
   )
@@ -4391,6 +4395,16 @@ function ToolCardBody({
   const openInspector = useContext(ToolInspectorContext)
   const openFull = openInspector ? () => openInspector(row) : null
 
+  if (row.result?.fileDiffs?.length) {
+    return (
+      <FileDiffNavigator
+        diffs={row.result.fileDiffs}
+        renderDiff={(diff, index) => (
+          <DiffView diff={diff} onOpenFull={openInspector ? () => openInspector(row, index) : null} />
+        )}
+      />
+    )
+  }
   if (row.result?.diff) return <DiffView diff={row.result.diff} onOpenFull={openFull} />
 
   const errorTone = row.result?.isError === true
@@ -6627,8 +6641,12 @@ function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
 }
 
 function diffCountBadge(row: ToolUseNestedRow): ReactNode {
-  const counts = row.result?.diff
-    ? countDiff(row.result.diff)
+  const diffs = selectToolDiffs(row.result)
+  const counts = diffs.length > 0
+    ? diffs.reduce((total, diff) => {
+        const counts = countDiff(diff)
+        return { adds: total.adds + counts.adds, dels: total.dels + counts.dels }
+      }, { adds: 0, dels: 0 })
     : row.toolFamily === 'write' &&
         row.result?.isError !== true &&
         typeof row.input.content === 'string' &&
@@ -6701,6 +6719,9 @@ function DiffView({
   )
   return (
     <>
+      {rows.length === 0 ? (
+        <div className="py-1 font-mono text-[11.5px] text-text-subtle">No diff lines.</div>
+      ) : null}
       <VirtualLineList
         lines={bodies}
         activeIndex={null}

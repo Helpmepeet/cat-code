@@ -1,3 +1,4 @@
+import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import type { ComposerFaceProps } from './ComposerActionsBar.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import {
@@ -67,7 +68,7 @@ export function PermissionModeChip({
   // outside-click/Escape dismiss + selected-item focus on open + focus-restore to the
   // trigger via `close`), identical to the run-control chips. Previously this chip
   // had bespoke state with NO selected-item focus and NO in-panel roving.
-  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
+  const { open, setOpen, close, ref, triggerRef, panelRef } = usePopover(onFocusComposer)
 
   const current = context ? permissionModeMeta(context.mode) : null
 
@@ -112,6 +113,7 @@ export function PermissionModeChip({
       </button>
 
       {open && context ? (
+        <ComposerPopoverPanel panelRef={panelRef} triggerRef={triggerRef} align="end">
         <div
           role="menu"
           aria-label="Permission mode"
@@ -180,6 +182,7 @@ export function PermissionModeChip({
             )
           })}
         </div>
+        </ComposerPopoverPanel>
       ) : null}
     </div>
   )

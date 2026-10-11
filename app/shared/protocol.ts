@@ -4066,6 +4066,8 @@ export type OpenWorkspaceFileTarget =
   | 'cursor'
   | 'finder'
 
+export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
+
 export type CatCodeBridge = {
   /** Send one prompt to the addressed session. */
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void
@@ -4303,7 +4305,7 @@ export type CatCodeBridge = {
   writeDurableSetting(projectCwd: string | null, verb: SettingsVerbMessage): Promise<SettingsWriteReadResult>
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
-  saveDiagnosticsBundle(): Promise<boolean>
+  saveDiagnosticsBundle(): Promise<SaveDiagnosticsResult>
   /**
    * Open a model-mentioned file from this session's workspace in the operating
    * system's associated application, or a specific chosen editor or file manager.
@@ -4315,6 +4317,8 @@ export type CatCodeBridge = {
     path: string,
     target?: OpenWorkspaceFileTarget,
   ): Promise<boolean>
+  /** Read whether the same file-opening policy accepts a target, without opening it. */
+  getWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<boolean>
   /**
    * Main owns the native chooser and keeps the chosen path private. Image
    * selections return bounded bytes; other files return opaque tokens.

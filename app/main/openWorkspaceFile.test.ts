@@ -75,16 +75,16 @@ test('rejects traversal, symlink escape, directories, and unknown sessions', asy
   }
 })
 
-test('cleans line number suffix and forwards valid targets to opener', async () => {
+test('forwards normalized source locations and valid targets to the opener', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-open-file-'))
   try {
     mkdirSync(join(root, 'src'))
     const sourceFile = join(root, 'src', 'index.ts')
     writeFileSync(sourceFile, 'console.log("hello")')
 
-    const calls: Array<{ path: string; target?: string }> = []
-    const openPath = async (path: string, target?: string) => {
-      calls.push({ path, target })
+    const calls: Array<{ path: string; target?: string; location?: { line: number; column?: number } }> = []
+    const openPath = async (path: string, target?: string, location?: { line: number; column?: number }) => {
+      calls.push({ path, target, ...(location ? { location } : {}) })
       return true
     }
 
@@ -92,6 +92,14 @@ test('cleans line number suffix and forwards valid targets to opener', async () 
     expect(
       await openWorkspaceFile(
         { appSessionId: 'session-1', path: 'src/index.ts:42', target: 'vscode' },
+        [session(root)],
+        openPath,
+      ),
+    ).toBe(true)
+
+    expect(
+      await openWorkspaceFile(
+        { appSessionId: 'session-1', path: 'src/index.ts:0042:0007', target: 'cursor' },
         [session(root)],
         openPath,
       ),
@@ -107,7 +115,8 @@ test('cleans line number suffix and forwards valid targets to opener', async () 
     ).toBe(true)
 
     expect(calls).toEqual([
-      { path: realpathSync(sourceFile), target: 'vscode' },
+      { path: realpathSync(sourceFile), target: 'vscode', location: { line: 42 } },
+      { path: realpathSync(sourceFile), target: 'cursor', location: { line: 42, column: 7 } },
       { path: realpathSync(sourceFile), target: 'finder' },
     ])
   } finally {
@@ -135,6 +144,24 @@ test('prefers an existing literal filename over an ambiguous source location suf
       ),
     ).toBe(true)
     expect(opened).toEqual([realpathSync(literal)])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('rejects invalid source coordinates without opening the existing base file', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-open-file-'))
+  try {
+    writeFileSync(join(root, 'source.ts'), 'existing source')
+    const opened: string[] = []
+    for (const suffix of [':0', ':1:0', ':2147483648', ':1:2147483648', ':999999999999999999999']) {
+      expect(await openWorkspaceFile(
+        { appSessionId: 'session-1', path: `source.ts${suffix}`, target: 'vscode' },
+        [session(root)],
+        async path => { opened.push(path); return true },
+      )).toBe(false)
+    }
+    expect(opened).toEqual([])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

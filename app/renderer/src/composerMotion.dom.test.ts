@@ -121,7 +121,7 @@ test('context warning explains whether compaction is automatic or manual', async
   )
   expect(warning()?.getAttribute('aria-label')).toBe('Context low, 6% remaining')
   await act(async () => warning()?.click())
-  expect(tree.container.querySelector('[role="dialog"]')?.textContent).toContain(
+  expect(document.querySelector('[role="dialog"][aria-label="Context"]')?.textContent).toContain(
     'Run /compact to summarize it and keep going.',
   )
 
@@ -129,7 +129,7 @@ test('context warning explains whether compaction is automatic or manual', async
   await tree.render(rail(175_000))
   expect(warning()?.getAttribute('aria-label')).toBe('6% until auto-compact')
   await act(async () => warning()?.click())
-  expect(tree.container.querySelector('[role="dialog"]')?.textContent).toContain(
+  expect(document.querySelector('[role="dialog"][aria-label="Context"]')?.textContent).toContain(
     'Soon it auto-compacts into a summary',
   )
 })
@@ -148,7 +148,7 @@ test('cache status changes do not add a toolbar action or open a popover', async
   await act(async () => {
     indicator()?.click()
   })
-  expect(tree.container.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
   expect(faces()).toEqual(before)
   expect(faces()).toContain('token-warning')
   await tree.render(rail(167_000, false))
@@ -253,11 +253,11 @@ test('permission mode popover enters on opening and disappears immediately on cl
   }
   const tree = await harness.mount(createElement(PermissionModeChip, { context, onSetMode: () => {} }))
   const trigger = tree.container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')
-  expect(tree.container.querySelector('[role="menu"]')).toBeNull()
+  expect(document.querySelector('[role="menu"][aria-label="Permission mode"]')).toBeNull()
   await act(async () => { trigger?.click() })
-  expect(tree.container.querySelector('[role="menu"]')?.classList.contains('animate-pop-up')).toBe(true)
+  expect(document.querySelector('[role="menu"][aria-label="Permission mode"]')?.classList.contains('animate-pop-up')).toBe(true)
   await act(async () => { trigger?.click() })
-  expect(tree.container.querySelector('[role="menu"]')).toBeNull()
+  expect(document.querySelector('[role="menu"][aria-label="Permission mode"]')).toBeNull()
 })
 
 test('context arc and tone carry value transitions as usage changes', async () => {

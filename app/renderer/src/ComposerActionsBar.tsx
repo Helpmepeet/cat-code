@@ -15,6 +15,7 @@ import {
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
+import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import { ContextGauge } from './ContextGauge.js'
 import {
   pressureTone,
@@ -119,7 +120,7 @@ const FAST_FACE =
 /** The prototype's faint `·` divider (Surfaces.jsx:751 `Sep`, colour #3f3f46). */
 function RailSep() {
   return (
-    <span aria-hidden className="shrink-0 select-none text-[12px] text-white/20">
+    <span aria-hidden className="composer-separator shrink-0 select-none text-[12px] text-white/20">
       ·
     </span>
   )
@@ -284,7 +285,7 @@ function ModelChip({
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
+  const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover(onFocusComposer)
   // The row whose ladder the second face is showing, or null for the model list.
   // Held as the OPTION, not a model id: its `effortOptions` are the ladder, and
   // they are already correct in the snapshot the user is looking at, so the face
@@ -328,6 +329,7 @@ function ModelChip({
         {face ?? 'Model'}
       </button>
       {open ? (
+        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef}>
         <div
           ref={panelRef}
           role="menu"
@@ -418,6 +420,7 @@ function ModelChip({
             })
           )}
         </div>
+        </ComposerPopoverPanel>
       ) : null}
     </div>
   )
@@ -823,7 +826,7 @@ function ReasoningChip({
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
+  const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover(onFocusComposer)
   // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
   // The face shows the effective tier, while the slider reflects the raw
   // selection so an env/default override never lies about what the API receives.
@@ -848,6 +851,7 @@ function ReasoningChip({
           : 'Auto'}
       </button>
       {open ? (
+        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef}>
         <div
           role="menu"
           aria-label="Reasoning effort"
@@ -866,6 +870,7 @@ function ReasoningChip({
             }}
           />
         </div>
+        </ComposerPopoverPanel>
       ) : null}
     </div>
   )
@@ -1095,11 +1100,11 @@ function AccountChip({
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
+  const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover(onFocusComposer)
   const pool = accounts.length > 0 ? accounts : [active]
   const alias = active.alias ?? '(unnamed)'
   return (
-    <div ref={ref} className="relative shrink-0">
+    <div ref={ref} className="composer-account-face relative shrink-0">
       <button
         ref={triggerRef}
         {...faceProps}
@@ -1117,6 +1122,7 @@ function AccountChip({
         {alias}
       </button>
       {open ? (
+        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef} align="end">
         <AccountSwitcherPanel
           active={active}
           pool={pool}
@@ -1133,6 +1139,7 @@ function AccountChip({
               : undefined
           }
         />
+        </ComposerPopoverPanel>
       ) : null}
     </div>
   )
@@ -1417,7 +1424,7 @@ function TokenWarningChip({
   warning: TokenWarning
   faceProps?: ComposerFaceProps
 }) {
-  const { open, setOpen, ref, triggerRef } = usePopover()
+  const { open, setOpen, ref, triggerRef, panelRef: popoverRef } = usePopover()
   const summary = warning.autoCompactEnabled
     ? `${warning.percentLeft}% until auto-compact`
     : 'Context low'
@@ -1440,6 +1447,7 @@ function TokenWarningChip({
         <ActionWarningIcon size={14} />
       </button>
       {open ? (
+        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef} align="end" gap={10}>
         <div
           role="dialog"
           aria-label="Context"
@@ -1465,6 +1473,7 @@ function TokenWarningChip({
             )}
           </div>
         </div>
+        </ComposerPopoverPanel>
       ) : null}
     </div>
   )
@@ -1490,7 +1499,7 @@ function ContextChip({
   faceProps?: ComposerFaceProps
   runControls?: RunControlsSnapshot | null
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover()
   // Null on a fallback window, where the face itself shows no percentage: the
   // label must not announce one the donut is deliberately withholding.
   const percent = selectContextPercent(usage)
@@ -1522,6 +1531,7 @@ function ContextChip({
         <ContextGauge usage={usage} />
       </button>
       {open ? (
+        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef} align="end">
         <ContextUsagePanel
           usage={usage}
           breakdown={breakdown}
@@ -1540,6 +1550,7 @@ function ContextChip({
               : undefined
           }
         />
+        </ComposerPopoverPanel>
       ) : null}
     </div>
   )
@@ -1736,6 +1747,9 @@ export function ComposerActionsBar({
         }
         return
       case 'Escape':
+        // Informational dialogs keep focus on their trigger. Their open
+        // popover owns dismissal before Escape can leave the toolbar.
+        if (current.getAttribute('aria-expanded') === 'true') return
         event.preventDefault()
         exitToComposer()
         return
@@ -1743,8 +1757,8 @@ export function ComposerActionsBar({
     }
   }
 
-  // Focus left the whole bar (its popovers live inside, so this excludes those) →
-  // drop the tab stop back to the first face for a predictable next Tab entry.
+  // Leaving the trigger row resets the next Tab entry. A menu selection returns
+  // to its trigger, whose onFocus restores that face as the active tab stop.
   const onToolbarBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
       setActiveFace(null)
@@ -1759,7 +1773,7 @@ export function ComposerActionsBar({
       aria-orientation="horizontal"
       onKeyDown={onToolbarKeyDown}
       onBlur={onToolbarBlur}
-      className="mt-3 flex items-center gap-4 px-1"
+      className="composer-actions mt-3 flex items-center gap-4 px-1"
     >
       {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
        * #a1a1aa on hover. The owner opens main's native file picker. */}
@@ -1790,7 +1804,7 @@ export function ComposerActionsBar({
       {/* The columnar rail (Surfaces.jsx:756): left cluster [model ·] MODE, then
        * an auto margin pushes account · context to the right edge. Faces are
        * borderless quiet text — the composer's minimal grammar, not pills. */}
-      <div className="flex min-w-0 flex-1 items-center gap-[7px]">
+      <div className="composer-controls flex min-w-0 flex-1 items-center gap-[7px]">
         {modelInteractive && runControls && onSetModel ? (
           <>
             <ModelChip
@@ -1867,7 +1881,8 @@ export function ComposerActionsBar({
           <FastFace active={fastMode} />
         ) : null}
 
-        <div className="ml-auto flex min-w-0 items-center gap-[7px]">
+        <div className="composer-account-controls ml-auto flex min-w-0 items-center gap-[7px]">
+          <div className="composer-account-identity flex min-w-0 items-center gap-[7px]">
           {cacheExpired ? <CacheExpiredIndicator /> : null}
           {accountInteractive && account && onSwitchAccount ? (
             <AccountChip
@@ -1887,7 +1902,7 @@ export function ComposerActionsBar({
              * signal from the one state where the user cannot open the switcher
              * to go looking for it. */
             <span
-              className={`${RAIL_FACE} gap-1.5 text-text-muted`}
+              className={`composer-account-face ${RAIL_FACE} gap-1.5 text-text-muted`}
               title={`Active account: ${accountAlias} · ${account.availabilityLabel}`}
             >
               <span
@@ -1898,12 +1913,13 @@ export function ComposerActionsBar({
             </span>
           ) : anthropicAccount && anthropicAccountLabel ? (
             <span
-              className={`${RAIL_FACE} text-text-muted`}
+              className={`composer-account-face ${RAIL_FACE} text-text-muted`}
               title={`Active Anthropic account: ${anthropicAccountLabel} · ${ANTHROPIC_STATUS_LABEL[anthropicAccount.status]}`}
             >
               {anthropicAccountLabel}
             </span>
           ) : null}
+          </div>
           {(accountInteractive || showAccount || anthropicAccountLabel) && contextUsage ? (
             <RailSep />
           ) : null}

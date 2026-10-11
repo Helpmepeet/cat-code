@@ -421,19 +421,35 @@ export function usePopoverFocus({
   initialFocusSelector?: string
   initialFocusPrioritySelector?: string
   onShiftTab?: () => void
-}): { restoreTriggerFocus: () => void } {
+}): {
+  restoreTriggerFocus: () => void
+  dismissWithoutRestore: () => void
+  isKeyboardOwner: () => boolean
+} {
   const ownerRef = useRef<ModalFocusOwner>(Symbol('popover-focus-owner'))
   const triggerFocusRef = useRef<HTMLElement | null>(null)
+  const restoreOnCloseRef = useRef(true)
   const onShiftTabRef = useRef(onShiftTab)
   onShiftTabRef.current = onShiftTab
 
   const restoreTriggerFocus = useCallback(() => {
     restoreFocus(triggerFocusRef.current)
   }, [])
+  const dismissWithoutRestore = useCallback(() => {
+    // Focus/pointer departure already has a destination. Cleanup still removes
+    // this stack entry, but must not return focus to the control just left.
+    restoreOnCloseRef.current = false
+    onEscape()
+  }, [onEscape])
+  const isKeyboardOwner = useCallback(
+    () => !modalFocusStack.isBlockedByModal(ownerRef.current),
+    [],
+  )
 
   useEffect(() => {
     if (!open) return
     const owner = ownerRef.current
+    restoreOnCloseRef.current = true
     triggerFocusRef.current = activeHtmlElement()
     // Join the SAME stack `useModalFocus` registers with (kind: 'popover'),
     // so `isBlockedByModal` below can tell a modal opened on top of this
@@ -454,7 +470,10 @@ export function usePopoverFocus({
     })
     return () => {
       cancelAnimationFrame(frame)
-      restoreFocus(restoreTargetForRemoval(modalFocusStack.unregister(owner)))
+      const removal = modalFocusStack.unregister(owner)
+      if (restoreOnCloseRef.current) {
+        restoreFocus(restoreTargetForRemoval(removal))
+      }
     }
   }, [
     containerRef,
@@ -482,7 +501,7 @@ export function usePopoverFocus({
         }
       }
       const action = popoverKeyAction(
-        !modalFocusStack.isBlockedByModal(ownerRef.current),
+        isKeyboardOwner(),
         event,
       )
       if (action !== 'escape') return
@@ -492,9 +511,9 @@ export function usePopoverFocus({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onEscape, open, restoreTriggerFocus])
+  }, [isKeyboardOwner, onEscape, open, restoreTriggerFocus])
 
-  return { restoreTriggerFocus }
+  return { restoreTriggerFocus, dismissWithoutRestore, isKeyboardOwner }
 }
 
 export function nextMenuRovingIndex(

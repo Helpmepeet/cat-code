@@ -87,6 +87,7 @@ export const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 // native dialog it cannot answer, and main owns the destination (HC1).
 export const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 export const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'
+export const CH_HOST_WORKSPACE_FILE_AVAILABILITY = 'catcode:host:workspace-file-availability'
 export const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'
 export const CH_HOST_ACCOUNT_SIGN_OUT = 'catcode:host:account-sign-out'
 export const CH_HOST_EVENT = 'catcode:host:event'

@@ -3,6 +3,7 @@ import type {
   ToolFamily,
   ToolUseRow,
 } from './transcriptProjector.js'
+import { selectToolDiffs } from './toolDiffs.js'
 
 /**
  * Exactly what the drawer paints. The Tool / Summary / Status / raw-Input stack
@@ -13,7 +14,7 @@ import type {
 export type ToolInspectorModel = {
   family: ToolFamily
   summary: string
-  diff: ToolDiffProjection | null
+  diffs: readonly ToolDiffProjection[]
   output: string | null
 }
 
@@ -35,7 +36,7 @@ export function describeToolForInspector(row: ToolUseRow): ToolInspectorModel {
   return {
     family: row.toolFamily,
     summary: deriveSummary(input),
-    diff: row.result?.diff ?? null,
+    diffs: selectToolDiffs(row.result),
     output: selectOutput(row, input),
   }
 }

@@ -59,8 +59,8 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
   const frames = async (...frames: ServerFrame[]) => { await act(async () => { frameListener(frames) }) }
   await host({ type: 'accounts-pool', pool: { accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true, anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true } })
   await frames(...sessions.filter(s => !s.restorable && s.status === 'ready').map(s => ready(s.appSessionId)))
-  const click = async (label: string) => {
-    const element = [...tree.container.querySelectorAll<HTMLElement>('button,[role="tab"],[role="option"],[role="button"]')].find(el => el.getAttribute('aria-label') === label || el.textContent?.trim() === label || el.getAttribute('title') === label)
+  const click = async (label: string, scope: ParentNode = tree.container) => {
+    const element = [...scope.querySelectorAll<HTMLElement>('button,[role="tab"],[role="option"],[role="button"]')].find(el => el.getAttribute('aria-label') === label || el.textContent?.trim() === label || el.getAttribute('title') === label)
     if (!element) throw new Error(`missing ${label}`)
     await act(async () => {
       element.click()
@@ -561,7 +561,9 @@ test('composer management and account-health action focus the same Accounts tab'
   await app.click('Accounts')
   await app.key('1')
   await app.click('Active account: Synthetic · Ready')
-  await app.click('Manage accounts →')
+  const accountsMenu = document.querySelector('[role="menu"][aria-label="Accounts"]')
+  expect(accountsMenu).not.toBeNull()
+  await app.click('Manage accounts →', accountsMenu!)
   expect(app.selected()).toEqual(['Accounts page'])
   expect(app.tabs()).toHaveLength(2)
   await app.key('1')

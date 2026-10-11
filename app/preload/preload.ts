@@ -123,6 +123,7 @@ import {
   CH_HOST_OPEN_HISTORY,
   CH_HOST_SAVE_TEXT,
   CH_HOST_OPEN_WORKSPACE_FILE,
+  CH_HOST_WORKSPACE_FILE_AVAILABILITY,
   CH_HOST_ACCOUNT_DELETE,
   CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
@@ -542,9 +543,9 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ openLogs: true })
     ipcRenderer.send(CH_OPEN_LOGS)
   },
-  saveDiagnosticsBundle(): Promise<boolean> {
+  saveDiagnosticsBundle(): Promise<import('../shared/protocol.js').SaveDiagnosticsResult> {
     sendGuard.assertAllowed({ saveDiagnostics: true })
-    return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<boolean>
+    return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<import('../shared/protocol.js').SaveDiagnosticsResult>
   },
   openWorkspaceFile(
     appSessionId: SessionId,
@@ -559,6 +560,11 @@ const bridge: CatCodeBridge = {
     const payload = { appSessionId }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_HOST_PICK_ATTACHMENT_FILE, appSessionId) as Promise<import('../shared/hostApi.js').AttachmentFileSelection | null>
+  },
+  getWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<boolean> {
+    const payload = { appSessionId, path }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_HOST_WORKSPACE_FILE_AVAILABILITY, payload) as Promise<boolean>
   },
   reportVisibleSessions(sessionIds: SessionId[]): void {
     // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park

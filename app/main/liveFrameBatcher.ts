@@ -149,8 +149,10 @@ export function createRendererLossTransition<Reason extends string>(options: {
       return begin(reason, true)
     },
     loadFailed(reason: Reason): boolean {
-      if (state !== 'recovering') return false
-      return begin(reason, false)
+      if (state === 'exhausted') return false
+      // A first document can fail without a renderer process ever crashing.
+      // It needs the same unavailable/attachment transition as a later loss.
+      return begin(reason, state === 'idle')
     },
     documentReady(): void {
       state = 'idle'

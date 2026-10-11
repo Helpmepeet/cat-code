@@ -3456,14 +3456,14 @@ test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shap
   })
 })
 
-test('apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
+test('apply_patch tool_use_result retains every file diff, including an empty deleted file', () => {
   // Current FilePatchTool output shape: `{ files: [{ path, type, firstLine,
   // structuredPatch }] }` (src/tools/FilePatchTool/types.ts, emitted
   // FilePatchTool.tsx) — a MULTI-file envelope, unlike FileEditTool's
   // top-level `filePath`+`structuredPatch`. Whole-file `before`/`after` are no
   // longer written; the legacy test below covers transcripts that still have
-  // them. The single-file ToolDiffProjection names one path, so the primary
-  // (first file with hunks) is projected.
+  // them. An empty file still has an identity and an operation even though its
+  // deletion produces no diff lines.
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
   state = projectServerFrame(
@@ -3543,6 +3543,7 @@ test('apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
               },
             ],
           },
+          { path: '/repo/empty.txt', type: 'delete', structuredPatch: [] },
         ],
       },
       session_id: 'session-1',
@@ -3554,7 +3555,26 @@ test('apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
   if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
   expect(row.toolFamily).toBe('edit')
   expect(row.status).toBe('success')
-  // Primary (first) file's diff is projected — the Diff section now renders.
+  expect(row.result?.fileDiffs).toEqual([
+    {
+      filePath: '/repo/src/a.ts',
+      operation: 'update',
+      hunks: [{
+        oldStart: 1, oldLines: 3, newStart: 1, newLines: 3,
+        lines: [' export const a = {', '-  x: 1,', '+  x: 2,', ' }'],
+      }],
+    },
+    {
+      filePath: '/repo/src/b.ts',
+      operation: 'update',
+      hunks: [{
+        oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+        lines: ['-const b = false', '+const b = true'],
+      }],
+    },
+    { filePath: '/repo/empty.txt', operation: 'delete', hunks: [] },
+  ])
+  // The legacy primary diff remains available to existing readers.
   expect(row.result?.diff).toEqual({
     filePath: '/repo/src/a.ts',
     hunks: [

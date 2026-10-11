@@ -4,7 +4,7 @@
  * Fast Refresh boundary: exports React component only.
  */
 
-import { useRef, useState, Fragment, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react'
 import type {
   OpenWorkspaceFileTarget,
   SessionId,
@@ -17,7 +17,6 @@ import { useToast } from './toastContext.js'
 import {
   estimateFilePathMenuHeight,
   FILE_PATH_MENU_ROW_HEIGHT,
-  canOpenFilePathInSession,
   placeFilePathActionsMenu,
   resolveFilePathActionItems,
   resolveFilePathParts,
@@ -105,6 +104,14 @@ export function FilePathActionsMenu({
   onClose: () => void
 }): ReactNode {
   const menuRef = useRef<HTMLDivElement>(null)
+  const request = useMemo(
+    () => ({ rawPath, cwd, sessionId, anchor, allowOpen: extras?.canOpen !== false }),
+    [anchor, cwd, rawPath, sessionId, extras?.canOpen],
+  )
+  const [availability, setAvailability] = useState<{
+    request: typeof request
+    available: boolean
+  } | null>(null)
   const toast = useToast()
   const { restoreTriggerFocus } = usePopoverFocus({
     open: true,
@@ -112,11 +119,27 @@ export function FilePathActionsMenu({
     onEscape: onClose,
   })
 
+  useEffect(() => {
+    let active = true
+    if (!request.allowOpen) return
+    void (async () => {
+      let available = false
+      try {
+        available = (await window.catcode?.getWorkspaceFileAvailability(request.sessionId, request.rawPath)) === true
+      } catch {
+        // Copy remains usable when the host cannot answer this read.
+      }
+      if (active) setAvailability({ request, available })
+    })()
+    return () => { active = false }
+  }, [request])
+
   const parts = resolveFilePathParts({ rawPath, cwd })
+  const canOpen = request.allowOpen && availability?.request === request && availability.available
   const items = resolveFilePathActionItems(
     parts,
     undefined,
-    extras?.canOpen ?? canOpenFilePathInSession(parts, cwd),
+    canOpen,
   )
   const leading = extras?.leading
   const placement = placeFilePathActionsMenu(
@@ -126,6 +149,7 @@ export function FilePathActionsMenu({
   )
 
   const handleAction = (kind: FilePathActionKind): void => {
+    if (OPEN_TARGETS[kind] && !canOpen) return
     restoreTriggerFocus()
     onClose()
 

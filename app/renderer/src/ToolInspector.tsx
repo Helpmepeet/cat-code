@@ -41,6 +41,7 @@ import type {
 } from './transcriptProjector.js'
 import { describeToolForInspector } from './toolInspectorModel.js'
 import { selectRawDiffLines } from './diffRowModel.js'
+import { FileDiffNavigator } from './FileDiffNavigator.js'
 import {
   describeOutputSearch,
   selectOutputLineChunk,
@@ -52,9 +53,11 @@ import { VirtualLineList } from './VirtualLineList.js'
 
 export function ToolInspector({
   row,
+  initialFileIndex,
   onClose,
 }: {
   row: ToolUseRow | null
+  initialFileIndex?: number
   onClose?: () => void
 }): ReactNode {
   if (!row) return null
@@ -88,8 +91,14 @@ export function ToolInspector({
       </div>
 
       <div className="flex-1 overflow-y-auto px-[18px] py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {model.diff ? (
-          <DiffPanel diff={model.diff} />
+        {model.diffs.length > 0 ? (
+          <FileDiffNavigator
+            key={row.id}
+            diffs={model.diffs}
+            initialFileIndex={initialFileIndex}
+            showPath={false}
+            renderDiff={diff => <DiffPanel diff={diff} />}
+          />
         ) : null}
 
         {model.output ? (
@@ -111,7 +120,10 @@ export function ToolInspector({
  */
 function DiffPanel({ diff }: { diff: ToolDiffProjection }) {
   const text = useMemo(() => selectRawDiffLines(diff).join('\n'), [diff])
-  return <div className="mb-4"><OutputPanel text={text} label={`Diff · ${diff.filePath}`} diff /></div>
+  return <div className="mb-4">
+    {diff.hunks.length === 0 ? <div className="mb-2 font-mono text-[11.5px] text-text-subtle">No diff lines.</div> : null}
+    <OutputPanel text={text} label={`Diff · ${diff.filePath}`} diff />
+  </div>
 }
 
 /** Off is the prototype's default: long lines scroll rather than reflow. */

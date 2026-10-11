@@ -408,7 +408,7 @@ describe('the inspector drawer bounds its own diff section', () => {
       />,
     )
     expect(mountedRows(bigger)).toBe(rows)
-    expect(describeToolForInspector(row).diff?.hunks[0].lines).toHaveLength(HUGE_LINES)
+    expect(describeToolForInspector(row).diffs[0]?.hunks[0].lines).toHaveLength(HUGE_LINES)
   })
 
   test('one minified patch line mounts a bounded row', () => {

@@ -187,7 +187,10 @@ export type ToolResultProjection = {
   isCancelled?: true
   content: string
   images?: ToolResultImageProjection[]
+  /** Legacy single-file view; multi-file readers use `fileDiffs`. */
   diff: ToolDiffProjection | null
+  /** Every retained file in a patch, including files with no diff lines. */
+  fileDiffs?: ToolDiffProjection[]
   /** Structured result for AskUserQuestion. Preview annotations are validated
    * but intentionally omitted from the transcript projection; only user notes
    * are eligible for display. */
@@ -297,25 +300,11 @@ export type ToolResultImageProjection = {
   data: string
 }
 
-/**
- * `MultiDiffCard` (prototype) is not a distinct message type or a distinct
- * tool — `FileEditTool`'s own multi-edit input (`edits: EditInput[]`) can
- * still only ever produce ONE `structuredPatch` for the ONE file it edited
- * (`FileEditTool/types.ts` output schema has no per-file array). "Multiple
- * files changed in one turn" is normally multiple separate
- * `tool_use`/`tool_result` pairs, each its own single-file `ToolDiffProjection`.
- * The one result that CAN span many files is `apply_patch`
- * (`FilePatchTool/types.ts` output `files[]`); this single-file projection names
- * ONE path, so `extractDiffProjection` projects that patch's PRIMARY file (the
- * rest still appear in the result `content`). `hunks.length > 1` models multiple
- * hunks returned for the ONE projected file (structuredPatch is already an array
- * of hunks); DiffView renders one hunk, MultiDiffCard switches between hunks the
- * same way the prototype's FileEditCard switches between files — same component,
- * adapted to the real one-file-many-hunks shape.
- */
+/** One file's retained diff. FilePatch also records empty adds/deletions. */
 export type ToolDiffProjection = {
   filePath: string
   hunks: ToolDiffHunk[]
+  operation?: 'update' | 'add' | 'delete'
 }
 
 export type ToolDiffHunk = {
@@ -2509,8 +2498,7 @@ function isToolResultBlockType(blockType: string): boolean {
  * `content.is_error !== true` is the engine's own read of this exact field).
  * `content` best-effort-projects display text and allowlisted base64 raster
  * images without inventing formatting the engine doesn't already produce;
- * `diff` is populated only when `toolUseResult` narrows to a FileEditTool-shaped
- * structuredPatch.
+ * diff fields come only from runtime-narrowed structured patches.
  */
 function projectToolResultBlock(
   block: Record<string, unknown>,
@@ -2529,6 +2517,7 @@ function projectToolResultBlock(
   const generatedImageProjection =
     extractGeneratedImageProjection(toolUseResult)
   const askUserQuestion = extractAskUserQuestionResult(toolUseResult)
+  const diffProjection = extractDiffProjection(toolUseResult)
   let generatedImage = generatedImageProjection.generatedImage
   let images = contentProjection.images
   if (generatedImage && block.is_error !== true) {
@@ -2555,7 +2544,7 @@ function projectToolResultBlock(
     ...(isCancelled ? { isCancelled: true as const } : {}),
     content: contentProjection.content,
     ...(images !== undefined ? { images } : {}),
-    diff: extractDiffProjection(toolUseResult),
+    ...diffProjection,
     ...(askUserQuestion === null ? {} : { askUserQuestion }),
     ...(generatedImage !== undefined ? { generatedImage } : {}),
     ...(agentName !== null ? { agentName } : {}),
@@ -2870,38 +2859,49 @@ function isBase64Data(value: string): boolean {
  *  - FilePatchTool / `apply_patch` (`src/tools/FilePatchTool/types.ts:138-172`,
  *    emitted `FilePatchTool.tsx:453-464`): a multi-file envelope
  *    `files: Array<{ path: string; structuredPatch: StructuredPatchHunk[] }>`.
- *    The single-file `ToolDiffProjection` names ONE path, so the PRIMARY (first
- *    file yielding hunks) is projected; further files in the same patch are not
- *    shown here (the result `content` still enumerates every touched path).
+ *    Every valid file identity is retained even when an empty add or deletion
+ *    produces no hunks. Contents stay at the engine's persistence bounds.
  * Anything else (Bash output, Read contents, a foreign/future tool shape)
  * yields `null` — a degraded ToolCard with plain `content` text, never a crash
  * or a guess.
  */
 function extractDiffProjection(
   toolUseResult: unknown,
-): ToolDiffProjection | null {
-  if (!isRecord(toolUseResult)) return null
+): Pick<ToolResultProjection, 'diff' | 'fileDiffs'> {
+  if (!isRecord(toolUseResult)) return { diff: null }
 
   // FileEditTool: single-file, top-level `filePath` + `structuredPatch`.
   const { filePath, structuredPatch, files } = toolUseResult
   if (typeof filePath === 'string' && filePath.length > 0) {
     const hunks = narrowStructuredPatch(structuredPatch)
-    return hunks.length === 0 ? null : { filePath, hunks }
+    return { diff: hunks.length === 0 ? null : { filePath, hunks } }
   }
 
-  // FilePatchTool / apply_patch: multi-file `files[]` envelope. Project the
-  // first file that yields hunks (matches how a single Edit diff is shown).
+  // The legacy primary diff shares its hunks with the full file list rather
+  // than copying retained content or changing existing single-file readers.
   if (Array.isArray(files)) {
+    const fileDiffs: ToolDiffProjection[] = []
     for (const file of files) {
       if (!isRecord(file)) continue
-      const { path, structuredPatch: filePatch } = file
+      const { path, structuredPatch: filePatch, type } = file
       if (typeof path !== 'string' || path.length === 0) continue
       const hunks = narrowStructuredPatch(filePatch)
-      if (hunks.length > 0) return { filePath: path, hunks }
+      fileDiffs.push({
+        filePath: path,
+        hunks,
+        ...(type === 'update' || type === 'add' || type === 'delete'
+          ? { operation: type }
+          : {}),
+      })
+    }
+    const primary = fileDiffs.find(file => file.hunks.length > 0)
+    return {
+      diff: primary ? { filePath: primary.filePath, hunks: primary.hunks } : null,
+      ...(fileDiffs.length > 0 ? { fileDiffs } : {}),
     }
   }
 
-  return null
+  return { diff: null }
 }
 
 /** Runtime-narrow a `diff`-package `StructuredPatchHunk[]` (zero casts); a

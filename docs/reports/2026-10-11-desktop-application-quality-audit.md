@@ -1,12 +1,12 @@
 # Desktop application quality audit
 
-2026-10-11. Scope: the desktop application, including visible behavior, workflows, UI/UX, input/state continuity, responsiveness, and failure recovery. Backend inspection followed application-visible issues; implementation stays in renderer owners and the existing extensions inventory adapter.
+2026-10-11. Scope: the desktop application, including visible behavior, workflows, UI/UX, input/state continuity, responsiveness, and failure recovery. Backend inspection followed application-visible issues; repairs use application owners and existing inventory/host boundaries.
 
 ## Outcome
 
-Fifteen distinct audit assignments identified 54 deduplicated findings. The repair pass fixed 48 bounded issues, including all nine P1 findings. Six findings remain explicit follow-up work below. The requested implementation review found seven additional repair/verification issues, all corrected and re-executed. Severity records impact if triggered, not measured frequency. Source, component/DOM, host-boundary, and native visual evidence are distinguished; this report does not certify every app state.
+Fifteen distinct audit assignments identified 54 deduplicated findings. The initial repair pass fixed 48 bounded issues, including all nine P1 findings. A later six-agent repair pass implemented the six remaining findings, bringing the original audit to 54 repaired findings; its verification and review are recorded in the [follow-up report](2026-10-11-application-quality-followup-repairs.md). The initial implementation review found seven additional repair/verification issues; the follow-up review found five. All were corrected and re-executed. Severity records impact if triggered, not measured frequency. Source, component/DOM, host-boundary, and native visual evidence are distinguished; this report does not certify every app state.
 
-The agents worked in waves under the four-active-agent limit. Finished agents were reused for repair and review; no additional distinct agents were allocated.
+The agents worked in waves under the four-active-agent limit. The initial fifteen-agent pass reused finished agents for repair and review. The user then requested one new agent for each of the six follow-ups; those six were also reused for review.
 
 | Assignment | Audit lens |
 |---|---|
@@ -40,7 +40,7 @@ The agents worked in waves under the four-active-agent limit. Finished agents we
 | A02-4 | P2 | Fixed | Slash buttons ignore keyboard and assistive clicks | Slash results select through Click, including keyboard/AT activation. |
 | A03-1 | P2 | Fixed | Full-output copy strips genuine tabular output | Read prefix normalization is limited to Read; other output keeps its bytes. |
 | A03-2 | P2 | Fixed | Encoded markdown paths fail to open | Workspace links decode once; host containment/literal-file policy remains authoritative. |
-| A03-3 | P2 | Follow-up | Multi-file patches display only first diff | Existing capability gap: multi-file patches still expose the projected primary file. A separate projector/presentation change must preserve all file identities and bounded output. |
+| A03-3 | P2 | Fixed | Multi-file patches display only first diff | Every retained patch file and operation is projected; transcript and inspector navigate one mounted diff with selected-file full-output search/copy. |
 | A03-4 | P2 | Fixed | Long diff lines have no full-content route | Diff cards expose the existing full-output inspector and complete available patch copy. |
 | A03-5 | P3 | Fixed | Search skips repeated matches on a long line | Search steps through occurrences with character offsets on one long line. |
 | A04-1 | P2 | Fixed | Failed integer draft survives settings layer switch | Scope-keyed editor remounts discard a failed layer's stale draft. |
@@ -70,22 +70,22 @@ The agents worked in waves under the four-active-agent limit. Finished agents we
 | A10-2 | P2 | Fixed | File submenu keys invoke parent default action | Child file actions retain their activation keys; Left restores host focus. |
 | A10-3 | P2 | Fixed | Palette buttons do not activate via keyboard click | Palette results activate through Click with selection aligned to focus. |
 | A10-4 | P2 | Fixed | Session Copy flyout extends offscreen | Copy flyout flips left near the viewport edge. |
-| A11-1 | P2 | Follow-up | Narrow split composer controls and menus clipped | Source-confirmed narrow-split layout risk. Reproduce with populated 20/80 panes and open composer menus before choosing minimum widths or responsive controls; page captures did not exercise this state. |
+| A11-1 | P2 | Fixed | Narrow split composer controls and menus clipped | Populated 20/80 clipping was reproduced on both sides; responsive controls and viewport portals pass real browser bounds, pointer, keyboard and theme checks. |
 | A11-2 | P3 | Fixed | Frosted Analytics overrides reduced motion | Reduced-motion CSS wins over frosted Analytics animation selectors. |
 | A12-1 | P1 | Fixed | History recall loses original unsent draft on remount | App owns per-session history navigation; storage recovers the original draft. |
 | A12-2 | P1 | Fixed | Held never-sent prompt lost on renderer reload | Held text is recovered as an unsent draft, without automatic submit replay. |
 | A12-3 | P2 | Fixed | Question answer progress resets on remount | App owns per-session/request question step and answers; resolved requests clear them. |
 | A12-4 | P2 | Fixed | Delayed edit reply overwrites newer composer | Delayed Edit/Branch restoration preserves current text, paste entries and attachments. |
-| A13-1 | P2 | Follow-up | Initial renderer load failure misses recovery | Source-confirmed initial-load recovery gap. Requires an isolated native Electron first-document failure test and main-process recovery wiring. |
+| A13-1 | P2 | Fixed | Initial renderer load failure misses recovery | First native load rejection enters bounded recovery. Isolated dev/packaged failure, retry-limit, quit and stale-generation controls pass. |
 | A13-2 | P2 | Fixed | Multi-image drop attaches only the first distinct file | Distinct dropped images are prepared and attached serially. |
-| A13-3 | P3 | Follow-up | Editor opening loses citation line and column | File opening preserves literal filename containment, but editor line/column navigation remains a capability gap. Requires editor-specific host launch support. |
-| A13-4 | P3 | Follow-up | Folder links offer unsupported Finder actions | Folder links can advertise unavailable file-opening actions. Preserve the current host regular-file policy; a directory-aware availability contract is follow-up work. |
+| A13-3 | P3 | Fixed | Editor opening loses citation line and column | Canonical source locations reach editor-specific CLI arguments. Literal names and containment stay protected; unrepresentable locations fail safely. Native editor selection remains unproven. |
+| A13-4 | P3 | Fixed | Folder links offer unsupported Finder actions | A fixed boolean metadata read shares the opening resolver. Only current host acceptance offers Open; directory, pending, failed and stale targets retain Copy. |
 | A14-1 | P2 | Fixed | Dock eviction reconstructs older agents as newly finished | Bounded terminal history retains current-source run identity; cold restoration uses saved source anchors and completion evidence. Unordered completion, Clear and later resume/completion were exercised. |
 | A15-1 | P2 | Fixed | Pending export never fails when its engine exits | Pending exports fail after engine termination; already-ready text remains readable. |
 | A15-2 | P2 | Fixed | Settings inventory failures have no retry | Settings inventory failure offers Retry with stale-request suppression. |
-| A15-3 | P2 | Follow-up | Diagnostics save failure is silent | Diagnostics save conflates cancellation with write failure. Requires a host/preload result contract that distinguishes them and both renderer consumers showing real failure. |
+| A15-3 | P2 | Fixed | Diagnostics save failure is silent | Main distinguishes saved, cancelled and failed; both Settings and transcript handle safe failure feedback and retry while cancellation stays quiet. |
 
-## Verification
+## Initial repair verification
 
 Behavioral regressions were exercised before repairs at the real reducer, React component/DOM, rendered output, or host-file boundary. Focused suites cover routing, keyboard arbitration, draft storage/remounts, full plan rendering, permission ownership, composition, settings writes/retries, quota/result presentation, transcript output/link/search, and inventory redaction. The root also exercised actual App export interleavings, late Edit restoration, question remount/resolution, and pagehide recovery without submit replay.
 
@@ -100,7 +100,7 @@ A frozen initial baseline at `eee500463cfa24a3f91c8989458d64353e24eec4` ran 5,76
 | Implementation review | Four lenses completed; seven findings corrected and symptoms re-executed |
 | Documentation links/maps/whitespace | Passed: 17 maps, zero warnings; owned diff has no whitespace errors or unresolved local links |
 
-## Visual evidence and limits
+## Initial visual evidence and limits
 
 The existing never-shown Electron capture harness produced 18 Chromium page captures across Welcome, Goals, Accounts, Analytics and Settings categories at 1100x720 and 900x600. It used isolated app configuration and no engine sessions. Anthropic account metadata was read-only from the shared vault; captures stayed in temporary storage and no account identifiers are included in this report. No login, token refresh, account mutation, or model call was performed.
 
@@ -108,22 +108,17 @@ These captures cover default dark-theme page presentation and empty states. They
 
 Native follow-up checks: use a restarted development app; focus split pane B and close it with Cmd+W; activate tab/menu/palette buttons with Enter/Space; open the palette over Tasks and type k; receive a permission while a modal is open; review a plan with prose/code/rollback notes; compose with IME; drop two distinct screenshots; revisit a partially answered question and a recalled draft; open full diff output and search repeated long-line matches; open menus in narrow splits and at the right window edge. Live account and host-save checks require deliberate operator-controlled failure cases.
 
-Draft recovery keeps the existing 32-draft/20,000-character bounds and version-1 string storage. Images and opaque picked-file tokens remain memory-only across a full reload; held text returns for review instead of being automatically sent. Diff inspection includes all content retained by the existing primary-file projection and cannot recover files omitted upstream. Cold dock suppression needs matching retained source identities or independent later task evidence; an entirely missing source join cannot establish which absent runs were previously capped without additional durable metadata.
+Draft recovery keeps the existing 32-draft/20,000-character bounds and version-1 string storage. Images and opaque picked-file tokens remain memory-only across a full reload; held text returns for review instead of being automatically sent. In the initial pass, diff inspection included the primary-file projection only. The follow-up now exposes every file retained in the existing tool output; content absent upstream still cannot be recovered. Cold dock suppression needs matching retained source identities or independent later task evidence; an entirely missing source join cannot establish which absent runs were previously capped without additional durable metadata.
 
-## Follow-up scope
+## Follow-up disposition
 
-- **A03-3:** Existing capability gap: multi-file patches still expose the projected primary file. A separate projector/presentation change must preserve all file identities and bounded output.
-- **A11-1:** Source-confirmed narrow-split layout risk. Reproduce with populated 20/80 panes and open composer menus before choosing minimum widths or responsive controls; page captures did not exercise this state.
-- **A13-1:** Source-confirmed initial-load recovery gap. Requires an isolated native Electron first-document failure test and main-process recovery wiring.
-- **A13-3:** File opening preserves literal filename containment, but editor line/column navigation remains a capability gap. Requires editor-specific host launch support.
-- **A13-4:** Folder links can advertise unavailable file-opening actions. Preserve the current host regular-file policy; a directory-aware availability contract is follow-up work.
-- **A15-3:** Diagnostics save conflates cancellation with write failure. Requires a host/preload result contract that distinguishes them and both renderer consumers showing real failure.
+All six original follow-ups have now been implemented by one agent per finding. The [follow-up repair report](2026-10-11-application-quality-followup-repairs.md) records discriminating regressions, real browser/native startup evidence, the second review, package validation and remaining native acceptance limits.
 
-## Implementation review
+## Initial implementation review
 
 The requested `review-impl` pass used four lenses: correctness/concurrent lifecycle, contracts/security, conversational requirements, and executing effect/evidence. Scope was the saved task-owned diff, excluding unrelated engine/runtime/report changes. All five risk signals applied. The evidence reviewer independently ran 1,034 focused tests across 41 suites, then executed 12 representative production-owner reverts/mutations that produced 25 intended regression failures and two passing controls. A failure in an early composite assertion was not treated as proof of its later assertions. The spec lens found no additional intent mismatch.
 
-Coordinator triage was recorded before fixes: **seven findings, two HIGH, three MEDIUM, two LOW; five user-visible and two internal. Four VALID and three INHERITED were fixed. No new deferred or false-positive findings.** The original six audit follow-ups above remain open. These review findings strengthen repairs already in the 48 audit rows; the counts should not be added as distinct original audit findings.
+Coordinator triage was recorded before fixes: **seven findings, two HIGH, three MEDIUM, two LOW; five user-visible and two internal. Four VALID and three INHERITED were fixed. No new deferred or false-positive findings.** At the end of this initial review, six original audit follow-ups were still open; the subsequent requested pass implements them as recorded above. These review findings strengthen repairs already in the 48 audit rows; the counts should not be added as distinct original audit findings.
 
 | ID | Severity / impact | Owner | Confirmed problem | Correction and executed proof |
 |---|---|---|---|---|

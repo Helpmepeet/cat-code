@@ -36,6 +36,7 @@ import {
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
+import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
 import {
   activeAfterPaneChange,
   createShellState,
@@ -4900,7 +4901,7 @@ export function App() {
               cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
               onRemoteVerb={sendRemoteSettingsVerb}
               onOpenLogs={() => getBridge().openLogsFolder()}
-              onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
+              onSaveDiagnostics={() => void requestDiagnosticsSave(toast)}
               remoteLastResult={remoteSettings.lastResult}
               remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
               projectBinding={settingsProjectBinding}

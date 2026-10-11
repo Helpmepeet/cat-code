@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ServerFrame } from '../shared/protocol.js'
 import { AttachmentGate } from './attachmentGate.js'
+import { createRendererRecoveryPolicy, RENDERER_RECOVERY_MAX_ATTEMPTS } from './mainDecisions.js'
 import {
   createAttachedFrameDeliveryCoordinator,
   createLiveFrameDeliveryCoordinator,
@@ -256,6 +257,37 @@ describe('live frame delivery coordinator', () => {
 })
 
 describe('renderer loss transition', () => {
+  test('a failed first document retains frames through bounded retries until attachment', () => {
+    const gate = new AttachmentGate()
+    const policy = createRendererRecoveryPolicy()
+    const attempts: number[] = []
+    let exhausted = 0
+    const transition = createRendererLossTransition<string>({
+      isDisposed: () => false,
+      onUnavailable: () => gate.onNavigationStart(),
+      decide: () => policy.decide('load-failed'),
+      onReload: (_reason, attempt) => { attempts.push(attempt) },
+      onGiveUp: () => { exhausted++ },
+      timeoutReason: 'load-failed',
+    })
+    try {
+      expect(gate.onFrame('a', base('before-first-document'))).toEqual([])
+      expect(transition.loadFailed('load-failed')).toBe(true)
+      expect(gate.onFrame('a', base('during-retry'))).toEqual([])
+      for (let failure = 1; failure <= RENDERER_RECOVERY_MAX_ATTEMPTS; failure++) {
+        transition.loadFailed('load-failed')
+      }
+      expect(attempts).toEqual([1, 2, 3])
+      expect(exhausted).toBe(1)
+      expect(transition.loadFailed('load-failed')).toBe(false)
+      transition.documentReady()
+      expect(gate.onRendererReady()).toEqual([base('before-first-document'), base('during-retry')])
+      expect(gate.onRendererReady()).toEqual([])
+    } finally {
+      transition.dispose()
+    }
+  })
+
   test('one failed document consumes one bounded recovery decision', () => {
     let unavailable = 0, decisions = 0, reloads = 0
     const transition = createRendererLossTransition<string>({

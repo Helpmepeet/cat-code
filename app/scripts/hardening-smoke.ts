@@ -290,6 +290,8 @@ async function runProductionHardeningSmoke(
       // realpath must stay inside that session's realpath'd cwd and be a regular
       // file. Traversal and symlink escape both fail closed.
       'openWorkspaceFile',
+      // Same validated regular-file policy, boolean metadata only; no OS action.
+      'getWorkspaceFileAvailability',
       // P4-35 — the file sink (operator ruling 2026-07-30). The renderer requests
       // main's native save dialog and cannot name a destination (HC1/HC3).
       'saveTextToFile',

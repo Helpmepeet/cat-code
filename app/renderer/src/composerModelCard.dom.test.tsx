@@ -179,13 +179,16 @@ async function click(element: Element | null | undefined): Promise<void> {
   })
 }
 
-function menu(tree: MountedTree): HTMLElement | null {
-  return tree.container.querySelector<HTMLElement>('[role="menu"]')
+// Each test owns one mounted bar; its actual popup may be portalled to body.
+function menu(_tree: MountedTree): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    '[role="menu"][aria-label="Model"], [role="menu"][aria-label="Reasoning effort"], [role="menu"][aria-label="Accounts"]',
+  )
 }
 
 function rows(tree: MountedTree): HTMLElement[] {
   return Array.from(
-    tree.container.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+    menu(tree)?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [],
   )
 }
 
@@ -334,7 +337,7 @@ test('the back control returns to the model list', async () => {
   const tree = await mountBar(recorder())
   await openCard(tree)
   await click(rowNamed(tree, 'Opus 5'))
-  await click(tree.container.querySelector('[role="menuitem"]'))
+  await click(menu(tree)?.querySelector('[role="menuitem"]'))
 
   expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
   expect(rows(tree)).toHaveLength(4)
@@ -455,7 +458,7 @@ test('going back returns focus to the row that was picked', async () => {
       }),
     )
   })
-  await click(tree.container.querySelector('[role="menuitem"]'))
+  await click(menu(tree)?.querySelector('[role="menuitem"]'))
 
   // Leaving the face unmounts the focused button; dropping focus on <body>
   // would strand a keyboard user in a menu that is still open.
@@ -480,7 +483,7 @@ test('clicking the already-selected ladder rung closes the model card', async ()
   const tree = await mountBar(recorder())
   await openLadder(tree)
 
-  await click(tree.container.querySelector('[aria-label="High"]'))
+  await click(menu(tree)?.querySelector('[aria-label="High"]'))
 
   expect(menu(tree)).toBeNull()
 })
@@ -518,9 +521,9 @@ test('opening the model picker focuses the selected model row', async () => {
   await openCard(tree)
   await harness.nextFrame()
 
-  const selected = tree.container.querySelector(
+  const selected = menu(tree)?.querySelector(
     '[role="menuitemradio"][aria-checked="true"]',
-  )
+  ) ?? null
   expect(selected?.textContent).toContain('GPT-5.6 Sol')
   expect(focused()).toBe(selected)
 })
@@ -541,9 +544,9 @@ test('opening the effort picker focuses the selected effort instead of Auto', as
   await openEffort(tree)
   await harness.nextFrame()
 
-  const selected = tree.container.querySelector(
+  const selected = menu(tree)?.querySelector(
     '[role="menuitemradio"][aria-checked="true"]',
-  )
+  ) ?? null
   expect(selected?.getAttribute('aria-label')).toBe('Max')
   expect(focused()).toBe(selected)
 })
@@ -568,7 +571,7 @@ test('the effort slider flow tracks filled levels and skips the lowest and Auto'
   const tree = await mountBar(recorder())
   await openEffort(tree)
 
-  const flowBand = () => tree.container.querySelector('.effort-flow-light-band')
+  const flowBand = () => menu(tree)?.querySelector('.effort-flow-light-band')
   expect(flowBand()).toBeTruthy()
 
   await act(async () => {
@@ -603,7 +606,7 @@ test('the effort slider flow pass gets shorter at a higher level', async () => {
   await openEffort(tree)
 
   const duration = () => {
-    const rail = tree.container.querySelector('.effort-flow-clip')?.parentElement
+    const rail = menu(tree)?.querySelector('.effort-flow-clip')?.parentElement
     return Number.parseFloat(rail?.style.getPropertyValue('--effort-flow-duration') ?? '')
   }
   const highDuration = duration()
@@ -626,11 +629,11 @@ test('the rail effort picker stays open on a change and closes on a re-pick', as
   const tree = await mountBar(recorded)
   await openEffort(tree)
 
-  await click(tree.container.querySelector('[aria-label="Max"]'))
+  await click(menu(tree)?.querySelector('[aria-label="Max"]'))
   expect(recorded.efforts).toEqual(['max'])
   expect(menu(tree)).toBeTruthy()
 
-  await click(tree.container.querySelector('[aria-label="High"]'))
+  await click(menu(tree)?.querySelector('[aria-label="High"]'))
   expect(recorded.efforts).toEqual(['max', 'high'])
   expect(menu(tree)).toBeNull()
 })
@@ -705,9 +708,9 @@ test('opening the account picker focuses the active account row', async () => {
   await openAccount(tree)
   await harness.nextFrame()
 
-  const selected = tree.container.querySelector(
+  const selected = menu(tree)?.querySelector(
     '[role="menuitem"][aria-current="true"]',
-  )
+  ) ?? null
   expect(selected?.textContent).toContain('active')
   expect(focused()).toBe(selected)
 })

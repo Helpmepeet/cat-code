@@ -71,8 +71,8 @@ test('a FileEdit result exposes the narrowed diff', () => {
       },
     }),
   )
-  expect(model.diff?.filePath).toBe('/app/x.ts')
-  expect(model.diff?.hunks[0].lines).toEqual(['-old', '+new'])
+  expect(model.diffs[0]?.filePath).toBe('/app/x.ts')
+  expect(model.diffs[0]?.hunks[0].lines).toEqual(['-old', '+new'])
 })
 
 test('narrows tolerantly: empty input has no summary, a non-record input degrades to {}', () => {
@@ -152,9 +152,8 @@ test('the drawer opens on the output, not on a restatement of the card', () => {
 })
 
 test('renders a Diff section for a real Apply_patch row (E1 — edit-family, files[] envelope)', () => {
-  // The projector maps Apply_patch's multi-file `files[]` output to a
-  // single-file diff (primary file); a real apply_patch row is edit-family and
-  // MUST show a Diff section, unlike a diff-less Bash row.
+  // Older projected rows carry only the primary diff; these remain inspectable
+  // under the legacy tool name as well as current multi-file patch rows.
   const html = renderToStaticMarkup(
     <ToolInspector
       row={mkToolRow({

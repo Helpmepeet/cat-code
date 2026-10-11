@@ -23,10 +23,16 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { act, createElement, useState } from 'react'
 import type { ReactNode } from 'react'
+import { workspaceFileAvailability } from '../../main/workspaceFileAvailability.js'
+import type { CatCodeBridge } from '../../shared/protocol.js'
+import { sessionDescriptorFixture } from '../../shared/sessionDescriptor.fixture.js'
 import { createDomTestHarness } from './domTestHarness.js'
-import type { DomTestHarness } from './domTestHarness.js'
+import type { DomTestHarness, MountedTree } from './domTestHarness.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import type { AgentRevealRequest } from './transcriptAgentReveal.js'
 import type { RestorePhase } from './TranscriptView.js'
@@ -95,18 +101,18 @@ function imageReadRow(): NestedToolUseRow {
   }
 }
 
-function generatedImageRow(): NestedToolUseRow {
+function generatedImageRow(filePath = '/tmp/cat.png'): NestedToolUseRow {
   return {
     ...readRow(0),
     toolName: 'GenerateImage',
     toolFamily: 'imagegen',
     input: { prompt: 'a cat' },
     result: {
-      content: 'saved to /tmp/cat.png',
+      content: `saved to ${filePath}`,
       isError: false,
       diff: null,
       generatedImage: {
-        filePath: '/tmp/cat.png',
+        filePath,
         model: 'gpt-image-2-codex',
         size: '1024x1024',
         outputFormat: 'png',
@@ -500,30 +506,67 @@ test('clicking a generated image opens the shared image preview', async () => {
 })
 
 test('right-clicking a generated image offers the image and its file outside the workspace', async () => {
-  const tree = await harness.mount(
-    createElement(TranscriptRowsView, { rows: [generatedImageRow()], cwd: '/repo' }),
-  )
-  const image = tree.container.querySelector<HTMLElement>(
-    'button[aria-label="Expand generated image"] img',
-  )
-  const event = new globalThis.MouseEvent('contextmenu', {
-    bubbles: true,
-    cancelable: true,
-    clientX: 100,
-    clientY: 150,
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-generated-image-menu-'))
+  const cwd = join(root, 'workspace')
+  const generatedImagesRoot = join(root, 'generated-images')
+  mkdirSync(cwd)
+  mkdirSync(generatedImagesRoot)
+  const filePath = join(generatedImagesRoot, 'cat.png')
+  writeFileSync(filePath, 'fixture image')
+  const sessions = [sessionDescriptorFixture({ appSessionId: blockSource.sessionId, cwd })]
+  const reads: Promise<boolean>[] = []
+  const requests: Array<{ appSessionId: string; path: string }> = []
+  const bridge: Pick<CatCodeBridge, 'getWorkspaceFileAvailability'> = {
+    getWorkspaceFileAvailability(appSessionId, path) {
+      requests.push({ appSessionId, path })
+      const read = workspaceFileAvailability({ appSessionId, path }, sessions, { generatedImagesRoot })
+      reads.push(read)
+      return read
+    },
+  }
+  const previousBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  const writes: string[] = []
+  Object.defineProperty(window, 'catcode', { configurable: true, value: bridge })
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true, value: { writeText: async (text: string) => { writes.push(text) } },
   })
-  await act(async () => {
-    image?.dispatchEvent(event)
-  })
-  await harness.nextFrame()
+  let tree: MountedTree | undefined
+  try {
+    tree = await harness.mount(
+      createElement(TranscriptRowsView, { rows: [generatedImageRow(filePath)], cwd }),
+    )
+    const image = tree.container.querySelector<HTMLElement>(
+      'button[aria-label="Expand generated image"] img',
+    )
+    const event = new globalThis.MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 100,
+      clientY: 150,
+    })
+    await act(async () => { image?.dispatchEvent(event) })
+    await act(async () => { await Promise.all(reads); await harness.nextFrame() })
 
-  expect(event.defaultPrevented).toBe(true)
-  const menu = tree.container.querySelector('[role="menu"][aria-label="File actions for cat.png"]')
-  const labels = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map(
-    item => item.textContent,
-  )
-  // /tmp/cat.png is outside /repo: Open is offered only because the host validates it.
-  expect(labels).toEqual(['Copy image', 'Copy', 'Open in'])
+    expect(event.defaultPrevented).toBe(true)
+    expect(requests).toEqual([{ appSessionId: blockSource.sessionId, path: filePath }])
+    expect(await Promise.all(reads)).toEqual([true])
+    const menu = tree.container.querySelector('[role="menu"][aria-label="File actions for cat.png"]')
+    const labels = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map(
+      item => item.textContent,
+    )
+    // The image is outside cwd; the real host resolver approves its generated-images root.
+    expect(labels).toEqual(['Copy image', 'Copy', 'Open in'])
+    await click(menu?.querySelector<HTMLElement>('[aria-haspopup="menu"]'))
+    expect(writes).toEqual([filePath])
+  } finally {
+    await tree?.unmount()
+    if (previousBridge) Object.defineProperty(window, 'catcode', previousBridge)
+    else Reflect.deleteProperty(window, 'catcode')
+    if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {

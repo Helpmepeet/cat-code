@@ -1,0 +1,64 @@
+.session-pane {
+  container: session-pane / inline-size;
+  padding-inline: min(2rem, 6%);
+}
+
+.composer-controls {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.composer-controls > *,
+.composer-account-controls > *,
+.composer-account-identity > * {
+  max-width: 100%;
+}
+
+.composer-controls [data-composer-face] {
+  max-width: min(170px, 100%);
+}
+
+.composer-account-controls {
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+.composer-account-identity:empty {
+  display: none;
+}
+
+.composer-account-identity .composer-account-face {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+@container session-pane (max-width: 600px) {
+  .composer-actions {
+    align-items: flex-start;
+    column-gap: 7px;
+  }
+
+  .composer-separator {
+    display: none;
+  }
+}
+
+.composer-popover {
+  position: fixed;
+  z-index: 40;
+  left: var(--composer-popover-left, 8px);
+  top: var(--composer-popover-top, 8px);
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  max-height: var(--composer-popover-height, calc(100vh - 16px));
+  overflow: auto;
+}
+
+.composer-popover > :is([role='menu'], [role='dialog']) {
+  position: relative;
+  inset: auto;
+  margin: 0;
+  max-width: calc(100vw - 16px);
+}

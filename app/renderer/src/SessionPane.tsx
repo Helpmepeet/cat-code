@@ -65,6 +65,7 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import type { AskQuestionDraft } from './askQuestionFlowModel.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
+import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
 import {
   type RawMessageSessionLog,
 } from './rawMessageLog.js'
@@ -1694,7 +1695,7 @@ export function SessionPane({
     /* Wrapped without re-indenting the pane below, the same way the composer
      * dock's own column wrapper is. */
     <AgentFaceRegistryContext.Provider value={paneFaces}>
-    <main className="relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-8 pb-8">
+    <main className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
       <SubagentDock state={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
         onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onOpenWorker={openDockWorker} onOpenWorkers={() => onOpenTasks?.(undefined, true)} />
       {/* No chat header row: the prototype's ChatView has none (the session
@@ -1811,7 +1812,7 @@ export function SessionPane({
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={activeDescriptor?.moving ? undefined : onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
-            onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
+            onSaveDiagnostics={() => void requestDiagnosticsSave(toast)}
             onMessageAction={activeDescriptor?.moving ? undefined : onMessageAction}
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}

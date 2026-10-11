@@ -161,6 +161,7 @@ import {
   CH_HOST_OPEN_HISTORY,
   CH_HOST_SAVE_TEXT,
   CH_HOST_OPEN_WORKSPACE_FILE,
+  CH_HOST_WORKSPACE_FILE_AVAILABILITY,
   CH_HOST_ACCOUNT_DELETE,
   CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
@@ -196,7 +197,6 @@ import {
   type WindowVisibilityReason,
   resolveSidecarLaunch,
   type SidecarLaunchPlan,
-  runDetachedCliFallbackSpawn,
   selectTranscriptBackfillCandidates,
   frameMutatedAccountsPool,
   stampHistoryViewAnchor,
@@ -236,7 +236,9 @@ import {
   resolveOpenHistorySession,
   type TrustedOpenHistorySeed,
 } from './openHistorySession.js'
-import { openWorkspaceFile, type OpenWorkspaceFileTarget } from './openWorkspaceFile.js'
+import { openWorkspaceFile, type OpenWorkspaceFileTarget, type SourceLocation } from './openWorkspaceFile.js'
+import { launchEditorApp } from './editorLauncher.js'
+import { workspaceFileAvailability } from './workspaceFileAvailability.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -294,7 +296,7 @@ import { MAX_SUGGESTION_SELECTIONS, MAX_TEXT_FIELD_CHARS } from '../shared/limit
 import { createOperationalLogSink } from './operationalLogSink.js'
 import { createOperationalRecord } from '../shared/operationalLog.js'
 import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
-import { buildDiagnosticsBundle } from './diagnosticsBundle.js'
+import { saveDiagnosticsBundle } from './saveDiagnosticsBundle.js'
 import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, type DeliveryStage } from '../shared/deliveryTrace.js'
 import {
   ACCOUNT_VERB_TYPES,
@@ -1853,12 +1855,23 @@ function createWindow(): void {
     startupTimers.schedule(startIdleParkDriver)
   })
 
+  let rendererLoadGeneration = 0
   const loadRenderer = () => {
+    const generation = ++rendererLoadGeneration
+    const loadFailed = (error: unknown) => {
+      logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+      // Electron also emits did-fail-load for this rejection. The promise owns
+      // the attempt, so a superseded load cannot consume its replacement's
+      // budget and the two observations cannot spend two retries.
+      if (generation !== rendererLoadGeneration) return
+      if (error !== null && typeof error === 'object' &&
+          (('code' in error && error.code === 'ERR_ABORTED') ||
+           ('errno' in error && error.errno === -3))) return
+      rendererLossTransition.loadFailed('load-failed')
+    }
     if (IS_DEV) {
       logOperational('renderer.load.started', 'info', { source: 'dev' })
-      void window.loadURL(APP_ORIGIN_DEV).catch(error => {
-        logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
-      })
+      void window.loadURL(APP_ORIGIN_DEV).catch(loadFailed)
     } else {
       // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
       // launching. Reaching the packaged branch anyway means the dev launcher
@@ -1873,9 +1886,7 @@ function createWindow(): void {
         )
       }
       logOperational('renderer.load.started', 'info', { source: 'packaged' })
-      void window.loadFile(PACKAGED_INDEX_PATH).catch(error => {
-        logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
-      })
+      void window.loadFile(PACKAGED_INDEX_PATH).catch(loadFailed)
     }
   }
   const giveUpOnRenderer = (reason: RendererDeathReason) => {
@@ -1886,8 +1897,10 @@ function createWindow(): void {
     if (!rendererRecoveryDialogShown) {
       rendererRecoveryDialogShown = true
       dialog.showErrorBox(
-        'Cat Code window crashed',
-        'The window crashed several times in a row, so automatic reload stopped. Quit and reopen the app to continue.',
+        reason === 'load-failed' ? 'Could not open Cat Code' : 'Cat Code window crashed',
+        reason === 'load-failed'
+          ? 'The window could not finish opening after several attempts. Quit and reopen the app to try again.'
+          : 'The window crashed several times in a row, so automatic reload stopped. Quit and reopen the app to continue.',
       )
     }
   }
@@ -1969,9 +1982,6 @@ function createWindow(): void {
       // ordinary dev reload looks like.
       if (IS_DEV && code !== -3) {
         process.stderr.write(`[main] the window failed to load (code ${code}).\n`)
-      }
-      if (rendererRecovering && code !== -3) {
-        rendererLossTransition.loadFailed('load-failed')
       }
     }
   })
@@ -2892,30 +2902,24 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_OPEN_LOGS, () => {
     void shell.openPath(operationalLog.getDirectory())
   })
-  ipcMain.handle(CH_SAVE_DIAGNOSTICS, async (): Promise<boolean> => {
-    const result = mainWindow
-      ? await dialog.showSaveDialog(mainWindow, { defaultPath: 'cat-code-diagnostics.json' })
-      : await dialog.showSaveDialog({ defaultPath: 'cat-code-diagnostics.json' })
-    if (result.canceled || !result.filePath) return false
-    try {
-      await writeFile(
-        result.filePath,
-        buildDiagnosticsBundle({
-          logsDirectory: operationalLog.getDirectory(),
-          appVersion: app.getVersion(),
-          packaged: app.isPackaged,
-          currentLaunchId: operationalLog.launchId,
-          buildId: process.env.CATCODE_BUILD_ID,
-          commitId: process.env.CATCODE_COMMIT_ID,
-        }),
-        'utf8',
-      )
-      return true
-    } catch (error) {
-      logOperational('diagnostic', 'error', { source: 'diagnosticsExport', reason: classifyFailure(error) })
-      return false
-    }
-  })
+  ipcMain.handle(CH_SAVE_DIAGNOSTICS, () =>
+    saveDiagnosticsBundle({
+      chooseDestination: () => mainWindow
+        ? dialog.showSaveDialog(mainWindow, { defaultPath: 'cat-code-diagnostics.json' })
+        : dialog.showSaveDialog({ defaultPath: 'cat-code-diagnostics.json' }),
+      bundleOptions: {
+        logsDirectory: operationalLog.getDirectory(),
+        appVersion: app.getVersion(),
+        packaged: app.isPackaged,
+        currentLaunchId: operationalLog.launchId,
+        buildId: process.env.CATCODE_BUILD_ID,
+        commitId: process.env.CATCODE_COMMIT_ID,
+      },
+      onFailure: error => logOperational('diagnostic', 'error', {
+        source: 'diagnosticsExport', reason: classifyFailure(error),
+      }),
+    }),
+  )
 
   // IDLE-PARK §4(b) — the renderer reports which sessions are on screen so the
   // park policy skips them. Validated HERE, at the boundary, not at the preload
@@ -3890,7 +3894,7 @@ function registerHostControlPlane(): void {
     return openWorkspaceFile(
       input,
       host.listSessions(),
-      (path, target) => launchTargetOpener(path, target),
+      (path, target, location) => launchTargetOpener(path, target, location),
       {
         generatedImagesRoot: join(
           process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
@@ -3899,78 +3903,56 @@ function registerHostControlPlane(): void {
       },
     )
   })
+  // docs/decisions/2026-10-11-workspace-file-availability.md: metadata only,
+  // with the same canonical regular-file policy and no operating-system action.
+  let availabilityReads = 0
+  ipcMain.handle(CH_HOST_WORKSPACE_FILE_AVAILABILITY, async (event, input: unknown): Promise<boolean> => {
+    if (!host || !isMainWindowSender(event) || availabilityReads >= 8) return false
+    availabilityReads++
+    try {
+      return await workspaceFileAvailability(input, host.listSessions(), {
+        generatedImagesRoot: join(
+          process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+          'generated-images',
+        ),
+      })
+    } finally {
+      availabilityReads--
+    }
+  })
 }
 
 function launchTargetOpener(
   path: string,
   target?: OpenWorkspaceFileTarget,
+  location?: SourceLocation,
 ): Promise<boolean | string> {
   if (target === 'finder') {
     shell.showItemInFolder(path)
     return Promise.resolve(true)
   }
   if (target === 'vscode') {
-    return launchEditorApp(['Visual Studio Code'], ['code'], path)
+    return launchEditorApp('vscode', 'Visual Studio Code', [
+      join('/Applications', 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
+      join(homedir(), 'Applications', 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
+      'code',
+    ], path, location)
   }
   if (target === 'zed') {
-    return launchEditorApp(['Zed'], ['zed'], path)
+    return launchEditorApp('zed', 'Zed', [
+      join('/Applications', 'Zed.app', 'Contents', 'MacOS', 'cli'),
+      join(homedir(), 'Applications', 'Zed.app', 'Contents', 'MacOS', 'cli'),
+      'zed',
+    ], path, location)
   }
   if (target === 'cursor') {
-    return launchEditorApp(['Cursor'], ['cursor'], path)
+    return launchEditorApp('cursor', 'Cursor', [
+      join('/Applications', 'Cursor.app', 'Contents', 'Resources', 'app', 'bin', 'cursor'),
+      join(homedir(), 'Applications', 'Cursor.app', 'Contents', 'Resources', 'app', 'bin', 'cursor'),
+      'cursor',
+    ], path, location)
   }
   return shell.openPath(path)
-}
-
-function launchEditorApp(
-  appNames: readonly string[],
-  cliBinaries: readonly string[],
-  filePath: string,
-): Promise<boolean> {
-  return new Promise<boolean>(resolve => {
-    let resolved = false
-    const finish = (ok: boolean) => {
-      if (!resolved) {
-        resolved = true
-        resolve(ok)
-      }
-    }
-
-    if (process.platform === 'darwin' && appNames.length > 0) {
-      try {
-        const child = spawn('open', ['-a', appNames[0], filePath], {
-          stdio: 'ignore',
-        })
-        child.on('error', () => {
-          tryCliFallback()
-        })
-        child.on('exit', code => {
-          if (code === 0) finish(true)
-          else tryCliFallback()
-        })
-      } catch {
-        tryCliFallback()
-      }
-      return
-    }
-
-    tryCliFallback()
-
-    function tryCliFallback() {
-      if (cliBinaries.length === 0) {
-        finish(false)
-        return
-      }
-      runDetachedCliFallbackSpawn({
-        spawn: () =>
-          spawn(cliBinaries[0], [filePath], {
-            detached: true,
-            stdio: 'ignore',
-          }),
-        setTimer: (run, ms) => setTimeout(run, ms),
-        settleDelayMs: 150,
-      }).then(finish)
-    }
-  })
 }
 
 function registerDebugStateHandler(): void {
