@@ -28,8 +28,9 @@ ds-bundle/
 .design-sync/learnings/
 .design-sync/node_modules
 
-# Local generated fixtures and test recordings (tracked files remain tracked)
-/fixtures/
+# Local generated fixtures and test recordings; keep handwritten expectations
+/fixtures/*
+!/fixtures/auto-mode-expectations.ts
 
 # Local review and test evidence
 /tmp/
