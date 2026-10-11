@@ -27,6 +27,7 @@ const { releaseActiveTranscriptLease } = await import('../../src/utils/transcrip
 const { getDefaultAppState } = await import('../../src/state/AppStateStore.js')
 const { registerAsyncAgent, completeAgentTask, enqueueAgentNotification, queuePendingMessageIfRunning } = await import('../../src/tasks/LocalAgentTask/LocalAgentTask.js')
 const { AbortError } = await import('../../src/utils/errors.js')
+const { registerActiveSubagent, unregisterActiveSubagent, flushStallDetectedEntries } = await import('../../src/utils/cleanupRegistry.js')
 const { _clearOutputsForTest, _resetTaskOutputDirForTest } = await import('../../src/utils/task/diskOutput.js')
 const { resetCommandQueue } = await import('../../src/utils/messageQueueManager.js')
 const { AgentTool } = await import('../../src/tools/AgentTool/AgentTool.js')
@@ -113,10 +114,11 @@ test('desktop restore returns the undelivered worker outcome to the parent with 
 })
 
 const classifierEnabled = feature('TRANSCRIPT_CLASSIFIER') ? true : false
-for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'killed-cleanup', 'review-pending', 'review-blocked'] as const) {
+for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'killed-cleanup', 'review-pending', 'review-blocked', 'completion-shutdown', 'failure-shutdown', 'api-error-shutdown', 'killed-shutdown'] as const) {
   const reviewing = boundary.startsWith('review-')
-  const status = boundary === 'killed-cleanup' ? 'killed'
-    : boundary === 'failure-cleanup' || boundary === 'api-error-cleanup' ? 'failed' : 'completed'
+  const shutdown = boundary.endsWith('-shutdown')
+  const status = boundary.startsWith('killed-') ? 'killed'
+    : boundary.startsWith('failure-') || boundary.startsWith('api-error-') ? 'failed' : 'completed'
   test.skipIf(reviewing && !classifierEnabled)(
     `desktop recovers ${status} output before notification persistence: ${boundary}`, async () => {
       const sessionId = crypto.randomUUID()
@@ -140,7 +142,15 @@ for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'kill
       })
       let state = getDefaultAppState()
       if (reviewing) state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
-      const setAppState = (update: (prev: typeof state) => typeof state) => { state = update(state) }
+      const setAppState = (update: (prev: typeof state) => typeof state) => {
+        const wasRunning = state.tasks.worker?.status === 'running'
+        state = update(state)
+        if (shutdown && wasRunning && state.tasks.worker?.status === status) {
+          // A parent exit can run the real stall sweep at the first await after
+          // the terminal transition, before worker bookkeeping finishes.
+          queueMicrotask(() => flushStallDetectedEntries(path))
+        }
+      }
       const registration = registerAsyncAgent({
         agentId: 'worker', prompt: 'fixture', description: 'Fixture', toolUseId,
         selectedAgent: { agentType: 'implementor', source: 'built-in', baseDir: 'built-in', whenToUse: 'fixture', getSystemPrompt: () => 'fixture' }, setAppState,
@@ -153,6 +163,10 @@ for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'kill
       let reached!: () => void
       const paused = new Promise<void>(resolve => { reached = resolve })
       const gate = new Promise<void>(resolve => { release = resolve })
+      registerActiveSubagent('worker', {
+        startedAt: Date.now(), toolUseId, transcriptPath: join(root, 'worker.jsonl'),
+        agentType: 'implementor', description: 'Fixture', sessionId,
+      })
       let reviews = 0
       scriptedReview = async () => {
         reviews++
@@ -166,9 +180,9 @@ for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'kill
           action.message.content = [{ type: 'tool_use', id: 'fixture-action', name: FileReadTool.name, input: { file_path: 'fixture.ts' } }]
           yield action
           yield createAssistantMessage({ content: 'worker outcome fixture.ts' })
-          if (boundary === 'failure-cleanup') throw new Error('fixture stream failed')
-          if (boundary === 'killed-cleanup') throw new AbortError('fixture stopped')
-          if (boundary === 'api-error-cleanup') {
+          if (boundary.startsWith('failure-')) throw new Error('fixture stream failed')
+          if (boundary.startsWith('killed-')) throw new AbortError('fixture stopped')
+          if (boundary.startsWith('api-error-')) {
             yield createAssistantAPIErrorMessage({ content: 'fixture API failed' })
           }
         },
@@ -200,7 +214,7 @@ for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'kill
         expect(outcomes).toHaveLength(1)
         expect(JSON.stringify(outcomes)).toContain('worker outcome fixture.ts')
         if (status !== 'completed') expect(JSON.stringify(outcomes)).toContain(instruction)
-        if (status === 'failed') expect(JSON.stringify(outcomes)).toContain(boundary === 'failure-cleanup' ? 'fixture stream failed' : 'fixture API failed')
+        if (status === 'failed') expect(JSON.stringify(outcomes)).toContain(boundary.startsWith('failure-') ? 'fixture stream failed' : 'fixture API failed')
         expect(outcomes[0]).toMatchObject({ origin: { kind: 'task-notification', taskId: 'worker', toolUseId } })
         if (boundary === 'review-pending') expect(JSON.stringify(outcomes)).toContain('safety classifier was unavailable')
         if (boundary === 'review-blocked') expect(JSON.stringify(outcomes)).toContain('SECURITY WARNING')
@@ -216,6 +230,7 @@ for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'kill
         clearTimeout(timeout)
         release()
         await lifecycle
+        unregisterActiveSubagent('worker')
         scriptedReview = undefined
         resetCommandQueue()
         await flushSessionStorage()

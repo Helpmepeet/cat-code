@@ -18,8 +18,8 @@ validation lanes checked the original and repaired owners.
 These are local repairs using existing state, formats, limits, and helpers.
 There are no new dependencies, protocol versions, durable fields, exported test
 seams, or orchestration frameworks. The five production owners have a combined
-net increase of 37 lines; the remaining code changes extend existing tests and
-their transcript/process fixtures.
+net increase of 35 lines after the review repair below; the remaining code
+changes extend existing tests and their transcript/process fixtures.
 
 ## Assignment outcomes
 
@@ -74,3 +74,56 @@ An independent validation run initially omitted the configuration override and
 may have read default 30-day transcript statistics. No live writes or network
 probes were observed; its reportable pass counts come from corrected isolated
 reruns. Module initialization was not traced at the syscall level.
+
+## Review follow-up
+
+Two further agents reviewed all five repairs with separate source/contract and
+execution lenses. The original owner suites passed 439 tests, and each original
+regression failed against the earlier production owner. The review found one
+high severity result-loss race in the worker repair and the existing completed
+path: the lifecycle saved a terminal notification, then awaited worker-state
+bookkeeping while its entry remained in the active registry. The parent exit
+sweep could append a later `stall-detected` terminal without that notification;
+restore selected the latest terminal and omitted the saved output and instruction
+reports.
+
+The follow-up unregisters terminal workers immediately after the synchronous
+terminal append succeeds, before awaited bookkeeping. It uses the existing
+registry helper and reduces production code by two lines. The other four
+repairs had no confirmed review findings.
+
+Four new table cases invoke the real exit sweep at the first bookkeeping await
+for completed, failed, API-error, and killed outcomes. All four failed against
+`69e8d179`; all eleven recovery cases now pass with the classifier enabled,
+alongside 80 worker lifecycle, registry, state, and restore tests. The tests use
+a microtask to reproduce the exit interleaving deterministically, real terminal
+persistence and actual resume/deduplication. They do not run full process
+shutdown or establish power-loss durability.
+
+The frozen dev-full build, changed-file lint, desktop typecheck, and scoped
+sidecar typecheck passed. Root TypeScript retains the same 1,058 normalized
+baseline diagnostics with no additions or removals. Temporary archive builds
+lack Git provenance; the changed engine file was linted directly. No GUI or
+live provider probes were added.
+
+Final full desktop runs used frozen `69e8d179` baseline and repaired snapshots
+with separate temporary configuration and short socket paths:
+
+| Snapshot | Passed | Skipped | Failed |
+|---|---:|---:|---:|
+| Baseline `69e8d179` | 5,762 | 3 | 10 |
+| Baseline plus the review repair | 5,767 | 3 | 9 |
+
+No failing test names were introduced. The nine shared failures include the
+earlier eight and a repeated-relocation skill-path expectation, also reproduced
+separately on the baseline. A task-subscription test failed only in the broad
+baseline run; its 18-test owner suite passed separately on both snapshots.
+That pass is not attributed to this repair. The first repaired broad run used
+an overly long temporary path and hit four socket-length guards; corrected
+short-path runs supply the acceptance totals above.
+
+For full shutdown acceptance, terminate a synthetic parent while a terminal
+worker is awaiting bookkeeping, cold-resume its transcript, and verify one
+outcome with the saved output and unresolved instructions. This review proves
+that interleaving through the real exit sweep and storage/resume owners, rather
+than terminating the entire parent process.

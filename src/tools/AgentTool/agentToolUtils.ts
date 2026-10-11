@@ -983,11 +983,11 @@ export async function prepareBackgroundAgentHandoff({
   recordOutcome(reviewRequired
     ? `${HANDOFF_CLASSIFIER_UNAVAILABLE_WARNING}\n\n${finalMessage}`
     : finalMessage)
+  unregisterActiveSubagent(taskId)
   await recordWorkerSessionTerminal({
     sessionId: parentSessionId, agentId: taskId, status: 'completed',
     createStateIfMissing: sessionStateTracking,
   }).catch(error => logForDebugging(`Failed to record worker completion: ${error}`))
-  unregisterActiveSubagent(taskId)
   if (reviewEnabled) {
     const toolPermissionContext = toolUseContext.getAppState().toolPermissionContext
     const currentReviewRequired = toolPermissionContext.mode === 'auto'
@@ -1118,6 +1118,8 @@ export async function runAsyncAgentLifecycle({
       endedAt: new Date().toISOString(),
       notification,
     })
+    // An exit sweep must not replace this saved outcome while bookkeeping awaits.
+    unregisterActiveSubagent(taskId)
   }
   try {
     const resolveActivity = createActivityDescriptionResolver(
@@ -1242,8 +1244,6 @@ export async function runAsyncAgentLifecycle({
       }).catch(_err =>
         logForDebugging(`Failed to record worker failure: ${_err}`),
       )
-      unregisterActiveSubagent(taskId)
-
       const worktreeResult = await getWorktreeResult()
       enqueueAgentNotification({
         taskId,
@@ -1322,7 +1322,6 @@ export async function runAsyncAgentLifecycle({
       }).catch(_err =>
       logForDebugging(`Failed to record worker kill: ${_err}`),
       )
-      unregisterActiveSubagent(taskId)
       const worktreeResult = await getWorktreeResult()
       enqueueAgentNotification({
         taskId,
@@ -1353,7 +1352,6 @@ export async function runAsyncAgentLifecycle({
     }).catch(_err =>
       logForDebugging(`Failed to record worker failure: ${_err}`),
     )
-    unregisterActiveSubagent(taskId)
     const worktreeResult = await getWorktreeResult()
     enqueueAgentNotification({
       taskId,
