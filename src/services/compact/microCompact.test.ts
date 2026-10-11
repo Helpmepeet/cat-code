@@ -51,7 +51,7 @@ function toolResultUser(id: string, content: string): UserMessage {
 
 /** Three Bash tool results; with keepRecent 1 the first two get cleared. */
 function conversation(): Message[] {
-  return [
+  const messages = [
     toolUseAssistant('t1'),
     toolResultUser('t1', RESULT_A),
     toolUseAssistant('t2'),
@@ -59,6 +59,14 @@ function conversation(): Message[] {
     toolUseAssistant('t3'),
     toolResultUser('t3', RESULT_C),
   ]
+  const anchor = messages[4] as AssistantMessage
+  anchor.message.usage = {
+    input_tokens: 5000,
+    output_tokens: 100,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  } as NonNullable<typeof anchor.message.usage>
+  return messages
 }
 
 /** Same conversation plus a just-now assistant turn, so the gap never fires. */
@@ -143,6 +151,7 @@ describe('time-based microcompact accounting', () => {
     )
 
     expect(clearedIds(second.messages)).toEqual(['t1', 't2'])
+    // This fixture has no new usage, so the old server anchor is still stale.
     expect(second.tokensFreed).toBe(EXPECTED_FREED)
   })
 
@@ -195,5 +204,76 @@ describe('time-based microcompact accounting', () => {
 
     expect(clearedIds(forked.messages)).toEqual([])
     expect(forked.tokensFreed).toBeUndefined()
+  })
+
+  test('a post-clear server anchor is not charged the same shrink savings again', async () => {
+    const { microcompactMessages } = await import('./microCompact.js')
+    const { shouldAutoCompact } = await import('./autoCompact.js')
+    const savedWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '100000'
+    try {
+      const original = conversation().map(message => {
+        if (message.type !== 'user' || !Array.isArray(message.message.content)) return message
+        return {
+          ...message,
+          message: {
+            ...message.message,
+            content: message.message.content.map(block =>
+              block.type === 'tool_result' && block.tool_use_id !== 't3'
+                ? { ...block, content: 'x'.repeat(80000) }
+                : block),
+          },
+        } as UserMessage
+      })
+      const preClearAnchor = toolUseAssistant('preclear')
+      preClearAnchor.message.content = [{ type: 'text', text: 'Finished reading.' }]
+      preClearAnchor.message.usage = {
+        input_tokens: 100000, output_tokens: 100,
+        cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      } as NonNullable<typeof preClearAnchor.message.usage>
+      original.push(preClearAnchor)
+      const first = await microcompactMessages(original, undefined, 'repl_main_thread')
+      expect(await shouldAutoCompact(first.messages, 'claude-sonnet-4-6', 'repl_main_thread', first.tokensFreed)).toBe(false)
+      const fresh = toolUseAssistant('fresh', new Date().toISOString())
+      fresh.message.usage = {
+        input_tokens: 67500, output_tokens: 100,
+        cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      } as NonNullable<typeof fresh.message.usage>
+      const sticky = await microcompactMessages([...original, fresh], undefined, 'repl_main_thread')
+      expect(clearedIds(sticky.messages)).toEqual(['t1', 't2'])
+      expect(await shouldAutoCompact(sticky.messages, 'claude-sonnet-4-6', 'repl_main_thread', sticky.tokensFreed)).toBe(true)
+    } finally {
+      if (savedWindow === undefined) delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+      else process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = savedWindow
+    }
+  })
+
+  test('a later idle trigger compensates only results newly removed from that anchor', async () => {
+    const { microcompactMessages } = await import('./microCompact.js')
+    const original = conversation()
+    await microcompactMessages(original, undefined, 'repl_main_thread')
+    const nextAnchor = toolUseAssistant('t4')
+    nextAnchor.message.usage = {
+      input_tokens: 10000, output_tokens: 100,
+      cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+    } as NonNullable<typeof nextAnchor.message.usage>
+    const next = await microcompactMessages(
+      [...original, nextAnchor, toolResultUser('t4', 'latest result')],
+      undefined,
+      'repl_main_thread',
+    )
+    expect(clearedIds(next.messages)).toEqual(['t1', 't2', 't3'])
+    expect(next.tokensFreed).toBe(roughTokenCountEstimation(RESULT_C))
+  })
+
+  test('clearing results in the estimated tail needs no usage compensation', async () => {
+    const { microcompactMessages } = await import('./microCompact.js')
+    const messages = conversation()
+    const first = messages[0] as AssistantMessage
+    first.message.usage = (messages[4] as AssistantMessage).message.usage
+    delete (messages[4] as AssistantMessage).message.usage
+    const result = await microcompactMessages(messages, undefined, 'repl_main_thread')
+    expect(clearedIds(result.messages)).toEqual(['t1', 't2'])
+    expect(result.tokensFreed ?? 0).toBe(0)
   })
 })

@@ -1,4 +1,5 @@
 import { getMainLoopModel } from './model/model.js'
+import { resolveRequestProvider, type APIProvider } from './model/providers.js'
 
 // Document extensions that are handled specially
 export const DOCUMENT_EXTENSIONS = new Set(['pdf'])
@@ -50,14 +51,17 @@ export function parsePDFPageRange(
 }
 
 /**
- * Check if PDF reading is supported with the current model.
- * PDF document blocks work on all providers (1P, Vertex, Bedrock, Foundry).
+ * Check whether the invoking model/provider accepts native PDF documents.
+ * Codex uses rendered page images instead of Anthropic document blocks.
  * Haiku 3 is the only remaining model that predates PDF support; users on
  * it fall back to the page-extraction path (poppler-utils). Substring match
  * covers all provider ID formats (Bedrock prefixes, Vertex @-dates).
  */
-export function isPDFSupported(): boolean {
-  return !getMainLoopModel().toLowerCase().includes('claude-3-haiku')
+export function isPDFSupported(
+  model: string = getMainLoopModel(),
+  provider: APIProvider = resolveRequestProvider(model),
+): boolean {
+  return provider !== 'openai' && !model.toLowerCase().includes('claude-3-haiku')
 }
 
 /**

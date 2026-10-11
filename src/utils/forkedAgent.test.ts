@@ -8,13 +8,16 @@ import {
 import type { ToolUseContext } from '../Tool.js'
 import { createFileStateCacheWithSizeLimit } from './fileStateCache.js'
 import type { CacheSafeParams } from './forkedAgent.js'
+import { asSystemPrompt } from './systemPromptType.js'
 
 let queryError: Error | undefined
 let lastQueryParams: { maxTurns?: number } | undefined
+let onQuery: ((context: ToolUseContext) => void) | undefined
 
 mock.module('../query.js', () => ({
-  query: mock(async function* (params: { maxTurns?: number }) {
+  query: mock(async function* (params: { maxTurns?: number; toolUseContext: ToolUseContext }) {
     lastQueryParams = params
+    onQuery?.(params.toolUseContext)
     if (queryError) {
       throw queryError
     }
@@ -40,7 +43,7 @@ function createCacheSafeParams(): CacheSafeParams {
   } as unknown as ToolUseContext
 
   return {
-    systemPrompt: [],
+    systemPrompt: asSystemPrompt([]),
     userContext: {},
     systemContext: {},
     toolUseContext,
@@ -97,6 +100,7 @@ describe('runForkedAgent turn cap', () => {
 describe('runForkedAgent Codex resource cleanup', () => {
   afterEach(() => {
     queryError = undefined
+    onQuery = undefined
     resetCodexLeaseManagerForTest()
   })
 
@@ -125,4 +129,34 @@ describe('runForkedAgent Codex resource cleanup', () => {
 
     expect(getCodexLeaseForOwner('tool-context-owner')).toBeUndefined()
   })
+
+  for (const fails of [false, true]) {
+    test(`clears only owned skill hooks when a cache-sharing fork ${fails ? 'fails' : 'completes'}`, async () => {
+      const { runForkedAgent } = await import('./forkedAgent.js')
+      const { registerSkillHooks } = await import('./hooks/registerSkillHooks.js')
+      const { getDefaultAppState } = await import('../state/AppStateStore.js')
+      const params = createCacheSafeParams()
+      let app = getDefaultAppState()
+      const setAppState = (update: (prev: typeof app) => typeof app) => { app = update(app) }
+      params.toolUseContext.getAppState = () => app
+      params.toolUseContext.setAppState = setAppState
+      const hooks = { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command' as const, command: 'echo guard' }] }] }
+      registerSkillHooks(setAppState, 'parent', hooks, 'guard')
+      registerSkillHooks(setAppState, 'other-worker', hooks, 'guard')
+      onQuery = context => {
+        registerSkillHooks(context.setAppStateForTasks!, context.agentId!, hooks, 'guard')
+        expect(app.sessionHooks.has('owned-worker')).toBe(true)
+      }
+      queryError = fails ? new Error('fork failed') : undefined
+      const run = runForkedAgent({
+        promptMessages: [], cacheSafeParams: params,
+        canUseTool: async () => ({ behavior: 'deny', message: 'Unexpected tool', decisionReason: { type: 'other', reason: 'Unexpected tool' } }),
+        querySource: 'session_memory', forkLabel: 'hook-cleanup',
+        overrides: { agentId: 'owned-worker' as never }, skipTranscript: true, maxTurns: 5,
+      })
+      if (fails) await expect(run).rejects.toThrow('fork failed')
+      else await run
+      expect([...app.sessionHooks.keys()]).toEqual(['parent', 'other-worker'])
+    })
+  }
 })

@@ -219,7 +219,7 @@ If the user asks about the instruction prompt, feel free to talk about it.
 
 ${getCyberPolicyInstruction()}
 
-IMPORTANT: Do not generate or guess non-programming URLs. You may navigate to a well-known public service's exact root homepage when it directly fits the user's request. Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain. Otherwise use only URLs provided by the user in their messages or local files.`
+IMPORTANT: Do not generate or guess non-programming URLs. You may navigate to a well-known public service's exact root homepage when it directly fits the user's request. Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain. Otherwise use only URLs provided by the user in their messages or local files, or returned by your web searches or otherwise read with a tool.`
 }
 
 function getSimpleSystemSection(): string {
@@ -236,7 +236,7 @@ function getSimpleSystemSection(): string {
   return ['# System', ...prependBullets(items)].join(`\n`)
 }
 
-function getSimpleDoingTasksSection(): string {
+function getSimpleDoingTasksSection(enabledTools: Set<string>): string {
   const managed = isManagedSession()
   const codeStyleSubitems = [
     `Don't add features, refactor code, or make "improvements" beyond what was asked. A bug fix doesn't need surrounding code cleaned up. A simple feature doesn't need extra configurability. Don't add docstrings, comments, or type annotations to code you didn't change.`,
@@ -253,7 +253,7 @@ function getSimpleDoingTasksSection(): string {
     `If the user is wrong, say so clearly, calmly, and briefly. Do not agree just to preserve momentum. If you notice a nearby bug, risky assumption, or likely mistake related to the task, mention it briefly even if the user did not ask.`,
     `In general, do not propose changes to code you haven't read. If a user asks about or wants you to modify a file, read it first, and re-read it if another session may have changed it since. Understand existing code before suggesting modifications.`,
     `Do not create files unless they're absolutely necessary for achieving your goal. Generally prefer editing an existing file to creating a new one, as this prevents file bloat and builds on existing work more effectively.`,
-    `${RETRY_RULE} Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when you're genuinely stuck after investigation, not as a first response to friction.`,
+    `${RETRY_RULE} Escalate to the user${enabledTools.has(ASK_USER_QUESTION_TOOL_NAME) ? ` with ${ASK_USER_QUESTION_TOOL_NAME}` : ''} only when you're genuinely stuck after investigation, not as a first response to friction.`,
     `Be careful not to introduce security vulnerabilities such as command injection, XSS, SQL injection, and other OWASP top 10 vulnerabilities. If you notice that you wrote insecure code, immediately fix it. Prioritize writing safe, secure, and correct code.`,
     ...(managed ? [codeStyleSubitems[codeStyleSubitems.length - 1]!] : codeStyleSubitems),
     OUTCOME_REPORTING_RULE,
@@ -332,22 +332,38 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
   const embedded = hasEmbeddedSearchTools()
 
   const providedToolSubitems = [
-    `To read files use ${FILE_READ_TOOL_NAME} instead of cat, head, tail, or sed`,
-    `To edit files use ${FILE_EDIT_TOOL_NAME} instead of sed or awk`,
-    `To create files use ${FILE_WRITE_TOOL_NAME} instead of cat with heredoc or echo redirection`,
-    ...(embedded
-      ? []
-      : [
-          `To search for files use ${GLOB_TOOL_NAME} instead of find or ls`,
-          `To search the content of files, use ${GREP_TOOL_NAME} instead of grep`,
-        ]),
-    `\`rg\` and read-only git commands (\`git diff\`, \`git show\`, \`git blame\`) are fine through ${BASH_TOOL_NAME}`,
-    `Reserve using the ${BASH_TOOL_NAME} exclusively for system commands and terminal operations that require shell execution. If you are unsure and there is a relevant dedicated tool, default to using the dedicated tool and only fallback on using the ${BASH_TOOL_NAME} tool for these if it is absolutely necessary.`,
-  ]
+    enabledTools.has(FILE_READ_TOOL_NAME)
+      ? `To read files use ${FILE_READ_TOOL_NAME} instead of cat, head, tail, or sed`
+      : null,
+    enabledTools.has(FILE_EDIT_TOOL_NAME)
+      ? `To edit files use ${FILE_EDIT_TOOL_NAME} instead of sed or awk`
+      : null,
+    enabledTools.has(FILE_WRITE_TOOL_NAME)
+      ? `To create files use ${FILE_WRITE_TOOL_NAME} instead of cat with heredoc or echo redirection`
+      : null,
+    !embedded && enabledTools.has(GLOB_TOOL_NAME)
+      ? `To search for files use ${GLOB_TOOL_NAME} instead of find or ls`
+      : null,
+    !embedded && enabledTools.has(GREP_TOOL_NAME)
+      ? `To search the content of files, use ${GREP_TOOL_NAME} instead of grep`
+      : null,
+  ].filter(item => item !== null)
 
   const items = [
-    `Do NOT use the ${BASH_TOOL_NAME} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work:`,
-    providedToolSubitems,
+    ...(providedToolSubitems.length > 0
+      ? [
+          enabledTools.has(BASH_TOOL_NAME)
+            ? `Do NOT use the ${BASH_TOOL_NAME} to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work:`
+            : 'Use the available dedicated tools for file operations:',
+          providedToolSubitems,
+        ]
+      : []),
+    ...(enabledTools.has(BASH_TOOL_NAME)
+      ? [
+          `Use ${BASH_TOOL_NAME} for system commands and operations without a relevant dedicated tool.`,
+          `\`rg\` and read-only git commands (\`git diff\`, \`git show\`, \`git blame\`) are fine through ${BASH_TOOL_NAME}`,
+        ]
+      : []),
     taskToolName
       ? `Break down and manage your work with the ${taskToolName} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
       : null,
@@ -396,9 +412,14 @@ function getSessionSpecificGuidanceSection(
   const hasSkills =
     skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
-  const searchTools = hasEmbeddedSearchTools()
-    ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
-    : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
+  const dedicatedSearchTools = hasEmbeddedSearchTools()
+    ? []
+    : [GLOB_TOOL_NAME, GREP_TOOL_NAME].filter(name => enabledTools.has(name))
+  const searchTools = dedicatedSearchTools.length > 0
+    ? `the ${dedicatedSearchTools.join(' or ')}`
+    : enabledTools.has(BASH_TOOL_NAME)
+      ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
+      : 'available tools'
 
   const items = [
     hasAskUserQuestionTool
@@ -627,8 +648,8 @@ function buildDynamicPromptSections({
       'session_transcripts',
       // Keyed: the section names Grep/Glob or shell find/grep depending on the
       // embedded-search build, and under-keying would serve the wrong one.
-      { embeddedSearch: hasEmbeddedSearchTools() },
-      () => getSessionTranscriptsSection(),
+      { embeddedSearch: hasEmbeddedSearchTools(), tools: [...enabledTools].sort() },
+      () => getSessionTranscriptsSection(enabledTools),
     ),
   ]
 }
@@ -760,7 +781,7 @@ export async function getSystemPrompt(
     hasDoingTasksSection
       ? gpt
         ? getGPTDoingTasksSection(enabledTools, gptFamily)
-        : getSimpleDoingTasksSection()
+        : getSimpleDoingTasksSection(enabledTools)
       : null,
     gpt ? getGPTActionsSection(gptFamily) : getActionsSection(),
     ...(gpt ? [] : [getDeliveringWorkSection(), getCorrectionsSection()]),
@@ -1079,32 +1100,45 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
  * expose, direct transcript inspection remains available, including discovering
  * relevant sessions.
  */
-function getSessionTranscriptsSection(): string {
+function getSessionTranscriptsSection(enabledTools: Set<string>): string {
   const embedded = hasEmbeddedSearchTools()
-  const searchTool = embedded
-    ? `\`grep\` via the ${BASH_TOOL_NAME} tool`
-    : GREP_TOOL_NAME
-  const resolveInstruction = embedded
-    ? `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with \`find\` via the ${BASH_TOOL_NAME} tool (scoped to the workspace directory under projects if known, or the projects dir):
-
-    find ~/.cat-code/projects -name '*9a993deb*.jsonl'
-
-Require unambiguous resolution to a single file before reading contents.`
-    : `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with ${GLOB_TOOL_NAME}, passing the workspace directory under projects if known, or the projects dir as the \`path\` argument rather than the default cwd:
+  const hasGrep = !embedded && enabledTools.has(GREP_TOOL_NAME)
+  const hasGlob = !embedded && enabledTools.has(GLOB_TOOL_NAME)
+  const hasShell = enabledTools.has(BASH_TOOL_NAME)
+  const searchTool = hasGrep
+    ? GREP_TOOL_NAME
+    : hasShell ? `\`grep\` via the ${BASH_TOOL_NAME} tool` : null
+  const resolveInstruction = hasGlob
+    ? `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with ${GLOB_TOOL_NAME}, passing the workspace directory under projects if known, or the projects dir as the \`path\` argument rather than the default cwd:
 
     ${GLOB_TOOL_NAME} pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"
 
 Require unambiguous resolution to a single file before reading contents.`
+    : hasShell
+      ? `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with \`find\` via the ${BASH_TOOL_NAME} tool (scoped to the workspace directory under projects if known, or the projects dir):
+
+    find ~/.cat-code/projects -name '*9a993deb*.jsonl'
+
+Require unambiguous resolution to a single file before reading contents.`
+      : 'Prefer a known workspace and full session ID or transcript path. If the path is unknown and no file-search tool is available, ask the user for the exact path before reading contents.'
   const query = (pattern: string) =>
-    embedded
-      ? `grep '${pattern}' <path-to-transcript.jsonl>`
-      : `${GREP_TOOL_NAME} '${pattern}' path="<path-to-transcript.jsonl>"`
+    hasGrep
+      ? `${GREP_TOOL_NAME} '${pattern}' path="<path-to-transcript.jsonl>"`
+      : `grep '${pattern}' <path-to-transcript.jsonl>`
+  const queryExamples = searchTool ? `Examples for querying an individual transcript:
+
+    ${query('"type":"tool_use"')}      # list tool calls
+    ${query('"stop_reason"')}          # find last API response boundary
+    ${query('"type":"subagent-')}      # enumerate spawn/terminal entries
+    ${query('"tool_use_id":"')}        # link a tool_result back to its tool_use (ID prefixes vary by provider)
+
+` : ''
 
   return `## Reading session transcripts
 
 These files are the raw record of a session. When you need to understand another session's work, prefer the available session-reading tool. For debugging that requires raw events or tool results the tool does not expose, inspect the transcript directly.
 
-Cat-code session files are line-oriented JSONL. Use ${searchTool} with patterns on the "type" or other fields, and do NOT write a custom parser. The shape is stable.
+Cat-code session files are line-oriented JSONL. ${searchTool ? `Use ${searchTool} with patterns on the "type" or other fields, and do NOT write a custom parser.` : 'Inspect a known path using an available reading tool. If no reading tool is available, explain that limitation.'} The shape is stable.
 
 Paths:
 
@@ -1114,14 +1148,7 @@ Paths:
 
 ${resolveInstruction}
 
-Examples for querying an individual transcript:
-
-    ${query('"type":"tool_use"')}      # list tool calls
-    ${query('"stop_reason"')}          # find last API response boundary
-    ${query('"type":"subagent-')}      # enumerate spawn/terminal entries
-    ${query('"tool_use_id":"')}        # link a tool_result back to its tool_use (ID prefixes vary by provider)
-
-The subagent sidecar .meta.json contains:
+${queryExamples}The subagent sidecar .meta.json contains:
 
     {
       "agentType": "general-purpose",

@@ -130,7 +130,7 @@ describe('provider and prompt regressions', () => {
       context_lines: 3,
       show_line_numbers: false,
       case_insensitive: true,
-    })
+    }, zodToJsonSchema(GrepTool.inputSchema) as Record<string, unknown>)
 
     expect(normalizedInput).toEqual({
       pattern: 'needle',
@@ -515,7 +515,8 @@ describe('provider and prompt regressions', () => {
   test('the Claude system prompt keeps its own dedicated-tool wording', async () => {
     setSessionProvider('firstParty')
 
-    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+    const tools = getTools(getEmptyToolPermissionContext())
+    const prompt = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
 
     expect(prompt).toContain('To edit files use Edit instead of sed or awk')
     expect(prompt).toContain(

@@ -862,8 +862,10 @@ async function* runAgentInCleanupScope({
       `agent '${agentDefinition.agentType}'`,
       true, // isAgent - converts Stop to SubagentStop
     )
-    setupCleanups.push(() => clearSessionHooks(rootSetAppState, agentId))
   }
+  // Skills may register hooks during preloading or later worker turns even
+  // when the agent's own frontmatter declares none.
+  setupCleanups.push(() => clearSessionHooks(rootSetAppState, agentId))
 
   // Preload skills from agent frontmatter
   const skillsToPreload = agentDefinition.skills ?? []
@@ -1365,12 +1367,10 @@ async function* runAgentInCleanupScope({
     // Reaching here means setup completed, so this block owns every pre-loop
     // resource too. Disarm the setup scope first so the two never both release.
     setupCleanups.length = 0
+    // Clean up agent's session hooks
+    clearSessionHooks(rootSetAppState, agentId)
     // Clean up agent-specific MCP servers (runs on normal completion, abort, or error)
     await mcpCleanup()
-    // Clean up agent's session hooks
-    if (agentDefinition.hooks) {
-      clearSessionHooks(rootSetAppState, agentId)
-    }
     // Clean up prompt cache tracking state for this agent
     if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
       cleanupAgentTracking(agentId)

@@ -592,11 +592,8 @@ async function* queryLoop(
       : undefined
     queryCheckpoint('query_microcompact_end')
 
-    // Both snip and time-based microcompact shrink the REQUEST array only —
-    // the usage anchor tokenCountWithEstimation reads comes from an assistant
-    // message that predates either. Combine their savings and subtract once,
-    // wherever the stale anchor is consulted below. Computed after
-    // microcompact because microcompact runs after snip.
+    // Microcompact reports only savings still priced by a stale server anchor.
+    // A post-clear anchor or a rough estimate already prices the smaller array.
     const preRequestTokensFreed =
       snipTokensFreed + (microcompactResult.tokensFreed ?? 0)
 
@@ -843,7 +840,8 @@ async function* queryLoop(
           messagesForQuery,
           currentModel,
           nonMessageOverheadTokens,
-        ) - preRequestTokensFreed,
+          preRequestTokensFreed,
+        ),
         currentModel,
       )
       if (isAtBlockingLimit) {

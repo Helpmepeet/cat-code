@@ -373,17 +373,9 @@ export function getAssistantMessageContentLength(
 }
 
 /**
- * Get the current context window size in tokens.
- *
- * This is the CANONICAL function for measuring context size when checking
- * thresholds (autocompact, session memory init, etc.). Uses the last API
- * response's token count (input + output + cache) plus estimates for any
- * messages added since.
- *
- * Always use this instead of:
- * - Cumulative token counting (which double-counts as context grows)
- * - messageTokenCountFromLastAPIResponse (which only counts output_tokens)
- * - tokenCountFromLastAPIResponse (which doesn't estimate new messages)
+ * Find the usable server-usage anchor and the beginning of its split response.
+ * Shared by token estimation and request-local shrink compensation so both
+ * agree on compact boundaries, stale preserved tails, and provider switches.
  *
  * Implementation note on parallel tool calls: when the model makes multiple
  * tool calls in one response, the streaming code emits a SEPARATE assistant
@@ -400,7 +392,7 @@ export function getAssistantMessageContentLength(
  * anchor is the terminal sibling, because the anchor's output_tokens already
  * covers it — see the stop_reason note at the return.
  */
-export function tokenCountWithEstimation(
+export function getContextUsageAnchor(
   messages: readonly Message[],
   // The model of the request this count is gating. When provided AND the
   // usage-bearing anchor was produced under openai (a gpt-* model whose server
@@ -413,15 +405,15 @@ export function tokenCountWithEstimation(
   // sizes; gpt only shrinks the wire, so the estimate stays conservative), so
   // that direction is left untouched.
   currentModel?: string,
-  // Measured non-message request overhead (system prompt + userContext/
-  // systemContext + serialized tool schemas) for the request this count is
-  // gating. Only the two decision call sites can see it — autoCompactIfNeeded
-  // and the query.ts blocking preempt — and it is consumed ONLY on the
-  // pure-rough fallback paths, where NON_MESSAGE_REQUEST_OVERHEAD_TOKENS acts
-  // as its floor. Never applied on an anchored path: server usage already
-  // counts every one of those bytes.
-  nonMessageOverheadTokens?: number,
-): number {
+): {
+  boundaryIdx: number
+  anchor?: {
+    firstMessageIndex: number
+    responseId: string
+    usage: Usage
+    excludeSiblings: boolean
+  }
+} {
   const invalidateOpenaiAnchor =
     currentModel !== undefined &&
     getProviderForModel(currentModel) !== 'openai'
@@ -452,10 +444,7 @@ export function tokenCountWithEstimation(
         message.type === 'assistant' &&
         getProviderForModel(message.message.model) === 'openai'
       ) {
-        return roughEstimateWithOverhead(
-          messages.slice(boundaryIdx),
-          nonMessageOverheadTokens,
-        )
+        return { boundaryIdx }
       }
       // Walk back past any earlier sibling records split from the same API
       // response (same message.id) so interleaved tool_results between them
@@ -494,21 +483,48 @@ export function tokenCountWithEstimation(
         responseId !== undefined &&
         message.type === 'assistant' &&
         message.message.stop_reason != null
-      const tail = messages.slice(i + 1)
-      return (
-        getTokenCountFromUsage(usage) +
-        roughTokenCountEstimationForMessages(
-          excludeSiblings
-            ? tail.filter(m => getAssistantMessageId(m) !== responseId)
-            : tail,
-        )
-      )
+      return {
+        boundaryIdx,
+        anchor: {
+          firstMessageIndex: i,
+          responseId: responseId ?? message.uuid,
+          usage,
+          excludeSiblings,
+        },
+      }
     }
     i--
   }
-  // No usable anchor at or after the boundary. Estimate only what the next
-  // request will actually carry; rough-counting a fullscreen array's whole
-  // scrollback here massively overcounts (measured 180,514 vs 14).
+  return { boundaryIdx }
+}
+
+/**
+ * Measure context for thresholds using server usage plus the projected tail,
+ * or estimate the entire request when no usable usage record survives.
+ */
+export function tokenCountWithEstimation(
+  messages: readonly Message[],
+  currentModel?: string,
+  // Server usage includes request overhead; only rough estimates need it.
+  nonMessageOverheadTokens?: number,
+  // Compensation for content removed from a stale usage anchor. The rough
+  // path already counts the projected array and must never subtract it again.
+  preRequestTokensFreed = 0,
+): number {
+  const { boundaryIdx, anchor } = getContextUsageAnchor(messages, currentModel)
+  if (anchor) {
+    const tail = messages.slice(anchor.firstMessageIndex + 1)
+    return Math.max(
+      0,
+      getTokenCountFromUsage(anchor.usage) - preRequestTokensFreed +
+        roughTokenCountEstimationForMessages(
+          anchor.excludeSiblings
+            ? tail.filter(m => getAssistantMessageId(m) !== anchor.responseId)
+            : tail,
+        ),
+    )
+  }
+  // No usable post-boundary anchor: estimate exactly the projected request.
   return roughEstimateWithOverhead(
     messages.slice(boundaryIdx),
     nonMessageOverheadTokens,

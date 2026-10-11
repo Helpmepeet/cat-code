@@ -24,7 +24,7 @@ import type { AgentId } from 'src/types/ids.js'
 import { companionIntroText } from '../buddy/prompt.js'
 import { NO_CONTENT_MESSAGE } from '../constants/messages.js'
 import { OUTPUT_STYLE_CONFIG } from '../constants/outputStyles.js'
-import { getAPIProvider } from '../utils/model/providers.js'
+import { type APIProvider, getAPIProvider } from '../utils/model/providers.js'
 import { isAutoMemoryEnabled } from '../memdir/paths.js'
 import {
   checkStatsigFeatureGate_CACHED_MAY_BE_STALE,
@@ -2771,6 +2771,7 @@ export function normalizeContentFromAPI(
   contentBlocks: BetaMessage['content'],
   tools: Tools,
   agentId?: AgentId,
+  provider?: APIProvider,
 ): BetaMessage['content'] {
   if (!contentBlocks) {
     return []
@@ -2827,6 +2828,7 @@ export function normalizeContentFromAPI(
                 tool,
                 normalizedInput as { [key: string]: unknown },
                 agentId,
+                provider,
               )
             } catch (error) {
               logError(new Error('Error normalizing tool input: ' + error))

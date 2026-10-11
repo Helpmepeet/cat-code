@@ -17,6 +17,14 @@
 
 import { APIConnectionError } from '@anthropic-ai/sdk'
 import { createHash, randomUUID } from 'crypto'
+import { rm } from 'fs/promises'
+import {
+  API_MAX_MEDIA_PER_REQUEST,
+  PDF_MAX_PAGES_PER_READ,
+  PDF_TARGET_RAW_SIZE,
+} from '../../constants/apiLimits.js'
+import { extractPDFPages, readPDFPageImages } from '../../utils/pdf.js'
+import { removePrivateTempFile, writePrivateTempFile } from '../../utils/privateTemp.js'
 import { logForDebugging, RECOVERED_TERMINAL_TEXT_PREFIX } from '../../utils/debug.js'
 import { logEvent } from '../analytics/index.js'
 import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
@@ -702,6 +710,7 @@ interface AnthropicContentBlock {
 interface AnthropicMessage {
   role: string
   content: string | AnthropicContentBlock[]
+  message?: AnthropicMessage
 }
 
 interface AnthropicTool {
@@ -882,6 +891,8 @@ function canonicalizeToolArgumentsForRecord(
       const decoded = normalizeToolInput(
         tool,
         parsed as Record<string, unknown>,
+        undefined,
+        'openai',
       )
       const forApi = normalizeToolInputForAPI(tool, decoded)
       return JSON.stringify(forApi)
@@ -1202,6 +1213,10 @@ function translateMessages(
           type: 'input_image',
           image_url: `data:${(part.source as Record<string, string>).media_type};base64,${(part.source as Record<string, string>).data}`,
         })
+      } else if (part.type === 'document') {
+        throw new Error(
+          'This document cannot be delivered to the current model. For PDFs, read it again using the pages parameter.',
+        )
       }
     }
 
@@ -1254,6 +1269,10 @@ function translateMessages(
             type: 'input_image',
             image_url: `data:${(block.source as any).media_type};base64,${(block.source as any).data}`,
           })
+        } else if (block.type === 'document') {
+          throw new Error(
+            'This document cannot be delivered to the current model. For PDFs, read it again using the pages parameter.',
+          )
         }
       }
       if (contentArr.length > 0) {
@@ -1339,6 +1358,108 @@ function translateMessages(
 }
 
 // ── Full request translation ────────────────────────────────────────
+
+/**
+ * Old Read results may contain native PDF documents. Project their saved bytes
+ * locally at the async transport boundary; never rewrite the durable history.
+ */
+async function prepareCodexPDFDocuments(
+  anthropicBody: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const assembly = anthropicBody._openaiInstructionAssembly as
+    | OpenAIInstructionAssemblyPayload
+    | undefined
+  if (!assembly || !Array.isArray(assembly.inputMessages)) return anthropicBody
+
+  let remainingBytes = PDF_TARGET_RAW_SIZE
+  let remainingImages = API_MAX_MEDIA_PER_REQUEST
+  let hasDocuments = false
+  const contentFor = (raw: AnthropicMessage): AnthropicMessage =>
+    'message' in raw && raw.message != null ? raw.message as AnthropicMessage : raw
+  for (const raw of assembly.inputMessages) {
+    const message = contentFor(raw)
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (block.type === 'image') remainingImages--
+      if (block.type === 'document') hasDocuments = true
+      if (block.type === 'tool_result' && Array.isArray(block.content)) {
+        remainingImages -= block.content.filter(part => part.type === 'image').length
+        hasDocuments ||= block.content.some(part => part.type === 'document')
+      }
+    }
+  }
+  if (!hasDocuments) return anthropicBody
+
+  const projectBlocks = async (blocks: AnthropicContentBlock[]): Promise<AnthropicContentBlock[]> => {
+    const projected: AnthropicContentBlock[] = []
+    for (const block of blocks) {
+      if (block.type === 'tool_result' && Array.isArray(block.content)) {
+        projected.push({ ...block, content: await projectBlocks(block.content) })
+        continue
+      }
+      if (block.type !== 'document') {
+        projected.push(block)
+        continue
+      }
+      const source = block.source as Record<string, unknown> | undefined
+      if (
+        !source || source.type !== 'base64' || source.media_type !== 'application/pdf' ||
+        typeof source.data !== 'string'
+      ) {
+        throw new Error('This document cannot be delivered to the current model. Only base64 PDF attachments can be rendered.')
+      }
+      if (source.data.length > Math.ceil(remainingBytes / 3) * 4) {
+        throw new Error('PDF attachments exceed the maximum total size of 20 MB for one request.')
+      }
+      const bytes = Buffer.from(source.data, 'base64')
+      if (bytes.length > remainingBytes) {
+        throw new Error('PDF attachments exceed the maximum total size of 20 MB for one request.')
+      }
+      if (bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        throw new Error('This PDF attachment is not a valid PDF file.')
+      }
+      const maxPages = Math.min(PDF_MAX_PAGES_PER_READ, remainingImages)
+      if (maxPages < 1) {
+        throw new Error('Too many images and PDF pages are attached to this request.')
+      }
+      remainingBytes -= bytes.length
+      const filePath = await writePrivateTempFile(bytes, 'cat-code-codex-pdf-', '.pdf')
+      let outputDir: string | undefined
+      try {
+        const result = await extractPDFPages(filePath, { firstPage: 1, lastPage: maxPages + 1 })
+        if (result.success === false) throw new Error(result.error.message)
+        outputDir = result.data.file.outputDir
+        if (result.data.file.count > maxPages) {
+          throw new Error(`This saved PDF exceeds the ${maxPages}-page limit for this request. Use a smaller PDF attachment.`)
+        }
+        const images = await readPDFPageImages(outputDir)
+        remainingImages -= images.length
+        projected.push(...images.map(image => ({ ...image })))
+      } finally {
+        try {
+          if (outputDir) await rm(outputDir, { recursive: true, force: true })
+        } finally {
+          await removePrivateTempFile(filePath)
+        }
+      }
+    }
+    return projected
+  }
+
+  const inputMessages: AnthropicMessage[] = []
+  for (const raw of assembly.inputMessages) {
+    const message = contentFor(raw)
+    if (!Array.isArray(message.content)) {
+      inputMessages.push(raw)
+      continue
+    }
+    const content = await projectBlocks(message.content)
+    inputMessages.push('message' in raw && raw.message != null
+      ? { ...raw, message: { ...message, content } }
+      : { ...message, content })
+  }
+  return { ...anthropicBody, _openaiInstructionAssembly: { ...assembly, inputMessages } }
+}
 
 /**
  * Translates a complete Anthropic API request body to Codex format.
@@ -3756,7 +3877,9 @@ export function createCodexFetch(
     const poolManagedCredentials = resolvedTokens?.source === 'pool'
 
     // Translate to Codex format
-    const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
+    const { codexBody, codexModel } = translateToCodexBody(
+      await prepareCodexPDFDocuments(anthropicBody),
+    )
     const isStreamingAnthropicRequest = anthropicBody.stream === true
 
     // Upstream openai/codex (codex-rs/core/src/client.rs) uses a single plain

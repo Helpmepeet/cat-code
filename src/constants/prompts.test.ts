@@ -7,6 +7,10 @@ import {
 } from './promptStyles/gpt.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import { setManagedSessionPolicy } from '../utils/managedSessionPolicy.js'
+import { initializeToolPermissionContext } from '../utils/permissions/permissionSetup.js'
+import { getTools } from '../tools.js'
+import { getWebSearchPrompt } from '../tools/WebSearchTool/prompt.js'
+import { getEmptyToolPermissionContext } from '../Tool.js'
 
 // Command availability is filtered by auth, so an assembly built with no
 // credential anywhere throws before it reaches the sections under test. The
@@ -268,7 +272,8 @@ describe('mechanical prompt cleanup', () => {
   })
 
   test('uses a provider-neutral transcript tool-result query and has no unused or stale prompt constants', async () => {
-    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+    const tools = getTools(getEmptyToolPermissionContext())
+    const prompt = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
 
     expect(prompt).toContain(`Grep '"tool_use_id":"'`)
     expect(prompt).not.toContain(`Grep '"tool_use_id":"call_'`)
@@ -292,7 +297,8 @@ describe('mechanical prompt cleanup', () => {
     delete process.env.CLAUDE_CODE_ENTRYPOINT
 
     try {
-      const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const tools = getTools(getEmptyToolPermissionContext())
+      const prompt = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
       const section = prompt.slice(prompt.indexOf('## Reading session transcripts'))
 
       expect(section).toContain('## Reading session transcripts')
@@ -326,7 +332,8 @@ describe('session transcript guidance scope', () => {
         delete process.env.EMBEDDED_SEARCH_TOOLS
       }
       clearSystemPromptSections()
-      const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const tools = getTools(getEmptyToolPermissionContext())
+      const prompt = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
       const start = prompt.indexOf('## Reading session transcripts')
       expect(start).toBeGreaterThan(-1)
       return prompt.slice(start)
@@ -524,5 +531,51 @@ describe('session guidance keying across the two prompt builds', () => {
     expect(claude).toContain('# Session-specific guidance')
     expect(gpt).toContain('# Session-Specific Guidance')
     expect(gpt).not.toContain('# Session-specific guidance')
+  })
+})
+
+describe('available tools in assembled prompts', () => {
+  afterEach(() => clearSystemPromptSections())
+
+  test('a CLI Bash-only pool has usable file guidance without unavailable tool names', async () => {
+    const { toolPermissionContext } = await initializeToolPermissionContext({
+      allowedToolsCli: [],
+      disallowedToolsCli: [],
+      baseToolsCli: ['Bash'],
+      permissionMode: 'default',
+      allowDangerouslySkipPermissions: false,
+      addDirs: [],
+    })
+    const tools = getTools(toolPermissionContext)
+    expect(tools.map(tool => tool.name)).toEqual(['Bash'])
+
+    for (const provider of ['firstParty', 'openai'] as const) {
+      const model = provider === 'firstParty' ? 'claude-opus-5-5' : 'gpt-6.1-sol'
+      const prompt = (await getSystemPrompt(tools, model, [], [], provider)).join('\n')
+      for (const missing of ['Glob', 'Grep', 'AskUserQuestion']) {
+        expect(prompt).not.toMatch(new RegExp(`\\b${missing}\\b`))
+      }
+      expect(prompt).not.toContain('To read files use Read')
+      expect(prompt).not.toContain('To edit files use Edit')
+      expect(prompt).not.toContain('To create files use Write')
+      expect(prompt).toContain('Bash')
+      expect(prompt).toContain('grep')
+    }
+
+    const dedicated = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'AskUserQuestion']
+      .map(name => ({ name })) as unknown as Parameters<typeof getSystemPrompt>[0]
+    const prompt = (await getSystemPrompt(dedicated, 'claude-opus-5-5', [], [], 'firstParty')).join('\n')
+    expect(prompt).toContain('To read files use Read')
+    expect(prompt).toContain('To edit files use Edit')
+    expect(prompt).toContain('To search the content of files, use Grep')
+    expect(prompt).toContain('Escalate to the user with AskUserQuestion')
+  })
+
+  test('Claude allows tool-returned citation URLs while retaining the ban on invented paths', async () => {
+    const tools = getTools(getEmptyToolPermissionContext()).filter(tool => tool.name === 'WebSearch')
+    const prompt = (await getSystemPrompt(tools, 'claude-opus-5-5', [], [], 'firstParty')).join('\n')
+    expect(getWebSearchPrompt()).toContain('list relevant URLs from the search results as markdown hyperlinks')
+    expect(prompt).toContain('or returned by your web searches or otherwise read with a tool')
+    expect(prompt).toContain('Never infer a deeper path')
   })
 })

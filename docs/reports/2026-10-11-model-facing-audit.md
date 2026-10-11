@@ -2,6 +2,8 @@
 
 Date: 2026-10-11. Initial source snapshot: `b05de039b5935e0360f9476ae4fbdabccad99b35`. Independent verification checked the current working tree through HEAD `eee500463cfa24a3f91c8989458d64353e24eec4`.
 
+Implementation follow-up: all 13 findings have been repaired. See [fixes and validation](2026-10-11-model-facing-fixes.md). The observations and source line references below describe the original audit snapshots, before those repairs.
+
 This audit covers surfaces that change what the model sees, how it acts, and how much work a request performs. Five subagents audited independent lanes, with at most three subagents running concurrently because of the session limit. The parent checked production call chains and independently reran probes from every lane. This audit changed no repository code or tests. Existing untracked files were preserved.
 
 Another session committed two research documents during the audit, moving HEAD to `870b7630e650c2f515f604c8404d277d551fbe94`, and edited `app/sidecar/sidecarServer.test.ts` and `app/sidecar/workerOutcomeRestore.integration.test.ts`. These changes were left intact. The audited runtime source did not change between the initial snapshot and the final check.

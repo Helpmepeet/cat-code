@@ -36,6 +36,7 @@ import {
   type PromptMessage,
   type ResourceLink,
 } from '@modelcontextprotocol/sdk/types.js'
+import isEqual from 'lodash-es/isEqual.js'
 import mapValues from 'lodash-es/mapValues.js'
 import memoize from 'lodash-es/memoize.js'
 import zipObject from 'lodash-es/zipObject.js'
@@ -2850,8 +2851,32 @@ export async function transformMCPResult(
       'structuredContent' in result &&
       result.structuredContent !== undefined
     ) {
+      const structuredText = jsonStringify(result.structuredContent)
+      const distinctContent = 'content' in result && Array.isArray(result.content)
+        ? result.content.filter(item => {
+          if (item.type !== 'text' || typeof item.text !== 'string') return true
+          try {
+            return !isEqual(jsonParse(item.text), result.structuredContent)
+          } catch {
+            return true
+          }
+        })
+        : []
+      if (distinctContent.length > 0) {
+        const content: ContentBlockParam[] = [
+          { type: 'text', text: structuredText },
+          ...(await Promise.all(
+            distinctContent.map(item => transformResultContent(item, name)),
+          )).flat(),
+        ]
+        return {
+          content,
+          type: 'contentArray',
+          schema: inferCompactSchema(content),
+        }
+      }
       return {
-        content: jsonStringify(result.structuredContent),
+        content: structuredText,
         type: 'structuredContent',
         schema: inferCompactSchema(result.structuredContent),
       }

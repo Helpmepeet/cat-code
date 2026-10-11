@@ -1,8 +1,35 @@
 import { HOOK_EVENTS } from 'src/entrypoints/agentSdkTypes.js'
 import type { AppState } from 'src/state/AppState.js'
+import { getSessionId } from '../../bootstrap/state.js'
+import type { ToolUseContext } from '../../Tool.js'
+import type { PromptCommand } from '../../types/command.js'
 import { logForDebugging } from '../debug.js'
+import {
+  isRestrictedToPluginOnly,
+  isSourceAdminTrusted,
+} from '../settings/pluginOnlyPolicy.js'
 import type { HooksSettings } from '../settings/types.js'
 import { addSessionHook, removeSessionHook } from './sessionHooks.js'
+
+/** Use the invoking worker's identity while retaining the root hook store. */
+export function registerSkillCommandHooks(
+  command: PromptCommand & { name: string },
+  context: ToolUseContext,
+): void {
+  if (
+    !command.hooks ||
+    (isRestrictedToPluginOnly('hooks') && !isSourceAdminTrusted(command.source))
+  ) {
+    return
+  }
+  registerSkillHooks(
+    context.setAppStateForTasks ?? context.setAppState,
+    context.agentId ?? getSessionId(),
+    command.hooks,
+    command.name,
+    command.skillRoot,
+  )
+}
 
 /**
  * Registers hooks from a skill's frontmatter as session hooks.

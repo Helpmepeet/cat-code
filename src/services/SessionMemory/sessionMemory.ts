@@ -12,6 +12,9 @@ import { getSystemContext, getUserContext } from '../../context.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import { parseFilePatchInput } from '../../tools/FilePatchTool/parser.js'
+import { inputSchema as filePatchInputSchema } from '../../tools/FilePatchTool/types.js'
 import {
   callFileReadToolWithPreparedCapability,
   type Output as FileReadToolOutput,
@@ -96,7 +99,7 @@ function getSessionMemoryRemoteConfig(): Partial<SessionMemoryConfig> {
 /**
  * Turn cap for both extraction forks.
  *
- * createMemoryFileCanUseTool denies everything except Edit on the notes file,
+ * createMemoryFileCanUseTool denies everything except targeted notes updates,
  * and a denied tool call returns a tool_result and re-enters the query loop —
  * query() caps turns ONLY when maxTurns is set, so an uncapped fork can loop
  * on denials indefinitely. The prompt asks for the edits in one parallel
@@ -182,15 +185,7 @@ export function shouldExtractMemory(messages: Message[]): boolean {
     (hasMetTokenThreshold && hasMetToolCallThreshold) ||
     (hasMetTokenThreshold && !hasToolCallsInLastTurn)
 
-  if (shouldExtract) {
-    const lastMessage = messages[messages.length - 1]
-    if (lastMessage?.uuid) {
-      lastMemoryMessageUuid = lastMessage.uuid
-    }
-    return true
-  }
-
-  return false
+  return shouldExtract
 }
 
 async function setupSessionMemoryFile(
@@ -297,60 +292,67 @@ const extractSessionMemory = sequential(async function (
   }
 
   markExtractionStarted()
+  try {
+    // Create isolated context for setup to avoid polluting parent's cache
+    const setupContext = createSubagentContext(toolUseContext)
 
-  // Create isolated context for setup to avoid polluting parent's cache
-  const setupContext = createSubagentContext(toolUseContext)
+    // Set up file system and read current state with isolated context
+    const { memoryPath, currentMemory } =
+      await setupSessionMemoryFile(setupContext)
 
-  // Set up file system and read current state with isolated context
-  const { memoryPath, currentMemory } =
-    await setupSessionMemoryFile(setupContext)
+    // Create extraction message
+    const userPrompt = await buildSessionMemoryUpdatePrompt(
+      currentMemory,
+      memoryPath,
+      resolveRequestProvider(
+        toolUseContext.options.mainLoopModel,
+        toolUseContext.options.mainLoopProvider,
+      ),
+    )
 
-  // Create extraction message
-  const userPrompt = await buildSessionMemoryUpdatePrompt(
-    currentMemory,
-    memoryPath,
-    resolveRequestProvider(
-      toolUseContext.options.mainLoopModel,
-      toolUseContext.options.mainLoopProvider,
-    ),
-  )
+    // Run session memory extraction using runForkedAgent for prompt caching
+    // runForkedAgent creates an isolated context to prevent mutation of parent state
+    // Pass setupContext.readFileState so the forked agent can edit the memory file
+    const extraction = await runForkedAgent({
+      promptMessages: [createUserMessage({ content: userPrompt })],
+      cacheSafeParams: createCacheSafeParams(context),
+      canUseTool: createMemoryFileCanUseTool(memoryPath),
+      querySource: 'session_memory',
+      forkLabel: 'session_memory',
+      overrides: { readFileState: setupContext.readFileState, requireCanUseTool: true },
+      maxTurns: SESSION_MEMORY_MAX_TURNS,
+    })
 
-  // Run session memory extraction using runForkedAgent for prompt caching
-  // runForkedAgent creates an isolated context to prevent mutation of parent state
-  // Pass setupContext.readFileState so the forked agent can edit the memory file
-  await runForkedAgent({
-    promptMessages: [createUserMessage({ content: userPrompt })],
-    cacheSafeParams: createCacheSafeParams(context),
-    canUseTool: createMemoryFileCanUseTool(memoryPath),
-    querySource: 'session_memory',
-    forkLabel: 'session_memory',
-    overrides: { readFileState: setupContext.readFileState },
-    maxTurns: SESSION_MEMORY_MAX_TURNS,
-  })
+    if (
+      !(await hasPersistedMemoryUpdate(extraction.messages, memoryPath, currentMemory))
+    ) {
+      return
+    }
 
-  // Log extraction event for tracking frequency
-  // Use the token usage from the last message in the conversation
-  const lastMessage = messages[messages.length - 1]
-  const usage = lastMessage ? getTokenUsage(lastMessage) : undefined
-  const config = getSessionMemoryConfig()
-  logEvent('tengu_session_memory_extraction', {
-    input_tokens: usage?.input_tokens,
-    output_tokens: usage?.output_tokens,
-    cache_read_input_tokens: usage?.cache_read_input_tokens ?? undefined,
-    cache_creation_input_tokens:
-      usage?.cache_creation_input_tokens ?? undefined,
-    config_min_message_tokens_to_init: config.minimumMessageTokensToInit,
-    config_min_tokens_between_update: config.minimumTokensBetweenUpdate,
-    config_tool_calls_between_updates: config.toolCallsBetweenUpdates,
-  })
+    // Log extraction event for tracking frequency
+    // Use the token usage from the last message in the conversation
+    const lastMessage = messages[messages.length - 1]
+    const usage = lastMessage ? getTokenUsage(lastMessage) : undefined
+    const config = getSessionMemoryConfig()
+    logEvent('tengu_session_memory_extraction', {
+      input_tokens: usage?.input_tokens,
+      output_tokens: usage?.output_tokens,
+      cache_read_input_tokens: usage?.cache_read_input_tokens ?? undefined,
+      cache_creation_input_tokens:
+        usage?.cache_creation_input_tokens ?? undefined,
+      config_min_message_tokens_to_init: config.minimumMessageTokensToInit,
+      config_min_tokens_between_update: config.minimumTokensBetweenUpdate,
+      config_tool_calls_between_updates: config.toolCallsBetweenUpdates,
+    })
 
-  // Record the context size at extraction for tracking minimumTokensBetweenUpdate
-  recordExtractionTokenCount(tokenCountWithEstimation(messages))
+    // Record the context size at extraction for tracking minimumTokensBetweenUpdate
+    recordExtractionTokenCount(tokenCountWithEstimation(messages))
 
-  // Update lastSummarizedMessageId after successful completion
-  updateLastSummarizedMessageIdIfSafe(messages)
-
-  markExtractionCompleted()
+    // Update lastSummarizedMessageId after successful completion
+    updateLastSummarizedMessageIdIfSafe(messages)
+  } finally {
+    markExtractionCompleted()
+  }
 })
 
 /**
@@ -425,7 +427,7 @@ export async function manuallyExtractSessionMemory(
     const systemPrompt = asSystemPrompt(rawSystemPrompt)
 
     // Run session memory extraction using runForkedAgent
-    await runForkedAgent({
+    const extraction = await runForkedAgent({
       promptMessages: [createUserMessage({ content: userPrompt })],
       cacheSafeParams: {
         systemPrompt,
@@ -437,9 +439,15 @@ export async function manuallyExtractSessionMemory(
       canUseTool: createMemoryFileCanUseTool(memoryPath),
       querySource: 'session_memory',
       forkLabel: 'session_memory_manual',
-      overrides: { readFileState: setupContext.readFileState },
+      overrides: { readFileState: setupContext.readFileState, requireCanUseTool: true },
       maxTurns: SESSION_MEMORY_MAX_TURNS,
     })
+
+    if (
+      !(await hasPersistedMemoryUpdate(extraction.messages, memoryPath, currentMemory))
+    ) {
+      return { success: false, error: 'Session notes were not updated' }
+    }
 
     // Log manual extraction event
     logEvent('tengu_session_memory_manual_extraction', {})
@@ -464,7 +472,8 @@ export async function manuallyExtractSessionMemory(
 // Helper functions
 
 /**
- * Creates a canUseTool function that only allows Edit for the exact memory file.
+ * Allows only targeted updates to the exact notes file using the provider's
+ * exposed edit tool. All operations in a patch must satisfy the same scope.
  */
 export function createMemoryFileCanUseTool(memoryPath: string): CanUseToolFn {
   return async (tool: Tool, input: unknown) => {
@@ -479,15 +488,61 @@ export function createMemoryFileCanUseTool(memoryPath: string): CanUseToolFn {
         return { behavior: 'allow' as const, updatedInput: input }
       }
     }
+    if (tool.name === FILE_PATCH_TOOL_NAME) {
+      const parsed = filePatchInputSchema().safeParse(input)
+      if (parsed.success) {
+        try {
+          const { ops } = parseFilePatchInput(parsed.data)
+          if (
+            ops.length > 0 &&
+            ops.every(operation =>
+              operation.type === 'update' &&
+              operation.path === memoryPath &&
+              operation.moveTo === undefined,
+            )
+          ) {
+            return { behavior: 'allow' as const, updatedInput: parsed.data }
+          }
+        } catch {
+          // Malformed patch envelopes never acquire permission.
+        }
+      }
+    }
+    const restriction = `only ${FILE_EDIT_TOOL_NAME} or ${FILE_PATCH_TOOL_NAME} updates on ${memoryPath} are allowed`
     return {
       behavior: 'deny' as const,
-      message: `only ${FILE_EDIT_TOOL_NAME} on ${memoryPath} is allowed`,
+      message: restriction,
       decisionReason: {
         type: 'other' as const,
-        reason: `only ${FILE_EDIT_TOOL_NAME} on ${memoryPath} is allowed`,
+        reason: restriction,
       },
     }
   }
+}
+
+async function hasPersistedMemoryUpdate(
+  messages: Message[],
+  memoryPath: string,
+  previousMemory: string,
+): Promise<boolean> {
+  const mutationIds = new Set<string>()
+  for (const message of messages) {
+    if (message.type !== 'assistant') continue
+    for (const block of message.message.content) {
+      if (block.type === 'tool_use' &&
+        (block.name === FILE_EDIT_TOOL_NAME || block.name === FILE_PATCH_TOOL_NAME)) {
+        mutationIds.add(block.id)
+      }
+    }
+  }
+  const successfulMutation = messages.some(message =>
+    message.type === 'user' && Array.isArray(message.message.content) &&
+    message.message.content.some(block => block.type === 'tool_result' &&
+      !block.is_error && mutationIds.has(block.tool_use_id)),
+  )
+  if (!successfulMutation) return false
+  const persistedMemory = await getFsImplementation().readFile(memoryPath, { encoding: 'utf-8' })
+  return persistedMemory !== previousMemory
 }
 
 /**
@@ -495,8 +550,9 @@ export function createMemoryFileCanUseTool(memoryPath: string): CanUseToolFn {
  * Only sets it if the last message doesn't have tool calls (to avoid orphaned tool_results).
  */
 function updateLastSummarizedMessageIdIfSafe(messages: Message[]): void {
+  const lastMessage = messages[messages.length - 1]
+  if (lastMessage?.uuid) lastMemoryMessageUuid = lastMessage.uuid
   if (!hasToolCallsInLastAssistantTurn(messages)) {
-    const lastMessage = messages[messages.length - 1]
     if (lastMessage?.uuid) {
       setLastSummarizedMessageId(lastMessage.uuid)
     }

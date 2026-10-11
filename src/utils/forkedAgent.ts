@@ -32,6 +32,7 @@ import type { OpenAIInstructionAssembly } from '../services/api/instructionAssem
 import { logForDebugging } from './debug.js'
 import { cloneFileStateCache } from './fileStateCache.js'
 import type { REPLHookContext } from './hooks/postSamplingHooks.js'
+import { clearSessionHooks } from './hooks/sessionHooks.js'
 import {
   createUserMessage,
   extractTextContent,
@@ -613,6 +614,11 @@ export async function runForkedAgent({
     initialMessages.length = 0
     const agentId = isolatedToolUseContext.agentId
     if (agentId) {
+      clearSessionHooks(
+        isolatedToolUseContext.setAppStateForTasks ??
+          isolatedToolUseContext.setAppState,
+        agentId,
+      )
       releaseCodexLease(agentId)
       clearWebSocketSession(`${getSessionId()}/${agentId}`)
     }

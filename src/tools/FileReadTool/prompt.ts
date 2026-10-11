@@ -27,7 +27,7 @@ export function renderPromptTemplate(
   lineFormat: string,
   maxSizeInstruction: string,
   offsetInstruction: string,
-  pdfSupported: boolean,
+  nativePDFSupported: boolean,
 ): string {
   return `Reads a file from the local filesystem. You can access any file directly by using this tool.
 Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. A missing JS/TS file requested without offset, limit, or pages may resolve to exactly one permitted complete function definition with the exact basename as its name, in a file directly in the same directory. Such a successful result identifies the function, missing path and actual source line range, and states that the rest of the file is not included. Otherwise a missing file returns an error.
@@ -37,11 +37,8 @@ Usage:
 - By default, it reads up to ${MAX_LINES_TO_READ} lines starting from the beginning of the file${maxSizeInstruction}
 ${offsetInstruction}
 ${lineFormat}
-- This tool allows Cat Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Cat Code is a multimodal LLM.${
-    pdfSupported
-      ? '\n- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: "1-5"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.'
-      : ''
-  }
+- This tool allows Cat Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Cat Code is a multimodal LLM.
+- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: "1-5"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.${nativePDFSupported ? '' : ' PDF pages are presented as images and require poppler-utils to be installed.'}
 - This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.
 - This tool can only read files, not directories. To read a directory, use an ls command via the ${BASH_TOOL_NAME} tool.
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.

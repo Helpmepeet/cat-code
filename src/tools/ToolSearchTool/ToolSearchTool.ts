@@ -1,5 +1,4 @@
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
-import memoize from 'lodash-es/memoize.js'
 import { z } from 'zod/v4'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -46,30 +45,16 @@ type OutputSchema = ReturnType<typeof outputSchema>
 
 export type Output = z.infer<OutputSchema>
 
-// Track deferred tool names to detect when cache should be cleared
+// MCP rediscovery creates fresh tool objects even when the name is unchanged.
+// Weak keys preserve stable built-in descriptions without retaining old MCP
+// definitions or allowing them to mask authoritative replacements.
+let toolDescriptions = new WeakMap<Tool, Promise<string>>()
 let cachedDeferredToolNames: string | null = null
 
-/**
- * Get a cache key representing the current set of deferred tools.
- */
-function getDeferredToolsCacheKey(deferredTools: Tools): string {
-  return deferredTools
-    .map(t => t.name)
-    .sort()
-    .join(',')
-}
-
-/**
- * Get tool description, memoized by tool name.
- * Used for keyword search scoring.
- */
-const getToolDescriptionMemoized = memoize(
-  async (toolName: string, tools: Tools): Promise<string> => {
-    const tool = findToolByName(tools, toolName)
-    if (!tool) {
-      return ''
-    }
-    return tool.prompt({
+function getToolDescriptionMemoized(tool: Tool, tools: Tools): Promise<string> {
+  let description = toolDescriptions.get(tool)
+  if (!description) {
+    description = tool.prompt({
       getToolPermissionContext: async () => ({
         mode: 'default' as const,
         additionalWorkingDirectories: new Map(),
@@ -81,27 +66,22 @@ const getToolDescriptionMemoized = memoize(
       tools,
       agents: [],
     })
-  },
-  (toolName: string) => toolName,
-)
-
-/**
- * Invalidate the description cache if deferred tools have changed.
- */
-function maybeInvalidateCache(deferredTools: Tools): void {
-  const currentKey = getDeferredToolsCacheKey(deferredTools)
-  if (cachedDeferredToolNames !== currentKey) {
-    logForDebugging(
-      `ToolSearchTool: cache invalidated - deferred tools changed`,
-    )
-    getToolDescriptionMemoized.cache.clear?.()
-    cachedDeferredToolNames = currentKey
+    toolDescriptions.set(tool, description)
   }
+  return description
 }
 
 export function clearToolSearchDescriptionCache(): void {
-  getToolDescriptionMemoized.cache.clear?.()
+  toolDescriptions = new WeakMap()
   cachedDeferredToolNames = null
+}
+
+function maybeInvalidateCache(deferredTools: Tools): void {
+  const currentNames = deferredTools.map(tool => tool.name).sort().join(',')
+  if (currentNames !== cachedDeferredToolNames) {
+    clearToolSearchDescriptionCache()
+    cachedDeferredToolNames = currentNames
+  }
 }
 
 /**
@@ -238,7 +218,7 @@ async function searchToolsWithKeywords(
     const matches = await Promise.all(
       deferredTools.map(async tool => {
         const parsed = parseToolName(tool.name)
-        const description = await getToolDescriptionMemoized(tool.name, tools)
+        const description = await getToolDescriptionMemoized(tool, tools)
         const descNormalized = description.toLowerCase()
         const hintNormalized = tool.searchHint?.toLowerCase() ?? ''
         const matchesAll = requiredTerms.every(term => {
@@ -259,7 +239,7 @@ async function searchToolsWithKeywords(
   const scored = await Promise.all(
     candidateTools.map(async tool => {
       const parsed = parseToolName(tool.name)
-      const description = await getToolDescriptionMemoized(tool.name, tools)
+      const description = await getToolDescriptionMemoized(tool, tools)
       const descNormalized = description.toLowerCase()
       const hintNormalized = tool.searchHint?.toLowerCase() ?? ''
 

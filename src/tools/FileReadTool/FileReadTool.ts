@@ -70,8 +70,9 @@ import {
   mapNotebookCellsToToolResult,
   readNotebook,
 } from '../../utils/notebook.js'
+import type { APIProvider } from '../../utils/model/providers.js'
 import { expandPath } from '../../utils/path.js'
-import { extractPDFPages, getPDFPageCount, readPDF } from '../../utils/pdf.js'
+import { extractPDFPages, getPDFPageCount, readPDF, readPDFPageImages } from '../../utils/pdf.js'
 import {
   isPDFExtension,
   isPDFSupported,
@@ -511,7 +512,7 @@ export const FileReadTool = buildTool({
   async description() {
     return DESCRIPTION
   },
-  async prompt() {
+  async prompt(options?: { provider?: APIProvider }) {
     const limits = getDefaultFileReadingLimits()
     const maxSizeInstruction = limits.includeMaxSizeInPrompt
       ? `. Files larger than ${formatFileSize(limits.maxSizeBytes)} will return an error; use offset and limit for larger files`
@@ -523,7 +524,7 @@ export const FileReadTool = buildTool({
       pickLineFormatInstruction(),
       maxSizeInstruction,
       offsetInstruction,
-      isPDFSupported(),
+      isPDFSupported(undefined, options?.provider),
     )
   },
   get inputSchema(): InputSchema {
@@ -1652,8 +1653,24 @@ async function callInner(
 
   // --- PDF ---
   if (isPDFExtension(ext)) {
-    if (pages) {
-      const parsedRange = parsePDFPageRange(pages)
+    const pageCount = pages ? null : await getPDFPageCount(resolvedFilePath)
+    if (pageCount !== null && pageCount > PDF_AT_MENTION_INLINE_THRESHOLD) {
+      throw new Error(
+        `This PDF has ${pageCount} pages, which is too many to read at once. ` +
+          `Use the pages parameter to read specific page ranges (e.g., pages: "1-5"). ` +
+          `Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
+      )
+    }
+    const supportsNativePDF = isPDFSupported(
+      context.options.mainLoopModel,
+      context.options.mainLoopProvider,
+    )
+    if (pages || !supportsNativePDF) {
+      // Bound automatic rendering even if pdfinfo is unavailable. One extra
+      // page distinguishes a small full read from a required page-range read.
+      const parsedRange = pages
+        ? parsePDFPageRange(pages)
+        : { firstPage: 1, lastPage: PDF_AT_MENTION_INLINE_THRESHOLD + 1 }
       const extractResult = await extractPDFPages(
         resolvedFilePath,
         parsedRange ?? undefined,
@@ -1661,40 +1678,28 @@ async function callInner(
       if (!extractResult.success) {
         throw new Error(extractResult.error.message)
       }
+      if (
+        !pages &&
+        extractResult.data.file.count > PDF_AT_MENTION_INLINE_THRESHOLD
+      ) {
+        throw new Error(
+          'This PDF has too many pages to read at once. Use the pages parameter to read specific page ranges ' +
+          `(e.g., pages: "1-5"). Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
+        )
+      }
       logEvent('tengu_pdf_page_extraction', {
         success: true,
         pageCount: extractResult.data.file.count,
         fileSize: extractResult.data.file.originalSize,
-        hasPageRange: true,
+        hasPageRange: !!pages,
       })
       logFileOperation({
         operation: 'read',
         tool: 'FileReadTool',
         filePath: fullFilePath,
-        content: `PDF pages ${pages}`,
+        content: pages ? `PDF pages ${pages}` : 'PDF rendered pages',
       })
-      const entries = await readdir(extractResult.data.file.outputDir)
-      const imageFiles = entries.filter(f => f.endsWith('.jpg')).sort()
-      const imageBlocks = await Promise.all(
-        imageFiles.map(async f => {
-          const imgPath = path.join(extractResult.data.file.outputDir, f)
-          const imgBuffer = await readFileAsync(imgPath)
-          const resized = await maybeResizeAndDownsampleImageBuffer(
-            imgBuffer,
-            imgBuffer.length,
-            'jpeg',
-          )
-          return {
-            type: 'image' as const,
-            source: {
-              type: 'base64' as const,
-              media_type:
-                `image/${resized.mediaType}` as Base64ImageSource['media_type'],
-              data: resized.buffer.toString('base64'),
-            },
-          }
-        }),
-      )
+      const imageBlocks = await readPDFPageImages(extractResult.data.file.outputDir)
       return {
         data: extractResult.data,
         ...(imageBlocks.length > 0 && {
@@ -1705,19 +1710,9 @@ async function callInner(
       }
     }
 
-    const pageCount = await getPDFPageCount(resolvedFilePath)
-    if (pageCount !== null && pageCount > PDF_AT_MENTION_INLINE_THRESHOLD) {
-      throw new Error(
-        `This PDF has ${pageCount} pages, which is too many to read at once. ` +
-          `Use the pages parameter to read specific page ranges (e.g., pages: "1-5"). ` +
-          `Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
-      )
-    }
-
     const fs = getFsImplementation()
     const stats = await fs.stat(resolvedFilePath)
-    const shouldExtractPages =
-      !isPDFSupported() || stats.size > PDF_EXTRACT_SIZE_THRESHOLD
+    const shouldExtractPages = stats.size > PDF_EXTRACT_SIZE_THRESHOLD
 
     if (shouldExtractPages) {
       const extractResult = await extractPDFPages(resolvedFilePath)
@@ -1734,14 +1729,6 @@ async function callInner(
           fileSize: stats.size,
         })
       }
-    }
-
-    if (!isPDFSupported()) {
-      throw new Error(
-        'Reading full PDFs is not supported with this model. Use a newer model (Sonnet 3.5 v2 or later), ' +
-          `or use the pages parameter to read specific page ranges (e.g., pages: "1-5", maximum ${PDF_MAX_PAGES_PER_READ} pages per request). ` +
-          'Page extraction requires poppler-utils: install with `brew install poppler` on macOS or `apt-get install poppler-utils` on Debian/Ubuntu.',
-      )
     }
 
     const readResult = await readPDF(resolvedFilePath)

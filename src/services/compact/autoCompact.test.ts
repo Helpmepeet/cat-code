@@ -246,6 +246,15 @@ describe('shouldAutoCompact pre-request savings', () => {
       true,
     )
   })
+
+  test('rough-counted projected messages do not subtract shrink savings a second time', async () => {
+    const threshold = getAutoCompactThreshold(MODEL)
+    const messages = [{
+      type: 'user', uuid: 'projected', timestamp: '2026-01-01T00:00:00.000Z',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'result', content: 'x'.repeat(threshold * 3) }] },
+    }] as Message[]
+    expect(await shouldAutoCompact(messages, MODEL, 'repl_main_thread', 40_000)).toBe(true)
+  })
 })
 
 describe('shouldAutoCompact measured non-message overhead', () => {
@@ -416,6 +425,49 @@ describe('measureNonMessageOverheadTokens', () => {
       fakeTool('DeltaTool', 12_000),
     ])
     expect(second).toBeGreaterThan(first * 1.8)
+  })
+
+  test('same-name MCP rediscovery refreshes the measured schema overhead', async () => {
+    const { fetchToolsForClient } = await import('../mcp/client.js')
+    const { ListToolsResultSchema } = await import('@modelcontextprotocol/sdk/types.js')
+    let description = 'Find a numeric record'
+    const connection = {
+      type: 'connected',
+      name: 'overhead-refresh',
+      config: { type: 'sdk', name: 'overhead-refresh', scope: 'local' },
+      capabilities: { tools: { listChanged: true } },
+      cleanup: async () => {},
+      client: {
+        request: async () => ListToolsResultSchema.parse({ tools: [{
+          name: 'lookup',
+          description,
+          _meta: { 'anthropic/alwaysLoad': true },
+          inputSchema: {
+            type: 'object',
+            properties: {
+              record: { type: 'string', description: 'x'.repeat(66_000) },
+            },
+          },
+        }] }),
+      },
+    } as unknown as import('../mcp/types.js').ConnectedMCPServer
+    try {
+      const firstTools = await fetchToolsForClient(connection)
+      const initialTokens = await measure(firstTools)
+      expect(initialTokens).toBeGreaterThan(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS)
+
+      description = 's'.repeat(2048)
+      fetchToolsForClient.cache.delete(connection.name)
+      const updatedTools = await fetchToolsForClient(connection)
+      const updatedTokens = await measure(updatedTools)
+      expect(updatedTokens).toBeGreaterThan(initialTokens + 400)
+
+      fetchToolsForClient.cache.delete(connection.name)
+      const unchangedTools = await fetchToolsForClient(connection)
+      expect(await measure(unchangedTools)).toBe(updatedTokens)
+    } finally {
+      fetchToolsForClient.cache.delete(connection.name)
+    }
   })
 
   test('two live tool sets keep their own measurements', async () => {

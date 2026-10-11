@@ -14,6 +14,7 @@ import { logForDebugging } from '../../utils/debug.js'
 import { getMainLoopModel } from '../../utils/model/model.js'
 import { SHELL_TOOL_NAMES } from '../../utils/shell/shellToolUtils.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import type { getContextUsageAnchor } from '../../utils/tokens.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -136,12 +137,29 @@ export function markToolsSentToAPIState(): void {
 // the request silently exceeds the estimate and autocompact fires late.
 // Cleared by resetMicrocompactState (MAIN-THREAD compaction, /clear, rewind),
 // which is exactly when the ids stop referring to the live conversation.
-// This set — like cachedMCState and pendingCacheEdits above — is owned by the
+// This map — like cachedMCState and pendingCacheEdits above — is owned by the
 // main thread: only a main-thread querySource can write it (see the gates at
 // evaluateTimeBasedTrigger and the sticky re-application in
 // microcompactMessages). Subagents and in-process teammates share this module
 // but never own any of it, so they must never reset it.
-const timeBasedClearedToolIds = new Set<string>()
+// Remember the response that still priced each result when it was first
+// cleared. A later response already prices the smaller request; applying the
+// sticky projection must not subtract those savings from its usage again.
+const timeBasedClearedToolIds = new Map<string, string | undefined>()
+type UsageAnchor = ReturnType<typeof getContextUsageAnchor>['anchor']
+
+async function getRequestUsageAnchor(
+  messages: Message[],
+  toolUseContext?: ToolUseContext,
+): Promise<UsageAnchor> {
+  // Keep this lazy: tokens imports messages, which reaches microCompact via
+  // API error handling. The anchor walk must match the budget estimator.
+  const { getContextUsageAnchor } = await import('../../utils/tokens.js')
+  return getContextUsageAnchor(
+    messages,
+    toolUseContext?.options.mainLoopModel ?? getMainLoopModel(),
+  ).anchor
+}
 
 export function resetMicrocompactState(): void {
   if (cachedMCState && cachedMCModule) {
@@ -241,11 +259,9 @@ export type PendingCacheEdits = {
 export type MicrocompactResult = {
   messages: Message[]
   /**
-   * Rough tokens removed from the returned REQUEST array relative to the
-   * stored conversation (time-based MC content-clearing only). The usage
-   * anchor tokenCountWithEstimation reads comes from the pre-clear response,
-   * so callers must subtract this to keep the autocompact threshold honest —
-   * same compensation snipCompactIfNeeded's tokensFreed provides.
+   * Rough savings still priced by the current server usage anchor. Results
+   * in its estimated tail, or already priced by a post-clear response, do
+   * not need compensation. A pure rough count uses the smaller array itself.
    */
   tokensFreed?: number
   compactionInfo?: {
@@ -298,7 +314,11 @@ export async function microcompactMessages(
   // tool results now, before the request, to shrink what gets rewritten.
   // Cached MC (cache-editing) is skipped when this fires: editing assumes a
   // warm cache, and we just established it's cold.
-  const timeBasedResult = maybeTimeBasedMicrocompact(messages, querySource)
+  const timeBasedResult = await maybeTimeBasedMicrocompact(
+    messages,
+    querySource,
+    toolUseContext,
+  )
   if (timeBasedResult) {
     return timeBasedResult
   }
@@ -318,9 +338,13 @@ export async function microcompactMessages(
     querySource &&
     isMainThreadSource(querySource)
   ) {
-    const reapplied = applyToolResultClearing(messages, timeBasedClearedToolIds)
+    const reapplied = applyToolResultClearing(
+      messages,
+      timeBasedClearedToolIds,
+      await getRequestUsageAnchor(messages, toolUseContext),
+    )
     workingMessages = reapplied.messages
-    stickyTokensFreed = reapplied.tokensSaved
+    stickyTokensFreed = reapplied.anchorTokensFreed
   }
 
   // Only run cached MC for the main thread to prevent forked agents
@@ -513,10 +537,12 @@ export function evaluateTimeBasedTrigger(
  */
 function applyToolResultClearing(
   messages: Message[],
-  clearSet: ReadonlySet<string>,
-): { messages: Message[]; tokensSaved: number } {
+  clearedAnchors: ReadonlyMap<string, string | undefined>,
+  anchor: UsageAnchor,
+): { messages: Message[]; tokensSaved: number; anchorTokensFreed: number } {
   let tokensSaved = 0
-  const result: Message[] = messages.map(message => {
+  let anchorTokensFreed = 0
+  const result: Message[] = messages.map((message, messageIndex) => {
     if (message.type !== 'user' || !Array.isArray(message.message.content)) {
       return message
     }
@@ -524,10 +550,18 @@ function applyToolResultClearing(
     const newContent = message.message.content.map(block => {
       if (
         block.type === 'tool_result' &&
-        clearSet.has(block.tool_use_id) &&
+        clearedAnchors.has(block.tool_use_id) &&
         block.content !== TIME_BASED_MC_CLEARED_MESSAGE
       ) {
-        tokensSaved += calculateToolResultTokens(block)
+        const savings = calculateToolResultTokens(block)
+        tokensSaved += savings
+        if (
+          anchor &&
+          messageIndex < anchor.firstMessageIndex &&
+          clearedAnchors.get(block.tool_use_id) === anchor.responseId
+        ) {
+          anchorTokensFreed += savings
+        }
         touched = true
         return { ...block, content: TIME_BASED_MC_CLEARED_MESSAGE }
       }
@@ -539,13 +573,14 @@ function applyToolResultClearing(
       message: { ...message.message, content: newContent },
     }
   })
-  return { messages: result, tokensSaved }
+  return { messages: result, tokensSaved, anchorTokensFreed }
 }
 
-function maybeTimeBasedMicrocompact(
+async function maybeTimeBasedMicrocompact(
   messages: Message[],
   querySource: QuerySource | undefined,
-): MicrocompactResult | null {
+  toolUseContext?: ToolUseContext,
+): Promise<MicrocompactResult | null> {
   const trigger = evaluateTimeBasedTrigger(messages, querySource)
   if (!trigger) {
     return null
@@ -563,7 +598,7 @@ function maybeTimeBasedMicrocompact(
   // Carry forward anything a previous trigger cleared, minus whatever is now
   // protected as recent — otherwise a re-fire would resurrect full content
   // for ids the earlier pass had already dropped from the request.
-  for (const id of timeBasedClearedToolIds) {
+  for (const id of timeBasedClearedToolIds.keys()) {
     if (!keepSet.has(id)) {
       clearSet.add(id)
     }
@@ -573,9 +608,19 @@ function maybeTimeBasedMicrocompact(
     return null
   }
 
-  const { messages: result, tokensSaved } = applyToolResultClearing(
+  const anchor = await getRequestUsageAnchor(messages, toolUseContext)
+  const clearedAnchors = new Map(
+    [...clearSet].map(id => [
+      id,
+      timeBasedClearedToolIds.has(id)
+        ? timeBasedClearedToolIds.get(id)
+        : anchor?.responseId,
+    ]),
+  )
+  const { messages: result, tokensSaved, anchorTokensFreed } = applyToolResultClearing(
     messages,
-    clearSet,
+    clearedAnchors,
+    anchor,
   )
 
   if (tokensSaved === 0) {
@@ -602,10 +647,10 @@ function maybeTimeBasedMicrocompact(
   // stale state, it would try to cache_edit tools whose server-side entries
   // no longer exist. Reset it.
   resetMicrocompactState()
-  // Record what we cleared AFTER the reset above (which clears this set too),
+  // Record what we cleared AFTER the reset above (which clears this map too),
   // so later turns keep re-applying it to the request array.
-  for (const id of clearSet) {
-    timeBasedClearedToolIds.add(id)
+  for (const [id, responseId] of clearedAnchors) {
+    timeBasedClearedToolIds.set(id, responseId)
   }
   // We just changed the prompt content — the next response's cache read will
   // be low, but that's us, not a break. Tell the detector to expect a drop.
@@ -618,5 +663,5 @@ function maybeTimeBasedMicrocompact(
     notifyCacheDeletion(querySource)
   }
 
-  return { messages: result, tokensFreed: tokensSaved }
+  return { messages: result, tokensFreed: anchorTokensFreed }
 }

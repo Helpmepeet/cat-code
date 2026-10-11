@@ -7,7 +7,7 @@ import { feature } from 'bun:bundle'
 import { markPostCompaction } from 'src/bootstrap/state.js'
 import { getSdkBetas, getSessionId } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
-import type { ToolUseContext } from '../../Tool.js'
+import type { Tool, ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import {
@@ -338,13 +338,11 @@ export function isAutoCompactEnabled(): boolean {
 const TOOL_SCHEMA_CHARS_PER_TOKEN = 3
 
 /**
- * Rendered tool schemas are session-stable by design — utils/toolSchemaCache.ts
- * locks their bytes at first render so a mid-session GrowthBook flip cannot bust
- * the prompt cache — so re-serializing every tool on every turn buys nothing.
- * The memo key is the tool set itself, because that is the one thing that does
- * change mid-session: deferred-tool discovery grows `tools`, and MCP reconnects
- * add or drop names. Model and provider are in the key too (openai renames
- * schema properties).
+ * Rendered built-in schemas and feature-flag fields are session-stable, so
+ * re-serializing every tool on every turn buys nothing. Authoritative MCP
+ * rediscovery can replace a description or input schema while retaining the
+ * name. Key by definition identity so those replacements are re-measured.
+ * Model and provider also affect rendered schemas.
  *
  * A map rather than a single slot because several tool sets are live at once in
  * one process: subagents carry their own, and the compact and session-memory
@@ -355,6 +353,17 @@ const TOOL_SCHEMA_CHARS_PER_TOKEN = 3
  */
 const MAX_TOOL_SCHEMA_TOKEN_MEMO_ENTRIES = 8
 const toolSchemaTokensMemo = new Map<string, number>()
+const toolSchemaDefinitionIds = new WeakMap<Tool, number>()
+let nextToolSchemaDefinitionId = 1
+
+function getToolSchemaDefinitionId(tool: Tool): number {
+  let id = toolSchemaDefinitionIds.get(tool)
+  if (id === undefined) {
+    id = nextToolSchemaDefinitionId++
+    toolSchemaDefinitionIds.set(tool, id)
+  }
+  return id
+}
 
 export function _resetToolSchemaTokensMemoForTest(): void {
   toolSchemaTokensMemo.clear()
@@ -393,7 +402,7 @@ async function measureToolSchemaTokens(
     : allTools
   const provider = toolUseContext.options.mainLoopProvider
   const key = `${model}|${provider ?? 'default'}|${mayDefer}|${sentTools.length}|${sentTools
-    .map(tool => tool.name)
+    .map(getToolSchemaDefinitionId)
     .join(',')}`
   const memoized = toolSchemaTokensMemo.get(key)
   if (memoized !== undefined) {
@@ -476,11 +485,7 @@ export async function shouldAutoCompact(
   messages: Message[],
   model: string,
   querySource?: QuerySource,
-  // Snip drops messages and time-based microcompact content-clears old
-  // tool_results, but both act on the request array only — the surviving
-  // assistant's usage still reflects the pre-shrink context, so
-  // tokenCountWithEstimation can't see the savings. Subtract the rough delta
-  // those passes already computed.
+  // Compensation for request content still priced by a stale server anchor.
   preRequestTokensFreed = 0,
   // Measured system prompt + userContext/systemContext + tool schemas for this
   // request, from measureNonMessageOverheadTokens. Only consumed when the count
@@ -502,9 +507,12 @@ export async function shouldAutoCompact(
   // wire-truncated tool outputs the openai server billed, but a Claude request
   // sends the full transcript, so trusting it would fire autocompact late (or
   // let the first Claude call 413). See tokenCountWithEstimation's currentModel.
-  const tokenCount =
-    tokenCountWithEstimation(messages, model, nonMessageOverheadTokens) -
-    preRequestTokensFreed
+  const tokenCount = tokenCountWithEstimation(
+    messages,
+    model,
+    nonMessageOverheadTokens,
+    preRequestTokensFreed,
+  )
   const threshold = getAutoCompactThreshold(model)
   const policy = resolveContextWindowPolicy(model, getSdkBetas())
 

@@ -167,7 +167,8 @@ export async function toolToAPISchema(
   // eager_input_streaming. These are computed once per session and cached to
   // prevent mid-session GrowthBook flips (tengu_tool_pear, tengu_fgts) or
   // tool.prompt() drift from churning the serialized tool array bytes.
-  // See toolSchemaCache.ts for rationale.
+  // Authoritative MCP description changes are refreshed without recomputing
+  // session-stable flags. See toolSchemaCache.ts for rationale.
   //
   // Cache key includes inputJSONSchema when present. StructuredOutput instances
   // share the name 'StructuredOutput' but carry different schemas per workflow
@@ -184,7 +185,19 @@ export async function toolToAPISchema(
       : tool.name
   const cacheKey = `${resolvedProvider}:${cacheKeyBase}`
   const cache = getToolSchemaCache()
+  const promptOptions = {
+    getToolPermissionContext: options.getToolPermissionContext,
+    tools: options.tools,
+    agents: options.agents,
+    allowedAgentTypes: options.allowedAgentTypes,
+    provider: resolvedProvider,
+  }
+  const mcpDescription = tool.isMcp ? await tool.prompt(promptOptions) : undefined
   let base = cache.get(cacheKey)
+  if (base && mcpDescription !== undefined && base.description !== mcpDescription) {
+    base = { ...base, description: mcpDescription }
+    cache.set(cacheKey, base)
+  }
   if (!base) {
     const strictToolsEnabled =
       checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_tool_pear')
@@ -207,13 +220,7 @@ export async function toolToAPISchema(
       ) as Anthropic.Tool.InputSchema
     }
 
-    const description = await tool.prompt({
-      getToolPermissionContext: options.getToolPermissionContext,
-      tools: options.tools,
-      agents: options.agents,
-      allowedAgentTypes: options.allowedAgentTypes,
-      provider: resolvedProvider,
-    })
+    const description = mcpDescription ?? (await tool.prompt(promptOptions))
 
     base = {
       name: tool.name,
@@ -648,10 +655,18 @@ export function normalizeToolInput<T extends Tool>(
   tool: T,
   input: z.infer<T['inputSchema']>,
   agentId?: AgentId,
+  provider?: APIProvider,
 ): z.infer<T['inputSchema']> {
-  if (getAPIProvider() === 'openai' && typeof input === 'object' && input !== null) {
+  if (
+    (provider ?? getAPIProvider()) === 'openai' &&
+    typeof input === 'object' &&
+    input !== null
+  ) {
+    const originalSchema =
+      tool.inputJSONSchema ?? zodToJsonSchema(tool.inputSchema)
     input = renameOpenAIInputKeysToOriginal(
       input as Record<string, unknown>,
+      originalSchema as Record<string, unknown>,
     ) as z.infer<T['inputSchema']>
   }
 

@@ -6,7 +6,7 @@ import { builtInCommandNames, type Command, type CommandBase, findCommand, getCo
 import { NO_CONTENT_MESSAGE } from 'src/constants/messages.js';
 import type { SetToolJSXFn, ToolUseContext } from 'src/Tool.js';
 import type { AssistantMessage, AttachmentMessage, Message, NormalizedUserMessage, ProgressMessage, UserMessage } from 'src/types/message.js';
-import { addInvokedSkill, getSessionId } from '../../bootstrap/state.js';
+import { addInvokedSkill } from '../../bootstrap/state.js';
 import { COMMAND_MESSAGE_TAG, COMMAND_NAME_TAG } from '../../constants/xml.js';
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, type AnalyticsMetadata_I_VERIFIED_THIS_IS_PII_TAGGED, logEvent } from '../../services/analytics/index.js';
@@ -29,7 +29,7 @@ import { getFsImplementation } from '../fsOperations.js';
 import { isFullscreenEnvEnabled } from '../fullscreen.js';
 import { clearSerializedLocalJsxPending, markSerializedLocalJsxPending } from '../immediateCommand.js';
 import { toArray } from '../generators.js';
-import { registerSkillHooks } from '../hooks/registerSkillHooks.js';
+import { registerSkillCommandHooks } from '../hooks/registerSkillHooks.js';
 import { logError } from '../log.js';
 import { enqueuePendingNotification } from '../messageQueueManager.js';
 import { createCommandInputMessage, createSyntheticUserCaveatMessage, createSystemMessage, createUserInterruptionMessage, createUserMessage, formatCommandInputTags, isCompactBoundaryMessage, isSystemLocalCommandMessage, normalizeMessages, prepareUserContent } from '../messages.js';
@@ -37,7 +37,6 @@ import type { ModelAlias } from '../model/aliases.js';
 import { parseToolListFromCLI } from '../permissions/permissionSetup.js';
 import { hasPermissionsToUseTool } from '../permissions/permissions.js';
 import { isOfficialMarketplaceName, parsePluginIdentifier } from '../plugins/pluginIdentifier.js';
-import { isRestrictedToPluginOnly, isSourceAdminTrusted } from '../settings/pluginOnlyPolicy.js';
 import { parseSlashCommand } from '../slashCommandParsing.js';
 import { sleep } from '../sleep.js';
 import { recordSkillUsage } from '../suggestions/skillUsageTracking.js';
@@ -162,6 +161,7 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
         model: command.model as ModelAlias | undefined,
         availableTools: freshTools,
         mcpRuntimeInputs: freshMcpRuntime,
+        onCacheSafeParams: ({ toolUseContext }) => registerSkillCommandHooks(command, toolUseContext),
         override: {
           agentId
         }
@@ -240,7 +240,9 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
       isAsync: false,
       querySource: 'agent:custom',
       model: command.model as ModelAlias | undefined,
-      availableTools: context.options.tools
+      availableTools: context.options.tools,
+      onCacheSafeParams: ({ toolUseContext }) => registerSkillCommandHooks(command, toolUseContext),
+      override: { agentId }
     })) {
       agentMessages.push(message);
       const normalizedNew = normalizeMessages([message]);
@@ -913,14 +915,7 @@ async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCom
   }
   const result = await command.getPromptForCommand(args, context);
 
-  // Register skill hooks if defined. Under ["hooks"]-only (skills not locked),
-  // user skills still load and reach this point — block hook REGISTRATION here
-  // where source is known. Mirrors the agent frontmatter gate in runAgent.ts.
-  const hooksAllowedForThisSkill = !isRestrictedToPluginOnly('hooks') || isSourceAdminTrusted(command.source);
-  if (command.hooks && hooksAllowedForThisSkill) {
-    const sessionId = getSessionId();
-    registerSkillHooks(context.setAppState, sessionId, command.hooks, command.name, command.type === 'prompt' ? command.skillRoot : undefined);
-  }
+  registerSkillCommandHooks(command, context);
 
   // Record skill invocation for compaction preservation, scoped by agent context.
   // Skills are tagged with their agentId so only skills belonging to the current

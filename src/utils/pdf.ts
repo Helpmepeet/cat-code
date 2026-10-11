@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
-import { mkdir, readdir, readFile } from 'fs/promises'
+import type { Base64ImageSource, ImageBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
+import { mkdir, readdir, readFile, rm } from 'fs/promises'
 import { join } from 'path'
 import {
   PDF_MAX_EXTRACT_SIZE,
@@ -10,6 +11,7 @@ import { execFileNoThrow } from './execFileNoThrow.js'
 import { formatFileSize } from './format.js'
 import { getFsImplementation } from './fsOperations.js'
 import { getToolResultsDir } from './toolResultStorage.js'
+import { maybeResizeAndDownsampleImageBuffer } from './imageResizer.js'
 
 export type PDFError = {
   reason:
@@ -144,6 +146,24 @@ export type PDFExtractPagesResult = {
   }
 }
 
+/** Load rendered pages using the same image limits as ordinary Read output. */
+export async function readPDFPageImages(outputDir: string): Promise<ImageBlockParam[]> {
+  const entries = await readdir(outputDir)
+  const imageFiles = entries.filter(file => file.endsWith('.jpg')).sort()
+  return Promise.all(imageFiles.map(async file => {
+    const buffer = await readFile(join(outputDir, file))
+    const resized = await maybeResizeAndDownsampleImageBuffer(buffer, buffer.length, 'jpeg')
+    return {
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: `image/${resized.mediaType}` as Base64ImageSource['media_type'],
+        data: resized.buffer.toString('base64'),
+      },
+    }
+  }))
+}
+
 let pdftoppmAvailable: boolean | undefined
 
 /**
@@ -180,6 +200,8 @@ export async function extractPDFPages(
   filePath: string,
   options?: { firstPage?: number; lastPage?: number },
 ): Promise<PDFResult<PDFExtractPagesResult>> {
+  let outputDir: string | undefined
+  let keepOutput = false
   try {
     const fs = getFsImplementation()
     const stats = await fs.stat(filePath)
@@ -215,7 +237,7 @@ export async function extractPDFPages(
     }
 
     const uuid = randomUUID()
-    const outputDir = join(getToolResultsDir(), `pdf-${uuid}`)
+    outputDir = join(getToolResultsDir(), `pdf-${uuid}`)
     await mkdir(outputDir, { recursive: true })
 
     // pdftoppm produces files like <prefix>-01.jpg, <prefix>-02.jpg, etc.
@@ -276,6 +298,7 @@ export async function extractPDFPages(
 
     const count = imageFiles.length
 
+    keepOutput = true
     return {
       success: true,
       data: {
@@ -295,6 +318,10 @@ export async function extractPDFPages(
         reason: 'unknown',
         message: errorMessage(e),
       },
+    }
+  } finally {
+    if (outputDir && !keepOutput) {
+      await rm(outputDir, { recursive: true, force: true })
     }
   }
 }

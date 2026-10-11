@@ -210,7 +210,7 @@ const getCoordinatorUserContext: (
 
   const toolUseContext: ToolUseContext = {
     ...toolUseContextBase,
-    messages: instructionAssembly.messages,
+    messages: forkContextMessages,
   }
 
   return {
@@ -219,6 +219,8 @@ const getCoordinatorUserContext: (
     systemContext,
     openAIInstructionAssembly: instructionAssembly.openAIInstructionAssembly,
     toolUseContext,
-    forkContextMessages: instructionAssembly.messages,
+    // Cache-safe snapshots keep raw history. query() owns provider context
+    // assembly, including prepending Claude userContext exactly once.
+    forkContextMessages,
   }
 }

@@ -1015,6 +1015,7 @@ export async function* executeNonStreamingRequest(
       getAnthropicClient({
         maxRetries: 0,
         model: clientOptions.model,
+        provider: requestProvider,
         fetchOverride: clientOptions.fetchOverride,
         source: clientOptions.source,
         codexLeaseOwnerId: clientOptions.codexLeaseOwnerId,
@@ -1876,6 +1877,11 @@ async function* queryModel(
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
     )
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
+    if (requestProvider === 'openai' && !hasThinking) {
+      // The Codex adapter needs the explicit signal to override parent effort
+      // for output-only calls such as the regular compaction fallback.
+      thinking = { type: 'disabled' }
+    }
 
     // Claude 5.5 rejects manual thinking budgets. Opus requires thinking on
     // every request; summarized display preserves visible progress updates.
@@ -2091,6 +2097,7 @@ async function* queryModel(
         getAnthropicClient({
           maxRetries: 0, // Disabled auto-retry in favor of manual implementation
           model: options.model,
+          provider: requestProvider,
           fetchOverride: options.fetchOverride,
           source: options.querySource,
           codexLeaseOwnerId: options.agentId ?? getSessionId(),
@@ -2572,6 +2579,7 @@ async function* queryModel(
                   [contentBlock] as BetaContentBlock[],
                   tools,
                   options.agentId,
+                  requestProvider,
                 ),
               },
               requestId: streamRequestId ?? undefined,
@@ -3028,6 +3036,7 @@ async function* queryModel(
             result.content,
             tools,
             options.agentId,
+            requestProvider,
           ),
         },
         requestId: streamRequestId ?? undefined,
@@ -3140,6 +3149,7 @@ async function* queryModel(
               result.content,
               tools,
               options.agentId,
+              requestProvider,
             ),
           },
           requestId: streamRequestId ?? undefined,
@@ -3788,11 +3798,8 @@ export async function queryHaiku({
         messages: assembly.messages,
         systemPrompt: assembly.systemPrompt,
         openAIInstructionAssembly: assembly.openAIInstructionAssembly,
-        // thinkingConfig: 'disabled' lands as undefined on the request body
-        // before it reaches the Codex adapter, so the Codex server would
-        // default to high reasoning effort for these cheap calls. Pass an
-        // explicit low effort so the adapter sends reasoning.effort=low on the
-        // OpenAI path. Harmless on Anthropic (Haiku ignores effort).
+        // Keep these cheap side-calls at low effort on providers that accept
+        // an effort setting alongside the disabled-thinking request.
         thinkingConfig: { type: 'disabled' },
         tools: [],
         signal,

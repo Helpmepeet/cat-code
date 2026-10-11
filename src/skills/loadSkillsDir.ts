@@ -209,6 +209,7 @@ export function parseSkillFrontmatterFields(
   disableModelInvocation: boolean
   userInvocable: boolean
   hooks: HooksSettings | undefined
+  paths: string[] | undefined
   executionContext: 'fork' | undefined
   agent: string | undefined
   effort: EffortValue | undefined
@@ -266,6 +267,7 @@ export function parseSkillFrontmatterFields(
     ),
     userInvocable,
     hooks: parseHooksFromFrontmatter(frontmatter, resolvedName),
+    paths: parseSkillPaths(frontmatter),
     executionContext: frontmatter.context === 'fork' ? 'fork' : undefined,
     agent: frontmatter.agent as string | undefined,
     effort,
@@ -464,7 +466,7 @@ async function loadSkillsFromSkillsDir(
           markdownContent,
           skillName,
         )
-        const paths = parseSkillPaths(frontmatter)
+        const paths = parsed.paths
 
         return {
           skill: createSkillCommand({

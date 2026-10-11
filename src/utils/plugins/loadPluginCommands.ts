@@ -2,6 +2,7 @@ import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, join } from 'path'
 import { getInlinePlugins, getSessionId } from '../../bootstrap/state.js'
 import type { Command } from '../../types/command.js'
+import { parseSkillFrontmatterFields } from '../../skills/loadSkillsDir.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
 import {
   parseArgumentNames,
@@ -226,6 +227,8 @@ function createPluginCommand(
 ): Command | null {
   try {
     const { frontmatter, content } = file
+    const { hooks, executionContext, agent, paths } =
+      parseSkillFrontmatterFields(frontmatter, content, commandName)
 
     const validatedDescription = coerceDescriptionToString(
       frontmatter.description,
@@ -309,6 +312,11 @@ function createPluginCommand(
       version,
       model,
       effort,
+      context: executionContext,
+      agent,
+      hooks,
+      paths,
+      skillRoot: isSkill || config.isSkillMode ? dirname(file.filePath) : undefined,
       disableModelInvocation,
       userInvocable,
       contentLength: content.length,

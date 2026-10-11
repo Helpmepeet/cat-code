@@ -22,6 +22,13 @@ const SESSION_MEMORY_TOOL_RULES = [
   'Do not call any other tools.',
 ] as const
 
+const SESSION_MEMORY_PATCH_RULES = [
+  'Your ONLY task is to use the apply_patch tool to update the notes file, then stop.',
+  'Use only Update File operations for the exact notes file. Do not add, delete, move, or modify any other file.',
+  'You may include multiple targeted edits to the notes file in one patch.',
+  'Do not call any other tools.',
+] as const
+
 const SESSION_MEMORY_STRUCTURE_RULES = [
   'The file must preserve its exact template structure with all existing sections, headers, and italic descriptions intact.',
   "NEVER modify, delete, or add section headers (the lines starting with '#', such as # Task specification).",
@@ -105,7 +112,7 @@ The file {{notesPath}} has already been read for you. Here are its current conte
 </current_notes_content>
 
 TOOL CONTRACT:
-${formatPromptList(SESSION_MEMORY_TOOL_RULES, true)}
+${formatPromptList(SESSION_MEMORY_PATCH_RULES, true)}
 
 STRUCTURE CONSTRAINTS:
 ${formatPromptList(SESSION_MEMORY_STRUCTURE_RULES, true)}
@@ -116,7 +123,7 @@ ${formatPromptList(SESSION_MEMORY_SECTION_RULES, true)}
 CONTENT CONSTRAINTS:
 ${formatPromptList(SESSION_MEMORY_CONTENT_RULES, true)}
 
-Use the Edit tool with file_path: {{notesPath}}
+Use the apply_patch tool with an Update File operation for: {{notesPath}}
 
 BEFORE FINISHING, VERIFY:
 ${formatPromptList(SESSION_MEMORY_VERIFY_RULES, true)}`
