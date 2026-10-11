@@ -5375,7 +5375,7 @@ export async function loadDisplayTranscriptFromJsonlPath(
  */
 async function loadSessionFile(
   sessionId: UUID,
-  options?: { keepAllLeaves?: boolean },
+  options?: { keepAllLeaves?: boolean; keepCompactedHistory?: boolean },
 ): Promise<{
   messages: Map<UUID, TranscriptMessage>
   summaries: Map<UUID, string>
@@ -5447,6 +5447,9 @@ export async function getSessionQueueOperations(
 }> {
   const loaded = await loadSessionFile(sessionId as UUID, {
     keepAllLeaves: true,
+    // Queue mutations can straddle compaction. Recover their whole ledger and
+    // previously delivered UUIDs independently of the compacted model seed.
+    keepCompactedHistory: true,
   })
   return {
     operations: loaded.queueOperations,

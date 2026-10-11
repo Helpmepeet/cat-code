@@ -705,6 +705,7 @@ export class SidecarSupervisor {
             this.log(
               `[supervisor] invalid ready frame from ${record.sessionId}: ${readyError}`,
             )
+            this.terminateChild(record)
             this.setStatus(record, 'failed')
             socket.destroy()
             return
@@ -730,6 +731,7 @@ export class SidecarSupervisor {
           this.log(
             `[supervisor] dropped ${String(serverFrame.kind)} frame from ${record.sessionId} before a valid ready frame`,
           )
+          this.terminateChild(record)
           this.setStatus(record, 'failed')
           socket.destroy()
           return

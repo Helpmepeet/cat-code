@@ -28,6 +28,11 @@ import {
   reduceSlashCatalogState,
   selectSlashCatalog,
 } from '../renderer/src/slashCatalogState.js'
+import {
+  createRawMessageLogState,
+  reduceServerFrame,
+  selectRawMessageLog,
+} from '../renderer/src/rawMessageLog.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
@@ -2812,54 +2817,64 @@ test('T4 — a mid-turn submit carrying a goalSnapshot is refused, not silently 
   release()
 })
 
-test('a queued prompt a turn refuses is retried once, then given up loudly', async () => {
-  // The user watched this leave the composer and saw it in the transcript, so a
-  // turn that never durably accepts it must not end in silence. One retry, not
-  // an unbounded one: `startTurn`'s finalizer schedules the next drain, so an
-  // always-failing turn would otherwise spin at microtask speed.
-  const attempts: string[] = []
-  const logs: string[] = []
-  const controller = new AppSessionController({
-    async *runTurn({ prompt, options }) {
-      attempts.push(String(prompt))
-      if (String(prompt) === 'doomed') throw new Error('engine refused')
-      options?.onInputPersisted?.()
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = new SidecarServer({
-    sessionId: SESSION,
-    engineSessionId: ENGINE_SESSION,
-    controller,
-    log: line => logs.push(line),
-  })
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+for (const persisted of [false, true]) {
+  test(`a queued prompt rejection is visible and ${persisted ? 'never retried after acceptance' : 'retried only once before acceptance'}`, async () => {
+    const attempts: string[] = []
+    let release!: () => void
+    const firstTurn = new Promise<void>(resolve => { release = resolve })
+    const controller = new AppSessionController({
+      async *runTurn({ prompt, options }) {
+        attempts.push(String(prompt))
+        if (String(prompt) === 'doomed') {
+          if (persisted) await options?.onInputPersisted?.()
+          throw new Error('engine refused')
+        }
+        await options?.onInputPersisted?.()
+        await firstTurn
+        yield buildProbeToolUseMessage()
+      },
+    })
+    const { server, received, conn } = connect(controller)
 
-  server.handleData(
-    conn,
-    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'first' }),
-  )
-  await waitFor(() => attempts.length === 1)
-  const retryKey = crypto.randomUUID()
-  enqueue({ mode: 'prompt', value: 'doomed', uuid: retryKey })
+    server.handleData(
+      conn,
+      clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'first' }),
+    )
+    await waitFor(() => attempts.length === 1)
+    server.handleData(
+      conn,
+      clientFrame({
+        type: 'app.submit', requestId: 'queued', prompt: 'doomed',
+        options: { submitId: 'queued-submit' },
+      }),
+    )
+    expect(received.find(frame => frame.kind === 'submit.result')).toMatchObject({
+      submitId: 'queued-submit', accepted: true,
+    })
+    expect(queuedPromptSnapshots(received).at(-1)).toHaveLength(1)
+    expect(userMessageTexts(received)).toEqual(['first'])
 
-  await waitFor(() => attempts.length === 3, 2000)
-  // One initial attempt plus exactly one retry, then it stops.
-  expect(attempts.slice(1)).toEqual(['doomed', 'doomed'])
-  await new Promise(resolve => setTimeout(resolve, 10))
-  expect(attempts).toHaveLength(3)
-  expect(getCommandQueueSnapshot()).toHaveLength(0)
-  expect(logs.some(line => line.includes('giving up'))).toBe(true)
-  expect(
-    (
-      server as unknown as {
-        retriedQueuedPromptKeys: ReadonlySet<string>
-      }
-    ).retriedQueuedPromptKeys.has(retryKey),
-  ).toBe(false)
-  server.close()
-})
+    // A reader attached after admission must also learn the terminal failure.
+    const second = makeSocket()
+    server.addConnection(second.socket)
+    release()
+    await waitFor(() => attempts.length === (persisted ? 2 : 3) && !controller.isTurnActive())
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(attempts.slice(1)).toEqual(persisted ? ['doomed'] : ['doomed', 'doomed'])
+    expect(getCommandQueueSnapshot()).toHaveLength(0)
+    expect(userMessageTexts(received)).toEqual(['first', 'doomed'])
+    for (const frames of [received, second.received]) {
+      const errors = frames.filter(frame => frame.kind === 'error')
+      expect(errors).toHaveLength(1)
+      expect(errors[0]).toMatchObject({ code: 'internal_error' })
+      let state = createRawMessageLogState()
+      for (const frame of frames) state = reduceServerFrame(state, frame)
+      expect(selectRawMessageLog(state, SESSION)).toMatchObject({
+        error: expect.stringContaining('engine refused'), inputEnabled: true,
+      })
+    }
+  })
+}
 
 test('a queued prompt prevents idle park before the drain runs', () => {
   // Same rule the queued worker result already had: parking here would strand a

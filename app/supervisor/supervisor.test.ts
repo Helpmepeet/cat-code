@@ -27,11 +27,13 @@ const tempDirs: string[] = []
 function readyScript({
   sessionIdExpression = 'process.env.CATCODE_SIDECAR_SESSION_ID',
   engineSessionIdExpression = "'engine-test-session'",
+  beforeReady = '',
   afterOpen = '',
   omitEngineSessionId = false,
 }: {
   sessionIdExpression?: string
   engineSessionIdExpression?: string
+  beforeReady?: string
   afterOpen?: string
   omitEngineSessionId?: boolean
 } = {}): string {
@@ -48,6 +50,7 @@ function readyScript({
       unix: socketPath,
       socket: {
         open(socket) {
+          ${beforeReady}
           writeFrame(socket, {
             kind: 'ready',
             protocolVersion: ${PROTOCOL_VERSION},
@@ -558,34 +561,47 @@ test('send to an exited session throws terminal session_disconnected', async () 
   }
 })
 
-test('ready frame missing engineSessionId marks the session failed and is not emitted', async () => {
-  const socketDir = makeTempDir('catcode-supervisor-ready-schema-')
-  const events: SupervisorEvent[] = []
-  const logs: string[] = []
-  const loggedSupervisor = new SidecarSupervisor({
-    sidecarCommand: process.execPath,
-    sidecarArgs: ['-e', readyScript({ omitEngineSessionId: true })],
-    socketDir,
-    log: line => logs.push(line),
+for (const handshake of [
+  { name: 'missing engineSessionId', script: readyScript({ omitEngineSessionId: true }), reason: 'missing engineSessionId' },
+  {
+    name: 'frame before ready',
+    script: readyScript({ beforeReady: "writeFrame(socket, { kind: 'pong', sessionId: process.env.CATCODE_SIDECAR_SESSION_ID, nonce: 'early' })" }),
+    reason: 'before a valid ready frame',
+  },
+]) {
+  test(`a ${handshake.name} handshake fails without retaining a live engine`, async () => {
+    const socketDir = makeTempDir('catcode-supervisor-ready-schema-')
+    const events: SupervisorEvent[] = []
+    const logs: string[] = []
+    const loggedSupervisor = new SidecarSupervisor({
+      sidecarCommand: process.execPath,
+      sidecarArgs: ['-e', `process.on('SIGTERM', () => {})\n${handshake.script}`],
+      socketDir,
+      killGraceMs: 100,
+      log: line => logs.push(line),
+    })
+    supervisors.push(loggedSupervisor)
+    loggedSupervisor.subscribe(event => events.push(event))
+    const sessionId = loggedSupervisor.spawnSession('bad-ready-session')
+    const pid = loggedSupervisor.getSessionProcessId(sessionId)!
+
+    try {
+      await waitFor(
+        () => events.some(event => event.type === 'status' && event.status === 'failed'),
+        'session did not fail on malformed handshake',
+      )
+      expect(events.some(event => event.type === 'frame')).toBe(false)
+      expect(logs.some(line => line.includes(handshake.reason))).toBe(true)
+      await waitFor(
+        () => !isProcessAlive(pid),
+        'failed handshake left an unreachable engine alive',
+        1_000,
+      )
+    } finally {
+      if (isProcessAlive(pid)) process.kill(pid, 'SIGKILL')
+    }
   })
-  supervisors.push(loggedSupervisor)
-  loggedSupervisor.subscribe(event => events.push(event))
-  const sessionId = loggedSupervisor.spawnSession('bad-ready-session')
-
-  await waitFor(
-    () =>
-      events.some(
-        event =>
-          event.type === 'status' &&
-          event.sessionId === sessionId &&
-          event.status === 'failed',
-      ),
-    'session did not fail on malformed ready frame',
-  )
-
-  expect(events.some(event => event.type === 'frame')).toBe(false)
-  expect(logs.some(line => line.includes('missing engineSessionId'))).toBe(true)
-})
+}
 
 test('outbound frame sessionId tripwire drops and logs a mis-stamped frame', async () => {
   const socketDir = makeTempDir('catcode-supervisor-tripwire-')

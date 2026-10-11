@@ -24,7 +24,7 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -132,4 +132,43 @@ test('a recalled mid-turn message is absent from restored history while a still-
       source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
     },
   ])
+}, TEST_TIMEOUT_MS)
+
+test('accepted queued text and images survive large-transcript compaction without restoring recalled input or expanding the model seed', async () => {
+  const configHome = tmp('catcode-compact-queue-cfg-')
+  const cwd = tmp('catcode-compact-queue-cwd-')
+  const engineSessionId = randomUUID()
+  const marker = `compact-queue-${randomUUID()}`
+
+  const minted = await run(
+    [minter, engineSessionId, marker, '--queued-before-compact'],
+    cwd,
+    configHome,
+  )
+  const recalledUuid = readMintedValue(minted, 'MINTED_RECALLED_UUID')
+  const waitingUuid = readMintedValue(minted, 'MINTED_WAITING_UUID')
+  const imageUuid = readMintedValue(minted, 'MINTED_IMAGE_UUID')
+  const consumedUuid = readMintedValue(minted, 'MINTED_CONSUMED_UUID')
+  expect(statSync(readMintedValue(minted, 'MINTED_TRANSCRIPT_PATH')).size).toBeGreaterThan(5 * 1024 * 1024)
+  const resumed = await run([resumeProbe, engineSessionId, marker], cwd, configHome)
+  const line = resumed.split('\n').find(entry => entry.startsWith('RESUME_RESULT='))
+  if (!line) throw new Error(`resume probe reported nothing: ${resumed}`)
+  const result = JSON.parse(line.slice('RESUME_RESULT='.length)) as {
+    hasCompactBoundary: boolean
+    hasMarker: boolean
+    undeliveredHistory: Array<{ uuid: string; message: { content: unknown } }>
+  }
+
+  expect(result.undeliveredHistory.map(row => row.uuid)).toEqual([waitingUuid, imageUuid])
+  expect(result.undeliveredHistory.map(row => row.uuid)).not.toContain(recalledUuid)
+  expect(result.undeliveredHistory.map(row => row.uuid)).not.toContain(consumedUuid)
+  expect(result.undeliveredHistory[0]?.message.content).toBe(`waiting input ${marker}`)
+  expect(result.undeliveredHistory[1]?.message.content).toEqual([
+    { type: 'text', text: `image caption ${marker}` },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+  ])
+  // The recovered queue is display history. Earlier turns remain compacted
+  // in the model seed rather than coming back with the queue ledger.
+  expect(result.hasCompactBoundary).toBe(true)
+  expect(result.hasMarker).toBe(false)
 }, TEST_TIMEOUT_MS)

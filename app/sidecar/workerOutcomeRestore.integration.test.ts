@@ -21,11 +21,12 @@ mock.module('../../src/utils/permissions/yoloClassifier.js', () => ({
 }))
 const { resetStateForTests, switchSession, setCwdState, setOriginalCwd } = await import('../../src/bootstrap/state.js')
 const { asSessionId, asAgentId } = await import('../../src/types/ids.js')
-const { createUserMessage, createAssistantMessage } = await import('../../src/utils/messages.js')
+const { createUserMessage, createAssistantMessage, createAssistantAPIErrorMessage } = await import('../../src/utils/messages.js')
 const { recordTranscript, appendSubagentSpawned, appendSubagentTerminal, getTranscriptPath, flushSessionStorage, resetProjectForTesting } = await import('../../src/utils/sessionStorage.js')
 const { releaseActiveTranscriptLease } = await import('../../src/utils/transcriptLease.js')
 const { getDefaultAppState } = await import('../../src/state/AppStateStore.js')
-const { registerAsyncAgent, completeAgentTask, enqueueAgentNotification } = await import('../../src/tasks/LocalAgentTask/LocalAgentTask.js')
+const { registerAsyncAgent, completeAgentTask, enqueueAgentNotification, queuePendingMessageIfRunning } = await import('../../src/tasks/LocalAgentTask/LocalAgentTask.js')
+const { AbortError } = await import('../../src/utils/errors.js')
 const { _clearOutputsForTest, _resetTaskOutputDirForTest } = await import('../../src/utils/task/diskOutput.js')
 const { resetCommandQueue } = await import('../../src/utils/messageQueueManager.js')
 const { AgentTool } = await import('../../src/tools/AgentTool/AgentTool.js')
@@ -112,9 +113,12 @@ test('desktop restore returns the undelivered worker outcome to the parent with 
 })
 
 const classifierEnabled = feature('TRANSCRIPT_CLASSIFIER') ? true : false
-for (const boundary of ['cleanup', 'review-pending', 'review-blocked'] as const) {
-  test.skipIf(boundary !== 'cleanup' && !classifierEnabled)(
-    `desktop recovers completed output before notification persistence: ${boundary}`, async () => {
+for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'killed-cleanup', 'review-pending', 'review-blocked'] as const) {
+  const reviewing = boundary.startsWith('review-')
+  const status = boundary === 'killed-cleanup' ? 'killed'
+    : boundary === 'failure-cleanup' || boundary === 'api-error-cleanup' ? 'failed' : 'completed'
+  test.skipIf(reviewing && !classifierEnabled)(
+    `desktop recovers ${status} output before notification persistence: ${boundary}`, async () => {
       const sessionId = crypto.randomUUID()
       await releaseActiveTranscriptLease()
       await _clearOutputsForTest()
@@ -135,12 +139,16 @@ for (const boundary of ['cleanup', 'review-pending', 'review-blocked'] as const)
         toolUseId, spawnedAt: new Date().toISOString(), isAsync: true,
       })
       let state = getDefaultAppState()
-      if (boundary !== 'cleanup') state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
+      if (reviewing) state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
       const setAppState = (update: (prev: typeof state) => typeof state) => { state = update(state) }
       const registration = registerAsyncAgent({
         agentId: 'worker', prompt: 'fixture', description: 'Fixture', toolUseId,
         selectedAgent: { agentType: 'implementor', source: 'built-in', baseDir: 'built-in', whenToUse: 'fixture', getSystemPrompt: () => 'fixture' }, setAppState,
       })
+      const instruction = 'Check the unhandled instruction fixture.ts'
+      if (status !== 'completed') {
+        expect(queuePendingMessageIfRunning('worker', instruction, setAppState)).toBe(true)
+      }
       let release!: () => void
       let reached!: () => void
       const paused = new Promise<void>(resolve => { reached = resolve })
@@ -157,7 +165,12 @@ for (const boundary of ['cleanup', 'review-pending', 'review-blocked'] as const)
           const action = createAssistantMessage({ content: 'fixture action' })
           action.message.content = [{ type: 'tool_use', id: 'fixture-action', name: FileReadTool.name, input: { file_path: 'fixture.ts' } }]
           yield action
-          yield createAssistantMessage({ content: 'completed outcome fixture.ts' })
+          yield createAssistantMessage({ content: 'worker outcome fixture.ts' })
+          if (boundary === 'failure-cleanup') throw new Error('fixture stream failed')
+          if (boundary === 'killed-cleanup') throw new AbortError('fixture stopped')
+          if (boundary === 'api-error-cleanup') {
+            yield createAssistantAPIErrorMessage({ content: 'fixture API failed' })
+          }
         },
         metadata: { prompt: 'fixture', agentType: 'implementor', resolvedAgentModel: 'claude-sonnet-4-6', isBuiltInAgent: true, isAsync: true, startTime: Date.now() },
         description: 'Fixture', agentIdForCleanup: 'worker', enableSummarization: false,
@@ -176,8 +189,8 @@ for (const boundary of ['cleanup', 'review-pending', 'review-blocked'] as const)
         clearTimeout(timeout)
         const persisted = await readFile(path, 'utf8')
         expect(persisted).not.toContain('queue-operation')
-        expect(state.tasks.worker?.status).toBe('completed')
-        expect(reviews).toBe(boundary === 'cleanup' ? 0 : 1)
+        expect(state.tasks.worker?.status).toBe(status)
+        expect(reviews).toBe(reviewing ? 1 : 0)
         // Restore from the durable prefix at this exact crash boundary. The
         // paused lifecycle cannot append a later outcome while restore reads.
         await releaseActiveTranscriptLease()
@@ -185,12 +198,14 @@ for (const boundary of ['cleanup', 'review-pending', 'review-blocked'] as const)
         const restored = await resumeEngineSession(sessionId, root, { activeAgents: [], allAgents: [] } as never)
         const outcomes = restored.messages.filter(message => message.type === 'user' && message.origin?.kind === 'task-notification')
         expect(outcomes).toHaveLength(1)
-        expect(JSON.stringify(outcomes)).toContain('completed outcome fixture.ts')
+        expect(JSON.stringify(outcomes)).toContain('worker outcome fixture.ts')
+        if (status !== 'completed') expect(JSON.stringify(outcomes)).toContain(instruction)
+        if (status === 'failed') expect(JSON.stringify(outcomes)).toContain(boundary === 'failure-cleanup' ? 'fixture stream failed' : 'fixture API failed')
         expect(outcomes[0]).toMatchObject({ origin: { kind: 'task-notification', taskId: 'worker', toolUseId } })
         if (boundary === 'review-pending') expect(JSON.stringify(outcomes)).toContain('safety classifier was unavailable')
         if (boundary === 'review-blocked') expect(JSON.stringify(outcomes)).toContain('SECURITY WARNING')
-        if (boundary === 'cleanup') expect(JSON.stringify(outcomes)).not.toContain('safety classifier was unavailable')
-        expect(reviews).toBe(boundary === 'cleanup' ? 0 : 1)
+        if (!reviewing) expect(JSON.stringify(outcomes)).not.toContain('safety classifier was unavailable')
+        expect(reviews).toBe(reviewing ? 1 : 0)
         await recordTranscript(restored.messages)
         await flushSessionStorage()
         await releaseActiveTranscriptLease()

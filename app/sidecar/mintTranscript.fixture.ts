@@ -51,6 +51,7 @@ async function main(): Promise<void> {
   const subagentBranch = process.argv.includes('--subagent-branch')
   const interruptedQueued = process.argv.includes('--interrupted-queued')
   const recalledQueued = process.argv.includes('--recalled-queued')
+  const queuedBeforeCompact = process.argv.includes('--queued-before-compact')
   const savedOutput = process.argv.includes('--saved-output')
   const relocationSkills = process.argv.includes('--relocation-skills')
   if (!sessionId) {
@@ -105,7 +106,9 @@ async function main(): Promise<void> {
       : `remember this nonce: ${marker}`,
   })
   const assistant = createAssistantMessage({
-    content: `acknowledged the nonce ${marker}`,
+    content: queuedBeforeCompact
+      ? `acknowledged the nonce ${marker}\n${'x'.repeat(5 * 1024 * 1024)}`
+      : `acknowledged the nonce ${marker}`,
   })
   const skillAttachments = relocationSkills ? [
     createAttachmentMessage({ type: 'invoked_skills', skills: [
@@ -225,7 +228,7 @@ async function main(): Promise<void> {
     await Bun.sleep(0)
     process.stdout.write(`MINTED_QUEUED_UUID=${queuedUuid}\n`)
   }
-  if (recalledQueued) {
+  if (recalledQueued || queuedBeforeCompact) {
     // D1b — two messages sent into a running turn, then Take back on one of
     // them, through the same queue primitives the desktop's recall handler
     // composes (`app/sidecar/sidecarServer.ts` handlePromptRecall). The one
@@ -248,6 +251,27 @@ async function main(): Promise<void> {
       mode: 'prompt',
       uuid: imageUuid,
     })
+    if (queuedBeforeCompact) {
+      const consumedUuid = randomUUID()
+      enqueue({ value: `consumed input ${marker}`, mode: 'prompt', uuid: consumedUuid })
+      dequeueAllMatching(command => command.uuid === consumedUuid)
+      await recordTranscript([
+        user,
+        assistant,
+        createUserMessage({ content: `consumed input ${marker}`, uuid: consumedUuid }),
+        createAssistantMessage({ content: `consumed response ${marker}` }),
+      ])
+      // An active turn can compact while later user input is still waiting.
+      // Flush its enqueue records before the boundary, then retract one after
+      // it so restore must read the ledger on both sides of compaction.
+      await Bun.sleep(0)
+      await flushSessionStorage()
+      await recordTranscript([
+        createCompactBoundaryMessage('auto', 200_000),
+        createUserMessage({ content: 'compacted model seed summary', isCompactSummary: true }),
+      ])
+      process.stdout.write(`MINTED_CONSUMED_UUID=${consumedUuid}\n`)
+    }
     dequeueAllMatching(command => command.uuid === recalledUuid)
     await Bun.sleep(0)
     process.stdout.write(`MINTED_RECALLED_UUID=${recalledUuid}\n`)

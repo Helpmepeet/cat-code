@@ -1106,13 +1106,22 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       // PEER-SESSIONS §5 — the one message that is not framed as peer-sent.
       untagged: true,
     }
-    if (!stillSharesProject(sessionId, appSessionId) || !forwarded(appSessionId, message)) {
+    // The named row is already reachable while the host call is settling, so
+    // other senders may have filled its pending allowance before this prompt.
+    const slotHeld = reserveSlot(appSessionId)
+    let delivered = false
+    try {
+      delivered = slotHeld && stillSharesProject(sessionId, appSessionId) && forwarded(appSessionId, message)
+    } finally {
+      if (slotHeld) releaseSlot(appSessionId)
+    }
+    if (!delivered) {
       deps.logRouted(sessionId, {
         from: fromName,
         to: name,
         kind: 'creation',
         messageId,
-        outcome: 'refused:wake_failed',
+        outcome: slotHeld ? 'refused:wake_failed' : 'refused:queue_full',
       })
       return { ok: true, value: { name, appSessionId, failedStep: 'prompt' } }
     }

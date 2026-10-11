@@ -1344,6 +1344,57 @@ describe('peer.create', () => {
     })
   })
 
+  test.each([MAX_PENDING_PEER_MESSAGES - 1, MAX_PENDING_PEER_MESSAGES])(
+    'creation respects the pending cap when %i messages arrive before the host answers',
+    async pendingCount => {
+      let finishCreate!: (value: { ok: true; value: { appSessionId: string; name: string } }) => void
+      const created = new Promise<{ ok: true; value: { appSessionId: string; name: string } }>(resolve => {
+        finishCreate = resolve
+      })
+      const senders = Array.from({ length: 5 }, (_, index) =>
+        row(`dddddddd-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, `Sender${index}`),
+      )
+      const rows = [row(ALEX, 'Alex'), ...senders]
+      const h = harness({
+        rows,
+        live: new Set([ALEX, CORAL, ...senders.map(sender => sender.appSessionId)]),
+        createResult: () => {
+          // Host persists and spawns before its final advisory write settles.
+          rows.push(row(CORAL, 'Coral', { createdBy: ALEX }))
+          return created
+        },
+      })
+      const creating = h.plane.handleRequest(ALEX, request('peer.create', { prompt: 'opening instruction' }))
+      await settle()
+      h.plane.onReady(CORAL)
+      for (let index = 0; index < pendingCount; index++) {
+        const sender = senders[Math.floor(index / PEER_SEND_BURST)]!
+        await h.plane.handleRequest(sender.appSessionId, request(
+          'peer.deliver', { to: 'Coral', text: `message ${index}` }, `send-${index}`,
+        ))
+        expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+      }
+      expect(h.plane.pendingFor(CORAL)).toHaveLength(pendingCount)
+
+      finishCreate({ ok: true, value: { appSessionId: CORAL, name: 'Coral' } })
+      await creating
+
+      expect(h.plane.pendingFor(CORAL)).toHaveLength(MAX_PENDING_PEER_MESSAGES)
+      expect(h.lastResult()?.value).toEqual({
+        name: 'Coral', appSessionId: CORAL,
+        ...(pendingCount === MAX_PENDING_PEER_MESSAGES ? { failedStep: 'prompt' } : {}),
+      })
+      expect(h.deliveries().filter(entry => entry.message.untagged)).toHaveLength(
+        pendingCount === MAX_PENDING_PEER_MESSAGES ? 0 : 1,
+      )
+      if (pendingCount === MAX_PENDING_PEER_MESSAGES) {
+        expect(h.logged).toContainEqual(expect.objectContaining({
+          kind: 'creation', outcome: 'refused:queue_full',
+        }))
+      }
+    },
+  )
+
   test('a prompt refused after ready keeps the row and names the failed step', async () => {
     const h = harness({
       createResult: async () => ({ ok: true, value: { appSessionId: CORAL, name: 'Coral' } }),

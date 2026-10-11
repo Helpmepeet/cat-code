@@ -1089,6 +1089,36 @@ export async function runAsyncAgentLifecycle({
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
   const tracker = createProgressTracker()
+  const recordUnsuccessfulOutcome = (
+    status: 'failed' | 'killed',
+    finalMessage: string | undefined,
+    error?: string,
+    usage = {
+      totalTokens: getTokenCountFromTracker(tracker),
+      toolUses: tracker.toolUseCount,
+      durationMs: Date.now() - metadata.startTime,
+    },
+  ) => {
+    const task = toolUseContext.getAppState().tasks[taskId]
+    const notification = isLocalAgentTask(task) && (runId === undefined || task.runId === runId)
+      ? formatTaskNotificationText(buildAgentNotificationDetails(task, {
+          taskId, description, status, error, finalMessage, usage,
+          toolUseId: toolUseContext.toolUseId,
+        }))
+      : undefined
+    // Preserve partial work and delivery failures before terminal bookkeeping
+    // or worktree cleanup can suspend, as prepareBackgroundAgentHandoff does.
+    appendSubagentTerminal(parentTranscriptPath, {
+      sessionId: parentSessionId,
+      agentId: asAgentId(taskId),
+      toolUseId: toolUseContext.toolUseId,
+      status,
+      reason: error,
+      durationMs: usage.durationMs,
+      endedAt: new Date().toISOString(),
+      notification,
+    })
+  }
   try {
     const resolveActivity = createActivityDescriptionResolver(
       toolUseContext.options.tools,
@@ -1195,14 +1225,14 @@ export async function runAsyncAgentLifecycle({
     if (agentResult.error) {
       const apiErrorMsg = agentResult.error
       failAsyncAgent(taskId, apiErrorMsg, rootSetAppState, runId)
-      appendSubagentTerminal(parentTranscriptPath, {
-        sessionId: parentSessionId,
-        agentId: asAgentId(taskId),
-        toolUseId: toolUseContext.toolUseId,
-        status: 'failed',
-        reason: apiErrorMsg,
-        durationMs: Date.now() - metadata.startTime,
-        endedAt: new Date().toISOString(),
+      let finalMessage = extractTextContent(agentResult.content, '\n')
+      if (formatFinalMessage && finalMessage.trim()) {
+        finalMessage = formatFinalMessage(finalMessage)
+      }
+      recordUnsuccessfulOutcome('failed', finalMessage, apiErrorMsg, {
+        totalTokens: getTokenCountFromTracker(tracker),
+        toolUses: agentResult.totalToolUseCount,
+        durationMs: agentResult.totalDurationMs,
       })
       await recordWorkerSessionTerminal({
         sessionId: parentSessionId,
@@ -1213,11 +1243,6 @@ export async function runAsyncAgentLifecycle({
         logForDebugging(`Failed to record worker failure: ${_err}`),
       )
       unregisterActiveSubagent(taskId)
-
-      let finalMessage = extractTextContent(agentResult.content, '\n')
-      if (formatFinalMessage && finalMessage.trim()) {
-        finalMessage = formatFinalMessage(finalMessage)
-      }
 
       const worktreeResult = await getWorktreeResult()
       enqueueAgentNotification({
@@ -1287,14 +1312,8 @@ export async function runAsyncAgentLifecycle({
         reason:
           'user_kill_async' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       })
-      appendSubagentTerminal(parentTranscriptPath, {
-        sessionId: parentSessionId,
-        agentId: asAgentId(taskId),
-        toolUseId: toolUseContext.toolUseId,
-        status: 'killed',
-        durationMs: Date.now() - metadata.startTime,
-        endedAt: new Date().toISOString(),
-      })
+      const partialResult = extractPartialResult(agentMessages)
+      recordUnsuccessfulOutcome('killed', partialResult)
       await recordWorkerSessionTerminal({
         sessionId: parentSessionId,
         agentId: taskId,
@@ -1305,7 +1324,6 @@ export async function runAsyncAgentLifecycle({
       )
       unregisterActiveSubagent(taskId)
       const worktreeResult = await getWorktreeResult()
-      const partialResult = extractPartialResult(agentMessages)
       enqueueAgentNotification({
         taskId,
         description,
@@ -1325,15 +1343,8 @@ export async function runAsyncAgentLifecycle({
     }
     const msg = errorMessage(error)
     failAsyncAgent(taskId, msg, rootSetAppState, runId)
-    appendSubagentTerminal(parentTranscriptPath, {
-      sessionId: parentSessionId,
-      agentId: asAgentId(taskId),
-      toolUseId: toolUseContext.toolUseId,
-      status: 'failed',
-      reason: msg,
-      durationMs: Date.now() - metadata.startTime,
-      endedAt: new Date().toISOString(),
-    })
+    const partialResult = extractPartialResult(agentMessages)
+    recordUnsuccessfulOutcome('failed', partialResult, msg)
     await recordWorkerSessionTerminal({
       sessionId: parentSessionId,
       agentId: taskId,
@@ -1344,7 +1355,6 @@ export async function runAsyncAgentLifecycle({
     )
     unregisterActiveSubagent(taskId)
     const worktreeResult = await getWorktreeResult()
-    const partialResult = extractPartialResult(agentMessages)
     enqueueAgentNotification({
       taskId,
       description,

@@ -2078,10 +2078,10 @@ export class SidecarServer {
 
     // The user already watched this leave the composer and saw it staged above
     // the composer, so a turn that never accepts it must not end in silence.
-    // `onInputPersisted` is the durable-acceptance signal: past it the turn
-    // genuinely ran, and a later rejection is an ordinary turn failure the
-    // engine reports itself. Before it, nothing took the prompt, so requeue for
-    // the next boundary. Retry ONCE per prompt: `startTurn`'s finalizer
+    // `onInputPersisted` is the durable-acceptance signal: past it the prompt
+    // must not be retried, and an unexpected rejection is surfaced below.
+    // Before it, nothing took the prompt, so requeue for the next boundary.
+    // Retry ONCE per prompt: `startTurn`'s finalizer
     // schedules the next drain, so an unconditional requeue on a turn that
     // always rejects would spin at microtask speed.
     const retryKey = command.uuid ?? promptText(command.value)
@@ -2098,10 +2098,23 @@ export class SidecarServer {
         this.forcedReconciliationPromptIds.delete(retryKey)
       },
       onSettled: error => {
-        if (!error || persisted) return
-        if (this.retriedQueuedPromptKeys.has(retryKey)) {
-          this.log(
-            `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
+        if (!error) return
+        if (persisted || this.retriedQueuedPromptKeys.has(retryKey)) {
+          if (!persisted) {
+            this.log(
+              `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
+            )
+          }
+          this.broadcastToConnections(connection =>
+            this.sendError(
+              connection,
+              undefined,
+              'internal_error',
+              persisted
+                ? error.message
+                : `The queued message could not be sent. Send it again. ${error.message}`,
+              false,
+            ),
           )
           this.retriedQueuedPromptKeys.delete(retryKey)
           this.forcedReconciliationPromptIds.delete(retryKey)
