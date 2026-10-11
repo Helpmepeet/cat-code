@@ -74,17 +74,33 @@ the [v2 manifest](task-restore-manifest.v2.json). The candidate remains off by
 default. The [original experiment](../../docs/reports/2026-10-11-task-restoration-experiment.md)
 and v1 artifacts remain historical evidence.
 
-The user selected a **GPT-6.1 Sol proposal only**: four serial attempts, two
-matched off/on pairs of the repaired resume case. The v2 proposal has a $24
-suite/$6 attempt ceiling and a deliberately unapproved
-[authorization example](task-restore-gpt-authorization.example.json). It cannot
-execute through this Anthropic Messages gateway. Current `--live` execution
-refuses before manifest, authorization or credential reads.
+The user subsequently authorized the existing Cat Code subscription for the
+four serial GPT-6.1 Sol low-effort attempts. The subscription extension uses
+production Codex request/stream translation, account resolution, refresh-on-use
+and credential-send lifecycle checks in the parent gateway. A transport-only
+client factory in the isolated sidecar retains OpenAI-native prompt assembly,
+normal tools, compaction, durable writing and fresh-process resume. It never
+places credentials in the fixture process. The hidden grader is unchanged.
+The paid-API proposal and authorization example are historical and are not
+used by this route.
 
-A separately scoped Responses integration must preserve the real engine path
-and independent grader, prove token/output accounting and durable spending
-admission offline, and freeze a new runnable manifest. Dedicated API access,
-current rates, an enforced project limit and exact digest-bound human approval
-remain required. Provider limits can overshoot; the proposed local ledger must
-reserve the full token ceiling before every dispatch. No live authorization or
-model improvement is established by these offline results.
+```sh
+# Clone the prepared seeds; freeze only evaluator changes over the repaired engine.
+bun scripts/harness-design-eval/task-restore/freeze-subscription.ts /private/tmp/task-subscription-new
+# Requires explicit user authorization for subscription/account access.
+bun scripts/harness-design-eval/task-restore/run.ts /private/tmp/task-subscription-new --live --subscription
+bun scripts/harness-design-eval/task-restore-subscription-summary.ts /private/tmp/task-subscription-new
+```
+
+The schedule is off/on, then on/off. Limits are 12 requests and six minutes per
+attempt, 48 requests and 26 minutes per suite, plus the conservative serialized
+workload gate recorded in the frozen policy. The SDK output setting is 4096,
+but the production subscription translator does not forward a provider output
+cap. Account refresh stays coordinated with existing sessions; no copied vault
+or refresh token is used. Subscription usage comes from raw completed provider
+responses, including cached-input and reasoning-output subsets. It is not
+converted to API charges. Results and failures are never overwritten. Plain
+`--live` remains blocked; the subscription flag requires a frozen matching
+subscription policy.
+
+The [subscription pilot report](../../docs/reports/2026-10-11-task-restoration-subscription-pilot.md) records the actual outcomes, request-capped failures, task-state mistake, and usage from both the failed preliminary batch and corrected comparison.

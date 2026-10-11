@@ -1,0 +1,2102 @@
+{
+  "totalModelAttempts": 8,
+  "priorModelBatches": [
+    {
+      "kind": "failed-model-batch",
+      "totalModelAttempts": 4,
+      "priorModelBatches": [],
+      "schema": 1,
+      "date": "2026-10-11",
+      "manifestSha256": "05db05830a73e287a536d49443e223e6ffeae2d21b0b756957305b65ac49fc55",
+      "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v6",
+      "attempts": [
+        {
+          "taskControlActions": [],
+          "taskStateMistakes": [],
+          "restoration": {
+            "persistedSnapshots": 0,
+            "firstRequestSnapshots": 0,
+            "maximumSnapshotsPerRequest": 0,
+            "excludedControls": true,
+            "taskIds": []
+          },
+          "repeat": 1,
+          "arm": "off",
+          "valid": false,
+          "complete": false,
+          "error": "Error: Error: Request/workload admission cap",
+          "mistakes": [],
+          "omissions": [
+            "decimal",
+            "fractional",
+            "finalRounding",
+            "comma",
+            "quote",
+            "newline",
+            "rounding documentation",
+            "escaping documentation",
+            "required successful bun check.ts"
+          ],
+          "exposure": {
+            "firstRequestSeen": true,
+            "originalTrackingRemoved": true,
+            "snapshotCount": 0,
+            "valid": true
+          },
+          "elapsedMs": 114153,
+          "usage": {
+            "input": 120577,
+            "cached": 33280,
+            "output": 3623,
+            "reasoning": 0,
+            "unknownAttempts": 0,
+            "attempts": 3,
+            "inputIncludesCached": true,
+            "outputIncludesReasoning": true
+          },
+          "verification": {
+            "attempted": false,
+            "succeeded": false
+          },
+          "calls": [
+            {
+              "attempt": 1,
+              "phase": "compact",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 83547,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 3492,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 97861
+            },
+            {
+              "attempt": 2,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 18341,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 15104
+                },
+                "output_tokens": 105,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 7271
+            },
+            {
+              "attempt": 3,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 18689,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 18176
+                },
+                "output_tokens": 26,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 3498
+            }
+          ],
+          "resultSha256": "0b8c014f4c493527adc23d31806e6b7f676a02f82c2a3e6e3636b40c62163d8b",
+          "requestsSha256": "51b95c1f94a17233e2d7b272bc450b743b66caef038cf158e8ad889ddd4e2e30",
+          "oracle": {
+            "stdout": "{\"decimal\":false,\"fractional\":false,\"finalRounding\":false,\"empty\":true,\"comma\":false,\"quote\":false,\"newline\":false,\"order\":true}\n",
+            "stderr": "",
+            "code": 0
+          },
+          "beforeRecovery": null
+        },
+        {
+          "taskControlActions": [],
+          "taskStateMistakes": [],
+          "restoration": {
+            "persistedSnapshots": 1,
+            "firstRequestSnapshots": 1,
+            "maximumSnapshotsPerRequest": 1,
+            "excludedControls": true,
+            "taskIds": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "repeat": 1,
+          "arm": "on",
+          "valid": false,
+          "complete": false,
+          "error": "Error: Error: Request/workload admission cap",
+          "mistakes": [],
+          "omissions": [
+            "decimal",
+            "fractional",
+            "finalRounding",
+            "comma",
+            "quote",
+            "newline",
+            "rounding documentation",
+            "escaping documentation",
+            "required successful bun check.ts"
+          ],
+          "exposure": {
+            "firstRequestSeen": true,
+            "originalTrackingRemoved": true,
+            "snapshotCount": 1,
+            "valid": true
+          },
+          "elapsedMs": 98062,
+          "usage": {
+            "input": 139189,
+            "cached": 32896,
+            "output": 3146,
+            "reasoning": 0,
+            "unknownAttempts": 0,
+            "attempts": 4,
+            "inputIncludesCached": true,
+            "outputIncludesReasoning": true
+          },
+          "verification": {
+            "attempted": false,
+            "succeeded": false
+          },
+          "calls": [
+            {
+              "attempt": 1,
+              "phase": "compact",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 83547,
+                "input_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 2731,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 75145
+            },
+            {
+              "attempt": 2,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 1,
+              "usage": {
+                "input_tokens": 17921,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 15104
+                },
+                "output_tokens": 113,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 5209
+            },
+            {
+              "attempt": 3,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 1,
+              "usage": {
+                "input_tokens": 18277,
+                "input_tokens_details": {
+                  "cached_tokens": 17792,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 212,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 6439
+            },
+            {
+              "attempt": 4,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 1,
+              "usage": {
+                "input_tokens": 19444,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 90,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 5734
+            }
+          ],
+          "resultSha256": "ed0c38f938478fcd7a92630e479599580457ec1fcb840f74497bfbedbcd7445f",
+          "requestsSha256": "e64b782c1affcdaaf79b5ca382317eac77b88021e715b1a4f8bb1c873d65bd51",
+          "oracle": {
+            "stdout": "{\"decimal\":false,\"fractional\":false,\"finalRounding\":false,\"empty\":true,\"comma\":false,\"quote\":false,\"newline\":false,\"order\":true}\n",
+            "stderr": "",
+            "code": 0
+          },
+          "beforeRecovery": null
+        },
+        {
+          "taskControlActions": [],
+          "taskStateMistakes": [],
+          "restoration": {
+            "persistedSnapshots": 1,
+            "firstRequestSnapshots": 1,
+            "maximumSnapshotsPerRequest": 1,
+            "excludedControls": true,
+            "taskIds": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "repeat": 2,
+          "arm": "on",
+          "valid": false,
+          "complete": false,
+          "error": "Error: Error: Request/workload admission cap",
+          "mistakes": [],
+          "omissions": [
+            "decimal",
+            "fractional",
+            "finalRounding",
+            "comma",
+            "quote",
+            "newline",
+            "rounding documentation",
+            "escaping documentation",
+            "required successful bun check.ts"
+          ],
+          "exposure": {
+            "firstRequestSeen": true,
+            "originalTrackingRemoved": true,
+            "snapshotCount": 1,
+            "valid": true
+          },
+          "elapsedMs": 106041,
+          "usage": {
+            "input": 139734,
+            "cached": 33280,
+            "output": 3446,
+            "reasoning": 0,
+            "unknownAttempts": 0,
+            "attempts": 4,
+            "inputIncludesCached": true,
+            "outputIncludesReasoning": true
+          },
+          "verification": {
+            "attempted": false,
+            "succeeded": false
+          },
+          "calls": [
+            {
+              "attempt": 1,
+              "phase": "compact",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 83572,
+                "input_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 3208,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 83385
+            },
+            {
+              "attempt": 2,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 1,
+              "usage": {
+                "input_tokens": 18291,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 15104
+                },
+                "output_tokens": 109,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 6881
+            },
+            {
+              "attempt": 3,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 1,
+              "usage": {
+                "input_tokens": 18639,
+                "input_tokens_details": {
+                  "cached_tokens": 18176,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 26,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 4606
+            },
+            {
+              "attempt": 4,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 1,
+              "usage": {
+                "input_tokens": 19232,
+                "input_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 103,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 5719
+            }
+          ],
+          "resultSha256": "963eae137521ae0223368d87d324158b1eed229347ecec2820d765a9633b10e0",
+          "requestsSha256": "ef92c19219ee9b8ee8769e0e068e340c0d052696088e8b5870b371bf2de9046d",
+          "oracle": {
+            "stdout": "{\"decimal\":false,\"fractional\":false,\"finalRounding\":false,\"empty\":true,\"comma\":false,\"quote\":false,\"newline\":false,\"order\":true}\n",
+            "stderr": "",
+            "code": 0
+          },
+          "beforeRecovery": null
+        },
+        {
+          "taskControlActions": [],
+          "taskStateMistakes": [],
+          "restoration": {
+            "persistedSnapshots": 0,
+            "firstRequestSnapshots": 0,
+            "maximumSnapshotsPerRequest": 0,
+            "excludedControls": true,
+            "taskIds": []
+          },
+          "repeat": 2,
+          "arm": "off",
+          "valid": false,
+          "complete": false,
+          "error": "Error: Error: Request/workload admission cap",
+          "mistakes": [],
+          "omissions": [
+            "decimal",
+            "fractional",
+            "finalRounding",
+            "comma",
+            "quote",
+            "newline",
+            "rounding documentation",
+            "escaping documentation",
+            "required successful bun check.ts"
+          ],
+          "exposure": {
+            "firstRequestSeen": true,
+            "originalTrackingRemoved": true,
+            "snapshotCount": 0,
+            "valid": true
+          },
+          "elapsedMs": 94382,
+          "usage": {
+            "input": 138254,
+            "cached": 32640,
+            "output": 2988,
+            "reasoning": 0,
+            "unknownAttempts": 0,
+            "attempts": 4,
+            "inputIncludesCached": true,
+            "outputIncludesReasoning": true
+          },
+          "verification": {
+            "attempted": false,
+            "succeeded": false
+          },
+          "calls": [
+            {
+              "attempt": 1,
+              "phase": "compact",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 83572,
+                "input_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 2835,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 78396
+            },
+            {
+              "attempt": 2,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 17651,
+                "input_tokens_details": {
+                  "cached_tokens": 15104,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 110,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 5069
+            },
+            {
+              "attempt": 3,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 18000,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 17536
+                },
+                "output_tokens": 29,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 2960
+            },
+            {
+              "attempt": 4,
+              "phase": "work",
+              "status": 200,
+              "completed": true,
+              "model": "gpt-6.1-sol",
+              "effort": "low",
+              "restorationCount": 0,
+              "usage": {
+                "input_tokens": 19031,
+                "input_tokens_details": {
+                  "cached_tokens": 0,
+                  "cache_write_tokens": 0
+                },
+                "output_tokens": 14,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                }
+              },
+              "elapsedMs": 2556
+            }
+          ],
+          "resultSha256": "792f840b41ce69a8e61716a703efbbccd5c8b10fe86ba2e168aaa2a962c830cb",
+          "requestsSha256": "061d6d2b3ef7ee7d9380a0f3cd9354211df7ec183dd639a3b0c265c428516e8b",
+          "oracle": {
+            "stdout": "{\"decimal\":false,\"fractional\":false,\"finalRounding\":false,\"empty\":true,\"comma\":false,\"quote\":false,\"newline\":false,\"order\":true}\n",
+            "stderr": "",
+            "code": 0
+          },
+          "beforeRecovery": null
+        }
+      ],
+      "pairs": [
+        {
+          "repeat": 1,
+          "outcome": "invalid pair",
+          "offComplete": false,
+          "onComplete": false
+        },
+        {
+          "repeat": 2,
+          "outcome": "invalid pair",
+          "offComplete": false,
+          "onComplete": false
+        }
+      ],
+      "infrastructure": [
+        {
+          "kind": "zero-model-infrastructure",
+          "root": "/private/tmp/cat-code-task-restore-subscription-20261011",
+          "admittedRequests": 0,
+          "failures": [
+            {
+              "attempt": "task-resume-1-off",
+              "error": "Config accessed before allowed"
+            }
+          ]
+        },
+        {
+          "kind": "zero-model-infrastructure",
+          "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v2",
+          "admittedRequests": 0,
+          "failures": [
+            {
+              "attempt": "task-resume-2-on",
+              "error": "Error: Run wall-time cap"
+            },
+            {
+              "attempt": "task-resume-1-off",
+              "error": "Error: Run wall-time cap"
+            },
+            {
+              "attempt": "task-resume-1-on",
+              "error": "Error: Run wall-time cap"
+            },
+            {
+              "attempt": "task-resume-2-off",
+              "error": "Error: Run wall-time cap"
+            }
+          ]
+        },
+        {
+          "kind": "zero-model-infrastructure",
+          "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v4",
+          "admittedRequests": 0,
+          "failures": [
+            {
+              "attempt": "task-resume-2-on",
+              "error": "Error: Run wall-time cap"
+            },
+            {
+              "attempt": "task-resume-1-off",
+              "error": "Error: Run wall-time cap"
+            },
+            {
+              "attempt": "task-resume-1-on",
+              "error": "Error: Run wall-time cap"
+            },
+            {
+              "attempt": "task-resume-2-off",
+              "error": "Error: Run wall-time cap"
+            }
+          ]
+        },
+        {
+          "kind": "zero-model-infrastructure",
+          "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v5",
+          "admittedRequests": 0,
+          "failures": [
+            {
+              "attempt": "task-resume-2-on",
+              "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+            },
+            {
+              "attempt": "task-resume-1-off",
+              "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+            },
+            {
+              "attempt": "task-resume-1-on",
+              "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+            },
+            {
+              "attempt": "task-resume-2-off",
+              "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+            }
+          ]
+        }
+      ],
+      "totals": {
+        "verifiedCompletions": 0,
+        "validCompleteAttempts": 0,
+        "input": 537754,
+        "cached": 132096,
+        "output": 13203,
+        "reasoning": 0,
+        "elapsedMs": 412638,
+        "requests": 15
+      },
+      "allBatchesUsage": {
+        "input": 537754,
+        "cached": 132096,
+        "output": 13203,
+        "reasoning": 0,
+        "requests": 15,
+        "elapsedMs": 412638
+      },
+      "accounting": "Actual server-reported inclusive input/output counts; cached input and reasoning output are subsets. Subscription usage only, no API dollar conversion.",
+      "interpretation": "Two pairs on one prepared resume fixture are a small pilot. Manual compaction and stateless subscription HTTP transport. Default remains off; no everyday-benefit or population claim."
+    }
+  ],
+  "schema": 1,
+  "date": "2026-10-11",
+  "manifestSha256": "1500b5eaa1fe702a8a9709691977e56af38ad37ef88b72cb2cdf791fc1fcbd1e",
+  "root": "/private/tmp/cat-code-task-restore-subscription-20261011-corrected-v2",
+  "attempts": [
+    {
+      "taskControlActions": [
+        {
+          "taskId": "4",
+          "status": "deleted",
+          "control": "completed cleanup",
+          "succeeded": true
+        }
+      ],
+      "taskStateMistakes": [],
+      "restoration": {
+        "persistedSnapshots": 0,
+        "firstRequestSnapshots": 0,
+        "maximumSnapshotsPerRequest": 0,
+        "excludedControls": true,
+        "taskIds": []
+      },
+      "repeat": 1,
+      "arm": "off",
+      "valid": false,
+      "complete": true,
+      "error": "Error: Error: Request/workload admission cap",
+      "mistakes": [],
+      "omissions": [],
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "elapsedMs": 172786,
+      "usage": {
+        "input": 313378,
+        "cached": 159488,
+        "output": 5297,
+        "reasoning": 125,
+        "unknownAttempts": 0,
+        "attempts": 12,
+        "inputIncludesCached": true,
+        "outputIncludesReasoning": true
+      },
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "calls": [
+        {
+          "attempt": 1,
+          "phase": "compact",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 83547,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 3449,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 90931
+        },
+        {
+          "attempt": 2,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 18358,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 15104
+            },
+            "output_tokens": 95,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 5851
+        },
+        {
+          "attempt": 3,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 18696,
+            "input_tokens_details": {
+              "cached_tokens": 18176,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 25,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3177
+        },
+        {
+          "attempt": 4,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 19723,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 218,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 7797
+        },
+        {
+          "attempt": 5,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20621,
+            "input_tokens_details": {
+              "cached_tokens": 19584,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 38,
+            "output_tokens_details": {
+              "reasoning_tokens": 10
+            }
+          },
+          "elapsedMs": 4328
+        },
+        {
+          "attempt": 6,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20899,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 80,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3775
+        },
+        {
+          "attempt": 7,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 21111,
+            "input_tokens_details": {
+              "cached_tokens": 20736,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 289,
+            "output_tokens_details": {
+              "reasoning_tokens": 115
+            }
+          },
+          "elapsedMs": 11501
+        },
+        {
+          "attempt": 8,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 21444,
+            "input_tokens_details": {
+              "cached_tokens": 20992,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 406,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 13758
+        },
+        {
+          "attempt": 9,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 21962,
+            "input_tokens_details": {
+              "cached_tokens": 21248,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 24,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 2940
+        },
+        {
+          "attempt": 10,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 22002,
+            "input_tokens_details": {
+              "cached_tokens": 21760,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 385,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 10792
+        },
+        {
+          "attempt": 11,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 22447,
+            "input_tokens_details": {
+              "cached_tokens": 21888,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 77,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3812
+        },
+        {
+          "attempt": 12,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 22568,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 211,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 8078
+        }
+      ],
+      "resultSha256": "72cadbc1b8df6c992fbc1d4c8a54ceb5e3481df43ad934e07bee459755b8a1d9",
+      "requestsSha256": "bcb556e4d7f0af01651400debdd76743557f3e4f701fccb5642c4b21f2299d25",
+      "oracle": {
+        "stdout": "{\"decimal\":true,\"fractional\":true,\"finalRounding\":true,\"empty\":true,\"comma\":true,\"quote\":true,\"newline\":true,\"order\":true}\n",
+        "stderr": "",
+        "code": 0
+      },
+      "beforeRecovery": {
+        "exposure": {
+          "firstRequestSeen": true,
+          "originalTrackingRemoved": true,
+          "snapshotCount": 0,
+          "valid": true
+        },
+        "verification": {
+          "attempted": true,
+          "succeeded": true
+        }
+      }
+    },
+    {
+      "taskControlActions": [],
+      "taskStateMistakes": [],
+      "restoration": {
+        "persistedSnapshots": 1,
+        "firstRequestSnapshots": 1,
+        "maximumSnapshotsPerRequest": 1,
+        "excludedControls": true,
+        "taskIds": [
+          "1",
+          "2",
+          "3"
+        ]
+      },
+      "repeat": 1,
+      "arm": "on",
+      "valid": false,
+      "complete": false,
+      "error": "Error: Error: Request/workload admission cap",
+      "mistakes": [],
+      "omissions": [
+        "decimal",
+        "fractional",
+        "finalRounding",
+        "comma",
+        "quote",
+        "newline",
+        "rounding documentation",
+        "escaping documentation",
+        "required successful bun check.ts"
+      ],
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 1,
+        "valid": true
+      },
+      "elapsedMs": 131723,
+      "usage": {
+        "input": 300204,
+        "cached": 151040,
+        "output": 3593,
+        "reasoning": 0,
+        "unknownAttempts": 0,
+        "attempts": 12,
+        "inputIncludesCached": true,
+        "outputIncludesReasoning": true
+      },
+      "verification": {
+        "attempted": false,
+        "succeeded": false
+      },
+      "calls": [
+        {
+          "attempt": 1,
+          "phase": "compact",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 83547,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 3204,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 85133
+        },
+        {
+          "attempt": 2,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 18153,
+            "input_tokens_details": {
+              "cached_tokens": 15104,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 100,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 4966
+        },
+        {
+          "attempt": 3,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 18491,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 18048
+            },
+            "output_tokens": 29,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3145
+        },
+        {
+          "attempt": 4,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 19522,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 14,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3299
+        },
+        {
+          "attempt": 5,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 19621,
+            "input_tokens_details": {
+              "cached_tokens": 19328,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 42,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3697
+        },
+        {
+          "attempt": 6,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 19786,
+            "input_tokens_details": {
+              "cached_tokens": 19456,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 33,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 4675
+        },
+        {
+          "attempt": 7,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 19874,
+            "input_tokens_details": {
+              "cached_tokens": 19584,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 32,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 6034
+        },
+        {
+          "attempt": 8,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 19947,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 31,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 2274
+        },
+        {
+          "attempt": 9,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20075,
+            "input_tokens_details": {
+              "cached_tokens": 19840,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 32,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3185
+        },
+        {
+          "attempt": 10,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20268,
+            "input_tokens_details": {
+              "cached_tokens": 19968,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 31,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 2699
+        },
+        {
+          "attempt": 11,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20327,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 19712
+            },
+            "output_tokens": 26,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3705
+        },
+        {
+          "attempt": 12,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20593,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 19,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3318
+        }
+      ],
+      "resultSha256": "12ce3a49a0fcc0caa698f6cc790f0354867c246da3a1f66d5b0954e9fabaeb10",
+      "requestsSha256": "adc1da70f2922115ebd5adbb63f506e97275dd5708e05dbbd71efc6f8ea17eb9",
+      "oracle": {
+        "stdout": "{\"decimal\":false,\"fractional\":false,\"finalRounding\":false,\"empty\":true,\"comma\":false,\"quote\":false,\"newline\":false,\"order\":true}\n",
+        "stderr": "",
+        "code": 0
+      },
+      "beforeRecovery": null
+    },
+    {
+      "taskControlActions": [
+        {
+          "taskId": "4",
+          "status": "deleted",
+          "control": "completed cleanup",
+          "succeeded": true
+        }
+      ],
+      "taskStateMistakes": [],
+      "restoration": {
+        "persistedSnapshots": 1,
+        "firstRequestSnapshots": 1,
+        "maximumSnapshotsPerRequest": 1,
+        "excludedControls": true,
+        "taskIds": [
+          "1",
+          "2",
+          "3"
+        ]
+      },
+      "repeat": 2,
+      "arm": "on",
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "mistakes": [],
+      "omissions": [],
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 1,
+        "valid": true
+      },
+      "elapsedMs": 149077,
+      "usage": {
+        "input": 265928,
+        "cached": 156672,
+        "output": 4487,
+        "reasoning": 102,
+        "unknownAttempts": 0,
+        "attempts": 10,
+        "inputIncludesCached": true,
+        "outputIncludesReasoning": true
+      },
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "calls": [
+        {
+          "attempt": 1,
+          "phase": "compact",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 83522,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 3029,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 83362
+        },
+        {
+          "attempt": 2,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 18089,
+            "input_tokens_details": {
+              "cached_tokens": 15104,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 114,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 5912
+        },
+        {
+          "attempt": 3,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 18440,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 17920
+            },
+            "output_tokens": 210,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 8176
+        },
+        {
+          "attempt": 4,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20072,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 24,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 2783
+        },
+        {
+          "attempt": 5,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20112,
+            "input_tokens_details": {
+              "cached_tokens": 19968,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 373,
+            "output_tokens_details": {
+              "reasoning_tokens": 43
+            }
+          },
+          "elapsedMs": 10879
+        },
+        {
+          "attempt": 6,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20594,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 19968
+            },
+            "output_tokens": 293,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 8740
+        },
+        {
+          "attempt": 7,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 20949,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 20480
+            },
+            "output_tokens": 141,
+            "output_tokens_details": {
+              "reasoning_tokens": 31
+            }
+          },
+          "elapsedMs": 5754
+        },
+        {
+          "attempt": 8,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 21232,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 20864
+            },
+            "output_tokens": 34,
+            "output_tokens_details": {
+              "reasoning_tokens": 18
+            }
+          },
+          "elapsedMs": 5626
+        },
+        {
+          "attempt": 9,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 21340,
+            "input_tokens_details": {
+              "cached_tokens": 21120,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 204,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 7229
+        },
+        {
+          "attempt": 10,
+          "phase": "recovery",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 1,
+          "usage": {
+            "input_tokens": 21578,
+            "input_tokens_details": {
+              "cached_tokens": 21248,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 65,
+            "output_tokens_details": {
+              "reasoning_tokens": 10
+            }
+          },
+          "elapsedMs": 4736
+        }
+      ],
+      "resultSha256": "39be9836d1f1af941f1474872ed6d0e33af3b41aabea9dd9fc2454b892ec25c1",
+      "requestsSha256": "72c8a5bbbd60d9d6af0173f8f0e90eed4bb2acaa65b384e4cf38a39c5b2ce297",
+      "oracle": {
+        "stdout": "{\"decimal\":true,\"fractional\":true,\"finalRounding\":true,\"empty\":true,\"comma\":true,\"quote\":true,\"newline\":true,\"order\":true}\n",
+        "stderr": "",
+        "code": 0
+      },
+      "beforeRecovery": {
+        "exposure": {
+          "firstRequestSeen": true,
+          "originalTrackingRemoved": true,
+          "snapshotCount": 1,
+          "valid": true
+        },
+        "verification": {
+          "attempted": true,
+          "succeeded": true
+        }
+      }
+    },
+    {
+      "taskControlActions": [
+        {
+          "taskId": "4",
+          "status": "deleted",
+          "control": "completed cleanup",
+          "succeeded": true
+        },
+        {
+          "taskId": "6",
+          "status": "deleted",
+          "control": "foreign-owned XML",
+          "succeeded": true
+        }
+      ],
+      "taskStateMistakes": [
+        {
+          "taskId": "6",
+          "status": "deleted",
+          "control": "foreign-owned XML",
+          "succeeded": true
+        }
+      ],
+      "restoration": {
+        "persistedSnapshots": 0,
+        "firstRequestSnapshots": 0,
+        "maximumSnapshotsPerRequest": 0,
+        "excludedControls": true,
+        "taskIds": []
+      },
+      "repeat": 2,
+      "arm": "off",
+      "valid": false,
+      "complete": true,
+      "error": "Error: Error: Request/workload admission cap",
+      "mistakes": [],
+      "omissions": [],
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "elapsedMs": 141003,
+      "usage": {
+        "input": 306021,
+        "cached": 177280,
+        "output": 4034,
+        "reasoning": 22,
+        "unknownAttempts": 0,
+        "attempts": 12,
+        "inputIncludesCached": true,
+        "outputIncludesReasoning": true
+      },
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "calls": [
+        {
+          "attempt": 1,
+          "phase": "compact",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 83522,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 2820,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 77463
+        },
+        {
+          "attempt": 2,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 17794,
+            "input_tokens_details": {
+              "cached_tokens": 15104,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 98,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 5343
+        },
+        {
+          "attempt": 3,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 18134,
+            "input_tokens_details": {
+              "cached_tokens": 17664,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 228,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 7465
+        },
+        {
+          "attempt": 4,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 19591,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 26,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 2935
+        },
+        {
+          "attempt": 5,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20377,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 23,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3863
+        },
+        {
+          "attempt": 6,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20416,
+            "input_tokens_details": {
+              "cached_tokens": 20224,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 23,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3302
+        },
+        {
+          "attempt": 7,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20455,
+            "input_tokens_details": {
+              "cached_tokens": 20224,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 24,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3098
+        },
+        {
+          "attempt": 8,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20495,
+            "input_tokens_details": {
+              "cached_tokens": 20352,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 355,
+            "output_tokens_details": {
+              "reasoning_tokens": 22
+            }
+          },
+          "elapsedMs": 10470
+        },
+        {
+          "attempt": 9,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 20959,
+            "input_tokens_details": {
+              "cached_tokens": 20352,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 368,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 11138
+        },
+        {
+          "attempt": 10,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 21387,
+            "input_tokens_details": {
+              "cached_tokens": 20864,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 23,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3319
+        },
+        {
+          "attempt": 11,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 21426,
+            "input_tokens_details": {
+              "cached_tokens": 21248,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 23,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3420
+        },
+        {
+          "attempt": 12,
+          "phase": "work",
+          "status": 200,
+          "completed": true,
+          "model": "gpt-6.1-sol",
+          "effort": "low",
+          "restorationCount": 0,
+          "usage": {
+            "input_tokens": 21465,
+            "input_tokens_details": {
+              "cached_tokens": 21248,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 23,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "elapsedMs": 3607
+        }
+      ],
+      "resultSha256": "8c39b569fa2dc4ffcdff1c50944cd409738fecdc5582ed3596766bab7530a71e",
+      "requestsSha256": "8412a36b02bec29d95dbd72c9d476817497931bc8605a01ef6006656317a6902",
+      "oracle": {
+        "stdout": "{\"decimal\":true,\"fractional\":true,\"finalRounding\":true,\"empty\":true,\"comma\":true,\"quote\":true,\"newline\":true,\"order\":true}\n",
+        "stderr": "",
+        "code": 0
+      },
+      "beforeRecovery": null
+    }
+  ],
+  "pairs": [
+    {
+      "repeat": 1,
+      "outcome": "invalid pair",
+      "offComplete": true,
+      "onComplete": false
+    },
+    {
+      "repeat": 2,
+      "outcome": "invalid pair",
+      "offComplete": true,
+      "onComplete": true
+    }
+  ],
+  "infrastructure": [
+    {
+      "kind": "zero-model-infrastructure",
+      "root": "/private/tmp/cat-code-task-restore-subscription-20261011",
+      "admittedRequests": 0,
+      "failures": [
+        {
+          "attempt": "task-resume-1-off",
+          "error": "Config accessed before allowed"
+        }
+      ]
+    },
+    {
+      "kind": "zero-model-infrastructure",
+      "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v2",
+      "admittedRequests": 0,
+      "failures": [
+        {
+          "attempt": "task-resume-2-on",
+          "error": "Error: Run wall-time cap"
+        },
+        {
+          "attempt": "task-resume-1-off",
+          "error": "Error: Run wall-time cap"
+        },
+        {
+          "attempt": "task-resume-1-on",
+          "error": "Error: Run wall-time cap"
+        },
+        {
+          "attempt": "task-resume-2-off",
+          "error": "Error: Run wall-time cap"
+        }
+      ]
+    },
+    {
+      "kind": "zero-model-infrastructure",
+      "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v4",
+      "admittedRequests": 0,
+      "failures": [
+        {
+          "attempt": "task-resume-2-on",
+          "error": "Error: Run wall-time cap"
+        },
+        {
+          "attempt": "task-resume-1-off",
+          "error": "Error: Run wall-time cap"
+        },
+        {
+          "attempt": "task-resume-1-on",
+          "error": "Error: Run wall-time cap"
+        },
+        {
+          "attempt": "task-resume-2-off",
+          "error": "Error: Run wall-time cap"
+        }
+      ]
+    },
+    {
+      "kind": "zero-model-infrastructure",
+      "root": "/private/tmp/cat-code-task-restore-subscription-20261011-v5",
+      "admittedRequests": 0,
+      "failures": [
+        {
+          "attempt": "task-resume-2-on",
+          "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+        },
+        {
+          "attempt": "task-resume-1-off",
+          "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+        },
+        {
+          "attempt": "task-resume-1-on",
+          "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+        },
+        {
+          "attempt": "task-resume-2-off",
+          "error": "Error: Error: Error: Unsupported hosted tool/continuation/tier"
+        }
+      ]
+    },
+    {
+      "kind": "zero-model-infrastructure",
+      "root": "/private/tmp/cat-code-task-restore-subscription-20261011-corrected",
+      "admittedRequests": 0,
+      "failures": [
+        {
+          "attempt": "task-resume-1-off",
+          "error": "EPERM from fd realpath with metadata-only permission"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "verifiedCompletions": 3,
+    "validCompleteAttempts": 1,
+    "input": 1185531,
+    "cached": 644480,
+    "output": 17411,
+    "reasoning": 249,
+    "elapsedMs": 594589,
+    "requests": 46
+  },
+  "allBatchesUsage": {
+    "input": 1723285,
+    "cached": 776576,
+    "output": 30614,
+    "reasoning": 249,
+    "requests": 61,
+    "elapsedMs": 1007227
+  },
+  "accounting": "Actual server-reported inclusive input/output counts; cached input and reasoning output are subsets. Subscription usage only, no API dollar conversion.",
+  "interpretation": "Two pairs on one prepared resume fixture are a small pilot. Manual compaction and stateless subscription HTTP transport. Default remains off; no everyday-benefit or population claim.",
+  "approvalReview": {
+    "rejectedLaunchRoot": "/private/tmp/cat-code-task-restore-subscription-20261011-v3",
+    "providerRequests": 0,
+    "reason": "Credential-file paths were passed to an isolation denial probe; reviewer classified this as exposure risk.",
+    "resolution": "Removed the credential-path probes. Retained synthetic private-file canary, hidden grader denial and OS sandbox file allowlist. Subsequent launches were approved."
+  },
+  "validation": {
+    "focusedTests": "7 passed, 37 assertions",
+    "bundling": "Runner, freezer and collector Bun bundles passed",
+    "typecheck": "1897 existing root diagnostics, identical initial/final output; no diagnostics in changed evaluator files.",
+    "graderSha256": "931b59eb87955160d4e8ebb018b43ec835ad1df265951f780eb2d0300fdb218f",
+    "defaultEnabled": false,
+    "installation": false,
+    "guiLaunch": false,
+    "push": false,
+    "collectorSha256": "87b3643b6704518e652e0c1981e38d14af046391d9abc75e7480b9e6619b2686"
+  },
+  "descriptivePairs": [
+    {
+      "repeat": 1,
+      "artifactOutcome": "on loss",
+      "offArtifactComplete": true,
+      "onArtifactComplete": false,
+      "fullProtocolPairValid": false
+    },
+    {
+      "repeat": 2,
+      "artifactOutcome": "tie",
+      "offArtifactComplete": true,
+      "onArtifactComplete": true,
+      "fullProtocolPairValid": false
+    }
+  ],
+  "taskStateAudit": {
+    "successfulForeignTaskMutations": 1,
+    "case": "repeat 2 off",
+    "action": "TaskUpdate task 6 status deleted",
+    "evidence": "Native provider tool call matched to successful subsequent tool_result: Updated task #6 deleted",
+    "graderScope": "Independent artifact grader unchanged; this task metadata mistake is reported separately.",
+    "completedTaskCleanup": "Task 4 was deleted in repeat 1 off, repeat 2 on, and repeat 2 off; archive/ledger.csv remained unchanged.",
+    "unrelatedUnownedTaskMutations": 0
+  }
+}

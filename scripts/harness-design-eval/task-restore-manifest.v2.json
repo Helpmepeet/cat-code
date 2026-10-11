@@ -1,8 +1,8 @@
 {
   "schema": 2,
   "experiment": "task-restore-gpt61-resume-pilot-v2",
-  "status": "PROPOSAL_ONLY_EXECUTION_BLOCKED",
-  "authorizeLive": false,
+  "status": "SUBSCRIPTION_PILOT_EXECUTED_WITH_RETAINED_FAILURES",
+  "authorizeLive": true,
   "date": "2026-10-11",
   "engineCommit": "46f82fbcb8b410556727c31d45779491d530bfd6",
   "frozenSource": {
@@ -42,8 +42,8 @@
     "exactComparisonAttempts": 16,
     "strengthenedControlAttempts": 16
   },
-  "provider": "openai-api",
-  "endpoint": "https://api.openai.com/v1/responses",
+  "provider": "codex-subscription",
+  "endpoint": "https://chatgpt.com/backend-api/codex/responses",
   "model": "gpt-6.1-sol",
   "reasoning": {
     "mode": "standard",
@@ -55,7 +55,7 @@
     "documented": true,
     "modelPage": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
     "production": "Cat Code catalog and Codex OAuth request routing support GPT-6.1 Sol. This is not evidence of dedicated API project access.",
-    "evaluator": "UNSUPPORTED: existing gateway accepts Anthropic Messages only; production OpenAI route uses Codex OAuth, not a dedicated API key. No fallback or model substitution authorized."
+    "evaluator": "Implemented using production OpenAI-native assembly, request/stream translation, subscription account resolution and credential-send lifecycle, with credentials held only by the parent gateway."
   },
   "schedule": [
     {
@@ -109,58 +109,32 @@
     "outputIncludesReasoning": true,
     "maxAttemptMs": 360000,
     "maxSuiteMs": 1560000,
-    "maxUsdPerAttempt": 6,
-    "maxUsdSuite": 24
-  },
-  "pricing": {
-    "checkedAt": "2026-10-11",
-    "currency": "USD",
-    "scope": "Standard/default global API, pre-tax model tokens; no hosted tools, fast/ultrafast, regional processing, or pro reasoning",
-    "source": "https://developers.openai.com/api/docs/pricing",
-    "thresholdInputTokens": 272000,
-    "shortPerMillion": {
-      "input": 2,
-      "cachedInput": 0.1,
-      "cacheWrite": 2.5,
-      "output": 10
-    },
-    "longPerMillion": {
-      "input": 4,
-      "cachedInput": 0.2,
-      "cacheWrite": 5,
-      "output": 15
-    },
-    "reservationCeilingsPerMillion": {
-      "everyInputToken": 5,
-      "everyOutputToken": 15
-    },
-    "maximumTokenChargeUnderLimits": 22.94912,
-    "maximumTokenChargePerAttempt": 5.73728,
-    "formula": "4,000,000 * 5 / 1,000,000 + 48 * 4096 * 15 / 1,000,000. Charge all input at the highest long-context cache-write rate, and reserve every output cap including reasoning. This bound depends on verified admission of actual input tokens, not serialized-byte estimates."
-  },
-  "spendingEnforcement": {
-    "implemented": false,
-    "requiredProjectHardLimitUsd": 24,
-    "projectMustBeDedicated": true,
-    "noOtherWorkload": true,
-    "providerSource": "https://developers.openai.com/api/docs/guides/spend-limits",
-    "providerCaveat": "Enable Enforce a hard limit, not just an alert. Provider enforcement is not instantaneous and can overshoot; it is a backstop, not proof of a strict 24 USD invoice cap.",
-    "gatewayRequirement": "Serial, sole-key-holding parent gateway; durable fsynced reservation ledger before dispatch. Reserve 5 USD/million actual input tokens and 15 USD/million capped output tokens. Reject before 6 USD/attempt or 24 USD/suite; no reservation refunds even for failed/incomplete calls. Include all summary/helper/retry requests. Reject hosted tools, other models, tier/geography/mode drift, hidden server conversation history and unbounded output. Stop on unknown usage or broken isolation.",
-    "countingSource": "https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count",
-    "countingGate": "Verify count of the exact final stateless Responses input including instructions, tools and retained reasoning; no conversation/previous_response_id or input mutation after counting. Establish count endpoint billing and reserve any charge within the same 24 USD cap. A byte-length heuristic cannot satisfy this gate."
+    "maxOutputTokensPerRequestEnforced": false,
+    "outputLimitNote": "4096 requested at the SDK boundary; the production subscription translator does not forward max_tokens. Request/time/input-admission limits are enforced; output including reasoning is measured from provider completion.",
+    "failedAttemptsNotReplaced": "Four preliminary model attempts failed because of evaluator input accounting and Read sandbox limitations. They remain a separate failed batch with all actual usage. Four explicitly disclosed corrected attempts followed. No failed corrected attempt was rerun."
   },
   "grading": {
     "independent": true,
     "unchangedHiddenOracleSha256": "931b59eb87955160d4e8ebb018b43ec835ad1df265951f780eb2d0300fdb218f",
-    "primary": "Verified completion of the repaired fresh-process resume case; report each matched pair and omissions, incorrect actions, actual reminder delivery, elapsed time and token-priced cost including failures",
-    "interpretation": "Two pairs of one repair family are a pilot only. No model improvement, default enablement, population claims or held-out confirmation without subsequent results and separate approval.",
-    "stop": "Any missing/duplicate restoration, incorrect or unauthorized action, incomplete usage, model/config drift, or budget/isolation breach stops execution. No discarded attempts or replacement pairs."
+    "primary": "Independent artifact completion, omissions/incorrect actions, actual reminder delivery, full protocol validity, elapsed time and actual subscription tokens, including failed batches.",
+    "interpretation": "Two corrected pairs on one reconstructed task cluster, with request-capped failures and no fully protocol-valid matched pair. No everyday-benefit or population claim. Default remains disabled.",
+    "stop": "Keep model/configuration exact and enforce isolation before dispatch. Retain failed/capped attempts and unknown usage; no silent model substitutions or replacement pairs."
   },
-  "blockers": [
-    "Separately scoped and reviewed Responses transport/admission/accounting integration preserving the real engine, sidecar and resume path; no query/tool mocks or credential-vault reuse",
-    "Offline proof at the final Responses boundary of fresh-process reminder delivery, independent grading, token counts, reasoning/output caps, cache-write accounting, retries and durable spending reservations",
-    "Confirm dedicated API project model access, dated prices, ancillary count-call billing and enforced project limit without other workload",
-    "Freeze the runnable GPT implementation and new fixture/runtime/support lock; obtain a new exact digest-bound human spending authorization. This proposal digest cannot authorize live execution"
-  ],
-  "proposedAuthorization": "After the runnable GPT package and spending controls are independently verified and its new manifest digest is explicitly approved, authorize only the four serial task-resume attempts in this schedule on gpt-6.1-sol, Standard/default tier, standard reasoning mode, low effort, maximum 24 USD pre-tax API charges total and 6 USD per attempt, 48 inference requests including summaries/helpers/retries, 4096 output tokens per request including reasoning, one fixed recovery turn, at most one API retry, no whole-attempt reruns, and a 26-minute suite cap. Use only a dedicated OpenAI API project/key with an enforced 24 USD project limit and verified durable local admission. No Codex account/vault use, installs, GUI, push, default changes or other paid services. No live authorization is granted now."
+  "authorization": {
+    "source": "Direct user instruction on 2026-10-11",
+    "subscriptionUsage": true,
+    "normalAccountAccessAndTokenRefresh": true,
+    "dedicatedPaidApiIntegration": false,
+    "dedicatedAccountRequired": false,
+    "additionalSpendingApprovalRequired": false
+  },
+  "executedPackage": {
+    "path": "/private/tmp/cat-code-task-restore-subscription-20261011-corrected-v2",
+    "manifestSha256": "1500b5eaa1fe702a8a9709691977e56af38ad37ef88b72cb2cdf791fc1fcbd1e",
+    "verificationPath": "docs/reports/2026-10-11-task-restoration-subscription-verification.json",
+    "verificationSha256": "222db1255fa78a3c4b934c4b5adebc18493a5bc66f24c7796eaff0816ba72ef6",
+    "correctedAttempts": 4,
+    "retainedFailedModelAttempts": 4,
+    "totalActualProviderRequests": 61
+  }
 }

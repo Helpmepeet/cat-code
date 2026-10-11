@@ -30,6 +30,8 @@ export function profile(stage: string, engine: string, dependencies: string, por
 (allow network* (local unix-socket))
 (allow network-outbound (remote ip "localhost:${port}"))
 (deny file-read*)(deny file-write*)
+(allow file-read-metadata (subpath "/dev/fd"))
+(allow file-read* (regex "^/dev/fd/[0-9]+$"))
 (allow file-read-metadata ${[...parents].map(p => `(literal ${q(p)})`).join(' ')})
 (allow file-read* (literal "/") (subpath ${q(stage)}) (subpath ${q(engine)}) (subpath ${q(dependencies)})
  (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/Library/Apple")

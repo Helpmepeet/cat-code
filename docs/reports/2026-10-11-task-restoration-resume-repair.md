@@ -117,6 +117,12 @@ checks were used. No broad test audit or unrelated test cleanup was performed.
 
 ## GPT-6.1 Sol pilot proposal only
 
+Historical authorization state below. The user subsequently authorized Cat
+Code subscription usage and normal account refresh. The subscription extension
+and actual four-attempt outcomes are recorded in
+[the pilot report](2026-10-11-task-restoration-subscription-pilot.md). This earlier
+paid-API proposal did not constrain the newly authorized subscription route.
+
 The user's daily model is GPT-6.1 Sol, and the user chose to leave execution
 blocked. Cat Code catalogs and routes it through Codex OAuth. That route does
 not establish dedicated OpenAI API project access. The existing evaluator

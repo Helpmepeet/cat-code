@@ -2,8 +2,9 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fixture } from './fixtures.js'
-import { policy, sha, validatePrices, type Prices } from './policy.js'
+import { policy as offlinePolicy, sha, validatePrices, type Prices } from './policy.js'
 import { environment, profile, dependenciesAt } from './isolation.js'
+import { subscriptionGateway, subscriptionPolicy, subscriptionUsage } from './subscription.js'
 import { gateway } from './gateway.js'
 import { grade, oracleProgram } from './grade.js'
 import { dependencyHash, inventory } from './prepare.js'
@@ -55,8 +56,9 @@ export function cost(records: any[], prices: Prices) {
 export function exposure(records: any[], seed: any, compactRequired: boolean) {
   const requests = records.filter(r => r.kind === 'request' && ['work', 'recovery'].includes(r.phase) && r.body.tools?.some((t: any) => ['Bash', 'Read'].includes(t.name)))
   const first = requests[0]
-  const originalTrackingRemoved = first ? !seed.trackingIds.some((id: string) => JSON.stringify(first.body.messages).includes(id)) : false
-  const snapshotCount = first ? (JSON.stringify(first.body.messages).match(/Unfinished tracked work at compaction\./g) ?? []).length : null
+  const history = first?.providerBody?.input ?? first?.body.messages
+  const originalTrackingRemoved = first ? !seed.trackingIds.some((id: string) => JSON.stringify(history).includes(id)) : false
+  const snapshotCount = first ? (JSON.stringify(history).match(/Unfinished tracked work at compaction\./g) ?? []).length : null
   return { firstRequestSeen: !!first, originalTrackingRemoved, snapshotCount,
     valid: !!first && (!compactRequired || originalTrackingRemoved) }
 }
@@ -74,13 +76,14 @@ export function verification(frames: any[]) {
   const checkCalls = [...calls].filter(([, command]) => /(?:^|[\n;&])\s*bun\s+(?:\.\/)?check\.ts(?:\s|$)/.test(command))
   return { attempted: checkCalls.length > 0, succeeded: checkCalls.some(([id]) => results.some(r => r.tool_use_id === id && !r.is_error && JSON.stringify(r.content).includes('Invoice checks passed'))) }
 }
-export async function run(root: string, live: boolean, approvalPath?: string) {
-  if (live && !policy.liveExecutionAllowed) throw Error('Live execution blocked: GPT-6.1 Sol pilot is proposal-only; this gateway supports Anthropic Messages only')
+export async function run(root: string, live: boolean, approvalPath?: string, subscription = false) {
+  const policy = subscription ? { ...offlinePolicy, ...subscriptionPolicy } : offlinePolicy
+  if (live && !subscription && !policy.liveExecutionAllowed) throw Error('Live execution blocked: GPT-6.1 Sol pilot is proposal-only; this gateway supports Anthropic Messages only')
   const rawManifest = readFileSync(join(root, 'manifest.json'), 'utf8')
   const manifest = JSON.parse(rawManifest)
   const digest = sha(rawManifest)
   if (readFileSync(join(root, 'manifest.sha256'), 'utf8').trim() !== digest) throw Error('Manifest hash mismatch')
-  for (const [key, value] of Object.entries(policy)) if (!same(manifest[key], value)) throw Error(`Policy drift: ${key}`)
+  for (const [key, value] of Object.entries(offlinePolicy)) if (!same(manifest[key], value)) throw Error(`Policy drift: ${key}`)
   const engine = join(root, 'engine')
   if (!same(inventory(engine), manifest.engineInventory)) throw Error('Frozen engine/support changed')
   if (Bun.version !== manifest.runtime.bun || sha(readFileSync(process.execPath)) !== manifest.runtime.binarySha256) throw Error('Runtime drift')
@@ -89,7 +92,8 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
   if (!same(inventory(import.meta.dir), inventory(join(engine, 'scripts/harness-design-eval/task-restore')))) throw Error('Runner/support drift; prepare again before approval')
   const { SidecarSupervisor } = await import(join(engine, 'app/supervisor/supervisor.ts'))
   let key: string | undefined, prices: Prices | undefined
-  if (live) {
+  if (subscription && (!live || !same(manifest.subscription, subscriptionPolicy))) throw Error('Subscription execution requires frozen subscription policy and --live --subscription')
+  if (live && !subscription) {
     if (!approvalPath) throw Error('Live execution requires explicit manifest authorization')
     const approval = JSON.parse(readFileSync(approvalPath, 'utf8'))
     if (approval.authorize !== true || approval.manifestSha256 !== digest || approval.dedicatedProjectConfirmed !== true || approval.providerSpendLimitConfirmed !== true || !Number.isFinite(approval.providerSpendLimitUsd) || approval.providerSpendLimitUsd <= 0 || approval.providerSpendLimitUsd > policy.maxUsdSuite || !approval.keyFile) throw Error('Live authorization/account isolation/provider spending limit incomplete')
@@ -99,15 +103,15 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
     key = readFileSync(approval.keyFile, 'utf8').trim()
     if (!key.startsWith('sk-ant-')) throw Error('Dedicated first-party API key required')
   }
-  const destination = join(root, live ? 'live-results' : 'offline-results')
+  const destination = join(root, subscription ? 'subscription-results' : live ? 'live-results' : 'offline-results')
   if (existsSync(destination)) throw Error('Results already exist; no silent reruns')
   mkdirSync(destination, { mode: 0o700 })
   writeFileSync(join(destination, 'results.json'), JSON.stringify({ manifestSha256: digest, live, prices: prices ?? null, results: [] }, null, 2))
   // Supervisor inherits its parent's environment. Remove ambient account,
   // provider, hook and proxy settings before spawning any engine process.
-  for (const name of Object.keys(process.env)) if (!['PATH', 'SHELL', 'LANG', 'TERM'].includes(name)) delete process.env[name]
-  const suite = { usd: 0 }, results: any[] = [], start = Date.now()
-  for (const item of manifest.schedule) {
+  if (!subscription) for (const name of Object.keys(process.env)) if (!['PATH', 'SHELL', 'LANG', 'TERM'].includes(name)) delete process.env[name]
+  const suite = { usd: 0, input: 0, requests: 0 }, results: any[] = [], start = Date.now()
+  for (const item of subscription ? subscriptionPolicy.schedule : manifest.schedule) {
     if (Date.now() - start >= policy.maxSuiteMs) break
     const f = fixture(item.caseId)
     const seedRoot = join(root, 'seeds', f.id), seed = JSON.parse(readFileSync(join(seedRoot, 'seed.json'), 'utf8'))
@@ -123,6 +127,7 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
     cpSync(join(seedRoot, 'workspace'), cwd, { recursive: true }); cpSync(join(seedRoot, 'home'), home, { recursive: true })
     mkdirSync(temp)
     cpSync(join(engine, 'scripts/harness-design-eval/task-restore/preload.ts'), join(stage, 'transport.ts'))
+    if (subscription) cpSync(join(engine, 'scripts/harness-design-eval/task-restore/subscription-preload.ts'), join(stage, 'subscription-transport.ts'))
     // Transcript project routing is cwd-derived. Rebase only the project catalog
     // directory key and path fields, identically in both arms.
     const oldCwd = join(seedRoot, 'workspace')
@@ -142,26 +147,33 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
       const file = join(home, '.cat-code', path)
       writeFileSync(file, readFileSync(file, 'utf8').replaceAll(oldCwd, cwd))
     }
+    const resumeTranscript = join(projects, newProject, `${seed.sessionId}.jsonl`)
+    if (!existsSync(resumeTranscript)) throw Error('Rebased seed transcript missing before gateway startup')
     const records: any[] = [], frames: any[] = []
     const out = join(destination, `${pairKey}-${item.arm}`)
     mkdirSync(out, { mode: 0o700 })
     writeFileSync(join(out, 'attempt.json'), JSON.stringify({ ...item, cohort: f.cohort, mocked: !live, started: Date.now() }))
-    const g = gateway({ live, key, prices, redirect: f.redirect, suite, save: record => {
+    const save = (record: any) => {
       records.push(record); appendFileSync(join(out, 'requests.jsonl'), JSON.stringify(record) + '\n', { mode: 0o600 })
-    } })
+    }
+    const g = subscription ? await subscriptionGateway(engine, { save, suite, conversationId: randomUUID() })
+      : gateway({ live, key, prices, redirect: f.redirect, suite, save })
     const env = { ...environment(home, temp, f.mode), TASK_EVAL_GATEWAY: g.endpoint, TASK_EVAL_CAPABILITY: g.capability,
+      ...(subscription ? { TASK_EVAL_ENGINE_PATH: engine, ANTHROPIC_SMALL_FAST_MODEL: policy.model } : {}),
       CAT_CODE_EVAL_COMPACT_TASK_RESTORE: item.arm === 'on' ? '1' : '0' }
     const dependencies = dependenciesAt(engine)
     const sandbox = profile(stage, engine, dependencies, g.port)
     const secret = join(out, 'isolation-canary.txt')
     writeFileSync(secret, 'Private grader/output canary')
-    const probeCode = `import {readFileSync} from 'node:fs';
+    const probeCode = `import {readFileSync, openSync, closeSync, lstatSync, realpathSync} from 'node:fs';
       for(const p of process.argv.slice(1)){let denied=false;try{readFileSync(p)}catch{denied=true}if(!denied)throw Error('Private file readable')}
       readFileSync('src/invoice.ts');
+      const fd=openSync('src/invoice.ts','r');lstatSync('/dev/fd/'+fd);realpathSync('/dev/fd/'+fd);closeSync(fd);
       if(process.env.TASK_EVAL_GATEWAY||process.env.TASK_EVAL_CAPABILITY)throw Error('Gateway capability leaked');
       let blocked=false;try{await fetch('https://example.com')}catch{blocked=true}if(!blocked)throw Error('External transport admitted');
       console.log('isolation passed');`
-    const probe = Bun.spawn(['/usr/bin/sandbox-exec', '-p', sandbox, process.execPath, `--preload=${join(stage, 'transport.ts')}`, '--eval', probeCode,
+    const probe = Bun.spawn(['/usr/bin/sandbox-exec', '-p', sandbox, process.execPath, `--preload=${join(stage, 'transport.ts')}`,
+      ...(subscription ? [`--preload=${join(stage, 'subscription-transport.ts')}`] : []), '--eval', probeCode,
       join(engine, 'scripts/harness-design-eval/task-restore/grade.ts'), secret], { cwd, env, stdout: 'pipe', stderr: 'pipe' })
     const [probeOut, probeError, probeExit] = await Promise.all([new Response(probe.stdout).text(), new Response(probe.stderr).text(), probe.exited])
     writeFileSync(join(out, 'isolation.json'), JSON.stringify({ probeOut, probeError, probeExit }))
@@ -179,11 +191,16 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
       ready = undefined; active = false; done = false; boundaryError = null; appId = randomUUID()
       supervisor = new SidecarSupervisor({ sidecarCommand: '/usr/bin/sandbox-exec',
         sidecarArgs: ['-p', sandbox, process.execPath, `--preload=${join(stage, 'transport.ts')}`,
+          ...(subscription ? [`--preload=${join(stage, 'subscription-transport.ts')}`] : []),
           ...policy.runtimeFeatures.map(feature => `--feature=${feature}`), 'run', join(engine, 'app/sidecar/index.ts')],
-        sidecarCwd: cwd, sidecarEnv: env, socketDir: join(temp, 's') })
+        sidecarCwd: cwd, sidecarEnv: subscription ? Object.assign(Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])), env) : env, socketDir: join(temp, 's') })
       supervisor.subscribe((event: any) => {
         appendFileSync(join(out, 'frames.jsonl'), JSON.stringify(event) + '\n', { mode: 0o600 })
-        if (event.type !== 'frame') { frames.push({ supervisor: event }); return }
+        if (event.type !== 'frame') {
+          frames.push({ supervisor: event })
+          if (event.type === 'exit' && !ready) boundaryError = `Sidecar exited before ready: ${event.code}`
+          return
+        }
         const frame = event.frame; frames.push(frame)
         if (frame.kind === 'error' && frame.code === 'bad_request') boundaryError = `Sidecar rejected evaluator input: ${frame.message}`
         if (frame.kind === 'ready') ready = frame
@@ -214,10 +231,15 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
         await submit(f.compact, 'compact')
         if (f.restart) { supervisor!.shutdown(); await Bun.sleep(500); await attach() }
       }
+      if (subscription) g.setPhase('work')
       await submit(f.continuation, 'work')
+      if (subscription) {
+        const beforeRecovery = exposure(records, seed, true)
+        writeFileSync(join(out, 'before-recovery.json'), JSON.stringify({ exposure: beforeRecovery, verification: verification(frames) }))
+      }
       await submit(f.recovery, 'recovery')
     } catch (caught) { error = String(caught) }
-    finally { supervisor?.shutdown(); await Bun.sleep(500); g.stop(); process.removeListener('SIGTERM', cleanup); process.removeListener('SIGINT', cleanup) }
+    finally { supervisor?.shutdown(); await Bun.sleep(500); g.stop(); if ('drain' in g) await g.drain(); process.removeListener('SIGTERM', cleanup); process.removeListener('SIGINT', cleanup) }
     // Grading happens with no model process running. Its sandbox prevents
     // fixture code from reading answers, keys, or other runs or writing results.
     let oracle: Record<string, boolean> | null = null
@@ -234,12 +256,12 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
     const scoring = grade(cwd, f.id, oracle, f.redirect ? check.attempted : check.succeeded)
     const boundaries = new Set(frames.flatMap(frame => frame.event?.message?.subtype === 'compact_boundary' ? [frame.event.message.uuid] : [])).size
     const e = exposure(records, seed, f.cohort !== 'ordinary')
-    const u = usage(records)
+    const u = subscription ? subscriptionUsage(records) : usage(records)
     const validity = !error && e.valid && (f.cohort === 'ordinary' ? boundaries === 0 : boundaries > 0)
     const result = { ...item, cohort: f.cohort, mocked: !live, error, valid: validity, boundaries, exposure: e,
       restorationDeliveryGap: item.arm === 'on' && f.cohort === 'forced' && e.snapshotCount !== 1,
       ...scoring, verification: check, elapsedMs: Date.now() - started, usage: u, reservations: g.stats(),
-      costUsdEstimate: prices ? cost(records, prices) : null }
+      subscription, costUsdEstimate: prices ? cost(records, prices) : null }
     cpSync(cwd, join(out, 'workspace'), { recursive: true })
     // Save isolated transcripts, not configuration/credentials. No live key exists
     // in the child, but keeping only transcript evidence reduces future risk.
@@ -251,7 +273,7 @@ export async function run(root: string, live: boolean, approvalPath?: string) {
     writeFileSync(join(destination, 'results.json'), JSON.stringify({ manifestSha256: digest, live, prices: prices ?? null, results }, null, 2))
     rmSync(stage, { recursive: true })
     console.log(JSON.stringify({ caseId: f.id, repeat: item.repeat, arm: item.arm, valid: validity, mocked: !live, error }))
-    if (error || !validity || (live && (scoring.incorrect.length || u.unknownAttempts || result.costUsdEstimate === null || g.stats().stopped))) break
+    if (!subscription && (error || !validity || (live && (scoring.incorrect.length || u.unknownAttempts || result.costUsdEstimate === null || g.stats().stopped)))) break
   }
   return { destination, runs: results.length, manifestSha256: digest, live }
 }
@@ -260,5 +282,5 @@ if (import.meta.main) {
   if (!args.includes('--offline') && !args.includes('--live')) throw Error('Choose --offline or explicitly authorized --live')
   if (args.includes('--offline') && args.includes('--live')) throw Error('Conflicting execution modes')
   const authorization = args.indexOf('--authorization')
-  console.log(JSON.stringify(await run(resolve(args[0]!), args.includes('--live'), authorization >= 0 ? args[authorization + 1] : undefined), null, 2))
+  console.log(JSON.stringify(await run(resolve(args[0]!), args.includes('--live'), authorization >= 0 ? args[authorization + 1] : undefined, args.includes('--subscription')), null, 2))
 }
