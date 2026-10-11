@@ -123,7 +123,14 @@
       "cachedInput": 0.1,
       "output": 10
     },
-    "note": "Independent fresh requests, exact JSON grading. Short synthetic tasks, not a repository-agent benchmark. Sol uses Cat Code Codex adapter and subscription transport; API prices are not a subscription invoice. Latency includes network, reasoning and generation. No TTFT or isolated decode measurement."
+    "note": "Independent fresh requests, exact JSON grading. Short synthetic tasks, not a repository-agent benchmark. Sol uses Cat Code Codex adapter and subscription transport; API prices are not a subscription invoice. Latency includes network, reasoning and generation. No TTFT or isolated decode measurement.",
+    "lunaReasoningEffort": "low",
+    "lunaApiPricesPerMillion": {
+      "input": 0.1,
+      "cachedInput": 0.01,
+      "output": 0.5
+    },
+    "lunaNote": "Luna measured later in a separate serial run, using identical prompts, grading, transport and low effort as Sol. Previous 44 results retained unchanged. This is not an interleaved contemporaneous latency comparison."
   },
   "results": [
     {
@@ -1137,6 +1144,204 @@
       "returnedModel": "qwen/qwen3.8-27b",
       "correct": true,
       "validJson": true
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "js-closure",
+      "category": "Code comprehension",
+      "latencySeconds": 2.5908733330000002,
+      "text": "{\"answer\":[3,3,3]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 78,
+        "outputTokens": 13,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:18.753Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "js-event-loop",
+      "category": "Code comprehension",
+      "latencySeconds": 2.0508602080000005,
+      "text": "{\"answer\":[\"A\",\"D\",\"B\",\"C\"]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 86,
+        "outputTokens": 16,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:20.804Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "python-aliasing",
+      "category": "Code comprehension",
+      "latencySeconds": 3.3621476249999995,
+      "text": "{\"answer\":\"[[7, 0], [7, 0], [7, 0]]\"}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 66,
+        "outputTokens": 26,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": false,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:24.166Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "interval-boundaries",
+      "category": "Code comprehension",
+      "latencySeconds": 1.786466833999999,
+      "text": "{\"answer\":[[1,5],[8,11],[11,12]]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 110,
+        "outputTokens": 21,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:25.953Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "bayes",
+      "category": "Reasoning",
+      "latencySeconds": 4.098845791000001,
+      "text": "{\"answer\":15.38}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 83,
+        "outputTokens": 52,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:30.052Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "constraint-order",
+      "category": "Reasoning",
+      "latencySeconds": 4.81259375,
+      "text": "{\"answer\":[\"B\",\"A\",\"D\",\"E\",\"C\"]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 91,
+        "outputTokens": 90,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:34.865Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "data-extraction",
+      "category": "Extraction",
+      "latencySeconds": 4.117488874999999,
+      "text": "{\"answer\":{\"ids\":[\"R001\",\"R013\",\"R025\",\"R037\",\"R049\",\"R061\",\"R073\",\"R085\",\"R097\"],\"total\":3087}}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 1777,
+        "outputTokens": 120,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:38.982Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "exact-format",
+      "category": "Instruction following",
+      "latencySeconds": 3.301788709,
+      "text": "{\"answer\":[\"beta\"]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 79,
+        "outputTokens": 61,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:42.285Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "speed-1",
+      "category": "Fixed-output speed",
+      "latencySeconds": 2.666077666999998,
+      "text": "{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 55,
+        "outputTokens": 167,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:44.951Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "speed-2",
+      "category": "Fixed-output speed",
+      "latencySeconds": 4.830709333000002,
+      "text": "{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 55,
+        "outputTokens": 167,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:49.782Z"
+    },
+    {
+      "model": "gpt-6-luna",
+      "id": "speed-3",
+      "category": "Fixed-output speed",
+      "latencySeconds": 5.137923250000007,
+      "text": "{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 55,
+        "outputTokens": 167,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true,
+      "measuredAt": "2026-10-11T03:40:54.920Z"
     }
   ],
   "summaries": [
@@ -1162,7 +1367,8 @@
         "cached": 384,
         "reasoning": 0
       },
-      "solApiEquivalent": null
+      "solApiEquivalent": null,
+      "lunaApiEquivalent": null
     },
     {
       "id": "qwen/qwen3.8-27b",
@@ -1186,7 +1392,8 @@
         "cached": 0,
         "reasoning": 2448
       },
-      "solApiEquivalent": null
+      "solApiEquivalent": null,
+      "lunaApiEquivalent": null
     },
     {
       "id": "qwen/qwen3.8-27b-nvfp4",
@@ -1210,7 +1417,8 @@
         "cached": 0,
         "reasoning": 3835
       },
-      "solApiEquivalent": null
+      "solApiEquivalent": null,
+      "lunaApiEquivalent": null
     },
     {
       "id": "gpt-6.1-sol",
@@ -1234,7 +1442,33 @@
         "cached": 0,
         "reasoning": 0
       },
-      "solApiEquivalent": 0.01327
+      "solApiEquivalent": 0.01327,
+      "lunaApiEquivalent": null
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT‑6 Luna · Cat Code",
+      "color": "#b8a2e5",
+      "correct": 7,
+      "attempted": 8,
+      "medianTaskSeconds": 3.331968167,
+      "medianSpeedSeconds": 4.830709333000002,
+      "speedRange": [
+        2.666077666999998,
+        4.830709333000002,
+        5.137923250000007
+      ],
+      "speedCorrect": 3,
+      "requests": 11,
+      "errors": 0,
+      "tokens": {
+        "input": 2535,
+        "output": 900,
+        "cached": 0,
+        "reasoning": 0
+      },
+      "solApiEquivalent": null,
+      "lunaApiEquivalent": 0.0007035
     }
   ],
   "referencePricing": {
@@ -1252,6 +1486,11 @@
       "input": 0.2,
       "output": 2.5
     },
+    "lunaOpenAiPerMillion": {
+      "input": 0.1,
+      "cachedInput": 0.01,
+      "output": 0.5
+    },
     "workload": {
       "requests": 1000,
       "inputPerRequest": 10000,
@@ -1263,6 +1502,18 @@
         "value": 1.04,
         "color": "#8ac7a1",
         "display": "$1.04"
+      },
+      {
+        "label": "Luna · OpenAI API, 90% input cached",
+        "value": 0.69,
+        "color": "#786399",
+        "display": "$0.69"
+      },
+      {
+        "label": "Luna · OpenAI API, uncached",
+        "value": 1.5,
+        "color": "#b8a2e5",
+        "display": "$1.50"
       },
       {
         "label": "Qwen3.8 · DeepInfra promotion",
@@ -1290,6 +1541,10 @@
       "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
     ],
     [
+      "OpenAI: GPT‑6 Luna model and pricing",
+      "https://developers.openai.com/api/docs/models/gpt-6-luna"
+    ],
+    [
       "Qwen3.8 official model card and evaluations",
       "https://huggingface.co/Qwen/Qwen3.8-27B"
     ],
@@ -1309,5 +1564,6 @@
       "TokenMe public site; no price found",
       "https://www.tokenme.limited/"
     ]
-  ]
+  ],
+  "updatedDate": "2026-10-11T03:40:16.162Z"
 }
