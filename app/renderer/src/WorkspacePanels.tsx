@@ -169,6 +169,9 @@ export function WorkspaceLayout({
                   data-window-ground
                   aria-label={panelAriaLabel(panel, index, active)}
                   onMouseDown={() => onFocusPanel(index, panel.sessionId)}
+                  onFocusCapture={() => {
+                    if (!active) onFocusPanel(index, panel.sessionId)
+                  }}
                 >
                   {isSplit ? (
                     <PanelHeader
@@ -293,18 +296,15 @@ function PanelHeader({
         }
         aria-hidden="true"
       />
-      {/* Project pill — the panel session's workspace (cwd basename), matching
-       * the prototype's WorkspaceLayout.jsx header pill. §0: the prototype turns
-       * this amber on a cross-project resume; that state is deferred — HC1's
-       * one-cwd-per-session model has no single "current workspace" to diff
-       * against, so every pill renders the neutral (same-project) blue. */}
-      <span
-        className="flex shrink-0 items-center gap-1 rounded border border-[#60a5fa]/25 bg-[#60a5fa]/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[light-dark(#1d4ed8,#93c5fd)]"
-        title={`Project: ${workspaceLabel(panel)}`}
-      >
-        <FolderIcon />
-        {workspaceLabel(panel)}
-      </span>
+      {panel.descriptor?.binding?.kind !== 'managed' ? (
+        <span
+          className="flex shrink-0 items-center gap-1 rounded border border-[#60a5fa]/25 bg-[#60a5fa]/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[light-dark(#1d4ed8,#93c5fd)]"
+          title={`Project: ${workspaceLabel(panel)}`}
+        >
+          <FolderIcon />
+          {workspaceLabel(panel)}
+        </span>
+      ) : null}
       <select
         className="min-w-0 flex-1 truncate rounded border border-shell-seam bg-app-bg px-2 py-1 text-xs text-text-primary"
         value={panel.sessionId}
@@ -441,6 +441,7 @@ function sessionState(panel: WorkspacePanelView): string {
         panel.descriptor.status,
         panel.descriptor.restorable,
         true,
+        panel.descriptor.parked,
       ).label
     : 'loading'
 }

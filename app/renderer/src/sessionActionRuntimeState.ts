@@ -11,9 +11,8 @@
  * `branchEngineSessionId` of a freshly-forked session — never an optimistic guess,
  * always the sidecar's real outcome.
  *
- * LATEST-ONLY, deliberately: a consumer that must survive a later unrelated
- * result holds its own latch keyed by `requestId` (`selectLatchedExportPreview`),
- * rather than this reducer growing per-request history.
+ * Edit, fork, and export outcomes also have bounded request-keyed retention so
+ * a batched unrelated result cannot erase them before their consumer renders.
  */
 
 import type {
@@ -27,7 +26,7 @@ export type SessionActionRuntimeState = {
   lastBySession: Record<SessionId, SessionActionResultFrame | null>
   /** Correlated failures stay separate: ErrorFrame does not name an action verb. */
   errorBySession: Record<SessionId, SessionActionError | null>
-  /** Edit and fork results retained by correlation id until consumed. */
+  /** Edit, fork, and export results retained by correlation id until consumed. */
   targetedByRequestId: Record<string, SessionActionResultFrame>
 }
 
@@ -94,7 +93,8 @@ export function reduceSessionActionRuntimeState(
     const targeted =
       frame.verb === 'editFromMessage' ||
       frame.verb === 'branchFromMessage' ||
-      frame.verb === 'branch'
+      frame.verb === 'branch' ||
+      frame.verb === 'export'
     const targetedByRequestId = targeted
       ? appendBoundedTargetedResult(state.targetedByRequestId, frame)
       : state.targetedByRequestId

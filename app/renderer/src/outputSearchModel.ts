@@ -2,12 +2,8 @@
  * P4-37 — the pure half of the tool inspector's output search
  * (prototype `OutputInspector`, `Messages.jsx:271-284,325-335`).
  *
- * Search is pure interaction and the renderer suite renders to STATIC MARKUP:
- * no test in this package can type into a field, press a stepper, or run a
- * scroll effect. So every decision the search makes — which lines match, which
- * match is active, what `k/N` reads, where a step lands when it runs off the
- * end — lives here as a plain function with unit coverage, and `ToolInspector`
- * keeps only the thin DOM layer over it.
+ * Literal matching, occurrence stepping, and bounded chunks live here;
+ * `ToolInspector` owns the DOM controls and clipboard interaction.
  *
  * Matching is literal and case-insensitive: the query is a user's search string,
  * never a pattern. `String.includes`/`indexOf` means a query of `.*` or `[` finds
@@ -65,9 +61,13 @@ export type OutputSearchModel = {
   hiddenLines: number
   /** 1-based numbers of the lines containing the query, ascending. */
   matches: number[]
+  /** Non-overlapping occurrences across the complete output. */
+  matchCount: number
   /** The 1-based line the steppers are parked on, or null when nothing matches. */
   activeLine: number | null
-  /** Index of `activeLine` within `matches`, or -1 when nothing matches. */
+  /** Character offset of the selected occurrence within its line. */
+  activeOffset: number | null
+  /** Index of the selected occurrence, or -1 when nothing matches. */
   activeIndex: number
   /** The counter beside the field: `k/N`, or `0` when a query finds nothing. */
   label: string
@@ -92,22 +92,37 @@ export function describeOutputSearch(
       lines,
       ...counts,
       matches: [],
+      matchCount: 0,
       activeLine: null,
+      activeOffset: null,
       activeIndex: -1,
       label: '',
       searching: false,
     }
   }
   const matches: number[] = []
+  const occurrencesPerLine: number[] = []
+  let matchCount = 0
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].toLowerCase().includes(needle)) matches.push(i + 1)
+    const line = lines[i].toLowerCase()
+    let count = 0
+    for (let at = line.indexOf(needle); at !== -1; at = line.indexOf(needle, at + needle.length)) {
+      count++
+    }
+    if (count > 0) {
+      matches.push(i + 1)
+      occurrencesPerLine.push(count)
+      matchCount += count
+    }
   }
   if (matches.length === 0) {
     return {
       lines,
       ...counts,
       matches,
+      matchCount: 0,
       activeLine: null,
+      activeOffset: null,
       activeIndex: -1,
       label: '0',
       searching: true,
@@ -115,14 +130,26 @@ export function describeOutputSearch(
   }
   // Wrap rather than clamp: the stored index survives a query edit that shrank
   // the match list, so a stale index lands on a real match instead of nothing.
-  const activeIndex = wrapIndex(matchIndex, matches.length)
+  const activeIndex = wrapIndex(matchIndex, matchCount)
+  let remaining = activeIndex
+  let matchingLine = 0
+  while (remaining >= occurrencesPerLine[matchingLine]!) {
+    remaining -= occurrencesPerLine[matchingLine]!
+    matchingLine++
+  }
+  const activeLine = matches[matchingLine]!
+  const line = lines[activeLine - 1]!.toLowerCase()
+  let activeOffset = line.indexOf(needle)
+  while (remaining-- > 0) activeOffset = line.indexOf(needle, activeOffset + needle.length)
   return {
     lines,
     ...counts,
     matches,
-    activeLine: matches[activeIndex],
+    matchCount,
+    activeLine,
+    activeOffset,
     activeIndex,
-    label: `${activeIndex + 1}/${matches.length}`,
+    label: `${activeIndex + 1}/${matchCount}`,
     searching: true,
   }
 }
@@ -177,22 +204,21 @@ export function splitLineByQuery(
 /**
  * The bounded, painted form of one logical line.
  *
- * `anchorToMatch` is what keeps a match on a pathological line reachable: on
- * the active row the slice is centred on the first occurrence instead of taken
- * from the start, so stepping onto a match five megabytes into one line still
- * shows it. Every other row slices from the start, which is where a reader
- * looks first.
+ * `anchorOffset` centres the selected occurrence on a pathological line.
+ * `anchorToMatch` selects its first occurrence when no offset is supplied.
+ * Other rows slice from the start.
  */
 export function selectOutputLineChunk(
   line: string,
   query: string,
-  options: { anchorToMatch?: boolean; maxChars?: number } = {},
+  options: { anchorToMatch?: boolean; anchorOffset?: number; maxChars?: number } = {},
 ): OutputLineChunk {
   const needle = query.toLowerCase()
-  const anchor =
+  const anchor = options.anchorOffset ?? (
     options.anchorToMatch === true && needle.length > 0
       ? line.toLowerCase().indexOf(needle)
       : -1
+  )
   const chunk = selectVisualChunk(
     line,
     anchor < 0 ? 0 : anchor,

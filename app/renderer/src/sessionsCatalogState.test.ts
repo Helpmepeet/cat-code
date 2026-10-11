@@ -1006,12 +1006,12 @@ describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
     expect(two.historySessionId).toBe('ec')
   })
 
-  test('a project whose folder is gone from disk has NO openable identity', () => {
+  test.each([false, true])('a missing project has no openable identity (registry=%s)', tracked => {
     // The one case the launcher must still refuse (bug-sweep #1): the recorded
     // workspace no longer exists, so opening it would come back as the host's
     // typed `invalid_cwd` rejection. Same gate the sidebar row applies.
     const gone = selectMergedSessionRows(
-      [],
+      tracked ? [descriptor({ appSessionId: 'gone-app', engineSessionId: 'eg', cwd: '/w/gone', status: 'exited', restorable: true })] : [],
       snapshot([entry({ sessionId: 'eg', cwd: '/w/gone', cwdExists: false })]),
     )
     const recents = selectRecentWorkspaces(gone, new Map())
@@ -1019,6 +1019,31 @@ describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
     expect(recents[0]!.appSessionId).toBeNull()
     expect(recents[0]!.historySessionId).toBeNull()
     expect(resolveRecentOpenRoute(recents[0]!)).toEqual({ kind: 'none' })
+  })
+
+  test('a missing folder keeps a live desktop session reachable from Welcome', () => {
+    const rows = selectMergedSessionRows(
+      [descriptor({ appSessionId: 'live-app', engineSessionId: 'eg', cwd: '/w/gone' })],
+      snapshot([entry({ sessionId: 'eg', cwd: '/w/gone', cwdExists: false })]),
+    )
+    const [recent] = selectRecentWorkspaces(rows, new Map())
+    expect(resolveRecentOpenRoute(recent!)).toEqual({ kind: 'focus', appSessionId: 'live-app' })
+  })
+
+  test('Welcome skips a newer unavailable registry identity for an older openable session', () => {
+    const rows = selectMergedSessionRows(
+      [
+        descriptor({ appSessionId: 'gone-app', engineSessionId: 'gone', cwd: '/w/project', status: 'exited', restorable: true }),
+        descriptor({ appSessionId: 'live-app', engineSessionId: 'live', cwd: '/w/project' }),
+      ],
+      snapshot([
+        entry({ sessionId: 'gone', cwd: '/w/project', cwdExists: false, modifiedAtMs: 9000 }),
+        entry({ sessionId: 'live', cwd: '/w/project', cwdExists: false, modifiedAtMs: 8000 }),
+      ]),
+    )
+    const [recent] = selectRecentWorkspaces(rows, new Map())
+    expect(recent!.sessionCount).toBe(2)
+    expect(resolveRecentOpenRoute(recent!)).toEqual({ kind: 'focus', appSessionId: 'live-app' })
   })
 
   test('the newest openable terminal session wins when the newest one is unopenable', () => {

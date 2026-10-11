@@ -14,12 +14,13 @@
  * `permissionKeysAreLive` predicate still rules.
  */
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act } from 'react'
+import { act, useState } from 'react'
 
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import type { AskQuestion } from './askQuestionState.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
+import type { AskQuestionDraft } from './askQuestionFlowModel.js'
 
 let harness: DomTestHarness
 
@@ -145,11 +146,12 @@ async function focusIn(element: HTMLElement): Promise<void> {
 }
 
 /** Dispatch a real keydown FROM `from`, the way a focused element does. */
-async function press(from: Element, key: string): Promise<KeyboardEvent> {
+async function press(from: Element, key: string, extra: KeyboardEventInit = {}): Promise<KeyboardEvent> {
   const event = new KeyboardEvent('keydown', {
     key,
     bubbles: true,
     cancelable: true,
+    ...extra,
   })
   await act(async () => {
     from.dispatchEvent(event)
@@ -300,6 +302,76 @@ test('hover keeps the Other field open, focused, and unchanged', async () => {
   expect(card.querySelector('input') === input).toBe(true)
   expect(document.activeElement).toBe(input)
   expect(input.value).toBe('my own answer')
+})
+
+test('Other keeps composition Enter and Escape with the input method', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, 'o')
+  const input = card.querySelector('input')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'partial')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const enter = await press(input, 'Enter', { isComposing: true })
+  expect(enter.defaultPrevented).toBe(false)
+  expect(calls.answers).toEqual([])
+  await act(async () => {
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+  })
+  const escape = await press(input, 'Escape')
+  expect(escape.defaultPrevented).toBe(false)
+  expect(calls.answers).toEqual([])
+  expect(card.querySelector('input')).toBe(input)
+  await act(async () => {
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await press(input, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [], other: 'partial' }]])
+})
+
+test('controlled question progress keeps answers and Other text across a pane remount', async () => {
+  const calls: Calls = { answers: [], cancels: 0 }
+  const sequence = [SINGLE[0]!, MULTI[0]!]
+  function RetainedFlow() {
+    const [visible, setVisible] = useState(true)
+    const [saved, setSaved] = useState<AskQuestionDraft | undefined>()
+    return <>
+      <button onClick={() => setVisible(value => !value)}>Toggle pane</button>
+      {visible ? <AskQuestionFlow isActivePane requestId="retained-question" questions={sequence}
+        draft={saved} onDraftChange={setSaved}
+        onAnswer={answer => calls.answers.push(answer)} onCancel={() => { calls.cancels += 1 }} /> : null}
+    </>
+  }
+  const tree = await harness.mount(<RetainedFlow />)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  let card = tree.container.querySelector('section')!
+  await press(card, '2')
+  await press(card, 'Enter')
+  await act(async () => {
+    const rows = optionRows(card)
+    rows[0]!.click()
+    rows[1]!.click()
+  })
+  await press(card, 'o')
+  const input = card.querySelector('input')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'another feature')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const toggle = tree.container.querySelector('button')!
+  await act(async () => { toggle.click() })
+  expect(tree.container.querySelector('section')).toBeNull()
+  await act(async () => { toggle.click() })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  card = tree.container.querySelector('section')!
+  expect(card.textContent).toContain('Which features?')
+  expect(optionRows(card).map(checkedState)).toEqual(['true', 'true'])
+  expect(card.textContent).toContain('another feature')
+  await act(async () => { buttonWithText(card, 'Submit').click() })
+  expect(calls.answers).toEqual([[
+    { optionIndices: [1] },
+    { optionIndices: [0, 1], other: 'another feature' },
+  ]])
 })
 
 test('single-select has one option tab stop', async () => {

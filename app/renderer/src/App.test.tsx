@@ -3209,19 +3209,5 @@ test('CC-84 wiring tripwire: the docked roster click carries its worker id into 
 // picker use, and a dropped non-image reaches nothing: both are real drops on a
 // mounted pane in composerPaste.dom.test.ts.
 
-test('CC-84 wiring tripwire: composer drafts are seeded from and written back to storage', () => {
-  // LAYER HONESTY: the read/write/cap/degrade behaviour is exercised for real in
-  // promptDraftPersistence.test.ts. App cannot be mounted here (it needs the
-  // preload bridge, and this file is SSR), so what only the source can decide is
-  // that the state is SEEDED from storage rather than from `{}` — the shape the
-  // bug had, and one that typechecks either way.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-
-  expect(source).toContain(
-    '() => readPromptDraftsFromStorage(defaultPromptDraftStorage()) ?? {},',
-  )
-  expect(source).toContain('writePromptDraftsToStorage(storage, promptDrafts)')
-  // A reload landing inside the debounce window still saves.
-  expect(source).toContain("window.addEventListener('pagehide', flush)")
-  expect(source).not.toContain('useState<PromptDraftState>({})')
-})
+// Draft storage wiring is exercised through real App pagehide/remount paths in
+// pageTabs.dom.test.tsx; promptDraftPersistence.test.ts owns codec bounds.

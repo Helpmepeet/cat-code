@@ -58,14 +58,55 @@ test('PlanPanel renders nothing when closed or without a review', () => {
   ).toBe('')
 })
 
-test('PlanPanel renders the real plan file, parsed steps, and allowedPrompts', () => {
+test('PlanPanel only offers links supported by the external opening policy', () => {
   const html = renderToStaticMarkup(
-    <PlanPanel onApprove={() => {}} onClose={() => {}} onRevise={() => {}} open review={REVIEW} />,
+    <PlanPanel
+      onApprove={() => {}}
+      onClose={() => {}}
+      onRevise={() => {}}
+      open
+      review={{ ...REVIEW, data: { ...REVIEW.data, plan: '[Relative source](src/app.ts)\n\n[Absolute source](/workspace/app.ts)\n\n[Rollback](#rollback)\n\n[Insecure website](http://example.com)\n\n[Documentation](https://example.com/docs)' } }}
+    />,
+  )
+  expect(html).toContain('Relative source')
+  expect(html).toContain('Absolute source')
+  expect(html).toContain('Rollback')
+  expect(html).toContain('Insecure website')
+  expect(html).not.toContain('href="src/app.ts"')
+  expect(html).not.toContain('href="/workspace/app.ts"')
+  expect(html).not.toContain('href="#rollback"')
+  expect(html).not.toContain('href="http://example.com"')
+  expect(html).toContain('href="https://example.com/docs" target="_blank"')
+})
+
+test('PlanPanel renders the complete mixed Markdown plan and its approval context', () => {
+  const html = renderToStaticMarkup(
+    <PlanPanel
+      onApprove={() => {}}
+      onClose={() => {}}
+      onRevise={() => {}}
+      open
+      review={{
+        ...REVIEW,
+        data: {
+          ...REVIEW.data,
+          plan: '# Migration\n\nOnly use the disposable staging database.\n\n1. Write the tests\n\n   Keep the original backup.\n\n2. Wire the domain\n   - Check the migrated schema.\n\n```sql\nSELECT COUNT(*) FROM staging;\n```\n\n## Rollback\n\nRestore the snapshot before retrying.',
+        },
+      }}
+    />,
   )
 
   expect(html).toContain('/config/plans/kind-otter.md')
+  expect(html).toContain('Only use the disposable staging database.')
+  expect(html).toContain('<h1>Migration</h1>')
   expect(html).toContain('Write the tests')
+  expect(html).toContain('Keep the original backup.')
   expect(html).toContain('Wire the domain')
+  expect(html).toContain('Check the migrated schema.')
+  expect(html).toContain('<pre>')
+  expect(html).toContain('SELECT COUNT(*) FROM staging;')
+  expect(html).toContain('<h2>Rollback</h2>')
+  expect(html).toContain('Restore the snapshot before retrying.')
   // Honesty copy (review fix 2026-07-09): the header no longer implies an
   // automatic grant; the chips are listed for context, still gated per use.
   expect(html).toContain('Tools this plan expects to use')
@@ -80,7 +121,7 @@ test('PlanPanel renders the real plan file, parsed steps, and allowedPrompts', (
   expect(html).not.toContain('Executing:')
 })
 
-test('PlanPanel falls back to the raw plan text when it has no parseable steps', () => {
+test('PlanPanel renders a prose-only plan', () => {
   const html = renderToStaticMarkup(
     <PlanPanel
       onApprove={() => {}}
@@ -92,4 +133,25 @@ test('PlanPanel falls back to the raw plan text when it has no parseable steps',
   )
 
   expect(html).toContain('Just prose, no list.')
+})
+
+test('a submitted plan keeps close available while approval and revision are disabled', () => {
+  const html = renderToStaticMarkup(
+    <PlanPanel
+      onApprove={() => {}}
+      onClose={() => {}}
+      onRevise={() => {}}
+      open
+      review={{ ...REVIEW, submitted: true }}
+    />,
+  )
+  const buttons = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
+  const approve = buttons.find(button => button[2]?.includes('Approve plan'))
+  const revise = buttons.find(button => button[2]?.includes('Revise…'))
+  const close = buttons.find(button => button[1]?.includes('Close plan panel'))
+
+  expect(approve?.[1]).toContain('disabled=""')
+  expect(revise?.[1]).toContain('disabled=""')
+  expect(close?.[1]).toBeDefined()
+  expect(close?.[1]).not.toContain('disabled')
 })

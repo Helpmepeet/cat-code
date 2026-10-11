@@ -181,6 +181,8 @@ import {
   type DraftWriteReason,
   type FileAttachmentState,
   type HistoryState,
+  type HistoryNav,
+  EMPTY_HISTORY_NAV,
   type ImageAttachmentState,
   type PasteEntry,
   type PasteState,
@@ -428,6 +430,7 @@ import {
   writePromptDraftsToStorage,
 } from './promptDraftPersistence.js'
 import { SessionPane } from './SessionPane.js'
+import type { AskQuestionDraft } from './askQuestionFlowModel.js'
 import {
   createToolCardExpansionStore,
   type ToolCardExpansionStore,
@@ -528,6 +531,22 @@ export function App() {
     createPermissionState,
   )
   const toast = useToast()
+  const [questionDrafts, setQuestionDrafts] = useState<Partial<Record<SessionId, Record<string, AskQuestionDraft>>>>({})
+  useEffect(() => {
+    setQuestionDrafts(current => {
+      let changed = false
+      const next: typeof current = {}
+      for (const [key, drafts] of Object.entries(current)) {
+        if (!drafts) continue
+        const sessionId = key as SessionId
+        const pendingIds = new Set(permissions.sessions[sessionId]?.pending.map(item => item.requestId) ?? [])
+        const kept = Object.fromEntries(Object.entries(drafts).filter(([requestId]) => pendingIds.has(requestId)))
+        if (Object.keys(kept).length !== Object.keys(drafts).length) changed = true
+        if (Object.keys(kept).length > 0) next[sessionId] = kept
+      }
+      return changed ? next : current
+    })
+  }, [permissions])
   // CC-84 — unsent composer text survives a reload. The draft is the only state
   // in the window the engine has never seen and cannot replay, and the app's own
   // crash recovery reloads the document (`app/main/main.ts` `render-process-gone`),
@@ -538,6 +557,17 @@ export function App() {
   )
   const promptDraftsRef = useRef(promptDrafts)
   promptDraftsRef.current = promptDrafts
+  const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
+  const pasteStateRef = useRef(pasteState)
+  pasteStateRef.current = pasteState
+  const [historyNavigation, setHistoryNavigation] = useState<Partial<Record<SessionId, HistoryNav>>>({})
+  const historyNavigationRef = useRef(historyNavigation)
+  historyNavigationRef.current = historyNavigation
+  // Held input has not reached the engine. Keep its text in draft recovery until
+  // it is sent or returned to the composer; reloads never replay it automatically.
+  const [pendingSubmits, setPendingSubmits] = useState<PendingSubmitState>(createPendingSubmitState)
+  const pendingSubmitsRef = useRef(pendingSubmits)
+  pendingSubmitsRef.current = pendingSubmits
   const updatePromptDrafts = useCallback(
     (update: (current: PromptDraftState) => PromptDraftState): void => {
       const next = update(promptDraftsRef.current)
@@ -546,31 +576,38 @@ export function App() {
     },
     [],
   )
+  const selectRecoveryDraft = useCallback((drafts: PromptDraftState, sessionId: SessionId): string => {
+    const navigation = historyNavigationRef.current[sessionId]
+    return navigation?.index != null ? navigation.savedDraft : selectPromptDraft(drafts, sessionId)
+  }, [])
   // Typing rewrites the draft on every keystroke and `setItem` is synchronous on
   // this thread, so the write is debounced rather than run per character.
   useEffect(() => {
     const storage = defaultPromptDraftStorage()
     if (!storage) return
     const timer = setTimeout(() => {
-      writePromptDraftsToStorage(storage, promptDrafts)
+      writePromptDraftsToStorage(storage, promptDrafts, pasteState, {
+        pendingSubmits, historyNavigation,
+      })
     }, PROMPT_DRAFT_WRITE_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [promptDrafts])
+  }, [promptDrafts, pasteState, pendingSubmits, historyNavigation])
   // A reload or a quit can land inside the debounce window, which is exactly the
   // moment the draft matters most. `pagehide` fires on both and still allows a
   // synchronous write, so the pending one is flushed there.
   useEffect(() => {
     const storage = defaultPromptDraftStorage()
     if (!storage || typeof window === 'undefined') return
-    const flush = () => writePromptDraftsToStorage(storage, promptDraftsRef.current)
+    const flush = () => writePromptDraftsToStorage(
+      storage, promptDraftsRef.current, pasteStateRef.current, {
+        pendingSubmits: pendingSubmitsRef.current,
+        historyNavigation: historyNavigationRef.current,
+      },
+    )
     window.addEventListener('pagehide', flush)
     return () => window.removeEventListener('pagehide', flush)
   }, [])
-  // P4-0 composer state, per-session-keyed exactly like `promptDrafts` so a
-  // background session's collapsed pastes and input history survive a focus
-  // switch (SessionPane unmounts for off-screen sessions). Renderer-local; never
-  // crosses the wire.
-  const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
+  // Composer attachments and sent history stay per session across pane remounts.
   const [imageAttachmentState, setImageAttachmentState] =
     useState<ImageAttachmentState>(createImageAttachmentState)
   const [fileAttachmentState, setFileAttachmentState] =
@@ -580,15 +617,6 @@ export function App() {
     Partial<Record<SessionId, number>>
   >({})
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
-  // CC-16 — a prompt submitted while the session was still spawning. Parked
-  // per-session (same keying as `promptDrafts`) and drained through the SAME
-  // `app.submit` once the engine accepts input; released back into the composer
-  // if the spawn dies. Renderer-local, never on the wire.
-  const [pendingSubmits, setPendingSubmits] = useState<PendingSubmitState>(
-    createPendingSubmitState,
-  )
-  const pendingSubmitsRef = useRef(pendingSubmits)
-  pendingSubmitsRef.current = pendingSubmits
   const [projectRoutes, setProjectRoutes] = useState<Record<SessionId, ProjectRouteSnapshot>>({})
   const projectRoutesRef = useRef(projectRoutes)
   projectRoutesRef.current = projectRoutes
@@ -2205,16 +2233,16 @@ export function App() {
       const restored = restoreSelectedPrompt(selectedPrompt)
       if (!restored) return false
       updatePromptDrafts(current =>
-        reducePromptDrafts(current, sessionId, restored.text),
+        reducePromptDrafts(current, sessionId, restoreDraftWithPending(
+          selectRecoveryDraft(current, sessionId),
+          restored.text,
+        )),
       )
-      setPasteState(current =>
-        reduceSessionPastesCleared(current, sessionId),
-      )
+      setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
+      // A reply can arrive after the user has typed or attached more context.
+      // Restore alongside that draft rather than replacing its text or files.
       setImageAttachmentState(current =>
-        reduceSessionImagesReplaced(current, sessionId, restored.images),
-      )
-      setFileAttachmentState(current =>
-        reduceFileAttachmentRemoved(current, sessionId),
+        restored.images.reduce((next, image) => reduceImageAttachmentAdded(next, sessionId, image), current),
       )
       setComposerFocusRequests(current => ({
         ...current,
@@ -2222,7 +2250,7 @@ export function App() {
       }))
       return true
     },
-    [],
+    [selectRecoveryDraft],
   )
 
   // P4-35 (operator ruling 2026-07-30) — the app's only file write, reached the
@@ -2368,12 +2396,18 @@ export function App() {
     )
     const outcome = selectBulkExportOutcome(
       requests,
-      sessionActionRuntime.lastBySession,
+      Object.fromEntries(requests.map(request => [
+        request.sessionId,
+        sessionActionRuntime.targetedByRequestId[request.requestId] ?? sessionActionRuntime.lastBySession[request.sessionId],
+      ])),
       sessionActionRuntime.errorBySession,
       engineBySession,
     )
     if (outcome.status === 'waiting') return
     pendingBulkExportRef.current = null
+    for (const request of requests) {
+      dispatchSessionActionRuntime({ type: 'discard-result', sessionId: request.sessionId as SessionId, requestId: request.requestId })
+    }
     if (outcome.sections.length === 0) {
       toast('None of those sessions could be read.', { tone: 'warn' })
       return
@@ -2444,7 +2478,7 @@ export function App() {
   useEffect(() => {
     if (!exportDialog) return
     const projected = selectExportPreview(
-      selectLatestSessionActionResult(
+      sessionActionRuntime.targetedByRequestId[exportDialog.requestId] ?? selectLatestSessionActionResult(
         sessionActionRuntime,
         exportDialog.sessionId,
       ),
@@ -2470,7 +2504,15 @@ export function App() {
       })
       return
     }
-    if (projected.status === 'pending') return
+    if (projected.status === 'pending') {
+      if (!connectionHasEngine(selectConnection(connection, exportDialog.sessionId).status)) {
+        setLatchedExport(current => current?.requestId === exportDialog.requestId ? current : {
+          requestId: exportDialog.requestId,
+          state: { status: 'failed', message: 'The session ended before its transcript could be exported.' },
+        })
+      }
+      return
+    }
     setLatchedExport(current =>
       current?.requestId === exportDialog.requestId
         ? current
@@ -2481,7 +2523,7 @@ export function App() {
       sessionId: exportDialog.sessionId,
       requestId: exportDialog.requestId,
     })
-  }, [exportDialog, sessionActionRuntime])
+  }, [exportDialog, sessionActionRuntime, connection])
 
   // Decision #5 (audit §I.4) — surface a FAILED verb ack that would otherwise be
   // silent (a success re-broadcasts a snapshot and the UI already updates; a
@@ -2638,11 +2680,12 @@ export function App() {
         drafts,
         sessionId,
         restoreDraftWithPending(
-          selectPromptDraft(drafts, sessionId),
+          selectRecoveryDraft(drafts, sessionId),
           pending.text,
         ),
       ),
     )
+    setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
     setImageAttachmentState(state =>
       reduceSessionImagesRestored(state, sessionId, pending.images ?? []),
     )
@@ -2652,7 +2695,7 @@ export function App() {
     setTransportErrors(prev =>
       reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
     )
-  }, [])
+  }, [selectRecoveryDraft])
 
   // D5 — the composer half of a refused submit. No notice of its own: the
   // sidecar's typed error is already rendered directly above the composer and
@@ -2668,13 +2711,14 @@ export function App() {
     retained: readonly RetainedSubmit[],
   ) => {
     const restored = applyRefusedSubmitRestoration(
-      promptDraftsRef.current,
+      reducePromptDrafts(promptDraftsRef.current, sessionId, selectRecoveryDraft(promptDraftsRef.current, sessionId)),
       refusedSubmitPrefixesRef.current,
       sessionId,
       retained,
     )
     refusedSubmitPrefixesRef.current = restored.recovery
     updatePromptDrafts(() => restored.drafts)
+    setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
     if (restored.images !== null) {
       setImageAttachmentState(state =>
         reduceSessionImagesRestored(state, sessionId, restored.images ?? []),
@@ -2685,7 +2729,7 @@ export function App() {
         reduceSessionFileAttachmentRestored(state, sessionId, restored.file),
       )
     }
-  }, [])
+  }, [selectRecoveryDraft])
 
   // D1b — the composer half of a recall, and deliberately the SAME shape as the
   // refused-submit restore above: text merges under whatever is being typed,
@@ -2700,14 +2744,15 @@ export function App() {
         reducePromptDrafts(
           drafts,
           sessionId,
-          restoreDraftWithPending(selectPromptDraft(drafts, sessionId), text),
+          restoreDraftWithPending(selectRecoveryDraft(drafts, sessionId), text),
         ),
       )
+      setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
       setImageAttachmentState(state =>
         reduceSessionImagesRestored(state, sessionId, images),
       )
     },
-    [],
+    [selectRecoveryDraft],
   )
 
   // D1b — ask for every message still waiting on this session's running
@@ -3313,6 +3358,7 @@ export function App() {
         if (result.status === 'created') {
           if (selectPromptDraft(promptDraftsRef.current, sessionId) === submittedDraft) {
             updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
+            setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
           }
           placeCreatedSessionForOrigin(sessionId, result.sessionId)
         }
@@ -3364,6 +3410,7 @@ export function App() {
     // A parked prompt that is later released comes back as its expanded text
     // (`restoreDraftWithPending`) — the pills are gone, the content is not.
     const retireDraft = (): void => {
+      setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
       updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
       setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
       setImageAttachmentState(prev =>
@@ -3665,6 +3712,9 @@ export function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
       if (event.key === 'k' || event.key === 'K') {
+        // Settings owns this chord for its search field. An already-open
+        // palette still owns the chord that closes it.
+        if (activeView === 'settings' && !paletteOpen) return
         // ⌘K toggles the command palette. Palette-internal keys (↑↓/↵/Esc) are
         // handled on its own focused input, so this only owns the open chord.
         event.preventDefault()
@@ -3695,7 +3745,7 @@ export function App() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries])
+  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries, activeView, paletteOpen])
 
   function copyForLlm(sessionId: SessionId): void {
     const text = buildDebugExport(
@@ -4072,7 +4122,7 @@ export function App() {
 	              )
 	            }
 	            onApprovePlan={mode => {
-	              if (!sessionPlanReview) return
+	              if (!sessionPlanReview || sessionPlanReview.submitted) return
 	              try {
 	                getBridge().setPermissionMode(sessionId, mode)
 	                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
@@ -4098,7 +4148,7 @@ export function App() {
 	              )
 	            }}
 	            onRevisePlan={message => {
-	              if (!sessionPlanReview) return
+	              if (!sessionPlanReview || sessionPlanReview.submitted) return
 	              respondToPermission(
 	                sessionId,
 	                sessionPlanReview.request.requestId,
@@ -4107,6 +4157,12 @@ export function App() {
 	              toast('Sent. The agent will revise the plan.', { tone: 'info' })
 	            }}
 	            askQuestion={sessionAskQuestion}
+                askDraft={sessionAskQuestion ? questionDrafts[sessionId]?.[sessionAskQuestion.request.requestId] : undefined}
+                onAskDraftChange={draft => {
+                  if (!sessionAskQuestion) return
+                  const requestId = sessionAskQuestion.request.requestId
+                  setQuestionDrafts(current => ({ ...current, [sessionId]: { ...current[sessionId], [requestId]: draft } }))
+                }}
 	            askPendingCount={sessionAskPendingCount}
 	            onAnswerQuestions={answers => {
 	              // P4-20 — the answer round-trips via the dedicated
@@ -4258,6 +4314,8 @@ export function App() {
 	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId)}
 	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
 	            history={selectHistory(historyState, sessionId)}
+                historyNav={historyNavigation[sessionId] ?? EMPTY_HISTORY_NAV}
+                onHistoryNavChange={nav => setHistoryNavigation(current => ({ ...current, [sessionId]: nav }))}
 	            onPaste={(content, selectionStart, selectionEnd) =>
 	              addSessionPaste(
 	                sessionId,

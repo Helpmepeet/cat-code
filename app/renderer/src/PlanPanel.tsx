@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react'
+import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { renderMarkdownTree } from './markdownRenderPlan.js'
 import {
   handleMenuRovingKeyDown,
   useModalFocus,
@@ -105,27 +107,28 @@ export function PlanPanel({
     setShowApprove(false)
     setRevising(false)
     setRevisionText('')
-  }, [open])
+  }, [open, review?.request.requestId])
 
   useModalFocus({
     open,
     containerRef: cardRef,
     onEscape: onClose,
-    escapeEnabled: !showApprove && !revising,
+    escapeEnabled: review?.submitted || (!showApprove && !revising),
     initialFocus: 'container',
   })
 
   if (!open || !review) return null
 
   const t = toneClasses('info')
-  const steps = parsePlanSteps(review.data.plan)
 
   function pickApprove(option: PlanApprovalOption) {
+    if (review?.submitted) return
     setShowApprove(false)
     onApprove(option.mode)
   }
 
   function sendRevision() {
+    if (review?.submitted) return
     const trimmed = revisionText.trim()
     if (!trimmed) return
     onRevise(trimmed)
@@ -174,32 +177,13 @@ export function PlanPanel({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          <div className="mb-1.5 text-[9.5px] font-bold uppercase tracking-wide text-text-subtle">
-            {steps.length > 0
-              ? `${steps.length} step${steps.length === 1 ? '' : 's'}`
-              : 'Plan'}
+          <div className="md-prose text-[12.5px] leading-relaxed text-text-muted [&_[data-markdown-leaf]]:pb-3 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-shell-seam [&_pre]:bg-app-bg [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[12px]">
+            <BoundedMarkdown
+              sourceId={`plan:${review.request.requestId}`}
+              source={review.data.plan ?? '(empty plan)'}
+              renderLeaf={leaf => renderMarkdownTree(leaf.tree, { a: PlanLink })}
+            />
           </div>
-          {steps.length > 0 ? (
-            <ol className="flex flex-col gap-1">
-              {steps.map((step, index) => (
-                <li
-                  className="flex gap-2 rounded-md px-2 py-1 text-[12.5px] text-text-muted"
-                  // Real markdown lines are order-stable within one render of
-                  // one immutable review; index keys are safe here.
-                  key={index}
-                >
-                  <span className="shrink-0 font-mono text-text-subtle">
-                    {index + 1}.
-                  </span>
-                  <span>{step}</span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <pre className="whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-text-muted">
-              {review.data.plan ?? '(empty plan)'}
-            </pre>
-          )}
 
           {review.data.allowedPrompts.length > 0 ? (
             <div className="mt-4 border-t border-shell-seam pt-3">
@@ -232,7 +216,7 @@ export function PlanPanel({
         </div>
 
         <div className="shrink-0 border-t border-shell-seam bg-shell-chrome px-3.5 py-2.5">
-          {revising ? (
+          {revising && !review.submitted ? (
             <div>
               <textarea
                 autoFocus
@@ -278,11 +262,12 @@ export function PlanPanel({
             </div>
           ) : (
             <div className="relative flex items-center gap-2">
-              {showApprove ? (
+              {showApprove && !review.submitted ? (
                 <ApproveMenu onClose={() => setShowApprove(false)} onPick={pickApprove} />
               ) : null}
               <button
-                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-on-fill"
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-on-fill disabled:opacity-40"
+                disabled={review.submitted}
                 onClick={() => setShowApprove(current => !current)}
                 onMouseDown={event => event.stopPropagation()}
                 type="button"
@@ -293,14 +278,15 @@ export function PlanPanel({
                 </span>
               </button>
               <button
-                className="rounded-md border border-shell-seam px-3 py-1.5 text-[12px] text-text-muted"
+                className="rounded-md border border-shell-seam px-3 py-1.5 text-[12px] text-text-muted disabled:opacity-40"
+                disabled={review.submitted}
                 onClick={() => setRevising(true)}
                 type="button"
               >
                 Revise…
               </button>
-              <span className="ml-auto font-mono text-[10px] text-text-subtle">
-                read-only until you approve
+              <span className="ml-auto font-mono text-[10px] text-text-subtle" role={review.submitted ? 'status' : undefined}>
+                {review.submitted ? 'Submitting…' : 'read-only until you approve'}
               </span>
             </div>
           )}
@@ -308,6 +294,17 @@ export function PlanPanel({
       </div>
     </div>
   )
+}
+
+function PlanLink({ children, href }: ComponentPropsWithoutRef<'a'>) {
+  // The window-open policy only hands HTTPS to the browser. This panel has no
+  // session-bound file opener, so other destinations remain readable text.
+  try {
+    if (!href || new URL(href).protocol !== 'https:') return <span>{children}</span>
+  } catch {
+    return <span>{children}</span>
+  }
+  return <a href={href} target="_blank" rel="noreferrer" className="underline hover:text-accent-soft">{children}</a>
 }
 
 function ApproveMenu({

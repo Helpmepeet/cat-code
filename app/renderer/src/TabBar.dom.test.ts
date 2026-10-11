@@ -156,6 +156,29 @@ test('mixed tabs expose one selection and page close intent without session cont
   expect(closed.at(-1)).toEqual({ kind: 'session', sessionId: 'first' })
 })
 
+test.each(['Enter', ' '])('session tab buttons leave %p available for native activation', async key => {
+  const first = tab('first')
+  first.visual.restartable = true
+  const selected: string[] = []
+  const tree = await harness.mount(createElement(TabBar, {
+    tabs: [first], activeSessionId: 'first', onSelect: id => selected.push(id),
+    onClose: noop, onRestart: noop, onOpenActions: noop, onNewTab: noop,
+  }))
+
+  for (const label of ['Close session first', 'Restart session first', 'Session actions for first']) {
+    const button = tree.container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    await act(async () => {
+      button.focus()
+      button.dispatchEvent(event)
+    })
+    // happy-dom does not synthesize native keyboard clicks. The contract here is
+    // that the surrounding tab neither cancels activation nor selects itself.
+    expect(event.defaultPrevented).toBe(false)
+    expect(selected).toEqual([])
+  }
+})
+
 test('mixed navigation does not mark retained session context selected when selection is empty', async () => {
   const retainedContext = tab('retained-context')
   const tree = await harness.mount(createElement(TabBar, {

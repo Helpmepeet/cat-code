@@ -29,6 +29,7 @@ import type { ComponentProps } from 'react'
 
 import { SessionPane } from './SessionPane.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
+import { TasksDialog } from './TasksDialog.js'
 import { PERMISSION_KEY_HOST_ATTR } from './permissionPromptModel.js'
 import type { PermissionRequest } from './permissionState.js'
 import { createDomTestHarness } from './domTestHarness.js'
@@ -230,6 +231,62 @@ test('a card the shortcuts do not act on registers no listener at all', async ()
 
   expect(recorded.allow).toEqual([])
   expect(recorded.deny).toBe(0)
+})
+
+test('a permission arriving under a modal leaves focus and response keys with the dialog', async () => {
+  const modal = await harness.mount(
+    <TasksDialog open onClose={() => {}} snapshot={null} hasActiveSession />,
+  )
+  await act(async () => { await harness.nextFrame() })
+  const focused = harness.document.activeElement
+  const recorded = answers()
+  const tree = await mountCard(recorded)
+
+  expect(harness.document.activeElement === focused).toBe(true)
+  await press(harness.document, { key: 'Enter' })
+  await press(harness.document, { key: '1' })
+  expect(recorded.allow).toEqual([])
+  expect(recorded.deny).toBe(0)
+  expect(tree.container.textContent).not.toContain('↑↓ · 1–9')
+  await modal.unmount()
+})
+
+test('a modal opening before delayed permission focus suppresses the takeover and keys', async () => {
+  const recorded = answers()
+  const tree = await harness.mount(
+    <PermissionPrompt keyboardTarget request={REQUEST}
+      onAllow={indices => recorded.allow.push(indices)} onDeny={() => { recorded.deny += 1 }} />,
+  )
+  const modal = await harness.mount(
+    <TasksDialog open onClose={() => {}} snapshot={null} hasActiveSession />,
+  )
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  await act(async () => { await harness.nextFrame() })
+  expect(harness.document.activeElement?.closest('[aria-modal="true"]') != null).toBe(true)
+  await press(harness.document, { key: 'Enter' })
+  expect(recorded.allow).toEqual([])
+  expect(tree.container.textContent).not.toContain('↑↓ · 1–9')
+  await modal.unmount()
+})
+
+test('a departing permission restores its previous control without taking focus from a new destination', async () => {
+  for (const destination of ['card', 'row', 'outside', 'fromInput'] as const) {
+    const previous = harness.document.createElement(destination === 'fromInput' ? 'textarea' : 'button')
+    const outside = harness.document.createElement('button')
+    harness.document.body.append(previous, outside)
+    await act(async () => { previous.focus() })
+    const tree = await mountCard(answers())
+    if (destination !== 'card') {
+      await act(async () => {
+        const next = destination === 'outside' ? outside : optionButtons(tree)[0]!
+        next.focus()
+      })
+    }
+    await tree.unmount()
+    expect(harness.document.activeElement === (destination === 'outside' ? outside : previous)).toBe(true)
+    previous.remove()
+    outside.remove()
+  }
 })
 
 /* ── the composer's keyboard ───────────────────────────────────────────────── */

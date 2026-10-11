@@ -910,7 +910,11 @@ export function reducePendingSubmitHeld(
   sessionId: SessionId,
   pending: PendingSubmit,
 ): PendingSubmitState {
-  if (pending.text.length === 0 && (pending.images?.length ?? 0) === 0) return state
+  if (
+    pending.text.length === 0 &&
+    (pending.images?.length ?? 0) === 0 &&
+    !pending.file
+  ) return state
   return { ...state, [sessionId]: pending }
 }
 

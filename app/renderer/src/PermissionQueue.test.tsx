@@ -40,7 +40,7 @@ const MALFORMED_ASK: PermissionRequest = {
 }
 
 const ALLOW_ROW = '>Yes<'
-const REFUSE_ROW = 'No, and tell Cat Code what to do differently'
+const REFUSE_ROW = '>No<'
 
 const WORKER: LiveWorkerItem = {
   agentId: 'worker-42',

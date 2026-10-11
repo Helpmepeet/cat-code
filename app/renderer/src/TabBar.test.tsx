@@ -50,12 +50,18 @@ test('renders one tab per session with its label', () => {
     [
       tab('a', {}, { title: 'Alpha' }),
       tab('b', {}, { cwd: '/tmp/beta-project' }),
+      tab('chat', {}, {
+        cwd: '/managed/storage-id', title: null,
+        binding: { kind: 'managed', storageRootId: 'root', storageId: 'storage-id' },
+      }),
     ],
     'a',
   )
   expect(html).toContain('Alpha')
   // Title-less tab falls back to the cwd basename.
   expect(html).toContain('beta-project')
+  expect(html).toContain('New chat')
+  expect(html).not.toContain('/managed/storage-id')
 })
 
 test('forked tabs show the split glyph before the title and qualify the accessible name', () => {

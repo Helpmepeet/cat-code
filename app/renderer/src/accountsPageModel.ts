@@ -105,8 +105,8 @@ export function resultToastTone(ok: boolean): ToastTone {
 }
 
 export function usageTone(pct: number | null): Tone {
-  const p = pct ?? 0
-  return p >= 90 ? 'danger' : p >= 65 ? 'warn' : 'good'
+  if (pct === null) return 'default'
+  return pct >= 90 ? 'danger' : pct >= 65 ? 'warn' : 'good'
 }
 
 export function statusDotTone(account: AccountStatus): Tone {

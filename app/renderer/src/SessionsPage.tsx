@@ -57,6 +57,7 @@ import {
   filterSessionRows,
   formatRelativeTime,
   groupByWorkspace,
+  resolveSessionOpenRoute,
   sortSessionRows,
   type MergedSessionRow,
   type SessionSort,
@@ -161,8 +162,19 @@ export function SessionsPage({
   const previousRowsRef = useRef(rows)
 
   const now = Date.now()
-  const allTags = useMemo(() => collectSessionTags(rows), [rows])
+  const taggedRows = useMemo(
+    () => rows.map(row => {
+      const tag = selectRowTag(page, row)
+      return tag === row.tag ? row : { ...row, tag }
+    }),
+    [rows, page],
+  )
+  const allTags = useMemo(() => collectSessionTags(taggedRows), [taggedRows])
   const totalWorkspaces = useMemo(() => countWorkspaces(rows), [rows])
+
+  useEffect(() => {
+    if (tagFilter !== 'all' && !allTags.includes(tagFilter)) setTagFilter('all')
+  }, [allTags, tagFilter])
 
   // Reconcile against the rows on every catalog delivery: drop tag echoes the
   // catalog has caught up with, and forget selections whose row disappeared.
@@ -202,14 +214,14 @@ export function SessionsPage({
   }, [renameRequest, rows])
 
   const visible = useMemo(() => {
-    const filtered = filterSessionRows(rows, {
+    const filtered = filterSessionRows(taggedRows, {
       query: search,
       tag: tagFilter,
       activeCwd,
       allWorkspaces,
     })
     return sortSessionRows(filtered, sort)
-  }, [rows, search, tagFilter, activeCwd, allWorkspaces, sort])
+  }, [taggedRows, search, tagFilter, activeCwd, allWorkspaces, sort])
 
   const grouped = allWorkspaces && countWorkspaces(visible) > 1
   const byDate = sort === 'recent'
@@ -609,14 +621,7 @@ function SessionRow({
   page: SessionsPageState
   actions: RowActions
 }) {
-  // SESSIONS-UNIFICATION (operator ruling 2026-07-20): a terminal-created history
-  // row is now openable too — by its engine id, if its workspace is resolvable.
-  // A registry row opens via switch/restore; a history row with a recorded cwd
-  // opens via the open-from-history host path; only a history row with NO recorded
-  // workspace (MAJOR-1, unreconcilable) stays browse-only.
-  const historyOpenable =
-    row.appSessionId == null && !row.inRegistry && row.cwd.trim().length > 0
-  const openable = row.appSessionId != null || historyOpenable
+  const openable = resolveSessionOpenRoute(row).kind !== 'none'
   const crossProject = !grouped && activeCwd != null && row.cwd !== activeCwd
   const selected = selectIsSelected(page, row.sessionId)
   const renaming = page.renaming?.sessionId === row.sessionId
@@ -788,7 +793,9 @@ function SessionRow({
       title={
         openable
           ? undefined
-          : 'This session has no recorded workspace, so it can only be opened from the terminal.'
+          : row.cwd.trim().length === 0
+            ? 'This session has no recorded workspace, so it can only be opened from the terminal.'
+            : 'This folder is missing from disk. Put it back to open the session again.'
       }
     >
       {inner}

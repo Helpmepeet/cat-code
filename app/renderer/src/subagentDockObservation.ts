@@ -6,11 +6,11 @@ import type { TasksState } from './tasksState.js'
 import type { LeaseStateStore } from './leaseState.js'
 import { selectNestedTranscriptRows, type TranscriptState } from './transcriptProjector.js'
 import {
-  createSubagentDockState, reconcileSubagentDockState, isSubagentDockTerminal,
+  createSubagentDockState, reconcileSubagentDockState, isSubagentDockTerminal, mergeSubagentDockObservation,
   type SubagentDockState, type SubagentDockEntry,
 } from './subagentDockState.js'
 import {
-  MAX_PERSISTED_DOCK_FINISHED, normalizeSubagentDockSession,
+  normalizeSubagentDockSession,
   readSubagentDockSessionsFromStorage, writeSubagentDockSessionsToStorage,
 } from './subagentDockPersistence.js'
 import { defaultViewPreferenceStorage, type ViewPreferenceStorage } from './viewPreference.js'
@@ -46,19 +46,7 @@ export function commitSubagentDockObservation(sessionId: string, key: string, st
   storage: ViewPreferenceStorage | null, previousKey?: string | null): SubagentDockState {
   const store = runtime(storage)
   const prior = store.get(key)?.state
-  const entries = { ...state.entries }
-  // A pane effect captured before a resume must not replace the current run
-  // with a saved completion from the previous run.
-  if (prior) for (const [agentId, current] of Object.entries(prior.entries)) {
-    const candidate = entries[agentId]
-    if (current.resumedAt !== null && candidate &&
-        (candidate.resumedAt ?? 0) < current.resumedAt &&
-        (candidate.terminalAt ?? 0) < current.resumedAt) entries[agentId] = current
-  }
-  const terminal = Object.values(entries).filter(entry => isSubagentDockTerminal(entry.state))
-    .sort((a, b) => (b.terminalAt ?? 0) - (a.terminalAt ?? 0))
-  for (const entry of terminal.slice(MAX_PERSISTED_DOCK_FINISHED)) delete entries[entry.agentId]
-  const bounded = { ...state, entries, nextLaunchOrder: Math.max(state.nextLaunchOrder, prior?.nextLaunchOrder ?? 0) }
+  const bounded = mergeSubagentDockObservation(state, prior)
   if (previousKey && previousKey !== key && store.get(previousKey)?.sessionId === sessionId) store.delete(previousKey)
   store.delete(key)
   store.set(key, { sessionId, state: bounded })

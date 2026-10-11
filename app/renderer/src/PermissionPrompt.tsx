@@ -8,6 +8,7 @@ import { AgentFace } from './AgentChrome.js'
 import { useAgentFaceRegistry } from './agentFace.js'
 import { Glyph } from './SessionActionIcons.js'
 import type { PermissionRequest } from './permissionState.js'
+import { isModalOverlayOpen, useModalOverlayOpen } from './overlayFocus.js'
 import {
   buildPermissionOptions,
   formatPermissionInput,
@@ -59,7 +60,7 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
  *   Yes, and don't ask …     → allow + `applySuggestions` (C1 index selection
  *                              into THIS request's engine-minted suggestions;
  *                              a row exists only where the engine minted one)
- *   No, and tell Cat Code …  → deny (the model-visible refusal)
+ *   No                       → deny (the model-visible refusal)
  *
  * `denyOnly` drops both allow rows. An AskUserQuestion whose questions cannot
  * be read falls back to this card, and a bare allow there would run the tool
@@ -191,6 +192,9 @@ export function PermissionPrompt({
   const [cursor, setCursor] = useState(0)
 
   const sectionRef = useRef<HTMLElement>(null)
+  const restoreTargetRef = useRef<HTMLElement | null>(null)
+  const focusOwnedRef = useRef(false)
+  const modalOpen = useModalOverlayOpen()
   // Optimistic: the effect below is about to focus this card. It corrects itself
   // from the real `activeElement`, and every later focus move re-derives it.
   const [keysLive, setKeysLive] = useState(keyboardTarget === true)
@@ -201,34 +205,50 @@ export function PermissionPrompt({
   // (`PlanPanel.tsx:99-110`): focus after the commit that produced the card, and
   // hand focus back on the way out.
   useEffect(() => {
-    if (!keyboardTarget) {
+    if (!keyboardTarget || modalOpen) {
       setKeysLive(false)
       return
     }
     const node = sectionRef.current
     if (!node) return
     const previous = document.activeElement
+    if (
+      isModalOverlayOpen() ||
+      (previous instanceof Element && previous.closest('[aria-modal="true"]'))
+    ) {
+      setKeysLive(false)
+      return
+    }
+    if (previous instanceof HTMLElement && previous !== node && !node.contains(previous)) {
+      restoreTargetRef.current = previous
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
     if (isEditableElement(previous)) {
       // The user is typing somewhere else (e.g. the mid-turn composer,
       // editable since 4394086). Leave focus alone and report the keys dead
       // through the same predicate the document listener uses, so the hint
       // never advertises keys that will not fire.
       setKeysLive(permissionKeysAreLive(previous))
-      return
+    } else {
+      timer = setTimeout(() => {
+        // A modal can open between this effect and its delayed focus callback.
+        if (isModalOverlayOpen()) return
+        node.focus()
+        setKeysLive(document.activeElement === node)
+      }, 0)
     }
-    const timer = setTimeout(() => {
-      node.focus()
-      setKeysLive(document.activeElement === node)
-    }, 0)
     return () => {
       clearTimeout(timer)
-      // Only if this card still holds the keyboard: never yank focus away from
-      // wherever the user moved it in the meantime.
-      if (document.activeElement === node && previous instanceof HTMLElement) {
-        previous.focus()
+      const restoreTarget = restoreTargetRef.current
+      if (!focusOwnedRef.current || !restoreTarget?.isConnected || isModalOverlayOpen()) return
+      const active = document.activeElement
+      // React detaches the focused node before passive cleanup, leaving body.
+      // Child controls belong to this card too; another destination keeps focus.
+      if (active === node || node.contains(active) || active === document.body) {
+        restoreTarget.focus()
       }
     }
-  }, [keyboardTarget])
+  }, [keyboardTarget, modalOpen])
 
   // A deny-only request is skipped by the shortcuts upstream
   // (`selectVisiblePermission`), so such a card never advertises them even if it
@@ -262,8 +282,9 @@ export function PermissionPrompt({
    * listeners were reasoned against (target → document → window).
    */
   useEffect(() => {
-    if (!keyboardTarget) return
+    if (!keyboardTarget || modalOpen) return
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || isModalOverlayOpen()) return
       // Never hijack a key the focused element already acts on: every button on
       // this card, and the composer. The one exemption is the card itself, which
       // HOSTS the keys rather than owning them (`permissionKeysAreLive`).
@@ -315,13 +336,13 @@ export function PermissionPrompt({
     return () => document.removeEventListener('keydown', onKeyDown)
   })
 
-  const hintVisible = keyboardTarget === true && keysLive && !denyOnly
+  const hintVisible = keyboardTarget === true && keysLive && !modalOpen && !denyOnly
   // Gated on `keysLive` for the SAME reason the hint is: while focus sits in the
   // composer the shortcuts do not fire, and a highlighted row wearing an `↵`
   // chip states that Enter confirms it. That is the dead affordance P4-43
   // removed from the hint strip, one element over.
   const activeIndex =
-    keyboardTarget === true && keysLive
+    keyboardTarget === true && keysLive && !modalOpen
       ? Math.min(cursor, options.length - 1)
       : undefined
 
@@ -333,8 +354,14 @@ export function PermissionPrompt({
       // Literal because JSX needs a literal attribute name; the reader is
       // `PERMISSION_KEY_HOST_ATTR` in `permissionPromptModel.ts`.
       data-permission-key-host={keyboardTarget ? '' : undefined}
-      onBlur={event => setKeysLive(permissionKeysAreLive(event.relatedTarget))}
-      onFocus={event => setKeysLive(permissionKeysAreLive(event.target))}
+      onBlur={event => {
+        focusOwnedRef.current = sectionRef.current?.contains(event.relatedTarget as Node | null) === true
+        setKeysLive(permissionKeysAreLive(event.relatedTarget))
+      }}
+      onFocus={event => {
+        focusOwnedRef.current = true
+        setKeysLive(permissionKeysAreLive(event.target))
+      }}
       ref={element => {
         sectionRef.current = element
         arrivalRef?.(element)

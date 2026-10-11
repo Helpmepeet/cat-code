@@ -58,13 +58,12 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
   const host = async (event: HostEvent) => { await act(async () => { hostListener(event) }) }
   const frames = async (...frames: ServerFrame[]) => { await act(async () => { frameListener(frames) }) }
   await host({ type: 'accounts-pool', pool: { accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true, anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true } })
-  await frames(...sessions.filter(s => !s.restorable).map(s => ready(s.appSessionId)))
+  await frames(...sessions.filter(s => !s.restorable && s.status === 'ready').map(s => ready(s.appSessionId)))
   const click = async (label: string) => {
     const element = [...tree.container.querySelectorAll<HTMLElement>('button,[role="tab"],[role="option"],[role="button"]')].find(el => el.getAttribute('aria-label') === label || el.textContent?.trim() === label || el.getAttribute('title') === label)
     if (!element) throw new Error(`missing ${label}`)
     await act(async () => {
-      if (element.getAttribute('role') === 'option') element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-      else element.click()
+      element.click()
     })
   }
   const key = async (key: string) => { await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true })) }) }
@@ -94,6 +93,192 @@ test('all sidebar pages share a unique strip and empty close restores the creden
   expect(app.tabs()).toHaveLength(0)
   expect(app.tree.container.textContent).toContain('Welcome back')
   expect(app.lifecycle).toEqual([])
+})
+
+test('Settings owns Cmd K for search without opening the shell command palette', async () => {
+  const app = await mountApp()
+  await app.click('Settings')
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))
+  })
+  expect(app.tree.container.querySelector('[aria-label="Command palette"]')).toBeNull()
+  expect(document.activeElement?.getAttribute('placeholder')).toBe('Search all settings')
+})
+
+test('bulk export retains a completed leg while another session renders and rename replaces the latest result', async () => {
+  const app = await mountApp([sessionDescriptor('a', { cwd: '/tmp/shared' }), sessionDescriptor('b', { cwd: '/tmp/shared' })])
+  await app.host({ type: 'sessions-catalog', catalog: { capturedAtMs: 1, truncated: false, entries: [] } })
+  const requests: Array<{ sessionId: string; requestId: string }> = []
+  const saved: string[] = []
+  window.catcode.sessionActionVerb = (sessionId, verb) => {
+    if (verb.type === 'session.export') requests.push({ sessionId, requestId: verb.requestId })
+  }
+  window.catcode.saveTextToFile = async request => { saved.push(request.text); return { ok: true, saved: true } }
+  await app.frames({ kind: 'slash-catalog.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', commands: [{ name: 'resume', description: 'Open history' }] })
+  await app.key('k')
+  await app.click('Navigate with /resume')
+  const selectionButtons = [...app.tree.container.querySelectorAll<HTMLButtonElement>('[aria-label="Select session"]')]
+  expect(selectionButtons).toHaveLength(2)
+  for (const button of selectionButtons) await act(async () => { button.click() })
+  await app.click('Export')
+  expect(requests).toHaveLength(2)
+  const first = requests[0]!
+  const second = requests[1]!
+  await app.frames({ kind: 'session-action.result', protocolVersion: PROTOCOL_VERSION, ...first, verb: 'export', ok: true, message: 'Exported', exportText: 'first transcript' })
+  expect(saved).toEqual([])
+  await app.frames({ kind: 'session-action.result', protocolVersion: PROTOCOL_VERSION, sessionId: first.sessionId, requestId: 'rename-later', verb: 'rename', ok: true, message: 'Renamed' })
+  await app.frames({ kind: 'session-action.result', protocolVersion: PROTOCOL_VERSION, ...second, verb: 'export', ok: true, message: 'Exported', exportText: 'second transcript' })
+  expect(saved).toHaveLength(1)
+  expect(saved[0]).toContain('first transcript')
+  expect(saved[0]).toContain('second transcript')
+})
+
+test('pending single export fails after engine exit while an already-rendered export remains readable', async () => {
+  const app = await mountApp([sessionDescriptor('a')])
+  let requestId = ''
+  window.catcode.sessionActionVerb = (_sessionId, verb) => { requestId = verb.requestId }
+  await app.click('Session actions for a')
+  await app.click('Export…')
+  expect(requestId).not.toBe('')
+  await app.frames({ kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', status: 'exited' })
+  expect(app.tree.container.textContent).not.toContain('Rendering this session, one moment.')
+  expect(app.tree.container.textContent).toContain('The session ended before its transcript could be exported.')
+  await app.click('Close dialog')
+  await app.frames(ready('a'))
+  await app.click('Session actions for a')
+  await app.click('Export…')
+  await app.frames({ kind: 'session-action.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', requestId, verb: 'export', ok: true, message: 'Exported', exportText: 'completed export' })
+  await app.frames({ kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', status: 'exited' })
+  expect(app.tree.container.textContent).toContain('completed export')
+  expect(app.tree.container.textContent).not.toContain('The session ended before its transcript could be exported.')
+})
+
+test('a delayed Edit reply preserves typing added while the message action was pending', async () => {
+  const app = await mountApp([sessionDescriptor('a')])
+  let requestId = ''
+  window.catcode.sessionActionVerb = (_sessionId, verb) => { requestId = verb.requestId }
+  await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'message', message: { type: 'user', uuid: '00000000-0000-4000-8000-000000000001', message: { role: 'user', content: 'original sent prompt' } } } } as ServerFrame)
+  await app.click('Edit from here')
+  const composer = app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  await act(async () => {
+    composer.textContent = 'new unsent thought'
+    composer.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await app.frames({ kind: 'session-action.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', requestId, verb: 'editFromMessage', ok: true, message: 'Edited', selectedPrompt: { content: 'original sent prompt' } })
+  expect(app.tree.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('original sent prompt\nnew unsent thought')
+})
+
+test('App keeps question progress through a page visit and clears it when the request resolves', async () => {
+  const app = await mountApp([sessionDescriptor('a')])
+  const request = { requestId: 'ask-progress', request: { subtype: 'can_use_tool' as const, tool_name: 'AskUserQuestion', tool_use_id: 'ask-tool', input: { questions: [
+    { header: 'Library', question: 'Which library?', options: [{ label: 'Bun', description: '' }, { label: 'Node', description: '' }] },
+    { header: 'Runtime', question: 'Which runtime?', options: [{ label: 'Local', description: '' }, { label: 'Remote', description: '' }] },
+  ] } } }
+  await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'permission.requested', request } })
+  await act(async () => { app.tree.container.querySelector<HTMLButtonElement>('[data-ask-option]')!.click() })
+  await act(async () => {
+    [...app.tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('Next question'))!.click()
+  })
+  expect(app.tree.container.textContent).toContain('Which runtime?')
+  await app.click('Accounts')
+  await app.key('1')
+  expect(app.tree.container.textContent).toContain('Which runtime?')
+  expect(app.tree.container.textContent).not.toContain('Which library?')
+  await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'permission.resolved', request, response: { behavior: 'deny', message: 'Synthetic dismissal' } } })
+  await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'permission.requested', request } })
+  expect(app.tree.container.textContent).toContain('Which library?')
+})
+
+test('released held text merges with the original draft while browsing history and survives reload', async () => {
+  const app = await mountApp([sessionDescriptor('a', { status: 'spawning' })])
+  let submissions = 0
+  window.catcode.submit = () => { submissions += 1 }
+  const composer = () => app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  const type = async (text: string) => {
+    await act(async () => {
+      composer().textContent = text
+      composer().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  const press = async (key: string) => {
+    await act(async () => {
+      composer().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    })
+  }
+  await type('held never sent H')
+  await press('Enter')
+  expect(composer().textContent).toBe('')
+  await type('live draft D')
+  await press('ArrowUp')
+  expect(composer().textContent).toBe('held never sent H')
+  await app.frames({ kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', status: 'exited' })
+  expect(composer().textContent).toBe('held never sent H\nlive draft D')
+  await act(async () => { window.dispatchEvent(new Event('pagehide')) })
+  expect(JSON.parse(window.localStorage.getItem('catcode.promptDrafts.v1')!).drafts.a).toBe('held never sent H\nlive draft D')
+  await app.tree.unmount()
+  const restored = await harness.mount(<App />)
+  await app.frames(ready('a'))
+  expect(restored.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('held never sent H\nlive draft D')
+  expect(submissions).toBe(0)
+})
+
+test.each(['refused', 'recalled'] as const)('%s text keeps the original draft while browsing history', async outcome => {
+  const app = await mountApp([sessionDescriptor('a')])
+  let submitId = ''
+  let recallRequestId = ''
+  window.catcode.submit = (_sessionId, _prompt, options) => { submitId = options?.submitId ?? '' }
+  window.catcode.recallPrompts = (_sessionId, message) => { recallRequestId = message.requestId }
+  const composer = () => app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  const type = async (text: string) => {
+    await act(async () => {
+      composer().textContent = text
+      composer().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  const press = async (key: string) => {
+    await act(async () => { composer().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
+  }
+  await type('earlier submitted H')
+  await press('Enter')
+  expect(submitId).not.toBe('')
+  await type('live draft D')
+  await press('ArrowUp')
+  expect(composer().textContent).toBe('earlier submitted H')
+  let restoredText = 'earlier submitted H'
+  if (outcome === 'refused') {
+    await app.frames({ kind: 'submit.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', submitId, accepted: false, code: 'session_not_found' })
+  } else {
+    restoredText = 'queued text Q'
+    await app.frames({ kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', prompts: [{ id: 'queued-q', text: restoredText }] })
+    await app.click('Take back queued message')
+    expect(recallRequestId).not.toBe('')
+    await app.frames({ kind: 'prompt-recall.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', requestId: recallRequestId, ok: true, message: 'Recalled', recalled: [{ id: 'queued-q', prompt: restoredText }], alreadyDelivered: 0 })
+  }
+  expect(composer().textContent).toBe(`${restoredText}\nlive draft D`)
+  await act(async () => { window.dispatchEvent(new Event('pagehide')) })
+  expect(JSON.parse(window.localStorage.getItem('catcode.promptDrafts.v1')!).drafts.a).toBe(`${restoredText}\nlive draft D`)
+})
+
+test.each(['ready', 'spawning'] as const)('unsent text survives pagehide and App remount from %s without replaying submit', async status => {
+  const app = await mountApp([sessionDescriptor('a', { status })])
+  const submissions: unknown[] = []
+  window.catcode.submit = (_sessionId, prompt) => { submissions.push(prompt) }
+  const composer = app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  await act(async () => {
+    composer.textContent = 'never sent before connection'
+    composer.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  if (status === 'spawning') {
+    await act(async () => { composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+  }
+  expect(submissions).toEqual([])
+  expect(app.tree.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe(status === 'spawning' ? '' : 'never sent before connection')
+  await act(async () => { window.dispatchEvent(new Event('pagehide')) })
+  await app.tree.unmount()
+  const restored = await harness.mount(<App />)
+  await app.frames(ready('a'))
+  expect(restored.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('never sent before connection')
+  expect(submissions).toEqual([])
 })
 
 test('page close and numeric selection focus the matching conversation instead of retained context', async () => {
@@ -237,6 +422,20 @@ test('page navigation preserves saved splits and Settings loses removed session 
   expect(app.inventoryCwds.at(-1)).toBeNull()
 })
 
+test('keyboard focus in a split conversation selects that session before close', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')], true)
+  const secondPanel = app.tree.container.querySelector<HTMLElement>('section[aria-label^="Panel 2 session b"]')!
+  const composer = secondPanel.querySelector<HTMLElement>('[contenteditable="true"]')!
+  await act(async () => { composer.focus() })
+  const selectionAfterFocus = app.selected()
+  const paneLabelAfterFocus = secondPanel.getAttribute('aria-label')
+  await app.key('w')
+
+  expect(app.lifecycle).toEqual(['close:b'])
+  expect(selectionAfterFocus).toEqual(['Session b, live'])
+  expect(paneLabelAfterFocus).toBe('Panel 2 session b, live, active')
+})
+
 
 test.each(['session', 'page'] as const)('deferred saved split restoration preserves newer %s selection', async selection => {
   const app = await mountApp([
@@ -371,4 +570,33 @@ test('composer management and account-health action focus the same Accounts tab'
   expect(app.selected()).toEqual(['Accounts page'])
   expect(app.tabs()).toHaveLength(2)
   expect(app.lifecycle).toEqual([])
+})
+
+test('a refused recalled prompt survives pagehide and renderer remount', async () => {
+  const app = await mountApp([sessionDescriptor('a')])
+  const submissions: Array<{ id: string; prompt: unknown }> = []
+  window.catcode.submit = (_sessionId, prompt, options) => {
+    submissions.push({ id: options?.submitId ?? '', prompt })
+  }
+  const composer = () => app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  await act(async () => {
+    composer().textContent = 'previously sent prompt'
+    composer().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => { composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+  expect(submissions).toHaveLength(1)
+  expect(composer().textContent).toBe('')
+  await act(async () => { composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })) })
+  expect(composer().textContent).toBe('previously sent prompt')
+  await act(async () => { composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+  expect(submissions).toHaveLength(2)
+  await app.frames({ kind: 'submit.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', submitId: submissions[1]!.id, accepted: false, code: 'session_not_found' })
+  expect(composer().textContent).toBe('previously sent prompt')
+  await act(async () => { window.dispatchEvent(new Event('pagehide')) })
+  const saved = JSON.parse(window.localStorage.getItem('catcode.promptDrafts.v1')!)
+  expect(saved.drafts.a).toBe('previously sent prompt')
+  await app.tree.unmount()
+  const restored = await harness.mount(<App />)
+  await app.frames(ready('a'))
+  expect(restored.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('previously sent prompt')
 })

@@ -261,7 +261,7 @@ export function buildPermissionOptions(
 ): PermissionOption[] {
   const deny: PermissionOption = {
     id: 'deny',
-    pre: 'No, and tell Cat Code what to do differently',
+    pre: 'No',
     effect: 'deny',
     esc: true,
   }

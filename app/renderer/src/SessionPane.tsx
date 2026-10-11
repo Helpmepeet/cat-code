@@ -62,6 +62,7 @@ import {
   type AskQuestionReview,
 } from './askQuestionState.js'
 import { AskQuestionFlow } from './AskQuestionFlow.js'
+import type { AskQuestionDraft } from './askQuestionFlowModel.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
 import {
@@ -251,6 +252,8 @@ export function SessionPane({
   copyForLlm,
   denyPermission,
   history,
+  historyNav: controlledHistoryNav,
+  onHistoryNavChange,
   images = [],
   mentionItems,
   onApprovePlan,
@@ -263,6 +266,8 @@ export function SessionPane({
   onRemovePaste,
   onRevisePlan,
   askQuestion,
+  askDraft,
+  onAskDraftChange,
   askPendingCount,
   onAnswerQuestions,
   onCancelQuestions,
@@ -475,8 +480,10 @@ export function SessionPane({
       prevLength: prompt.length,
     }
     setPrompt(completeSlashDraft(name))
+    setHistoryNav(EMPTY_HISTORY_NAV)
     setSlashDismissed(false)
     setSlashActiveIndex(0)
+    composerRef.current?.focus()
   }
 
   // @-mention typeahead (P4-0): same trigger discipline as the slash picker but
@@ -514,17 +521,27 @@ export function SessionPane({
   }, [mentionQuery])
 
   const pickMention = (item: MentionItem): void => {
+    pendingCaretRef.current = {
+      base: prompt.length,
+      prevLength: prompt.length,
+    }
     setPrompt(applyMention(prompt, item.label))
+    setHistoryNav(EMPTY_HISTORY_NAV)
     setMentionDismissed(false)
     setMentionActiveIndex(0)
+    composerRef.current?.focus()
   }
 
-  // ↑/↓ input-history recall (P4-0). Renderer-local, per-session (`history` prop
-  // keyed by activeSessionId upstream); `historyNav` is the ephemeral editor
-  // cursor and resets when the pane rebinds to a different session.
-  const [historyNav, setHistoryNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
+  // App retains navigation with the session so its saved draft survives pane
+  // remounts. Standalone consumers keep the local fallback.
+  const [localHistoryNav, setLocalHistoryNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
+  const historyNav = controlledHistoryNav ?? localHistoryNav
+  const setHistoryNav = (nav: HistoryNav): void => {
+    if (controlledHistoryNav === undefined) setLocalHistoryNav(nav)
+    onHistoryNavChange?.(nav)
+  }
   useEffect(() => {
-    setHistoryNav(EMPTY_HISTORY_NAV)
+    setLocalHistoryNav(EMPTY_HISTORY_NAV)
   }, [activeSessionId])
 
   // P4-24 multi-line composer. `composerRef` gives the keydown/paste handlers the
@@ -2018,6 +2035,8 @@ export function SessionPane({
         >
           <AskQuestionFlow
             key={askQuestion.request.requestId}
+            draft={askDraft}
+            onDraftChange={onAskDraftChange}
             isActivePane={isActivePane}
             onAnswer={onAnswerQuestions}
             onCancel={onCancelQuestions}
@@ -2296,7 +2315,7 @@ export function SessionPane({
               // the ⌘V and native-picker paths use; other dropped file kinds stay
               // ignored because only main may turn a chosen path into an opaque
               // file token (HC1).
-              onAttachImageFile={file => void attachImage(file)}
+              onAttachImageFile={attachImage}
               onPointerDown={engagePreviewPane}
               onValueChange={next => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor
@@ -2822,6 +2841,8 @@ type SessionPaneProps = {
   onRevisePlan: (message: string) => void
   /** P4-20 — the pending AskUserQuestion request, or `null`; drives AskQuestionFlow. */
   askQuestion: AskQuestionReview | null
+  askDraft?: AskQuestionDraft
+  onAskDraftChange?: (draft: AskQuestionDraft) => void
   /** Session-wide requests still awaiting an answer, this question included.
    * Optional like the sibling card's `pendingCount`; absent reads as "nothing
    * queued behind this", which is what the kicker shows below two. */
@@ -2896,6 +2917,9 @@ type SessionPaneProps = {
   releasePendingSubmit: () => void
   /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
   history: string[]
+  /** App-owned per-session navigation, including the draft saved by ↑ recall. */
+  historyNav?: HistoryNav
+  onHistoryNavChange?: (nav: HistoryNav) => void
   /** Store a large paste as a collapsed chip and splice its token in at the
    * composer caret (`selectionStart`/`selectionEnd`); absent selection appends. */
   onPaste: (

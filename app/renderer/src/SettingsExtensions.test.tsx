@@ -69,6 +69,7 @@ test('the marketplace tab tells the user what to do, not what we have not built'
 })
 
 test('skill flags direct configuration changes without exposing an implementation note', () => {
-  expect(MODULE).toContain('Change them in the agent&apos;s configuration file.')
+  expect(MODULE).toContain('For file-based skills, edit these flags in')
+  expect(MODULE).toContain('SKILL.md')
   expect(MODULE).not.toContain('toggling is deferred to a settings writer')
 })

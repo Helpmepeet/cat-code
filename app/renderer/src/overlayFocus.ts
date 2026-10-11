@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from 'react'
@@ -127,6 +128,8 @@ export type ModalFocusStack = {
    * position. A popover uses this to defer Escape to a modal opened on top
    * of it (Bug 2), rather than consuming Escape unconditionally. */
   isBlockedByModal(owner: ModalFocusOwner): boolean
+  hasModal(): boolean
+  subscribe(listener: () => void): () => void
 }
 
 export type OverlayFocusRemoval = {
@@ -159,15 +162,21 @@ function resolveConnectedRestoreTarget(
 
 export function createModalFocusStack(): ModalFocusStack {
   const entries: ModalFocusEntry[] = []
+  const listeners = new Set<() => void>()
+  const notify = () => {
+    for (const listener of listeners) listener()
+  }
 
   return {
     register(owner, container, restoreTarget, kind = 'modal') {
       const existing = entries.findIndex(entry => entry.owner === owner)
       if (existing >= 0) {
         entries[existing] = { owner, container, restoreTarget, kind }
+        notify()
         return
       }
       entries.push({ owner, container, restoreTarget, kind })
+      notify()
     },
 
     unregister(owner) {
@@ -190,6 +199,7 @@ export function createModalFocusStack(): ModalFocusStack {
           entry.restoreTarget = removed.restoreTarget
         }
       }
+      notify()
 
       return {
         restoreTarget: wasTop
@@ -208,6 +218,15 @@ export function createModalFocusStack(): ModalFocusStack {
       const index = entries.findIndex(entry => entry.owner === owner)
       if (index < 0) return false
       return entries.slice(index + 1).some(entry => entry.kind === 'modal')
+    },
+
+    hasModal() {
+      return entries.some(entry => entry.kind === 'modal')
+    },
+
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
     },
   }
 }
@@ -259,6 +278,19 @@ export function popoverKeyAction(
 
 const modalFocusStack = createModalFocusStack()
 
+export function isModalOverlayOpen(): boolean {
+  return modalFocusStack.hasModal()
+}
+
+/** Inline prompts defer focus and plain shortcuts while a modal owns input. */
+export function useModalOverlayOpen(): boolean {
+  return useSyncExternalStore(
+    modalFocusStack.subscribe,
+    isModalOverlayOpen,
+    () => false,
+  )
+}
+
 function activeHtmlElement(): HTMLElement | null {
   return document.activeElement instanceof HTMLElement
     ? document.activeElement
@@ -301,8 +333,12 @@ export function useModalFocus({
   escapeEnabled?: boolean
   initialFocus?: 'first' | 'container'
   restoreOnClose?: boolean
-}): void {
+}): { isKeyboardOwner: () => boolean } {
   const ownerRef = useRef<ModalFocusOwner>(Symbol('modal-focus-owner'))
+  const isKeyboardOwner = useCallback(
+    () => modalFocusStack.isTop(ownerRef.current),
+    [],
+  )
   const initialFocusRef = useRef(initialFocus)
   const restoreOnCloseRef = useRef(restoreOnClose)
   initialFocusRef.current = initialFocus
@@ -367,6 +403,8 @@ export function useModalFocus({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [containerRef, escapeEnabled, onEscape, open])
+
+  return { isKeyboardOwner }
 }
 
 export function usePopoverFocus({

@@ -705,8 +705,8 @@ export type RecentWorkspace = {
    */
   name: string
   /**
-   * The most-recent registry-backed session in this workspace (a row carrying an
-   * app id), or null when every session in it was created in the terminal. It
+   * The most-recent openable registry session in this workspace, or null when
+   * no registry session can open. It
    * WINS when both identities exist: an already-known desktop session is focused
    * or restored rather than resumed a second time from its transcript.
    */
@@ -792,13 +792,14 @@ export function selectRecentWorkspaces(
     // buckets those rows under "Unknown workspace" instead; here there is
     // nothing to open, so they are left out.
     if (row.cwd.trim().length === 0) continue
+    const appSessionId = resolveSessionOpenRoute(row).kind === 'none' ? null : row.appSessionId
     const existing = byCwd.get(row.cwd)
     if (!existing) {
       byCwd.set(row.cwd, {
         cwd: row.cwd,
         name: basename(row.cwd) || row.cwd,
-        appSessionId: row.appSessionId,
-        live: row.live,
+        appSessionId,
+        live: appSessionId != null && row.live,
         historySessionId: openableHistoryId(row),
         modifiedAtMs: row.modifiedAtMs,
         trusted: trustByCwd.has(row.cwd) ? trustByCwd.get(row.cwd)! : null,
@@ -812,8 +813,8 @@ export function selectRecentWorkspaces(
     }
     // Adopt the first openable id we see (rows arrive newest-first from the
     // merge, so the earliest openable is also the most recent openable).
-    if (existing.appSessionId == null && row.appSessionId != null) {
-      existing.appSessionId = row.appSessionId
+    if (existing.appSessionId == null && appSessionId != null) {
+      existing.appSessionId = appSessionId
       existing.live = row.live
     }
     // The same adoption for the other identity, so a project made entirely of
@@ -853,9 +854,8 @@ export function resolveRecentOpenRoute(recent: RecentWorkspace): SessionOpenRout
     appSessionId: recent.appSessionId,
     live: recent.live,
     cwd: recent.cwd,
-    // A recent does not retain catalog cwd evidence for its registry identity, so
-    // absence of a history id is unknown rather than known-dead. Page/sidebar
-    // rows retain the actual evidence and take the stricter route above.
+    // selectRecentWorkspaces admits identities through the shared open route:
+    // closed project rows need an existing cwd, while live rows can still focus.
     cwdExists: recent.appSessionId != null || recent.historySessionId != null,
     sessionId: recent.historySessionId ?? '',
     // A recent carrying an app id was adopted from a registry row, and one

@@ -22,6 +22,14 @@
  */
 
 import type { PromptDraftState } from './appModel.js'
+import type { SessionId } from '../../shared/protocol.js'
+import {
+  expandPasteRefs,
+  restoreDraftWithPending,
+  type HistoryNav,
+  type PasteState,
+  type PendingSubmitState,
+} from './composerState.js'
 import {
   readViewPreference,
   writeViewPreference,
@@ -93,12 +101,38 @@ export function readPromptDraftsFromStorage(
 export function writePromptDraftsToStorage(
   storage: ViewPreferenceStorage | null,
   drafts: PromptDraftState,
+  pastes: PasteState = {},
+  recovery: {
+    pendingSubmits?: PendingSubmitState
+    historyNavigation?: Partial<Record<SessionId, HistoryNav>>
+  } = {},
 ): void {
+  // Paste pills depend on volatile entries. Persist their text so restoring a
+  // draft after a reload never leaves a pill whose contents no longer exist.
+  const expanded: Record<string, string> = {}
+  const sessionIds = new Set([
+    ...Object.keys(drafts),
+    ...Object.keys(recovery.pendingSubmits ?? {}),
+    ...Object.keys(recovery.historyNavigation ?? {}),
+  ])
+  for (const key of sessionIds) {
+    const sessionId = key as SessionId
+    const navigation = recovery.historyNavigation?.[sessionId]
+    const draft = navigation && navigation.index !== null
+      ? navigation.savedDraft
+      : drafts[sessionId] ?? ''
+    // A held submit has never reached an engine. Recovery deliberately restores
+    // text for review, rather than recreating a queue that could send on reload.
+    expanded[key] = restoreDraftWithPending(
+      expandPasteRefs(draft, pastes[sessionId]?.entries ?? {}),
+      recovery.pendingSubmits?.[sessionId]?.text ?? '',
+    )
+  }
   writeViewPreference(
     storage,
     PROMPT_DRAFTS_STORAGE_KEY,
     'drafts',
-    normalizePromptDrafts(drafts),
+    normalizePromptDrafts(expanded),
   )
 }
 

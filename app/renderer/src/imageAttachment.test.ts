@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import {
   prepareImageAttachment,
-  selectAttachableImageFile,
+  selectAttachableImageFiles,
 } from './imageAttachment.js'
 
 const originalFileReader = Object.getOwnPropertyDescriptor(globalThis, 'FileReader')
@@ -118,14 +118,14 @@ test('picks the accepted image out of a dropped file list', () => {
   const png = new File(['x'], 'shot.png', { type: 'image/png' })
   const notes = new File(['x'], 'notes.txt', { type: 'text/plain' })
 
-  expect(selectAttachableImageFile([notes, png])).toBe(png)
+  expect(selectAttachableImageFiles([notes, png])).toEqual([png])
 })
 
 test('prefers an accepted type over an unsupported image', () => {
   const heic = new File(['x'], 'shot.heic', { type: 'image/heic' })
   const webp = new File(['x'], 'shot.webp', { type: 'image/webp' })
 
-  expect(selectAttachableImageFile([heic, webp])).toBe(webp)
+  expect(selectAttachableImageFiles([heic, webp])).toEqual([webp])
 })
 
 // Handed on rather than dropped, so `prepareImageAttachment` answers with the
@@ -133,18 +133,18 @@ test('prefers an accepted type over an unsupported image', () => {
 test('still surfaces an unsupported image so the user gets told why', () => {
   const heic = new File(['x'], 'shot.heic', { type: 'image/heic' })
 
-  expect(selectAttachableImageFile([heic])).toBe(heic)
+  expect(selectAttachableImageFiles([heic])).toEqual([heic])
 })
 
 // Scope is strictly images: making a dropped file into a path the engine reads
 // would put the renderer in charge of authoring a filesystem path (HC1).
 test('ignores non-image files entirely', () => {
   expect(
-    selectAttachableImageFile([
+    selectAttachableImageFiles([
       new File(['x'], 'notes.txt', { type: 'text/plain' }),
       new File(['x'], 'report.pdf', { type: 'application/pdf' }),
       new File(['x'], 'unknown', { type: '' }),
     ]),
-  ).toBeNull()
-  expect(selectAttachableImageFile([])).toBeNull()
+  ).toEqual([])
+  expect(selectAttachableImageFiles([])).toEqual([])
 })

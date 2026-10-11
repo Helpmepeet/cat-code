@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
@@ -39,13 +38,6 @@ function item(over: Partial<TaskSnapshotItem> = {}): TaskSnapshotItem {
     ...over,
   }
 }
-
-test('task keyboard selection stays represented by an accessible, scrollable active row', () => {
-  const source = readFileSync(new URL('./TasksDialog.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('data-task-active={isSelected}')
-  expect(source).toContain("querySelector('[data-task-active=\"true\"]')")
-  expect(source).toContain("scrollIntoView({ block: 'nearest' })")
-})
 
 const noop = () => {}
 

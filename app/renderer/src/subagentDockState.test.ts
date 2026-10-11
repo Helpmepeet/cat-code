@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test'
 import type { LeaseSnapshot, LiveWorkerItem, TaskSnapshotItem } from '../../shared/protocol.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
 import { createSubagentDockState, reconcileSubagentDockState, selectSubagentDock, type SubagentDockInput, type SubagentDockState } from './subagentDockState.js'
+import { MAX_PERSISTED_DOCK_FINISHED, readSubagentDockSessionsFromStorage, writeSubagentDockSessionsToStorage } from './subagentDockPersistence.js'
+import { memoryStorage } from './viewPreferenceStorageFixture.js'
 
 const worker = (patch: Partial<LiveWorkerItem> = {}): LiveWorkerItem => ({ agentId: 'a', handle: '@Ada', role: 'Explore', status: 'running', description: 'Check paths', ...patch })
 const agentRow = (patch: Partial<NestedToolUseRow> = {}): NestedToolUseRow => ({
@@ -76,6 +78,75 @@ test('clear stays cleared as transcript evidence arrives, but a resumed backgrou
   const done = view(resumed.state, { workers: [worker({ status: 'completed', isBackgrounded: true })], tasks: { items: [task({ status: 'completed', resumedAt: 2000, endTime: 3000 })], subagents: [] }, transcriptRows: [oldRow, resumeRow], clearMarkers, nowMs: 4000, reducedMotion: true })
   expect(done.finished).toHaveLength(1)
   expect(done.finished[0]).toMatchObject({ runKey: 'resume-a', usageLabel: '1 tool call · 500 tokens' })
+})
+
+test('capped unordered completions stay cleared after cold reload, while independent later runs remain eligible', () => {
+  const rows = Array.from({ length: MAX_PERSISTED_DOCK_FINISHED + 1 }, (_, index) => agentRow({
+    id: `row-${index}`, toolUseId: `launch-${index}`, blockIndex: index, status: 'success',
+    result: { isError: false, content: 'Done', diff: null, agentId: `agent-${index}` },
+  }))
+  // The first launch finishes last; the middle launch at index 1 is capped.
+  const first = view(createSubagentDockState(), {
+    transcriptRows: rows, nowMs: 20_000, reducedMotion: true,
+    tasks: { items: rows.map((_, index) => task({ id: `agent-${index}`, status: 'completed', endTime: index === 0 ? 10_000 : 100 + index })), subagents: [] },
+  })
+  expect(first.finished).toHaveLength(128)
+  expect(first.finished[0]).toMatchObject({ agentId: 'agent-0', terminalAt: 10_000 })
+  expect(first.state.entries['agent-1']).toBeUndefined()
+  const storage = memoryStorage()
+  writeSubagentDockSessionsToStorage(storage, { session: {
+    finished: Object.values(first.state.entries),
+    cleared: first.finished.map(entry => ({ agentId: entry.agentId, runKey: entry.runKey })),
+  } })
+  const saved = readSubagentDockSessionsFromStorage(memoryStorage(Object.fromEntries(storage.map)))!.session!
+  const reload = (patch: Partial<SubagentDockInput> = {}) => view(createSubagentDockState(saved.finished), {
+    transcriptRows: rows, clearMarkers: saved.cleared, nowMs: 30_000, reducedMotion: true, ...patch,
+  })
+  const cold = reload()
+  expect(cold.state.entries['agent-1']).toBeUndefined()
+  expect(Object.keys(cold.state.entries)).toHaveLength(128)
+  expect(cold.state.entries['agent-0']?.terminalAt).toBe(10_000)
+  expect(cold.finished).toEqual([])
+  expect(view(cold.state, { transcriptRows: rows, clearMarkers: saved.cleared, nowMs: 40_000 }).finished).toEqual([])
+  expect(reload({ tasks: { items: [task({ id: 'agent-1', status: 'completed', endTime: 101 })], subagents: [] } }).finished).toEqual([])
+
+  // Later task evidence may arrive with reload or after its first reconciliation.
+  for (const prior of [createSubagentDockState(saved.finished), cold.state]) {
+    const laterCompletion = view(prior, {
+      transcriptRows: rows, clearMarkers: saved.cleared, nowMs: 30_000, reducedMotion: true,
+      tasks: { items: [task({ id: 'agent-1', status: 'completed', endTime: 20_000 })], subagents: [] },
+    })
+    expect(laterCompletion.finished.map(entry => [entry.agentId, entry.terminalAt])).toEqual([['agent-1', 20_000]])
+    expect(Object.keys(laterCompletion.state.entries)).toHaveLength(128)
+  }
+
+  const newRun = agentRow({ toolUseId: 'resume-1', toolName: 'ResumeAgent', input: { agentId: 'agent-1' }, status: 'success',
+    agentCompletion: { status: 'completed', summary: 'Done again', result: null, usage: null } })
+  const transcriptRun = reload({ transcriptRows: [...rows, newRun] })
+  expect(transcriptRun.finished.map(entry => [entry.agentId, entry.runKey])).toEqual([['agent-1', 'resume-1']])
+  expect(Object.keys(transcriptRun.state.entries)).toHaveLength(128)
+
+  const resumedAfterReload = reload({
+    workers: [worker({ agentId: 'agent-1', status: 'completed', isBackgrounded: true })],
+    tasks: { items: [task({ id: 'agent-1', status: 'completed', resumedAt: 20_000, isBackgrounded: true })], subagents: [] },
+  })
+  expect(resumedAfterReload.finished.map(entry => [entry.agentId, entry.runKey])).toEqual([['agent-1', 'resume:20000']])
+
+  const resumedFacts = {
+    workers: [worker({ agentId: 'agent-1', isBackgrounded: true })],
+    tasks: { items: [task({ id: 'agent-1', resumedAt: 20_000, isBackgrounded: true })], subagents: [] },
+  }
+  const resumed = reload(resumedFacts)
+  expect(resumed.active.map(entry => [entry.agentId, entry.state, entry.runKey])).toEqual([['agent-1', 'resumed', 'resume:20000']])
+  expect(resumed.finished).toEqual([])
+  expect(Object.keys(resumed.state.entries)).toHaveLength(129)
+  const resumedCompletion = view(resumed.state, {
+    transcriptRows: rows, clearMarkers: saved.cleared, nowMs: 40_000, reducedMotion: true,
+    workers: [worker({ agentId: 'agent-1', status: 'completed', isBackgrounded: true })],
+    tasks: { items: [task({ id: 'agent-1', status: 'completed', resumedAt: 20_000, endTime: 25_000, isBackgrounded: true })], subagents: [] },
+  })
+  expect(resumedCompletion.finished.map(entry => [entry.agentId, entry.runKey, entry.terminalAt])).toEqual([['agent-1', 'resume:20000', 25_000]])
+  expect(Object.keys(resumedCompletion.state.entries)).toHaveLength(128)
 })
 
 const leases: LeaseSnapshot = {

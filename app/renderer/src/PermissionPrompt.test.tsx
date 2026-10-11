@@ -71,7 +71,8 @@ test('the command is the headline, and the answer is a numbered select list', ()
   expect(html).toContain('Permission')
   // The rows, in the prototype's order and words.
   expect(html).toContain('>Yes<')
-  expect(html).toContain('No, and tell Cat Code what to do differently')
+  expect(html).toContain('>No<')
+  expect(html).not.toContain('tell Cat Code what to do differently')
   expect(html).toContain('>esc<')
   expect(html).toContain('>1<')
   expect(html).toContain('>2<')
@@ -590,7 +591,7 @@ test('a deny-only card offers no allow path at all', () => {
   expect(html).not.toContain("don't ask again")
   // The generic shortcuts skip this request, so the hint would be dead too.
   expect(html).not.toContain('↑↓ · 1–9')
-  expect(html).toContain('No, and tell Cat Code what to do differently')
+  expect(html).toContain('>No<')
   expect(html).toContain('it can only be denied')
   // The card no longer carries a note field, so it must not tell the user to
   // write in one.
@@ -604,7 +605,7 @@ test('buildPermissionOptions is the one list both mouse and keyboard read', () =
     { id: 'allow', pre: 'Yes', effect: 'allow' },
     {
       id: 'deny',
-      pre: 'No, and tell Cat Code what to do differently',
+      pre: 'No',
       effect: 'deny',
       esc: true,
     },

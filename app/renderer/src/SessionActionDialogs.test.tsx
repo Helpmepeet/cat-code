@@ -103,7 +103,7 @@ test('ExportDialog: neither action is live before a transcript arrives', () => {
     for (const button of [copy, download]) {
       expect(button.props.disabled).toBe(true)
       expect(button.props.onClick).toBeUndefined()
-      expect(String(button.props.reason)).toContain('still rendering')
+      expect(String(button.props.reason)).toContain(preview.status === 'pending' ? 'still rendering' : 'could not be rendered')
     }
   }
 

@@ -98,12 +98,12 @@ export function SlashCommandPicker({
                 type="button"
                 data-slash-active={isActive}
                 aria-label={`Insert slash command /${entry.name}`}
-                // onMouseDown (not onClick) so selecting a command never blurs
-                // the composer input first (which would drop the draft focus).
+                // Keep pointer focus in the editor; click also handles keyboard
+                // and assistive activation of this button.
                 onMouseDown={event => {
                   event.preventDefault()
-                  onPick(entry.name)
                 }}
+                onClick={() => onPick(entry.name)}
                 className={
                   'flex w-full items-baseline border-l-2 px-3 py-1 text-left ' +
                   (isActive

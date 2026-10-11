@@ -2150,8 +2150,15 @@ function workspaceFileHref(href: string | undefined): string | null {
   if (href === undefined || href.length === 0) return null
   if (href.startsWith('#') || href.startsWith('//')) return null
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)) return null
-  const path = href.replace(/[?#].*$/, '').replace(/:\d+(?::\d+)?$/, '')
-  return path.length === 0 ? null : path
+  const path = href.replace(/[?#].*$/, '')
+  if (path.length === 0) return null
+  // Markdown URLs encode filenames. Decode once, then let main prefer a real
+  // literal :number filename before considering a source-location suffix.
+  try {
+    return decodeURIComponent(path.replace(/%(?![\da-f]{2})/gi, '%25'))
+  } catch {
+    return path
+  }
 }
 
 function createPathAwareAnchor(
@@ -2178,7 +2185,7 @@ function createPathAwareAnchor(
         </a>
       )
     }
-    const rawPath = href ?? path
+    const rawPath = path
     return (
       <button
         className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
@@ -4384,7 +4391,7 @@ function ToolCardBody({
   const openInspector = useContext(ToolInspectorContext)
   const openFull = openInspector ? () => openInspector(row) : null
 
-  if (row.result?.diff) return <DiffView diff={row.result.diff} />
+  if (row.result?.diff) return <DiffView diff={row.result.diff} onOpenFull={openFull} />
 
   const errorTone = row.result?.isError === true
   // Only an EXACT ack replaces the body: a richer object's other fields would
@@ -6678,7 +6685,13 @@ const WORD_DIM_CLASS: Record<'del' | 'add', string> = {
  * whole file, so one tool call mounted one DOM row per file line. The row list
  * is complete; the virtualizer decides which of it is near the viewport.
  */
-function DiffView({ diff }: { diff: ToolDiffProjection }) {
+function DiffView({
+  diff,
+  onOpenFull,
+}: {
+  diff: ToolDiffProjection
+  onOpenFull: (() => void) | null
+}) {
   const rows = useMemo(() => selectDiffRows(diff), [diff])
   const bodies = useMemo(() => rows.map(row => row.body), [rows])
   const lang = readSourceLanguage(diff.filePath)
@@ -6687,18 +6700,29 @@ function DiffView({ diff }: { diff: ToolDiffProjection }) {
     [bodies, lang],
   )
   return (
-    <VirtualLineList
-      lines={bodies}
-      activeIndex={null}
-      className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre font-mono text-xs leading-[1.65]`}
-      renderLine={(body, index) => (
-        <DiffRowView
-          row={rows[index]}
-          body={coloured?.[index] ?? body}
-          segments={selectRowWordSegments(rows, index)}
-        />
-      )}
-    />
+    <>
+      <VirtualLineList
+        lines={bodies}
+        activeIndex={null}
+        className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre font-mono text-xs leading-[1.65]`}
+        renderLine={(body, index) => (
+          <DiffRowView
+            row={rows[index]}
+            body={coloured?.[index] ?? body}
+            segments={selectRowWordSegments(rows, index)}
+          />
+        )}
+      />
+      {onOpenFull ? (
+        <button
+          type="button"
+          onClick={onOpenFull}
+          className="rounded px-1 py-0.5 font-mono text-[10.5px] text-accent-soft/70 hover:bg-accent/10 hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        >
+          Open full output
+        </button>
+      ) : null}
+    </>
   )
 }
 

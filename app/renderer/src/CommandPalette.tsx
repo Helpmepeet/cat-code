@@ -222,11 +222,8 @@ function PaletteRow({
       aria-label={item.ariaLabel}
       data-palette-active={isActive}
       onMouseEnter={onHover}
-      // onMouseDown so the click lands before the backdrop's onClose fires.
-      onMouseDown={event => {
-        event.preventDefault()
-        onRun()
-      }}
+      onFocus={onHover}
+      onClick={onRun}
       className={
         'flex w-full items-center gap-2.5 border-l-2 px-4 py-1.5 text-left transition-colors ' +
         (isActive

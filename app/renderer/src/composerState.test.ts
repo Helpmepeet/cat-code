@@ -1023,7 +1023,18 @@ describe('CC-16 parked prompt store', () => {
     })
   })
 
-  test('empty text is never parked, and a null session selects nothing', () => {
+  test('a file-only prompt survives a hold until the session can accept it', () => {
+    const pending = {
+      text: '',
+      file: { name: 'notes.txt', token: 'picker-token' },
+      showQueuedRow: false,
+    }
+    const state = reducePendingSubmitHeld(createPendingSubmitState(), S1, pending)
+    expect(selectPendingSubmit(state, S1)).toEqual(pending)
+    expect(selectPendingSubmit(state, S2)).toBeNull()
+  })
+
+  test('empty content is never parked, and a null session selects nothing', () => {
     const state = reducePendingSubmitHeld(createPendingSubmitState(), S1, {
       text: '',
       showQueuedRow: true,

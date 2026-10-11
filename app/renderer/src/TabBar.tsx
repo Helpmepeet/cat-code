@@ -160,6 +160,7 @@ export function TabBar({
   }, [activeIndex, selected])
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
+    if (event.target !== event.currentTarget) return
     if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
     const entry = entries[index]
     switch (event.key) {
@@ -463,7 +464,7 @@ function Tab({
       // the first tab when nothing is active — never a focus dead-end); arrows
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
-      title={`${descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
+      title={`${descriptor.binding?.kind === 'managed' ? title : descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
       aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${visual.needsAttention ? ', permission request waiting' : ''}`}
       draggable
       onPointerDown={event => {

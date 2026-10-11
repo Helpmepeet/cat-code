@@ -32,6 +32,9 @@ import {
   SESSION_ACTION_SECTIONS,
   SESSION_ACTION_SECTION_LABELS,
   SESSION_RENAME_POPOVER_HEIGHT,
+  SESSION_ACTIONS_MENU_WIDTH,
+  SESSION_ACTIONS_MENU_GAP,
+  SESSION_ACTIONS_VIEWPORT_MARGIN,
   estimateSessionActionsMenuHeight,
   placeSessionActionsMenu,
   type SessionActionItem,
@@ -45,6 +48,8 @@ import {
 } from './SessionActionIcons.js'
 
 export type { SessionActionsAnchor }
+
+const SESSION_ACTIONS_FLYOUT_WIDTH = 190
 
 /**
  * The viewport the placement is clamped into. SSR has no window, so it falls
@@ -79,11 +84,15 @@ export function SessionActionsMenu({
     section,
     rows: items.filter(item => item.section === section),
   })).filter(group => group.rows.length > 0)
+  const viewport = readViewport()
   const placement = placeSessionActionsMenu(
     anchor,
-    readViewport(),
+    viewport,
     estimateSessionActionsMenuHeight(items),
   )
+  const flipFlyoutLeft =
+    placement.left + SESSION_ACTIONS_MENU_WIDTH + SESSION_ACTIONS_MENU_GAP +
+      SESSION_ACTIONS_FLYOUT_WIDTH > viewport.width - SESSION_ACTIONS_VIEWPORT_MARGIN
 
   return (
     <>
@@ -123,6 +132,7 @@ export function SessionActionsMenu({
                   <MenuFlyoutRow
                     key={item.kind}
                     item={item}
+                    flipLeft={flipFlyoutLeft}
                     onAction={kind => {
                       restoreTriggerFocus()
                       onAction(kind)
@@ -261,9 +271,11 @@ function SectionLabel({ children }: { children: ReactNode }) {
  */
 function MenuFlyoutRow({
   item,
+  flipLeft,
   onAction,
 }: {
   item: SessionActionItem
+  flipLeft: boolean
   onAction: (kind: SessionActionKind) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -298,7 +310,10 @@ function MenuFlyoutRow({
           role="menu"
           aria-label={item.label}
           onKeyDown={handleMenuRovingKeyDown}
-          className="animate-sa-pop absolute -top-[5px] left-full z-[72] ml-1 w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
+          className={
+            'animate-sa-pop absolute -top-[5px] z-[72] w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)] ' +
+            (flipLeft ? 'right-full mr-1' : 'left-full ml-1')
+          }
         >
           {item.flyout?.map(child => (
             <MenuRow

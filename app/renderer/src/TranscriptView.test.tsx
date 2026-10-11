@@ -288,7 +288,7 @@ test('renders workspace file paths as open-file controls without linkifying web 
   expect(html).not.toContain('aria-label="Open www.example.com/readme.md"')
 })
 
-test('a markdown link to a workspace path opens the file, and a line suffix is dropped', () => {
+test('a markdown workspace link keeps its suffix for host resolution', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:filelink',
@@ -300,8 +300,8 @@ test('a markdown link to a workspace path opens the file, and a line suffix is d
 
   expect(html).toContain('aria-label="Open src/utils/foo.ts"><svg')
   expect(html).toContain('</svg>foo.ts</button>')
-  // The `:42` addresses a line, not a file on disk: main stats the path itself.
-  expect(html).toContain('aria-label="Open app/components/Bar.tsx"><svg')
+  // Main prefers a literal :number filename before parsing a location suffix.
+  expect(html).toContain('aria-label="Open app/components/Bar.tsx:42"><svg')
   expect(html).toContain('</svg>Bar.tsx:42</button>')
   // An external link stays an anchor, never an open-file control, and carries
   // the target that routes it to the OS browser through the window-open policy.

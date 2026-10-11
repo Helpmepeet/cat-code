@@ -1,6 +1,7 @@
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 
 export type DraftAnswer = { optionIndices: number[]; other: string }
+export type AskQuestionDraft = { questionIndex: number; answers: DraftAnswer[] }
 
 /**
  * Leaving the freeform field without keeping the text (Escape) — it drops the

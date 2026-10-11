@@ -9,8 +9,11 @@ import type { WorkspaceLayoutState } from './workspaceLayout.js'
 
 const READY: ConnectionSnapshot = { status: 'ready', inputEnabled: true }
 
-test('renders panel, drop edge, and splitter aria labels with session identity and state', () => {
-  const alpha = descriptor('session-a', 'Alpha')
+test.each([
+  { status: 'ready' as const, restorable: false, parked: false, label: 'live' },
+  { status: 'disconnected' as const, restorable: true, parked: true, label: 'idle' },
+])('renders panel, drop edge, and splitter aria labels for $label sessions', ({ status, restorable, parked, label }) => {
+  const alpha = { ...descriptor('session-a', 'Alpha'), status, restorable, parked }
   const beta = descriptor('session-b', 'Beta')
   const panels: WorkspacePanelView[] = [
     panel(alpha, <div>Alpha transcript</div>),
@@ -38,19 +41,44 @@ test('renders panel, drop edge, and splitter aria labels with session identity a
 
   expect(html).toContain('Workspace layout, 2 panels')
   expect(html).toContain(
-    'Panel 1 session Alpha, live, active',
+    `Panel 1 session Alpha, ${label}, active`,
   )
   expect(html).toContain(
-    'Drop tab on left edge of panel 1 showing Alpha, live to split',
+    `Drop tab on left edge of panel 1 showing Alpha, ${label} to split`,
   )
   expect(html).toContain('role="separator"')
   expect(html).toContain(
-    'Resize split between panel 1 session Alpha, live and panel 2 session Beta, live',
+    `Resize split between panel 1 session Alpha, ${label} and panel 2 session Beta, live`,
   )
   expect(html).not.toContain('host ready')
   expect(html).not.toContain('connection ready')
   expect(html).not.toContain('(session-a)')
   expect(html).not.toContain('(session-b)')
+})
+
+test('managed Chat headers show conversation identity without a storage project', () => {
+  const chat = sessionDescriptor('chat', {
+    title: 'Chat notes', cwd: '/managed/chat-storage-id',
+    binding: { kind: 'managed', storageRootId: 'root', storageId: 'chat-storage-id' },
+  })
+  const project = descriptor('project', 'Project')
+  const html = renderToStaticMarkup(
+    <WorkspaceLayout
+      layout={{ panels: [{ sessionId: 'chat' }, { sessionId: 'project' }], widths: [50, 50], activeIndex: 0 }}
+      panels={[panel(chat, <div />), panel(project, <div />)]}
+      sessions={[chat, project]}
+      notice={null}
+      onClosePanel={() => {}}
+      onFocusPanel={() => {}}
+      onSelectSession={() => {}}
+      onSplitPanel={() => {}}
+      onWidthsChange={() => {}}
+    />,
+  )
+
+  expect(html).toContain('Chat notes')
+  expect(html).toContain('Project: project')
+  expect(html).not.toContain('chat-storage-id')
 })
 
 test('panel selector exposes duplicate-session prevention affordance', () => {

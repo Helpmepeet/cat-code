@@ -299,7 +299,9 @@ export function SkillsPanel({
         {groups.length === 1 ? '' : 's'}. Skills are prompt-commands; the{' '}
         <span className="font-mono text-text-muted">Manual only</span> and{' '}
         <span className="font-mono text-text-muted">Not user-invocable</span> flags
-        are shown for reference. Change them in the agent&apos;s configuration file.
+        are shown for reference. For file-based skills, edit these flags in{' '}
+        <span className="font-mono text-text-muted">SKILL.md</span> or the
+        command&apos;s Markdown file.
       </div>
       {total === 0 ? (
         <EmptyRow>No skills loaded for this session.</EmptyRow>

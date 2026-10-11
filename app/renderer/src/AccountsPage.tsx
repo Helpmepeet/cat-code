@@ -53,6 +53,7 @@ import {
   selectHasOtherSwitchable,
   selectReadyLabel,
   selectTakenAliases,
+  useAccountsPoolPresentationState,
 } from './accountsState.js'
 import {
   capIncidentKey,
@@ -82,6 +83,8 @@ import {
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import { toneClasses, type Tone } from './tone.js'
+import { selectWelcomeUsageWindows } from './welcomeUsage.js'
+import { getBridge } from './bridge.js'
 
 /* ── pure helpers (unit-tested without a DOM, like tone.ts / toastReducer) ── */
 
@@ -171,9 +174,11 @@ function HeadroomBar({
         <div className={`h-full rounded-full ${t.dot}`} style={{ width: `${p}%` }} />
       </div>
       <span
+        aria-label={pct === null ? `${label} usage unavailable` : undefined}
+        title={pct === null ? 'Usage unavailable' : undefined}
         className={`w-8 shrink-0 text-right text-[11px] font-semibold tabular-nums ${t.text}`}
       >
-        {p}%
+        {pct === null ? '–' : `${pct}%`}
       </span>
       {showReset ? (
         <span className="w-[54px] shrink-0 text-[10px] tabular-nums text-text-ghost">
@@ -454,12 +459,17 @@ function TouchAllDialog({
   const requestIdRef = useRef<string | null>(null)
   const [running, setRunning] = useState(true)
 
+  function refresh(): void {
+    const verb = touchAllVerb()
+    requestIdRef.current = verb.requestId
+    setRunning(true)
+    onVerb(verb)
+  }
+
   // Dispatch once on open; this dialog self-correlates (it RENDERS the per-account
   // results rather than toast+close, so it stays out of the page's generic pending).
   useEffect(() => {
-    const verb = touchAllVerb()
-    requestIdRef.current = verb.requestId
-    onVerb(verb)
+    refresh()
   }, [])
 
   const matched =
@@ -467,6 +477,7 @@ function TouchAllDialog({
     lastResult.requestId === requestIdRef.current &&
     lastResult.verb === 'account.touchAll'
   const results = matched ? lastResult.touchAllResults ?? [] : []
+  const failed = matched && !lastResult.ok
 
   useEffect(() => {
     if (matched) setRunning(false)
@@ -483,12 +494,21 @@ function TouchAllDialog({
       title="Refresh all accounts"
       sub="Refreshes OAuth tokens for every unlocked account."
       onClose={onClose}
-      footer={<GhostBtn onClick={onClose}>{running ? 'Cancel' : 'Done'}</GhostBtn>}
+      footer={
+        <>
+          <GhostBtn onClick={onClose}>{running || failed ? 'Close' : 'Done'}</GhostBtn>
+          {!running && failed ? <PrimaryBtn onClick={refresh}>Try again</PrimaryBtn> : null}
+        </>
+      }
     >
       {running ? (
         <div className="flex items-center gap-2.5 text-[12.5px] text-text-muted">
           <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-shell-seam border-t-text-muted" />
           Refreshing…
+        </div>
+      ) : failed ? (
+        <div role="alert" className="text-[12.5px] text-tone-danger">
+          {lastResult.message}
         </div>
       ) : results.length === 0 ? (
         <div className="text-[12.5px] text-text-subtle">
@@ -598,6 +618,7 @@ function PoolRow({
   // DOT carries the pink-for-default override — decoupled per the prototype
   // (Pages.jsx:409 dot vs :417 label).
   const labelTone = toneClasses(statusLabelTone(account))
+  const usage = selectWelcomeUsageWindows(account)
   const alias = account.alias ?? account.id
   const transitionLabel =
     signOutState === 'submitting'
@@ -646,14 +667,14 @@ function PoolRow({
         <div className={`flex flex-1 flex-col ${hero ? 'gap-[7px]' : 'gap-1.5'}`}>
           <HeadroomBar
             label="5h"
-            pct={account.usagePrimary}
-            resetAt={account.usageResetAt}
+            pct={usage.fiveHour?.percent ?? null}
+            resetAt={usage.fiveHour?.resetAt}
             showReset
           />
           <HeadroomBar
             label="wk"
-            pct={account.usageWeekly}
-            resetAt={account.usageWeeklyResetAt}
+            pct={usage.weekly?.percent ?? null}
+            resetAt={usage.weekly?.resetAt}
             showReset
           />
         </div>
@@ -772,6 +793,7 @@ function SignedOutProfileRow({
 /* ── header pieces ── */
 
 function ActiveHeadroom({ account }: { account: AccountStatus }) {
+  const usage = selectWelcomeUsageWindows(account)
   return (
     <div className="rounded-[10px] border border-accent/[0.18] bg-accent/[0.04] px-4 py-2.5">
       <div className="mb-[9px] flex items-center gap-1.5">
@@ -787,8 +809,8 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
       <div className="flex gap-[18px]">
         {(
           [
-            ['5h', account.usagePrimary, account.usageResetAt],
-            ['Weekly', account.usageWeekly, account.usageWeeklyResetAt],
+            ['5h', usage.fiveHour?.percent ?? null, usage.fiveHour?.resetAt],
+            ['Weekly', usage.weekly?.percent ?? null, usage.weekly?.resetAt],
           ] as const
         ).map(([k, pct, resetAt]) => {
           const t = toneClasses(usageTone(pct))
@@ -796,8 +818,12 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
           return (
             <div key={k} className="min-w-[78px]">
               <div className="mb-1.5 flex items-baseline gap-1.5">
-                <span className={`text-[18px] font-bold tabular-nums ${t.text}`}>
-                  {p}%
+                <span
+                  aria-label={pct === null ? `${k} usage unavailable` : undefined}
+                  title={pct === null ? 'Usage unavailable' : undefined}
+                  className={`text-[18px] font-bold tabular-nums ${t.text}`}
+                >
+                  {pct === null ? '–' : `${pct}%`}
                 </span>
                 <span className="text-[10px] uppercase tracking-[0.06em] text-text-faint">
                   {k}
@@ -821,17 +847,21 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
   )
 }
 
-/**
- * Shown only until the first pool refresh lands (accounts owner: main polls a
- * disposable worker, `decisions/ACCOUNTS-OWNERSHIP.md`), so this is a brief load
- * rather than a "needs a session" state. Copy carries no internal vocabulary
- * per CLAUDE.md §7: what the page is waiting on is our problem, not the user's.
- */
-function WaitingState() {
+/** Main does not publish failed reads. Bound loading locally while sign-in remains available. */
+function WaitingState({ onRetry, onSignIn }: {
+  onRetry: () => void
+  onSignIn: (provider: 'anthropic' | 'openai') => void
+}) {
+  const presentation = useAccountsPoolPresentationState(false)
   return (
     <section className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center">
-      <div className="text-sm font-semibold text-text-muted">
-        Loading accounts…
+      <div role="status" className="text-sm font-semibold text-text-muted">
+        {presentation === 'unavailable' ? 'Accounts could not be loaded.' : 'Loading accounts…'}
+      </div>
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        {presentation === 'unavailable' ? <GhostBtn onClick={onRetry}>Try again</GhostBtn> : null}
+        <PrimaryBtn onClick={() => onSignIn('anthropic')}>+ Add Anthropic</PrimaryBtn>
+        <PrimaryBtn onClick={() => onSignIn('openai')}>+ Add account</PrimaryBtn>
       </div>
     </section>
   )
@@ -867,6 +897,7 @@ export function AccountsPage({
   const [dialog, setDialog] = useState<DialogState>(null)
   const [dismissedCapKey, setDismissedCapKey] = useState<string | null>(null)
   const [pendingAccountId, setPendingAccountId] = useState<string | null>(null)
+  const [accountLoadAttempt, setAccountLoadAttempt] = useState(0)
   const pendingRef = useRef<Pending | null>(null)
 
   // Correlate a dispatched verb with its `account.result` by requestId: NO
@@ -1027,7 +1058,14 @@ export function AccountsPage({
         ) : null}
 
         {!snapshot ? (
-          <WaitingState />
+          <WaitingState
+            key={accountLoadAttempt}
+            onSignIn={beginSignIn}
+            onRetry={() => {
+              getBridge().refreshAccountsPool()
+              setAccountLoadAttempt(attempt => attempt + 1)
+            }}
+          />
         ) : (
           <>
           <section className="mb-[22px]">

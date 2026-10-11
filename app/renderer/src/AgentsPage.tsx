@@ -13,6 +13,7 @@ import {
 import { useModalFocus } from './overlayFocus.js'
 import { PathCopyButton } from './PathCopyButton.js'
 import { EmptyState } from './EmptyState.js'
+import { sanitizeOperationalText } from '../../shared/operationalLog.js'
 
 type SourceMeta = {
   label: string
@@ -102,7 +103,31 @@ export function AgentsPage({
 
       {snapshot?.failedFiles.length ? (
         <div className="mb-5 rounded-lg border border-tone-warn/25 bg-tone-warn/10 px-3 py-2 text-[12px] text-tone-warn">
-          {snapshot.failedFiles.length} agent file{snapshot.failedFiles.length === 1 ? '' : 's'} failed to parse.
+          <p>
+            {snapshot.failedFiles.length} agent file{snapshot.failedFiles.length === 1 ? '' : 's'} failed to parse.
+          </p>
+          <ul className="mt-2 max-h-64 space-y-3 overflow-y-auto">
+            {snapshot.failedFiles.slice(0, 20).map((file, index) => {
+              const path = file.path.replace(/[\u0000-\u001f\u007f]/g, ' ')
+              const displayPath = path.length > 768 ? `${path.slice(0, 768)}…` : path
+              const reason = sanitizeOperationalText(file.error).replace(/\s*—\s*/g, ', ')
+              return (
+                <li key={`${index}:${file.path}`}>
+                  <div className="font-mono text-[11.5px] text-text-muted">
+                    {path && path !== 'unknown' ? (
+                      <PathValue path={file.path} displayPath={displayPath} />
+                    ) : 'File unavailable'}
+                  </div>
+                  <p className="mt-1 break-words text-text-subtle">
+                    {reason || 'Agent file could not be read.'}
+                  </p>
+                </li>
+              )
+            })}
+          </ul>
+          {snapshot.failedFiles.length > 20 ? (
+            <p className="mt-2 text-text-subtle">{snapshot.failedFiles.length - 20} more failed files.</p>
+          ) : null}
         </div>
       ) : null}
 
@@ -364,10 +389,10 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
   )
 }
 
-function PathValue({ path }: { path: string }) {
+function PathValue({ path, displayPath = path }: { path: string; displayPath?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="min-w-0 flex-1 break-all">{path}</span>
+      <span className="min-w-0 flex-1 break-all">{displayPath}</span>
       <PathCopyButton label="agent definition file path" path={path} />
     </span>
   )

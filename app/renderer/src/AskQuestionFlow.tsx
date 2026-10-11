@@ -17,9 +17,11 @@ import type { AskQuestion } from './askQuestionState.js'
 import {
   abandonOtherText,
   buildAskAnswerPayload,
+  type AskQuestionDraft,
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
 import { permissionKeysAreLive } from './permissionPromptModel.js'
+import { isModalOverlayOpen, useModalOverlayOpen } from './overlayFocus.js'
 
 /**
  * Keys a focused control acts on ITSELF. Footer buttons keep both activation
@@ -89,6 +91,8 @@ function KeyCap({ children, active }: { children: ReactNode; active: boolean }) 
 export function AskQuestionFlow({
   questions,
   requestId,
+  draft: savedDraft,
+  onDraftChange,
   submitted,
   isActivePane,
   pendingCount,
@@ -97,6 +101,9 @@ export function AskQuestionFlow({
 }: {
   questions: AskQuestion[]
   requestId: string
+  /** Session-owned progress survives a pane unmount. Omit for local state. */
+  draft?: AskQuestionDraft
+  onDraftChange?: (draft: AskQuestionDraft) => void
   /** True while an answer for this request is in flight (double-submit guard). */
   submitted?: boolean
   /**
@@ -114,15 +121,23 @@ export function AskQuestionFlow({
   onAnswer: (answers: AskUserQuestionAnswer[]) => void
   onCancel: () => void
 }) {
-  const [qi, setQi] = useState(0)
-  const [answers, setAnswers] = useState<DraftAnswer[]>(() =>
-    questions.map(() => ({ optionIndices: [], other: '' })),
-  )
+  const [localDraft, setLocalDraft] = useState<AskQuestionDraft>(() => savedDraft ?? {
+    questionIndex: 0,
+    answers: questions.map(() => ({ optionIndices: [], other: '' })),
+  })
+  const flowDraft = savedDraft ?? localDraft
+  const flowDraftRef = useRef(flowDraft)
+  flowDraftRef.current = flowDraft
+  const qi = flowDraft.questionIndex
+  const answers = flowDraft.answers
   const [cursor, setCursor] = useState(0)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
   const [otherActive, setOtherActive] = useState(false)
   const otherInputRef = useRef<HTMLInputElement>(null)
+  const isComposingRef = useRef(false)
   const cardRef = useRef<HTMLElement>(null)
+  const restoreTargetRef = useRef<HTMLElement | null>(null)
+  const modalOpen = useModalOverlayOpen()
   // Optimistic, like the sibling card's: the mount effect below is about to take
   // the keyboard, and it corrects this from the real `activeElement`. Every
   // later focus move re-derives it through the section's own focus handlers.
@@ -156,6 +171,7 @@ export function AskQuestionFlow({
 
   useEffect(() => {
     if (otherActive) otherInputRef.current?.focus()
+    else isComposingRef.current = false
   }, [otherActive])
 
   // The height ceiling below made this a keyboard-driven list inside a scroll
@@ -174,7 +190,7 @@ export function AskQuestionFlow({
   // Without this the composer keeps focus and `permissionKeysAreLive` reports
   // the compact key chips dead.
   useEffect(() => {
-    if (!isActivePane) {
+    if (!isActivePane || modalOpen) {
       setKeysLive(false)
       return
     }
@@ -185,19 +201,27 @@ export function AskQuestionFlow({
     // the keyboard here would let digits and Enter answer a question the user
     // cannot see while they are looking at the dialog (`PlanPanel` sets both
     // attributes, `overlayFocus.ts` arbitrates the stack this effect is not on).
-    if (previous instanceof Element && previous.closest('[aria-modal="true"]')) {
+    if (
+      isModalOverlayOpen() ||
+      (previous instanceof Element && previous.closest('[aria-modal="true"]'))
+    ) {
       setKeysLive(false)
       return
     }
+    if (previous instanceof HTMLElement && previous !== node && !node.contains(previous)) {
+      restoreTargetRef.current = previous
+    }
     let took = false
     const timer = setTimeout(() => {
+      if (isModalOverlayOpen()) return
       node.focus()
       took = document.activeElement === node
       setKeysLive(took)
     }, 0)
     return () => {
       clearTimeout(timer)
-      if (!took || !(previous instanceof HTMLElement)) return
+      const restoreTarget = restoreTargetRef.current
+      if (!took || !restoreTarget?.isConnected || isModalOverlayOpen()) return
       // `document.activeElement === node` is FALSE on the real unmount path:
       // React runs passive cleanup after the host node is detached, and
       // detaching the focused node resets `activeElement` to <body>. Checking
@@ -206,10 +230,18 @@ export function AskQuestionFlow({
       // it fell to the body because our node went away.
       const active = document.activeElement
       if (active === node || node.contains(active) || active === null || active === document.body) {
-        previous.focus()
+        restoreTarget.focus()
       }
     }
-  }, [isActivePane])
+  }, [isActivePane, modalOpen])
+
+  function updateFlowDraft(edit: (current: AskQuestionDraft) => AskQuestionDraft) {
+    const next = edit(flowDraftRef.current)
+    // The ref keeps batched picks ordered before a controlled parent re-renders.
+    flowDraftRef.current = next
+    if (savedDraft === undefined) setLocalDraft(next)
+    onDraftChange?.(next)
+  }
 
   /**
    * Every draft edit derives from the PREVIOUS draft, never from the `draft`
@@ -219,7 +251,12 @@ export function AskQuestionFlow({
    * a multi-select silently keeping only the last option touched.
    */
   function updateDraft(edit: (current: DraftAnswer) => DraftAnswer) {
-    setAnswers(prev => prev.map((value, i) => (i === qi ? edit(value) : value)))
+    updateFlowDraft(current => ({
+      ...current,
+      answers: current.answers.map((value, i) =>
+        i === current.questionIndex ? edit(value) : value,
+      ),
+    }))
   }
 
   function toggleOption(index: number) {
@@ -278,18 +315,17 @@ export function AskQuestionFlow({
       setOtherActive(true)
       return
     }
-    let nextAnswers = answers
+    let nextAnswers = flowDraftRef.current.answers
     if (!canAdvance) {
       // A single-select cursor is an implicit default for one-Enter submission.
       // Multi-select must stay explicit or Enter would end the step after one
       // choice and make its remaining options unreachable.
       if (!q || q.multiSelect || otherActive || cursor >= optionCount) return
       const selected = { optionIndices: [cursor], other: '' }
-      nextAnswers = answers.map((value, i) => (i === qi ? selected : value))
+      nextAnswers = nextAnswers.map((value, i) => (i === qi ? selected : value))
     }
     if (!isLast) {
-      setAnswers(nextAnswers)
-      setQi(qi + 1)
+      updateFlowDraft(() => ({ questionIndex: qi + 1, answers: nextAnswers }))
       return
     }
     // Build the wire payload: option INDICES + trimmed freeform per question. The
@@ -302,10 +338,13 @@ export function AskQuestionFlow({
     // listener would let a single Escape deny every pending request at once.
     // Keyboard belongs to the active pane only, matching App's own permission
     // keydown, which acts solely on the activeSessionId's request.
-    if (!isActivePane) return
+    if (!isActivePane || modalOpen) return
     function onKeyDown(event: KeyboardEvent) {
       if (
         event.defaultPrevented ||
+        event.isComposing ||
+        isComposingRef.current ||
+        isModalOverlayOpen() ||
         event.repeat ||
         event.metaKey ||
         event.altKey
@@ -439,7 +478,7 @@ export function AskQuestionFlow({
   // The sibling card's honesty rule (P4-43, PARITY-LEDGER §7): never advertise
   // a key that will not fire. An inactive pane registers no listener, and a card
   // behind a modal deliberately does not take focus.
-  const keysAdvertised = isActivePane && keysLive
+  const keysAdvertised = isActivePane && keysLive && !modalOpen
 
   return (
     <section
@@ -612,8 +651,11 @@ export function AskQuestionFlow({
               className="-my-[3px] min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-[13px] leading-[17px] text-text-primary outline-none placeholder:text-text-subtle"
               disabled={submitted}
               onBlur={() => {
+                isComposingRef.current = false
                 if (!otherText.trim()) setOtherActive(false)
               }}
+              onCompositionStart={() => { isComposingRef.current = true }}
+              onCompositionEnd={() => { isComposingRef.current = false }}
               // UX only — the sidecar's schema stays the trust boundary (T6).
               // Keeps an honest paste from being rejected at the seam.
               maxLength={MAX_QUESTION_ANSWER_CHARS}

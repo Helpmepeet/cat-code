@@ -26,18 +26,8 @@ import {
   usageTone,
 } from './accountsPageModel.js'
 
-/**
- * This package has NO DOM test harness — `bun test` exposes no `document`/`window`,
- * `react-dom/client` is not installed, and neither `@testing-library/react` nor
- * happy-dom/jsdom is a dependency (adding one needs sign-off). Every sibling
- * renderer test uses `renderToStaticMarkup` (SSR string) + pure exported helpers
- * (tone.ts, toastReducer). This file follows that real convention: SSR for
- * render/degrade assertions, and the interaction-bearing logic is factored into
- * pure exported helpers (menu gating, verb builders, result-tone) tested directly
- * — the exact code path the click handlers run. Live click/effect behavior (a
- * dialog closing on the matching `account.result`) is exercised in the running
- * app; here it is covered at the logic seam.
- */
+// Static presentation and model contracts live here. AccountsPage.dom.test.tsx
+// owns interactions and asynchronous result presentation.
 
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {
@@ -53,6 +43,8 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
     source: 'vault',
     usagePrimary: 42,
     usageWeekly: 70,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: null,
     lastRefreshIso: null,
@@ -300,6 +292,8 @@ test('a null snapshot renders the waiting state without throwing', () => {
   )
   expect(html).toContain('Accounts')
   expect(html).toContain('Loading accounts')
+  expect(html).toContain('+ Add Anthropic')
+  expect(html).toContain('+ Add account')
   expect(html).not.toContain('MOCK')
   // CLAUDE.md §7 — the empty state must not print internal vocabulary at the
   // user (the copy it replaced named the sidecar and the prototype fixtures).
@@ -485,13 +479,72 @@ test('the weekly and 5h headroom bars each show their own reset', () => {
   expect(html).toContain('↺ in 4h')
 })
 
+test('unavailable quota stays distinct from measured zero in the header and pool row', () => {
+  const snap = snapshot([
+    account({ isDefault: true, usagePrimary: null, usageWeekly: null }),
+  ])
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).not.toContain('>0%<')
+  expect(html).toContain('5h usage unavailable')
+  expect(html).toContain('Weekly usage unavailable')
+  expect(html).toContain('wk usage unavailable')
+
+  const measured = renderToStaticMarkup(
+    <AccountsPage
+      snapshot={snapshot([account({ isDefault: true, usagePrimary: 0, usageWeekly: 0 })])}
+      lastResult={null}
+      onVerb={noop}
+    />,
+  )
+  expect(measured).toContain('>0%<')
+  expect(measured).not.toContain('usage unavailable')
+})
+
+test('named quota slots follow reported duration and keep unknown durations unavailable', () => {
+  const snap = snapshot([
+    account({
+      isDefault: true,
+      usagePrimary: 81,
+      usageWeekly: 12,
+      usagePrimaryWindowSeconds: 604_800,
+      usageSecondaryWindowSeconds: 18_000,
+    }),
+  ])
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+  expect(text).toContain('12% 5h')
+  expect(text).toContain('81% Weekly')
+  expect(text).toContain('5h 12%')
+  expect(text).toContain('wk 81%')
+
+  const unknown = renderToStaticMarkup(
+    <AccountsPage
+      snapshot={snapshot([account({
+        isDefault: true,
+        usagePrimaryWindowSeconds: null,
+        usageSecondaryWindowSeconds: 3600,
+      })])}
+      lastResult={null}
+      onVerb={noop}
+    />,
+  )
+  expect(unknown).not.toContain('>42%<')
+  expect(unknown).not.toContain('>70%<')
+  expect(unknown).toContain('5h usage unavailable')
+  expect(unknown).toContain('Weekly usage unavailable')
+})
+
 test('usageTone thresholds: ≥90 danger, ≥65 warn, else good', () => {
   expect(usageTone(95)).toBe('danger')
   expect(usageTone(90)).toBe('danger')
   expect(usageTone(70)).toBe('warn')
   expect(usageTone(65)).toBe('warn')
   expect(usageTone(10)).toBe('good')
-  expect(usageTone(null)).toBe('good')
+  expect(usageTone(null)).toBe('default')
 })
 
 test('renameError enforces the alias regex + uniqueness (excluding self)', () => {

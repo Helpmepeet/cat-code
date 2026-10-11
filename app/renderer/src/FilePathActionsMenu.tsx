@@ -223,6 +223,7 @@ function FilePathFlyoutRow({
 }) {
   const [open, setOpen] = useState(false)
   const flyoutRef = useRef<HTMLDivElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
   if (!item.enabled) return <FilePathMenuRow item={item} onAction={() => {}} />
 
   const icon = item.kind === 'copy' ? <ActionCopyIcon /> : <ActionOpenIcon />
@@ -234,7 +235,7 @@ function FilePathFlyoutRow({
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'ArrowRight') {
-      if (!open) {
+      if (event.target === hostRef.current) {
         event.preventDefault()
         event.stopPropagation()
         setOpen(true)
@@ -245,7 +246,10 @@ function FilePathFlyoutRow({
           first?.focus()
         })
       }
-    } else if (event.key === 'Enter' || event.key === ' ') {
+    } else if (
+      (event.key === 'Enter' || event.key === ' ') &&
+      event.target === hostRef.current
+    ) {
       event.preventDefault()
       event.stopPropagation()
       onAction(item.kind === 'copy' ? 'copy-absolute' : 'open-default')
@@ -253,6 +257,7 @@ function FilePathFlyoutRow({
       if (open) {
         event.preventDefault()
         event.stopPropagation()
+        hostRef.current?.focus()
         setOpen(false)
       }
     }
@@ -269,6 +274,7 @@ function FilePathFlyoutRow({
       onKeyDown={handleKeyDown}
     >
       <div
+        ref={hostRef}
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={open}

@@ -2,6 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import type { PromptDraftState } from './appModel.js'
 import type { SessionId } from '../../shared/protocol.js'
 import {
+  createPasteState,
+  reducePasteAdded,
+  createPendingSubmitState,
+  reducePendingSubmitHeld,
+} from './composerState.js'
+import {
   MAX_PERSISTED_PROMPT_DRAFTS,
   MAX_PERSISTED_PROMPT_DRAFT_CHARS,
   PROMPT_DRAFTS_STORAGE_KEY,
@@ -31,6 +37,42 @@ describe('prompt draft persistence', () => {
 
   test('reads nothing when no draft was ever written', () => {
     expect(readPromptDraftsFromStorage(fakeStorage())).toBeNull()
+  })
+
+  test('restores collapsed paste content without depending on in-memory paste entries', () => {
+    const storage = fakeStorage()
+    const sessionId = 'session-a' as SessionId
+    const content = 'important context\n'.repeat(100)
+    const pasted = reducePasteAdded(createPasteState(), sessionId, content)
+    writePromptDraftsToStorage(
+      storage,
+      draftsOf({ [sessionId]: `Review this:\n${pasted.token}` }),
+      pasted.state,
+    )
+    expect(readPromptDraftsFromStorage(storage)?.[sessionId]).toBe(`Review this:\n${content}`)
+  })
+
+  test('recovers held unsent text as a draft alongside newer typing, without restoring a send queue', () => {
+    const storage = fakeStorage()
+    const sessionId = 'session-a' as SessionId
+    const pendingSubmits = reducePendingSubmitHeld(createPendingSubmitState(), sessionId, {
+      text: 'waiting for connection', showQueuedRow: false,
+    })
+    writePromptDraftsToStorage(storage, draftsOf({ [sessionId]: 'newer typing' }), {}, { pendingSubmits })
+    expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf({
+      [sessionId]: 'waiting for connection\nnewer typing',
+    }))
+    writePromptDraftsToStorage(storage, draftsOf({ [sessionId]: 'newer typing' }))
+    expect(readPromptDraftsFromStorage(storage)?.[sessionId]).toBe('newer typing')
+  })
+
+  test('saves the original unsent draft while browsing sent-message history', () => {
+    const storage = fakeStorage()
+    const sessionId = 'session-a' as SessionId
+    writePromptDraftsToStorage(storage, draftsOf({ [sessionId]: 'previously sent message' }), {}, {
+      historyNavigation: { [sessionId]: { index: 0, savedDraft: 'original unsent draft' } },
+    })
+    expect(readPromptDraftsFromStorage(storage)?.[sessionId]).toBe('original unsent draft')
   })
 
   test('degrades to no drafts on a corrupt or foreign stored value', () => {

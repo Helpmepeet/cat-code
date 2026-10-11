@@ -34,7 +34,14 @@ export function ExportDialog({
   onDownload?: () => void
   onClose: () => void
 }): ReactNode {
-  const waiting = { disabled: true, reason: 'The transcript is still rendering.' }
+  const waiting = {
+    disabled: true,
+    reason: preview.status === 'failed'
+      ? 'The transcript could not be rendered. Close this dialog and retry after reconnecting.'
+      : preview.status === 'ready'
+        ? 'This action is unavailable.'
+        : 'The transcript is still rendering.',
+  }
   return (
     <SAModal
       icon={<ActionExportIcon />}

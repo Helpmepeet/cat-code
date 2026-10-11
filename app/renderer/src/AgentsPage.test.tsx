@@ -85,6 +85,36 @@ test('without a snapshot, reports a read failure rather than requiring a session
   expect(html).not.toContain('MOCK')
 })
 
+test('failed agent files show copyable paths and bounded, sanitized repair details', () => {
+  const failedFiles = [
+    {
+      path: '/repo/.cat-code/agents/broken.md',
+      error: 'Missing required "description" field in frontmatter',
+    },
+    {
+      path: `/repo/.cat-code/agents/${'long-name'.repeat(200)}.md`,
+      error: `Read failed at https://user:synthetic-credential@example.test/private?token=synthetic-credential\u0000 ${'detail '.repeat(200)}`,
+    },
+    ...Array.from({ length: 1000 }, (_, index) => ({
+      path: `/repo/.cat-code/agents/extra-${index}.md`,
+      error: 'Unknown parsing error',
+    })),
+  ]
+  const html = renderToStaticMarkup(
+    <AgentsPage snapshot={{ ...SNAPSHOT, failedFiles }} />,
+  )
+
+  expect(html).toContain('/repo/.cat-code/agents/broken.md')
+  expect(html).toContain('Missing required &quot;description&quot; field in frontmatter')
+  expect(html).toContain('aria-label="Copy agent definition file path"')
+  expect(html).toContain('Read failed at https://example.test')
+  expect(html).not.toContain('synthetic-credential')
+  expect(html).not.toContain('\u0000')
+  expect(html).not.toContain(failedFiles[1]!.path)
+  expect(html).not.toContain('/repo/.cat-code/agents/extra-999.md')
+  expect(html.length).toBeLessThan(25_000)
+})
+
 test('P4-57 agent definition file paths have a keyboard-reachable copy button', () => {
   const definition = { ...SNAPSHOT.definitions[0]!, available: false, missingMcpServers: ['linear'] }
   const html = renderToStaticMarkup(

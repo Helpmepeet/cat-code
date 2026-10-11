@@ -200,6 +200,7 @@ const SKILL_LOADED_FROM = new Set([
   'commands_DEPRECATED',
   'plugin',
   'mcp',
+  'bundled',
 ])
 
 function readSkillsSlice(commands: readonly Command[]): SkillEntry[] | null {
@@ -214,12 +215,13 @@ function readSkillsSlice(commands: readonly Command[]): SkillEntry[] | null {
 export function buildSkillEntries(commands: readonly Command[]): SkillEntry[] {
   const skills: SkillEntry[] = []
   for (const command of commands) {
-    // A skill is a prompt-command loaded from a skills / plugin / mcp source
-    // (`SkillsMenu.tsx` filter). Non-prompt or built-in commands are not skills.
+    // Bundled skills carry their own source; builtin prompt commands can use
+    // the same loadedFrom label without being skills.
     if (command.type !== 'prompt') continue
     if (!command.loadedFrom || !SKILL_LOADED_FROM.has(command.loadedFrom)) {
       continue
     }
+    if (command.loadedFrom === 'bundled' && command.source !== 'bundled') continue
     const pluginName = command.pluginInfo?.pluginManifest.name
     const entry: SkillEntry = {
       name: command.name,
@@ -412,14 +414,14 @@ function correlatePluginError(
   errors: readonly PluginError[],
 ): string | undefined {
   const match = errors.find(error => errorMatchesPlugin(error, plugin))
-  return match ? getPluginErrorMessage(match) : undefined
+  return match ? redactPluginErrorMessage(getPluginErrorMessage(match)) : undefined
 }
 
 /**
  * `getPluginErrorMessage` interpolates loader-caught strings (a fetch error, a
- * raw path) straight into prose. For a row built from `buildErrorOnlyEntry`
- * there is no vetted `LoadedPlugin` behind it, so this is the ONLY thing
- * standing between a credential-bearing URL and the renderer: `secretGuard`
+ * raw path) straight into prose. A retained LoadedPlugin does not vouch for
+ * the diagnostic text of a failed component, so every row needs this boundary
+ * between a credential-bearing URL and the renderer: `secretGuard`
  * matches key NAMES only and never inspects string values (`secretGuard.ts`).
  * Reuses `redactRemoteUrl`'s per-URL redaction (origin + word-shaped path
  * segments only) on every URL-shaped substring the message may embed, rather
@@ -430,7 +432,7 @@ function correlatePluginError(
  * reads fine in its place and needs no rewrite of the message structure.
  */
 function redactPluginErrorMessage(message: string): string {
-  const urlsRedacted = message.replace(/https?:\/\/[^\s"'()<>[\]]+/g, raw => {
+  const urlsRedacted = message.replace(/https?:\/\/[^\s"'()<>[\]]+/gi, raw => {
     const trailingPunct = raw.match(/[.,;:!?]+$/)?.[0] ?? ''
     const url = trailingPunct ? raw.slice(0, -trailingPunct.length) : raw
     return redactRemoteUrl(url) + trailingPunct

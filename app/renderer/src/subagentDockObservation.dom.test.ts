@@ -4,8 +4,9 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { useSubagentDockObservation, readSubagentDockObservation, commitSubagentDockObservation,
   type SubagentDockObservationInput } from './subagentDockObservation.js'
 import { useSubagentDock } from './subagentDockController.js'
+import { createSubagentDockState, reconcileSubagentDockState, selectSubagentDock } from './subagentDockState.js'
 import { SubagentDock } from './SubagentDock.js'
-import { readSubagentDockSessionsFromStorage } from './subagentDockPersistence.js'
+import { MAX_PERSISTED_DOCK_FINISHED, readSubagentDockSessionsFromStorage } from './subagentDockPersistence.js'
 import { createWorkersState, reduceWorkersState } from './workersState.js'
 import { createTasksState, reduceTasksState } from './tasksState.js'
 import { createLeaseState } from './leaseState.js'
@@ -115,4 +116,82 @@ test('offscreen completion survives eviction, Clear, and another resume without 
   const latest = readSubagentDockSessionsFromStorage(window.localStorage)![engineId]
   expect(latest.finished[0]?.runKey).not.toBe(firstRun.runKey)
   expect(latest.cleared).toEqual([{ agentId: 'offscreen-agent', runKey: firstRun.runKey }])
+})
+
+test('bounded finished history stays stable across pane renders, Clear and a resumed evicted agent', async () => {
+  const historySessionId = 'bounded-history-session'
+  const historyEngineId = 'bounded-history-engine'
+  let now = 5000
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    let transcript = projectServerFrame(createTranscriptState(), {
+      kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: historySessionId, engineSessionId: historyEngineId,
+      payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+    })
+    for (let index = 0; index < 129; index++) {
+      const messages: SDKMessage[] = [
+        { type: 'assistant', uuid: `00000000-0000-4000-8000-${String(index * 2).padStart(12, '0')}`, parent_tool_use_id: null,
+          message: { id: `launch-message-${index}`, role: 'assistant', content: [{ type: 'tool_use', id: `launch-${index}`, name: 'Agent', input: { description: `Historical agent ${index}` } }] } },
+        { type: 'user', uuid: `00000000-0000-4000-8000-${String(index * 2 + 1).padStart(12, '0')}`, parent_tool_use_id: null,
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `launch-${index}`, content: 'Done', is_error: false }] }, tool_use_result: { agentId: `history-agent-${index}` } },
+      ]
+      for (const message of messages) transcript = projectServerFrame(transcript, {
+        kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: historySessionId, event: { type: 'message', message },
+      })
+    }
+    const activeWorker: LiveWorkerItem = { agentId: 'still-running', handle: '@Active', role: 'Explore', status: 'running', description: 'Ongoing work' }
+    function HistoryView({ revision, workers = [activeWorker], tasks = null }: {
+      revision: number; workers?: LiveWorkerItem[]; tasks?: { items: TaskSnapshotItem[]; subagents: [] } | null
+    }) {
+      const { dock, clearFinished } = useSubagentDock(historySessionId, historyEngineId, {
+        workers, tasks, transcriptRows: selectNestedTranscriptRows(transcript, historySessionId), leases: null,
+      })
+      return createElement('div', { 'data-revision': revision },
+        createElement('button', { onClick: clearFinished }, 'Clear'),
+        createElement('output', null, JSON.stringify({ active: dock.active.map(row => [row.agentId, row.state]), finished: dock.finished.map(row => [row.agentId, row.terminalAt, row.runKey]) })))
+    }
+    const tree = await harness.mount(createElement(HistoryView, { revision: 0 }))
+    now = 6000
+    await tree.render(createElement(HistoryView, { revision: 1 }))
+    const retained = readSubagentDockObservation(historySessionId, historyEngineId, window.localStorage)!
+    // The pre-fix cache forgets agent 128, then stamps it as newly finished here.
+    expect(retained.entries['history-agent-128']?.terminalAt).toBe(5000)
+    const expectedFinished = Array.from({ length: 128 }, (_, index) => [
+      `history-agent-${128 - index}`, 5000, `launch-${128 - index}`,
+    ])
+    const display = () => JSON.parse(tree.container.querySelector('output')!.textContent!)
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: expectedFinished })
+    expect(readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId].finished).toHaveLength(MAX_PERSISTED_DOCK_FINISHED)
+    for (const revision of [2, 3]) {
+      now += 1000
+      await tree.render(createElement(HistoryView, { revision }))
+      expect(display()).toEqual({ active: [['still-running', 'running']], finished: expectedFinished })
+    }
+    await act(async () => { tree.container.querySelector('button')!.click() })
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: [] })
+    now = 9000
+    await tree.render(createElement(HistoryView, { revision: 4 }))
+    expect(display().finished).toEqual([])
+
+    const resumeMessage: SDKMessage = {
+      type: 'assistant', uuid: '00000000-0000-4000-8000-000000001000', parent_tool_use_id: null,
+      message: { id: 'resume-message', role: 'assistant', content: [{ type: 'tool_use', id: 'resume-0', name: 'ResumeAgent', input: { agentId: 'history-agent-0', prompt: 'Continue' } }] },
+    }
+    transcript = projectServerFrame(transcript, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: historySessionId, event: { type: 'message', message: resumeMessage } })
+    const resumedWorker: LiveWorkerItem = { agentId: 'history-agent-0', handle: '@Resumed', role: 'Explore', status: 'running', description: 'Continue', isBackgrounded: true }
+    const resumedTask: TaskSnapshotItem = { id: 'history-agent-0', type: 'local_agent', label: 'Continue', status: 'running', startTime: 100, resumedAt: 9000, isBackgrounded: true }
+    await tree.render(createElement(HistoryView, { revision: 5, workers: [activeWorker, resumedWorker], tasks: { items: [resumedTask], subagents: [] } }))
+    expect(display()).toEqual({ active: [['still-running', 'running'], ['history-agent-0', 'resumed']], finished: [] })
+    now = 10000
+    await tree.render(createElement(HistoryView, { revision: 6, workers: [activeWorker, { ...resumedWorker, status: 'completed' }], tasks: { items: [{ ...resumedTask, status: 'completed', endTime: 10000 }], subagents: [] } }))
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: [['history-agent-0', 10000, 'resume-0']] })
+    now = 11000
+    await tree.render(createElement(HistoryView, { revision: 7 }))
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: [['history-agent-0', 10000, 'resume-0']] })
+    const saved = readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId]
+    const restoredInput = { workers: [], tasks: null, transcriptRows: selectNestedTranscriptRows(transcript, historySessionId), leases: null, clearMarkers: saved.cleared, nowMs: 12000, reducedMotion: true }
+    const restored = reconcileSubagentDockState(createSubagentDockState(saved.finished), restoredInput)
+    expect(selectSubagentDock(restored, restoredInput).finished.map(row => [row.agentId, row.terminalAt, row.runKey])).toEqual([['history-agent-0', 10000, 'resume-0']])
+    expect(restored.entries['history-agent-1']).toBeUndefined()
+  } finally { clock.mockRestore() }
 })

@@ -72,25 +72,23 @@ export async function prepareImageAttachment(
 }
 
 /**
- * The one image to attach out of a transfer's file list, or null when it carries
- * none. Used by the composer's drop path, and shaped like the ⌘V path it shares
- * `prepareImageAttachment` with: an accepted type wins, otherwise ANY `image/*`
- * is still handed on so `prepareImageAttachment` can answer with its own
+ * Accepted images from a transfer, in transfer order. If none are accepted,
+ * the first unsupported image is still handed on so preparation can answer
+ * with its own
  * "Choose a PNG, JPEG, GIF, or WebP image." rather than the drop silently doing
  * nothing.
  *
- * Non-image files return null on purpose. Turning a dropped file into a path the
+ * Non-image files are excluded on purpose. Turning a dropped file into a path the
  * engine reads would make the renderer the author of a filesystem path, which is
  * exactly what HC1 forbids; that is a separate decision, not this fix.
  */
-export function selectAttachableImageFile(
+export function selectAttachableImageFiles(
   files: readonly File[],
-): File | null {
-  return (
-    files.find(file => isAcceptedImageType(file.type)) ??
-    files.find(file => file.type.startsWith('image/')) ??
-    null
-  )
+): File[] {
+  const accepted = files.filter(file => isAcceptedImageType(file.type))
+  if (accepted.length > 0) return accepted
+  const unsupported = files.find(file => file.type.startsWith('image/'))
+  return unsupported ? [unsupported] : []
 }
 
 function isAcceptedImageType(value: string): value is AcceptedImageType {

@@ -11,9 +11,8 @@
  * and scroll-to-centre, and a soft-wrap toggle. Every windowed tool card points
  * the user here (`InlineRevealBand`, P4-36), so this drawer is the app's only
  * route to a full output and it has to be readable, searchable and copyable. The
- * search DECISIONS live in `outputSearchModel.ts` because this package renders
- * to static markup and cannot exercise a keystroke; this file is the thin DOM
- * half.
+ * Search decisions live in `outputSearchModel.ts`; this file owns the DOM
+ * controls, clipboard writes, and bounded presentation.
  *
  * WHY IT IS OUTPUT AND DIFF ONLY (2026-08-13,
  * `docs/reports/2026-08-12-tool-inspector-ux-review.md`). It used to open on a
@@ -89,23 +88,13 @@ export function ToolInspector({
       </div>
 
       <div className="flex-1 overflow-y-auto px-[18px] py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {/* CURRENTLY UNREACHABLE, and kept deliberately rather than deleted.
-            `ToolCardBody` returns `DiffView` before any windowed body
-            (`TranscriptView.tsx`, the `row.result?.diff` early return), so a row
-            with a diff never renders a reveal band, and the band is now the only
-            route in. Before 2026-08-13 the card footer was the other route and
-            this section really did paint. Deleting it would be a second parity
-            cut nobody has approved, and it comes back the moment a diff body
-            gains a route; do not treat a passing test on it as proof of a live
-            surface. Raised for an owner decision alongside that removal. */}
         {model.diff ? (
-          <>
-            <SectionLabel>Diff · {model.diff.filePath}</SectionLabel>
-            <DiffPanel diff={model.diff} />
-          </>
+          <DiffPanel diff={model.diff} />
         ) : null}
 
-        {model.output ? <OutputPanel text={model.output} /> : null}
+        {model.output ? (
+          <OutputPanel text={model.output} numberedRead={model.family === 'read'} />
+        ) : null}
       </div>
     </div>
   )
@@ -121,15 +110,8 @@ export function ToolInspector({
  * characters too, which is what a minified line needs.
  */
 function DiffPanel({ diff }: { diff: ToolDiffProjection }) {
-  const lines = useMemo(() => selectRawDiffLines(diff), [diff])
-  return (
-    <VirtualLineList
-      lines={lines}
-      activeIndex={null}
-      className="mb-4 max-h-96 overflow-auto rounded-lg border border-shell-seam whitespace-pre px-3 font-mono text-[11.5px] leading-relaxed"
-      renderLine={line => <div className={diffLineClass(line)}>{line}</div>}
-    />
-  )
+  const text = useMemo(() => selectRawDiffLines(diff).join('\n'), [diff])
+  return <div className="mb-4"><OutputPanel text={text} label={`Diff · ${diff.filePath}`} diff /></div>
 }
 
 /** Off is the prototype's default: long lines scroll rather than reflow. */
@@ -171,15 +153,25 @@ const STEP_BUTTON_CLASS = {
  * here for the same three reasons it is on the card. The gutter can then show
  * the file's real lines rather than a count that restarts at 1 on an offset
  * read; a search for `1` no longer matches every line's number; and copy hands
- * over the file rather than the file plus a column of digits. Any output that
- * is NOT the engine's numbered shape passes through byte for byte.
+ * over the file rather than the file plus a column of digits. Other tools keep
+ * their output byte for byte, even when it resembles a numbered file read.
  *
  * Syntax coloring stops at the card and does not come in here: this body paints
  * matched runs by splitting each line into segments, and a highlighter returns
  * ONE token tree for the whole block whose spans cross line boundaries. The two
  * cannot both own the text. Search is what a drawer is for, so search wins.
  */
-function OutputPanel({ text }: { text: string }) {
+function OutputPanel({
+  text,
+  numberedRead = false,
+  label = 'Output',
+  diff = false,
+}: {
+  text: string
+  numberedRead?: boolean
+  label?: string
+  diff?: boolean
+}) {
   const [query, setQuery] = useState('')
   const [matchIndex, setMatchIndex] = useState(0)
   const [wrap, setWrap] = useState(false)
@@ -187,7 +179,10 @@ function OutputPanel({ text }: { text: string }) {
   const toast = useToast()
   // Memoized against the search below, which re-runs on every keystroke while
   // this depends only on the output itself.
-  const source = useMemo(() => parseReadSource(text), [text])
+  const source = useMemo(
+    () => numberedRead ? parseReadSource(text) : { lines: text.split('\n'), numbers: null },
+    [text, numberedRead],
+  )
   const body = useMemo(
     () => (source.numbers === null ? text : source.lines.join('\n')),
     [source, text],
@@ -196,7 +191,7 @@ function OutputPanel({ text }: { text: string }) {
     () => describeOutputSearch(body, query, matchIndex),
     [body, query, matchIndex],
   )
-  const matchCount = search.matches.length
+  const matchCount = search.matchCount
 
   const step = (delta: number): void => {
     setMatchIndex(index => stepMatchIndex(index, delta, matchCount))
@@ -218,7 +213,7 @@ function OutputPanel({ text }: { text: string }) {
 
   return (
     <>
-      <SectionLabel>Output</SectionLabel>
+      <SectionLabel>{label}</SectionLabel>
       <div className="mb-1.5 flex items-center gap-1.5">
         <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-shell-seam bg-white/[0.02] px-2 focus-within:border-accent/35">
           <span className="shrink-0 text-text-faint">
@@ -315,10 +310,10 @@ function OutputPanel({ text }: { text: string }) {
           const chunk = selectOutputLineChunk(
             search.lines[index] ?? '',
             query,
-            { anchorToMatch: active },
+            { anchorOffset: active ? search.activeOffset ?? undefined : undefined },
           )
           return (
-            <div key={index} className={`flex ${active ? 'bg-accent/15' : ''}`}>
+            <div key={index} className={`flex ${diff ? diffLineClass(search.lines[index] ?? '') : ''} ${active ? 'bg-accent/15' : ''}`}>
               <span className="sticky left-0 w-[42px] shrink-0 select-none bg-app-bg pr-2.5 text-right text-text-ghost [font-variant-numeric:tabular-nums]">
                 {lineNumber}
               </span>

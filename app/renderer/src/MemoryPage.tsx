@@ -153,7 +153,12 @@ function InstructionFiles({ snapshot }: { snapshot: MemorySnapshot }) {
                       {file.globs?.length ? (
                         <Pill label={`${file.globs.length} path rule${file.globs.length === 1 ? '' : 's'}`} />
                       ) : null}
-                      {file.contentDiffersFromDisk ? <Pill label="truncated" /> : null}
+                      {file.contentDiffersFromDisk ? (
+                        <Pill
+                          label="Loaded text differs"
+                          title="Loaded text may omit frontmatter or comments, or be shortened to fit memory limits."
+                        />
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -284,9 +289,9 @@ function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
   )
 }
 
-function Pill({ label }: { label: string }) {
+function Pill({ label, title }: { label: string; title?: string }) {
   return (
-    <span className="rounded-full border border-shell-seam bg-shell-hover px-1.5 py-0.5 text-[10px] font-medium text-text-subtle">
+    <span className="rounded-full border border-shell-seam bg-shell-hover px-1.5 py-0.5 text-[10px] font-medium text-text-subtle" title={title}>
       {label}
     </span>
   )

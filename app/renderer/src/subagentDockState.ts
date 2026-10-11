@@ -5,6 +5,7 @@ import { selectWorkerDisplayName, workerState } from './workersState.js'
 import { agentAccountLabel, agentActivityOf, agentIdOf, agentModelOf, agentProgressBadge, agentToolSourceOf, agentUsageOf } from './transcriptAgent.js'
 import { leaseAccountShortLabel, leaseHeldLabel, selectLeaseForOwner } from './leaseState.js'
 import { formatModelDisplayName } from './statsState.js'
+import { MAX_PERSISTED_DOCK_FINISHED } from './subagentDockPersistence.js'
 export type SubagentDockClearMarker = { agentId: string; runKey: string }
 
 export type SubagentDockStatus = 'waiting' | 'running' | 'background' | 'resumed' | 'completed' | 'failed' | 'stopped'
@@ -60,8 +61,42 @@ export type DerivedSubagentDock = {
 }
 
 const DISAPPEARANCE_GRACE_MS = 2000
+// A capped entry can still have a terminal card in the current transcript.
+// Remember its run identity for this observation, without retaining another
+// completion record or carrying this evidence across reloads. Each replacement
+// contains only runs in its current input or retained entries; old state keys
+// and their source evidence are weakly held.
+const terminalRunsByState = new WeakMap<SubagentDockState, ReadonlyMap<string, string>>()
 export function isSubagentDockTerminal(state: SubagentDockStatus): boolean {
   return state === 'completed' || state === 'failed' || state === 'stopped'
+}
+
+function boundFinishedEntries(state: SubagentDockState): SubagentDockState {
+  const terminal = Object.values(state.entries).filter(entry => isSubagentDockTerminal(entry.state))
+    .sort((a, b) => (b.terminalAt ?? 0) - (a.terminalAt ?? 0) || b.launchOrder - a.launchOrder)
+  if (terminal.length <= MAX_PERSISTED_DOCK_FINISHED) return state
+  const entries = { ...state.entries }
+  for (const entry of terminal.slice(MAX_PERSISTED_DOCK_FINISHED)) delete entries[entry.agentId]
+  return { ...state, entries }
+}
+
+/** Keep a stale pane observation from replacing a newer resumed run. */
+export function mergeSubagentDockObservation(state: SubagentDockState, prior?: SubagentDockState): SubagentDockState {
+  const entries = { ...state.entries }
+  const terminalRuns = new Map(terminalRunsByState.get(state))
+  if (prior) for (const [agentId, current] of Object.entries(prior.entries)) {
+    const candidate = entries[agentId]
+    if (current.resumedAt !== null && candidate &&
+        (candidate.resumedAt ?? 0) < current.resumedAt &&
+        (candidate.terminalAt ?? 0) < current.resumedAt) {
+      entries[agentId] = current
+      if (isSubagentDockTerminal(current.state)) terminalRuns.set(agentId, current.runKey)
+      else terminalRuns.delete(agentId)
+    }
+  }
+  const bounded = boundFinishedEntries({ ...state, entries, nextLaunchOrder: Math.max(state.nextLaunchOrder, prior?.nextLaunchOrder ?? 0) })
+  terminalRunsByState.set(bounded, terminalRuns)
+  return bounded
 }
 
 /** Restored terminal history is already settled, so reload never replays motion. */
@@ -111,7 +146,10 @@ function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'task
     const fallback = row.toolName !== 'ResumeAgent' ? target : target && knownAgents.has(target) ? target
       : named?.length === 1 ? named[0]! : target && /^a(?:[\w-]+-)?[0-9a-f]{16}$/.test(target) ? target : null
     const agentId = agentByToolUseId.get(row.toolUseId) ?? rememberedByToolUseId.get(row.toolUseId) ?? fallback
-    if (agentId !== null) byId.set(agentId, row)
+    if (agentId !== null) {
+      byId.delete(agentId)
+      byId.set(agentId, row)
+    }
   }
   return byId
 }
@@ -125,6 +163,23 @@ export function reconcileSubagentDockState(previous: SubagentDockState, input: S
   const workers = new Map(input.workers.map(worker => [worker.agentId, worker]))
   const tasks = new Map((input.tasks?.items ?? []).filter(task => task.type === 'local_agent').map(task => [task.id, task]))
   const entries: Record<string, SubagentDockEntry> = {}
+  const previousTerminalRuns = terminalRunsByState.get(previous)
+  const terminalRuns = new Map<string, string>()
+  // On reload there is no runtime observation of capped runs. The retained
+  // transcript identities still establish the observed source range. Launch
+  // order does not imply completion order, so use its last retained position
+  // and the newest saved completion; newer evidence remains eligible.
+  const rowOrder = new Map([...rows.keys()].map((agentId, index) => [agentId, index]))
+  let retainedRowCeiling = Number.NEGATIVE_INFINITY
+  let retainedCompletionCeiling = 0
+  const restoringCappedHistory = !previousTerminalRuns && previous.nextLaunchOrder >= MAX_PERSISTED_DOCK_FINISHED
+  for (const entry of Object.values(previous.entries)) {
+    if (!isSubagentDockTerminal(entry.state)) continue
+    retainedCompletionCeiling = Math.max(retainedCompletionCeiling, entry.terminalAt ?? 0)
+    if (restoringCappedHistory && entry.toolUseId !== null && rows.get(entry.agentId)?.toolUseId === entry.toolUseId) {
+      retainedRowCeiling = Math.max(retainedRowCeiling, rowOrder.get(entry.agentId) ?? Number.NEGATIVE_INFINITY)
+    }
+  }
   let nextLaunchOrder = previous.nextLaunchOrder
   const ids = new Set([...Object.keys(previous.entries), ...workers.keys(), ...rows.keys()])
   for (const agentId of ids) {
@@ -171,7 +226,16 @@ export function reconcileSubagentDockState(previous: SubagentDockState, input: S
     // Once terminal evidence was observed its identity must stay stable across enrichment and Clear.
     const runKey = old && !runChanged && isSubagentDockTerminal(old.state)
       ? old.runKey
-      : transcriptRunKey ?? (freshResume ? `resume:${resumeTime}` : old?.runKey ?? `start:${task?.startTime ?? input.nowMs}`)
+      : transcriptRunKey ?? (freshResume || !old && resumeTime !== null ? `resume:${resumeTime}` : old?.runKey ?? previousTerminalRuns?.get(agentId) ?? `start:${task?.startTime ?? input.nowMs}`)
+    if (terminal) terminalRuns.set(agentId, runKey)
+    // A capped completion is historical unless independent newer task evidence
+    // arrives, even after the first cold observation. Running/new resume runs
+    // and terminal transitions from retained active entries remain eligible.
+    const newerTaskEvidence = (task?.endTime ?? 0) > retainedCompletionCeiling || (resumeTime ?? 0) > retainedCompletionCeiling
+    if (terminal && !old && !newerTaskEvidence && previousTerminalRuns?.get(agentId) === runKey) continue
+    if (terminal && !old && row && Number.isFinite(retainedRowCeiling) &&
+        (rowOrder.get(agentId) ?? Number.POSITIVE_INFINITY) <= retainedRowCeiling &&
+        !newerTaskEvidence) continue
     const newlyTerminal = terminal && (!old || !isSubagentDockTerminal(old.state) || runChanged)
     const terminalAt = terminal ? newlyTerminal ? task?.endTime ?? input.nowMs : old?.terminalAt ?? task?.endTime ?? input.nowMs : null
     const settledUsage = evidenceRow && terminal ? evidenceRow.toolName === 'ResumeAgent'
@@ -199,7 +263,9 @@ export function reconcileSubagentDockState(previous: SubagentDockState, input: S
     }
     entries[agentId] = entry
   }
-  return { entries, nextLaunchOrder, initialized: true }
+  const bounded = boundFinishedEntries({ entries, nextLaunchOrder, initialized: true })
+  terminalRunsByState.set(bounded, terminalRuns)
+  return bounded
 }
 
 function join(parts: (string | null | undefined)[]): string | null {

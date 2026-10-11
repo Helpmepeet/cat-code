@@ -179,6 +179,11 @@ export function TasksDialog({
   // Same contract for the task highlight: the selection is a task id, resolved
   // against the list being rendered, and -1 (no highlight) once it is gone.
   const selected = selectedTaskIndex(flat, selectedTaskId)
+  const { isKeyboardOwner } = useModalFocus({
+    open,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
 
   useEffect(() => {
     if (!open) return
@@ -193,7 +198,7 @@ export function TasksDialog({
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
+      if (event.defaultPrevented || !isKeyboardOwner()) return
       // A modifier chord belongs to the app, not to this dialog — `tasksDialogKeyAction`
       // owns that bail so ⌘K can reach the command palette without stopping a task.
       const action = tasksDialogKeyAction(event)
@@ -232,21 +237,19 @@ export function TasksDialog({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, tab, flat, selectedTaskId, onClose, onStopTask])
+  }, [open, tab, flat, selectedTaskId, onClose, onStopTask, isKeyboardOwner])
 
   // A keyboard-selected task can be stopped with K, so it must never move out
   // of view while the cursor advances through a long list.
   useEffect(() => {
     if (!open || tab !== 'tasks' || selectedWorker) return
-    const active = taskListRef.current?.querySelector('[data-task-active="true"]')
-    if (active) active.scrollIntoView({ block: 'nearest' })
+    const list = taskListRef.current
+    const active = list?.querySelector<HTMLElement>('[data-task-active="true"]')
+    if (active) {
+      active.scrollIntoView({ block: 'nearest' })
+      if (list?.contains(document.activeElement)) active.focus()
+    }
   }, [open, selected, selectedWorker, tab])
-
-  useModalFocus({
-    open,
-    containerRef: dialogRef,
-    onEscape: onClose,
-  })
 
   if (!open) return null
 
@@ -344,12 +347,20 @@ export function TasksDialog({
             </div>
           ) : (
             <>
-              <TaskGroup label="Active" items={active} offset={0} selected={selected} />
+              <TaskGroup
+                label="Active"
+                items={active}
+                offset={0}
+                selected={selected}
+                onSelect={setSelectedTaskId}
+                onStopTask={onStopTask}
+              />
               <TaskGroup
                 label="Completed"
                 items={completed}
                 offset={active.length}
                 selected={selected}
+                onSelect={setSelectedTaskId}
               />
             </>
           )}
@@ -845,11 +856,15 @@ function TaskGroup({
   items,
   offset,
   selected,
+  onSelect,
+  onStopTask,
 }: {
   label: string
   items: TaskSnapshotItem[]
   offset: number
   selected: number
+  onSelect: (taskId: string) => void
+  onStopTask?: (taskId: string) => void
 }) {
   if (items.length === 0) return null
   return (
@@ -862,13 +877,29 @@ function TaskGroup({
         <span className="text-[10.5px] text-text-subtle/60">{items.length}</span>
       </div>
       {items.map((item, index) => (
-        <TaskRow key={item.id} item={item} isSelected={offset + index === selected} />
+        <TaskRow
+          key={item.id}
+          item={item}
+          isSelected={offset + index === selected}
+          onSelect={() => onSelect(item.id)}
+          onStopTask={onStopTask}
+        />
       ))}
     </div>
   )
 }
 
-function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boolean }) {
+function TaskRow({
+  item,
+  isSelected,
+  onSelect,
+  onStopTask,
+}: {
+  item: TaskSnapshotItem
+  isSelected: boolean
+  onSelect: () => void
+  onStopTask?: (taskId: string) => void
+}) {
   const kind = taskKindMeta(item.type)
   const kindColor = taskColorClass(kind.color)
   const state = agentStateMeta(taskDisplayState(item))
@@ -888,8 +919,14 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
       role="option"
       aria-selected={isSelected}
       data-task-active={isSelected}
+      tabIndex={isSelected ? 0 : -1}
+      onFocus={onSelect}
+      onClick={event => {
+        event.currentTarget.focus()
+        onSelect()
+      }}
       className={
-        'flex items-center gap-2.5 rounded-lg px-2.5 py-2 ' +
+        'flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ' +
         (isSelected ? 'bg-shell-active' : '') +
         (terminal ? ' opacity-70' : '')
       }
@@ -915,6 +952,20 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
       >
         {state.label}
       </span>
+      {!terminal && onStopTask ? (
+        <button
+          type="button"
+          aria-label={`Stop ${item.label}`}
+          className="shrink-0 rounded-md px-2 py-1 text-[11px] text-tone-danger hover:bg-tone-danger/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          onClick={event => {
+            event.stopPropagation()
+            onSelect()
+            onStopTask(item.id)
+          }}
+        >
+          Stop
+        </button>
+      ) : null}
     </div>
   )
 }

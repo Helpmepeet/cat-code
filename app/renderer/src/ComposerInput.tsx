@@ -32,7 +32,7 @@ import {
   renderComposerDom,
 } from './composerDom.js'
 import { pasteIdAtCaret } from './composerState.js'
-import { selectAttachableImageFile } from './imageAttachment.js'
+import { selectAttachableImageFiles } from './imageAttachment.js'
 import type { PasteEntry } from './composerState.js'
 import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
 import type { ComposerPlaceholderParts } from './composerState.js'
@@ -54,9 +54,9 @@ type ComposerInputProps = {
   onCompositionEnd: () => void
   onCompositionStart: () => void
   onFocus: () => void
-  /** Attach an image dropped onto the field, through the pane's existing
-   * `attachImage` path. Absent = drops carry text only. */
-  onAttachImageFile?: (file: File) => void
+  /** Attach each dropped image through the pane's existing `attachImage` path.
+   * A promise serializes preparation across files from the same drop. */
+  onAttachImageFile?: (file: File) => void | Promise<void>
   onPointerDown: () => void
   /** `at` is the live start offset of the occurrence the user clicked. */
   onRemovePaste: (entry: PasteEntry, at: number) => void
@@ -309,11 +309,15 @@ export function ComposerInput({
   const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
     if (!editable) return
-    const image = selectAttachableImageFile(
+    const images = selectAttachableImageFiles(
       Array.from(event.dataTransfer.files),
     )
-    if (image) {
-      onAttachImageFile?.(image)
+    if (images.length > 0) {
+      // Preparation is serialized: the pane's in-flight guard must not reject
+      // later files from the same drop while the first file is still reading.
+      void (async () => {
+        for (const image of images) await onAttachImageFile?.(image)
+      })()
       return
     }
     const root = rootRef.current

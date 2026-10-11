@@ -35,6 +35,20 @@ function durableInventory(cwd: string | null): SettingsInventoryReadResult {
   }
 }
 
+function booleanInventory(
+  cwd: string | null,
+  values: Readonly<Record<string, boolean>>,
+): SettingsInventoryReadResult {
+  const result = durableInventory(cwd)
+  if (result.ok) result.inventory.settings = {
+    ...durableSettings,
+    layers: [{ source: 'userSettings', origin: '/user/settings.json', keys: Object.keys(values) }],
+    resolved: Object.keys(values).map(key => ({ key, source: 'userSettings', editable: true, managed: false })),
+    editableValues: Object.entries(values).map(([key, value]) => ({ key, source: 'userSettings', value })),
+  }
+  return result
+}
+
 beforeAll(async () => {
   harness = await createDomTestHarness()
   previousBridge = window.catcode
@@ -70,7 +84,7 @@ afterAll(async () => {
   await harness.teardown()
 })
 
-async function searchFor(input: HTMLInputElement, query: string): Promise<void> {
+async function typeInput(input: HTMLInputElement, query: string): Promise<void> {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, query)
     input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -85,7 +99,7 @@ test('a search result opens Appearance and focuses the Code theme control', asyn
       'input[aria-label="Search all settings"]',
     )
     expect(search).not.toBeNull()
-    await searchFor(search!, 'code theme')
+    await typeInput(search!, 'code theme')
 
     const result = tree.container.querySelector<HTMLButtonElement>(
       'section[aria-label="Search results"] button',
@@ -332,7 +346,8 @@ test('an older write completion cannot replace a newer result', async () => {
   readInventory = async cwd => {
     reads += 1
     const result = durableInventory(cwd)
-    if (result.ok && reads === 2) {
+    // The acknowledged value stays durable on every subsequent read.
+    if (result.ok && reads >= 2) {
       result.inventory.settings = {
         ...durableSettings,
         layers: [{ source: 'userSettings', origin: '/user/settings.json', keys: ['respectGitignore'] }],
@@ -351,7 +366,10 @@ test('an older write completion cannot replace a newer result', async () => {
   const toggle = tree.container.querySelector<HTMLButtonElement>(
     'button[role="switch"][aria-label="Respect .gitignore"]',
   )
-  await act(async () => { toggle!.click(); toggle!.click() })
+  const otherToggle = tree.container.querySelector<HTMLButtonElement>(
+    'button[role="switch"][aria-label="Git workflow instructions"]',
+  )
+  await act(async () => { toggle!.click(); otherToggle!.click() })
   expect(pending).toHaveLength(2)
   await act(async () => pending[1]!({ ok: true, message: 'Saved' }))
   await act(async () => pending[0]!({
@@ -364,4 +382,217 @@ test('an older write completion cannot replace a newer result', async () => {
   expect(tree.container.querySelector<HTMLButtonElement>(
     'button[role="switch"][aria-label="Respect .gitignore"]',
   )?.getAttribute('aria-checked')).toBe('false')
+})
+
+test('independent successful settings writes render both values when commits finish in reverse order', async () => {
+  const values = { respectGitignore: true, includeGitInstructions: true }
+  const commits = new Map<string, () => void>()
+  readInventory = async cwd => booleanInventory(cwd, values)
+  writeSetting = (_cwd, verb) => new Promise(resolve => {
+    if (typeof verb.value !== 'boolean') throw new Error('Expected a boolean setting write')
+    const value = verb.value
+    commits.set(verb.key, () => {
+      Object.assign(values, { [verb.key]: value })
+      resolve({ ok: true, message: 'Saved' })
+    })
+  })
+  const tree = await harness.mount(createElement(SettingsShell, { initialCategory: 'general' }))
+  const a = tree.container.querySelector<HTMLButtonElement>(
+    'button[role="switch"][aria-label="Respect .gitignore"]',
+  )!
+  const b = tree.container.querySelector<HTMLButtonElement>(
+    'button[role="switch"][aria-label="Git workflow instructions"]',
+  )!
+  await act(async () => { a.click(); b.click() })
+  expect(commits.size).toBe(2)
+  await act(async () => commits.get('includeGitInstructions')!())
+  expect(b.getAttribute('aria-checked')).toBe('false')
+  expect(a.disabled).toBe(true)
+  await act(async () => commits.get('respectGitignore')!())
+  expect(a.getAttribute('aria-checked')).toBe('false')
+  expect(b.getAttribute('aria-checked')).toBe('false')
+  expect(a.disabled).toBe(false)
+  expect(b.disabled).toBe(false)
+  expect(tree.container.textContent).toContain('Saved')
+})
+
+test('a delayed earlier inventory read cannot replace a newer post-commit read', async () => {
+  const values = { respectGitignore: true, includeGitInstructions: true }
+  const commits = new Map<string, () => void>()
+  const readCompletions: Array<() => void> = []
+  let reads = 0
+  readInventory = cwd => {
+    const snapshot = booleanInventory(cwd, values)
+    return ++reads === 1 ? Promise.resolve(snapshot) : new Promise(resolve => {
+      readCompletions.push(() => resolve(snapshot))
+    })
+  }
+  writeSetting = (_cwd, verb) => new Promise(resolve => {
+    if (typeof verb.value !== 'boolean') throw new Error('Expected a boolean setting write')
+    const value = verb.value
+    commits.set(verb.key, () => {
+      Object.assign(values, { [verb.key]: value })
+      resolve({ ok: true, message: 'Saved' })
+    })
+  })
+  const tree = await harness.mount(createElement(SettingsShell, { initialCategory: 'general' }))
+  const a = tree.container.querySelector<HTMLButtonElement>(
+    'button[role="switch"][aria-label="Respect .gitignore"]',
+  )!
+  const b = tree.container.querySelector<HTMLButtonElement>(
+    'button[role="switch"][aria-label="Git workflow instructions"]',
+  )!
+  await act(async () => { a.click(); b.click() })
+  await act(async () => commits.get('respectGitignore')!())
+  await act(async () => commits.get('includeGitInstructions')!())
+  expect(readCompletions).toHaveLength(2)
+  await act(async () => readCompletions[1]!())
+  expect(a.getAttribute('aria-checked')).toBe('false')
+  expect(b.getAttribute('aria-checked')).toBe('false')
+  await act(async () => readCompletions[0]!())
+  expect(a.getAttribute('aria-checked')).toBe('false')
+  expect(b.getAttribute('aria-checked')).toBe('false')
+  expect(a.disabled).toBe(false)
+  expect(tree.container.textContent).toContain('Saved')
+})
+
+test('a failed retention draft does not carry into another settings layer', async () => {
+  readInventory = async cwd => {
+    const result = durableInventory(cwd)
+    if (result.ok) result.inventory.settings = {
+      ...durableSettings,
+      layers: [{ source: 'userSettings', origin: '/user/settings.json', keys: ['cleanupPeriodDays'] }],
+      resolved: [{ key: 'cleanupPeriodDays', source: 'userSettings', editable: true, managed: false }],
+      editableValues: [{ key: 'cleanupPeriodDays', source: 'userSettings', value: 30 }],
+    }
+    return result
+  }
+  writeSetting = async () => ({
+    ok: false,
+    error: { code: 'unavailable', message: 'Could not save setting.' },
+  })
+  const tree = await harness.mount(createElement(SettingsShell, {
+    initialCategory: 'privacy', initialScope: 'project',
+    projects: [{ cwd: '/repo-a', name: 'Repo A' }],
+  }))
+  const input = tree.container.querySelector<HTMLInputElement>(
+    'input[aria-label="Transcript retention (days)"]',
+  )!
+  await typeInput(input, '7')
+  await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(tree.container.querySelector('[role="alert"]')?.textContent).toContain('Could not save setting.')
+
+  const justMe = Array.from(tree.container.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Where project edits are saved"] button',
+  )).find(button => button.textContent === 'Just me')!
+  await act(async () => justMe.click())
+  expect(tree.container.querySelector<HTMLInputElement>(
+    'input[aria-label="Transcript retention (days)"]',
+  )?.value).toBe('30')
+})
+
+test('a pending toggle is disabled until its saved value has been reloaded', async () => {
+  let resolveWrite!: (result: SettingsWriteReadResult) => void
+  let resolveReload!: (result: SettingsInventoryReadResult) => void
+  let reads = 0
+  const writes: SettingsVerbMessage[] = []
+  readInventory = cwd => ++reads === 1
+    ? Promise.resolve(durableInventory(cwd))
+    : new Promise(resolve => { resolveReload = resolve })
+  writeSetting = async (_cwd, verb) => {
+    writes.push(verb)
+    return new Promise(resolve => { resolveWrite = resolve })
+  }
+  const tree = await harness.mount(createElement(SettingsShell, { initialCategory: 'general' }))
+  const toggle = tree.container.querySelector<HTMLButtonElement>(
+    'button[role="switch"][aria-label="Respect .gitignore"]',
+  )!
+  await act(async () => { toggle.click(); toggle.click() })
+  expect(writes).toHaveLength(1)
+  expect(toggle.disabled).toBe(true)
+  await act(async () => resolveWrite({ ok: true, message: 'Saved' }))
+  expect(toggle.disabled).toBe(true)
+
+  const reloaded = durableInventory(null)
+  if (reloaded.ok) reloaded.inventory.settings = {
+    ...durableSettings,
+    layers: [{ source: 'userSettings', origin: '/user/settings.json', keys: ['respectGitignore'] }],
+    resolved: [{ key: 'respectGitignore', source: 'userSettings', editable: true, managed: false }],
+    editableValues: [{ key: 'respectGitignore', source: 'userSettings', value: false }],
+  }
+  await act(async () => resolveReload(reloaded))
+  expect(toggle.disabled).toBe(false)
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+})
+
+test('search waits for a newly loaded scope before focusing its setting', async () => {
+  let resolveUser!: (result: SettingsInventoryReadResult) => void
+  readInventory = cwd => cwd === null
+    ? new Promise(resolve => { resolveUser = resolve })
+    : Promise.resolve(durableInventory(cwd))
+  const tree = await harness.mount(createElement(SettingsShell, {
+    initialCategory: 'skills', projects: [{ cwd: '/repo-a', name: 'Repo A' }],
+  }))
+  await typeInput(tree.container.querySelector<HTMLInputElement>(
+    'input[aria-label="Search all settings"]',
+  )!, 'retention')
+  await act(async () => tree.container.querySelector<HTMLButtonElement>(
+    'section[aria-label="Search results"] button',
+  )!.click())
+  expect(tree.container.textContent).toContain('Loading configuration')
+  await act(async () => resolveUser(durableInventory(null)))
+  const retention = tree.container.querySelector<HTMLInputElement>(
+    'input[aria-label="Transcript retention (days)"]',
+  )
+  expect(retention).not.toBeNull()
+  expect(harness.document.activeElement === retention).toBe(true)
+})
+
+test('inventory retry recovers the selected project and ignores a completion after switching projects', async () => {
+  const requested: Array<string | null> = []
+  let resolveRetry!: (result: SettingsInventoryReadResult) => void
+  readInventory = cwd => {
+    requested.push(cwd)
+    if (requested.length === 1 || requested.length === 3) return Promise.resolve({
+      ok: false,
+      error: { code: 'unavailable', message: 'Configuration could not be read.' },
+    })
+    return requested.length === 2 || requested.length === 4
+      ? new Promise(resolve => { resolveRetry = resolve })
+      : Promise.resolve(durableInventory(cwd))
+  }
+  const tree = await harness.mount(createElement(SettingsShell, {
+    initialCategory: 'general', initialScope: 'project',
+    projects: [{ cwd: '/repo-a', name: 'Repo A' }, { cwd: '/repo-b', name: 'Repo B' }],
+  }))
+  expect(tree.container.querySelector('[role="alert"]')?.textContent).toContain('Configuration could not be read.')
+  const retry = tree.container.querySelector<HTMLButtonElement>('button[aria-label="Retry configuration"]')
+  expect(retry).not.toBeNull()
+  await act(async () => { retry!.click(); retry!.click() })
+  expect(requested).toEqual(['/repo-a', '/repo-a'])
+  expect(tree.container.querySelector('button[aria-label="Retry configuration"]')).toBeNull()
+  await act(async () => resolveRetry(durableInventory('/repo-a')))
+  expect(tree.container.textContent).toContain('Respect .gitignore')
+  expect(tree.container.querySelector('[role="alert"]')).toBeNull()
+
+  const project = tree.container.querySelector<HTMLSelectElement>('select[aria-label="Project"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(project, '/repo-b')
+    project.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  const retryOtherProject = tree.container.querySelector<HTMLButtonElement>('button[aria-label="Retry configuration"]')!
+  await act(async () => retryOtherProject.click())
+  expect(requested).toEqual(['/repo-a', '/repo-a', '/repo-b', '/repo-b'])
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(project, '/repo-a')
+    project.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(tree.container.textContent).toContain('Respect .gitignore')
+  await act(async () => resolveRetry({
+    ok: false,
+    error: { code: 'unavailable', message: 'Old project read failed.' },
+  }))
+  expect(project.value).toBe('/repo-a')
+  expect(tree.container.textContent).not.toContain('Old project read failed.')
+  expect(tree.container.textContent).toContain('Respect .gitignore')
 })

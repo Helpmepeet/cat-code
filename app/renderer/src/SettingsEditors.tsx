@@ -100,6 +100,7 @@ export function SettingsPane({
   noEngineNote,
   sessionOpen = false,
   keys,
+  pendingKeys = [],
   showTarget = true,
 }: {
   pane: EditableSettingPane
@@ -115,6 +116,7 @@ export function SettingsPane({
   sessionOpen?: boolean
   /** Render a subset when a category combines settings from multiple panes. */
   keys?: readonly string[]
+  pendingKeys?: readonly string[]
   /** A composed category states its destination once, above its first pane. */
   showTarget?: boolean
 }) {
@@ -146,9 +148,10 @@ export function SettingsPane({
       {specs.map(spec => (
         <SettingEditor
           engine={engine}
-          key={spec.key}
+          key={`${layer}:${spec.key}`}
           layer={layer}
           onWrite={onWrite}
+          pending={pendingKeys.includes(spec.key)}
           sessionOpen={sessionOpen}
           snapshot={snapshot}
           spec={spec}
@@ -163,6 +166,7 @@ function SettingEditor({
   snapshot,
   onWrite,
   layer,
+  pending,
   engine,
   sessionOpen,
 }: {
@@ -170,6 +174,7 @@ function SettingEditor({
   snapshot: SettingsSnapshot | null
   onWrite: (input: SettingWriteInput) => void
   layer: EditableSettingSource
+  pending: boolean
   engine: SettingsProjectEngine
   sessionOpen: boolean
 }) {
@@ -227,7 +232,7 @@ function SettingEditor({
   return (
     <Field
       desc={spec.description}
-      editable={!managed}
+      editable={!managed && !pending}
       error={destructiveWarning}
       label={spec.label}
       managed={managed}
@@ -242,6 +247,7 @@ function SettingEditor({
       <SettingControl
         engineKey={spec.key}
         onWrite={write}
+        pending={pending}
         row={row}
         snapshot={snapshot}
         spec={spec}
@@ -263,12 +269,14 @@ function SettingControl({
   snapshot,
   row,
   onWrite,
+  pending,
   engineKey,
 }: {
   spec: EditableSettingSpec
   snapshot: SettingsSnapshot | null
   row: SettingsRowModel
   onWrite: (value: EditableSettingValue) => void
+  pending: boolean
   engineKey: string
 }) {
   if (row.read.kind !== 'set' && row.read.kind !== 'unset') {
@@ -279,7 +287,7 @@ function SettingControl({
     )
   }
   const current = row.read.kind === 'set' ? row.read.value : null
-  const disabled = row.writeTarget === null
+  const disabled = pending || row.writeTarget === null
   // An UNSET row displays the built-in default, which is not a value anyone's
   // file holds. So "same as what is displayed" is not "already saved" here, and
   // the controls must be able to commit it: `IntField`'s no-change guard is
@@ -466,7 +474,8 @@ function SaveableSelect({
       {showSave ? (
         <button
           aria-label={`Set ${label} for this scope`}
-          className="shrink-0 rounded-[5px] border border-shell-seam px-2 py-1.5 text-[11px] text-text-muted transition-colors hover:bg-shell-hover"
+          className="shrink-0 rounded-[5px] border border-shell-seam px-2 py-1.5 text-[11px] text-text-muted transition-colors hover:bg-shell-hover disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={disabled}
           onClick={() => onChange(value)}
           type="button"
         >

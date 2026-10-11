@@ -270,6 +270,7 @@ test('buildSkillEntries filters to skill-sourced prompt commands and withholds b
       pluginInfo: { pluginManifest: { name: 'review-kit' }, repository: 'review-kit@mkt' } as never,
     }),
     promptSkill({ name: 'hidden', source: 'userSettings', disableModelInvocation: true, userInvocable: false }),
+    promptSkill({ name: 'verify', source: 'bundled', loadedFrom: 'bundled' }),
     // A non-skill prompt command (built-in) — excluded.
     promptSkill({ name: 'clear', source: 'builtin', loadedFrom: 'bundled' }),
     // A non-prompt command — excluded.
@@ -277,7 +278,12 @@ test('buildSkillEntries filters to skill-sourced prompt commands and withholds b
   ]
   const skills = buildSkillEntries(commands)
   const names = skills.map(s => s.name)
-  expect(names).toEqual(['deep-research', 'hidden', 'reviewer'])
+  expect(names).toEqual(['deep-research', 'hidden', 'reviewer', 'verify'])
+  expect(skills.find(skill => skill.name === 'verify')).toMatchObject({
+    source: 'bundled',
+    context: 'inline',
+    userInvocable: true,
+  })
 
   const fork = skills.find(s => s.name === 'reviewer')
   expect(fork).toMatchObject({
@@ -430,22 +436,24 @@ test('buildPluginEntries surfaces an error that never produced a LoadedPlugin', 
   expect(entries[0]?.error).toContain('mkt')
 })
 
-test('buildPluginEntries redacts a credential-bearing URL in an error-only row', () => {
-  // `generic-error.error` is an arbitrary caught-error message that can embed
-  // the URL a fetch/download failed against (`pluginLoader.ts` "Failed to
-  // download/cache plugin …" sites), and — because this error kind returns
-  // `null` before building a `LoadedPlugin` — this error-only row is the ONLY
-  // place that message can end up. `secretGuard` only matches key names, so
-  // the sidecar's own redaction is what has to withhold the credential here.
+test.each(
+  ['http', 'HTTP', 'hTtP', 'https', 'HTTPS', 'hTtPs'].flatMap(scheme =>
+    [false, true].map(hasLoadedPlugin => [scheme, hasLoadedPlugin] as const),
+  ),
+)('buildPluginEntries redacts %s diagnostics with a loaded plugin: %p', (scheme, hasLoadedPlugin) => {
+  // Component errors can retain a LoadedPlugin. Redaction must cover both
+  // those matched rows and failures that never built a plugin record.
   const entries = buildPluginEntries({
-    loaded: [],
+    loaded: hasLoadedPlugin
+      ? [{ plugin: loadedPlugin({ name: 'creds', source: 'creds@mkt' }), enabled: true }]
+      : [],
     errors: [
       {
         type: 'generic-error',
         source: 'creds@mkt',
         plugin: 'creds',
         error:
-          'Failed to download/cache plugin creds: fetch failed: https://user:sk-live-SECRET@dl.example.com/api/mcp/s/NjQ4YzExMmZha2V0b2tlbg/pkg.zip',
+          `Failed to download/cache plugin creds: fetch failed: ${scheme}://user:sk-live-SECRET@dl.example.com/api/mcp/s/NjQ4YzExMmZha2V0b2tlbg/pkg.zip?api_key=fixture-query#fixture-hash`,
       },
     ],
     pending: [],
@@ -458,7 +466,10 @@ test('buildPluginEntries redacts a credential-bearing URL in an error-only row',
   expect(message).not.toContain('sk-live-SECRET')
   expect(message).not.toContain('user:')
   expect(message).not.toContain('NjQ4YzExMmZha2V0b2tlbg')
-  expect(message).toContain('https://dl.example.com')
+  expect(message).not.toContain('fixture-query')
+  expect(message).not.toContain('fixture-hash')
+  expect(message).not.toContain('api_key')
+  expect(message).toContain(`${scheme.toLowerCase()}://dl.example.com/api/mcp/s/*/*`)
 })
 
 /* --------------------------- secret posture --------------------------- */

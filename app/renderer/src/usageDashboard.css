@@ -309,4 +309,4 @@ html[data-glass='on'] .usage-page[data-range='30d'] .usage-panel,html[data-glass
 html[data-glass='on'] .usage-page[data-range='all'] .usage-panel,html[data-glass='on'] .usage-page[data-range='all'] .usage-cards { animation:usage-settle-all var(--motion-panel) var(--ease-enter) both; }
 @media(max-width:850px) { .usage-tool-pair { grid-template-columns:1fr; } }
 @media(max-width:680px) { .usage-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .usage-sticky-top { top:-16px; margin:0 -16px; padding:16px 16px 10px; } }
-@media(prefers-reduced-motion:reduce) { .usage-page .usage-panel,.usage-page .usage-cards { animation:none; transition:none; } .usage-segmented::before { transition:none; } }
+@media(prefers-reduced-motion:reduce) { .usage-page .usage-panel,.usage-page .usage-cards,html[data-glass] .usage-page[data-range] .usage-panel,html[data-glass] .usage-page[data-range] .usage-cards { animation:none; transition:none; } .usage-segmented::before { transition:none; } }

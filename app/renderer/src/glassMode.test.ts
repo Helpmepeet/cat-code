@@ -251,7 +251,9 @@ test('every full-area page ground is marked for glass to clear', () => {
     if (EXEMPT.has(file)) continue
     const lines = readFileSync(new URL(file, dir), 'utf8').split('\n')
     lines.forEach((line, i) => {
-      if (!line.includes('bg-app-bg')) return
+      // A descendant selector such as [&_pre]:bg-app-bg does not paint the
+      // container itself. Only a direct ground utility belongs in this sweep.
+      if (!/(?:^|[\s"'`])bg-app-bg(?:[\s"'`/]|$)/.test(line)) return
       const chunk = lines.slice(Math.max(0, i - 8), i + 9).join('\n')
       if (!FILLS.some(re => re.test(chunk))) return
       if (!chunk.includes('data-window-ground')) offenders.push(`${file}:${i + 1}`)

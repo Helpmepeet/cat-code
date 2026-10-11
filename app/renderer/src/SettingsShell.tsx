@@ -17,6 +17,7 @@ import type {
   SettingsVerbMessage,
 } from '../../shared/protocol.js'
 import type { EditableSettingPane } from '../../shared/settingsEditable.js'
+import { EDITABLE_SETTING_KEYS } from '../../shared/settingsEditable.js'
 import {
   ACCENT_KEYS,
   ACCENT_LABELS,
@@ -172,6 +173,8 @@ export function SettingsShell({
     cwd: string | null
     result: SettingsInventoryReadResult | null
   } | null>(null)
+  const [inventoryRetry, setInventoryRetry] = useState(0)
+  const [pendingWrites, setPendingWrites] = useState<ReadonlySet<string>>(() => new Set())
   const [writeStatus, setWriteStatus] = useState<{
     kind: 'saving' | 'saved' | 'failed'
     message: string
@@ -180,6 +183,7 @@ export function SettingsShell({
   const pageRef = useRef<HTMLDivElement>(null)
   const inventoryReadToken = useRef(0)
   const writeActionToken = useRef(0)
+  const pendingWriteIds = useRef(new Set<string>())
 
   const sessionOpen = typeof cwd === 'string' && cwd.trim().length > 0
   const activeCwd =
@@ -255,10 +259,13 @@ export function SettingsShell({
       },
     )
     return () => { cancelled = true }
-  }, [inventoryCwd])
+  }, [inventoryCwd, inventoryRetry])
   const engine: SettingsProjectEngine =
     preferredEngineScope === 'project' && !selectedProject ? 'absent' : 'live'
   const writeLayer = selectSettingsWriteLayer(preferredEngineScope, projectLayer)
+  const pendingSettingKeys = Array.from(EDITABLE_SETTING_KEYS).filter(key =>
+    pendingWrites.has(JSON.stringify([inventoryCwd, writeLayer, key])),
+  )
 
   useEffect(() => {
     ++writeActionToken.current
@@ -277,6 +284,11 @@ export function SettingsShell({
       setWriteStatus({ kind: 'failed', message: 'Choose a project before saving.' })
       return
     }
+    const writeId = JSON.stringify([targetCwd, input.source, input.key])
+    // Reject another click before React has painted the disabled control.
+    if (pendingWriteIds.current.has(writeId)) return
+    pendingWriteIds.current.add(writeId)
+    setPendingWrites(new Set(pendingWriteIds.current))
     const verb: SettingsVerbMessage = {
       type: 'settings.setValue',
       requestId: crypto.randomUUID(),
@@ -295,9 +307,11 @@ export function SettingsShell({
         failure = 'Setting could not be saved.'
       }
       try {
+        const readToken = inventoryCwdRef.current === targetCwd
+          ? ++inventoryReadToken.current
+          : null
         const refreshed = await getBridge().readSettingsInventory(targetCwd)
-        if (inventoryCwdRef.current === targetCwd && actionToken === writeActionToken.current) {
-          ++inventoryReadToken.current
+        if (inventoryCwdRef.current === targetCwd && readToken === inventoryReadToken.current) {
           setInventoryRead({ cwd: targetCwd, result: refreshed })
         }
         if (!refreshed.ok && !failure) failure = refreshed.error.message
@@ -311,7 +325,10 @@ export function SettingsShell({
           ? { kind: 'failed', message: failure }
           : { kind: 'saved', message: 'Saved' })
       }
-    })()
+    })().finally(() => {
+      pendingWriteIds.current.delete(writeId)
+      setPendingWrites(new Set(pendingWriteIds.current))
+    })
   }
 
   useEffect(() => {
@@ -331,6 +348,8 @@ export function SettingsShell({
 
   useEffect(() => {
     if (focusKey === null || searching) return
+    if ((engineCategory || inventoryCategory || category === 'policy') &&
+      (inventoryLoading || inventoryError)) return
     const target = Array.from(
       pageRef.current?.querySelectorAll<HTMLElement>('[data-setting-key]') ?? [],
     ).find(node => node.dataset.settingKey === focusKey)
@@ -352,7 +371,7 @@ export function SettingsShell({
       target.addEventListener('animationend', onLandingEnd)
     }
     setFocusKey(null)
-  }, [category, focusKey, preferredEngineScope, searching])
+  }, [category, focusKey, preferredEngineScope, searching, engineCategory, inventoryCategory, inventoryLoading, inventoryError])
 
   const openResult = (result: (typeof results)[number]) => {
     setCategory(result.category)
@@ -563,8 +582,10 @@ export function SettingsShell({
                 memorySnapshot={inventory?.memory ?? null}
                 onOpenLogs={onOpenLogs}
                 onRemoteVerb={onRemoteVerb ?? (() => {})}
+                onRetryInventory={() => setInventoryRetry(attempt => attempt + 1)}
                 onSaveDiagnostics={onSaveDiagnostics}
                 onSettingWrite={handleSettingWrite}
+                pendingSettingKeys={pendingSettingKeys}
                 remoteLastResult={remoteLastResult ?? null}
                 remoteSnapshot={remoteSnapshot ?? null}
                 selectedProject={selectedProject}
@@ -668,7 +689,9 @@ function ScopeBody({
   remoteSnapshot,
   remoteLastResult,
   onRemoteVerb,
+  onRetryInventory,
   onSettingWrite,
+  pendingSettingKeys,
   onOpenLogs,
   onSaveDiagnostics,
   sessionOpen,
@@ -687,7 +710,9 @@ function ScopeBody({
   remoteSnapshot: RemoteSettingsSnapshot | null
   remoteLastResult: RemoteSettingsResultFrame | null
   onRemoteVerb: (verb: RemoteVerbMessage) => void
+  onRetryInventory: () => void
   onSettingWrite: (input: SettingWriteInput) => void
+  pendingSettingKeys: readonly string[]
   onOpenLogs?: () => void
   onSaveDiagnostics?: () => void
 }) {
@@ -703,7 +728,19 @@ function ScopeBody({
     return <p className="text-[13px] leading-5 text-text-muted">Loading configuration…</p>
   }
   if ((inventoryCategory || engineCategory || category === 'policy') && inventoryError) {
-    return <p role="alert" className="text-[13px] leading-5 text-tone-warn">{inventoryError}</p>
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <p role="alert" className="text-[13px] leading-5 text-tone-warn">{inventoryError}</p>
+        <button
+          aria-label="Retry configuration"
+          className="rounded-md border border-shell-seam px-3 py-1.5 text-[13px] text-text-primary hover:bg-shell-hover"
+          onClick={onRetryInventory}
+          type="button"
+        >
+          Retry
+        </button>
+      </div>
+    )
   }
   if (engineCategory && engine === 'absent') {
     return <p className="text-[13px] leading-5 text-text-muted">Choose a project to read and edit its settings.</p>
@@ -724,6 +761,7 @@ function ScopeBody({
       noEngineNote="Choose a project to read and edit its settings."
       onWrite={onSettingWrite}
       pane={pane}
+      pendingKeys={pendingSettingKeys}
       sessionOpen={sessionOpen}
       showTarget={showTarget}
       snapshot={snapshot}

@@ -14,6 +14,7 @@
 
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement, useRef, useState } from 'react'
+import type { Window as HappyWindow } from 'happy-dom'
 
 import { SessionPane } from './SessionPane.js'
 import { createDomTestHarness } from './domTestHarness.js'
@@ -537,6 +538,50 @@ test('an image dropped on the composer is attached, not ignored', async () => {
   // The image never becomes text, and the draft is untouched.
   expect(observed.drafts).toEqual([])
   expect(readComposerText(composer)).toBe(initial)
+})
+
+test('all images from one drop attach in order with distinct contents', async () => {
+  const observed = observation()
+  const tree = await harness.mount(
+    createElement(ControlledPane, { initialPrompt: 'keep this text', observation: observed }),
+  )
+  const composer = composerOf(tree)
+  await act(async () => {
+    composer.dispatchEvent(fileDrop({ files: [
+      new File(['first image'], 'first.png', { type: 'image/png' }),
+      new File(['second image'], 'second.webp', { type: 'image/webp' }),
+    ] }))
+    await (window as unknown as HappyWindow).happyDOM.waitUntilComplete()
+  })
+  expect(observed.images).toEqual([
+    { mediaType: 'image/png', data: 'Zmlyc3QgaW1hZ2U=', name: 'first.png' },
+    { mediaType: 'image/webp', data: 'c2Vjb25kIGltYWdl', name: 'second.webp' },
+  ])
+  expect(tree.container.querySelectorAll('[aria-label^="Expand "]')).toHaveLength(2)
+  expect(readComposerText(composer)).toBe('keep this text')
+})
+
+test.each(['no session', 'dead session'] as const)('a drop cannot attach or edit with %s', async state => {
+  let attached = 0
+  let edited = 0
+  const tree = await harness.mount(createElement(SessionPane, {
+    ...idleSessionPaneProps(),
+    ...(state === 'no session'
+      ? { activeSessionId: null }
+      : { activeConnection: { status: 'dead' as const, inputEnabled: false } }),
+    prompt: 'keep this text',
+    onAttachImage: () => { attached++ },
+    setPrompt: () => { edited++ },
+  }))
+  const field = tree.container.querySelector<HTMLDivElement>('[aria-label="Prompt"]')!
+  await act(async () => {
+    field.dispatchEvent(fileDrop({ files: [new File(['image'], 'image.png', { type: 'image/png' })] }))
+    field.dispatchEvent(fileDrop({ text: 'extra text' }))
+    await (window as unknown as HappyWindow).happyDOM.waitUntilComplete()
+  })
+  expect(attached).toBe(0)
+  expect(edited).toBe(0)
+  expect(readComposerText(field)).toBe('keep this text')
 })
 
 test('a text drop still lands in the draft', async () => {
