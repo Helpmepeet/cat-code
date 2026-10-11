@@ -1,0 +1,1313 @@
+{
+  "date": "2026-10-11T03:33:11.314Z",
+  "system": "Solve the task. Return only a valid JSON object with exactly one key, \"answer\". Do not use Markdown. Do not explain.",
+  "tasks": [
+    {
+      "id": "js-closure",
+      "category": "Code comprehension",
+      "prompt": "What array does this JavaScript produce? const f=[]; for(var i=0;i<3;i++){ f.push(()=>i); } const result=f.map(fn=>fn()); Return result as answer.",
+      "expected": [
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "id": "js-event-loop",
+      "category": "Code comprehension",
+      "prompt": "In JavaScript, what is the console.log order? console.log(\"A\"); Promise.resolve().then(()=>console.log(\"B\")); setTimeout(()=>console.log(\"C\"),0); console.log(\"D\"); Return an array of strings as answer.",
+      "expected": [
+        "A",
+        "D",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "python-aliasing",
+      "category": "Code comprehension",
+      "prompt": "What is x after this Python code? x=[[0]*2]*3; x[1][0]=7. Return x as answer.",
+      "expected": [
+        [
+          7,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          7,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "interval-boundaries",
+      "category": "Code comprehension",
+      "prompt": "Half-open intervals [start,end) overlap only when max(starts) < min(ends). Input [[1,3],[3,5],[2,4],[8,10],[9,11],[11,12]]. Merge overlapping intervals, including transitive overlaps, but not intervals that only touch. Sort ascending by start. Return the merged array as answer.",
+      "expected": [
+        [
+          1,
+          5
+        ],
+        [
+          8,
+          11
+        ],
+        [
+          11,
+          12
+        ]
+      ]
+    },
+    {
+      "id": "bayes",
+      "category": "Reasoning",
+      "prompt": "A disease affects 1% of people. A test has 90% sensitivity and 95% specificity. Among people with a positive result, what percentage have the disease? Return a number rounded to two decimal places as answer.",
+      "expected": 15.38
+    },
+    {
+      "id": "constraint-order",
+      "category": "Reasoning",
+      "prompt": "Five tasks A,B,C,D,E occupy positions 1 through 5, each once. A is immediately before D. B is before A. C is immediately after E. E is position 4. Return the unique task order as an array of strings as answer.",
+      "expected": [
+        "B",
+        "A",
+        "D",
+        "E",
+        "C"
+      ]
+    },
+    {
+      "id": "data-extraction",
+      "category": "Extraction",
+      "prompt": "Use this synthetic dataset. Select records where region=east AND state=paid. Return answer as an object with keys ids (in source order) and total (sum of amounts). Dataset:\n[{\"id\":\"R001\",\"region\":\"east\",\"state\":\"paid\",\"amount\":7},{\"id\":\"R002\",\"region\":\"west\",\"state\":\"pending\",\"amount\":14},{\"id\":\"R003\",\"region\":\"west\",\"state\":\"pending\",\"amount\":21},{\"id\":\"R004\",\"region\":\"east\",\"state\":\"pending\",\"amount\":28},{\"id\":\"R005\",\"region\":\"west\",\"state\":\"paid\",\"amount\":35},{\"id\":\"R006\",\"region\":\"west\",\"state\":\"pending\",\"amount\":42},{\"id\":\"R007\",\"region\":\"east\",\"state\":\"pending\",\"amount\":49},{\"id\":\"R008\",\"region\":\"west\",\"state\":\"pending\",\"amount\":56},{\"id\":\"R009\",\"region\":\"west\",\"state\":\"paid\",\"amount\":63},{\"id\":\"R010\",\"region\":\"east\",\"state\":\"pending\",\"amount\":70},{\"id\":\"R011\",\"region\":\"west\",\"state\":\"pending\",\"amount\":77},{\"id\":\"R012\",\"region\":\"west\",\"state\":\"pending\",\"amount\":84},{\"id\":\"R013\",\"region\":\"east\",\"state\":\"paid\",\"amount\":91},{\"id\":\"R014\",\"region\":\"west\",\"state\":\"pending\",\"amount\":98},{\"id\":\"R015\",\"region\":\"west\",\"state\":\"pending\",\"amount\":105},{\"id\":\"R016\",\"region\":\"east\",\"state\":\"pending\",\"amount\":112},{\"id\":\"R017\",\"region\":\"west\",\"state\":\"paid\",\"amount\":119},{\"id\":\"R018\",\"region\":\"west\",\"state\":\"pending\",\"amount\":126},{\"id\":\"R019\",\"region\":\"east\",\"state\":\"pending\",\"amount\":133},{\"id\":\"R020\",\"region\":\"west\",\"state\":\"pending\",\"amount\":140},{\"id\":\"R021\",\"region\":\"west\",\"state\":\"paid\",\"amount\":147},{\"id\":\"R022\",\"region\":\"east\",\"state\":\"pending\",\"amount\":154},{\"id\":\"R023\",\"region\":\"west\",\"state\":\"pending\",\"amount\":161},{\"id\":\"R024\",\"region\":\"west\",\"state\":\"pending\",\"amount\":168},{\"id\":\"R025\",\"region\":\"east\",\"state\":\"paid\",\"amount\":175},{\"id\":\"R026\",\"region\":\"west\",\"state\":\"pending\",\"amount\":182},{\"id\":\"R027\",\"region\":\"west\",\"state\":\"pending\",\"amount\":189},{\"id\":\"R028\",\"region\":\"east\",\"state\":\"pending\",\"amount\":196},{\"id\":\"R029\",\"region\":\"west\",\"state\":\"paid\",\"amount\":203},{\"id\":\"R030\",\"region\":\"west\",\"state\":\"pending\",\"amount\":210},{\"id\":\"R031\",\"region\":\"east\",\"state\":\"pending\",\"amount\":217},{\"id\":\"R032\",\"region\":\"west\",\"state\":\"pending\",\"amount\":224},{\"id\":\"R033\",\"region\":\"west\",\"state\":\"paid\",\"amount\":231},{\"id\":\"R034\",\"region\":\"east\",\"state\":\"pending\",\"amount\":238},{\"id\":\"R035\",\"region\":\"west\",\"state\":\"pending\",\"amount\":245},{\"id\":\"R036\",\"region\":\"west\",\"state\":\"pending\",\"amount\":252},{\"id\":\"R037\",\"region\":\"east\",\"state\":\"paid\",\"amount\":259},{\"id\":\"R038\",\"region\":\"west\",\"state\":\"pending\",\"amount\":266},{\"id\":\"R039\",\"region\":\"west\",\"state\":\"pending\",\"amount\":273},{\"id\":\"R040\",\"region\":\"east\",\"state\":\"pending\",\"amount\":280},{\"id\":\"R041\",\"region\":\"west\",\"state\":\"paid\",\"amount\":287},{\"id\":\"R042\",\"region\":\"west\",\"state\":\"pending\",\"amount\":294},{\"id\":\"R043\",\"region\":\"east\",\"state\":\"pending\",\"amount\":301},{\"id\":\"R044\",\"region\":\"west\",\"state\":\"pending\",\"amount\":308},{\"id\":\"R045\",\"region\":\"west\",\"state\":\"paid\",\"amount\":315},{\"id\":\"R046\",\"region\":\"east\",\"state\":\"pending\",\"amount\":322},{\"id\":\"R047\",\"region\":\"west\",\"state\":\"pending\",\"amount\":329},{\"id\":\"R048\",\"region\":\"west\",\"state\":\"pending\",\"amount\":336},{\"id\":\"R049\",\"region\":\"east\",\"state\":\"paid\",\"amount\":343},{\"id\":\"R050\",\"region\":\"west\",\"state\":\"pending\",\"amount\":350},{\"id\":\"R051\",\"region\":\"west\",\"state\":\"pending\",\"amount\":357},{\"id\":\"R052\",\"region\":\"east\",\"state\":\"pending\",\"amount\":364},{\"id\":\"R053\",\"region\":\"west\",\"state\":\"paid\",\"amount\":371},{\"id\":\"R054\",\"region\":\"west\",\"state\":\"pending\",\"amount\":378},{\"id\":\"R055\",\"region\":\"east\",\"state\":\"pending\",\"amount\":385},{\"id\":\"R056\",\"region\":\"west\",\"state\":\"pending\",\"amount\":392},{\"id\":\"R057\",\"region\":\"west\",\"state\":\"paid\",\"amount\":399},{\"id\":\"R058\",\"region\":\"east\",\"state\":\"pending\",\"amount\":406},{\"id\":\"R059\",\"region\":\"west\",\"state\":\"pending\",\"amount\":413},{\"id\":\"R060\",\"region\":\"west\",\"state\":\"pending\",\"amount\":420},{\"id\":\"R061\",\"region\":\"east\",\"state\":\"paid\",\"amount\":427},{\"id\":\"R062\",\"region\":\"west\",\"state\":\"pending\",\"amount\":434},{\"id\":\"R063\",\"region\":\"west\",\"state\":\"pending\",\"amount\":441},{\"id\":\"R064\",\"region\":\"east\",\"state\":\"pending\",\"amount\":448},{\"id\":\"R065\",\"region\":\"west\",\"state\":\"paid\",\"amount\":455},{\"id\":\"R066\",\"region\":\"west\",\"state\":\"pending\",\"amount\":462},{\"id\":\"R067\",\"region\":\"east\",\"state\":\"pending\",\"amount\":469},{\"id\":\"R068\",\"region\":\"west\",\"state\":\"pending\",\"amount\":476},{\"id\":\"R069\",\"region\":\"west\",\"state\":\"paid\",\"amount\":483},{\"id\":\"R070\",\"region\":\"east\",\"state\":\"pending\",\"amount\":490},{\"id\":\"R071\",\"region\":\"west\",\"state\":\"pending\",\"amount\":497},{\"id\":\"R072\",\"region\":\"west\",\"state\":\"pending\",\"amount\":504},{\"id\":\"R073\",\"region\":\"east\",\"state\":\"paid\",\"amount\":511},{\"id\":\"R074\",\"region\":\"west\",\"state\":\"pending\",\"amount\":518},{\"id\":\"R075\",\"region\":\"west\",\"state\":\"pending\",\"amount\":525},{\"id\":\"R076\",\"region\":\"east\",\"state\":\"pending\",\"amount\":532},{\"id\":\"R077\",\"region\":\"west\",\"state\":\"paid\",\"amount\":539},{\"id\":\"R078\",\"region\":\"west\",\"state\":\"pending\",\"amount\":546},{\"id\":\"R079\",\"region\":\"east\",\"state\":\"pending\",\"amount\":553},{\"id\":\"R080\",\"region\":\"west\",\"state\":\"pending\",\"amount\":560},{\"id\":\"R081\",\"region\":\"west\",\"state\":\"paid\",\"amount\":567},{\"id\":\"R082\",\"region\":\"east\",\"state\":\"pending\",\"amount\":574},{\"id\":\"R083\",\"region\":\"west\",\"state\":\"pending\",\"amount\":581},{\"id\":\"R084\",\"region\":\"west\",\"state\":\"pending\",\"amount\":588},{\"id\":\"R085\",\"region\":\"east\",\"state\":\"paid\",\"amount\":595},{\"id\":\"R086\",\"region\":\"west\",\"state\":\"pending\",\"amount\":602},{\"id\":\"R087\",\"region\":\"west\",\"state\":\"pending\",\"amount\":609},{\"id\":\"R088\",\"region\":\"east\",\"state\":\"pending\",\"amount\":616},{\"id\":\"R089\",\"region\":\"west\",\"state\":\"paid\",\"amount\":623},{\"id\":\"R090\",\"region\":\"west\",\"state\":\"pending\",\"amount\":630},{\"id\":\"R091\",\"region\":\"east\",\"state\":\"pending\",\"amount\":637},{\"id\":\"R092\",\"region\":\"west\",\"state\":\"pending\",\"amount\":644},{\"id\":\"R093\",\"region\":\"west\",\"state\":\"paid\",\"amount\":651},{\"id\":\"R094\",\"region\":\"east\",\"state\":\"pending\",\"amount\":658},{\"id\":\"R095\",\"region\":\"west\",\"state\":\"pending\",\"amount\":665},{\"id\":\"R096\",\"region\":\"west\",\"state\":\"pending\",\"amount\":672},{\"id\":\"R097\",\"region\":\"east\",\"state\":\"paid\",\"amount\":679},{\"id\":\"R098\",\"region\":\"west\",\"state\":\"pending\",\"amount\":686},{\"id\":\"R099\",\"region\":\"west\",\"state\":\"pending\",\"amount\":693},{\"id\":\"R100\",\"region\":\"east\",\"state\":\"pending\",\"amount\":700}]",
+      "expected": {
+        "ids": [
+          "R001",
+          "R013",
+          "R025",
+          "R037",
+          "R049",
+          "R061",
+          "R073",
+          "R085",
+          "R097"
+        ],
+        "total": 3087
+      }
+    },
+    {
+      "id": "exact-format",
+      "category": "Instruction following",
+      "prompt": "Take the words: Alpha beta ALPHA gamma beta delta. Lowercase them, deduplicate preserving first occurrence, remove words whose length is 5, then reverse the remaining list. Return the list as answer.",
+      "expected": [
+        "beta"
+      ]
+    }
+  ],
+  "speedPrompt": "Return answer as an array containing every integer from 1 through 80 in ascending order.",
+  "settings": {
+    "tokenmeMaxTokens": 2048,
+    "qwenReasoningEffort": "low",
+    "solReasoningEffort": "low",
+    "gemmaReasoningEffort": "provider default",
+    "timeoutSeconds": 120,
+    "concurrency": 1,
+    "speedRepeats": 3,
+    "temperature": "provider default",
+    "tokenmePrice": null,
+    "solApiPricesPerMillion": {
+      "input": 2,
+      "cachedInput": 0.1,
+      "output": 10
+    },
+    "note": "Independent fresh requests, exact JSON grading. Short synthetic tasks, not a repository-agent benchmark. Sol uses Cat Code Codex adapter and subscription transport; API prices are not a subscription invoice. Latency includes network, reasoning and generation. No TTFT or isolated decode measurement."
+  },
+  "results": [
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "js-closure",
+      "category": "Code comprehension",
+      "latencySeconds": 1.4222954589999999,
+      "text": "{\"answer\": [3, 3, 3]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 93,
+        "total_tokens": 106,
+        "completion_tokens": 13,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 64
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "js-closure",
+      "category": "Code comprehension",
+      "latencySeconds": 2.0659711670000003,
+      "text": "\n\n{\"answer\":[3,3,3]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 109,
+        "total_tokens": 297,
+        "completion_tokens": 188,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 176
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "js-closure",
+      "category": "Code comprehension",
+      "latencySeconds": 1.5338973340000002,
+      "text": "\n\n{\"answer\": [3,3,3]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 109,
+        "total_tokens": 337,
+        "completion_tokens": 228,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 215
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "js-closure",
+      "category": "Code comprehension",
+      "latencySeconds": 2.9529231659999997,
+      "text": "{\"answer\":[3,3,3]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 78,
+        "outputTokens": 13,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "js-event-loop",
+      "category": "Code comprehension",
+      "latencySeconds": 1.566282625,
+      "text": "\n\n{\"answer\":[\"A\",\"D\",\"B\",\"C\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 116,
+        "total_tokens": 274,
+        "completion_tokens": 158,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 144
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "js-event-loop",
+      "category": "Code comprehension",
+      "latencySeconds": 1.3240944170000002,
+      "text": "\n\n{\"answer\":[\"A\",\"D\",\"B\",\"C\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 116,
+        "total_tokens": 320,
+        "completion_tokens": 204,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 190
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "js-event-loop",
+      "category": "Code comprehension",
+      "latencySeconds": 2.1753184169999984,
+      "text": "{\"answer\":[\"A\",\"D\",\"B\",\"C\"]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 86,
+        "outputTokens": 16,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "js-event-loop",
+      "category": "Code comprehension",
+      "latencySeconds": 1.4136198750000004,
+      "text": "{\"answer\": [\"A\", \"D\", \"B\", \"C\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 101,
+        "total_tokens": 117,
+        "completion_tokens": 16,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 64
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "python-aliasing",
+      "category": "Code comprehension",
+      "latencySeconds": 1.627101917,
+      "text": "\n\n{\"answer\": [[7, 0], [7, 0], [7, 0]]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 98,
+        "total_tokens": 304,
+        "completion_tokens": 206,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 181
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "python-aliasing",
+      "category": "Code comprehension",
+      "latencySeconds": 4.0393553749999995,
+      "text": "{\"answer\":[[7,0],[7,0],[7,0]]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 66,
+        "outputTokens": 21,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "python-aliasing",
+      "category": "Code comprehension",
+      "latencySeconds": 1.8314240829999981,
+      "text": "{\"answer\": [[0, 0], [7, 0], [0, 0]]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 76,
+        "total_tokens": 99,
+        "completion_tokens": 23,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 32
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": false,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "python-aliasing",
+      "category": "Code comprehension",
+      "latencySeconds": 1.8450458749999998,
+      "text": "\n\n{\"answer\": [[7, 0], [7, 0], [7, 0]]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 98,
+        "total_tokens": 302,
+        "completion_tokens": 204,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 179
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "interval-boundaries",
+      "category": "Code comprehension",
+      "latencySeconds": 7.842506583999999,
+      "text": "{\"answer\":[[1,5],[8,11],[11,12]]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 110,
+        "outputTokens": 71,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "interval-boundaries",
+      "category": "Code comprehension",
+      "latencySeconds": 5.530183958000001,
+      "text": "{\"answer\": [[1, 5], [2, 4], [8, 12]]}\n\nWait, re-evaluating the logic:\nInput: [[1,3],[3,5],[2,4],[8,10],[9,11],[11,12]]\n1. [1,3], [3,5], [2,4]: \n   - [1,3] and [3,5] do NOT overlap (max(1,3)=3, min(3,5)=3. 3 < 3 is false).\n   - [1,3] and [2,4] overlap (max(1,2)=2, min(3,4)=3. 2 < 3 is true).\n   - [3,5] and [2,4] overlap (max(3,2)=3, min(5,4)=4. 3 < 4 is true).\n   Since [1,3] overlaps [2,4] and [2,4] overlaps [3,5], they merge via transitivity.\n   Merge [1,3], [2,4], [3,5] -> [min(1,2,3), max(3,4,5)] = [1,5].\n2. [8,10], [9,11], [11,12]:\n   - [8,10] and [9,11] overlap (max(8,9)=9, min(10,11)=10. 9 < 10 is true).\n   - [9,11] and [11,12] do NOT overlap (max(9,11)=11, min(11,12)=11. 11 < 11 is false).\n   - [8,10] and [11,12] do NOT overlap.\n   Merging [8,10] and [9,11] -> [8,11].\n   [11,12] remains separate.\n\nSorted Result: [[1,5], [8,11], [11,12]]\n\nLet's double check:\n[1,3], [3,5], [2,4]\n- (1,3) cap (2,4) = (2,3) -> Overlap\n- (2,4) cap (3,5) = (3,4) -> Overlap\n- (1,3) cap (3,5) = empty -> No overlap\nTransitive: [1,5]\n\n[8,10], [9,11], [11,12]\n- (8,10) cap (9,11) = (9,10) -> Overlap\n- (9,11) cap (11,12) = empty -> No overlap\n- (8,10) cap (11,12) = empty -> No overlap\nTransitive: [8,11] and [11,12]\n\nFinal list: [[1,5], [8,11], [11,12]]\n\n{\"answer\": [[1, 5], [8, 11], [11, 12]]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 124,
+        "total_tokens": 850,
+        "completion_tokens": 726,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 64
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": false,
+      "validJson": false
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "interval-boundaries",
+      "category": "Code comprehension",
+      "latencySeconds": 2.563691749999998,
+      "text": "\n\n{\"answer\":[[1,5],[8,11],[11,12]]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 146,
+        "total_tokens": 511,
+        "completion_tokens": 365,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 342
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "interval-boundaries",
+      "category": "Code comprehension",
+      "latencySeconds": 1.8917062500000028,
+      "text": "\n\n{\"answer\":[[1,5],[8,11],[11,12]]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 146,
+        "total_tokens": 533,
+        "completion_tokens": 387,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 364
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "bayes",
+      "category": "Reasoning",
+      "latencySeconds": 1.1796252499999973,
+      "text": "{\"answer\": 15.38}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 94,
+        "total_tokens": 105,
+        "completion_tokens": 11,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 32
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "bayes",
+      "category": "Reasoning",
+      "latencySeconds": 2.4189278330000015,
+      "text": "\n\n{\"answer\": 15.38}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 117,
+        "total_tokens": 447,
+        "completion_tokens": 330,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 317
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "bayes",
+      "category": "Reasoning",
+      "latencySeconds": 1.8004461670000018,
+      "text": "\n\n{\"answer\": 15.38}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 117,
+        "total_tokens": 426,
+        "completion_tokens": 309,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 296
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "bayes",
+      "category": "Reasoning",
+      "latencySeconds": 3.9006283340000008,
+      "text": "{\"answer\":15.38}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 83,
+        "outputTokens": 42,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "constraint-order",
+      "category": "Reasoning",
+      "latencySeconds": 2.667406917,
+      "text": "\n\n{\"answer\":[\"B\",\"A\",\"D\",\"E\",\"C\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 123,
+        "total_tokens": 418,
+        "completion_tokens": 295,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 279
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "constraint-order",
+      "category": "Reasoning",
+      "latencySeconds": 2.0239256659999953,
+      "text": "\n\n{\"answer\":[\"B\",\"A\",\"D\",\"E\",\"C\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 123,
+        "total_tokens": 463,
+        "completion_tokens": 340,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 324
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "constraint-order",
+      "category": "Reasoning",
+      "latencySeconds": 3.3278373330000033,
+      "text": "{\"answer\":[\"B\",\"A\",\"D\",\"E\",\"C\"]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 91,
+        "outputTokens": 47,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "constraint-order",
+      "category": "Reasoning",
+      "latencySeconds": 1.4547616249999993,
+      "text": "{\"answer\": [\"B\", \"A\", \"D\", \"E\", \"C\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 104,
+        "total_tokens": 123,
+        "completion_tokens": 19,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 64
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "data-extraction",
+      "category": "Extraction",
+      "latencySeconds": 7.946507458,
+      "text": "\n\n{\"ids\":[\"R001\",\"R013\",\"R025\",\"R037\",\"R049\",\"R061\",\"R073\",\"R085\",\"R097\"],\"total\":3087}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 2195,
+        "total_tokens": 4186,
+        "completion_tokens": 1991,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 1933
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": false,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "data-extraction",
+      "category": "Extraction",
+      "latencySeconds": 3.985758833,
+      "text": "{\"answer\":{\"ids\":[\"R001\",\"R013\",\"R025\",\"R037\",\"R049\",\"R061\",\"R073\",\"R085\",\"R097\"],\"total\":3087}}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 1777,
+        "outputTokens": 67,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "data-extraction",
+      "category": "Extraction",
+      "latencySeconds": 1.6121456670000043,
+      "text": "{\"answer\":{\"ids\":[\"R001\",\"R013\",\"R025\",\"R037\",\"R049\",\"R061\",\"R073\",\"R085\",\"R097\"],\"total\":2712}}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 2172,
+        "total_tokens": 2230,
+        "completion_tokens": 58,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 2112
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": false,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "data-extraction",
+      "category": "Extraction",
+      "latencySeconds": 2.9361733749999983,
+      "text": "\n\n{\"ids\":[\"R001\",\"R013\",\"R025\",\"R037\",\"R049\",\"R061\",\"R073\",\"R085\",\"R097\"],\"total\":3087}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 2195,
+        "total_tokens": 2628,
+        "completion_tokens": 433,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 800
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 375
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": false,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "exact-format",
+      "category": "Instruction following",
+      "latencySeconds": 3.9071516249999987,
+      "text": "{\"answer\":[\"beta\"]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 79,
+        "outputTokens": 42,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "exact-format",
+      "category": "Instruction following",
+      "latencySeconds": 1.6013437919999998,
+      "text": "{\"answer\": [\"delta\", \"gamma\", \"beta\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 87,
+        "total_tokens": 100,
+        "completion_tokens": 13,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 32
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": false,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "exact-format",
+      "category": "Instruction following",
+      "latencySeconds": 1.8645842499999998,
+      "text": "\n\n{\"answer\": [\"beta\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 110,
+        "total_tokens": 321,
+        "completion_tokens": 211,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 202
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "exact-format",
+      "category": "Instruction following",
+      "latencySeconds": 1.7224013339999946,
+      "text": "\n\n{\"answer\": [\"beta\"]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 110,
+        "total_tokens": 307,
+        "completion_tokens": 197,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 188
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "speed-1",
+      "category": "Fixed-output speed",
+      "latencySeconds": 3.486457708000002,
+      "text": "{\"answer\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 65,
+        "total_tokens": 380,
+        "completion_tokens": 315,
+        "prompt_tokens_details": {
+          "cached_tokens": 32,
+          "created_cache_tokens": 32
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "speed-1",
+      "category": "Fixed-output speed",
+      "latencySeconds": 2.177531541999997,
+      "text": "\n\n{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 88,
+        "total_tokens": 359,
+        "completion_tokens": 271,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 34
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "speed-1",
+      "category": "Fixed-output speed",
+      "latencySeconds": 1.570369292000003,
+      "text": "\n\n{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 88,
+        "total_tokens": 378,
+        "completion_tokens": 290,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 53
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "speed-1",
+      "category": "Fixed-output speed",
+      "latencySeconds": 4.8906493749999935,
+      "text": "{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 55,
+        "outputTokens": 167,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "speed-2",
+      "category": "Fixed-output speed",
+      "latencySeconds": 4.303117375000002,
+      "text": "\n\n{\"answer\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 88,
+        "total_tokens": 769,
+        "completion_tokens": 681,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 364
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "speed-2",
+      "category": "Fixed-output speed",
+      "latencySeconds": 1.538820624999993,
+      "text": "\n\n{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 88,
+        "total_tokens": 362,
+        "completion_tokens": 274,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 37
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "speed-2",
+      "category": "Fixed-output speed",
+      "latencySeconds": 4.421043709000005,
+      "text": "{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 55,
+        "outputTokens": 167,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "speed-2",
+      "category": "Fixed-output speed",
+      "latencySeconds": 2.667809416999997,
+      "text": "{\"answer\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 65,
+        "total_tokens": 380,
+        "completion_tokens": 315,
+        "prompt_tokens_details": {
+          "cached_tokens": 64,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b-nvfp4",
+      "id": "speed-3",
+      "category": "Fixed-output speed",
+      "latencySeconds": 1.9580256249999948,
+      "text": "\n\n{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 88,
+        "total_tokens": 379,
+        "completion_tokens": 291,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 54
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b-nvfp4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "id": "speed-3",
+      "category": "Fixed-output speed",
+      "latencySeconds": 3.839542124999993,
+      "text": "{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "finishReason": "end_turn",
+      "usage": {
+        "inputTokens": 55,
+        "outputTokens": 167,
+        "cacheCreationInputTokens": 0,
+        "cachedInputTokens": 0
+      },
+      "httpStatus": 200,
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "id": "speed-3",
+      "category": "Fixed-output speed",
+      "latencySeconds": 3.145074833999999,
+      "text": "{\"answer\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 65,
+        "total_tokens": 380,
+        "completion_tokens": 315,
+        "prompt_tokens_details": {
+          "cached_tokens": 64,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "correct": true,
+      "validJson": true
+    },
+    {
+      "model": "qwen/qwen3.8-27b",
+      "id": "speed-3",
+      "category": "Fixed-output speed",
+      "latencySeconds": 2.183588917000001,
+      "text": "\n\n{\"answer\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80]}",
+      "reasoning": null,
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 88,
+        "total_tokens": 361,
+        "completion_tokens": 273,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 36
+        }
+      },
+      "httpStatus": 200,
+      "returnedModel": "qwen/qwen3.8-27b",
+      "correct": true,
+      "validJson": true
+    }
+  ],
+  "summaries": [
+    {
+      "id": "nvidia/Gemma-4-26B-A4B-NVFP4",
+      "name": "Gemma 4 · NVFP4",
+      "color": "#8ac7a1",
+      "correct": 4,
+      "attempted": 8,
+      "medianTaskSeconds": 1.5280527084999995,
+      "medianSpeedSeconds": 3.145074833999999,
+      "speedRange": [
+        3.486457708000002,
+        2.667809416999997,
+        3.145074833999999
+      ],
+      "speedCorrect": 3,
+      "requests": 11,
+      "errors": 0,
+      "tokens": {
+        "input": 3046,
+        "output": 1824,
+        "cached": 384,
+        "reasoning": 0
+      },
+      "solApiEquivalent": null
+    },
+    {
+      "id": "qwen/qwen3.8-27b",
+      "name": "Qwen3.8 · 27B",
+      "color": "#e1b46d",
+      "correct": 7,
+      "attempted": 8,
+      "medianTaskSeconds": 2.242449500000001,
+      "medianSpeedSeconds": 2.183588917000001,
+      "speedRange": [
+        2.177531541999997,
+        4.303117375000002,
+        2.183588917000001
+      ],
+      "speedCorrect": 3,
+      "requests": 11,
+      "errors": 0,
+      "tokens": {
+        "input": 3278,
+        "output": 3409,
+        "cached": 0,
+        "reasoning": 2448
+      },
+      "solApiEquivalent": null
+    },
+    {
+      "id": "qwen/qwen3.8-27b-nvfp4",
+      "name": "Qwen3.8 · NVFP4",
+      "color": "#d48caa",
+      "correct": 7,
+      "attempted": 8,
+      "medianTaskSeconds": 1.7614237504999983,
+      "medianSpeedSeconds": 1.570369292000003,
+      "speedRange": [
+        1.570369292000003,
+        1.538820624999993,
+        1.9580256249999948
+      ],
+      "speedCorrect": 3,
+      "requests": 11,
+      "errors": 0,
+      "tokens": {
+        "input": 3278,
+        "output": 4717,
+        "cached": 0,
+        "reasoning": 3835
+      },
+      "solApiEquivalent": null
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "name": "GPT‑6.1 Sol · Cat Code",
+      "color": "#90b7e5",
+      "correct": 8,
+      "attempted": 8,
+      "medianTaskSeconds": 3.9038899794999997,
+      "medianSpeedSeconds": 4.421043709000005,
+      "speedRange": [
+        4.8906493749999935,
+        4.421043709000005,
+        3.839542124999993
+      ],
+      "speedCorrect": 3,
+      "requests": 11,
+      "errors": 0,
+      "tokens": {
+        "input": 2535,
+        "output": 820,
+        "cached": 0,
+        "reasoning": 0
+      },
+      "solApiEquivalent": 0.01327
+    }
+  ],
+  "referencePricing": {
+    "currency": "USD",
+    "tokenme": null,
+    "gemmaDeepInfraPerMillion": {
+      "input": 0.07,
+      "output": 0.34
+    },
+    "qwenDeepInfraPromotionPerMillion": {
+      "input": 0.15,
+      "output": 1.875
+    },
+    "qwenDeepInfraListPerMillion": {
+      "input": 0.2,
+      "output": 2.5
+    },
+    "workload": {
+      "requests": 1000,
+      "inputPerRequest": 10000,
+      "billableOutputPerRequest": 1000
+    },
+    "costRows": [
+      {
+        "label": "Gemma 4 · DeepInfra reference",
+        "value": 1.04,
+        "color": "#8ac7a1",
+        "display": "$1.04"
+      },
+      {
+        "label": "Qwen3.8 · DeepInfra promotion",
+        "value": 3.375,
+        "color": "#e1b46d",
+        "display": "$3.38"
+      },
+      {
+        "label": "Sol · OpenAI API, 90% input cached",
+        "value": 12.9,
+        "color": "#637e9d",
+        "display": "$12.90"
+      },
+      {
+        "label": "Sol · OpenAI API, uncached",
+        "value": 30,
+        "color": "#90b7e5",
+        "display": "$30.00"
+      }
+    ]
+  },
+  "sources": [
+    [
+      "OpenAI: GPT‑6.1 Sol model and pricing",
+      "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
+    ],
+    [
+      "Qwen3.8 official model card and evaluations",
+      "https://huggingface.co/Qwen/Qwen3.8-27B"
+    ],
+    [
+      "NVIDIA: exact Gemma NVFP4 model and evaluations",
+      "https://huggingface.co/nvidia/Gemma-4-26B-A4B-NVFP4"
+    ],
+    [
+      "DeepInfra Gemma reference pricing",
+      "https://deepinfra.com/google/gemma-4-26B-A4B-it/api"
+    ],
+    [
+      "DeepInfra Qwen current promotion and list prices",
+      "https://deepinfra.com/blog/qwen3-8-27b"
+    ],
+    [
+      "TokenMe public site; no price found",
+      "https://www.tokenme.limited/"
+    ]
+  ]
+}
