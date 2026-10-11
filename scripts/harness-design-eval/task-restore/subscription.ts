@@ -2,14 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { policy, sha } from './policy.js'
 
 export const subscriptionPolicy = {
-  model: 'gpt-6.1-sol', effort: 'low', maxRunMs: 360000, maxSuiteMs: 1560000,
+  model: 'gpt-6.1-sol', effort: 'low', maxRunMs: 1200000, maxSuiteMs: 5040000,
+  maxRequestsPerRun: 64, maxRequestsPerSuite: 256,
+  maxInputPerRun: 8000000, maxInputPerSuite: 32000000,
   schedule: [
     { caseId: 'task-resume', repeat: 1, arm: 'off' },
     { caseId: 'task-resume', repeat: 1, arm: 'on' },
     { caseId: 'task-resume', repeat: 2, arm: 'on' },
     { caseId: 'task-resume', repeat: 2, arm: 'off' },
   ],
-  authorization: 'User explicitly authorized existing Cat Code subscription and normal account/token refresh on 2026-10-11. No paid API project, installation, GUI launch or push.',
+  authorization: 'User explicitly authorized existing Cat Code subscription, normal account/token refresh, and a higher-limit rerun on 2026-10-11. No paid API project, installation, GUI launch or push.',
   transport: 'Production Codex subscription HTTP SSE, production translation and credential-send lifecycle; parent holds credentials. Fresh stateless provider request per call.',
   inputAdmission: 'Reserve serialized UTF-8 bytes plus 4096 before dispatch; after a complete provider response reconcile to its actual inclusive input token count. Unknown/failed requests retain the full reservation. This estimate is not tokenizer measurement.',
   outputLimit: '4096 SDK max_tokens; production subscription translator does not forward this field. Request count and wall-time limits enforced; actual output observed after completion.',
@@ -53,7 +55,7 @@ export async function subscriptionGateway(engine: string, options: { save: (reco
         if (stopped || busy) throw Error(stopped ?? 'Concurrent request denied')
         if (body.model !== subscriptionPolicy.model || body.speed === 'fast' || body.max_tokens > policy.maxOutputPerRequest) throw Error('Model/tier/output configuration drift')
         estimate = Buffer.byteLength(JSON.stringify(body)) + 4096
-        if (calls >= 12 || options.suite.requests >= 48 || inputEstimate + estimate > 1000000 || options.suite.input + estimate > 4000000) throw Error('Request/workload admission cap')
+        if (calls >= subscriptionPolicy.maxRequestsPerRun || options.suite.requests >= subscriptionPolicy.maxRequestsPerSuite || inputEstimate + estimate > subscriptionPolicy.maxInputPerRun || options.suite.input + estimate > subscriptionPolicy.maxInputPerSuite) throw Error('Request/workload admission cap')
         codexBody = translateToCodexBody(body).codexBody
         codexBody.reasoning = { ...codexBody.reasoning, effort: 'low' }
         codexBody.prompt_cache_key = options.conversationId
