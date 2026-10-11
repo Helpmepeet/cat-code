@@ -28,8 +28,8 @@ ds-bundle/
 .design-sync/learnings/
 .design-sync/node_modules
 
-# Self-created auto-mode corpus verification probe (regenerable via scripts/auto-mode-corpus.ts)
-fixtures/auto-mode-corpus-probe/
+# Local generated fixtures and test recordings (tracked files remain tracked)
+/fixtures/
 
 # Local review and test evidence
 /tmp/
