@@ -6,7 +6,7 @@ import { policy as offlinePolicy, sha, validatePrices, type Prices } from './pol
 import { environment, profile, dependenciesAt } from './isolation.js'
 import { subscriptionGateway, subscriptionPolicy, subscriptionUsage } from './subscription.js'
 import { gateway } from './gateway.js'
-import { grade, oracleProgram } from './grade.js'
+import { grade, oracleFor } from './grade.js'
 import { dependencyHash, inventory } from './prepare.js'
 import type { SidecarSupervisor as SupervisorType } from '../../../app/supervisor/supervisor.js'
 
@@ -62,7 +62,7 @@ export function exposure(records: any[], seed: any, compactRequired: boolean) {
   return { firstRequestSeen: !!first, originalTrackingRemoved, snapshotCount,
     valid: !!first && (!compactRequired || originalTrackingRemoved) }
 }
-export function verification(frames: any[]) {
+export function verification(frames: any[], marker = 'Invoice checks passed') {
   const calls = new Map<string, string>(), results: any[] = []
   for (const frame of frames) {
     const e = frame.event ?? frame.payload
@@ -74,7 +74,19 @@ export function verification(frames: any[]) {
     }
   }
   const checkCalls = [...calls].filter(([, command]) => /(?:^|[\n;&])\s*bun\s+(?:\.\/)?check\.ts(?:\s|$)/.test(command))
-  return { attempted: checkCalls.length > 0, succeeded: checkCalls.some(([id]) => results.some(r => r.tool_use_id === id && !r.is_error && JSON.stringify(r.content).includes('Invoice checks passed'))) }
+  return { attempted: checkCalls.length > 0, succeeded: checkCalls.some(([id]) => results.some(r => r.tool_use_id === id && !r.is_error && JSON.stringify(r.content).includes(marker))) }
+}
+function regressionVerification(frames: any[]) {
+  const calls = new Set<string>(), results: any[] = []
+  for (const frame of frames) {
+    const event = frame.event ?? frame.payload
+    const message = event?.type === 'message' ? event.message : null
+    for (const block of Array.isArray(message?.message?.content) ? message.message.content : []) {
+      if (message.type === 'assistant' && block.type === 'tool_use' && block.name === 'Bash' && /(?:^|[\n;&])\s*bun\s+test(?:\s|$)/.test(block.input?.command ?? '')) calls.add(block.id)
+      if (message.type === 'user' && block.type === 'tool_result') results.push(block)
+    }
+  }
+  return results.some(r => calls.has(r.tool_use_id) && !r.is_error && /[1-9]\d* pass/.test(JSON.stringify(r.content)) && /0 fail/.test(JSON.stringify(r.content)))
 }
 export async function run(root: string, live: boolean, approvalPath?: string, subscription = false) {
   const policy = subscription ? { ...offlinePolicy, ...subscriptionPolicy } : offlinePolicy
@@ -167,8 +179,8 @@ export async function run(root: string, live: boolean, approvalPath?: string, su
     writeFileSync(secret, 'Private grader/output canary')
     const probeCode = `import {readFileSync, openSync, closeSync, lstatSync, realpathSync} from 'node:fs';
       for(const p of process.argv.slice(1)){let denied=false;try{readFileSync(p)}catch{denied=true}if(!denied)throw Error('Private file readable')}
-      readFileSync('src/invoice.ts');
-      const fd=openSync('src/invoice.ts','r');lstatSync('/dev/fd/'+fd);realpathSync('/dev/fd/'+fd);closeSync(fd);
+      readFileSync(${JSON.stringify(f.probeFile)});
+      const fd=openSync(${JSON.stringify(f.probeFile)},'r');lstatSync('/dev/fd/'+fd);realpathSync('/dev/fd/'+fd);closeSync(fd);
       if(process.env.TASK_EVAL_GATEWAY||process.env.TASK_EVAL_CAPABILITY)throw Error('Gateway capability leaked');
       let blocked=false;try{await fetch('https://example.com')}catch{blocked=true}if(!blocked)throw Error('External transport admitted');
       console.log('isolation passed');`
@@ -235,7 +247,7 @@ export async function run(root: string, live: boolean, approvalPath?: string, su
       await submit(f.continuation, 'work')
       if (subscription) {
         const beforeRecovery = exposure(records, seed, true)
-        writeFileSync(join(out, 'before-recovery.json'), JSON.stringify({ exposure: beforeRecovery, verification: verification(frames) }))
+        writeFileSync(join(out, 'before-recovery.json'), JSON.stringify({ exposure: beforeRecovery, verification: verification(frames, f.checkMarker) }))
       }
       await submit(f.recovery, 'recovery')
     } catch (caught) { error = String(caught) }
@@ -244,23 +256,27 @@ export async function run(root: string, live: boolean, approvalPath?: string, su
     // fixture code from reading answers, keys, or other runs or writing results.
     let oracle: Record<string, boolean> | null = null
     if (!f.redirect) {
-      const grader = Bun.spawn(['/usr/bin/sandbox-exec', '-p', sandbox.replace(`(allow file-write* (subpath ${JSON.stringify(stage)}) (literal "/dev/null"))`, '(allow file-write* (literal "/dev/null"))'),
-        process.execPath, '--eval', oracleProgram], { cwd, env: environment(home, temp, f.mode), stdout: 'pipe', stderr: 'pipe' })
+      const oracleTemp = join(temp, 'oracle')
+      mkdirSync(oracleTemp, { recursive: true })
+      const graderSandbox = sandbox.replace(`(allow file-write* (subpath ${JSON.stringify(stage)}) (literal "/dev/null"))`, `(allow file-write* (subpath ${JSON.stringify(oracleTemp)}) (literal "/dev/null"))`)
+      const grader = Bun.spawn(['/usr/bin/sandbox-exec', '-p', graderSandbox,
+        process.execPath, '--eval', oracleFor(f.id)], { cwd, env: { ...environment(home, temp, f.mode), TASK_ORACLE_TMP: oracleTemp }, stdout: 'pipe', stderr: 'pipe' })
       const timer = setTimeout(() => grader.kill(), 5000)
       const [stdout, stderr, code] = await Promise.all([new Response(grader.stdout).text(), new Response(grader.stderr).text(), grader.exited])
       clearTimeout(timer)
       writeFileSync(join(out, 'oracle.json'), JSON.stringify({ stdout, stderr, code }))
       if (code === 0) { try { oracle = JSON.parse(stdout.trim()) } catch {} }
     }
-    const check = verification(frames)
-    const scoring = grade(cwd, f.id, oracle, f.redirect ? check.attempted : check.succeeded)
+    const check = verification(frames, f.checkMarker)
+    const regressionVerified = regressionVerification(frames)
+    const scoring = grade(cwd, f.id, oracle, f.redirect ? check.attempted : check.succeeded, regressionVerified)
     const boundaries = new Set(frames.flatMap(frame => frame.event?.message?.subtype === 'compact_boundary' ? [frame.event.message.uuid] : [])).size
     const e = exposure(records, seed, f.cohort !== 'ordinary')
     const u = subscription ? subscriptionUsage(records) : usage(records)
     const validity = !error && e.valid && (f.cohort === 'ordinary' ? boundaries === 0 : boundaries > 0)
     const result = { ...item, cohort: f.cohort, mocked: !live, error, valid: validity, boundaries, exposure: e,
       restorationDeliveryGap: item.arm === 'on' && f.cohort === 'forced' && e.snapshotCount !== 1,
-      ...scoring, verification: check, elapsedMs: Date.now() - started, usage: u, reservations: g.stats(),
+      ...scoring, verification: check, regressionVerified, elapsedMs: Date.now() - started, usage: u, reservations: g.stats(),
       subscription, costUsdEstimate: prices ? cost(records, prices) : null }
     cpSync(cwd, join(out, 'workspace'), { recursive: true })
     // Save isolated transcripts, not configuration/credentials. No live key exists

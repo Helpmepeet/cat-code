@@ -1,8 +1,22 @@
 import { constants, cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { inventory, dependencyHash } from './prepare.js'
+import { inventory, dependencyHash, prepare } from './prepare.js'
 import { sha } from './policy.js'
 import { subscriptionPolicy } from './subscription.js'
+
+if (process.env.CAT_CODE_EVAL_FIXTURE === 'queue-resume') {
+  const out = resolve(process.argv[2]!)
+  await prepare(out)
+  const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'))
+  manifest.subscription = subscriptionPolicy
+  manifest.schedule = subscriptionPolicy.schedule
+  manifest.preparation = { authorization: subscriptionPolicy.authorization, fixture: 'queue-resume', source: 'Pinned repair with new public queue inputs and hidden independent oracle; no live model warm-up.' }
+  const frozen = JSON.stringify(manifest, null, 2)
+  writeFileSync(join(out, 'manifest.json'), frozen, { mode: 0o600 })
+  writeFileSync(join(out, 'manifest.sha256'), sha(frozen) + '\n')
+  console.log(JSON.stringify({ out, manifestSha256: sha(frozen) }))
+  process.exit(0)
+}
 
 const proposal = JSON.parse(readFileSync(resolve(import.meta.dir, '../task-restore-manifest.v2.json'), 'utf8'))
 const source = proposal.frozenSource.localPath, out = resolve(process.argv[2]!)

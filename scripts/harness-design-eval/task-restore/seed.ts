@@ -45,8 +45,8 @@ for (const subject of f.pending) await toolRound(TaskCreateTool, { subject, desc
 for (let i = 0; i < (f.long ? 24 : 2); i++) {
   const call = randomUUID()
   messages.push(createAssistantMessage({ content: [{ type: 'tool_use', id: call, name: 'Read', input: { file_path: `${process.cwd()}/investigation/batch-${i}.txt` } }] }),
-    createUserMessage({ content: [{ type: 'tool_result', tool_use_id: call, content: investigation(i) }] }),
-    createAssistantMessage({ content: `Batch ${i} inspected. Floating-point summation and unescaped delimiters explain the export failures. Source edits, documentation, and verification are still pending.` }))
+    createUserMessage({ content: [{ type: 'tool_result', tool_use_id: call, content: investigation(i, f.id) }] }),
+    createAssistantMessage({ content: `Batch ${i} inspected. ${f.observation}` }))
 }
 if (f.redirect) messages.push(createUserMessage({ content: f.correction }), createAssistantMessage({ content: 'The earlier repair is cancelled. I will perform the read-only review and preserve existing files.' }))
 await recordTranscript(messages)

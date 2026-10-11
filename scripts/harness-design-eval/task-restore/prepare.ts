@@ -1,7 +1,7 @@
 import { constants, cpSync, existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { cases, fixture, investigation } from './fixtures.js'
+import { cases, queueCase, fixture, investigation } from './fixtures.js'
 import { policy, schedule, sha } from './policy.js'
 import { environment } from './isolation.js'
 
@@ -43,7 +43,7 @@ export async function prepare(out: string) {
   cpSync(import.meta.dir, join(engine, 'scripts/harness-design-eval/task-restore'), { recursive: true })
   cpSync(join(repo, 'node_modules'), join(engine, 'node_modules'), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE })
   const inputs: Record<string, unknown> = {}
-  for (const c of cases) {
+  for (const c of process.env.CAT_CODE_EVAL_FIXTURE === 'queue-resume' ? [queueCase] : cases) {
     const f = fixture(c.id), root = join(out, 'seeds', c.id), cwd = join(root, 'workspace'), home = join(root, 'home'), temp = join(root, 'tmp')
     for (const d of [cwd, home, temp, join(home, '.cat-code')]) mkdirSync(d, { recursive: true, mode: 0o700 })
     for (const [p, body] of Object.entries(f.files)) {
@@ -51,7 +51,7 @@ export async function prepare(out: string) {
       writeFileSync(join(cwd, p), body)
     }
     mkdirSync(join(cwd, 'investigation'))
-    for (let i = 0; i < (c.long ? 24 : 2); i++) writeFileSync(join(cwd, 'investigation', `batch-${i}.txt`), investigation(i))
+    for (let i = 0; i < (c.long ? 24 : 2); i++) writeFileSync(join(cwd, 'investigation', `batch-${i}.txt`), investigation(i, c.id))
     const sessionId = randomUUID()
     const config = { hasCompletedOnboarding: true, primaryProvider: 'anthropic', projects: { [cwd]: { hasTrustDialogAccepted: true } } }
     writeFileSync(join(home, '.cat-code/.config.json'), JSON.stringify(config), { mode: 0o600 })

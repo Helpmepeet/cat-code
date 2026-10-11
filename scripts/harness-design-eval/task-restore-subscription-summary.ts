@@ -9,7 +9,7 @@ const input = JSON.parse(readFileSync(join(directory, 'results.json'), 'utf8'))
 const manifestText = readFileSync(join(root, 'manifest.json'), 'utf8')
 if (sha(manifestText) !== input.manifestSha256) throw Error('Evidence manifest mismatch')
 const attempts = input.results.map((result: any) => {
-  const folder = join(directory, `task-resume-${result.repeat}-${result.arm}`)
+  const folder = join(directory, `${result.caseId}-${result.repeat}-${result.arm}`)
   const records = JSON.parse(readFileSync(join(folder, 'requests.json'), 'utf8'))
   const requests = records.filter((r: any) => r.kind === 'request')
   let actualInput = 0, cachedInput = 0, actualOutput = 0, reasoningOutput = 0, unknown = 0
@@ -68,7 +68,7 @@ const attempts = input.results.map((result: any) => {
     maximumSnapshotsPerRequest: Math.max(0, ...calls.map((call: any) => call.restorationCount)),
     excludedControls: exclusions.every(text => restoredBlocks.every((block: string) => !block.includes(text))),
     taskIds: [...snapshots.values()].flatMap(snapshot => snapshot.content.map((task: any) => task.id)) }
-  return { taskControlActions, taskStateMistakes, restoration, repeat: result.repeat, arm: result.arm, valid: result.valid, complete: result.complete,
+  return { caseId: result.caseId, taskControlActions, taskStateMistakes, restoration, repeat: result.repeat, arm: result.arm, valid: result.valid, complete: result.complete,
     error: result.error, mistakes: result.incorrect, omissions: result.omissions, exposure: result.exposure,
     elapsedMs: result.elapsedMs, usage: result.usage, verification: result.verification, calls,
     resultSha256: sha(readFileSync(join(folder, 'result.json'))), requestsSha256: sha(readFileSync(join(folder, 'requests.json'))),
@@ -88,7 +88,7 @@ const infrastructure = process.argv.slice(3).map(path => {
   if (admitted) {
     const summary = JSON.parse(readFileSync(join(folder, 'subscription-results/verified-summary.json'), 'utf8'))
     for (const attempt of summary.attempts) {
-      const original = join(folder, 'subscription-results', `task-resume-${attempt.repeat}-${attempt.arm}`)
+      const original = join(folder, 'subscription-results', `${attempt.caseId ?? 'task-resume'}-${attempt.repeat}-${attempt.arm}`)
       if (sha(readFileSync(join(original, 'requests.json'))) !== attempt.requestsSha256 || sha(readFileSync(join(original, 'result.json'))) !== attempt.resultSha256) throw Error('Prior model evidence drift')
     }
     return { kind: 'failed-model-batch', ...summary }

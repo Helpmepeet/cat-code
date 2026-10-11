@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { policy, sha } from './policy.js'
 
+const caseId = process.env.CAT_CODE_EVAL_FIXTURE === 'queue-resume' ? 'queue-resume' : 'task-resume'
 export const subscriptionPolicy = {
   model: 'gpt-6.1-sol', effort: 'low', maxRunMs: 1200000, maxSuiteMs: 5040000,
   maxRequestsPerRun: 64, maxRequestsPerSuite: 256,
   maxInputPerRun: 8000000, maxInputPerSuite: 32000000,
   schedule: [
-    { caseId: 'task-resume', repeat: 1, arm: 'off' },
-    { caseId: 'task-resume', repeat: 1, arm: 'on' },
-    { caseId: 'task-resume', repeat: 2, arm: 'on' },
-    { caseId: 'task-resume', repeat: 2, arm: 'off' },
+    { caseId, repeat: 1, arm: 'off' },
+    { caseId, repeat: 1, arm: 'on' },
+    { caseId, repeat: 2, arm: 'on' },
+    { caseId, repeat: 2, arm: 'off' },
   ],
   authorization: 'User explicitly authorized existing Cat Code subscription, normal account/token refresh, and a higher-limit rerun on 2026-10-11. No paid API project, installation, GUI launch or push.',
   transport: 'Production Codex subscription HTTP SSE, production translation and credential-send lifecycle; parent holds credentials. Fresh stateless provider request per call.',

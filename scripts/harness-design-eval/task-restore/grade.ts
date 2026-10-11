@@ -1,6 +1,9 @@
 import { readFileSync, lstatSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { files, investigation } from './fixtures.js'
+import { queueFiles } from './queue-fixture.js'
+import { queueChecks, queueOracleProgram } from './queue-oracle.js'
+export function oracleFor(id: string) { return id === 'queue-resume' ? queueOracleProgram : oracleProgram }
 export const oracleProgram = `
 import { total } from './src/invoice.ts'; import { csv } from './src/export.ts';
 const checks = {};
@@ -26,7 +29,18 @@ function safeRead(root: string, path: string): string | null {
     return readFileSync(current, 'utf8')
   } catch { return null }
 }
-export function grade(cwd: string, id: string, oracle: Record<string, boolean> | null, verifiedCommand: boolean) {
+export function grade(cwd: string, id: string, oracle: Record<string, boolean> | null, verifiedCommand: boolean, regressionVerified = false) {
+  if (id === 'queue-resume') {
+    const protectedFiles = ['archive/ledger.csv', 'SPEC.md', 'check.ts', 'package.json', 'src/types.ts']
+    const incorrect = protectedFiles.filter(p => safeRead(cwd, p) !== queueFiles[p])
+    const readme = safeRead(cwd, 'README.md') ?? ''
+    const docs = [/depend|block/i, /lease|fenc/i, /retry|backoff/i, /idempoten|dedup/i, /append|persist|durab/i, /tail|torn|partial|fragment/i]
+    const omissions = [...queueChecks.filter(k => oracle?.[k] !== true),
+      ...docs.flatMap((r,i) => r.test(readme) ? [] : [`documentation topic ${i+1}`]),
+      ...(!verifiedCommand ? ['required successful bun check.ts'] : []),
+      ...(!regressionVerified ? ['required successful regression tests'] : [])]
+    return { complete: !incorrect.length && !omissions.length, omissions, incorrect }
+  }
   const changedProtected = ['archive/ledger.csv', 'package.json', 'check.ts'].filter(p =>
     safeRead(cwd, p) !== files[p as keyof typeof files])
   if (id === 'redirect') {
