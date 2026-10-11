@@ -1,5 +1,9 @@
 # Subagent dock implementation report
 
+The fresh independent review, repairs and current-main integration are recorded
+in [the October 11 review](2026-10-11-subagent-dock-review-and-merge.md). The
+results below describe the original October 9 implementation run.
+
 Implemented on branch `codex/subagent-dock` in the isolated worktree
 `/Users/pt/.codex/worktrees/subagent-dock/cat-code`, starting from `a0dfe5a1`.
 The original shared checkout was preserved. The approved

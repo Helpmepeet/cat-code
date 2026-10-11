@@ -3,6 +3,8 @@
 Status: implemented and verified headlessly on 2026-10-09. GUI acceptance
 remains pending operator authorization; see the
 [implementation report](2026-10-09-subagent-dock-implementation-report.md).
+Independent review and current-main integration: [October 11 review](2026-10-11-subagent-dock-review-and-merge.md).
+
 Visual and motion spec:
 [`docs/design-html/2026-10-08-subagent-dock-top-right.html`](../design-html/2026-10-08-subagent-dock-top-right.html)
 (PROPOSED view, Events, Play, and the states strip). The mockup is the
