@@ -5124,14 +5124,27 @@ export async function loadTranscriptFile(
           const parent = isCompactBoundaryMessage(entry)
             ? (entry.parentUuid ?? entry.logicalParentUuid)
             : entry.parentUuid
+          // Prefix compaction's logical parent belongs to the summarized
+          // prefix, while the selected tip can be in the preserved suffix.
+          // Follow that boundary only when it explicitly retains this tip;
+          // ancestry alone must not revive a discarded continuation.
+          const preserved = isCompactBoundaryMessage(entry)
+            ? resolvePreservedSegment(entry)
+            : undefined
+          const preservesActiveTip =
+            entry.sessionId === activeConversationTip.sessionId &&
+            activeConversationTip.tipUuid !== null &&
+            (preserved?.durableUuids
+              ? preserved.durableUuids.includes(activeConversationTip.tipUuid)
+              : preserved?.tailUuid === activeConversationTip.tipUuid)
           const extendsActiveBranch =
-            activeConversationRoot === null
+            preservesActiveTip || (activeConversationRoot === null
               ? parent === null ||
                 (parent !== null &&
                   activeConversationDescendants.has(parent))
               : parent === activeConversationRoot ||
                 (parent !== null &&
-                  activeConversationDescendants.has(parent))
+                  activeConversationDescendants.has(parent)))
           if (extendsActiveBranch) {
             activeConversationDescendants.add(entry.uuid)
             if (entry.type === 'user' || entry.type === 'assistant') {

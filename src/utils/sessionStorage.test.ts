@@ -550,12 +550,15 @@ describe('session storage', () => {
     ])
   })
 
-  test('active tip follows a compact continuation through logicalParentUuid', async () => {
+  // The real sidecar screen owns provider delivery. This reader case isolates
+  // the branch-selection regression and retains coverage of legacy metadata.
+  test.each(['summarized', 'preserved', 'legacy-preserved'] as const)('active tip follows a compact continuation with a %s tip', async mode => {
     const retained = randomUUID()
     const replacement = randomUUID()
     const boundary = randomUUID()
     const summary = randomUUID()
     const later = randomUUID()
+    const snapshot = randomUUID()
     const common = {
       isSidechain: false,
       sessionId,
@@ -567,9 +570,14 @@ describe('session storage', () => {
       { ...common, type: 'user', uuid: retained, parentUuid: null, timestamp: '2026-09-12T00:00:00.000Z', message: { role: 'user', content: 'retained' } },
       { type: 'active-conversation-tip', sessionId, tipUuid: retained },
       { ...common, type: 'user', uuid: replacement, parentUuid: retained, timestamp: '2026-09-12T00:00:01.000Z', message: { role: 'user', content: 'replacement' } },
-      { ...common, type: 'system', subtype: 'compact_boundary', uuid: boundary, parentUuid: null, logicalParentUuid: replacement, timestamp: '2026-09-12T00:00:02.000Z', content: 'Conversation compacted', level: 'info', isMeta: false, compactMetadata: { trigger: 'manual', preTokens: 200000 } },
+      { type: 'active-conversation-tip', sessionId, tipUuid: replacement },
+      { ...common, type: 'system', subtype: 'compact_boundary', uuid: boundary, parentUuid: null, logicalParentUuid: mode === 'summarized' ? replacement : retained, timestamp: '2026-09-12T00:00:02.000Z', content: 'Conversation compacted', level: 'info', isMeta: false, compactMetadata: { trigger: 'manual', preTokens: 200000,
+        ...(mode === 'preserved' ? { preservedMessages: { anchorUuid: summary, durableUuids: [replacement] } } : {}),
+        ...(mode === 'legacy-preserved' ? { preservedSegment: { anchorUuid: summary, headUuid: replacement, tailUuid: replacement } } : {}),
+      } },
       { ...common, type: 'user', uuid: summary, parentUuid: boundary, timestamp: '2026-09-12T00:00:03.000Z', isCompactSummary: true, message: { role: 'user', content: 'summary' } },
       { ...common, type: 'user', uuid: later, parentUuid: summary, timestamp: '2026-09-12T00:00:04.000Z', message: { role: 'user', content: 'post-compaction' } },
+      { ...common, type: 'attachment', uuid: snapshot, parentUuid: later, timestamp: '2026-09-12T00:00:05.000Z', attachment: { type: 'task_reminder', content: [], itemCount: 0, compactState: { scope: sessionId, text: 'Unfinished tracked work at compaction.' } } },
     ]
     await writeFile(
       getTranscriptPathForSession(sessionId),
@@ -580,7 +588,9 @@ describe('session storage', () => {
     expect(loaded.messages.map(message => message.uuid)).toEqual([
       boundary,
       summary,
+      ...(mode === 'summarized' ? [] : [replacement]),
       later,
+      snapshot,
     ])
     const display = await loadDisplayTranscriptFromJsonlPath(
       getTranscriptPathForSession(sessionId),
