@@ -2,11 +2,20 @@
 
 Date: 2026-10-11
 
-Status: research and implementation proposal; no runtime changes or model experiments performed
+Status: offline execution completed on 2026-10-11; gated P2 candidate implemented;
+P1/P3 and live screening/default promotion deferred by the evidence gates.
+
+Execution baseline: `b0bbbaa94aafbec6b04c009748a0ee74d0619cb3`. See the
+[execution report](../reports/2026-10-11-harness-improvement-execution.md) and
+[sanitized audit](../reports/2026-10-11-harness-log-audit.json) for observed
+coverage, estimates, decisions, validation and remaining gates. No quota-consuming
+model evaluation, live account change, installation or GUI observation occurred.
 
 Source baseline: `94a5790933c2bc57765973a33fd28d20b36fe07d`
 
-Revision: source-checked against `1b4e34c7a249417d6c9560b710157bc95c2979c1` after review. Log availability was checked; log contents have not yet been analyzed for this proposal.
+Revision: source-checked against `1b4e34c7a249417d6c9560b710157bc95c2979c1` after review.
+The original proposal only inventoried logs; the dated execution report now
+analyzes their contents and rechecks the source affecting implementation decisions.
 
 ## Recommendation
 
@@ -259,6 +268,21 @@ Rollback should disable the experimental policy for new requests while retaining
 
 ## What is known and what remains open
 
-The source establishes mechanisms, defaults, and likely integration points. The log inventory establishes available files, not compaction frequency or request composition. The July audit supplies historical evidence of cache costs; its counts and model windows have not been rerun for current sessions. Installed build identity, live feature overrides, and real task distributions remain unmeasured here.
+The original source study established mechanisms, defaults, and likely integration
+points; its log inventory established availability only. The execution report now
+measures a censored October cohort, verifies transcript identities and records a
+post-cap composition proxy. The July audit remains historical evidence; its counts
+and model windows were not treated as current measurements. Installed build
+identity, live feature overrides, real task distributions and cost per verified
+completion remain unmeasured here.
 
-The next action is P0a's read-only log audit, followed by the smallest offline reproduction needed. That evidence decides whether to pursue elision at all. Missing-task restoration can proceed as a separate bounded repair if reproduced; every-request plan injection and earlier warm-cache clearing remain deferred.
+Execution decision: P0a is complete. Recorded pressure never crossed the automatic
+threshold in the covered cohort; the single verified manual boundary has a large
+old-output upper bound but no causal cache/recovery savings. P1 remains deferred,
+so its projection contract has not been introduced. P2's missing-state gap was
+reproduced and repaired as an opt-in candidate across selected compaction and
+durable-resume paths. Full tool exposure, normal reminder frequency and existing
+diagnostics remain the default. P3, every-request plan injection and earlier
+warm-cache clearing remain deferred. Offline correctness does not establish model
+improvement or cost per verified completion; live screening and promotion need
+the concrete authorization package and evidence specified above.
