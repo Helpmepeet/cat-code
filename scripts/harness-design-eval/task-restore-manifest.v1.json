@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "experiment": "task-restore-screen-v1",
+  "engineCommit": "5e2b9dae4a06a81fba50800d5e974b889c293d96",
+  "provider": "firstParty",
+  "model": "claude-sonnet-5-5",
+  "effort": "low",
+  "runtimeFeatures": [
+    "TRANSCRIPT_CLASSIFIER",
+    "REACTIVE_COMPACT",
+    "COMPACT_TASK_RESTORE"
+  ],
+  "repetitions": 2,
+  "runs": 16,
+  "maxRequestsPerRun": 12,
+  "maxRetries": 1,
+  "maxInputReservationPerRun": 1000000,
+  "maxOutputPerRequest": 4096,
+  "maxRunMs": 360000,
+  "maxSuiteMs": 6240000,
+  "maxUsdPerRun": 4,
+  "maxUsdSuite": 64,
+  "recoveryTurns": 1,
+  "wholeRunRetries": 0,
+  "primary": "verified completion in the two forced unfinished-work cases",
+  "decision": "Any attributable incorrect or unauthorized action blocks further screening. Durable restoration delivery gaps block advancement. Fewer than 4 valid forced pairs or unknown usage leaves the screen inconclusive. Advance to separately approved held-out confirmation only if on has at least one paired completion win, no paired completion loss, no safety loss, and no increase in aggregate time or token-priced cost per verified completion. Never promote/default-enable from this screen.",
+  "pricing": null,
+  "account": "PENDING: dedicated first-party Anthropic project API key with no other workload; never borrow the operator account or vault. Key stays only in the parent gateway. No OAuth, refresh or account rotation.",
+  "billingLimit": "PENDING: operator must confirm an enforceable dedicated-provider spending limit at or below $64. Do not assume such a limit exists. Local serialized-byte reservations are conservative estimates, not a proven billable-token bound.",
+  "outputReservation": "Every admitted request reserves max_tokens; no refund for incomplete/failed calls. Serialized UTF-8 bytes plus 4096 reserve input conservatively; this is an admission estimate, not measured usage. Price ceiling must cover all input/cache tiers and output for this exact model.",
+  "cache": "Fresh process/config/session per arm; no client continuation across arms. Balanced arm order. Server prefix-cache reuse can occur and is reported, not claimed controlled cold/warm.",
+  "seed": "Reconstructed unfinished workflow; production tracking tool execution plus real transcript writer/reader. No model-authored warm-up. Manual prefix compaction, natural summary. No lowered automatic threshold.",
+  "schedule": [
+    {
+      "caseId": "task-resume",
+      "repeat": 1,
+      "arm": "off"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 1,
+      "arm": "on"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 1,
+      "arm": "on"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 1,
+      "arm": "off"
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 1,
+      "arm": "off"
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 1,
+      "arm": "on"
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 1,
+      "arm": "on"
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 1,
+      "arm": "off"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 2,
+      "arm": "on"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 2,
+      "arm": "off"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 2,
+      "arm": "off"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 2,
+      "arm": "on"
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 2,
+      "arm": "on"
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 2,
+      "arm": "off"
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 2,
+      "arm": "off"
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 2,
+      "arm": "on"
+    }
+  ],
+  "engineArchiveSha256": "5552ac46d58d944503c36ca6daf14bc98c082c5027507eeead88bf6715edaca7",
+  "runtime": {
+    "bun": "1.4.0",
+    "binarySha256": "539598c775882420b9d8deb7dc14d845f20f7d26f5600c50ab067dde6ac3f3bf",
+    "dependencyLockSha256": "d49835d680d72b1c1d91fe1fd1b15af691fe32f2a17645480330a28b162e32df",
+    "dependencyTreeSha256": "a761be40938229f2b6fde6585938d92d71392828bd565e2f5017e30af8a576c2"
+  },
+  "preparation": {
+    "sourceWorkingTree": "Only pinned Git archive plus hashed evaluation support; unrelated AgentTool edit excluded",
+    "keyAndBilling": "Unresolved offline. No key was read, no live request was sent.",
+    "liveAuthorization": "Authorize this exact manifest digest and schedule, dedicated project/key, dated all-tier price ceilings, $64/16-run/104-minute limits, one API retry and one fixed recovery turn. No installs, GUI, push or default change."
+  },
+  "fullManifestSha256": "46db4ef1399289890b35bced6bf9c5df8c0f48e5910386876e94484d01e10873",
+  "fullManifestLocalPath": "/private/tmp/cat-code-task-restore-screen-v1-approved-proposal/manifest.json",
+  "engineInventorySha256": "8ac4883ecd62947549e69476cea187b5151af5a84ad41e4d4c00b7a3b6232dcd",
+  "evaluationSourceHashes": {
+    "scripts/harness-design-eval/task-restore/collect.ts": "4625d055afb884817a617f812671f84d3b55287755b5540c56960a188ccb5454",
+    "scripts/harness-design-eval/task-restore/evaluation.test.ts": "4827940de55350d78fbf569714258d3deafdc11cc9e718af6554096b65d086ca",
+    "scripts/harness-design-eval/task-restore/fixtures.ts": "397e98287ed61565577b41f449e0d1989c407f29faf48d34e99afd05bad5bc64",
+    "scripts/harness-design-eval/task-restore/gateway.ts": "d1b601902d7030be524193fb83f18dccca28e3eb716c47170fc33ce2d47e0ce4",
+    "scripts/harness-design-eval/task-restore/grade.ts": "931b59eb87955160d4e8ebb018b43ec835ad1df265951f780eb2d0300fdb218f",
+    "scripts/harness-design-eval/task-restore/isolation.ts": "378ec8fb29076eda7e8f31eb9e9de9333ca5691e21fa406271dbfe24269e4641",
+    "scripts/harness-design-eval/task-restore/policy.ts": "841f18dca46e30eba97020d61dcff6de66a886014d51af37bcb983193fb00ff0",
+    "scripts/harness-design-eval/task-restore/preload.ts": "321041198df4e9f0b4c57f4a71591b98adb41cb4f60063ce22c0780f928432b0",
+    "scripts/harness-design-eval/task-restore/prepare.ts": "5f7bb96d351371b303a78a52636eb6a06fc41bee391a6dc5a169c24f13bbfaa5",
+    "scripts/harness-design-eval/task-restore/run.ts": "ba41fdbd3edbcf88d19795327df26cc3a077219fd48075e05d69372df687910a",
+    "scripts/harness-design-eval/task-restore/seed.ts": "fa4cb39bec1034e5a609331fbfcc656fca0f681c4337881916fc2d98051b33be"
+  },
+  "fixtureInputs": {
+    "task-resume": {
+      "sha256": "b987413b2b4711d3134f4b46be68e4d51a81b6abd4d4a0765aab8b149d0d3201",
+      "mode": "task",
+      "messages": 79,
+      "trackingExchanges": 3
+    },
+    "task-current": {
+      "sha256": "1de98034df2b948317e171b77827c6e7f8b2faf4400cc090c4c10a22fda5666f",
+      "mode": "task",
+      "messages": 79,
+      "trackingExchanges": 3
+    },
+    "redirect": {
+      "sha256": "bbed45660f45c4fef60da604f7f3650d652140d12baad05367e3e36fc67be54e",
+      "mode": "task",
+      "messages": 81,
+      "trackingExchanges": 3
+    },
+    "ordinary": {
+      "sha256": "0303e21e1abf7dc1a8d2f926ed9794e3da29facd712e1d902f619e3b97ce53f9",
+      "mode": "task",
+      "messages": 13,
+      "trackingExchanges": 3
+    }
+  },
+  "limits": {
+    "providerRequests": 192,
+    "inputReservationTokens": 16000000,
+    "outputTokens": 786432,
+    "totalReservationTokens": 16786432,
+    "usd": 64,
+    "suiteMinutes": 104,
+    "runMinutes": 6,
+    "estimatorIsBillableGuarantee": false
+  },
+  "unresolved": [
+    "Dedicated first-party Anthropic project/key and exact-model availability",
+    "Dated input, output, cache-read, cache-write-5m and cache-write-1h rates covering applicable pricing tiers",
+    "Confirmed enforceable provider spend ceiling at or below 64 USD",
+    "Explicit human authorization bound to this full-manifest digest"
+  ]
+}

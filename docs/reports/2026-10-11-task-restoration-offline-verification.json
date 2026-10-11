@@ -1,0 +1,561 @@
+{
+  "schema": 1,
+  "manifestSha256": "46db4ef1399289890b35bced6bf9c5df8c0f48e5910386876e94484d01e10873",
+  "engineCommit": "5e2b9dae4a06a81fba50800d5e974b889c293d96",
+  "evidence": "MOCKED transport infrastructure only; no model behavior or economics evidence",
+  "liveCalls": 0,
+  "summary": {
+    "attempts": 16,
+    "valid": 16,
+    "verifiedFixtureCompletions": 16,
+    "forcedCompactAttempts": 12,
+    "ordinaryAttempts": 4,
+    "restorationDeliveryGaps": 2,
+    "scriptedProviderRequests": 60
+  },
+  "checks": {
+    "evaluatorTests": {
+      "passed": 5,
+      "failed": 0,
+      "assertions": 32
+    },
+    "preFixNegativeControls": "2 expected failures: unexpected redirected file not detected; missing usage treated as zero",
+    "mapsLint": "17 maps; zero warnings",
+    "undefinedNames": "passed; zero undefined names",
+    "rootTypecheck": "failed with 1897 diagnostics; none in task-restore evaluator files; no full repository typecheck claim",
+    "liveGuard": "unapproved manifest-bound authorization refuses before credential read",
+    "featureDefault": "unchanged",
+    "unrelatedAgentToolEdit": "preserved"
+  },
+  "privateEvidenceRoot": "/private/tmp/cat-code-task-restore-screen-v1-approved-proposal/offline-results",
+  "attempts": [
+    {
+      "caseId": "task-resume",
+      "repeat": 1,
+      "arm": "off",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "516731ae8b90635872084b5422d3046f4208508ad5d55003ac508ada2ff1672e",
+        "frames.jsonl": "1c416749f592e782b62db2232a1e717e1f5c9a27aae0258b5fa5454512eb031a",
+        "result.json": "7b6478233e410cbd43ac2ed94d70bcb9f0874705e43e8e3d71d99968dc81b965",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "2473067a935418f65f9830a2c4a7d60db003d78642be0dfccd7de66f13f1c880"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 1,
+      "arm": "on",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": true,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 1,
+      "evidenceSha256": {
+        "requests.jsonl": "beb678d4349478d55489e27874fceda03803fd8026bd00ab67a16cadd7799886",
+        "frames.jsonl": "5a5f64af8d1a4cf7eb16f3fa4e43fc5754355726e42bf72adb7943e20e352a38",
+        "result.json": "2c89e69b95309acd7b475669a526bb61658871d5e6dc87516f7b9fcc545f26f8",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "0c41380a87c17f0b1992370acc435d14f15e111c2ac4a4ebdbe9c2cc69fa5861"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 1,
+      "arm": "on",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 1,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 1,
+      "evidenceSha256": {
+        "requests.jsonl": "881f166f0a080249388a3e59d20a4948505450248234d1d0b19445a7b46a7e6f",
+        "frames.jsonl": "1d305c9454479af4d140e132ad897edd7ab84e33e0ff063b198fc5032c16a62a",
+        "result.json": "be3ccc9196d0da462137b078a66bec0c665162f32fbcbea87f0326894962906e",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "c06e6a377cb2bf4a06b140f4c3b06f553de2b55c0cb3266f62239d89a30b2140"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 1,
+      "arm": "off",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "40958a87b9a6ac11cef360a8708724ca45be4ac775ad0857354c753948a43725",
+        "frames.jsonl": "19140613930c3f651c439a5fb03cf9eef4223df8da0d9aaa3b7cab021d78ac1d",
+        "result.json": "b10d841f636e79aa10ab883f8b8e013cea4f41917e4341de94b13381a987863c",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "6c59ea9c12f7cf6341f5e0ef04194b45cd60f7a718bc87a468714534d31c5ea8"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 1,
+      "arm": "off",
+      "cohort": "forced-safety",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": false,
+        "succeeded": false
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "02b012a3452946b4a526b65cfdf16d53e93590e789250a82591ae2aaabe8c7d5",
+        "frames.jsonl": "260d50f736e8e92346cda7e41cda066e70d6706d6c36fa59e5396fa4f877d5af",
+        "result.json": "f0286679020aa1bd400e69b1a941019fe76317e0d2ec0d585ad7750d2ff2ecfd",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "89fdf388675b59752fe717f802c7a804bc33ea71cda05b07e077250ea9cafaad"
+      },
+      "oracleReceiptSha256": null
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 1,
+      "arm": "on",
+      "cohort": "forced-safety",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": false,
+        "succeeded": false
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "d4b132e532179dbda476d9432870b60fc3d8062d591b3d382a1e705ac0dc7f51",
+        "frames.jsonl": "09c3a8ff29d781cfbb32f3b0ecdc1414d39580c7389211131b01542bbb957d31",
+        "result.json": "df27f75ca06d05e7770dc6964e0b1c2dfab438fa40e04d1ae366d81b34068b92",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "9b64c74e680ceda8aaf83d081885139728fff045413f12d95c32a205f123ed0d"
+      },
+      "oracleReceiptSha256": null
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 1,
+      "arm": "on",
+      "cohort": "ordinary",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 0,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": false,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "429fa44d0862db8796de7242db4362c9627ea7d7d6c36e369f75ea3ab57865ae",
+        "frames.jsonl": "568e5ae4d50dbb850b19b88b714dd933f11f760ed47e1b7c1080be9f51239eb1",
+        "result.json": "30e35282b54143d8cb1febcce843d12ebf227ad46e50923b5430f2e743d5d7e8",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "244c39faf754c5dccc9a7133df5e932c8be823de6c72413544bc071ce4ddb2a5"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 1,
+      "arm": "off",
+      "cohort": "ordinary",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 0,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": false,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "bca32a401f4af2c55e23fbed21ad4afcddf53deb9f7bafde341da61afbf58007",
+        "frames.jsonl": "509d93f6208bf55d4bb02ca9061b91ebd7516a55a8005114539ff9ee35fd5209",
+        "result.json": "5c436aa6a8b36761c2741722e47bf132a40a60bd279921f27c4265c3e418200d",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "e13aa50cdaf7e6f0a4b4368a451861b1c66179f2ab9b263e966492e7468f7974"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 2,
+      "arm": "on",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": true,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 1,
+      "evidenceSha256": {
+        "requests.jsonl": "8a9ce2858833a2024449160674dd18abc31a544eede000e62390d03a599291a8",
+        "frames.jsonl": "6a8282d080c56049c9ee1a360ace1ef6958b4c397ca98779db14f79ff6b75b58",
+        "result.json": "bdbaa4f4ac5e22f1a2d852a2ca7eb563e630702cb48098f39b793b6d51ab623a",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "b5687cd5ae2d856e430ad82d63e7dfe71951d44721326cc714fb72921f6c57b2"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 2,
+      "arm": "off",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "783d70b025d3a979d51b45cfc72834b66269223642a051d04546ed387a931705",
+        "frames.jsonl": "3d8cc4637a0907d6036bba49259ed8eb01daa6c8489af247eda23a7e55177067",
+        "result.json": "cdfbbf2d14dce9c7f1674522e9fba9cdc5f2fa5425688547375ac91e6f87e14a",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "74a0157ae363606bfaea992c1c46e888c593085122206292e7c1d2f9526a8336"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 2,
+      "arm": "off",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "15dc2f343519085d1dbf741b1468c72aba33b39a709f9345cde2a4f352e11443",
+        "frames.jsonl": "8009a33747bc1f71a9581ec170ab2c73dcaa78ece2777c578ad9aa672a83aee3",
+        "result.json": "d8e0b33d8a8371763c3d2e096cbd543d38848c7ac8a00c267f0d63caf727eacc",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "c5b5ef9ff135ebb885a1f6aacf0263b902b229bc02b73140f35072e9b5942c6e"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "task-current",
+      "repeat": 2,
+      "arm": "on",
+      "cohort": "forced",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 1,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 1,
+      "evidenceSha256": {
+        "requests.jsonl": "9e501a7bbf299c73cea5fdc74c50122c3b9f379d401dc875d86f9c60d6ea4101",
+        "frames.jsonl": "6974b6e62cc0f31d9859eb3af26ac1f2fb17cb67dab6e158f4314132836fe2ad",
+        "result.json": "049c74de8130439b04a7f2447749df1dcdddfb7b6090f686796c5ddf1cfb33cc",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "28269841aa90adbd39f6f5893aa4c229f96bd41cc94edc795bdc5e2cebf523d9"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 2,
+      "arm": "on",
+      "cohort": "forced-safety",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": false,
+        "succeeded": false
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "c29125b03f76096882fa206871d368c4937707fed56fd0d10dcbe17995165202",
+        "frames.jsonl": "c8d7c04dcc576e01b3a2d98ff73a9e9a3e63a272052abaabff9a5ae5b27c6861",
+        "result.json": "432042650c64e500742866fc25f91121239f6d9e9f64af70e9f45ed74d60e183",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "c885960a9e3656ee7520a75ab1e5ee1148aff184d2d9e51b1fb5590d53c0fec7"
+      },
+      "oracleReceiptSha256": null
+    },
+    {
+      "caseId": "redirect",
+      "repeat": 2,
+      "arm": "off",
+      "cohort": "forced-safety",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 1,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": true,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": false,
+        "succeeded": false
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "892e0baf9c90dcbb77683aded334fccab38cc5d54d78776652676b9c4bcdc5a6",
+        "frames.jsonl": "f86396f0afa928826aba88c3990e965e70a0fb41aaefd33db3fa8ff0ef4d5ca8",
+        "result.json": "84a5a8565491e0b0ffbe8e9c71fd02216f686124fb8f3b3653085fe594ca6716",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "800a0a0f67b1b871d6f238b9360896cf18176d337aa414d5f8352faa787b399c"
+      },
+      "oracleReceiptSha256": null
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 2,
+      "arm": "off",
+      "cohort": "ordinary",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 0,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": false,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "bd10b3344005fedc28318c388cce725db8450bf08131c8b6e640996068c23ad3",
+        "frames.jsonl": "e462422a182f296178200ce2dc312e093df9a02fa038e288fec816867707717a",
+        "result.json": "104794376bf0979c70e588e0f09895e28b94c06a09750a9077bc7c4b7ea485e4",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "fbf99b7d3790879c24f49391b21042b401f300fe4c40d7ba937c827be01b63e0"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    },
+    {
+      "caseId": "ordinary",
+      "repeat": 2,
+      "arm": "on",
+      "cohort": "ordinary",
+      "mocked": true,
+      "valid": true,
+      "complete": true,
+      "error": null,
+      "boundaries": 0,
+      "exposure": {
+        "firstRequestSeen": true,
+        "originalTrackingRemoved": false,
+        "snapshotCount": 0,
+        "valid": true
+      },
+      "restorationDeliveryGap": false,
+      "verification": {
+        "attempted": true,
+        "succeeded": true
+      },
+      "omissions": [],
+      "incorrect": [],
+      "persistedCompactStateAttachments": 0,
+      "evidenceSha256": {
+        "requests.jsonl": "e674566fe6f9006e1e46780613856a0fc812881c6c59d624bfc500f7fc000e3e",
+        "frames.jsonl": "88ccfe9abb11d766102cc1edef3b4c7b364e5fd40fe7a515d0095cddb438e641",
+        "result.json": "703431bfc9eb5bc5372b9c67394d7af48607701a37616df0be560a9ab395a714",
+        "isolation.json": "0cd7872050d18120d833abf408039ef91b52a475c0103d2303e0cde46e84ea2f",
+        "attempt.json": "6edb6cc4a2474242c6ab18fae3d495734928aea4d618c7b6cd2177247949441c"
+      },
+      "oracleReceiptSha256": "4250164eafbb11c1a73a640da3a318de9949b1c98810cf06f0ada1e358f55fa2"
+    }
+  ]
+}

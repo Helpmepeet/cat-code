@@ -42,3 +42,40 @@ instrumentation never implies zero compactions, failures or recovery costs.
 
 The dated execution report explains the measured cohort and decision gates:
 [2026-10-11 report](../../docs/reports/2026-10-11-harness-improvement-execution.md).
+
+## Task restoration screen
+
+The separate, fixed-case evaluator now prepares and runs paired Task-mode
+attempts through the real supervisor, Unix socket, sidecar and QueryEngine.
+Its offline mode supplies scripted transport responses. Those results verify
+infrastructure and data delivery, not model behavior.
+
+```sh
+# New destination required; freezes source, dependencies, fixtures and schedule.
+bun scripts/harness-design-eval/task-restore/prepare.ts /private/tmp/task-screen-new
+bun test ./scripts/harness-design-eval/task-restore/evaluation.test.ts
+bun scripts/harness-design-eval/task-restore/run.ts /private/tmp/task-screen-new --offline
+bun scripts/harness-design-eval/task-restore/collect.ts /private/tmp/task-screen-new/offline-results
+```
+
+Offline execution needs macOS `sandbox-exec` and permission to create a localhost
+listener and isolated Unix sockets. Preparation and offline execution never
+read a live credential. Each arm receives a fresh cloned configuration and
+fixture. Source, support and installed dependency hashes must match the frozen
+manifest; results cannot be silently overwritten or retried. The only substantive
+paired configuration change is `CAT_CODE_EVAL_COMPACT_TASK_RESTORE=0` versus `1`.
+
+Read the [experiment report](../../docs/reports/2026-10-11-task-restoration-experiment.md)
+and [versioned proposal](task-restore-manifest.v1.json) before considering live
+execution. The full frozen manifest and offline evidence paths are in the report.
+A dedicated first-party API project/key, dated billing rates, an enforceable
+provider spending limit, and explicit approval of the manifest digest are still
+required. The committed [authorization example](task-restore-authorization.example.json)
+is deliberately unapproved and bound to the prepared manifest digest. A new
+preparation requires its own exact digest; null fields must be resolved explicitly.
+An authorized operator can later use `--live --authorization /path/to/approval.json`;
+this preparation request does not authorize that operation.
+
+The offline screen found a persisted restoration snapshot missing from the
+first resumed request on the prefix-compaction path. It records that delivery
+gap and blocks advancement; it does not change the candidate or default.

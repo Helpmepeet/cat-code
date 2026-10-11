@@ -1,0 +1,18 @@
+{
+  "authorize": false,
+  "manifestSha256": "46db4ef1399289890b35bced6bf9c5df8c0f48e5910386876e94484d01e10873",
+  "dedicatedProjectConfirmed": false,
+  "providerSpendLimitConfirmed": false,
+  "providerSpendLimitUsd": null,
+  "keyFile": null,
+  "prices": {
+    "model": "claude-sonnet-5-5",
+    "inputUsdPerMillion": null,
+    "cacheReadUsdPerMillion": null,
+    "cacheWrite5mUsdPerMillion": null,
+    "cacheWrite1hUsdPerMillion": null,
+    "outputUsdPerMillion": null,
+    "source": null,
+    "checkedAt": null
+  }
+}
