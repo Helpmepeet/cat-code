@@ -1,0 +1,15 @@
+{
+  "authorize": false,
+  "proposalSha256": "3d0b4a588812d9d5dbb37188ad3f6cd57fe3c0541d2ea368047756ff3f1fb9d9",
+  "executableManifestSha256": null,
+  "model": "gpt-6.1-sol",
+  "maxUsdSuite": 24,
+  "maxUsdPerAttempt": 6,
+  "dedicatedApiProjectConfirmed": false,
+  "providerHardLimitConfirmed": false,
+  "localAdmissionVerified": false,
+  "pricesConfirmed": false,
+  "countingBillingResolved": false,
+  "keyFile": null,
+  "status": "Not executable. New runnable manifest and explicit authorization required; existing Messages runner rejects live execution."
+}

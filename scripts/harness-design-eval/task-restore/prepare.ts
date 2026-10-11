@@ -67,7 +67,7 @@ export async function prepare(out: string) {
   const manifest = { ...policy, schedule, engineArchiveSha256: sha(archive.stdout), runtime, engineInventory: inventory(engine), inputs,
     preparation: { sourceWorkingTree: 'Only pinned Git archive plus hashed evaluation support; unrelated AgentTool edit excluded',
       keyAndBilling: 'Unresolved offline. No key was read, no live request was sent.',
-      liveAuthorization: 'Authorize this exact manifest digest and schedule, dedicated project/key, dated all-tier price ceilings, $64/16-run/104-minute limits, one API retry and one fixed recovery turn. No installs, GUI, push or default change.' } }
+      liveAuthorization: 'None. This package is offline-only. The four-attempt GPT-6.1 Sol proposal is separate and blocked pending a verified Responses gateway and new digest-bound human authorization.' } }
   writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
   writeFileSync(join(out, 'manifest.sha256'), sha(JSON.stringify(manifest, null, 2)) + '\n')
   return { out, manifestSha256: sha(JSON.stringify(manifest, null, 2)), runs: schedule.length }

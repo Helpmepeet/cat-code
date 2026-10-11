@@ -2,6 +2,13 @@
 
 Date: 2026-10-11. Status: prepared; no live execution authorized or performed.
 
+Historical v1 record. The subsequent [resume repair and verification](2026-10-11-task-restoration-resume-repair.md)
+fixes the reproduced production delivery gap and refreshes the frozen source.
+The [v2 manifest](../../scripts/harness-design-eval/task-restore-manifest.v2.json)
+supersedes the paid proposal with four GPT-6.1 Sol attempts, proposal only and
+execution blocked. The current evaluator refuses live execution; the v1 source,
+authorization discussion and unresolved gap below describe the original screen.
+
 The experiment tests an opt-in candidate, not an established improvement.
 Read `CLAUDE.md`, the workspace map, the harness execution report, the design
 plan and the audit README before implementation. Initial and pre-commit source

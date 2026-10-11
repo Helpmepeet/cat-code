@@ -1,0 +1,166 @@
+{
+  "schema": 2,
+  "experiment": "task-restore-gpt61-resume-pilot-v2",
+  "status": "PROPOSAL_ONLY_EXECUTION_BLOCKED",
+  "authorizeLive": false,
+  "date": "2026-10-11",
+  "engineCommit": "46f82fbcb8b410556727c31d45779491d530bfd6",
+  "frozenSource": {
+    "localPath": "/private/tmp/cat-code-task-restore-repaired-frozen-v2",
+    "manifestSha256": "3fbed50eaf1a79e22d364f2a97bf12d81884ac71e813f3fbc079f7c9d880d01a",
+    "engineArchiveSha256": "b73cbb4c72534c785139d5d5cf62db898f5866d5fd312f2063631128851fbda1",
+    "engineInventorySha256": "d53663c3ffbfb119ce2920aedc9f236d858bdc80234e72dec1d062d122c17338",
+    "runtime": {
+      "bun": "1.4.0",
+      "binarySha256": "539598c775882420b9d8deb7dc14d845f20f7d26f5600c50ab067dde6ac3f3bf",
+      "dependencyLockSha256": "d49835d680d72b1c1d91fe1fd1b15af691fe32f2a17645480330a28b162e32df",
+      "dependencyTreeSha256": "a761be40938229f2b6fde6585938d92d71392828bd565e2f5017e30af8a576c2"
+    },
+    "evaluationSourceHashes": {
+      "scripts/harness-design-eval/task-restore/collect.ts": "4625d055afb884817a617f812671f84d3b55287755b5540c56960a188ccb5454",
+      "scripts/harness-design-eval/task-restore/evaluation.test.ts": "1078cc18b7dee00012d2cd42618d965430995371bac70914ac9b7e93434c9874",
+      "scripts/harness-design-eval/task-restore/fixtures.ts": "17772df82fefd90ab41473366d8dc46679cb3f667e9315a8c72968f451b393ef",
+      "scripts/harness-design-eval/task-restore/gateway.ts": "d1b601902d7030be524193fb83f18dccca28e3eb716c47170fc33ce2d47e0ce4",
+      "scripts/harness-design-eval/task-restore/grade.ts": "931b59eb87955160d4e8ebb018b43ec835ad1df265951f780eb2d0300fdb218f",
+      "scripts/harness-design-eval/task-restore/isolation.ts": "378ec8fb29076eda7e8f31eb9e9de9333ca5691e21fa406271dbfe24269e4641",
+      "scripts/harness-design-eval/task-restore/policy.ts": "f32a1f8d72c19778ef8b5fd7a7d10dfef41457e747987f3a791732347f06dba6",
+      "scripts/harness-design-eval/task-restore/preload.ts": "321041198df4e9f0b4c57f4a71591b98adb41cb4f60063ce22c0780f928432b0",
+      "scripts/harness-design-eval/task-restore/prepare.ts": "572c0ecd048cb246ce4a6e017a38653741c1fa62a85a5583dec6ab6b170dec04",
+      "scripts/harness-design-eval/task-restore/run.ts": "da4713d26b828ecf7079f79b271de6e53108deddb48e30e527891b52c40bad9f",
+      "scripts/harness-design-eval/task-restore/seed.ts": "ac4f480c5dffb1b3f43eda47f090566ed072c2ddc0df0ebe6de82c27d30d552b"
+    },
+    "preparation": "Pinned Git archive of repaired engine plus hashed evaluator support; unrelated AgentTool working-tree edit excluded"
+  },
+  "verification": {
+    "path": "docs/reports/2026-10-11-task-restoration-repair-verification.json",
+    "sha256": "ba2d7ce7b3d2d58c10686e7844bd05a362ed0d7d18535c18d85825e7f1caf536",
+    "provider": "firstParty",
+    "model": "claude-sonnet-5-5",
+    "evidence": "Offline scripted transport only through real supervisor, Unix socket, sidecar, compaction, durable writer and fresh-process resume",
+    "reproducedMissingRequests": 2,
+    "repairedMissingRequests": 0,
+    "exactComparisonAttempts": 16,
+    "strengthenedControlAttempts": 16
+  },
+  "provider": "openai-api",
+  "endpoint": "https://api.openai.com/v1/responses",
+  "model": "gpt-6.1-sol",
+  "reasoning": {
+    "mode": "standard",
+    "effort": "low"
+  },
+  "serviceTier": "default",
+  "geography": "global",
+  "modelSupport": {
+    "documented": true,
+    "modelPage": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "production": "Cat Code catalog and Codex OAuth request routing support GPT-6.1 Sol. This is not evidence of dedicated API project access.",
+    "evaluator": "UNSUPPORTED: existing gateway accepts Anthropic Messages only; production OpenAI route uses Codex OAuth, not a dedicated API key. No fallback or model substitution authorized."
+  },
+  "schedule": [
+    {
+      "caseId": "task-resume",
+      "repeat": 1,
+      "arm": "off"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 1,
+      "arm": "on"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 2,
+      "arm": "on"
+    },
+    {
+      "caseId": "task-resume",
+      "repeat": 2,
+      "arm": "off"
+    }
+  ],
+  "fixture": {
+    "mode": "task",
+    "source": "scripts/harness-design-eval/task-restore/fixtures.ts",
+    "workspaceInventorySha256": "677e6543a3a44a6c8cd75e51dd32142c73bdf0f98287b74c5644387acadd10c7",
+    "homeInventorySha256": "e543e0d4b964c23c0428cc71387f6aff562d38f43fe67ee064c4cc1b26c73111",
+    "promptSha256": "8609e5d7d9412805a15c43fcbe57ca5b75ee7b3705f016e23514631404fbede8",
+    "provenance": "Real TaskCreate and transcript writer reconstruction. Completed tracked task, unrelated unowned task and foreign-owned task are real disk controls.",
+    "paired": "Same frozen seed and workspace path within each pair; rebase only transport/session/path bookkeeping identically. Fresh process/config for each arm. Natural manual prefix summary from the live model, then supervisor shutdown and fresh-process production resume before the first work request.",
+    "ablation": "Both arms compile COMPACT_TASK_RESTORE; only CAT_CODE_EVAL_COMPACT_TASK_RESTORE=0 versus 1 changes. Normal task tools, prompts, compaction thresholds and independent hidden artifact grader remain."
+  },
+  "runtimeFeatures": [
+    "TRANSCRIPT_CLASSIFIER",
+    "REACTIVE_COMPACT",
+    "COMPACT_TASK_RESTORE"
+  ],
+  "limits": {
+    "attempts": 4,
+    "pairs": 2,
+    "maxRequestsPerAttempt": 12,
+    "maxProviderRequests": 48,
+    "maxRetries": 1,
+    "wholeRunRetries": 0,
+    "recoveryTurns": 1,
+    "maxInputTokensPerAttempt": 1000000,
+    "maxInputTokensSuite": 4000000,
+    "maxOutputTokensPerRequest": 4096,
+    "maxOutputTokensSuite": 196608,
+    "outputIncludesReasoning": true,
+    "maxAttemptMs": 360000,
+    "maxSuiteMs": 1560000,
+    "maxUsdPerAttempt": 6,
+    "maxUsdSuite": 24
+  },
+  "pricing": {
+    "checkedAt": "2026-10-11",
+    "currency": "USD",
+    "scope": "Standard/default global API, pre-tax model tokens; no hosted tools, fast/ultrafast, regional processing, or pro reasoning",
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "thresholdInputTokens": 272000,
+    "shortPerMillion": {
+      "input": 2,
+      "cachedInput": 0.1,
+      "cacheWrite": 2.5,
+      "output": 10
+    },
+    "longPerMillion": {
+      "input": 4,
+      "cachedInput": 0.2,
+      "cacheWrite": 5,
+      "output": 15
+    },
+    "reservationCeilingsPerMillion": {
+      "everyInputToken": 5,
+      "everyOutputToken": 15
+    },
+    "maximumTokenChargeUnderLimits": 22.94912,
+    "maximumTokenChargePerAttempt": 5.73728,
+    "formula": "4,000,000 * 5 / 1,000,000 + 48 * 4096 * 15 / 1,000,000. Charge all input at the highest long-context cache-write rate, and reserve every output cap including reasoning. This bound depends on verified admission of actual input tokens, not serialized-byte estimates."
+  },
+  "spendingEnforcement": {
+    "implemented": false,
+    "requiredProjectHardLimitUsd": 24,
+    "projectMustBeDedicated": true,
+    "noOtherWorkload": true,
+    "providerSource": "https://developers.openai.com/api/docs/guides/spend-limits",
+    "providerCaveat": "Enable Enforce a hard limit, not just an alert. Provider enforcement is not instantaneous and can overshoot; it is a backstop, not proof of a strict 24 USD invoice cap.",
+    "gatewayRequirement": "Serial, sole-key-holding parent gateway; durable fsynced reservation ledger before dispatch. Reserve 5 USD/million actual input tokens and 15 USD/million capped output tokens. Reject before 6 USD/attempt or 24 USD/suite; no reservation refunds even for failed/incomplete calls. Include all summary/helper/retry requests. Reject hosted tools, other models, tier/geography/mode drift, hidden server conversation history and unbounded output. Stop on unknown usage or broken isolation.",
+    "countingSource": "https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count",
+    "countingGate": "Verify count of the exact final stateless Responses input including instructions, tools and retained reasoning; no conversation/previous_response_id or input mutation after counting. Establish count endpoint billing and reserve any charge within the same 24 USD cap. A byte-length heuristic cannot satisfy this gate."
+  },
+  "grading": {
+    "independent": true,
+    "unchangedHiddenOracleSha256": "931b59eb87955160d4e8ebb018b43ec835ad1df265951f780eb2d0300fdb218f",
+    "primary": "Verified completion of the repaired fresh-process resume case; report each matched pair and omissions, incorrect actions, actual reminder delivery, elapsed time and token-priced cost including failures",
+    "interpretation": "Two pairs of one repair family are a pilot only. No model improvement, default enablement, population claims or held-out confirmation without subsequent results and separate approval.",
+    "stop": "Any missing/duplicate restoration, incorrect or unauthorized action, incomplete usage, model/config drift, or budget/isolation breach stops execution. No discarded attempts or replacement pairs."
+  },
+  "blockers": [
+    "Separately scoped and reviewed Responses transport/admission/accounting integration preserving the real engine, sidecar and resume path; no query/tool mocks or credential-vault reuse",
+    "Offline proof at the final Responses boundary of fresh-process reminder delivery, independent grading, token counts, reasoning/output caps, cache-write accounting, retries and durable spending reservations",
+    "Confirm dedicated API project model access, dated prices, ancillary count-call billing and enforced project limit without other workload",
+    "Freeze the runnable GPT implementation and new fixture/runtime/support lock; obtain a new exact digest-bound human spending authorization. This proposal digest cannot authorize live execution"
+  ],
+  "proposedAuthorization": "After the runnable GPT package and spending controls are independently verified and its new manifest digest is explicitly approved, authorize only the four serial task-resume attempts in this schedule on gpt-6.1-sol, Standard/default tier, standard reasoning mode, low effort, maximum 24 USD pre-tax API charges total and 6 USD per attempt, 48 inference requests including summaries/helpers/retries, 4096 output tokens per request including reasoning, one fixed recovery turn, at most one API retry, no whole-attempt reruns, and a 26-minute suite cap. Use only a dedicated OpenAI API project/key with an enforced 24 USD project limit and verified durable local admission. No Codex account/vault use, installs, GUI, push, default changes or other paid services. No live authorization is granted now."
+}

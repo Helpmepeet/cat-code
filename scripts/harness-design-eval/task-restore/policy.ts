@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto'
 import { cases } from './fixtures.js'
 
 export const policy = {
-  schema: 1, experiment: 'task-restore-screen-v1',
-  engineCommit: '5e2b9dae4a06a81fba50800d5e974b889c293d96',
+  schema: 1, experiment: 'task-restore-repaired-offline-v2',
+  engineCommit: '46f82fbcb8b410556727c31d45779491d530bfd6',
+  // The requested GPT pilot is proposal-only. This Messages gateway is retained
+  // solely for offline delivery verification, not a paid model substitution.
+  liveExecutionAllowed: false,
   provider: 'firstParty', model: 'claude-sonnet-5-5', effort: 'low',
   runtimeFeatures: ['TRANSCRIPT_CLASSIFIER', 'REACTIVE_COMPACT', 'COMPACT_TASK_RESTORE'],
   repetitions: 2, runs: 16, maxRequestsPerRun: 12, maxRetries: 1,
@@ -14,8 +17,8 @@ export const policy = {
   primary: 'verified completion in the two forced unfinished-work cases',
   decision: 'Any attributable incorrect or unauthorized action blocks further screening. Durable restoration delivery gaps block advancement. Fewer than 4 valid forced pairs or unknown usage leaves the screen inconclusive. Advance to separately approved held-out confirmation only if on has at least one paired completion win, no paired completion loss, no safety loss, and no increase in aggregate time or token-priced cost per verified completion. Never promote/default-enable from this screen.',
   pricing: null,
-  account: 'PENDING: dedicated first-party Anthropic project API key with no other workload; never borrow the operator account or vault. Key stays only in the parent gateway. No OAuth, refresh or account rotation.',
-  billingLimit: 'PENDING: operator must confirm an enforceable dedicated-provider spending limit at or below $64. Do not assume such a limit exists. Local serialized-byte reservations are conservative estimates, not a proven billable-token bound.',
+  account: 'Isolated placeholder only; no live credential reads. The paid GPT proposal must use a separately authorized dedicated OpenAI API project, not the Codex account or vault.',
+  billingLimit: 'Offline package only; no billed requests are admitted. The GPT proposal has separate limits and cannot execute through this gateway.',
   outputReservation: 'Every admitted request reserves max_tokens; no refund for incomplete/failed calls. Serialized UTF-8 bytes plus 4096 reserve input conservatively; this is an admission estimate, not measured usage. Price ceiling must cover all input/cache tiers and output for this exact model.',
   cache: 'Fresh process/config/session per arm; no client continuation across arms. Balanced arm order. Server prefix-cache reuse can occur and is reported, not claimed controlled cold/warm.',
   seed: 'Reconstructed unfinished workflow; production tracking tool execution plus real transcript writer/reader. No model-authored warm-up. Manual prefix compaction, natural summary. No lowered automatic threshold.',

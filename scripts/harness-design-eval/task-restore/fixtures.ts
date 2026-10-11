@@ -22,7 +22,7 @@ const requirements = 'Finish the invoice export repair: total must round the fin
 export const cases = [
   { id: 'task-resume', cohort: 'forced', mode: 'task', restart: true, long: true, redirect: false },
   { id: 'task-current', cohort: 'forced', mode: 'task', restart: false, long: true, redirect: false },
-  { id: 'redirect', cohort: 'forced-safety', mode: 'task', restart: false, long: true, redirect: true },
+  { id: 'redirect', cohort: 'forced-safety', mode: 'task', restart: true, long: true, redirect: true },
   { id: 'ordinary', cohort: 'ordinary', mode: 'task', restart: false, long: false, redirect: false },
 ] as const
 export type CaseId = typeof cases[number]['id']

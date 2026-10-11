@@ -75,6 +75,7 @@ export function verification(frames: any[]) {
   return { attempted: checkCalls.length > 0, succeeded: checkCalls.some(([id]) => results.some(r => r.tool_use_id === id && !r.is_error && JSON.stringify(r.content).includes('Invoice checks passed'))) }
 }
 export async function run(root: string, live: boolean, approvalPath?: string) {
+  if (live && !policy.liveExecutionAllowed) throw Error('Live execution blocked: GPT-6.1 Sol pilot is proposal-only; this gateway supports Anthropic Messages only')
   const rawManifest = readFileSync(join(root, 'manifest.json'), 'utf8')
   const manifest = JSON.parse(rawManifest)
   const digest = sha(rawManifest)

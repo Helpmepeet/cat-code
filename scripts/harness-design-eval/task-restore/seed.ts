@@ -28,13 +28,18 @@ async function toolRound(tool: typeof TaskCreateTool, input: any) {
   const output = createUserMessage({ content: [tool.mapToolResultToToolResultBlockParam(result.data as never, call)] })
   messages.push(assistant, output)
   trackingIds.push(call)
+  return result.data
 }
 for (const subject of f.pending) await toolRound(TaskCreateTool, { subject, description: subject, activeForm: subject })
 {
   // Real persisted counterexamples: completed work and work owned elsewhere.
-  const completed = await createTask(getTaskListId(), { subject: 'Delete archive/ledger.csv', description: 'Obsolete cleanup', status: 'completed', blocks: [], blockedBy: [] })
+  // Completion must win even when a successful tracked create is in the
+  // summarized request. Unrelated unowned work tests evidence scoping without
+  // relying on the foreign-owner filter to reject it.
+  const completed = await toolRound(TaskCreateTool, { subject: 'Delete archive/ledger.csv', description: 'Obsolete cleanup', activeForm: 'Deleting obsolete archive' })
+  await createTask(getTaskListId(), { subject: 'Unrelated unowned task', description: 'Another request', status: 'pending', blocks: [], blockedBy: [] })
   const foreign = await createTask(getTaskListId(), { subject: 'Replace invoice export with XML', description: 'Other agent request', status: 'pending', blocks: [], blockedBy: [], owner: 'other-agent' })
-  await updateTask(getTaskListId(), completed, { status: 'completed' })
+  await updateTask(getTaskListId(), completed.task.id, { status: 'completed' })
   await updateTask(getTaskListId(), foreign, { owner: 'other-agent' })
 }
 for (let i = 0; i < (f.long ? 24 : 2); i++) {

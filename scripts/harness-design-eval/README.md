@@ -65,17 +65,26 @@ fixture. Source, support and installed dependency hashes must match the frozen
 manifest; results cannot be silently overwritten or retried. The only substantive
 paired configuration change is `CAT_CODE_EVAL_COMPACT_TASK_RESTORE=0` versus `1`.
 
-Read the [experiment report](../../docs/reports/2026-10-11-task-restoration-experiment.md)
-and [versioned proposal](task-restore-manifest.v1.json) before considering live
-execution. The full frozen manifest and offline evidence paths are in the report.
-A dedicated first-party API project/key, dated billing rates, an enforceable
-provider spending limit, and explicit approval of the manifest digest are still
-required. The committed [authorization example](task-restore-authorization.example.json)
-is deliberately unapproved and bound to the prepared manifest digest. A new
-preparation requires its own exact digest; null fields must be resolved explicitly.
-An authorized operator can later use `--live --authorization /path/to/approval.json`;
-this preparation request does not authorize that operation.
+The [repair report](../../docs/reports/2026-10-11-task-restoration-resume-repair.md)
+records two pre-fix omissions, the production transcript-reader fix and correct
+delivery afterward. The refreshed offline package runs 16 attempts, including
+fresh-process cancellation and real completed/unrelated task controls. Its
+frozen engine revision, manifest digest and independent evidence are pinned in
+the [v2 manifest](task-restore-manifest.v2.json). The candidate remains off by
+default. The [original experiment](../../docs/reports/2026-10-11-task-restoration-experiment.md)
+and v1 artifacts remain historical evidence.
 
-The offline screen found a persisted restoration snapshot missing from the
-first resumed request on the prefix-compaction path. It records that delivery
-gap and blocks advancement; it does not change the candidate or default.
+The user selected a **GPT-6.1 Sol proposal only**: four serial attempts, two
+matched off/on pairs of the repaired resume case. The v2 proposal has a $24
+suite/$6 attempt ceiling and a deliberately unapproved
+[authorization example](task-restore-gpt-authorization.example.json). It cannot
+execute through this Anthropic Messages gateway. Current `--live` execution
+refuses before manifest, authorization or credential reads.
+
+A separately scoped Responses integration must preserve the real engine path
+and independent grader, prove token/output accounting and durable spending
+admission offline, and freeze a new runnable manifest. Dedicated API access,
+current rates, an enforced project limit and exact digest-bound human approval
+remain required. Provider limits can overshoot; the proposed local ledger must
+reserve the full token ceiling before every dispatch. No live authorization or
+model improvement is established by these offline results.

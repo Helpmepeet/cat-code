@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { files, investigation } from './fixtures.js'
 import { grade } from './grade.js'
 import { budgetAllows, reservation } from './policy.js'
-import { cost, usage, exposure, verification } from './run.js'
+import { cost, usage, exposure, verification, run } from './run.js'
 import { collect, loadResults } from './collect.js'
 
 // Authoring gate: protect independent grading/admission/evidence contracts.
@@ -40,7 +40,9 @@ test('completion cannot come from a claim or working implementation with omitted
     expect(grade(root, 'ordinary', checks, true).incorrect).toContain('archive/ledger.csv')
   } finally { rmSync(root, { recursive: true }) }
 })
-test('admission reserves failed attempts and refuses a request before crossing count/input/dollar caps', () => {
+test('admission reserves failed attempts and refuses a request before crossing count/input/dollar caps', async () => {
+  // Refuse before opening even a manifest or authorization/key file.
+  await expect(run('/nonexistent-eval', true, '/must-not-read-key')).rejects.toThrow('Live execution blocked')
   const next = reservation({ model: 'claude-sonnet-5-5', max_tokens: 4096 }, { model: 'claude-sonnet-5-5', inputUsdPerMillion: 5, cacheReadUsdPerMillion: 1, cacheWrite5mUsdPerMillion: 6, cacheWrite1hUsdPerMillion: 8, outputUsdPerMillion: 25, checkedAt: 'fixture', source: 'fixture, not a real price' })
   expect(budgetAllows({ requests: 0, input: 0, usd: 0 }, next)).toBe(true)
   expect(budgetAllows({ requests: 12, input: 0, usd: 0 }, next)).toBe(false)
