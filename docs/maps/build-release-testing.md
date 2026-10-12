@@ -1,8 +1,8 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-10-09 against `CLAUDE.md`,
+Last refreshed: 2026-10-12 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
-`scripts/workspace-map-eval/`,
+`scripts/workspace-map-eval/`, `scripts/harness-design-eval/`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
 `app/package.json`, `app/scripts/`, `src/migrations/`,
@@ -22,6 +22,7 @@ files, then verify current source before changing code.
 | Desktop build, checks, and packaging | `app/package.json`, `app/scripts/` |
 | Persisted-state migrations | `src/migrations/runEngineMigrations.ts` |
 | Workspace map refresh and evaluation preparation | `scripts/workspaceMapRefreshState.ts`, `scripts/workspace-map-eval/taskInventory.ts`, `scripts/workspace-map-eval/prep/` |
+| Offline log audit and task restoration evaluation | `scripts/harness-design-eval/README.md`, [`docs/maps/harness-design-eval.md`](harness-design-eval.md) |
 | Map references, index, and section validation | `scripts/workspaceMapLint.ts` |
 
 ## Refresh Checklist
@@ -138,7 +139,8 @@ dev-full` or `--feature-set=dev-full` adds the current experimental set from
 ```text
 AGENT_MEMORY_SNAPSHOT, AGENT_TRIGGERS, AGENT_TRIGGERS_REMOTE, AWAY_SUMMARY,
 BASH_CLASSIFIER, BRIDGE_MODE, BUILTIN_EXPLORE_PLAN_AGENTS, CACHED_MICROCOMPACT,
-CCR_AUTO_CONNECT, CCR_MIRROR, CCR_REMOTE_SETUP, COMPACTION_REMINDERS,
+CCR_AUTO_CONNECT, CCR_MIRROR, CCR_REMOTE_SETUP,
+COMPACTION_REMINDERS, COMPACT_TASK_RESTORE,
 CONNECTOR_TEXT, EXTRACT_MEMORIES, HISTORY_PICKER, HOOK_PROMPTS, KAIROS_BRIEF,
 KAIROS_CHANNELS, LODESTONE, MCP_RICH_OUTPUT, MESSAGE_ACTIONS,
 NATIVE_CLIPBOARD_IMAGE, NEW_INIT, POWERSHELL_AUTO_MODE,
@@ -146,6 +148,10 @@ PROMPT_CACHE_BREAK_DETECTION, QUICK_SEARCH, SHOT_STATS, TEAMMEM, TOKEN_BUDGET,
 TREE_SITTER_BASH, TREE_SITTER_BASH_SHADOW, ULTRAPLAN, ULTRATHINK,
 UNATTENDED_RETRY, VOICE_MODE
 ```
+
+The desktop sidecar also compiles `COMPACT_TASK_RESTORE`. The candidate stays
+off unless `CAT_CODE_EVAL_COMPACT_TASK_RESTORE` is explicitly enabled at
+runtime; see [`harness-design-eval.md`](harness-design-eval.md).
 
 Feature changes need both sides checked: the build-time list in
 `scripts/build.ts` and runtime `feature(...)` call sites in entrypoints,

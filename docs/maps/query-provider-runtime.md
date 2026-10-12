@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-10-10
+Last refreshed: 2026-10-12
 
 ## Purpose
 
@@ -79,6 +79,7 @@ src/services/api/client.ts
 | Change client/auth routing | `src/services/api/client.ts` | `src/utils/auth.ts`, `src/utils/model/providers.ts`, [`codex-core.md`](codex-core.md) | Provider-specific clients are selected here. OpenAI/Codex fetch-adapter and account lease details are intentionally routed to `codex-core.md`. |
 | Change retry/fallback behavior | `src/services/api/withRetry.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`codex-core.md`](codex-core.md) | `claude.ts` wraps requests with `withRetry()`. `query.ts` handles model fallback by switching model/provider and replaying the whole attempt; a long-context entitlement refusal latches the lower budget instead of consuming retry attempts. |
 | Change compaction/collapse hooks | `src/query.ts` | `src/services/compact/{autoCompact,reactiveCompact,compact}.ts`, `src/utils/contextWindowPolicy.ts`, `src/services/contextCollapse/index.ts` | Query loop order matters: tool-result budget, snip, microcompact, context collapse, autocompact, blocking-limit check, API call, reactive recovery. Prefix compaction is the normal automatic path when `REACTIVE_COMPACT` is compiled and enabled; full replacement is the short-conversation fallback. |
+| Carry scoped task state across compaction | `src/services/compact/taskRestoration.ts` | `src/services/compact/{compact,autoCompact,reactiveCompact}.ts`, `src/utils/{sessionStorage,sessionRestore}.ts` | The evaluation candidate creates a bounded reminder only from current-request tool evidence and owner-scoped state. It requires both the `COMPACT_TASK_RESTORE` build feature and `CAT_CODE_EVAL_COMPACT_TASK_RESTORE`; transcript recovery retains its compact snapshot only along the selected active branch. |
 | Change model validation | `src/utils/model/validateModel.ts` | `src/utils/model/modelAllowlist.ts`, `src/utils/model/modelCapabilities.ts`, `src/utils/sideQuery.ts` | Validation checks allowlist and aliases before probing the API via `sideQuery()`. Codex subscriber model handling short-circuits known Codex/OpenAI models. |
 
 ## Turn Execution Owners
@@ -178,7 +179,7 @@ Use focused checks first, then the documented build for broader confidence:
 | Claude 5.5 request compatibility and pre-switch tool schemas | `bun test src/services/api/claude55.integration.test.ts` |
 | Provider instruction placement | `bun test src/utils/providerPromptRegressions.test.ts` |
 | Prompt/context behavior | `bun test src/constants/prompts.test.ts` |
-| Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts src/services/compact/reactiveCompact.test.ts` |
+| Compaction and scoped task reminders | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts src/services/compact/reactiveCompact.test.ts src/services/compact/taskRestoration.test.ts src/utils/sessionStorage.test.ts` |
 | Codex/OpenAI adapter/account routing | See [`codex-core.md`](codex-core.md) § Tests And Validation. |
 | Docs-only map change | `git diff --check -- docs/maps/query-provider-runtime.md` |
 | Full documented build | `bun run build:dev:full` |

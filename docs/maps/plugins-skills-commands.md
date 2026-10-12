@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-10-09
+Last refreshed: 2026-10-12
 
 ## Purpose
 
@@ -19,6 +19,7 @@ memoized and several surfaces load lazily or only under feature flags.
 - `src/skills/loadSkillsDir.ts` for filesystem skill discovery and caches.
 - `src/utils/plugins/pluginLoader.ts` for installed plugin components.
 - `src/utils/plugins/loadPluginCommands.ts` for plugin commands and skills.
+- `src/utils/hooks/registerSkillHooks.ts` for hooks declared by invoked skills.
 - `src/utils/plugins/marketplaceManager.ts` for marketplace state.
 
 ## Slash Command Exposure
@@ -138,7 +139,8 @@ plugin object from loading.
 | Plugin commands | `src/utils/plugins/loadPluginCommands.ts` `getPluginCommands` | Loads enabled plugin `commandsPath`, `commandsPaths`, and inline `commandsMetadata`. Names are `plugin:namespace:file`. |
 | Plugin skills | `src/utils/plugins/loadPluginCommands.ts` `getPluginSkills` | Loads enabled plugin `skillsPath` and `skillsPaths`. Names are `plugin:skill`. Direct skill dirs and child `SKILL.md` dirs are both supported. |
 | Plugin command markdown walk | `src/utils/plugins/walkPluginMarkdown.ts` | Used by command/output-style loaders; commands stop at skill dirs. |
-| Plugin command frontmatter | `src/utils/plugins/loadPluginCommands.ts` `createPluginCommand` | Supports descriptions, allowed tools, arguments, `when_to_use`, model, effort, shell, `user-invocable`, and plugin/user-config substitutions. |
+| Plugin command and skill frontmatter | `src/utils/plugins/loadPluginCommands.ts` `createPluginCommand` | Uses the shared skill-frontmatter parser for `context: fork`, `agent`, `hooks`, and `paths`, alongside descriptions, allowed tools, arguments, `when_to_use`, model, effort, shell, `user-invocable`, and plugin/user-config substitutions. |
+| Skill invocation hooks | `src/tools/SkillTool/SkillTool.ts` | `src/utils/hooks/registerSkillHooks.ts`, `src/utils/hooks/sessionHooks.ts`, `src/utils/settings/pluginOnlyPolicy.ts` | Forked skill execution registers its declared hooks with the invoking worker identity while retaining the root hook store. The plugin-only hooks policy still checks whether the command source is admin-trusted. |
 
 Plugin commands and skills are prompt commands with `source: 'plugin'`.
 Plugin skills set `loadedFrom: 'plugin'`, get progress message `loading`, and
@@ -257,6 +259,7 @@ usually set `needsRefresh` or require restart depending on the path.
 | CLI `plugin validate` | `src/main.tsx`, `src/cli/handlers/plugins.ts` | Also validates plugin content files when validating a plugin manifest in `.claude-plugin`. |
 | Manifest validation | `src/utils/plugins/validatePlugin.ts` | Strict schemas for author feedback, path traversal checks, marketplace-only field warnings. |
 | Component validation | `src/utils/plugins/validatePlugin.ts` `validatePluginContents` | Checks skills, agents, commands, and hooks frontmatter/content warnings. |
+| Plugin command frontmatter | `src/utils/plugins/loadPluginCommands.test.ts` | Covers shared frontmatter parsing and loaded plugin command/skill fields. |
 | Marketplace cache recovery and update identity | `src/utils/plugins/{marketplaceManager,officialMarketplaceGcs,pluginAutoupdate}.ts` | Run `bun test src/utils/plugins/marketplaceCacheSafety.test.ts src/utils/plugins/officialMarketplaceGcsPolicy.test.ts src/utils/plugins/pluginAutoupdate.test.ts` for cache paths, GCS policy, and duplicate-name/source checks. |
 
 Use `validateManifest()` for a file or directory. Directory validation prefers
