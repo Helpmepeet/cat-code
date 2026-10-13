@@ -1,10 +1,16 @@
 import { feature } from 'bun:bundle'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../Tool.js'
 import type { AssistantMessage } from '../types/message.js'
 import type { PermissionDecision } from '../utils/permissions/PermissionResult.js'
 import { createAppRuntimeCanUseTool } from './appRuntimeCanUseTool.js'
+import {
+  authorizeFinalToolInput,
+  clearUserApprovalReceipts,
+  ToolInputPreparation,
+} from '../services/tools/toolInputSecurity.js'
 
 describe('createAppRuntimeCanUseTool', () => {
   test('forwards an in-memory occurrence context without changing the base decision', async () => {
@@ -111,6 +117,96 @@ describe('createAppRuntimeCanUseTool', () => {
         'toolu_2',
       ),
     ).resolves.toBe(askDecision)
+  })
+
+  test.each([
+    'approved',
+    'cloned',
+    'mutated',
+    'other tool use',
+    'other tool',
+    'current deny',
+    'policy allow',
+  ])('final input honors receipt scope: %s', async scenario => {
+    const tool = {
+      name: 'ApprovalTest',
+      inputSchema: z.strictObject({ command: z.string() }),
+    } as unknown as Tool
+    const original = { command: 'before' }
+    const changed = { command: 'after' }
+    const toolUseID = `app-receipt-${scenario}`
+    let prompts = 0
+    const canUseTool = createAppRuntimeCanUseTool({
+      baseCanUseTool: async () => scenario === 'policy allow'
+        ? { behavior: 'allow', updatedInput: changed }
+        : { behavior: 'ask', message: 'Approve the changed input' },
+      getPermissionRequestHandler: () => async () => {
+        prompts++
+        return { behavior: 'allow', updatedInput: changed }
+      },
+    })
+    const context = {} as ToolUseContext
+    const assistantMessage = {} as AssistantMessage
+    const decision = await canUseTool(
+      tool, original, context, assistantMessage, toolUseID,
+    )
+    if (decision.behavior !== 'allow' || decision.updatedInput === undefined) {
+      throw new Error('Expected an allow decision with executable input')
+    }
+    const preparation = new ToolInputPreparation()
+    let reauthorizations = 0
+    const authorize = (
+      proposedInput: Record<string, unknown>,
+      currentTool = tool,
+      currentToolUseID = toolUseID,
+    ) => authorizeFinalToolInput(
+      currentTool,
+      proposedInput,
+      original,
+      decision,
+      currentToolUseID,
+      context,
+      assistantMessage,
+      preparation,
+      async () => scenario === 'current deny'
+        ? {
+            behavior: 'deny',
+            message: 'Current policy denies this input',
+            decisionReason: { type: 'other', reason: 'Current deny' },
+          }
+        : { behavior: 'ask', message: 'Approve the changed input' },
+      async () => {
+        reauthorizations++
+        return {
+          behavior: 'deny',
+          message: 'No new approval',
+          decisionReason: { type: 'other', reason: 'No new approval' },
+        }
+      },
+    )
+    try {
+      let proposedInput = decision.updatedInput
+      if (scenario === 'cloned') proposedInput = structuredClone(proposedInput)
+      if (scenario === 'mutated') proposedInput.command = 'unapproved'
+      const result = await authorize(
+        proposedInput,
+        scenario === 'other tool' ? { ...tool, name: 'OtherTool' } : tool,
+        scenario === 'other tool use' ? `${toolUseID}-other` : toolUseID,
+      )
+      expect(prompts).toBe(scenario === 'policy allow' ? 0 : 1)
+      expect(result.allowed).toBe(scenario === 'approved')
+      expect(reauthorizations).toBe(
+        scenario === 'approved' || scenario === 'current deny' ? 0 : 1,
+      )
+      if (scenario === 'approved') {
+        expect(result.input).toEqual(changed)
+        expect((await authorize(proposedInput)).allowed).toBe(false)
+        expect(reauthorizations).toBe(1)
+      }
+    } finally {
+      clearUserApprovalReceipts(toolUseID)
+      await preparation.dispose()
+    }
   })
 
   test('preserves permission update suggestions and maps cancel to deny with interrupt', async () => {
