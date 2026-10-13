@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { SessionDescriptor } from '../../shared/hostApi.js'
-import { type ScheduledRun, type ScheduledTask, type ScheduledTaskCommand, type ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
+import { type ScheduledRun, type ScheduledTask, type ScheduledTaskCommand, type ScheduledTaskOptions, type ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
 import { getBridge } from './bridge.js'
 import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import { usePopover } from './composerPopover.js'
@@ -29,7 +28,6 @@ import {
   orderTasks,
   partitionRuns,
   previewNextRun,
-  projectChoices,
   promptBytes,
   providerLabel,
   readStoredScheduledSelection,
@@ -82,16 +80,13 @@ const EDITOR = 'editor'
 const PRESET = 'preset'
 
 export function ScheduledTasksPage({
-  sessions,
-  modelOptions,
   onOpenChat,
 }: {
-  sessions: readonly SessionDescriptor[]
-  /** Models reported by open sessions' run controls; Default is always offered. */
-  modelOptions: readonly ScheduledModelOption[]
   onOpenChat: (appSessionId: string) => void
 }) {
   const [snapshot, setSnapshot] = useState<ScheduledTasksSnapshot | null>(null)
+  const [options, setOptions] = useState<ScheduledTaskOptions | null>(null)
+  const [optionsError, setOptionsError] = useState<string | null>(null)
   const [readError, setReadError] = useState<string | null>(null)
   const [draft, setDraftState] = useState<ScheduledTaskDraft | null>(readStoredScheduledTaskDraft)
   const [selection, setSelectionState] = useState<ScheduledSelection>(readStoredScheduledSelection)
@@ -102,6 +97,7 @@ export function ScheduledTasksPage({
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const order = useRef(createResponseOrder())
+  const optionsOrder = useRef(createResponseOrder())
 
   const setDraft = useCallback((next: ScheduledTaskDraft | null) => {
     storeScheduledTaskDraft(next)
@@ -126,11 +122,24 @@ export function ScheduledTasksPage({
     }
   }, [])
 
+  const refreshOptions = useCallback(async () => {
+    const id = optionsOrder.current.issue()
+    try {
+      const next = await getBridge().readScheduledTaskOptions()
+      if (!optionsOrder.current.accept(id)) return
+      if (next.error) setOptionsError(next.error)
+      else { setOptions(next); setOptionsError(null) }
+    } catch {
+      if (optionsOrder.current.accept(id)) setOptionsError('Task choices could not be loaded. Try again.')
+    }
+  }, [])
+
   // A pull API: poll while visible and re-read when the window returns.
   useEffect(() => {
     void refresh()
+    void refreshOptions()
     const timer = setInterval(() => { if (!document.hidden) void refresh() }, POLL_MS)
-    const onVisible = () => { if (!document.hidden) void refresh() }
+    const onVisible = () => { if (!document.hidden) { void refresh(); void refreshOptions() } }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     return () => {
@@ -138,7 +147,7 @@ export function ScheduledTasksPage({
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [refresh])
+  }, [refresh, refreshOptions])
 
   const command = useCallback(async (scope: string, value: ScheduledTaskCommand, success: string): Promise<ScheduledTasksSnapshot | null> => {
     setPending(current => ({ ...current, [scope]: true }))
@@ -165,7 +174,8 @@ export function ScheduledTasksPage({
   const tasks = useMemo(() => orderTasks(snapshot?.tasks ?? []), [snapshot])
   const runs = snapshot?.runs ?? []
   const taskById = useMemo(() => new Map((snapshot?.tasks ?? []).map(task => [task.id, task])), [snapshot])
-  const projects = useMemo(() => projectChoices(sessions), [sessions])
+  const projects = options?.projects ?? []
+  const modelOptions = options?.models ?? []
   const unavailable = snapshot?.error ?? null
   const loaded = snapshot !== null
   const editingTask = draft?.taskId ? taskById.get(draft.taskId) ?? null : null
@@ -209,11 +219,12 @@ export function ScheduledTasksPage({
     else if (isWorkspaceMapTask(task)) setConfirm({ kind: 'resume-preset', task })
     else void command(task.id, { type: 'resume', id: task.id }, `${task.name} active`)
   }
-  const createPreset = async (appSessionId: string) => {
+  const createPreset = async (project: Extract<ScheduledTaskCommand, { type: 'workspace-maps' }>): Promise<boolean> => {
     const before = new Set(taskById.keys())
-    const created = await command(PRESET, { type: 'workspace-maps', workspaceSessionId: appSessionId }, 'Workspace-map task created, paused')
+    const created = await command(PRESET, project, 'Workspace-map task created, paused')
     const id = created?.tasks.find(task => !before.has(task.id))?.id
     if (id) select({ kind: 'task', id })
+    return created !== null
   }
 
   let pane: ReactNode
@@ -226,6 +237,8 @@ export function ScheduledTasksPage({
         missing={draft.taskId !== null && editingTask === null}
         projects={projects}
         modelOptions={modelOptions}
+        defaultEffortOptions={options?.defaultEffortOptions ?? []}
+        optionsReady={options !== null && !optionsError}
         now={now}
         busy={!!pending[EDITOR]}
         error={errors[EDITOR] ?? null}
@@ -265,7 +278,7 @@ export function ScheduledTasksPage({
         error={errors[PRESET] ?? null}
         disabled={!!unavailable}
         onBack={() => select(null)}
-        onCreate={appSessionId => void createPreset(appSessionId)}
+        onCreate={createPreset}
       />
     )
   } else if (tasks.length === 0) {
@@ -321,6 +334,12 @@ export function ScheduledTasksPage({
         {unavailable || readError ? (
           <div role="alert" className="mb-5 max-w-[680px] rounded-[10px] border border-tone-danger/30 bg-tone-danger/[0.06] px-3.5 py-2.5 text-[12.5px] text-tone-danger">
             {unavailable ?? readError}
+          </div>
+        ) : null}
+        {optionsError ? (
+          <div role="alert" className="mb-5 flex max-w-[680px] items-center gap-3 text-[12.5px] text-tone-danger">
+            <span>{optionsError}</span>
+            <button type="button" className={BTN} onClick={() => void refreshOptions()}>Retry</button>
           </div>
         ) : null}
         {pane}
@@ -698,12 +717,30 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
   error: string | null
   disabled: boolean
   onBack: () => void
-  onCreate: (appSessionId: string) => void
+  onCreate: (command: Extract<ScheduledTaskCommand, { type: 'workspace-maps' }>) => Promise<boolean>
 }) {
   const [selected, setSelected] = useState('')
+  const [cwdToken, setCwdToken] = useState<string | null>(null)
+  const [pickerError, setPickerError] = useState<string | null>(null)
   const selectId = useId()
-  const choice = projects.find(project => project.appSessionId === selected) ?? null
+  const choice = projects.find(project => project.workspaceId === selected) ?? null
   const exists = choice !== null && tasks.some(task => task.cwd === choice.cwd && isWorkspaceMapTask(task))
+  const pickFolder = async () => {
+    setPickerError(null)
+    try {
+      const token = await getBridge().pickDirectory()
+      if (token) { setCwdToken(token); setSelected('folder') }
+    } catch { setPickerError('The folder picker could not open. Try again.') }
+  }
+  const create = async () => {
+    const token = selected === 'folder' ? cwdToken : null
+    const created = await onCreate(token ? { type: 'workspace-maps', cwdToken: token } : { type: 'workspace-maps', workspaceId: selected })
+    if (!created && token) {
+      setCwdToken(current => current === token ? null : current)
+      setSelected(current => current === 'folder' ? '' : current)
+      setPickerError('Choose the folder again.')
+    }
+  }
   return (
     <div className="max-w-[680px]">
       <PaneHeader title="Workspace-map refresh" meta={`Daily at 03:00 Asia/Bangkok · Auto permissions`} onBack={onBack} />
@@ -712,29 +749,30 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
         <p>The project needs its workspace-map refresh helper. Cat Code keeps its own refresh state and imports a matching earlier cursor once.</p>
       </div>
       <section className="mt-[30px]" aria-label="Project">
-        {projects.length === 0 ? (
-          <p className="text-[12.5px] text-text-subtle">Open the project in Cat Code to choose it here.</p>
-        ) : (
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-0 flex-1 basis-[240px]">
-              <label htmlFor={selectId} className={LABEL}>Project</label>
-              <Picker
-                id={selectId}
-                label="Project"
-                value={selected}
-                placeholder="Choose a project"
-                disabled={busy || disabled}
-                panelWidth="w-[min(440px,calc(100vw-16px))]"
-                options={projects.map(project => ({ value: project.appSessionId, label: project.label, detail: displayPath(project.cwd) }))}
-                onChange={setSelected}
-              />
-            </div>
-            <button type="button" className={`${TINTED} h-[33px]`} disabled={busy || disabled || !choice || exists} onClick={() => choice && onCreate(choice.appSessionId)}>
-              {busy ? 'Creating…' : 'Create paused task'}
-            </button>
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-0 flex-1 basis-[240px]">
+            <label htmlFor={selectId} className={LABEL}>Project</label>
+            <Picker
+              id={selectId}
+              label="Project"
+              value={selected}
+              placeholder="Choose a project"
+              disabled={busy || disabled}
+              panelWidth="w-[min(440px,calc(100vw-16px))]"
+              options={[
+                ...(cwdToken ? [{ value: 'folder', label: 'Chosen folder' }] : []),
+                ...projects.map(project => ({ value: project.workspaceId, label: project.label, detail: displayPath(project.cwd) })),
+              ]}
+              footer={{ label: 'Choose another folder…', onSelect: () => void pickFolder() }}
+              onChange={setSelected}
+            />
           </div>
-        )}
+          <button type="button" className={`${TINTED} h-[33px]`} disabled={busy || disabled || (!choice && !(selected === 'folder' && cwdToken)) || exists} onClick={() => void create()}>
+            {busy ? 'Creating…' : 'Create paused task'}
+          </button>
+        </div>
         {exists ? <p className="mt-2 text-[12px] text-text-subtle">This project already has a workspace-map task.</p> : null}
+        {pickerError ? <p role="alert" className="mt-2 text-[12.5px] text-tone-danger">{pickerError}</p> : null}
         {error ? <p role="alert" className="mt-2 text-[12.5px] text-tone-danger">{error}</p> : null}
       </section>
     </div>
@@ -742,13 +780,15 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
 }
 
 function EditorPane({
-  draft, task, missing, projects, modelOptions, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
+  draft, task, missing, projects, modelOptions, defaultEffortOptions, optionsReady, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
 }: {
   draft: ScheduledTaskDraft
   task: ScheduledTask | null
   missing: boolean
   projects: readonly ProjectChoice[]
   modelOptions: readonly ScheduledModelOption[]
+  defaultEffortOptions: readonly string[]
+  optionsReady: boolean
   now: number
   busy: boolean
   error: string | null
@@ -764,7 +804,9 @@ function EditorPane({
     const local = localTimeZone()
     return [local, ...availableTimeZones().filter(zone => zone !== local)]
   }, [])
-  const efforts = effortChoicesFor(draft.model, modelOptions)
+  const supportedEfforts = effortChoicesFor(draft.model, modelOptions, defaultEffortOptions)
+  // Keep a saved effort visible until the operator chooses a different model.
+  const efforts = supportedEfforts.includes(draft.effort) ? supportedEfforts : [...supportedEfforts, draft.effort]
   const models: PickerOption[] = [
     { value: '', label: 'Default' },
     ...modelOptions.map(option => ({ value: option.value, label: option.label, group: providerLabel(option.provider) })),
@@ -773,14 +815,14 @@ function EditorPane({
   const projectOptions: PickerOption[] = [
     ...(draft.taskId && task ? [{ value: 'saved', label: basename(task.cwd) || task.cwd, detail: displayPath(task.cwd), marker: 'Current' }] : []),
     ...(draft.project.kind === 'folder' ? [{ value: 'folder', label: 'Chosen folder' }] : []),
-    ...projects.filter(project => project.cwd !== task?.cwd).map(project => ({ value: project.appSessionId, label: project.label, detail: displayPath(project.cwd) })),
+    ...projects.filter(project => project.cwd !== task?.cwd).map(project => ({ value: project.workspaceId, label: project.label, detail: displayPath(project.cwd) })),
   ]
   const problems = draftProblems(draft)
   const blocked = Object.keys(problems).length > 0
   const set = <K extends keyof ScheduledTaskDraft>(key: K, value: ScheduledTaskDraft[K]) => onChange({ ...draft, [key]: value })
   useEffect(() => { nameRef.current?.focus() }, [draft.taskId])
   const bytes = promptBytes(draft.prompt)
-  const projectValue = draft.project.kind === 'session' ? draft.project.appSessionId : draft.project.kind === 'saved' ? 'saved' : draft.project.kind === 'folder' ? 'folder' : ''
+  const projectValue = draft.project.kind === 'workspace' ? draft.project.workspaceId : draft.project.kind === 'saved' ? 'saved' : draft.project.kind === 'folder' ? 'folder' : ''
   const next = previewNextRun(draft, now)
   const heading = draft.taskId ? `Edit ${task?.name ?? 'task'}` : 'New task'
   const border = (problem?: string) => (problem ? 'border-tone-danger/60' : 'border-shell-seam')
@@ -789,7 +831,7 @@ function EditorPane({
     <form
       aria-label={heading}
       className="max-w-[680px]"
-      onSubmit={event => { event.preventDefault(); if (!blocked && !busy && !missing) onSave() }}
+      onSubmit={event => { event.preventDefault(); if (!blocked && !busy && !missing && !disabled && optionsReady) onSave() }}
     >
       <PaneHeader title={heading} onBack={onCancel} />
       {missing ? <p role="alert" className="mt-2.5 text-[12.5px] text-tone-danger">This task was deleted. Cancel to discard the draft.</p> : null}
@@ -820,7 +862,7 @@ function EditorPane({
             panelWidth="w-[min(440px,calc(100vw-16px))]"
             options={projectOptions}
             footer={{ label: 'Choose another folder…', onSelect: onPickFolder }}
-            onChange={value => onChange({ ...draft, project: value === 'saved' ? { kind: 'saved' } : value === 'folder' ? draft.project : { kind: 'session', appSessionId: value } })}
+            onChange={value => onChange({ ...draft, project: value === 'saved' ? { kind: 'saved' } : value === 'folder' ? draft.project : { kind: 'workspace', workspaceId: value } })}
           />
         </Field>
       </FormSection>
@@ -879,9 +921,9 @@ function EditorPane({
               value={draft.model}
               invalid={!!problems.model}
               options={models}
-              note={modelOptions.length === 0 ? 'Models appear here once a chat is open.' : undefined}
+              disabled={!optionsReady}
               onChange={value => {
-                const allowed = effortChoicesFor(value, modelOptions)
+                const allowed = effortChoicesFor(value, modelOptions, defaultEffortOptions)
                 onChange({ ...draft, model: value, effort: allowed.includes(draft.effort) ? draft.effort : 'default' })
               }}
             />
@@ -891,6 +933,7 @@ function EditorPane({
               id={ids.effort}
               label="Effort"
               value={draft.effort}
+              disabled={!optionsReady}
               options={efforts.map(effort => ({ value: effort, label: EFFORT_LABELS[effort] }))}
               onChange={value => set('effort', value as ScheduledEffort)}
             />
@@ -912,7 +955,7 @@ function EditorPane({
       {error ? <p role="alert" className="mt-4 text-[12.5px] text-tone-danger">{error}</p> : null}
       <div className="mt-6 flex justify-end gap-2.5 border-t border-shell-seam pt-4">
         <SAButton label="Cancel" onClick={onCancel} />
-        <button type="submit" disabled={busy || disabled || blocked || missing} className={`flex shrink-0 items-center rounded-lg bg-accent px-[15px] py-2 text-[12.5px] font-semibold text-on-fill transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-45 ${FOCUS}`}>
+        <button type="submit" disabled={busy || disabled || blocked || missing || !optionsReady} className={`flex shrink-0 items-center rounded-lg bg-accent px-[15px] py-2 text-[12.5px] font-semibold text-on-fill transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-45 ${FOCUS}`}>
           {busy ? 'Saving…' : draft.taskId ? 'Save changes' : 'Create task'}
         </button>
       </div>
@@ -926,7 +969,7 @@ const MAX_SEARCH_RESULTS = 80
 
 /** A designed select: the composer's popover, menu roving, and focus lifecycle. */
 function Picker({
-  id, label, value, options, onChange, placeholder, invalid, disabled, compact, searchable, panelWidth = 'w-64', footer, note,
+  id, label, value, options, onChange, placeholder, invalid, disabled, compact, searchable, panelWidth = 'w-64', footer,
 }: {
   id?: string
   label: string
@@ -940,7 +983,6 @@ function Picker({
   searchable?: boolean
   panelWidth?: string
   footer?: { label: string; onSelect: () => void }
-  note?: string
 }) {
   const { open, setOpen, close, ref, triggerRef, panelRef } = usePopover()
   const [query, setQuery] = useState('')
@@ -999,7 +1041,6 @@ function Picker({
           </button>
         </>
       ) : null}
-      {note ? <p className="px-2 pb-0.5 pt-1.5 text-[11.5px] text-text-subtle">{note}</p> : null}
     </div>
   )
   return (

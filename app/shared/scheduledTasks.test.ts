@@ -19,3 +19,19 @@ test('closed scheduled-task boundary accepts saved intent and rejects filesystem
   expect(parseScheduledTaskCommand({ type: 'run', id: crypto.randomUUID(), cwd: '/private' })).toBeNull()
   expect(parseScheduledTaskCommand({ type: 'workspace-maps', workspaceSessionId: '/private' })).toBeNull()
 })
+
+test('project handles and native tokens are closed exclusive sources, with omission only on edit', () => {
+  const workspaceId = crypto.randomUUID()
+  const { cwdToken, ...base } = task
+  expect(parseScheduledTaskCommand({ type: 'save', task: { ...base, workspaceId, effort: 'ultra' } })).not.toBeNull()
+  expect(parseScheduledTaskCommand({ type: 'save', task: { ...base, workspaceId, model: 'opus[1m]' } })).not.toBeNull()
+  expect(parseScheduledTaskCommand({ type: 'save', task: base })).toBeNull()
+  expect(parseScheduledTaskCommand({ type: 'save', task: { ...base, id: crypto.randomUUID() } })).not.toBeNull()
+  for (const source of [{ workspaceId }, { cwdToken }]) {
+    expect(parseScheduledTaskCommand({ type: 'workspace-maps', ...source })).not.toBeNull()
+  }
+  for (const source of [{}, { workspaceId, cwdToken }, { cwdToken: '' }, { cwdToken: ' ' }, { cwdToken: 'x'.repeat(201) },
+    { workspaceId: undefined }, { workspaceId: '/private' }, { workspaceSessionId: workspaceId }, { cwd: '/private' }]) {
+    expect(parseScheduledTaskCommand({ type: 'workspace-maps', ...source })).toBeNull()
+  }
+})

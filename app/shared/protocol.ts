@@ -4070,6 +4070,7 @@ export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
   readScheduledTasks(): Promise<import('./scheduledTasks.js').ScheduledTasksSnapshot>
+  readScheduledTaskOptions(): Promise<import('./scheduledTasks.js').ScheduledTaskOptions>
   scheduledTask(command: import('./scheduledTasks.js').ScheduledTaskCommand): Promise<import('./scheduledTasks.js').ScheduledTasksResult>
   /** Send one prompt to the addressed session. */
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void

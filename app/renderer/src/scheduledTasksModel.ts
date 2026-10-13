@@ -1,5 +1,4 @@
-import type { SessionDescriptor } from '../../shared/hostApi.js'
-import type { RunControlProvider, RunControlsSnapshot } from '../../shared/protocol.js'
+import type { RunControlProvider } from '../../shared/protocol.js'
 import {
   isActiveScheduledRun,
   nextTaskOccurrence,
@@ -7,9 +6,10 @@ import {
   type ScheduledRun,
   type ScheduledTask,
   type ScheduledTaskInput,
+  type ScheduledModelOption,
+  type ScheduledProjectOption,
   type TaskSchedule,
 } from '../../shared/scheduledTasks.js'
-import { basename } from './pathUtils.js'
 import type { Tone } from './tone.js'
 
 export type ScheduledEffort = ScheduledTaskInput['effort']
@@ -17,13 +17,13 @@ export type ScheduledPermissionMode = ScheduledTaskInput['permissionMode']
 
 /**
  * Where a draft's project comes from. The renderer never holds a path it could
- * submit: a new task names a host-owned project session or a single-use picker
+ * submit: a new task names a host-owned project handle or a single-use picker
  * token, and an edit may keep the saved project (HC1, `parseScheduledTaskCommand`).
  */
 export type DraftProject =
   | { kind: 'none'; reason?: 'token-spent' }
   | { kind: 'saved' }
-  | { kind: 'session'; appSessionId: string }
+  | { kind: 'workspace'; workspaceId: string }
   | { kind: 'folder'; cwdToken: string }
 
 export type ScheduledTaskDraft = {
@@ -53,10 +53,11 @@ export const EFFORT_LABELS: Record<ScheduledEffort, string> = {
   high: 'High',
   xhigh: 'Extra high',
   max: 'Max',
+  ultra: 'Ultra',
 }
 const MAX_NAME_CHARS = 120
 export const MAX_PROMPT_BYTES = 64 * 1024
-const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/
+const MODEL_PATTERN = /^[a-zA-Z0-9._:/[\]-]+$/
 
 export function localTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -141,7 +142,7 @@ export function draftToInput(draft: ScheduledTaskDraft, current: ScheduledTask |
     model: draft.model.trim(),
     effort: draft.effort,
     permissionMode: draft.permissionMode,
-    ...(draft.project.kind === 'session' ? { workspaceSessionId: draft.project.appSessionId } : {}),
+    ...(draft.project.kind === 'workspace' ? { workspaceId: draft.project.workspaceId } : {}),
     ...(draft.project.kind === 'folder' ? { cwdToken: draft.project.cwdToken } : {}),
   }
 }
@@ -156,46 +157,18 @@ export function draftAfterRefusedSave(draft: ScheduledTaskDraft, spentToken: str
     : draft
 }
 
-export type ProjectChoice = { appSessionId: string; cwd: string; label: string }
-
-/** One host-owned project session per folder; main accepts any of them. */
-export function projectChoices(sessions: readonly SessionDescriptor[]): ProjectChoice[] {
-  const byCwd = new Map<string, SessionDescriptor>()
-  for (const session of sessions) {
-    if (session.binding?.kind !== 'project') continue
-    const previous = byCwd.get(session.cwd)
-    if (!previous || session.lastAttachedAt > previous.lastAttachedAt) byCwd.set(session.cwd, session)
-  }
-  return [...byCwd.values()]
-    .map(session => ({ appSessionId: session.appSessionId, cwd: session.cwd, label: basename(session.cwd) || session.cwd }))
-    .sort((a, b) => a.label.localeCompare(b.label) || a.cwd.localeCompare(b.cwd))
-}
-
-export type ScheduledModelOption = { value: string; label: string; provider: RunControlProvider; effortOptions: readonly string[] }
-
-/** Models the engine offered in open sessions, without the provider-local Default row. */
-export function modelChoices(snapshots: Iterable<RunControlsSnapshot>): ScheduledModelOption[] {
-  const byValue = new Map<string, ScheduledModelOption>()
-  for (const snapshot of snapshots) {
-    for (const option of snapshot.model.options) {
-      if (option.value !== null && !byValue.has(option.value)) {
-        byValue.set(option.value, { value: option.value, label: option.label, provider: option.provider, effortOptions: option.effortOptions })
-      }
-    }
-  }
-  return [...byValue.values()]
-}
+export type ProjectChoice = ScheduledProjectOption
+export type { ScheduledModelOption }
 
 const SCHEDULED_EFFORTS = Object.keys(EFFORT_LABELS) as ScheduledEffort[]
 
 /**
- * Effort levels the chosen model accepts, always including Default. The default
- * model's own levels are unknown here, so it offers every level the parser accepts.
+ * Effort levels from the engine's standalone catalog, always including Default.
+ * An unknown saved model has no advertised capabilities.
  */
-export function effortChoicesFor(model: string, options: readonly ScheduledModelOption[]): ScheduledEffort[] {
-  const option = model ? options.find(entry => entry.value === model) : undefined
-  if (!option) return SCHEDULED_EFFORTS
-  return SCHEDULED_EFFORTS.filter(effort => effort === 'default' || option.effortOptions.includes(effort))
+export function effortChoicesFor(model: string, options: readonly ScheduledModelOption[], defaultEffortOptions: readonly string[]): ScheduledEffort[] {
+  const supported = model ? options.find(entry => entry.value === model)?.effortOptions ?? [] : defaultEffortOptions
+  return SCHEDULED_EFFORTS.filter(effort => effort === 'default' || supported.includes(effort))
 }
 
 export function providerLabel(provider: RunControlProvider): string {

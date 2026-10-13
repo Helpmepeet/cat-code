@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import { parseScheduledTaskCommand, type ScheduledRun, type ScheduledTask } from '../../shared/scheduledTasks.js'
-import { sessionDescriptor } from './sessionDescriptorFixture.js'
 import {
   createResponseOrder,
   displayPath,
@@ -10,13 +9,11 @@ import {
   draftToInput,
   editTaskDraft,
   formatRunTime,
-  modelChoices,
   newTaskDraft,
   nextRunText,
   orderTasks,
   partitionRuns,
   previewNextRun,
-  projectChoices,
   scheduleLabel,
 } from './scheduledTasksModel.js'
 
@@ -41,12 +38,12 @@ function run(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
 }
 
 describe('draft to save input', () => {
-  test('a new task names a project session and never a path, and the receiving parser accepts it', () => {
-    const draft = { ...newTaskDraft('Asia/Bangkok'), name: ' Maps ', prompt: 'Refresh', project: { kind: 'session' as const, appSessionId: SESSION } }
+  test('a new task names a project handle and never a path, and the receiving parser accepts it', () => {
+    const draft = { ...newTaskDraft('Asia/Bangkok'), name: ' Maps ', prompt: 'Refresh', project: { kind: 'workspace' as const, workspaceId: SESSION } }
     const input = draftToInput(draft, null)
     expect(input).toEqual({
       name: 'Maps', prompt: 'Refresh', enabled: true, model: '', effort: 'default', permissionMode: 'default',
-      schedule: { kind: 'daily', time: '09:00', timeZone: 'Asia/Bangkok', day: 1 }, workspaceSessionId: SESSION,
+      schedule: { kind: 'daily', time: '09:00', timeZone: 'Asia/Bangkok', day: 1 }, workspaceId: SESSION,
     })
     expect(parseScheduledTaskCommand({ type: 'save', task: input })).not.toBeNull()
   })
@@ -56,7 +53,7 @@ describe('draft to save input', () => {
     const input = draftToInput({ ...draft, scheduleKind: 'interval', minutes: '90' }, task({ enabled: false }))
     expect(input.id).toBe(ID)
     expect(input.enabled).toBe(false)
-    expect(input).not.toHaveProperty('workspaceSessionId')
+    expect(input).not.toHaveProperty('workspaceId')
     expect(input).not.toHaveProperty('cwdToken')
     expect(input.schedule).toEqual({ kind: 'interval', minutes: 90 })
     expect(parseScheduledTaskCommand({ type: 'save', task: input })).not.toBeNull()
@@ -83,6 +80,9 @@ describe('draft to save input', () => {
     expect(draftProblems({ ...base, scheduleKind: 'interval', minutes: '10081' }).schedule).toBeDefined()
     expect(draftProblems({ ...base, scheduleKind: 'interval', minutes: '1.5' }).schedule).toBeDefined()
     expect(draftProblems({ ...base, model: 'gpt 6' }).model).toBeDefined()
+    const longContext = { ...base, taskId: ID, model: 'opus[1m]' }
+    expect(draftProblems(longContext)).toEqual({})
+    expect(parseScheduledTaskCommand({ type: 'save', task: draftToInput(longContext, task()) })).not.toBeNull()
     expect(draftProblems({ ...base, prompt: 'é'.repeat(32 * 1024 + 1) }).prompt).toBeDefined()
     expect(draftProblems({ ...base, project: { kind: 'none' } }).project).toBe('Choose a project.')
   })
@@ -129,13 +129,6 @@ describe('presentation', () => {
     expect(finished).toEqual([recent, old])
   })
 
-  test('project choices are host-owned project sessions, one per folder', () => {
-    const older = sessionDescriptor('a', { cwd: '/repo/b', binding: { kind: 'project' }, lastAttachedAt: 1 })
-    const newer = sessionDescriptor('b', { cwd: '/repo/b', binding: { kind: 'project' }, lastAttachedAt: 2 })
-    const managed = sessionDescriptor('c', { cwd: '/managed', binding: { kind: 'managed', storageRootId: 'r', storageId: 's' } })
-    const unbound = sessionDescriptor('d', { cwd: '/legacy' })
-    expect(projectChoices([older, newer, managed, unbound])).toEqual([{ appSessionId: 'b', cwd: '/repo/b', label: 'b' }])
-  })
 })
 
 test('a response issued before an applied one is dropped', () => {
@@ -147,17 +140,15 @@ test('a response issued before an applied one is dropped', () => {
   expect(order.accept(order.issue())).toBe(true)
 })
 
-test('model choices come from run controls and limit the offered effort levels', () => {
-  const snapshot = (options: Array<{ value: string | null; label: string; effortOptions: string[] }>) =>
-    ({ model: { options: options.map(option => ({ ...option, provider: 'openai' })) } }) as unknown as import('../../shared/protocol.js').RunControlsSnapshot
-  const options = modelChoices([
-    snapshot([{ value: null, label: 'Default (recommended)', effortOptions: [] }, { value: 'gpt-6-sol', label: 'GPT-6 Sol', effortOptions: ['low', 'high', 'ultra'] }]),
-    snapshot([{ value: 'gpt-6-sol', label: 'duplicate', effortOptions: [] }, { value: 'haiku', label: 'Haiku', effortOptions: [] }]),
-  ])
-  expect(options.map(option => option.label)).toEqual(['GPT-6 Sol', 'Haiku'])
-  expect(effortChoicesFor('gpt-6-sol', options)).toEqual(['default', 'low', 'high'])
-  expect(effortChoicesFor('haiku', options)).toEqual(['default'])
-  expect(effortChoicesFor('', options)).toEqual(['default', 'low', 'medium', 'high', 'xhigh', 'max'])
+test('effort choices use the catalog for explicit and default models, not the parser union', () => {
+  const options = [
+    { value: 'gpt-6-sol', label: 'GPT-6 Sol', provider: 'openai' as const, effortOptions: ['low', 'high'] },
+    { value: 'haiku', label: 'Haiku', provider: 'anthropic' as const, effortOptions: [] },
+  ]
+  expect(effortChoicesFor('gpt-6-sol', options, ['medium'])).toEqual(['default', 'low', 'high'])
+  expect(effortChoicesFor('haiku', options, ['medium'])).toEqual(['default'])
+  expect(effortChoicesFor('', options, ['medium'])).toEqual(['default', 'medium'])
+  expect(effortChoicesFor('unknown-saved-model', options, ['medium'])).toEqual(['default'])
 })
 
 test('paths shorten only the home folder', () => {

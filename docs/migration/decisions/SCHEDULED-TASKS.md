@@ -8,8 +8,8 @@ is not required.
 
 `app/host/scheduledTasks.ts` owns durable task definitions, individual run claims,
 and lifecycle tracking. Electron main starts and stops it with the existing host.
-The backend exposes two fixed preload methods; main validates closed inputs.
-Workspace identity comes from an existing host-owned project session or a
+The backend exposes three fixed preload methods; main validates closed inputs.
+Workspace identity comes from an opaque saved-project handle or a
 single-use native picker token. Renderer-authored filesystem paths, resume
 identities, permission rules, and bypass mode are rejected.
 
@@ -112,8 +112,8 @@ main consumes the token before validating the save. An edit takes `enabled`
 from the latest snapshot. Turning on the workspace-map preset requires confirming
 that the previous external schedule is paused. "Turn completed" names a
 finished agent turn, not semantic success. Run chats open through the same
-registry route as created-peer links. Model suggestions come from open sessions'
-run-controls options; any parser-valid model name is accepted. The editor's next
+registry route as created-peer links. Model suggestions come from the real engine's
+unlocked model catalog; any parser-valid model name is accepted. The editor's next
 run preview calls `nextTaskOccurrence`, which moved unchanged from the host into
 `app/shared/scheduledTasks.ts` so the preview and the scheduler share one rule.
 
@@ -122,15 +122,40 @@ The backend contract the page uses:
 | Method | Contract |
 | --- | --- |
 | `window.catcode.readScheduledTasks()` | Returns task definitions, recent runs, and an optional storage/startup error. This is a pull API; there is no schedule event subscription. |
+| `window.catcode.readScheduledTaskOptions()` | Returns models, engine-derived default effort options, saved projects, and an optional read error. It accepts no authored payload and is independent of schedule polling. |
 | `window.catcode.scheduledTask(command)` | Returns `{ ok: true, snapshot }` after success or `{ ok: false, error }` after refusal. It accepts `save`, `pause`, `resume`, `delete`, `run`, and `workspace-maps`. |
 
 `app/shared/scheduledTasks.ts` owns the command and snapshot types. A new `save`
-needs a `workspaceSessionId` from a host-owned project session or a single-use
+needs a `workspaceId` minted by main for an existing saved project or a single-use
 `cwdToken` from the existing native folder picker. An edit can omit both to
 retain its saved project. It cannot supply a raw filesystem path. Required
 fields include name, prompt, schedule, enabled, model (empty means default),
 effort, and default/auto permission mode. The workspace-map command accepts a
-project session ID and creates a paused preset.
+project handle or native picker token (exactly one) and creates a paused preset.
+
+### Session-independent options amendment (2026-10-13)
+
+The disposable `scheduled-options` worker uses observation-only
+`bootstrapWorkerEngine`, not session initialization or account-pool startup.
+It reads `getModelOptions(false)` while provider switching is unlocked, and derives
+each selection's effort capabilities through the engine's model resolver and
+`getSupportedEffortLevels`. Default effort options resolve the engine default;
+read errors are explicit, never a fabricated Default-only catalog. The supported
+saved effort union includes `ultra`, carried through existing string spawn controls.
+
+Projects come exclusively from `getGlobalConfig().projects`, not open chats,
+registry entries or transcript history. Main canonicalizes existing directories,
+deduplicates aliases and mints stable per-process opaque handles. Saving or creating
+a preset revalidates the handle's canonical directory; renderer-authored paths
+remain rejected. Closing or reaping chats does not invalidate project handles.
+Edits may omit a source to retain their saved directory. The native picker with
+no active session has no chat-derived default directory.
+
+Options reads are single-flight, bounded to one validated NDJSON record and a
+15-second worker lifetime with kill escalation. Request/result parsers are closed;
+the main receiving method accepts only an undefined payload from the main window.
+No project hooks, project bootstrap, live model request or real schedule is needed
+to discover options. This adds a host-only read contract, not a session wire shape.
 
 Each run's `appSessionId` identifies its ordinary chat. Existing host session
 and restore APIs own opening those chats; their permissions and pending

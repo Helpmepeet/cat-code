@@ -1,5 +1,4 @@
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
-import { modelChoices } from './scheduledTasksModel.js'
 import { UsagePage } from './UsagePage.js'
 import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js'
 import {
@@ -1603,7 +1602,6 @@ export function App() {
   // the sidebar and the Sessions page all apply one title-precedence rule.
   const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog)
   const shellDescriptors = useMemo(() => selectShellDescriptors(shell), [shell])
-  const scheduledModelOptions = useMemo(() => modelChoices(Object.values(runControls.last)), [runControls.last])
   const visibleShellDescriptors = useMemo(
     () =>
       filterInteractiveSessionDescriptors(
@@ -4901,8 +4899,6 @@ export function App() {
            * session views below continue reading their own session slices. */}
           {activeView === 'scheduled' ? (
             <ScheduledTasksPage
-              sessions={shellDescriptors}
-              modelOptions={scheduledModelOptions}
               // A run's chat is an ordinary registry session: focus, restore, or report it gone.
               onOpenChat={createdPeerNavigation.open}
             />

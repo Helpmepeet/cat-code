@@ -111,6 +111,10 @@ describe('sidecar launch resolution (P5-1)', () => {
       'run',
       '/repo/app/sidecar/settingsWriteWorker.ts',
     ])
+    expect(plan.argsFor('scheduled-options')).toEqual([
+      'run',
+      '/repo/app/sidecar/scheduledTaskOptionsWorker.ts',
+    ])
   })
 
   test('debug cleanup keeps the feature flags the session sidecar has', () => {

@@ -43,6 +43,13 @@ test('main never imports the engine graph', () => {
   expect(source).not.toMatch(/from ['"]\.\.\/\.\.\/src\//)
 })
 
+test('scheduled receiving handlers never derive project identity from chats or transcript history', () => {
+  const scheduled = region('function registerHostControlPlane(): void {', 'const noHost =')
+  expect(scheduled).not.toContain('listSessions')
+  expect(scheduled).not.toContain('readSessionsCatalog')
+  expect(scheduled).not.toContain('workspaceSessionId')
+})
+
 test('ids are never drawn from Math.random', () => {
   // Request ids and directory tokens are correlation/capability values; a
   // predictable generator makes a token guessable (HC1).

@@ -65,6 +65,7 @@ import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
 // literals by construction rather than by hand-copying them.
 import {
   CH_SCHEDULED_TASKS_READ,
+  CH_SCHEDULED_TASK_OPTIONS_READ,
   CH_SCHEDULED_TASKS_COMMAND,
   CH_SUBMIT,
   CH_ABORT,
@@ -258,6 +259,10 @@ const bridge: CatCodeBridge = {
   readScheduledTasks() {
     sendGuard.assertAllowed({ readScheduledTasks: true })
     return ipcRenderer.invoke(CH_SCHEDULED_TASKS_READ)
+  },
+  readScheduledTaskOptions() {
+    sendGuard.assertAllowed({ readScheduledTaskOptions: true })
+    return ipcRenderer.invoke(CH_SCHEDULED_TASK_OPTIONS_READ)
   },
   scheduledTask(command) {
     sendGuard.assertAllowed(command)

@@ -1,3 +1,9 @@
+import type { RunControlProvider } from './protocol.js'
+
+export type ScheduledModelOption = { value: string; label: string; provider: RunControlProvider; effortOptions: readonly string[] }
+export type ScheduledProjectOption = { workspaceId: string; cwd: string; label: string }
+export type ScheduledTaskOptions = { models: ScheduledModelOption[]; defaultEffortOptions: string[]; projects: ScheduledProjectOption[]; error?: string }
+
 export type TaskSchedule =
   | { kind: 'daily' | 'weekdays' | 'weekly'; time: string; timeZone: string; day: number }
   | { kind: 'interval'; minutes: number }
@@ -8,14 +14,14 @@ export type ScheduledTaskInput = {
   prompt: string
   schedule: TaskSchedule
   enabled: boolean
-  workspaceSessionId?: string
+  workspaceId?: string
   cwdToken?: string
   model: string
   permissionMode: 'default' | 'auto'
-  effort: 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  effort: 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 }
 
-export type ScheduledTask = Omit<ScheduledTaskInput, 'id' | 'workspaceSessionId' | 'cwdToken'> & {
+export type ScheduledTask = Omit<ScheduledTaskInput, 'id' | 'workspaceId' | 'cwdToken'> & {
   id: string
   cwd: string
   createdAt: number
@@ -39,10 +45,11 @@ export type ScheduledTasksResult = { ok: true; snapshot: ScheduledTasksSnapshot 
 export type ScheduledTaskCommand =
   | { type: 'save'; task: ScheduledTaskInput }
   | { type: 'pause' | 'resume' | 'delete' | 'run'; id: string }
-  | { type: 'workspace-maps'; workspaceSessionId: string }
+  | { type: 'workspace-maps'; workspaceId: string; cwdToken?: never }
+  | { type: 'workspace-maps'; cwdToken: string; workspaceId?: never }
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
-const EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+const EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
 }
@@ -60,22 +67,28 @@ export function validTaskSchedule(value: unknown): value is TaskSchedule {
 }
 export function parseScheduledTaskCommand(value: unknown): ScheduledTaskCommand | null {
   if (!object(value)) return null
-  if (value.type === 'workspace-maps') return keys(value, ['type', 'workspaceSessionId']) && typeof value.workspaceSessionId === 'string' && UUID.test(value.workspaceSessionId) ? value as ScheduledTaskCommand : null
+  if (value.type === 'workspace-maps') return keys(value, ['type', 'workspaceId', 'cwdToken']) && validProjectSource(value, true) ? value as ScheduledTaskCommand : null
   if (typeof value.type === 'string' && ['pause', 'resume', 'delete', 'run'].includes(value.type)) return keys(value, ['type', 'id']) && typeof value.id === 'string' && UUID.test(value.id) ? value as ScheduledTaskCommand : null
   if (value.type !== 'save' || !keys(value, ['type', 'task']) || !object(value.task)) return null
   const task = value.task
-  if (!keys(task, ['id', 'name', 'prompt', 'schedule', 'enabled', 'workspaceSessionId', 'cwdToken', 'model', 'effort', 'permissionMode']) ||
+  if (!keys(task, ['id', 'name', 'prompt', 'schedule', 'enabled', 'workspaceId', 'cwdToken', 'model', 'effort', 'permissionMode']) ||
       typeof task.name !== 'string' || !task.name.trim() || task.name.length > 120 ||
       typeof task.prompt !== 'string' || !task.prompt.trim() || new TextEncoder().encode(task.prompt).length > 64 * 1024 ||
       typeof task.enabled !== 'boolean' || !validTaskSchedule(task.schedule) ||
-      typeof task.model !== 'string' || task.model.length > 100 || (task.model !== '' && !/^[a-zA-Z0-9._:/-]+$/.test(task.model)) ||
+      typeof task.model !== 'string' || task.model.length > 100 || (task.model !== '' && !/^[a-zA-Z0-9._:/[\]-]+$/.test(task.model)) ||
       typeof task.permissionMode !== 'string' || !['default', 'auto'].includes(task.permissionMode) ||
       !EFFORTS.includes(task.effort as typeof EFFORTS[number]) ||
       (task.id !== undefined && (typeof task.id !== 'string' || !UUID.test(task.id))) ||
-      (task.workspaceSessionId !== undefined && (typeof task.workspaceSessionId !== 'string' || !UUID.test(task.workspaceSessionId))) ||
-      (task.cwdToken !== undefined && (typeof task.cwdToken !== 'string' || task.cwdToken.length > 200)) ||
-      (task.workspaceSessionId !== undefined && task.cwdToken !== undefined)) return null
+      !validProjectSource(task, task.id === undefined)) return null
   return value as ScheduledTaskCommand
+}
+
+function validProjectSource(value: Record<string, unknown>, required: boolean): boolean {
+  const hasWorkspace = Object.hasOwn(value, 'workspaceId')
+  const hasToken = Object.hasOwn(value, 'cwdToken')
+  if (hasWorkspace && hasToken || required && !hasWorkspace && !hasToken) return false
+  return (!hasWorkspace || typeof value.workspaceId === 'string' && UUID.test(value.workspaceId)) &&
+    (!hasToken || typeof value.cwdToken === 'string' && value.cwdToken.trim().length > 0 && value.cwdToken.length <= 200)
 }
 
 export function isActiveScheduledRun(run: ScheduledRun): boolean {

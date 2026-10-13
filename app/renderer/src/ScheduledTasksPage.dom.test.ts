@@ -1,10 +1,15 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
-import type { ScheduledRun, ScheduledTask, ScheduledTaskCommand, ScheduledTasksResult, ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { runScheduledTaskOptionsWorker } from '../../main/scheduledTaskOptionsRunner.js'
+import { ScheduledTaskOptionsService } from '../../main/scheduledTaskOptionsService.js'
+import type { ScheduledRun, ScheduledTask, ScheduledTaskCommand, ScheduledTaskOptions, ScheduledTasksResult, ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
 import { createDomTestHarness, type DomTestHarness, type MountedTree } from './domTestHarness.js'
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { storeScheduledSelection, storeScheduledTaskDraft } from './scheduledTasksModel.js'
-import { sessionDescriptor } from './sessionDescriptorFixture.js'
 
 let harness: DomTestHarness
 let previousBridge: typeof window.catcode | undefined
@@ -19,10 +24,10 @@ afterAll(async () => {
 const TASK_ID = '11111111-1111-4111-8111-111111111111'
 const PRESET_ID = '44444444-4444-4444-8444-444444444444'
 const MODELS = [
-  { value: 'gpt-6-sol', label: 'GPT-6 Sol', provider: 'openai' as const, effortOptions: ['low', 'medium', 'high'] },
+  { value: 'gpt-6-sol', label: 'GPT-6 Sol', provider: 'openai' as const, effortOptions: ['low', 'medium', 'high', 'ultra'] },
   { value: 'haiku', label: 'Haiku', provider: 'anthropic' as const, effortOptions: [] },
 ]
-const PROJECT = sessionDescriptor('33333333-3333-4333-8333-333333333333', { cwd: '/repo/cat-code', binding: { kind: 'project' } })
+const PROJECT = { workspaceId: '33333333-3333-4333-8333-333333333333', cwd: '/repo/cat-code', label: 'cat-code' }
 
 function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
@@ -47,18 +52,21 @@ type Bridge = {
   respond: (command: ScheduledTaskCommand) => ScheduledTasksResult | Promise<ScheduledTasksResult>
   read?: () => Promise<ScheduledTasksSnapshot>
   pickToken?: string | null
+  options?: ScheduledTaskOptions
+  readOptions?: () => Promise<ScheduledTaskOptions>
 }
 
 function installBridge(state: Bridge): void {
   window.catcode = {
     readScheduledTasks: () => state.read ? state.read() : Promise.resolve(structuredClone(state.snapshot)),
+    readScheduledTaskOptions: () => state.readOptions ? state.readOptions() : Promise.resolve(state.options ?? { models: MODELS, defaultEffortOptions: ['medium', 'high'], projects: [PROJECT] }),
     scheduledTask: async (command: ScheduledTaskCommand) => { state.commands.push(command); return state.respond(command) },
     pickDirectory: async () => state.pickToken ?? null,
   } as unknown as typeof window.catcode
 }
 
 async function mount(opened: string[] = []): Promise<MountedTree> {
-  const tree = await harness.mount(createElement(ScheduledTasksPage, { sessions: [PROJECT], modelOptions: MODELS, onOpenChat: (id: string) => { opened.push(id) } }))
+  const tree = await harness.mount(createElement(ScheduledTasksPage, { onOpenChat: (id: string) => { opened.push(id) } }))
   await flush()
   return tree
 }
@@ -111,7 +119,7 @@ const heading = (tree: MountedTree) => tree.container.querySelector('h2')?.textC
 const alerts = (tree: MountedTree) => [...tree.container.querySelectorAll('[role="alert"]')].map(entry => entry.textContent)
 const toggleSwitch = (tree: MountedTree) => tree.container.querySelector<HTMLButtonElement>('[role="switch"]')!
 
-test('creating a task sends the project session, not a path, and opens the new task', async () => {
+test('with no chats, creating a task offers catalog models/projects and sends a project handle, not a path', async () => {
   const state: Bridge = {
     snapshot: { tasks: [], runs: [] },
     commands: [],
@@ -134,6 +142,10 @@ test('creating a task sends the project session, not a path, and opens the new t
   await act(async () => { tree.container.ownerDocument.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
   await flush()
   await choose(tree, 'Model', 'GPT-6 Sol')
+  await click(field(tree, 'Effort'))
+  expect(menuOptions(tree)).toEqual(['Default', 'Low', 'Medium', 'High', 'Ultra'])
+  await click(button(tree, 'Ultra'))
+  expect(field(tree, 'Effort').textContent).toBe('Ultra')
   await choose(tree, 'Effort', 'High')
   await click(field(tree, 'Time zone'))
   const search = tree.container.ownerDocument.querySelector<HTMLInputElement>('input[aria-label="Search time zone"]')!
@@ -148,7 +160,7 @@ test('creating a task sends the project session, not a path, and opens the new t
   expect(state.commands).toHaveLength(1)
   const saved = state.commands[0]!
   if (saved.type !== 'save') throw new Error('expected save')
-  expect(saved.task).toMatchObject({ name: 'Nightly review', prompt: 'Review the diff', workspaceSessionId: PROJECT.appSessionId, enabled: true, permissionMode: 'auto', model: 'gpt-6-sol', effort: 'high' })
+  expect(saved.task).toMatchObject({ name: 'Nightly review', prompt: 'Review the diff', workspaceId: PROJECT.workspaceId, enabled: true, permissionMode: 'auto', model: 'gpt-6-sol', effort: 'high' })
   expect(saved.task.schedule).toMatchObject({ kind: 'daily', timeZone: 'Asia/Tokyo' })
   expect(saved.task).not.toHaveProperty('cwd')
   expect(saved.task).not.toHaveProperty('cwdToken')
@@ -215,7 +227,7 @@ test('refreshed state does not overwrite an open draft, and the draft survives l
   const saved = state.commands[0]!
   // Paused while the draft was open: saving keeps the latest enabled state.
   expect(saved.type === 'save' && saved.task.enabled).toBe(false)
-  expect(saved.type === 'save' && saved.task).not.toHaveProperty('workspaceSessionId')
+  expect(saved.type === 'save' && saved.task).not.toHaveProperty('workspaceId')
 })
 
 test('a stale poll that resolves after a command cannot replace the command snapshot', async () => {
@@ -301,7 +313,7 @@ test('activity leads with answers needed, history keeps deleted tasks, and runs 
   expect(text(tree)).toContain('Waiting for your answer')
 })
 
-test('the workspace-map preset is created paused for a chosen project session and then opened', async () => {
+test('with no chats the workspace-map preset uses a catalog project and opens paused', async () => {
   const state: Bridge = {
     snapshot: { tasks: [], runs: [] },
     commands: [],
@@ -313,7 +325,7 @@ test('the workspace-map preset is created paused for a chosen project session an
   expect(button(tree, 'Create paused task').disabled).toBe(true)
   await choose(tree, 'Project', 'cat-code')
   await click(button(tree, 'Create paused task'))
-  expect(state.commands).toEqual([{ type: 'workspace-maps', workspaceSessionId: PROJECT.appSessionId }])
+  expect(state.commands).toEqual([{ type: 'workspace-maps', workspaceId: PROJECT.workspaceId }])
   expect(heading(tree)).toBe('Refresh workspace maps')
   expect(toggleSwitch(tree).getAttribute('aria-checked')).toBe('false')
   expect(() => listRow(tree, 'Workspace-map refresh')).toThrow()
@@ -328,3 +340,108 @@ test('unavailable scheduling is explained and blocks changes', async () => {
   expect(toggleSwitch(tree).disabled).toBe(true)
   expect(button(tree, 'Run Nightly review now').disabled).toBe(true)
 })
+
+test('default effort is engine-derived and model changes reconcile unsupported effort', async () => {
+  installBridge({ snapshot: { tasks: [], runs: [] }, commands: [], respond: () => ({ ok: false, error: 'unused' }) })
+  const tree = await mount()
+  await click(listRow(tree, 'New task'))
+  await click(field(tree, 'Effort'))
+  expect(menuOptions(tree)).toEqual(['Default', 'Medium', 'High'])
+  await click(button(tree, 'High'))
+  await choose(tree, 'Model', 'Haiku')
+  expect(field(tree, 'Effort').textContent).toBe('Default')
+  expect(text(tree)).not.toContain('once a chat is open')
+})
+
+test('the preset accepts a native folder without any known projects and retries spent tokens', async () => {
+  const state: Bridge = {
+    snapshot: { tasks: [], runs: [] }, commands: [], pickToken: 'preset-folder-1',
+    options: { models: MODELS, defaultEffortOptions: [], projects: [] },
+    respond: () => ({ ok: false, error: 'The project needs a refresh helper' }),
+  }
+  installBridge(state)
+  const tree = await mount()
+  await click(listRow(tree, 'Workspace-map refresh'))
+  expect(button(tree, 'Create paused task').disabled).toBe(true)
+  expect(text(tree)).not.toContain('Open the project')
+  await click(field(tree, 'Project'))
+  await click(button(tree, 'Choose another folder…'))
+  expect(field(tree, 'Project').textContent).toContain('Chosen folder')
+  await click(button(tree, 'Create paused task'))
+  expect(state.commands).toEqual([{ type: 'workspace-maps', cwdToken: 'preset-folder-1' }])
+  expect(alerts(tree)).toContain('Choose the folder again.')
+  expect(button(tree, 'Create paused task').disabled).toBe(true)
+  state.pickToken = 'preset-folder-2'
+  state.respond = () => ({ ok: true, snapshot: { tasks: [preset()], runs: [] } })
+  await click(field(tree, 'Project'))
+  await click(button(tree, 'Choose another folder…'))
+  await click(button(tree, 'Create paused task'))
+  expect(state.commands.at(-1)).toEqual({ type: 'workspace-maps', cwdToken: 'preset-folder-2' })
+  expect(heading(tree)).toBe('Refresh workspace maps')
+})
+
+test('a catalog failure is explicit, can be retried, and never falls back to chat controls', async () => {
+  const state: Bridge = {
+    snapshot: { tasks: [], runs: [] }, commands: [],
+    readOptions: async () => { throw new Error('worker failed') },
+    respond: () => ({ ok: false, error: 'unused' }),
+  }
+  installBridge(state)
+  const tree = await mount()
+  expect(alerts(tree).join(' ')).toContain('Task choices could not be loaded. Try again.')
+  await click(listRow(tree, 'New task'))
+  expect(field<HTMLButtonElement>(tree, 'Model').disabled).toBe(true)
+  expect(button(tree, 'Create task').disabled).toBe(true)
+  state.readOptions = async () => ({ models: MODELS, defaultEffortOptions: [], projects: [PROJECT] })
+  await click(button(tree, 'Retry'))
+  expect(alerts(tree)).toEqual([])
+  await click(field(tree, 'Model'))
+  expect(menuOptions(tree)).toEqual(['Default', 'GPT-6 Sol', 'Haiku'])
+})
+
+test('App and the Scheduled page cannot feed choices from chat state', async () => {
+  const app = await Bun.file(new URL('./App.tsx', import.meta.url)).text()
+  const page = await Bun.file(new URL('./ScheduledTasksPage.tsx', import.meta.url)).text()
+  const model = await Bun.file(new URL('./scheduledTasksModel.ts', import.meta.url)).text()
+  const wiring = app.match(/<ScheduledTasksPage[\s\S]*?\/>/)?.[0]
+  expect(wiring).toBeDefined()
+  expect(wiring).not.toMatch(/sessions=|modelOptions=/)
+  expect(app).not.toContain('scheduledModelOptions')
+  expect(page).toContain('getBridge().readScheduledTaskOptions()')
+  expect(page + model).not.toMatch(/SessionDescriptor|RunControlsSnapshot|workspaceSessionId|runControls\.last/)
+})
+
+test('real engine catalog reaches the designed pickers without creating any chat', async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'scheduled-page-catalog-')))
+  try {
+    const config = join(dir, 'config')
+    const project = join(dir, 'standalone-project')
+    mkdirSync(config)
+    mkdirSync(project)
+    writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: { [project]: { hasTrustDialogAccepted: true } } }))
+    const catalog = await runScheduledTaskOptionsWorker({
+      command: process.execPath,
+      args: [fileURLToPath(new URL('../../sidecar/scheduledTaskOptionsWorker.ts', import.meta.url))],
+      cwd: dir,
+      env: { HOME: dir, NODE_ENV: 'production', CLAUDE_CONFIG_DIR: config, DISABLE_TELEMETRY: '1',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '' },
+    })
+    const options = await new ScheduledTaskOptionsService(async () => catalog,
+      path => ({ ok: true, realpath: realpathSync(path) })).read()
+    expect(options.error).toBeUndefined()
+    expect(options.models.length).toBeGreaterThan(0)
+    installBridge({ snapshot: { tasks: [], runs: [] }, commands: [], options, respond: () => ({ ok: false, error: 'unused' }) })
+    const tree = await mount()
+    await click(listRow(tree, 'New task'))
+    await click(field(tree, 'Model'))
+    expect(menuOptions(tree)).toEqual(['Default', ...options.models.map(model => model.label)])
+    await click(button(tree, options.models[0]!.label))
+    await click(field(tree, 'Effort'))
+    expect(menuOptions(tree).length).toBe(options.models[0]!.effortOptions.length + 1)
+    await click(button(tree, 'Default'))
+    await choose(tree, 'Project', 'standalone-project')
+    await type(field(tree, 'Name'), 'Independent')
+    await type(field(tree, 'Instructions'), 'Inspect this project')
+    expect(button(tree, 'Create task').disabled).toBe(false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 20_000)

@@ -29,6 +29,7 @@ const MODES = {
   'settings-inventory': () => import('./settingsInventoryWorker.js'),
   'settings-write': () => import('./settingsWriteWorker.js'),
   'workspace-listing': () => import('./workspaceListingWorker.js'),
+  'scheduled-options': () => import('./scheduledTaskOptionsWorker.js'),
   relocation: () => import('./sessionRelocationWorker.js'),
   'usage-stats': () => import('./usageStatsWorker.js'),
   'debug-cleanup': () => import('./debugCleanupWorker.js'),

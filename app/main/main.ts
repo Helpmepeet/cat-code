@@ -2,7 +2,10 @@ import { ScheduledTasks } from '../host/scheduledTasks.js'
 import { parseScheduledTaskCommand, type ScheduledTasksSnapshot, type ScheduledTasksResult } from '../shared/scheduledTasks.js'
 import { launchScheduledSession } from './scheduledTaskRunner.js'
 import { workspaceMapSchedule } from './workspaceMapSchedule.js'
-import { CH_SCHEDULED_TASKS_READ, CH_SCHEDULED_TASKS_COMMAND } from '../shared/ipcChannels.js'
+import { CH_SCHEDULED_TASKS_READ, CH_SCHEDULED_TASKS_COMMAND, CH_SCHEDULED_TASK_OPTIONS_READ } from '../shared/ipcChannels.js'
+import { validScheduledTaskOptionsPayload } from '../shared/scheduledTaskOptions.js'
+import { runScheduledTaskOptionsWorker } from './scheduledTaskOptionsRunner.js'
+import { ScheduledTaskOptionsService } from './scheduledTaskOptionsService.js'
 import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
@@ -2964,6 +2967,17 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * without re-registering listeners.
  */
 function registerHostControlPlane(): void {
+  const scheduledOptions = new ScheduledTaskOptionsService(
+    () => runScheduledTaskOptionsWorker({ command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('scheduled-options'), cwd: process.cwd() }),
+    validateCwd,
+  )
+  ipcMain.handle(CH_SCHEDULED_TASK_OPTIONS_READ, (event, payload: unknown) => {
+    if (!isMainWindowSender(event) || !validScheduledTaskOptionsPayload(payload)) {
+      return { models: [], defaultEffortOptions: [], projects: [], error: 'Scheduled task options are unavailable' }
+    }
+    return scheduledOptions.read()
+  })
   ipcMain.handle(CH_SCHEDULED_TASKS_READ, (event): ScheduledTasksSnapshot => {
     if (!isMainWindowSender(event)) return { tasks: [], runs: [], error: 'Scheduled tasks are unavailable' }
     return scheduledTasks?.snapshot() ?? { tasks: [], runs: [], error: scheduledTasksError ?? 'Scheduled tasks are starting' }
@@ -2976,10 +2990,10 @@ function registerHostControlPlane(): void {
     try {
       if (command.type === 'save' || command.type === 'workspace-maps') {
         const input = command.type === 'save' ? command.task : null
-        const sessionId = command.type === 'workspace-maps' ? command.workspaceSessionId : input?.workspaceSessionId
+        const workspaceId = command.type === 'workspace-maps' ? command.workspaceId : input?.workspaceId
+        const cwdToken = command.type === 'workspace-maps' ? command.cwdToken : input?.cwdToken
         const previous = input?.id ? scheduledTasks.snapshot().tasks.find(task => task.id === input.id) : undefined
-        const row = sessionId ? host.listSessions().find(session => session.appSessionId === sessionId && session.binding?.kind === 'project') : undefined
-        const cwd = input?.cwdToken ? cwdTokens.consume(input.cwdToken) : sessionId ? row?.cwd : previous?.cwd
+        const cwd = cwdToken ? cwdTokens.consume(cwdToken) : workspaceId ? scheduledOptions.resolve(workspaceId) : previous?.cwd
         if (!cwd) return { ok: false, error: 'Choose a project folder for this task' }
         const checked = validateCwd(cwd)
         if (!checked.ok) return { ok: false, error: 'The project folder is unavailable' }
@@ -3003,12 +3017,13 @@ function registerHostControlPlane(): void {
   // renderer feeds the token to createSession; it can never author a path.
   ipcMain.handle(
     CH_HOST_PICK_DIR,
-    async (_event, activeSessionId?: unknown): Promise<string | null> => {
+    async (event, activeSessionId?: unknown): Promise<string | null> => {
+      if (!isMainWindowSender(event) || activeSessionId !== undefined && activeSessionId !== null && typeof activeSessionId !== 'string') return null
       if (devPickerBypass.enabled) {
         const bypassed = devPickerBypass.pick()
         return bypassed ? cwdTokens.mint(bypassed) : null
       }
-      const defaultPath = resolvePickerDefaultPath(
+      const defaultPath = activeSessionId == null ? undefined : resolvePickerDefaultPath(
         host?.listSessions() ?? [],
         activeSessionId,
       )
