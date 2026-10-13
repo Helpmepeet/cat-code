@@ -2,7 +2,7 @@
 
 Date: 2026-10-13
 
-Status: Product design draft, revised after UX review. The agreed decisions below supersede the earlier activation panel, global countdown chip, return card, and external-power requirement. The cup remains numerals-only; explanations and named actions use the existing notice surface. Proposed defaults are identified separately. No power-control implementation or hardware safety claim is approved by this document.
+Status: Product design draft, revised after UX review. Implementation was requested on 2026-10-14 but is blocked at the power-control contract; see the [feasibility investigation](../research/2026-10-14-lid-closed-power-feasibility.md). The feature is not implemented. The agreed decisions below supersede the earlier activation panel, global countdown chip, return card, and external-power requirement. The cup remains numerals-only; explanations and named actions use the existing notice surface. Proposed defaults are identified separately. No power-control implementation or hardware safety claim is approved by this document.
 
 ## Purpose
 
