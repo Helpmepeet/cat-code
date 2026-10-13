@@ -8,7 +8,7 @@ is not required.
 
 `app/host/scheduledTasks.ts` owns durable task definitions, individual run claims,
 and lifecycle tracking. Electron main starts and stops it with the existing host.
-The Scheduled page uses two fixed preload methods; main validates closed inputs.
+The backend exposes two fixed preload methods; main validates closed inputs.
 Workspace identity comes from an existing host-owned project session or a
 single-use native picker token. Renderer-authored filesystem paths, resume
 identities, permission rules, and bypass mode are rejected.
@@ -21,8 +21,8 @@ Model, effort, and default/auto permission mode use the existing spawn controls.
 No sidecar wire kinds, engine permissions, or locked process topology change.
 
 The first version supports independent runs, daily/weekday/weekly wall-clock
-times in a saved timezone, and minute intervals. Runs continue with the Scheduled
-page closed while a Cat Code window and its host remain open. Closing the last
+times in a saved timezone, and minute intervals. Runs continue independently of
+renderer pages while a Cat Code window and its host remain open. Closing the last
 window stops scheduling under the existing desktop lifetime contract. It does
 not install an OS daemon, wake a sleeping computer, or execute in the cloud.
 
@@ -50,15 +50,15 @@ The user can inspect or continue its saved chat. A failed launch/refused prompt
 is recorded and not automatically redelivered. These rules avoid pretending
 exactly-once execution across an uncertain crash boundary.
 
-Finished means the agent turn ended successfully, not that its requested work
+Completed means the agent turn ended successfully, not that its requested work
 was semantically successful. The final report remains available in the chat and
-as a bounded run summary. A permission or question request displays Needs
-attention and keeps the task unfinished. The store retains 200 recent runs,
+as a bounded run summary. A permission or question request records `waiting`
+and keeps the task unfinished. The store retains 200 recent runs,
 including every unfinished run, and at most 50 definitions.
 
 ## Workspace-map migration
 
-Add workspace-map task creates a paused daily 03:00 Asia/Bangkok task for the
+The `workspace-maps` command creates a paused daily 03:00 Asia/Bangkok task for the
 selected project. The preset requires that project's existing refresh helper.
 Its prompt uses the helper's start, review, check, finish, block, and recovery
 contract, explicit map paths, scoped commits, committed source, and preserved
@@ -75,6 +75,30 @@ Pause the previous external schedule before enabling this task to keep one
 refresh owner. Creating the feature or preset does not edit external scheduling
 definitions, start a live model turn, or install a new application build.
 
+## UI deferred
+
+The user reserved interface design for a separate design model. The initial
+Scheduled page, its styling and DOM test, and its sidebar/tab/palette integration
+have been removed. No scheduling screen or navigation entry is currently wired.
+The backend and its preload API remain available for that interface work:
+
+| Method | Contract |
+| --- | --- |
+| `window.catcode.readScheduledTasks()` | Returns task definitions, recent runs, and an optional storage/startup error. This is a pull API; there is no schedule event subscription. |
+| `window.catcode.scheduledTask(command)` | Returns `{ ok: true, snapshot }` after success or `{ ok: false, error }` after refusal. It accepts `save`, `pause`, `resume`, `delete`, `run`, and `workspace-maps`. |
+
+`app/shared/scheduledTasks.ts` owns the command and snapshot types. A new `save`
+needs a `workspaceSessionId` from a host-owned project session or a single-use
+`cwdToken` from the existing native folder picker. An edit can omit both to
+retain its saved project. It cannot supply a raw filesystem path. Required
+fields include name, prompt, schedule, enabled, model (empty means default),
+effort, and default/auto permission mode. The workspace-map command accepts a
+project session ID and creates a paused preset.
+
+Each run's `appSessionId` identifies its ordinary chat. Existing host session
+and restore APIs own opening those chats; their permissions and pending
+questions remain on the normal conversation surface.
+
 ## Validation
 
 The scheduler tests cover durable claims, restart, overlap, catch-up, failures,
@@ -82,16 +106,21 @@ permission waits, replay suppression, turn closure, and timezone/DST behavior.
 A process test composes the real host, registry, Unix-socket supervisor,
 receiving sidecar boundary, and session controller against an isolated fixture
 turn. It proves both permission waiting and untrusted-workspace refusal without
-account access or model requests. A DOM test checks selected project identity
-and preservation of the draft after a rejected save.
+account access or model requests. The removed DOM test covered draft behavior
+for the removed page; backend coverage remains intact.
 
-Verified for this change: 24 focused scheduling/preload tests, desktop typecheck,
+The initial implementation passed 24 focused scheduling/preload/UI tests,
+desktop typecheck,
 scoped sidecar typecheck, renderer build, map lint, and diff checks. The full
 desktop suite in a clean temporary snapshot had 5,883 passes, three skips, and
 one failure in `app/shared/sessionRelocationRepeat.storage.test.ts:137`. That
 same failure reproduced against committed baseline `c90fb49d` before applying
 this change. The shared-tree suite also discovered an incomplete archived test
 copy under `tmp/`; the clean snapshot excluded that unrelated artifact.
+
+After deferring the UI, 132 focused navigation, scheduling, and preload tests
+passed, along with desktop typecheck, renderer build, map lint, and diff checks.
+The backend, sidecar fixture, and process test were unchanged in this follow-up.
 
 Live provider execution and native GUI acceptance were not run. The installed
 application and the existing external workspace-map schedule were not changed.

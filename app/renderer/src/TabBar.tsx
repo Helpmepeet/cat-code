@@ -39,7 +39,6 @@ export type TabBarEntry =
   | { kind: 'page'; page: PageTab }
 
 const PAGE_LABELS: Record<PageTab, string> = {
-  scheduled: 'Scheduled',
   goals: 'Goals',
   accounts: 'Accounts',
   usage: 'Analytics',

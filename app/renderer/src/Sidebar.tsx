@@ -235,7 +235,7 @@ export type RowReorderHandlers = {
 }
 
 type NavItem = {
-  id: 'scheduled' | 'goals' | 'accounts' | 'usage' | 'settings'
+  id: 'goals' | 'accounts' | 'usage' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -245,14 +245,13 @@ type NavItem = {
 // Chat is reached by opening a session from this roster, so repeating it as a
 // destination only spends vertical space and competes with the primary path.
 const NAV: NavItem[] = [
-  { id: 'scheduled', label: 'Scheduled', enabled: true, icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'usage', label: 'Analytics', enabled: true, icon: <UsageBarsIcon className="size-4" strokeWidth="1.5" /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'scheduled' | 'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
+type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
 
 export function Sidebar({
   rows,
