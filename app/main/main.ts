@@ -2203,6 +2203,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
  */
 function wireHostEvents(h: Host): void {
   h.subscribe(event => {
+    scheduledTasks?.receiveHostEvent(event)
     sendHostEvent(event)
     // The durable row now carries the completed turn; the in-memory pre-result
     // marker is needed only while that row still reads null.
@@ -2471,7 +2472,10 @@ function registerIpcHandlers(): void {
     // SF5 — route through the host so the registry's advisory fields (pid /
     // socketPath) are refreshed from the fresh child; the host also evicts replay.
       if (workspaceJump?.isReserved(sessionId)) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Wait for the workspace change to settle.' } })
-      return host.restartSession(sessionId)
+      return host.restartSession(sessionId).then(result => {
+        if (result.ok) scheduledTasks?.interrupt(sessionId)
+        return result
+      })
     },
   )
 
@@ -4528,7 +4532,7 @@ function ensureHost(): Host {
     try {
       const liveSupervisor = supervisor
       scheduledTasks = new ScheduledTasks(join(defaultRegistryDir(), 'scheduled-tasks.json'), {
-        launch: (task, id) => launchScheduledSession(liveHost, liveSupervisor, task, id),
+        launch: (task, id) => launchScheduledSession(liveHost, liveSupervisor, task, id, registry),
         submit: (id, prompt, submitId) => {
           sessionsWithSubmit.add(id)
           const options = { submitId } as import('../shared/protocol.js').SubmitOptions
@@ -4537,7 +4541,7 @@ function ensureHost(): Host {
       })
       scheduledTasksError = undefined
       scheduledTasks.start()
-    } catch { scheduledTasksError = 'Saved scheduled tasks could not be opened. Fix their storage before restarting Cat Code.' }
+    } catch { scheduledTasksError = 'Scheduled tasks could not be opened. Close any other Cat Code app and check their saved storage before restarting.' }
   })
 
   // IS-A startup GC: after the launch sweep settles (its reaps predate the

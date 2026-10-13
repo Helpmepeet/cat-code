@@ -28,14 +28,17 @@ not install an OS daemon, wake a sleeping computer, or execute in the cloud.
 
 ## Durable dispatch and results
 
-The single-instance desktop host owns
-`<Cat Code config home>/desktop/scheduled-tasks.json`. Writes use a private
+The scheduler holds an exclusive lock on the canonical
+`<Cat Code config home>/desktop/scheduled-tasks.json` path before reading or
+recovering it. Dev and packaged apps have different Electron profile locks;
+only one can own this shared scheduling store. Writes use a private
 temporary file, file sync, rename, and directory sync. A read failure preserves
 the existing document and leaves scheduling unavailable. A failed write freezes
 dispatch rather than allowing execution whose claim was not saved.
 
 A run's stable chat identity and dispatch claim reach disk before creating its
-engine process. A task can have one unfinished run. Overdue recurring work runs
+engine process. The exact ready engine identity is saved through the real
+registry before prompt submission. A task can have one unfinished run. Overdue recurring work runs
 once and moves the next occurrence into the future; missed occurrences are not
 replayed. Recurring tasks persist until paused or deleted and do not inherit
 terminal cron's seven-day expiry. Run now works for paused tasks and leaves the
@@ -46,15 +49,21 @@ Readiness, prompt delivery, permission waits, and turn results remain distinct.
 An SDK result alone does not finish the run: completion also waits for the real
 controller's inactive-turn event. Replayed history cannot complete a live run.
 An unfinished run after host restart becomes interrupted and is not resubmitted.
-The user can inspect or continue its saved chat. A failed launch/refused prompt
-is recorded and not automatically redelivered. These rules avoid pretending
+The user can inspect or continue its saved chat. Explicit close or restart
+interrupts the old run. A failed launch/refused prompt
+is recorded and not automatically redelivered. A definite host capacity or
+branch-switch refusal before process creation retains the same starting claim
+and retries admission on a later tick. This bounded queue preserves the captured
+prompt and controls through pause/delete; restart interrupts it without replay.
+These rules avoid pretending
 exactly-once execution across an uncertain crash boundary.
 
 Completed means the agent turn ended successfully, not that its requested work
 was semantically successful. The final report remains available in the chat and
 as a bounded run summary. A permission or question request records `waiting`
 and keeps the task unfinished. The store retains 200 recent runs,
-including every unfinished run, and at most 50 definitions.
+including every unfinished run, and at most 50 definitions. A new claim is refused
+when all 200 history slots are unfinished; active claims are never evicted.
 
 ## Workspace-map migration
 
@@ -67,8 +76,11 @@ unrelated work.
 State belongs to
 `<Cat Code config home>/desktop/workspace-map-refresh/<workspace hash>`.
 On explicit preset creation, a matching legacy Codex helper state is copied
-once without changing its bytes or the old state. Active review/commit states
-are refused. Later scheduled runs use only Cat Code state. The preset remains
+once without changing its bytes or the old state. Import publishes complete
+bytes atomically without replacing an existing native cursor; failed partial
+writes can be retried. Invalid existing native state is refused and preserved.
+Active review/commit states are refused. The prompt shell-quotes its state path
+and leaves another owner's active helper lease untouched. Later scheduled runs use only Cat Code state. The preset remains
 usable without any legacy state and will perform the helper's baseline review.
 
 Pause the previous external schedule before enabling this task to keep one
@@ -101,26 +113,38 @@ questions remain on the normal conversation surface.
 
 ## Validation
 
-The scheduler tests cover durable claims, restart, overlap, catch-up, failures,
-permission waits, replay suppression, turn closure, and timezone/DST behavior.
-A process test composes the real host, registry, Unix-socket supervisor,
-receiving sidecar boundary, and session controller against an isolated fixture
-turn. It proves both permission waiting and untrusted-workspace refusal without
-account access or model requests. The removed DOM test covered draft behavior
-for the removed page; backend coverage remains intact.
+The requested review used separate core and integration batches, then a
+cross-boundary and prompt-scenario pass. It fixed duplicate store ownership,
+DST catch-up, pending-request status, definite admission refusal, durable chat
+identity, explicit close/restart tracking, malformed input/state handling,
+atomic legacy import, shell path quoting, and two weak regression assertions.
+The UI and its removed DOM test remain deferred.
 
-The initial implementation passed 24 focused scheduling/preload/UI tests,
-desktop typecheck,
-scoped sidecar typecheck, renderer build, map lint, and diff checks. The full
-desktop suite in a clean temporary snapshot had 5,883 passes, three skips, and
-one failure in `app/shared/sessionRelocationRepeat.storage.test.ts:137`. That
-same failure reproduced against committed baseline `c90fb49d` before applying
-this change. The shared-tree suite also discovered an incomplete archived test
-copy under `tmp/`; the clean snapshot excluded that unrelated artifact.
+Core regressions exercise real durable files and a second process competing for
+ownership. Process tests compose the real host, registry, Unix-socket supervisor,
+receiving sidecar boundary and session controller with a fixture turn. They
+exercise parallel permission requests, untrusted refusal, nine simultaneous due
+tasks, explicit close, failed registry publication and child-observed controls.
+Child-isolated migration tests inject a partial write and execute the prompt's
+path argument through the shell. New behavioral cases failed against the broken
+code, and ten isolated mutations failed the strengthened tests as intended.
 
-After deferring the UI, 132 focused navigation, scheduling, and preload tests
-passed, along with desktop typecheck, renderer build, map lint, and diff checks.
-The backend, sidecar fixture, and process test were unchanged in this follow-up.
+An isolated acceptance probe copied the real matching legacy cursor byte for
+byte. The real helper accepted the native state for an incremental review; the
+probe blocked only its own temporary run, left the cursor unchanged and changed
+no maps or original state.
 
-Live provider execution and native GUI acceptance were not run. The installed
-application and the existing external workspace-map schedule were not changed.
+Desktop typecheck, scoped sidecar typecheck, main/preload bundles, map lint and
+diff checks passed. The sidecar wrapper ignored 5,574 upstream diagnostics under
+its existing scope. The clean temporary desktop suite had 5,890 passes, three
+skips and one failure across 5,894 tests in 404 files. The failure is
+`app/shared/sessionRelocationRepeat.storage.test.ts:137`, already reproduced
+against committed baseline `c90fb49d` before this implementation. All scheduling
+and preload cases passed. The temporary snapshot excluded unrelated shared-tree
+edits and ignored archived test copies.
+
+Actual Electron IPC/lifetime acceptance, live provider initialization and real
+transcript restore were not executed. Explicit restart integration is source,
+typecheck and bundle verified; explicit close is process verified. Autonomous
+map review/cursor advancement still requires a real authorized turn. The installed
+application and existing external schedule were not changed.

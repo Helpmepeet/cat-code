@@ -1,30 +1,33 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute } from 'node:path'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { isActiveScheduledRun, parseScheduledTaskCommand, type ScheduledTask, type ScheduledTaskInput, type ScheduledRun, type ScheduledTasksSnapshot, type TaskSchedule } from '../shared/scheduledTasks.js'
 import type { ServerFrame } from '../shared/protocol.js'
+import type { HostEvent } from '../shared/hostApi.js'
 
 const MAX_RUNS = 200
 type Document = ScheduledTasksSnapshot & { version: 1 }
 export type ScheduledTasksPorts = {
-  launch(task: ScheduledTask, appSessionId: string): Promise<void>
+  /** false means the host refused admission before creating a process. */
+  launch(task: ScheduledTask, appSessionId: string): Promise<void | false>
   submit(appSessionId: string, prompt: string, submitId: string): boolean
 }
 
 /** Uses the saved zone rather than the machine's current zone. Repeated DST minutes fire once; missing minutes are skipped. */
-export function nextTaskOccurrence(schedule: TaskSchedule, after: number): number {
+export function nextTaskOccurrence(schedule: TaskSchedule, after: number, claimedAt?: number): number {
   if (schedule.kind === 'interval') return after + schedule.minutes * 60_000
   const format = new Intl.DateTimeFormat('en-GB', { timeZone: schedule.timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })
   const afterParts = format.formatToParts(after)
   const localDate = (parts: Intl.DateTimeFormatPart[]) => ['year', 'month', 'day'].map(type => parts.find(entry => entry.type === type)?.value).join('-')
   const lastMinute = ['hour', 'minute'].map(type => afterParts.find(entry => entry.type === type)?.value).join(':')
   const skipDate = lastMinute >= schedule.time ? localDate(afterParts) : null
+  const claimedDate = claimedAt === undefined ? null : localDate(format.formatToParts(claimedAt))
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   // Two weeks covers a weekly occurrence skipped by a daylight-saving transition.
   for (let time = Math.floor(after / 60_000) * 60_000 + 60_000; time <= after + 15 * 86400_000; time += 60_000) {
     const parts = format.formatToParts(time)
     const part = (type: string) => parts.find(entry => entry.type === type)?.value
-    if (`${part('hour')}:${part('minute')}` !== schedule.time || localDate(parts) === skipDate) continue
+    if (`${part('hour')}:${part('minute')}` !== schedule.time || localDate(parts) === skipDate || localDate(parts) === claimedDate) continue
     const day = days.indexOf(part('weekday') ?? '')
     if (schedule.kind === 'daily' || (schedule.kind === 'weekdays' && day >= 1 && day <= 5) || (schedule.kind === 'weekly' && day === schedule.day)) return time
   }
@@ -39,7 +42,7 @@ function load(file: string): Document {
   if (doc.version !== 1 || !Array.isArray(doc.tasks) || doc.tasks.length > 50 || !Array.isArray(doc.runs) || doc.runs.length > MAX_RUNS) throw new Error('Saved scheduled tasks could not be read')
   const ids = new Set<string>()
   for (const task of doc.tasks) {
-    if (!task || typeof task.cwd !== 'string' || !isAbsolute(task.cwd) || !Number.isFinite(task.createdAt) || !Number.isFinite(task.nextRunAt) || ids.has(task.id) ||
+    if (!task || typeof task.id !== 'string' || typeof task.cwd !== 'string' || !isAbsolute(task.cwd) || !Number.isFinite(task.createdAt) || !Number.isFinite(task.nextRunAt) || ids.has(task.id) ||
         !parseScheduledTaskCommand({ type: 'save', task: { id: task.id, name: task.name, prompt: task.prompt, schedule: task.schedule, enabled: task.enabled, model: task.model, effort: task.effort, permissionMode: task.permissionMode } })) throw new Error('Saved scheduled tasks could not be read')
     ids.add(task.id)
   }
@@ -51,27 +54,46 @@ function load(file: string): Document {
   return doc
 }
 
-/** One owner in Electron's single-instance host. Persist the run claim before any engine side effect. */
+/** Own the shared store across app flavors; persist claims before engine side effects. */
 export class ScheduledTasks {
   private doc: Document
   private timer: ReturnType<typeof setInterval> | null = null
   private stopped = false
   private error: string | undefined
   private awaitingLaunch = new Set<string>()
+  private deferredLaunches = new Map<string, ScheduledTask>()
+  private pendingPermissions = new Map<string, Set<string>>()
   private results = new Map<string, { status: 'completed' | 'failed'; summary: string }>()
+  private releaseLock: (() => void) | null = null
   constructor(private readonly file: string, private readonly ports: ScheduledTasksPorts) {
-    this.doc = load(file)
-    let recovered = false
-    for (const run of this.doc.runs) if (isActiveScheduledRun(run)) {
-      run.status = 'interrupted'; run.endedAt = Date.now(); run.summary = 'Cat Code closed before this run finished. Open its chat to review or continue.'; recovered = true
+    mkdirSync(dirname(file), { recursive: true })
+    this.file = join(realpathSync(dirname(file)), basename(file))
+    // Electron's instance lock is profile-specific; Dev and packaged apps share this store.
+    const lockfile = require('proper-lockfile') as { lockSync(file: string, options: { realpath: boolean; stale: number; onCompromised(): void }): () => void }
+    try {
+      this.releaseLock = lockfile.lockSync(this.file, { realpath: false, stale: 20_000, onCompromised: () => {
+        this.error = 'Scheduled tasks lost ownership of their saved state. Restart Cat Code before running them.'
+        this.stop()
+      } })
+    } catch { throw new Error('Scheduled tasks are already running in another Cat Code app, or their storage is unavailable.') }
+    try {
+      this.doc = load(this.file)
+      let recovered = false
+      for (const run of this.doc.runs) if (isActiveScheduledRun(run)) {
+        run.status = 'interrupted'; run.endedAt = Date.now(); run.summary = 'Cat Code closed before this run finished. Open its chat to review or continue.'; recovered = true
+      }
+      if (recovered) this.commit(this.doc)
+    } catch (error) {
+      this.stop()
+      throw error
     }
-    if (recovered) this.commit(this.doc)
   }
   snapshot(): ScheduledTasksSnapshot {
     return structuredClone({ tasks: this.doc.tasks, runs: this.doc.runs, ...(this.error ? { error: this.error } : {}) })
   }
   private commit(next: Document): void {
     if (this.error) throw new Error(this.error)
+    if (!this.releaseLock) throw new Error('Scheduled tasks are not running')
     const temp = `${this.file}.${randomUUID()}.tmp`
     try {
       mkdirSync(dirname(this.file), { recursive: true })
@@ -107,15 +129,29 @@ export class ScheduledTasks {
     this.commit(next)
   }
   start(): void {
-    this.stopped = false
+    if (this.stopped) throw new Error('Scheduled tasks are not running')
     if (this.timer) return
     this.timer = setInterval(() => this.tick(), 15_000)
     this.timer.unref?.()
     this.tick()
   }
-  stop(): void { this.stopped = true; if (this.timer) clearInterval(this.timer); this.timer = null }
+  stop(): void {
+    this.stopped = true
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    this.deferredLaunches.clear()
+    this.pendingPermissions.clear()
+    this.results.clear()
+    try { this.releaseLock?.() } catch { /* A compromised lock is already released. */ }
+    this.releaseLock = null
+  }
   tick(now = Date.now()): void {
     if (this.stopped || this.error) return
+    for (const [sessionId, task] of this.deferredLaunches) {
+      this.deferredLaunches.delete(sessionId)
+      const run = this.doc.runs.find(entry => entry.appSessionId === sessionId && entry.status === 'starting')
+      if (run) this.launch(run, task)
+    }
     for (const task of [...this.doc.tasks]) {
       if (!task.enabled || task.nextRunAt > now || this.doc.runs.some(run => run.taskId === task.id && isActiveScheduledRun(run))) continue
       try { this.run(task.id, false, now) } catch { /* Storage failure freezes subsequent dispatches. */ }
@@ -126,18 +162,27 @@ export class ScheduledTasks {
     const task = this.doc.tasks.find(entry => entry.id === id)
     if (!task) throw new Error('This scheduled task no longer exists')
     if (this.doc.runs.some(run => run.taskId === id && isActiveScheduledRun(run))) throw new Error('This task already has an unfinished run')
+    if (this.doc.runs.filter(isActiveScheduledRun).length >= MAX_RUNS) throw new Error('Finish an unfinished scheduled run before starting another')
     const next = structuredClone(this.doc)
     const run: ScheduledRun = { id: randomUUID(), taskId: id, taskName: task.name, appSessionId: randomUUID(), scheduledAt: manual ? now : task.nextRunAt, startedAt: now, endedAt: null, status: 'starting', summary: '' }
     // A missed recurring occurrence is dispatched once, then moved forward.
-    if (!manual) next.tasks.find(entry => entry.id === id)!.nextRunAt = nextTaskOccurrence(task.schedule, now)
+    if (!manual) next.tasks.find(entry => entry.id === id)!.nextRunAt = nextTaskOccurrence(task.schedule, now, task.nextRunAt)
     const allRuns = [run, ...next.runs]
     let remaining = MAX_RUNS - allRuns.filter(isActiveScheduledRun).length
     next.runs = allRuns.filter(entry => isActiveScheduledRun(entry) || remaining-- > 0)
     this.commit(next)
+    this.launch(run, task)
+  }
+  private launch(run: ScheduledRun, task: ScheduledTask): void {
     this.awaitingLaunch.add(run.appSessionId)
-    void this.ports.launch(task, run.appSessionId).then(() => {
+    void this.ports.launch(task, run.appSessionId).then(admitted => {
       this.awaitingLaunch.delete(run.appSessionId)
-      if (this.stopped) return
+      if (this.stopped || this.error || !this.doc.runs.some(entry => entry.id === run.id && entry.status === 'starting')) return
+      if (admitted === false) {
+        this.deferredLaunches.set(run.appSessionId, task)
+        this.update(run.appSessionId, entry => { entry.summary = 'Waiting for Cat Code to have room for this chat.' })
+        return
+      }
       this.ready(run.appSessionId, task.prompt)
     }).catch(error => {
       this.awaitingLaunch.delete(run.appSessionId)
@@ -151,6 +196,18 @@ export class ScheduledTasks {
     if (!run) return
     apply(run)
     try { this.commit(next) } catch { /* Freeze without repeating uncertain work. */ }
+    if (!isActiveScheduledRun(run)) {
+      this.deferredLaunches.delete(sessionId)
+      this.pendingPermissions.delete(sessionId)
+      this.results.delete(sessionId)
+    }
+  }
+  interrupt(sessionId: string): void {
+    this.update(sessionId, run => { run.status = 'interrupted'; run.endedAt = Date.now(); run.summary = 'The scheduled chat closed before completion.' })
+  }
+  receiveHostEvent(event: HostEvent): void {
+    if (event.type === 'session-removed') this.interrupt(event.appSessionId)
+    if (event.type === 'session-status' && ['exited', 'disconnected'].includes(event.session.status)) this.interrupt(event.session.appSessionId)
   }
   private ready(sessionId: string, prompt: string): void {
     const run = this.doc.runs.find(entry => entry.appSessionId === sessionId && entry.status === 'starting')
@@ -170,13 +227,19 @@ export class ScheduledTasks {
       run.status = 'failed'; run.endedAt = Date.now(); run.summary = 'The scheduled prompt was refused. Open the chat to check workspace trust or permissions.'
     })
     if (frame.kind === 'lifecycle' || frame.kind === 'error' && frame.code === 'session_disconnected') {
-      this.results.delete(sessionId)
-      this.update(sessionId, run => { run.status = 'interrupted'; run.endedAt = Date.now(); run.summary = 'The scheduled chat disconnected before completion.' })
+      this.interrupt(sessionId)
     }
     if (frame.kind !== 'event' || frame.replay) return
+    if (!this.doc.runs.some(run => run.appSessionId === sessionId && isActiveScheduledRun(run))) return
     const event = frame.event
-    if (event.type === 'permission.requested') this.update(sessionId, run => { run.status = 'waiting'; run.summary = 'Open this chat to answer the pending request.' })
-    if (event.type === 'permission.resolved' || event.type === 'turn.status' && event.activeTurn) this.update(sessionId, run => { run.status = 'running'; run.summary = '' })
+    if (event.type === 'permission.requested') {
+      const pending = this.pendingPermissions.get(sessionId) ?? new Set<string>()
+      pending.add(event.request.requestId)
+      this.pendingPermissions.set(sessionId, pending)
+      this.update(sessionId, run => { run.status = 'waiting'; run.summary = 'Open this chat to answer the pending request.' })
+    }
+    if (event.type === 'permission.resolved') this.pendingPermissions.get(sessionId)?.delete(event.request.requestId)
+    if ((event.type === 'permission.resolved' || event.type === 'turn.status' && event.activeTurn) && !this.pendingPermissions.get(sessionId)?.size) this.update(sessionId, run => { run.status = 'running'; run.summary = '' })
     if (event.type === 'turn.status' && !event.activeTurn) {
       const result = this.results.get(sessionId)
       this.results.delete(sessionId)

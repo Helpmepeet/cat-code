@@ -52,7 +52,7 @@ function keys(value: Record<string, unknown>, allowed: readonly string[]): boole
 export function validTaskSchedule(value: unknown): value is TaskSchedule {
   if (!object(value)) return false
   if (value.kind === 'interval') return keys(value, ['kind', 'minutes']) && typeof value.minutes === 'number' && Number.isInteger(value.minutes) && value.minutes >= 1 && value.minutes <= 10080
-  if (!keys(value, ['kind', 'time', 'timeZone', 'day']) || !['daily', 'weekdays', 'weekly'].includes(String(value.kind)) ||
+  if (!keys(value, ['kind', 'time', 'timeZone', 'day']) || typeof value.kind !== 'string' || !['daily', 'weekdays', 'weekly'].includes(value.kind) ||
       typeof value.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ||
       typeof value.day !== 'number' || !Number.isInteger(value.day) || value.day < 0 || value.day > 6 ||
       typeof value.timeZone !== 'string' || value.timeZone.length > 80) return false
@@ -61,7 +61,7 @@ export function validTaskSchedule(value: unknown): value is TaskSchedule {
 export function parseScheduledTaskCommand(value: unknown): ScheduledTaskCommand | null {
   if (!object(value)) return null
   if (value.type === 'workspace-maps') return keys(value, ['type', 'workspaceSessionId']) && typeof value.workspaceSessionId === 'string' && UUID.test(value.workspaceSessionId) ? value as ScheduledTaskCommand : null
-  if (['pause', 'resume', 'delete', 'run'].includes(String(value.type))) return keys(value, ['type', 'id']) && typeof value.id === 'string' && UUID.test(value.id) ? value as ScheduledTaskCommand : null
+  if (typeof value.type === 'string' && ['pause', 'resume', 'delete', 'run'].includes(value.type)) return keys(value, ['type', 'id']) && typeof value.id === 'string' && UUID.test(value.id) ? value as ScheduledTaskCommand : null
   if (value.type !== 'save' || !keys(value, ['type', 'task']) || !object(value.task)) return null
   const task = value.task
   if (!keys(task, ['id', 'name', 'prompt', 'schedule', 'enabled', 'workspaceSessionId', 'cwdToken', 'model', 'effort', 'permissionMode']) ||
@@ -69,7 +69,7 @@ export function parseScheduledTaskCommand(value: unknown): ScheduledTaskCommand 
       typeof task.prompt !== 'string' || !task.prompt.trim() || new TextEncoder().encode(task.prompt).length > 64 * 1024 ||
       typeof task.enabled !== 'boolean' || !validTaskSchedule(task.schedule) ||
       typeof task.model !== 'string' || task.model.length > 100 || (task.model !== '' && !/^[a-zA-Z0-9._:/-]+$/.test(task.model)) ||
-      !['default', 'auto'].includes(String(task.permissionMode)) ||
+      typeof task.permissionMode !== 'string' || !['default', 'auto'].includes(task.permissionMode) ||
       !EFFORTS.includes(task.effort as typeof EFFORTS[number]) ||
       (task.id !== undefined && (typeof task.id !== 'string' || !UUID.test(task.id))) ||
       (task.workspaceSessionId !== undefined && (typeof task.workspaceSessionId !== 'string' || !UUID.test(task.workspaceSessionId))) ||

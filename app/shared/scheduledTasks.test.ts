@@ -12,7 +12,10 @@ test('closed scheduled-task boundary accepts saved intent and rejects filesystem
     { ...task, schedule: { ...task.schedule, time: '24:00' } },
     { ...task, schedule: { ...task.schedule, minutes: 2 } },
     { ...task, workspaceSessionId: crypto.randomUUID() },
+    { ...task, permissionMode: { toString: 0 } },
+    { ...task, schedule: { ...task.schedule, kind: { toString: 0 } } },
   ]) expect(parseScheduledTaskCommand({ type: 'save', task: invalid })).toBeNull()
+  expect(parseScheduledTaskCommand({ type: { toString: 0 } })).toBeNull()
   expect(parseScheduledTaskCommand({ type: 'run', id: crypto.randomUUID(), cwd: '/private' })).toBeNull()
   expect(parseScheduledTaskCommand({ type: 'workspace-maps', workspaceSessionId: '/private' })).toBeNull()
 })
