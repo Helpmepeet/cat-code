@@ -1,6 +1,6 @@
 import type { SessionId } from '../../shared/protocol.js'
 
-export type PageTab = 'goals' | 'accounts' | 'usage' | 'settings' | 'sessions'
+export type PageTab = 'scheduled' | 'goals' | 'accounts' | 'usage' | 'settings' | 'sessions'
 export type NavigationTarget =
   | { kind: 'session'; sessionId: SessionId }
   | { kind: 'page'; page: PageTab }

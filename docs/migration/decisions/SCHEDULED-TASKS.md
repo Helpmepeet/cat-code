@@ -87,12 +87,37 @@ Pause the previous external schedule before enabling this task to keep one
 refresh owner. Creating the feature or preset does not edit external scheduling
 definitions, start a live model turn, or install a new application build.
 
-## UI deferred
+## Desktop interface
 
-The user reserved interface design for a separate design model. The initial
-Scheduled page, its styling and DOM test, and its sidebar/tab/palette integration
-have been removed. No scheduling screen or navigation entry is currently wired.
-The backend and its preload API remain available for that interface work:
+Amended 2026-10-13: the interface, first deferred to a separate design pass, is now built.
+`app/renderer/src/ScheduledTasksPage.tsx` is the Scheduled page tab, opened from
+the sidebar. The user approved its layout in
+`docs/design-html/2026-10-13-scheduled-page-directions.html`: a task list panel
+(New task, Upcoming by next run, Paused, a workspace-map suggestion while no
+preset exists, and Run history) beside one detail pane. With nothing selected the
+pane shows activity: unfinished runs, answers needed first, then recent runs. A
+task's pane is a runs timeline (next run, current run, finished runs) followed by
+its instructions; an Active switch pauses and resumes it. Below the `md` width the
+list and the pane are shown one at a time.
+
+`scheduledTasksModel.ts` owns draft conversion, validation that mirrors the
+receiving parser, ordering, and status vocabulary. The page reads the pull API
+every five seconds while visible and when the window returns; a response issued
+before the last applied one is dropped, so a slow poll cannot undo a command
+result. One draft is open at a time and survives switching tabs, not renderer
+reload; New task and Edit return to it rather than replacing it.
+
+A refused save that carried a picker token asks for the folder again, because
+main consumes the token before validating the save. An edit takes `enabled`
+from the latest snapshot. Turning on the workspace-map preset requires confirming
+that the previous external schedule is paused. "Turn completed" names a
+finished agent turn, not semantic success. Run chats open through the same
+registry route as created-peer links. Model suggestions come from open sessions'
+run-controls options; any parser-valid model name is accepted. The editor's next
+run preview calls `nextTaskOccurrence`, which moved unchanged from the host into
+`app/shared/scheduledTasks.ts` so the preview and the scheduler share one rule.
+
+The backend contract the page uses:
 
 | Method | Contract |
 | --- | --- |
@@ -118,7 +143,7 @@ cross-boundary and prompt-scenario pass. It fixed duplicate store ownership,
 DST catch-up, pending-request status, definite admission refusal, durable chat
 identity, explicit close/restart tracking, malformed input/state handling,
 atomic legacy import, shell path quoting, and two weak regression assertions.
-The UI and its removed DOM test remain deferred.
+The interface was added later; see Desktop interface.
 
 Core regressions exercise real durable files and a second process competing for
 ownership. Process tests compose the real host, registry, Unix-socket supervisor,

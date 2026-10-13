@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { isActiveScheduledRun, parseScheduledTaskCommand, type ScheduledTask, type ScheduledTaskInput, type ScheduledRun, type ScheduledTasksSnapshot, type TaskSchedule } from '../shared/scheduledTasks.js'
+import { isActiveScheduledRun, nextTaskOccurrence, parseScheduledTaskCommand, type ScheduledTask, type ScheduledTaskInput, type ScheduledRun, type ScheduledTasksSnapshot } from '../shared/scheduledTasks.js'
+
+export { nextTaskOccurrence }
 import type { ServerFrame } from '../shared/protocol.js'
 import type { HostEvent } from '../shared/hostApi.js'
 
@@ -11,27 +13,6 @@ export type ScheduledTasksPorts = {
   /** false means the host refused admission before creating a process. */
   launch(task: ScheduledTask, appSessionId: string): Promise<void | false>
   submit(appSessionId: string, prompt: string, submitId: string): boolean
-}
-
-/** Uses the saved zone rather than the machine's current zone. Repeated DST minutes fire once; missing minutes are skipped. */
-export function nextTaskOccurrence(schedule: TaskSchedule, after: number, claimedAt?: number): number {
-  if (schedule.kind === 'interval') return after + schedule.minutes * 60_000
-  const format = new Intl.DateTimeFormat('en-GB', { timeZone: schedule.timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })
-  const afterParts = format.formatToParts(after)
-  const localDate = (parts: Intl.DateTimeFormatPart[]) => ['year', 'month', 'day'].map(type => parts.find(entry => entry.type === type)?.value).join('-')
-  const lastMinute = ['hour', 'minute'].map(type => afterParts.find(entry => entry.type === type)?.value).join(':')
-  const skipDate = lastMinute >= schedule.time ? localDate(afterParts) : null
-  const claimedDate = claimedAt === undefined ? null : localDate(format.formatToParts(claimedAt))
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  // Two weeks covers a weekly occurrence skipped by a daylight-saving transition.
-  for (let time = Math.floor(after / 60_000) * 60_000 + 60_000; time <= after + 15 * 86400_000; time += 60_000) {
-    const parts = format.formatToParts(time)
-    const part = (type: string) => parts.find(entry => entry.type === type)?.value
-    if (`${part('hour')}:${part('minute')}` !== schedule.time || localDate(parts) === skipDate || localDate(parts) === claimedDate) continue
-    const day = days.indexOf(part('weekday') ?? '')
-    if (schedule.kind === 'daily' || (schedule.kind === 'weekdays' && day >= 1 && day <= 5) || (schedule.kind === 'weekly' && day === schedule.day)) return time
-  }
-  throw new Error('The next scheduled time could not be calculated')
 }
 
 function load(file: string): Document {

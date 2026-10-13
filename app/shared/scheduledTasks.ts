@@ -81,3 +81,24 @@ export function parseScheduledTaskCommand(value: unknown): ScheduledTaskCommand 
 export function isActiveScheduledRun(run: ScheduledRun): boolean {
   return ['starting', 'submitted', 'running', 'waiting'].includes(run.status)
 }
+
+/** Uses the saved zone rather than the machine's current zone. Repeated DST minutes fire once; missing minutes are skipped. */
+export function nextTaskOccurrence(schedule: TaskSchedule, after: number, claimedAt?: number): number {
+  if (schedule.kind === 'interval') return after + schedule.minutes * 60_000
+  const format = new Intl.DateTimeFormat('en-GB', { timeZone: schedule.timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })
+  const afterParts = format.formatToParts(after)
+  const localDate = (parts: Intl.DateTimeFormatPart[]) => ['year', 'month', 'day'].map(type => parts.find(entry => entry.type === type)?.value).join('-')
+  const lastMinute = ['hour', 'minute'].map(type => afterParts.find(entry => entry.type === type)?.value).join(':')
+  const skipDate = lastMinute >= schedule.time ? localDate(afterParts) : null
+  const claimedDate = claimedAt === undefined ? null : localDate(format.formatToParts(claimedAt))
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  // Two weeks covers a weekly occurrence skipped by a daylight-saving transition.
+  for (let time = Math.floor(after / 60_000) * 60_000 + 60_000; time <= after + 15 * 86400_000; time += 60_000) {
+    const parts = format.formatToParts(time)
+    const part = (type: string) => parts.find(entry => entry.type === type)?.value
+    if (`${part('hour')}:${part('minute')}` !== schedule.time || localDate(parts) === skipDate || localDate(parts) === claimedDate) continue
+    const day = days.indexOf(part('weekday') ?? '')
+    if (schedule.kind === 'daily' || (schedule.kind === 'weekdays' && day >= 1 && day <= 5) || (schedule.kind === 'weekly' && day === schedule.day)) return time
+  }
+  throw new Error('The next scheduled time could not be calculated')
+}
