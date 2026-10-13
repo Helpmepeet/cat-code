@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { type ScheduledRun, type ScheduledTask, type ScheduledTaskCommand, type ScheduledTaskOptions, type ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
-import { SCHEDULED_OPTIONS_CACHE_MS } from '../../shared/scheduledTaskOptions.js'
 import { getBridge } from './bridge.js'
 import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import { usePopover } from './composerPopover.js'
@@ -199,7 +198,6 @@ export function ScheduledTasksPage({
   const editingTask = draft?.taskId ? taskById.get(draft.taskId) ?? null : null
   const hasPreset = tasks.some(isWorkspaceMapTask)
   const selectedTask = selection?.kind === 'task' ? taskById.get(selection.id) ?? null : null
-  const choicesOutdated = optionsError || (options?.updatedAt !== undefined && now - options.updatedAt >= SCHEDULED_OPTIONS_CACHE_MS)
 
   // One draft at a time: New task and Edit return to an open draft rather than replacing it.
   const openEditor = (next: () => ScheduledTaskDraft) => {
@@ -245,11 +243,6 @@ export function ScheduledTasksPage({
     if (id) select({ kind: 'task', id })
     return created !== null
   }
-  const choiceActions = !choicesOutdated ? (
-    <button type="button" className={GHOST} disabled={optionsRefreshing} onClick={() => void refreshOptions(true)}>
-      Refresh choices
-    </button>
-  ) : null
 
   let pane: ReactNode
   if (!loaded) pane = readError ? null : <p className="py-10 text-center text-[13px] text-text-subtle">Loading scheduled tasks…</p>
@@ -263,7 +256,6 @@ export function ScheduledTasksPage({
         modelOptions={modelOptions}
         defaultEffortOptions={options?.defaultEffortOptions ?? []}
         optionsReady={options !== null}
-        choiceActions={choiceActions}
         now={now}
         busy={!!pending[EDITOR]}
         error={errors[EDITOR] ?? null}
@@ -304,7 +296,6 @@ export function ScheduledTasksPage({
         disabled={!!unavailable}
         onBack={() => select(null)}
         onCreate={createPreset}
-        choiceActions={choiceActions}
       />
     )
   } else if (tasks.length === 0) {
@@ -362,7 +353,7 @@ export function ScheduledTasksPage({
             {unavailable ?? readError}
           </div>
         ) : null}
-        {choicesOutdated && choicesVisible ? (
+        {optionsError && choicesVisible ? (
           <div role="alert" className={`mb-5 flex max-w-[680px] items-center gap-3 text-[12.5px] ${options ? 'text-tone-warn' : 'text-tone-danger'}`}>
             <span>{options ? 'Models and projects may be out of date.' : 'Models and projects could not be loaded.'}</span>
             <button type="button" className={BTN} disabled={optionsRefreshing} onClick={() => void refreshOptions(true)}>Refresh choices</button>
@@ -736,7 +727,7 @@ function PromptPane({ disabled, offerPreset, onNew, onPreset }: { disabled: bool
   )
 }
 
-function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate, choiceActions }: {
+function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }: {
   projects: readonly ProjectChoice[]
   tasks: readonly ScheduledTask[]
   busy: boolean
@@ -744,7 +735,6 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate, 
   disabled: boolean
   onBack: () => void
   onCreate: (command: Extract<ScheduledTaskCommand, { type: 'workspace-maps' }>) => Promise<boolean>
-  choiceActions: ReactNode
 }) {
   const [selected, setSelected] = useState('')
   const [cwdToken, setCwdToken] = useState<string | null>(null)
@@ -770,7 +760,7 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate, 
   }
   return (
     <div className="max-w-[680px]">
-      <PaneHeader title="Workspace-map refresh" meta={`Daily at 03:00 Asia/Bangkok · Auto permissions`} onBack={onBack} actions={choiceActions} />
+      <PaneHeader title="Workspace-map refresh" meta={`Daily at 03:00 Asia/Bangkok · Auto permissions`} onBack={onBack} />
       <div className="mt-[22px] space-y-2 text-[13px] leading-relaxed text-text-muted">
         <p>Starts paused. Pause the previous map-refresh schedule outside Cat Code before turning this on; creating the task does not change that schedule.</p>
         <p>The project needs its workspace-map refresh helper. Cat Code keeps its own refresh state and imports a matching earlier cursor once.</p>
@@ -807,7 +797,7 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate, 
 }
 
 function EditorPane({
-  draft, task, missing, projects, modelOptions, defaultEffortOptions, optionsReady, choiceActions, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
+  draft, task, missing, projects, modelOptions, defaultEffortOptions, optionsReady, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
 }: {
   draft: ScheduledTaskDraft
   task: ScheduledTask | null
@@ -816,7 +806,6 @@ function EditorPane({
   modelOptions: readonly ScheduledModelOption[]
   defaultEffortOptions: readonly string[]
   optionsReady: boolean
-  choiceActions: ReactNode
   now: number
   busy: boolean
   error: string | null
@@ -861,7 +850,7 @@ function EditorPane({
       className="max-w-[680px]"
       onSubmit={event => { event.preventDefault(); if (!blocked && !busy && !missing && !disabled && optionsReady) onSave() }}
     >
-      <PaneHeader title={heading} onBack={onCancel} actions={choiceActions} />
+      <PaneHeader title={heading} onBack={onCancel} />
       {missing ? <p role="alert" className="mt-2.5 text-[12.5px] text-tone-danger">This task was deleted. Cancel to discard the draft.</p> : null}
 
       <div className="mt-[22px]">

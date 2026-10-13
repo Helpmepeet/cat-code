@@ -158,7 +158,7 @@ folder, including when its argument is null or omitted.
 
 Options reads are needed only while editing a task or choosing the preset's
 project. Main caches a successful catalog for five minutes and coalesces pending
-reads. An explicit Refresh choices action bypasses the cache and retry cooldown; automatic retries
+reads. The Refresh choices action in the read-failure alert bypasses the cache and retry cooldown; automatic retries
 after a failure are bounded by a thirty-second cooldown. External changes are
 observed on the next expired read or explicit refresh, without consulting chats.
 Landed account mutations and successful durable `model` setting writes invalidate
@@ -166,8 +166,8 @@ the cache; chat lifecycle and usage/status refreshes do not. A read invalidated
 while its worker is running is not published as fresh.
 If a refresh fails, main retains the last-good catalog and its `updatedAt` time.
 The editor keeps its model, effort and Save controls available with those choices
-and warns that models and projects may be out of date after a failed refresh or
-when the last successful read is older than the cache window. A first read failure leaves
+and warns that models and projects may be out of date only after a failed refresh.
+A catalog's age alone raises no warning and adds no header control. A first read failure leaves
 model and effort choices unavailable until a read succeeds. Project handles are
 still revalidated when saving.
 

@@ -526,7 +526,7 @@ test('choices load only when needed and overlapping window signals share one rea
   expect(reads).toBe(1)
 })
 
-test('an aged catalog is identified as possibly out of date without disabling usable choices', async () => {
+test('an aged catalog that loaded successfully raises no alert and adds no header control', async () => {
   installBridge({
     snapshot: { tasks: [], runs: [] }, commands: [],
     options: { models: MODELS, defaultEffortOptions: [], projects: [PROJECT], updatedAt: Date.now() - SCHEDULED_OPTIONS_CACHE_MS - 1 },
@@ -534,7 +534,7 @@ test('an aged catalog is identified as possibly out of date without disabling us
   })
   const tree = await mount()
   await click(listRow(tree, 'New task'))
-  expect(alerts(tree).join(' ')).toContain('Models and projects may be out of date.')
+  expect(alerts(tree)).toEqual([])
   expect(field<HTMLButtonElement>(tree, 'Model').disabled).toBe(false)
-  expect(buttons(tree, 'Refresh choices')).toHaveLength(1)
+  expect(buttons(tree, 'Refresh choices')).toHaveLength(0)
 })
