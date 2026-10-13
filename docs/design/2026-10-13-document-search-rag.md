@@ -1,16 +1,17 @@
 # Document Search RAG Design
 
-Status: Draft implementation design. The agreed scope is document retrieval as
-an optional agent tool. Storage, embedding runtime, and tuning values below are
-proposals, not implemented capabilities.
+Status: Draft experiment and conditional implementation design. The agreed
+product scope is document retrieval as an optional agent tool. Establish benefit
+on a frozen corpus before building a production indexing subsystem. The
+contracts below specify a possible implementation, not shipped capabilities.
 
 Date: 2026-10-13
 
 ## Purpose and decision
 
-Add `SearchDocs` to help Cat Code find relevant project documentation using
-natural-language questions. The tool combines keyword and embedding retrieval
-and returns cited source excerpts. The existing conversational model interprets
+Evaluate `SearchDocs` to help Cat Code find relevant project documentation using
+natural-language questions. The hybrid candidate combines keyword and embedding
+retrieval and returns cited source excerpts. The existing conversational model interprets
 the results, reads surrounding material when needed, and answers or continues
 the task.
 
@@ -18,6 +19,13 @@ The intended benefit is finding relevant documents when the question uses
 different words from the source, while retaining exact matches for identifiers,
 error messages, and API names. This benefit must be measured against the current
 workspace-map, grep, and file-read workflow.
+
+Separate three possible problems: failure to discover a relevant document,
+failure to identify the governing decision after finding related documents, and
+failure to consult documents at all. Embeddings address only part of discovery;
+they do not establish authority or guarantee the agent will use the tool. If
+curation or ordinary search solves the observed problem, do not build the new
+retrieval subsystem.
 
 Code search continues through the existing grep, glob, shell, and file-read
 tools. There is no requirement to call `SearchDocs` before those tools. Document
@@ -41,6 +49,9 @@ as such; it is not evidence that the project has no relevant documentation.
 
 The first version uses ordinary tool-result presentation. A dedicated search
 page, document upload flow, and new desktop controls are outside this scope.
+The contracts below describe the experimental interface and, where labelled,
+the conditional production behavior. They do not authorize building the full
+subsystem before evaluation.
 
 ## Scope
 
@@ -74,7 +85,10 @@ diagnostics into product prompts in [CLAUDE.md](../../CLAUDE.md).
 
 ## Tool contract
 
-Proposed name: `SearchDocs`.
+Proposed name: `SearchDocs`. When enabled, expose its schema directly
+(`shouldDefer: false`) in the experimental tool pool. Do not add a mandatory-use
+prompt rule. Measure voluntary use separately from explicitly prompted use;
+changing exposure later requires a new adoption comparison.
 
 | Input | Meaning | Initial bound |
 | --- | --- | --- |
@@ -90,19 +104,35 @@ A response contains:
 
 - `status`: `ok`, `no_matches`, `unavailable`, or `error`.
 - `retrieval_mode`: `hybrid` or `lexical` when retrieval ran.
-- `coverage`: `complete`, `partial`, or `unknown`, referring only to the
-  configured corpus inventory, never semantic recall.
-- An index generation identifier and a last completed scan time when available.
+- `coverage`: `complete`, `partial`, or `unknown`, defined against the requested
+  configured corpus. Permission exclusions, pending updates, or skipped files
+  make it partial; an unfinished inventory makes it unknown. It never measures
+  semantic recall.
+- `qualification`: `read_context` when an excerpt requires surrounding or
+  amending text before it can be treated as governing guidance.
+- A last completed inventory time when available.
 - Bounded results and a concise reason when results are incomplete or unavailable.
 
-Each result contains a workspace-relative file path, document title, heading
-ancestry, one-based start and end lines, exact excerpt text, source content hash,
-and whether it matched lexical retrieval, semantic retrieval, or both. Include
-explicit document status or dates only when available from the source, marked
-as source-declared metadata. Filesystem modification time is separate metadata.
+If no eligible indexed subset can be searched, return `unavailable`, not
+`no_matches`. If an eligible subset was searched successfully but found nothing,
+`no_matches` retains partial or unknown coverage when applicable. A denied outer
+tool call uses the normal permission rejection and does not run retrieval.
 
-Initial output budget: 16 KiB total, with at most 3 KiB of excerpt text per
-result, including room for citation metadata. These are starting bounds to tune
+Each result contains a workspace-relative file path, document title, heading
+ancestry, one-based start and end lines, exact excerpt text, document category,
+and any required qualification notice with read targets. Categories follow the
+repository conventions: maintained map, decision record, historical plan or
+report, and other reference. Category is navigation metadata, not authority.
+Include explicit document status or dates only when available from the source,
+marked as source-declared and potentially stale. Filesystem modification time
+is not a decision date. Keep hashes, generation IDs, and ranking diagnostics
+internal to storage and evaluation rather than in agent-facing prose.
+
+Initial output budget: 16 KiB total, reserving 4 KiB for citations and
+qualification notices, with at most 3 KiB of excerpt text per result. Required
+qualification notices take precedence over excerpt count or length. Drop a
+result if its minimum qualification and read targets cannot fit; never remove
+the warning to retain the excerpt. These are starting bounds to tune
 in evaluation. Truncation must be explicit; do not produce a citation whose line
 range implies omitted text was returned.
 
@@ -136,15 +166,21 @@ editing. A later edit must use the normal read and mutation contracts.
    sections, but do not enforce one result per document when multiple sections
    are needed to interpret a decision.
 6. Reauthorize candidate paths and verify their contents against indexed hashes.
-   Exclude changed, deleted, or newly denied documents. Never attach old excerpts
-   to new line coordinates. Schedule eligible changed files for refresh.
+   Exclude changed, deleted, or newly denied documents from this response. Never
+   attach old excerpts to new line coordinates. Refresh eligible changed files
+   within the current call's remaining indexing budget; leave unfinished work
+   as a resumable checkpoint, not a detached background job.
 7. Return the best surviving evidence within the result and byte budgets. If
    filtering leaves too few results, bounded overfetch may fill the remaining
    slots. Report partial coverage when refresh or filtering prevented a complete
    search of the configured corpus.
 
 Lexical retrieval uses BM25-style ranking. Preserve identifiers and also support
-searchable components of common technical names. Semantic retrieval searches
+searchable components of common technical names. Store original text separately
+from a derived FTS column that adds camelCase and snake_case components; normalize
+queries consistently. For example, `resumeCheckpoint` contributes the original
+identifier and `resume checkpoint`. The derived column never supplies excerpts
+or citation offsets. Semantic retrieval searches
 meaning rather than requiring shared tokens. Fusion combines ranks rather than
 adding scores whose scales are unrelated.
 
@@ -154,127 +190,244 @@ rephrase a question and call the tool again using its existing reasoning loop.
 
 ## Document parsing and citations
 
-Parse Markdown without executing embedded content. Split by headings, preserving
-document title and heading ancestry. Split oversized sections at paragraph or
-list boundaries where possible; keep a small overlap only for sections that
-must be divided. Treat fenced code blocks as units when they fit; mark any split
-of an oversized block explicitly.
+Parse Markdown without executing embedded content. Preserve original text and
+line offsets. Headings supply navigation context, but are not sufficient
+boundaries for interpreting rules.
 
-Start with a target of approximately 500 tokens per chunk and an 800-token
-maximum. Preserve original text and line offsets. Title and heading context may
-be prepended to embedding input, but must remain distinguishable from the exact
-source excerpt.
+Identify qualification groups before producing retrieval chunks. A group is an
+entire numbered or bulleted item with its continuation paragraphs, or a section's
+prose through the next heading of the same or higher level. Scan all paragraphs,
+including bold inline text, for explicit amendment, correction, supersession,
+exception, and deprecation markers. Match case-insensitively and record the
+original locations. These markers are conservative navigation cues, not a
+complete semantic detector.
 
-Store each chunk's source hash, section identity, original line span, and parser
-version. Do not derive citations by searching for a returned sentence after
-retrieval; repeated text would make that ambiguous.
+A group with amendment markers is one interpretation unit. It may have several
+embedding chunks, but every chunk links to the same complete group and every
+explicit qualifier location. Never present an isolated old rule as a standalone
+interpretation of that group. Return the full group if it fits; otherwise return
+a discovery excerpt with `qualification: read_context`, a notice that it is not
+sufficient governing guidance, and exact ranges for the complete item or section
+and its qualifiers. Discontiguous excerpts carry separate citations, not a
+fabricated continuous range.
 
-Documents larger than the initial 1 MiB file limit are skipped with a bounded
-coverage notice. This is a resource limit, not a claim that larger documents are
-irrelevant. Source text and line spans must come from one stable file snapshot.
+If a qualifier's target is ambiguous, associate it conservatively with the
+containing section or document. For decision records and historical plans or
+reports, always require surrounding-context verification before treating a
+retrieved fragment as governing, even when no marker was detected. Absence of a
+marker is not proof of current authority. The frozen experiment uses a manually
+checked qualifier map as ground truth; automatic grouping is evaluated against
+that map, not assumed correct.
+
+Start with approximately 500 tokens per embedding chunk and an 800-token maximum.
+Split large groups into retrieval chunks without losing their qualification-group
+links. Keep fenced code blocks whole where possible; explicitly mark oversized
+splits. Title and heading context may be prepended for embedding but must remain
+separate from exact excerpts. Any prepended context participates in the embedding
+cache key.
+
+Store source hash, qualification-group identity, line spans, and parser version.
+Never reconstruct citations by searching for a returned sentence: duplicate
+sentences make that ambiguous. Reject unstable file reads. Files over the initial
+1 MiB limit are skipped and contribute to incomplete coverage.
 
 ## Old plans and current decisions
 
-Document freshness is the main project-specific correctness risk. A dated plan
-may describe an abandoned approach. A decision may contain later amendments in
-the same file. For example, the
-[host request plane decision](../migration/decisions/HOST-REQUEST-PLANE.md)
-contains multiple amendments that qualify earlier statements.
+The [host request plane decision](../migration/decisions/HOST-REQUEST-PLANE.md)
+contains bold inline amendments within numbered step 2, including the September
+11 correction to reply-chain behavior. All of that step's paragraphs must remain
+one qualification group. Heading-only detection misses this case, and a fresh
+file hash cannot establish that an earlier statement still governs.
 
-Keep source-declared status, explicit dates, heading ancestry, and direct
-supersession links when present. Preserve those qualifiers in returned context.
-When a document explicitly links to a replacement, return that relationship and
-let the agent inspect the replacement. Do not infer that a document is current
-merely because its filename or modification time is newer.
+Use the document categories established by [CLAUDE.md](../../CLAUDE.md): maps
+are maintained navigation, dated plans and program records describe historical
+work, and decisions may contain later amendments. Preserve declared status,
+explicit dates, qualifier locations, and supersession links. A header can itself
+be stale; none of category, similarity, a status line, or modification time proves
+current implementation or precedence.
 
-If a matched section belongs to a decision with identifiable amendment sections,
-include their headings and locations in a bounded note. This is a navigation
-aid, not an automatic determination of which statement governs. Missing or
-ambiguous status remains unknown.
+When a source points to a replacement, return the relationship and its read
+target. When a qualification group cannot fit, reserve the warning and read
+locations before adding excerpt text. The main agent must inspect that context
+before relying on the passage as a current rule. Conflicts remain visible rather
+than being resolved by retrieval rank. Verify implementation claims in current
+source.
 
-For current implementation claims, read current source. For design rationale,
-distinguish accepted decisions, proposals, and historical observations. When
-sources disagree, cite the disagreement rather than silently selecting the
-highest-ranked passage.
+Compare a curated corpus of currently applicable references with the broader
+historical corpus. Curation uses document-level decisions made independently of
+held-out questions and keeps known amendments with their parent records. Do not
+rewrite away contradictions merely to improve retrieval scores.
 
-## Index storage and lifecycle
+## Experiment before production indexing
 
-Propose a local, disposable index under Cat Code's private cache, separate from
-tracked repository files and authoritative memory. Key it by the canonical
-active workspace directory and corpus configuration. Different worktrees get
-different index namespaces even when they share a Git repository.
+The first experiment uses prebuilt, read-only indexes over an isolated frozen
+corpus. It needs no file watcher, shared writable cache, incremental indexing,
+cross-process writer service, or production embedding packaging. Corpus creation
+and embedding generation are explicit experiment operations with a fixed
+manifest, hashes, and an authorized source selection.
 
-The initial storage candidate is SQLite with FTS5 for lexical retrieval and
-stored embedding vectors scanned by cosine similarity for this bounded corpus.
-Confirm FTS5 support and packaging compatibility with Cat Code's Bun runtime
-before adopting it. This avoids introducing a separate vector database service
-for the first version. Measure scan latency and memory use before deciding
-whether approximate nearest-neighbor indexing is needed.
+Run lexical and hybrid retrieval over labelled questions before adding an agent
+tool adapter. This phase needs query embeddings for hybrid retrieval but no
+answer-generating model. Then expose the same immutable index through a thin
+experimental `SearchDocs` adapter for the agent comparison. Neither phase writes
+to live memory or indexes live transcripts.
 
-Persist document metadata, exact chunks, lexical index data, vectors, content
-hashes, embedding model identity and dimension, parser version, configuration
-revision, and index progress. A document update publishes its chunks and search
-records transactionally. Old chunks disappear with the replacement; failed
-updates never publish a half-written document.
+SQLite FTS5 plus exact cosine search over stored vectors is the initial experiment
+choice. An in-memory probe on 2026-10-13 verified FTS5 in local Bun 1.4.0 and that
+its default tokenizer does not match `resume` inside `resumeCheckpoint`.
+[statsUsageIndex.ts](../../src/utils/statsUsageIndex.ts) already uses `bun:sqlite`.
+The derived token column addresses this specific lexical issue; packaged-runtime
+compatibility and vector-search performance still require measurement.
 
-On the first explicit search after enablement, start a bounded build if no index
-exists. Return `unavailable` with indexing state if no usable generation is ready.
-Subsequent calls may search the completed subset with `coverage: partial`.
-Never block a conversation on an unbounded first build.
+## Conditional production index ownership
 
-Before subsequent searches, run a bounded incremental inventory check. Reuse
-unchanged content, refresh modified files, and remove deleted or newly excluded
-documents. Candidate hash verification remains mandatory even if metadata
-suggests a file is unchanged. A partially completed inventory cannot claim
-complete coverage. File watchers are a later optimization, not a first-version
-correctness dependency.
+Build this lifecycle only after the experiment passes the retention gates below.
+Choose **resumable indexing within tool calls**, with no work continuing after a
+call returns. Each call owns a bounded amount of indexing and embedding work;
+a cold call either finishes useful work within that budget or returns unavailable
+with a checkpoint. Later calls advance it. Do not automatically loop tool calls
+to finish a build. If this interaction proves inadequate, redesign ownership
+explicitly before adding a background service.
 
-Multiple sessions may read the same workspace index. Use cross-process locking
-to admit one writer and transactional snapshots for readers. Another session
-building an index is a recoverable indexing state, not a reason to start a
-duplicate embedding job. Bind every operation to the workspace identity captured
-at admission; a workspace move must not reuse the former workspace's results.
+Use a disposable private cache keyed by canonical active workspace, corpus
+configuration revision, and index-format/model versions. Worktrees have separate
+namespaces. Bind operations to the workspace captured at admission; a move
+cancels or discards the former workspace operation before returning results.
 
-Model, vector-dimension, or chunking changes require a new index generation.
-Never compare vectors from incompatible models. Failed rebuilds leave any
-compatible committed generation readable; otherwise report unavailability.
-Cache deletion is safe because source documents remain authoritative.
+One call holds a cross-process writer lock; other calls read committed snapshots
+or return a bounded busy/unavailable result. Publish a complete document revision
+and indexing checkpoint transactionally. On cancellation or process exit, release
+the operating-system lock and discard uncommitted work. A later caller may
+continue from committed checkpoints only after revalidating its own authority.
+No caller inherits the previous owner's permissions.
 
-## Embedding runtime and permissions
+If A owns a batch and B searches, B may read eligible committed records. If A
+exits, B can acquire the released lock and start a new authorized batch on its
+next attempt. Neither a lock nor A's exit transfers an in-flight job to B. Before
+returning, a call stops or awaits its owned work; no detached promise may publish
+later. Completed documents survive cancellation; partial documents do not.
 
-The first implementation should target one explicitly configured local embedding
-runtime and one pinned model revision. Select the runtime and model through a
-small quality and packaging spike; this design does not authorize installing
-dependencies, downloading model weights, or using paid services.
+Refresh eligible changed documents lexically first. Publish their new source
+text, locations, and lexical entries transactionally; invalidate obsolete vector
+associations immediately. Embeddings may catch up in a later bounded call.
+Report hybrid coverage as partial while current chunks lack embeddings. Never
+use vectors linked to a previous document revision as though they describe the
+new text.
 
-Do not assume existing conversational subscriptions provide an embedding API.
-Hosted embedding support, if added later, requires a separate configuration and
-explicit authorization for transmitting document text and queries. Never switch
-from local to hosted embeddings automatically.
+Reuse embeddings by a hash of the exact embedding input, pinned model revision,
+dimension, and preprocessing version, not by whole-file hash. An edit re-embeds
+only changed inputs. Keep this reuse inside the workspace namespace initially;
+cross-worktree embedding sharing is a separate optimization. Model or parser
+changes create a compatible new generation rather than mixing vector spaces.
 
-If the configured embedding runtime is unavailable and a valid lexical index
-exists, return lexical results with `retrieval_mode: lexical`. This is degraded
-operation, not successful hybrid retrieval. An indexing or provider failure
-must not be reported as `no_matches`.
+Cache cleanup runs only during explicit local maintenance, with no active reader
+or writer lease. Remove a namespace only after canonical worktree removal is
+confirmed; an inaccessible directory is not proof of deletion. Provide an
+explicit cache-clear operation. The experiment uses an isolated disposable cache
+and does not introduce this maintenance subsystem.
 
-Authorize ingestion and result delivery separately. Cached text is still private
-source content: the index must not bypass current file-read denies or expand a
-worker's accessible scope. Apply scope constraints before lexical or vector
-ranking as well as before returning text. If the initial implementation cannot
-safely search an authorized subset, refuse the search rather than querying a
-broader corpus and filtering only the displayed results.
+## Corpus authority and coverage
 
-Treat retrieved prose and code fences as untrusted evidence, not instructions
-that can change permissions, tool policy, or agent behavior. Return them through
-ordinary tool results, preserving source attribution.
+Separate the **configured corpus** from the **caller-eligible subset**. Corpus
+membership comes from workspace configuration and corpus-wide ignores. Caller
+eligibility comes from that session's current permissions. Permission exclusions
+never change global membership or delete another session's index records.
 
-Tool cancellation stops query work and query-initiated embedding work, releases
-leases safely, and publishes no partial document transaction. Bound embedding
-concurrency, file reads, result size, and execution time. Index-cache files use
-private permissions; diagnostic logs record timings, counts, and error categories
-without document bodies or user queries.
+Ingestion is authorized by the specific call that performs it, for each file;
+there is no privileged scanner or transferable ingestion grant. A restricted
+caller may refresh files it can read. It must not mark unreadable or unenumerable
+files deleted, publish a global completed inventory, or advance another caller's
+unvisited inventory checkpoint. Store per-document progress and mark a full
+inventory complete only when one authorized scan actually covers the configured
+scope. A restricted scan may reuse that membership snapshot but not certify it
+as fresh.
 
-## Integration with Cat Code
+Only explicit corpus reconfiguration or an inventory with authority to enumerate
+the affected scope may remove globally excluded or confirmed-deleted records.
+Permission failures and transient I/O failures are not absence evidence. A
+configuration revision produces a new namespace rather than destructively
+applying one session's settings to another's cache.
+
+`coverage: complete` means the requested configured scope has a completed,
+validated inventory, all its documents are eligible for this caller, and all
+supported documents are current in the active retrieval mode. A restricted
+caller therefore receives `partial`, or `unknown` if inventory is unresolved,
+even if every eligible file was searched. Notices state only generic causes such
+as permission exclusions or pending updates; do not disclose denied filenames,
+snippets, or precise hidden-file counts. Completeness never promises that every
+relevant passage was found.
+
+## Embedding execution
+
+For the experiment and initial conditional implementation, use one explicitly
+configured, operator-managed local embedding endpoint with a pinned model
+revision. Cat Code is a bounded, cancellable client; it does not load a model in
+every engine session, start a daemon, download weights, or own endpoint recovery.
+The operator owns endpoint availability and shutdown. Choose the endpoint and
+model before running hybrid evaluation and record their resource use.
+
+Abort client requests on cancellation and discard late responses. If the endpoint
+does not support cancelling its computation, document and measure that limit;
+Cat Code must not claim it stopped server-side work. No late response may mutate
+the index after the owning call ends.
+
+Do not assume conversational subscriptions provide embedding access. Hosted
+embeddings require a separately authorized configuration; never silently switch
+to them. With a current lexical index and an unavailable embedding endpoint,
+return `retrieval_mode: lexical` and a concise degradation notice. Failed hybrid
+retrieval is not `no_matches`.
+
+## Multi-file authorization contract
+
+There are two independent gates: permission to invoke `SearchDocs`, and permission
+to use each source document. Tool approval does not approve a corpus. Use the
+normal tool pipeline for the outer gate, including blanket `SearchDocs` deny/ask
+rules and the caller's mode. A worker that cannot obtain a required outer approval
+cannot run the call.
+
+For each candidate file, evaluate ordinary Read eligibility without prompting or
+running an auto-approval classifier. Compose blanket Read rules with path rules
+and the filesystem decision, preserving deny before ask before allow. A blanket
+Read allow does not bypass a path-specific ask or deny; nor does a SearchDocs
+allow bypass either gate. Read-level policy is an additional floor for cached
+text and embeddings, even when ordinary tool-mode shortcuts might allow the
+outer call.
+
+| Current per-file decision | Ingest or rank cached content | Return excerpt |
+| --- | --- | --- |
+| Allow without additional approval | Permitted within configured scope. | Recheck eligibility and source snapshot before delivery. |
+| Ask, including blanket Read ask | Exclude. Do not prompt for individual files in version one. | Exclude and mark coverage incomplete. |
+| Deny, including blanket Read deny | Exclude. | Exclude without identifying the denied file. |
+| Unknown or failed evaluation | Exclude. | Report incomplete or unknown coverage. |
+
+[checkReadPermissionForTool](../../src/utils/permissions/filesystem.ts) checks
+path rules but is not the whole tool-rule pipeline. The implementation must
+compose it with the rule checks represented in
+[permissions.ts](../../src/utils/permissions/permissions.ts), using a shared
+side-effect-free eligibility helper rather than a synthetic Read invocation or
+an approval shortcut. [Tool exposure filtering](../../src/tools.ts) alone is
+insufficient because permissions may change after tool registration.
+
+One-time approval of a Read or SearchDocs call never creates a retrieval grant.
+Persisted or session-scoped rules count only while present in the current caller's
+permission context and only if no ask/deny applies. Re-evaluate at admission,
+before ingestion/ranking, and before delivery; if permissions change during a
+call, discard affected results or restart eligibility. Workers use their own
+context, not the parent or index builder's. No per-file approval prompts means
+the same exclusion policy works for workers unable to prompt.
+
+Apply the eligible document-ID set before loading vector payloads or scoring
+lexical candidates. Use eligible-only lexical statistics when the backend would
+otherwise let denied documents influence rankings. If that subset cannot be
+searched safely, refuse retrieval rather than perform global top-k followed by
+display-only filtering. Reauthorize before returning citations as well as text.
+Physical cache access is internal to this path, never a model-visible read grant.
+
+Retrieved content is untrusted evidence and cannot change permissions or agent
+instructions. Keep cache files private and ordinary diagnostics limited to
+bounded timing/count/error metadata, excluding queries and source bodies.
+
+## Conditional integration with Cat Code
 
 | Existing owner | Proposed change |
 | --- | --- |
@@ -295,61 +448,112 @@ contract. Do not route retrieval through `findRelevantMemories` or the
 are different. Grep, code exploration, persistent memory, compaction, and session
 history retain their existing behavior.
 
-## Evaluation and acceptance
+## Evaluation and retention gates
 
-Freeze a representative document corpus and build a small set of questions with
-human-checked supporting passages. Include paraphrases, exact identifiers,
-questions requiring multiple sections, old plans with amendments, and questions
-whose answer is absent. Keep tuning questions separate from held-out questions.
+Start by collecting actual document-search failures from user-supplied examples
+or explicitly authorized task evidence. Record the question, search sequence,
+missed passage, and resulting mistake. Classify each case as discovery, authority,
+adoption, mixed, or no demonstrated failure. Do not presume historical session
+logs are an authorized experiment corpus.
 
-Compare three conditions with the same model, task prompts, and corpus snapshot:
+The [July workspace-map usage report](../reports/2026-07-04-workspace-map-usage-evaluation.md)
+observed late, superficial, and absent map use, alongside useful and reasonable
+skips. It motivates measuring adoption; it is not evidence that a new optional
+tool will be ignored or that embeddings will help.
 
-1. Existing workspace-map, grep, and file-read workflow.
-2. That workflow plus lexical document retrieval.
-3. That workflow plus hybrid document retrieval.
+Freeze two independently curated corpus variants: currently applicable references
+with all their qualifiers, and broader historical documentation. Label supporting
+passages, qualification groups, and governing evidence separately. Include
+paraphrases, identifiers, inline corrections, stale headers, multi-section
+questions, and absent answers. Record answerability for each corpus so removal
+of needed evidence is not scored as a retrieval failure. Split development and
+held-out questions before tuning.
 
-Measure retrieval of supporting evidence within the top results, citation
-accuracy, grounded answer correctness, incorrect reliance on obsolete material,
-search turns, latency, and context consumption. Report initial indexing time,
-incremental refresh cost, disk use, and embedding-runtime resource use separately
-from warm query latency. Do not infer total savings from shorter excerpts alone.
+First compare lexical and hybrid retrieval offline against supporting-passage
+labels. Then compare the following agent conditions on each corpus with the same
+model, task prompts, budgets, and isolated source snapshots:
 
-Before running the held-out comparison, record the tolerated latency and resource
-budgets and the minimum improvement needed to justify retaining embeddings.
-Retain hybrid retrieval only if it adds useful evidence or reduces search effort
-without materially worsening answer correctness or stale-source handling. A small
-pilot establishes feasibility, not a general productivity claim.
+1. Existing maps, grep, and reads.
+2. Existing tools plus lexical `SearchDocs`.
+3. Existing tools plus hybrid `SearchDocs`.
 
-Implementation acceptance must also demonstrate:
+For each condition, use a voluntary-use arm and a separate instructed-search
+arm. The latter requests document search before deciding, using normal search
+in the baseline and `SearchDocs` where available. Keep all other instructions
+equivalent. This arm measures retrieval when invoked; it is not the proposed
+production prompt policy. Keep labels and other arms' outputs out of agent
+context, and use fresh sessions for paired runs.
 
-- Citations resolve to the exact bytes and line ranges returned.
-- A changed, deleted, excluded, or newly denied file cannot leak an old excerpt.
-- Indexes stay isolated across worktrees and workspace moves.
-- Concurrent sessions do not corrupt the index or duplicate the same build.
-- Cancellation and process interruption leave a recoverable committed index.
-- Missing embeddings, partial indexing, no matches, and errors remain distinct.
-- Both terminal and desktop engine paths deliver bounded results through the
-  real tool pipeline for supported providers.
+Measure tool availability, call rate, first-use timing relative to the first
+source read and first substantive decision, and whether retrieved evidence was
+used. Separate non-use, retrieval misses, missed qualifiers, and interpretation
+errors. A never-called tool is an adoption outcome, not an observed retrieval
+failure. A read after the decision cannot count as early decision support.
 
-Use focused behavioral checks for those boundaries and the applicable repository
-build checks. Any test implementation follows the repository's test-audit skill.
-Run model-based evaluation only with authorization for the chosen runtime and
-usage.
+Measure supporting-evidence recall, citation accuracy, grounded correctness,
+obsolete-rule reliance, search turns, latency, and context consumed. Record cold
+indexing and query-embedding costs separately from warm search. Report corpus
+curation effort and endpoint memory/CPU use as part of the cost. Runtime boundary
+checks and retrieval/model quality are separate evidence categories.
+
+Before held-out runs, set numeric minimum benefit and maximum overhead thresholds
+using the development baseline and the user's workload. Publish those thresholds
+with the frozen manifest; do not choose them after seeing held-out results.
+
+- Retain a new lexical tool only if it beats existing search by the preregistered
+  evidence-recall or search-effort margin within the correctness and cost budgets.
+- Retain embeddings only if hybrid adds that measurable benefit over lexical
+  retrieval, not merely over a weak baseline.
+- Require no newly observed permission leaks, broken citations, or hidden
+  qualification failures. Report uncertain quality differences rather than
+  treating a small sample with no observed failures as proof of equivalence.
+- If curation solves authority failures and retrieval adds little, improve corpus
+  organization and stop. If gains appear only in instructed use, resolve adoption
+  before production approval without making tool use mandatory by default.
+- If evidence is inconclusive, retain the experiment artifacts and defer the
+  subsystem. Neither keyword retrieval nor embeddings are presumed worth keeping.
+
+## Conditional implementation acceptance
+
+After a retention gate passes, demonstrate these behaviors through the real tool
+pipeline before enabling production use:
+
+- Allow/ask/deny composition, blanket rules, expired approvals, permission changes,
+  and non-prompting workers enforce the same per-file eligibility floor.
+- A denied or changed document cannot contribute cached excerpts or vector results.
+- Numbered items with inline amendments retain their qualification group, including
+  when the output budget forces a discovery-only excerpt and read targets.
+- A restricted caller cannot globally delete another caller's records or publish
+  complete inventory coverage.
+- A exits while B searches: committed records remain readable, unfinished work
+  stops, the lock releases, and a later authorized call resumes safely.
+- Changed files get current lexical entries before replacement embeddings finish;
+  unchanged chunk inputs reuse their vectors without reusing stale line locations.
+- Worktrees and workspace moves remain isolated. Missing embeddings, incomplete
+  inventory, busy indexing, no matches, and errors remain distinguishable.
+- Terminal and desktop engine paths deliver bounded results for supported providers.
+
+Use focused behavioral checks and applicable repository build checks. Follow the
+active test-audit skill when authoring tests; the repository's durable reference
+is the [test audit plan](../testing/2026-09-25-test-audit-plan.md). Model evaluation
+requires authorization for its runtime and usage. This design revision does not
+start evaluations or implement the tool.
 
 ## Delivery sequence
 
-1. Establish the corpus, questions, embedding runtime candidate, and baseline.
-   Confirm storage compatibility and record resource budgets.
-2. Implement the tool contract, Markdown chunks, lexical retrieval, citations,
-   permission enforcement, and index lifecycle.
-3. Add embeddings and rank fusion using the same corpus and lifecycle. Exercise
-   degraded behavior before evaluating retrieval quality.
-4. Run the held-out comparison, choose whether to retain hybrid retrieval, and
-   document the measured result. Keep the feature opt-in during evaluation.
+1. Collect and classify actual failures; freeze corpus variants, labels, and
+   experimental budgets. Stop if there is no useful retrieval hypothesis.
+2. Build disposable immutable indexes and compare lexical and hybrid retrieval
+   offline. Choose and authorize one external local embedding endpoint for the
+   experiment; add no production model lifecycle.
+3. Run the thin tool-adapter experiment, including adoption and instructed-use
+   arms. Apply independent retention gates to lexical retrieval and embeddings.
+4. Only after benefit is established, implement the production contracts above
+   for whichever retrieval mode earned retention. Validate permissions,
+   qualification handling, bounded ownership, refresh, and recovery.
 
-Later extensions require a demonstrated need: more document formats, external
-sources, a reranker, automatic retrieval, or an index shared across projects.
-They are not prerequisites for completing this design.
+More formats, connected sources, reranking, automatic injection, and shared
+cross-project indexes remain separate proposals requiring evidence.
 
 ## Relevant precedents
 
