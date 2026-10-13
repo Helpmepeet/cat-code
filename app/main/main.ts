@@ -1,3 +1,8 @@
+import { ScheduledTasks } from '../host/scheduledTasks.js'
+import { parseScheduledTaskCommand, type ScheduledTasksSnapshot, type ScheduledTasksResult } from '../shared/scheduledTasks.js'
+import { launchScheduledSession } from './scheduledTaskRunner.js'
+import { workspaceMapSchedule } from './workspaceMapSchedule.js'
+import { CH_SCHEDULED_TASKS_READ, CH_SCHEDULED_TASKS_COMMAND } from '../shared/ipcChannels.js'
 import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
@@ -651,6 +656,8 @@ logOperational('process.started', 'info', { role: 'electron-main', pid: process.
 // registry into the typed control plane (P3-3); main is a CALLER of that host.
 let supervisor: SidecarSupervisor | null = null
 let host: Host | null = null
+let scheduledTasks: ScheduledTasks | null = null
+let scheduledTasksError: string | undefined
 let projectRouting: ProjectRoutingController | null = null
 let workspaceJump: WorkspaceJumpCoordinator | null = null
 const observedWorkspaceHandoffs = new Map<string, { generation: string; operationId: string; tipUuid: string; toolUseId: string }>()
@@ -2057,6 +2064,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
   sup.subscribe(event => {
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
+    scheduledTasks?.receive(event.sessionId, frame)
     // P4-6 title-rider: the sidecar's one-shot AI title is a sidecar→host signal,
     // not a renderer frame. Relay it to the durable registry (host is engine-free,
     // so it cannot pull the engine's title) and DO NOT forward it — the title
@@ -2952,6 +2960,34 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * without re-registering listeners.
  */
 function registerHostControlPlane(): void {
+  ipcMain.handle(CH_SCHEDULED_TASKS_READ, (event): ScheduledTasksSnapshot => {
+    if (!isMainWindowSender(event)) return { tasks: [], runs: [], error: 'Scheduled tasks are unavailable' }
+    return scheduledTasks?.snapshot() ?? { tasks: [], runs: [], error: scheduledTasksError ?? 'Scheduled tasks are starting' }
+  })
+  ipcMain.handle(CH_SCHEDULED_TASKS_COMMAND, (event, payload: unknown): ScheduledTasksResult => {
+    if (!isMainWindowSender(event)) return { ok: false, error: 'Scheduled tasks are unavailable' }
+    const command = parseScheduledTaskCommand(payload)
+    if (!command) return { ok: false, error: 'Invalid scheduled task' }
+    if (!host || !scheduledTasks) return { ok: false, error: scheduledTasksError ?? 'Scheduled tasks are starting' }
+    try {
+      if (command.type === 'save' || command.type === 'workspace-maps') {
+        const input = command.type === 'save' ? command.task : null
+        const sessionId = command.type === 'workspace-maps' ? command.workspaceSessionId : input?.workspaceSessionId
+        const previous = input?.id ? scheduledTasks.snapshot().tasks.find(task => task.id === input.id) : undefined
+        const row = sessionId ? host.listSessions().find(session => session.appSessionId === sessionId && session.binding?.kind === 'project') : undefined
+        const cwd = input?.cwdToken ? cwdTokens.consume(input.cwdToken) : sessionId ? row?.cwd : previous?.cwd
+        if (!cwd) return { ok: false, error: 'Choose a project folder for this task' }
+        const checked = validateCwd(cwd)
+        if (!checked.ok) return { ok: false, error: 'The project folder is unavailable' }
+        if (command.type === 'workspace-maps') {
+          if (scheduledTasks.snapshot().tasks.some(task => task.cwd === checked.realpath && task.name === 'Refresh workspace maps')) return { ok: false, error: 'This project already has a workspace-map task' }
+          scheduledTasks.save(workspaceMapSchedule(checked.realpath, defaultRegistryDir()), checked.realpath)
+        } else scheduledTasks.save(command.task, checked.realpath)
+      } else if (command.type === 'run') scheduledTasks.run(command.id)
+      else scheduledTasks.change(command.type, command.id)
+      return { ok: true, snapshot: scheduledTasks.snapshot() }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'The scheduled task could not be saved' } }
+  })
   const noHost = <T>(): HostResult<T> => ({
     ok: false,
     error: { code: 'spawn_failed', message: 'host is not running' },
@@ -4486,6 +4522,24 @@ function ensureHost(): Host {
     log: line => logLegacyDiagnostic(line, 'host', 'main'),
   })
 
+  // Scheduled tasks share the real host and transport. The single-instance app owns their atomic store.
+  void launched.then(() => {
+    if (host !== liveHost || !supervisor) return
+    try {
+      const liveSupervisor = supervisor
+      scheduledTasks = new ScheduledTasks(join(defaultRegistryDir(), 'scheduled-tasks.json'), {
+        launch: (task, id) => launchScheduledSession(liveHost, liveSupervisor, task, id),
+        submit: (id, prompt, submitId) => {
+          sessionsWithSubmit.add(id)
+          const options = { submitId } as import('../shared/protocol.js').SubmitOptions
+          return forwardInternal(id, { type: 'app.submit', requestId: generateRequestId(), prompt, options }) === null
+        },
+      })
+      scheduledTasksError = undefined
+      scheduledTasks.start()
+    } catch { scheduledTasksError = 'Saved scheduled tasks could not be opened. Fix their storage before restarting Cat Code.' }
+  })
+
   // IS-A startup GC: after the launch sweep settles (its reaps predate the
   // HostEvent subscription, so they emit no session-removed), drop any orphaned
   // cache file whose row is no longer restorable.
@@ -4577,6 +4631,8 @@ if (!gotSingleInstanceLock) {
  * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
  */
 function shutdownRuntime(): void {
+  scheduledTasks?.stop()
+  scheduledTasks = null
   if (host) {
     host.shutdownAll()
   } else {

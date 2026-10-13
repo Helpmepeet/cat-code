@@ -497,6 +497,9 @@ export class Host implements HostApi {
       resumeEngineSessionId: req.resumeEngineSessionId,
       forked: req.forked === true,
       binding,
+      model: req.model,
+      effort: req.effort,
+      permissionMode: req.permissionMode,
     }, reservation)
   }
 

@@ -92,3 +92,6 @@ export const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'
 export const CH_HOST_ACCOUNT_SIGN_OUT = 'catcode:host:account-sign-out'
 export const CH_HOST_EVENT = 'catcode:host:event'
 export const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
+
+export const CH_SCHEDULED_TASKS_READ = 'catcode:scheduled-tasks:read'
+export const CH_SCHEDULED_TASKS_COMMAND = 'catcode:scheduled-tasks:command'

@@ -1,3 +1,4 @@
+import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { UsagePage } from './UsagePage.js'
 import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js'
 import {
@@ -4896,7 +4897,14 @@ export function App() {
 
           {/* Settings reads durable configuration through the host inventory;
            * session views below continue reading their own session slices. */}
-          {activeView === 'settings' ? (
+          {activeView === 'scheduled' ? (
+            <ScheduledTasksPage sessions={selectShellDescriptors(shell)} onOpenSession={id => {
+              const row = tabDescriptorsById.get(id)
+              if (row?.restorable) void performRestore(id)
+              else if (row) selectTab(id)
+              else toast('This chat is no longer available', { tone: 'danger' })
+            }} />
+          ) : activeView === 'settings' ? (
             <SettingsShell
               cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
               onRemoteVerb={sendRemoteSettingsVerb}

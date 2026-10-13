@@ -55,6 +55,10 @@ import type { SessionBinding } from './sessionBinding.js'
 export type CreateSessionRequest = {
   /** Session root. Host re-validates (realpath / exists / isDirectory) — HC1. */
   cwd: string
+  /** Host-owned scheduled-run controls; renderer create input cannot carry these. */
+  model?: string
+  effort?: string
+  permissionMode?: 'default' | 'auto'
   /** Present ⇒ restore, not a fresh spawn (REGISTRY.md R3). Main-set only. */
   resumeEngineSessionId?: string
   /** Display only; length-capped by the host (`MAX_SESSION_TITLE_CHARS`). */

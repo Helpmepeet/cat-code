@@ -1,0 +1,44 @@
+.scheduled-page { flex: 1; min-height: 0; overflow: auto; padding: 28px 32px; color: var(--color-text-primary); }
+.scheduled-content { max-width: 920px; margin: 0 auto; }
+.scheduled-heading, .scheduled-task-heading, .scheduled-preset, .scheduled-editor footer, .scheduled-run { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.scheduled-page h1 { font-size: 20px; font-weight: 600; margin: 0; }
+.scheduled-page h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.scheduled-page p { font-size: 13px; color: var(--color-text-muted); margin: 6px 0 0; line-height: 1.5; }
+.scheduled-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.scheduled-button { border: 1px solid var(--color-shell-seam); border-radius: 7px; padding: 6px 10px; background: transparent; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.scheduled-button:hover { background: var(--color-shell-hover); }
+.scheduled-button:disabled { opacity: .45; cursor: default; }
+.scheduled-button:focus-visible, .scheduled-page input:focus-visible, .scheduled-page textarea:focus-visible, .scheduled-page select:focus-visible, .scheduled-page summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.scheduled-primary { background: var(--color-accent); color: var(--color-on-fill); border-color: var(--color-accent); }
+.scheduled-primary:hover { background: var(--color-accent); filter: brightness(1.08); }
+.scheduled-danger { color: var(--color-tone-danger); }
+.scheduled-page .scheduled-error { color: var(--color-tone-danger); margin: 16px 0; }
+.scheduled-page .scheduled-notice { color: var(--color-tone-info); margin: 16px 0; }
+.scheduled-empty { padding: 52px 0; text-align: center; }
+.scheduled-list { margin-top: 24px; }
+.scheduled-task { padding: 20px 0; border-top: 1px solid var(--color-shell-seam); }
+.scheduled-task-heading > div:first-child { min-width: 0; }
+.scheduled-path { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11px !important; }
+.scheduled-runs { margin-top: 14px; }
+.scheduled-page summary { cursor: pointer; font-size: 12px; color: var(--color-text-muted); }
+.scheduled-run { padding: 12px 0 12px 14px; border-bottom: 1px solid var(--color-shell-seam); }
+.scheduled-run p { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 680px; font-size: 12px; }
+.scheduled-run-status { font-size: 12px; }
+.scheduled-run-waiting, .scheduled-run-interrupted { color: var(--color-tone-warn); }
+.scheduled-run-failed { color: var(--color-tone-danger); }
+.scheduled-run-completed { color: var(--color-tone-good); }
+.scheduled-run-time { margin-left: 12px; color: var(--color-text-subtle); font-size: 11px; }
+.scheduled-editor { margin: 24px 0; padding: 20px; background: var(--color-surface-panel); border: 1px solid var(--color-shell-seam); border-radius: 10px; }
+.scheduled-editor > label { margin-top: 14px; }
+.scheduled-editor label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--color-text-muted); min-width: 0; }
+.scheduled-page input, .scheduled-page textarea, .scheduled-page select { min-width: 0; width: 100%; color: var(--color-text-primary); background: var(--color-app-bg); border: 1px solid var(--color-shell-seam); border-radius: 6px; padding: 8px 9px; font-size: 13px; }
+.scheduled-page textarea { resize: vertical; }
+.scheduled-fields { display: flex; gap: 12px; margin: 14px 0; align-items: flex-end; flex-wrap: wrap; }
+.scheduled-fields > label { flex: 1; min-width: 130px; }
+.scheduled-editor footer { align-items: center; margin-top: 20px; }
+.scheduled-editor .scheduled-checkbox { flex-direction: row; align-items: center; }
+.scheduled-checkbox input { width: auto; }
+.scheduled-preset { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-shell-seam); flex-wrap: wrap; }
+.scheduled-preset .scheduled-actions { min-width: 0; max-width: 100%; }
+.scheduled-preset select { width: 250px; max-width: 100%; }
+@media (max-width: 740px) { .scheduled-page { padding: 20px 16px; } .scheduled-task-heading { flex-direction: column; gap: 12px; } .scheduled-heading { gap: 12px; } }

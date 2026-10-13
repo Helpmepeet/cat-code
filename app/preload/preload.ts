@@ -64,6 +64,8 @@ import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
 // themselves live in `../shared/ipcChannels.ts` so main listens on the same
 // literals by construction rather than by hand-copying them.
 import {
+  CH_SCHEDULED_TASKS_READ,
+  CH_SCHEDULED_TASKS_COMMAND,
   CH_SUBMIT,
   CH_ABORT,
   CH_PERMISSION,
@@ -253,6 +255,14 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
 })
 
 const bridge: CatCodeBridge = {
+  readScheduledTasks() {
+    sendGuard.assertAllowed({ readScheduledTasks: true })
+    return ipcRenderer.invoke(CH_SCHEDULED_TASKS_READ)
+  },
+  scheduledTask(command) {
+    sendGuard.assertAllowed(command)
+    return ipcRenderer.invoke(CH_SCHEDULED_TASKS_COMMAND, command)
+  },
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {
     const payload = { sessionId, prompt, options }
     sendGuard.assertAllowed(payload)

@@ -208,6 +208,8 @@ async function runProductionHardeningSmoke(
     })()`)
 
     const expectedBridgeKeys = [
+      'readScheduledTasks',
+      'scheduledTask',
       // Frame plane (engine commands + attachment).
       'abort',
       'accountVerb',

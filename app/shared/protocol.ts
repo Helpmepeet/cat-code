@@ -4069,6 +4069,8 @@ export type OpenWorkspaceFileTarget =
 export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
+  readScheduledTasks(): Promise<import('./scheduledTasks.js').ScheduledTasksSnapshot>
+  scheduledTask(command: import('./scheduledTasks.js').ScheduledTaskCommand): Promise<import('./scheduledTasks.js').ScheduledTasksResult>
   /** Send one prompt to the addressed session. */
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void
   /** Abort the named turn on the addressed session. */
