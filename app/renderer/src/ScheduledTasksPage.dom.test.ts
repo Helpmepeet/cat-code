@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { runScheduledTaskOptionsWorker } from '../../main/scheduledTaskOptionsRunner.js'
 import { ScheduledTaskOptionsService } from '../../main/scheduledTaskOptionsService.js'
 import type { ScheduledRun, ScheduledTask, ScheduledTaskCommand, ScheduledTaskOptions, ScheduledTasksResult, ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
+import { SCHEDULED_OPTIONS_CACHE_MS } from '../../shared/scheduledTaskOptions.js'
 import { createDomTestHarness, type DomTestHarness, type MountedTree } from './domTestHarness.js'
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { storeScheduledSelection, storeScheduledTaskDraft } from './scheduledTasksModel.js'
@@ -53,15 +54,16 @@ type Bridge = {
   read?: () => Promise<ScheduledTasksSnapshot>
   pickToken?: string | null
   options?: ScheduledTaskOptions
-  readOptions?: () => Promise<ScheduledTaskOptions>
+  readOptions?: (request?: { refresh: true }) => Promise<ScheduledTaskOptions>
 }
 
 function installBridge(state: Bridge): void {
   window.catcode = {
     readScheduledTasks: () => state.read ? state.read() : Promise.resolve(structuredClone(state.snapshot)),
-    readScheduledTaskOptions: () => state.readOptions ? state.readOptions() : Promise.resolve(state.options ?? { models: MODELS, defaultEffortOptions: ['medium', 'high'], projects: [PROJECT] }),
+    readScheduledTaskOptions: (request?: { refresh: true }) => state.readOptions ? state.readOptions(request) : Promise.resolve(state.options ?? { models: MODELS, defaultEffortOptions: ['medium', 'high'], projects: [PROJECT] }),
     scheduledTask: async (command: ScheduledTaskCommand) => { state.commands.push(command); return state.respond(command) },
-    pickDirectory: async () => state.pickToken ?? null,
+    pickDirectory: async () => { throw new Error('Scheduled must not use the chat picker') },
+    pickScheduledTaskDirectory: async () => state.pickToken ?? null,
   } as unknown as typeof window.catcode
 }
 
@@ -388,12 +390,12 @@ test('a catalog failure is explicit, can be retried, and never falls back to cha
   }
   installBridge(state)
   const tree = await mount()
-  expect(alerts(tree).join(' ')).toContain('Task choices could not be loaded. Try again.')
   await click(listRow(tree, 'New task'))
+  expect(alerts(tree).join(' ')).toContain('Models and projects could not be loaded.')
   expect(field<HTMLButtonElement>(tree, 'Model').disabled).toBe(true)
   expect(button(tree, 'Create task').disabled).toBe(true)
   state.readOptions = async () => ({ models: MODELS, defaultEffortOptions: [], projects: [PROJECT] })
-  await click(button(tree, 'Retry'))
+  await click(button(tree, 'Refresh choices'))
   expect(alerts(tree)).toEqual([])
   await click(field(tree, 'Model'))
   expect(menuOptions(tree)).toEqual(['Default', 'GPT-6 Sol', 'Haiku'])
@@ -407,7 +409,8 @@ test('App and the Scheduled page cannot feed choices from chat state', async () 
   expect(wiring).toBeDefined()
   expect(wiring).not.toMatch(/sessions=|modelOptions=/)
   expect(app).not.toContain('scheduledModelOptions')
-  expect(page).toContain('getBridge().readScheduledTaskOptions()')
+  expect(page).toContain('getBridge().readScheduledTaskOptions(')
+  expect(page).not.toContain('.pickDirectory(')
   expect(page + model).not.toMatch(/SessionDescriptor|RunControlsSnapshot|workspaceSessionId|runControls\.last/)
 })
 
@@ -445,3 +448,93 @@ test('real engine catalog reaches the designed pickers without creating any chat
     expect(button(tree, 'Create task').disabled).toBe(false)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }, 20_000)
+
+test('a failed refresh keeps the last-good choices and leaves editing and saving available', async () => {
+  const state: Bridge = {
+    snapshot: { tasks: [], runs: [] }, commands: [],
+    respond: () => ({ ok: true, snapshot: { tasks: [task()], runs: [] } }),
+  }
+  installBridge(state)
+  const tree = await mount()
+  await click(listRow(tree, 'New task'))
+  await type(field(tree, 'Name'), 'Nightly review')
+  await type(field(tree, 'Instructions'), 'Review the diff')
+  await choose(tree, 'Project', 'cat-code')
+  await choose(tree, 'Model', 'GPT-6 Sol')
+  await choose(tree, 'Effort', 'High')
+  state.readOptions = async () => ({ models: [], defaultEffortOptions: [], projects: [], error: 'Catalog read failed' })
+  await act(async () => { window.dispatchEvent(new Event('focus')) })
+  await flush()
+  expect(alerts(tree).join(' ')).toContain('Models and projects may be out of date.')
+  expect(field<HTMLButtonElement>(tree, 'Model').disabled).toBe(false)
+  expect(field<HTMLButtonElement>(tree, 'Effort').disabled).toBe(false)
+  expect(field(tree, 'Model').textContent).toBe('GPT-6 Sol')
+  expect(field(tree, 'Effort').textContent).toBe('High')
+  expect(button(tree, 'Create task').disabled).toBe(false)
+  await click(button(tree, 'Create task'))
+  expect(state.commands[0]).toMatchObject({ type: 'save', task: { workspaceId: PROJECT.workspaceId, model: 'gpt-6-sol', effort: 'high' } })
+})
+
+test('a cached last-good catalog is usable on a new mount and explicit refresh bypasses the cache', async () => {
+  const requests: Array<{ refresh: true } | undefined> = []
+  const state: Bridge = {
+    snapshot: { tasks: [], runs: [] }, commands: [],
+    readOptions: async request => {
+      requests.push(request)
+      return {
+        models: MODELS, defaultEffortOptions: ['high'], projects: [PROJECT], updatedAt: request ? Date.now() : Date.now() - 3600_000,
+        ...(request ? {} : { error: 'Catalog read failed' }),
+      }
+    },
+    respond: () => ({ ok: false, error: 'unused' }),
+  }
+  installBridge(state)
+  const tree = await mount()
+  await click(listRow(tree, 'New task'))
+  expect(field<HTMLButtonElement>(tree, 'Model').disabled).toBe(false)
+  expect(alerts(tree).join(' ')).toContain('Models and projects may be out of date.')
+  await click(field(tree, 'Model'))
+  expect(menuOptions(tree)).toEqual(['Default', 'GPT-6 Sol', 'Haiku'])
+  await click(button(tree, 'Haiku'))
+  await click(button(tree, 'Refresh choices'))
+  expect(requests).toEqual([undefined, { refresh: true }])
+  expect(alerts(tree)).toEqual([])
+})
+
+test('choices load only when needed and overlapping window signals share one read', async () => {
+  let reads = 0
+  let release!: (options: ScheduledTaskOptions) => void
+  const state: Bridge = {
+    snapshot: { tasks: [task()], runs: [] }, commands: [],
+    readOptions: () => { reads++; return new Promise(resolve => { release = resolve }) },
+    respond: () => ({ ok: false, error: 'unused' }),
+  }
+  installBridge(state)
+  const tree = await mount()
+  await click(listRow(tree, 'Nightly review'))
+  await act(async () => { window.dispatchEvent(new Event('focus')) })
+  await flush()
+  expect(reads).toBe(0)
+  await click(button(tree, 'Edit'))
+  expect(reads).toBe(1)
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+    document.dispatchEvent(new Event('visibilitychange'))
+    release({ models: MODELS, defaultEffortOptions: [], projects: [PROJECT] })
+  })
+  await flush()
+  expect(reads).toBe(1)
+})
+
+test('an aged catalog is identified as possibly out of date without disabling usable choices', async () => {
+  installBridge({
+    snapshot: { tasks: [], runs: [] }, commands: [],
+    options: { models: MODELS, defaultEffortOptions: [], projects: [PROJECT], updatedAt: Date.now() - SCHEDULED_OPTIONS_CACHE_MS - 1 },
+    respond: () => ({ ok: false, error: 'unused' }),
+  })
+  const tree = await mount()
+  await click(listRow(tree, 'New task'))
+  expect(alerts(tree).join(' ')).toContain('Models and projects may be out of date.')
+  expect(field<HTMLButtonElement>(tree, 'Model').disabled).toBe(false)
+  expect(buttons(tree, 'Refresh choices')).toHaveLength(1)
+})

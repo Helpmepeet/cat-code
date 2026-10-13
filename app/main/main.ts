@@ -6,6 +6,7 @@ import { CH_SCHEDULED_TASKS_READ, CH_SCHEDULED_TASKS_COMMAND, CH_SCHEDULED_TASK_
 import { validScheduledTaskOptionsPayload } from '../shared/scheduledTaskOptions.js'
 import { runScheduledTaskOptionsWorker } from './scheduledTaskOptionsRunner.js'
 import { ScheduledTaskOptionsService } from './scheduledTaskOptionsService.js'
+import { createDirectoryPickerHandlers } from './directoryPicker.js'
 import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
@@ -163,6 +164,7 @@ import {
   CH_HOST_SET_PEER_WAKE_BLOCKED,
   CH_HOST_LIST,
   CH_HOST_PICK_DIR,
+  CH_HOST_PICK_SCHEDULED_TASK_DIR,
   CH_HOST_PICK_ATTACHMENT_FILE,
   CH_HOST_PREVIEW,
   CH_HOST_SESSIONS_CATALOG,
@@ -292,7 +294,6 @@ import {
   createReadinessLatch,
   parseDebugSnapshot,
   resolveDevHarnessConfig,
-  resolvePickerDefaultPath,
 } from './devHarness.js'
 import {
   decideWindowOpen,
@@ -773,6 +774,7 @@ const usageEnabled = isUsageDashboardEnabled()
 let accountsPoolDriver: SingleFlightDriver | null = null
 let accountsPoolActivityGate: ReturnType<typeof createVisibilityGatedRefresh> | null = null
 let accountControl: ReturnType<typeof createAccountControlRunner> | null = null
+let scheduledOptions: ScheduledTaskOptionsService | null = null
 let accountProfileMutationInFlight = false
 let accountProfileMutationAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
@@ -1219,6 +1221,7 @@ function notifySidecarsOfAccountDeletion(
   accountId: string,
   requestId: string,
 ): void {
+  scheduledOptions?.invalidate()
   accountInvalidation.notifyDeletion(
     accountId,
     requestId,
@@ -1229,6 +1232,7 @@ function notifySidecarsOfAccountDeletion(
 function notifySidecarsOfAccountSignOut(
   notice: AccountProfileSignedOutMessage,
 ): void {
+  scheduledOptions?.invalidate()
   accountInvalidation.notifySignOut(
     notice,
     supervisor?.listSessions() ?? [],
@@ -2167,6 +2171,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // session snapshot being promoted to drive these surfaces. The predicate is
     // Electron-free so it can be unit-driven; nothing here can execute in a test.
     if (frameMutatedAccountsPool(frame)) {
+      scheduledOptions?.invalidate()
       refreshAccountsPoolNow()
     }
     const traced = traceFrame(frame, 'supervisor.socket.received')
@@ -2896,6 +2901,7 @@ function registerIpcHandlers(): void {
             log: line => process.stderr.write(`${line}\n`),
           })
           if (abort.signal.aborted) return unavailable()
+          if (result.ok && request.verb.key === 'model') scheduledOptions?.invalidate()
           return result.ok
             ? { ok: true, message: result.message }
             : { ok: false, error: { code: 'unavailable', message: result.message } }
@@ -2967,16 +2973,17 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * without re-registering listeners.
  */
 function registerHostControlPlane(): void {
-  const scheduledOptions = new ScheduledTaskOptionsService(
+  const optionsService = new ScheduledTaskOptionsService(
     () => runScheduledTaskOptionsWorker({ command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('scheduled-options'), cwd: process.cwd() }),
     validateCwd,
   )
+  scheduledOptions = optionsService
   ipcMain.handle(CH_SCHEDULED_TASK_OPTIONS_READ, (event, payload: unknown) => {
     if (!isMainWindowSender(event) || !validScheduledTaskOptionsPayload(payload)) {
       return { models: [], defaultEffortOptions: [], projects: [], error: 'Scheduled task options are unavailable' }
     }
-    return scheduledOptions.read()
+    return optionsService.read(payload)
   })
   ipcMain.handle(CH_SCHEDULED_TASKS_READ, (event): ScheduledTasksSnapshot => {
     if (!isMainWindowSender(event)) return { tasks: [], runs: [], error: 'Scheduled tasks are unavailable' }
@@ -2993,7 +3000,7 @@ function registerHostControlPlane(): void {
         const workspaceId = command.type === 'workspace-maps' ? command.workspaceId : input?.workspaceId
         const cwdToken = command.type === 'workspace-maps' ? command.cwdToken : input?.cwdToken
         const previous = input?.id ? scheduledTasks.snapshot().tasks.find(task => task.id === input.id) : undefined
-        const cwd = cwdToken ? cwdTokens.consume(cwdToken) : workspaceId ? scheduledOptions.resolve(workspaceId) : previous?.cwd
+        const cwd = cwdToken ? cwdTokens.consume(cwdToken) : workspaceId ? optionsService.resolve(workspaceId) : previous?.cwd
         if (!cwd) return { ok: false, error: 'Choose a project folder for this task' }
         const checked = validateCwd(cwd)
         if (!checked.ok) return { ok: false, error: 'The project folder is unavailable' }
@@ -3015,33 +3022,38 @@ function registerHostControlPlane(): void {
   // renderer may REQUEST it, never answer it. Returns a one-time TOKEN bound to
   // the realpath the user chose (never the path itself), or null (cancelled). The
   // renderer feeds the token to createSession; it can never author a path.
+  const pickDirectory = async (defaultPath?: string): Promise<string | null> => {
+    if (devPickerBypass.enabled) {
+      const bypassed = devPickerBypass.pick()
+      return bypassed ? cwdTokens.mint(bypassed) : null
+    }
+    const parent = mainWindow ?? undefined
+    const result = parent
+      ? await dialog.showOpenDialog(parent, {
+          properties: ['openDirectory', 'createDirectory'],
+          ...(defaultPath ? { defaultPath } : {}),
+        })
+      : await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory'],
+          ...(defaultPath ? { defaultPath } : {}),
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const chosen = validateCwd(result.filePaths[0])
+    if (!chosen.ok) return null
+    return cwdTokens.mint(chosen.realpath)
+  }
+  const directoryPickers = createDirectoryPickerHandlers({
+    isAuthorized: isMainWindowSender,
+    sessions: () => host?.listSessions() ?? [],
+    pick: pickDirectory,
+  })
   ipcMain.handle(
     CH_HOST_PICK_DIR,
-    async (event, activeSessionId?: unknown): Promise<string | null> => {
-      if (!isMainWindowSender(event) || activeSessionId !== undefined && activeSessionId !== null && typeof activeSessionId !== 'string') return null
-      if (devPickerBypass.enabled) {
-        const bypassed = devPickerBypass.pick()
-        return bypassed ? cwdTokens.mint(bypassed) : null
-      }
-      const defaultPath = activeSessionId == null ? undefined : resolvePickerDefaultPath(
-        host?.listSessions() ?? [],
-        activeSessionId,
-      )
-      const parent = mainWindow ?? undefined
-      const result = parent
-        ? await dialog.showOpenDialog(parent, {
-            properties: ['openDirectory', 'createDirectory'],
-            ...(defaultPath ? { defaultPath } : {}),
-          })
-        : await dialog.showOpenDialog({
-            properties: ['openDirectory', 'createDirectory'],
-            ...(defaultPath ? { defaultPath } : {}),
-          })
-      if (result.canceled || result.filePaths.length === 0) return null
-      const chosen = validateCwd(result.filePaths[0])
-      if (!chosen.ok) return null
-      return cwdTokens.mint(chosen.realpath)
-    },
+    directoryPickers.legacy,
+  )
+  ipcMain.handle(
+    CH_HOST_PICK_SCHEDULED_TASK_DIR,
+    directoryPickers.scheduled,
   )
 
   ipcMain.handle(
@@ -3690,6 +3702,7 @@ function registerHostControlPlane(): void {
       }),
       onProgress: update => sendHostEvent({ type: 'account-oauth', provider: update.provider, progress: update.progress }),
       onPoolChanged: () => {
+        scheduledOptions?.invalidate()
         accountsPoolPublicationGate.invalidate()
         refreshAccountsPoolNow()
       },

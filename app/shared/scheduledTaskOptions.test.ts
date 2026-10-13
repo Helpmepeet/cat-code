@@ -4,9 +4,10 @@ import { parseScheduledTaskOptionsRequest, parseScheduledTaskOptionsResult, vali
 const result = { type: 'scheduled-options-result', version: 1,
   models: [{ value: 'gpt-6-sol', label: 'Sol', provider: 'openai', effortOptions: ['ultra'] }],
   defaultEffortOptions: ['high'], projectPaths: ['/project'] }
-test('options observation has fixed undefined-only host input and closed worker schemas', () => {
+test('options observation accepts only an absent request or explicit refresh and closed worker schemas', () => {
   expect(validScheduledTaskOptionsPayload(undefined)).toBe(true)
-  for (const payload of [null, {}, { cwd: '/private' }, { sessionId: crypto.randomUUID() }, []]) expect(validScheduledTaskOptionsPayload(payload)).toBe(false)
+  expect(validScheduledTaskOptionsPayload({ refresh: true })).toBe(true)
+  for (const payload of [null, {}, { refresh: false }, { refresh: 1 }, { refresh: true, cwd: '/private' }, { cwd: '/private' }, { sessionId: crypto.randomUUID() }, []]) expect(validScheduledTaskOptionsPayload(payload)).toBe(false)
   expect(parseScheduledTaskOptionsRequest({ type: 'scheduled-options', version: 1 })).not.toBeNull()
   expect(parseScheduledTaskOptionsRequest({ type: 'scheduled-options', version: 1, cwd: '/private' })).toBeNull()
   expect(parseScheduledTaskOptionsResult(result)).not.toBeNull()

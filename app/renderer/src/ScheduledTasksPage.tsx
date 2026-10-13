@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { type ScheduledRun, type ScheduledTask, type ScheduledTaskCommand, type ScheduledTaskOptions, type ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
+import { SCHEDULED_OPTIONS_CACHE_MS } from '../../shared/scheduledTaskOptions.js'
 import { getBridge } from './bridge.js'
 import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import { usePopover } from './composerPopover.js'
@@ -86,7 +87,8 @@ export function ScheduledTasksPage({
 }) {
   const [snapshot, setSnapshot] = useState<ScheduledTasksSnapshot | null>(null)
   const [options, setOptions] = useState<ScheduledTaskOptions | null>(null)
-  const [optionsError, setOptionsError] = useState<string | null>(null)
+  const [optionsError, setOptionsError] = useState(false)
+  const [optionsRefreshing, setOptionsRefreshing] = useState(false)
   const [readError, setReadError] = useState<string | null>(null)
   const [draft, setDraftState] = useState<ScheduledTaskDraft | null>(readStoredScheduledTaskDraft)
   const [selection, setSelectionState] = useState<ScheduledSelection>(readStoredScheduledSelection)
@@ -97,7 +99,7 @@ export function ScheduledTasksPage({
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const order = useRef(createResponseOrder())
-  const optionsOrder = useRef(createResponseOrder())
+  const optionsInFlight = useRef(false)
 
   const setDraft = useCallback((next: ScheduledTaskDraft | null) => {
     storeScheduledTaskDraft(next)
@@ -122,24 +124,27 @@ export function ScheduledTasksPage({
     }
   }, [])
 
-  const refreshOptions = useCallback(async () => {
-    const id = optionsOrder.current.issue()
+  const refreshOptions = useCallback(async (force = false) => {
+    if (optionsInFlight.current) return
+    optionsInFlight.current = true
+    setOptionsRefreshing(true)
     try {
-      const next = await getBridge().readScheduledTaskOptions()
-      if (!optionsOrder.current.accept(id)) return
-      if (next.error) setOptionsError(next.error)
-      else { setOptions(next); setOptionsError(null) }
+      const next = await getBridge().readScheduledTaskOptions(force ? { refresh: true } : undefined)
+      if (!next.error || next.updatedAt !== undefined) setOptions(next)
+      setOptionsError(!!next.error)
     } catch {
-      if (optionsOrder.current.accept(id)) setOptionsError('Task choices could not be loaded. Try again.')
+      setOptionsError(true)
+    } finally {
+      optionsInFlight.current = false
+      setOptionsRefreshing(false)
     }
   }, [])
 
   // A pull API: poll while visible and re-read when the window returns.
   useEffect(() => {
     void refresh()
-    void refreshOptions()
     const timer = setInterval(() => { if (!document.hidden) void refresh() }, POLL_MS)
-    const onVisible = () => { if (!document.hidden) { void refresh(); void refreshOptions() } }
+    const onVisible = () => { if (!document.hidden) void refresh() }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     return () => {
@@ -147,7 +152,20 @@ export function ScheduledTasksPage({
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [refresh, refreshOptions])
+  }, [refresh])
+
+  const choicesVisible = (editing && draft !== null) || selection?.kind === 'preset'
+  useEffect(() => {
+    if (!choicesVisible) return
+    void refreshOptions()
+    const onVisible = () => { if (!document.hidden) void refreshOptions() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [choicesVisible, refreshOptions])
 
   const command = useCallback(async (scope: string, value: ScheduledTaskCommand, success: string): Promise<ScheduledTasksSnapshot | null> => {
     setPending(current => ({ ...current, [scope]: true }))
@@ -181,6 +199,7 @@ export function ScheduledTasksPage({
   const editingTask = draft?.taskId ? taskById.get(draft.taskId) ?? null : null
   const hasPreset = tasks.some(isWorkspaceMapTask)
   const selectedTask = selection?.kind === 'task' ? taskById.get(selection.id) ?? null : null
+  const choicesOutdated = optionsError || (options?.updatedAt !== undefined && now - options.updatedAt >= SCHEDULED_OPTIONS_CACHE_MS)
 
   // One draft at a time: New task and Edit return to an open draft rather than replacing it.
   const openEditor = (next: () => ScheduledTaskDraft) => {
@@ -207,7 +226,7 @@ export function ScheduledTasksPage({
   }
   const pickFolder = async () => {
     try {
-      const token = await getBridge().pickDirectory()
+      const token = await getBridge().pickScheduledTaskDirectory()
       const latest = readStoredScheduledTaskDraft()
       if (token && latest) setDraft({ ...latest, project: { kind: 'folder', cwdToken: token } })
     } catch {
@@ -226,6 +245,11 @@ export function ScheduledTasksPage({
     if (id) select({ kind: 'task', id })
     return created !== null
   }
+  const choiceActions = !choicesOutdated ? (
+    <button type="button" className={GHOST} disabled={optionsRefreshing} onClick={() => void refreshOptions(true)}>
+      Refresh choices
+    </button>
+  ) : null
 
   let pane: ReactNode
   if (!loaded) pane = readError ? null : <p className="py-10 text-center text-[13px] text-text-subtle">Loading scheduled tasks…</p>
@@ -238,7 +262,8 @@ export function ScheduledTasksPage({
         projects={projects}
         modelOptions={modelOptions}
         defaultEffortOptions={options?.defaultEffortOptions ?? []}
-        optionsReady={options !== null && !optionsError}
+        optionsReady={options !== null}
+        choiceActions={choiceActions}
         now={now}
         busy={!!pending[EDITOR]}
         error={errors[EDITOR] ?? null}
@@ -279,6 +304,7 @@ export function ScheduledTasksPage({
         disabled={!!unavailable}
         onBack={() => select(null)}
         onCreate={createPreset}
+        choiceActions={choiceActions}
       />
     )
   } else if (tasks.length === 0) {
@@ -336,10 +362,10 @@ export function ScheduledTasksPage({
             {unavailable ?? readError}
           </div>
         ) : null}
-        {optionsError ? (
-          <div role="alert" className="mb-5 flex max-w-[680px] items-center gap-3 text-[12.5px] text-tone-danger">
-            <span>{optionsError}</span>
-            <button type="button" className={BTN} onClick={() => void refreshOptions()}>Retry</button>
+        {choicesOutdated && choicesVisible ? (
+          <div role="alert" className={`mb-5 flex max-w-[680px] items-center gap-3 text-[12.5px] ${options ? 'text-tone-warn' : 'text-tone-danger'}`}>
+            <span>{options ? 'Models and projects may be out of date.' : 'Models and projects could not be loaded.'}</span>
+            <button type="button" className={BTN} disabled={optionsRefreshing} onClick={() => void refreshOptions(true)}>Refresh choices</button>
           </div>
         ) : null}
         {pane}
@@ -710,7 +736,7 @@ function PromptPane({ disabled, offerPreset, onNew, onPreset }: { disabled: bool
   )
 }
 
-function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }: {
+function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate, choiceActions }: {
   projects: readonly ProjectChoice[]
   tasks: readonly ScheduledTask[]
   busy: boolean
@@ -718,6 +744,7 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
   disabled: boolean
   onBack: () => void
   onCreate: (command: Extract<ScheduledTaskCommand, { type: 'workspace-maps' }>) => Promise<boolean>
+  choiceActions: ReactNode
 }) {
   const [selected, setSelected] = useState('')
   const [cwdToken, setCwdToken] = useState<string | null>(null)
@@ -728,7 +755,7 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
   const pickFolder = async () => {
     setPickerError(null)
     try {
-      const token = await getBridge().pickDirectory()
+      const token = await getBridge().pickScheduledTaskDirectory()
       if (token) { setCwdToken(token); setSelected('folder') }
     } catch { setPickerError('The folder picker could not open. Try again.') }
   }
@@ -743,7 +770,7 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
   }
   return (
     <div className="max-w-[680px]">
-      <PaneHeader title="Workspace-map refresh" meta={`Daily at 03:00 Asia/Bangkok · Auto permissions`} onBack={onBack} />
+      <PaneHeader title="Workspace-map refresh" meta={`Daily at 03:00 Asia/Bangkok · Auto permissions`} onBack={onBack} actions={choiceActions} />
       <div className="mt-[22px] space-y-2 text-[13px] leading-relaxed text-text-muted">
         <p>Starts paused. Pause the previous map-refresh schedule outside Cat Code before turning this on; creating the task does not change that schedule.</p>
         <p>The project needs its workspace-map refresh helper. Cat Code keeps its own refresh state and imports a matching earlier cursor once.</p>
@@ -780,7 +807,7 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
 }
 
 function EditorPane({
-  draft, task, missing, projects, modelOptions, defaultEffortOptions, optionsReady, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
+  draft, task, missing, projects, modelOptions, defaultEffortOptions, optionsReady, choiceActions, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
 }: {
   draft: ScheduledTaskDraft
   task: ScheduledTask | null
@@ -789,6 +816,7 @@ function EditorPane({
   modelOptions: readonly ScheduledModelOption[]
   defaultEffortOptions: readonly string[]
   optionsReady: boolean
+  choiceActions: ReactNode
   now: number
   busy: boolean
   error: string | null
@@ -833,7 +861,7 @@ function EditorPane({
       className="max-w-[680px]"
       onSubmit={event => { event.preventDefault(); if (!blocked && !busy && !missing && !disabled && optionsReady) onSave() }}
     >
-      <PaneHeader title={heading} onBack={onCancel} />
+      <PaneHeader title={heading} onBack={onCancel} actions={choiceActions} />
       {missing ? <p role="alert" className="mt-2.5 text-[12.5px] text-tone-danger">This task was deleted. Cancel to discard the draft.</p> : null}
 
       <div className="mt-[22px]">

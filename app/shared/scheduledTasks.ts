@@ -2,7 +2,7 @@ import type { RunControlProvider } from './protocol.js'
 
 export type ScheduledModelOption = { value: string; label: string; provider: RunControlProvider; effortOptions: readonly string[] }
 export type ScheduledProjectOption = { workspaceId: string; cwd: string; label: string }
-export type ScheduledTaskOptions = { models: ScheduledModelOption[]; defaultEffortOptions: string[]; projects: ScheduledProjectOption[]; error?: string }
+export type ScheduledTaskOptions = { models: ScheduledModelOption[]; defaultEffortOptions: string[]; projects: ScheduledProjectOption[]; updatedAt?: number; error?: string }
 
 export type TaskSchedule =
   | { kind: 'daily' | 'weekdays' | 'weekly'; time: string; timeZone: string; day: number }

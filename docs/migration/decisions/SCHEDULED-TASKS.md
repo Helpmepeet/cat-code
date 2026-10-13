@@ -8,7 +8,7 @@ is not required.
 
 `app/host/scheduledTasks.ts` owns durable task definitions, individual run claims,
 and lifecycle tracking. Electron main starts and stops it with the existing host.
-The backend exposes three fixed preload methods; main validates closed inputs.
+The Scheduled interface uses four fixed preload methods; main validates closed inputs.
 Workspace identity comes from an opaque saved-project handle or a
 single-use native picker token. Renderer-authored filesystem paths, resume
 identities, permission rules, and bypass mode are rejected.
@@ -122,8 +122,9 @@ The backend contract the page uses:
 | Method | Contract |
 | --- | --- |
 | `window.catcode.readScheduledTasks()` | Returns task definitions, recent runs, and an optional storage/startup error. This is a pull API; there is no schedule event subscription. |
-| `window.catcode.readScheduledTaskOptions()` | Returns models, engine-derived default effort options, saved projects, and an optional read error. It accepts no authored payload and is independent of schedule polling. |
+| `window.catcode.readScheduledTaskOptions(request?)` | Returns models, engine-derived default effort options, saved projects, the last successful read time, and an optional read error. The only optional intent is `{ refresh: true }`; it accepts no model, path or session input and is independent of schedule polling. |
 | `window.catcode.scheduledTask(command)` | Returns `{ ok: true, snapshot }` after success or `{ ok: false, error }` after refusal. It accepts `save`, `pause`, `resume`, `delete`, `run`, and `workspace-maps`. |
+| `window.catcode.pickScheduledTaskDirectory()` | Opens the native folder picker without a chat-derived default. Returns a single-use token or null on cancellation; it accepts no payload. |
 
 `app/shared/scheduledTasks.ts` owns the command and snapshot types. A new `save`
 needs a `workspaceId` minted by main for an existing saved project or a single-use
@@ -137,9 +138,9 @@ project handle or native picker token (exactly one) and creates a paused preset.
 
 The disposable `scheduled-options` worker uses observation-only
 `bootstrapWorkerEngine`, not session initialization or account-pool startup.
-It reads `getModelOptions(false)` while provider switching is unlocked, and derives
-each selection's effort capabilities through the engine's model resolver and
-`getSupportedEffortLevels`. Default effort options resolve the engine default;
+It reads `getModelOptions(false)` while provider switching is unlocked, and reuses
+the guarded `effortOptionsForSelection` owner for each selection and the engine
+default. A failed selection resolution does not discard other model choices;
 read errors are explicit, never a fabricated Default-only catalog. The supported
 saved effort union includes `ultra`, carried through existing string spawn controls.
 
@@ -148,12 +149,31 @@ registry entries or transcript history. Main canonicalizes existing directories,
 deduplicates aliases and mints stable per-process opaque handles. Saving or creating
 a preset revalidates the handle's canonical directory; renderer-authored paths
 remain rejected. Closing or reaping chats does not invalidate project handles.
-Edits may omit a source to retain their saved directory. The native picker with
-no active session has no chat-derived default directory.
+Edits may omit a source to retain their saved directory.
+`pickScheduledTaskDirectory()` is a fixed, payload-free native-picker request with
+no chat-derived default directory. It uses the existing single-use token store.
+The ordinary `pickDirectory(activeSessionId)` keeps its original behavior:
+prefer the active chat's folder, otherwise the most recently attached chat's
+folder, including when its argument is null or omitted.
 
-Options reads are single-flight, bounded to one validated NDJSON record and a
-15-second worker lifetime with kill escalation. Request/result parsers are closed;
-the main receiving method accepts only an undefined payload from the main window.
+Options reads are needed only while editing a task or choosing the preset's
+project. Main caches a successful catalog for five minutes and coalesces pending
+reads. An explicit Refresh choices action bypasses the cache and retry cooldown; automatic retries
+after a failure are bounded by a thirty-second cooldown. External changes are
+observed on the next expired read or explicit refresh, without consulting chats.
+Landed account mutations and successful durable `model` setting writes invalidate
+the cache; chat lifecycle and usage/status refreshes do not. A read invalidated
+while its worker is running is not published as fresh.
+If a refresh fails, main retains the last-good catalog and its `updatedAt` time.
+The editor keeps its model, effort and Save controls available with those choices
+and warns that models and projects may be out of date after a failed refresh or
+when the last successful read is older than the cache window. A first read failure leaves
+model and effort choices unavailable until a read succeeds. Project handles are
+still revalidated when saving.
+
+Worker reads are bounded to one validated NDJSON record and a 15-second lifetime
+with kill escalation. Request/result parsers are closed; the main receiving method
+accepts only undefined or exactly `{ refresh: true }` from the main window.
 No project hooks, project bootstrap, live model request or real schedule is needed
 to discover options. This adds a host-only read contract, not a session wire shape.
 

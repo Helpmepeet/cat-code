@@ -4070,7 +4070,7 @@ export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
   readScheduledTasks(): Promise<import('./scheduledTasks.js').ScheduledTasksSnapshot>
-  readScheduledTaskOptions(): Promise<import('./scheduledTasks.js').ScheduledTaskOptions>
+  readScheduledTaskOptions(request?: { refresh: true }): Promise<import('./scheduledTasks.js').ScheduledTaskOptions>
   scheduledTask(command: import('./scheduledTasks.js').ScheduledTaskCommand): Promise<import('./scheduledTasks.js').ScheduledTasksResult>
   /** Send one prompt to the addressed session. */
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void
@@ -4359,6 +4359,7 @@ export type CatCodeBridge = {
    * chosen string.
    */
   pickDirectory(activeSessionId?: SessionId | null): Promise<string | null>
+  pickScheduledTaskDirectory(): Promise<string | null>
   /**
    * Create a fresh session rooted at the directory a prior `pickDirectory()`
    * token names. The renderer supplies a token + optional title — it CANNOT

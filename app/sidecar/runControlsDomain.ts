@@ -24,6 +24,9 @@
  * levels / booleans only, never a token.
  */
 
+import { effortOptionsForSelection } from './effortOptions.js'
+export { effortOptionsForSelection } from './effortOptions.js'
+
 import {
   getMainLoopModelOverride,
   getSdkBetas,
@@ -67,13 +70,11 @@ import {
 } from '../../src/services/compact/autoCompact.js'
 import {
   getDefaultCodexModel,
-  getDefaultMainLoopModel,
   getMainLoopModel,
   getMarketingNameForModel,
   getRuntimeMainLoopModel,
   getUserSpecifiedModelSetting,
   normalizeModelStringForAPI,
-  parseUserSpecifiedModel,
 } from '../../src/utils/model/model.js'
 import {
   getModelOptions,
@@ -607,29 +608,6 @@ function safe<T>(fn: () => T, fallback: T): T {
   } catch {
     return fallback
   }
-}
-
-/**
- * The effort levels one PICKER ROW would offer, for `RunControlModelOption`.
- *
- * A row's `value` is a selection, not a model id — an alias (`opus`, `haiku`),
- * a canonical id, or null for the provider-local Default — and the effort
- * helpers answer for model ids: `modelSupportsEffort('opus')` is false while
- * `modelSupportsEffort('claude-opus-5')` is true. So the selection is resolved
- * FIRST, through the engine's own `parseUserSpecifiedModel` /
- * `getDefaultMainLoopModel` (the pair `getMainLoopModel` itself is built from),
- * and the levels then come off the same two engine functions the live snapshot
- * uses for the current model. No second capability table.
- */
-export function effortOptionsForSelection(value: string | null): string[] {
-  const model =
-    value == null
-      ? safe(() => getDefaultMainLoopModel(), null)
-      : safe(() => parseUserSpecifiedModel(value), null)
-  if (!model) return []
-  return safe(() => modelSupportsEffort(model), false)
-    ? safe(() => [...getSupportedEffortLevels(model)], [])
-    : []
 }
 
 /**

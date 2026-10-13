@@ -1,6 +1,7 @@
 import type { ScheduledModelOption } from './scheduledTasks.js'
 
 export const MAX_SCHEDULED_OPTIONS_BYTES = 1024 * 1024
+export const SCHEDULED_OPTIONS_CACHE_MS = 5 * 60_000
 export type ScheduledTaskOptionsRequest = { type: 'scheduled-options'; version: 1 }
 export type ScheduledTaskOptionsResult = {
   type: 'scheduled-options-result'
@@ -19,8 +20,8 @@ function efforts(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= 6 && new Set(value).size === value.length &&
     value.every(item => ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(item))
 }
-export function validScheduledTaskOptionsPayload(value: unknown): value is undefined {
-  return value === undefined
+export function validScheduledTaskOptionsPayload(value: unknown): value is undefined | { refresh: true } {
+  return value === undefined || object(value) && Object.keys(value).length === 1 && value.refresh === true
 }
 export function parseScheduledTaskOptionsRequest(value: unknown): ScheduledTaskOptionsRequest | null {
   return object(value) && Object.keys(value).length === 2 && value.type === 'scheduled-options' && value.version === 1 ? value as ScheduledTaskOptionsRequest : null

@@ -120,6 +120,7 @@ import {
   CH_HOST_SET_PEER_WAKE_BLOCKED,
   CH_HOST_LIST,
   CH_HOST_PICK_DIR,
+  CH_HOST_PICK_SCHEDULED_TASK_DIR,
   CH_HOST_PICK_ATTACHMENT_FILE,
   CH_HOST_PREVIEW,
   CH_HOST_SESSIONS_CATALOG,
@@ -260,9 +261,9 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ readScheduledTasks: true })
     return ipcRenderer.invoke(CH_SCHEDULED_TASKS_READ)
   },
-  readScheduledTaskOptions() {
-    sendGuard.assertAllowed({ readScheduledTaskOptions: true })
-    return ipcRenderer.invoke(CH_SCHEDULED_TASK_OPTIONS_READ)
+  readScheduledTaskOptions(request) {
+    sendGuard.assertAllowed({ readScheduledTaskOptions: true, request })
+    return ipcRenderer.invoke(CH_SCHEDULED_TASK_OPTIONS_READ, request)
   },
   scheduledTask(command) {
     sendGuard.assertAllowed(command)
@@ -599,6 +600,10 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed(payload)
     // Returns a one-time cwdToken (or null), NOT the chosen path.
     return ipcRenderer.invoke(CH_HOST_PICK_DIR, activeSessionId) as Promise<string | null>
+  },
+  pickScheduledTaskDirectory(): Promise<string | null> {
+    sendGuard.assertAllowed({ pickScheduledTaskDirectory: true })
+    return ipcRenderer.invoke(CH_HOST_PICK_SCHEDULED_TASK_DIR) as Promise<string | null>
   },
   createSession(
     input: CreateSessionInput,

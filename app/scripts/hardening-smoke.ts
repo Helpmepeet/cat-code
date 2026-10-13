@@ -271,6 +271,7 @@ async function runProductionHardeningSmoke(
       'openHistorySession',
       'pickAttachmentFile',
       'pickDirectory',
+      'pickScheduledTaskDirectory',
       'previewSession',
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',

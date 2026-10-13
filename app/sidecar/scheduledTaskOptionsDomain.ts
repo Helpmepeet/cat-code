@@ -1,33 +1,44 @@
 import type { ScheduledTaskOptionsResult } from '../shared/scheduledTaskOptions.js'
 
+type CatalogReaders = {
+  getModelOptions: (fastMode: boolean) => { value: string | null; label: string }[]
+  effortOptionsForSelection: (value: string | null) => string[]
+  resolveModelSelectionProvider: (value: string | null) => 'firstParty' | 'openai' | 'bedrock' | 'vertex' | 'foundry'
+  getGlobalConfig: () => { projects?: Record<string, unknown> }
+}
+
 /** Reads saved configuration and engine capabilities, never a project bootstrap or session. */
 export async function readScheduledTaskOptionsDomain(): Promise<ScheduledTaskOptionsResult> {
   const [
     { getGlobalConfig },
     { getModelOptions },
-    { getDefaultMainLoopModel, parseUserSpecifiedModel },
-    { getSupportedEffortLevels, modelSupportsEffort },
+    { effortOptionsForSelection },
     { resolveModelSelectionProvider },
   ] = await Promise.all([
     import('../../src/utils/config.js'),
     import('../../src/utils/model/modelOptions.js'),
-    import('../../src/utils/model/model.js'),
-    import('../../src/utils/effort.js'),
+    import('./effortOptions.js'),
     import('../../src/utils/model/providers.js'),
   ])
-  const effortOptions = (selection: string | null): string[] => {
-    const model = selection === null ? getDefaultMainLoopModel() : parseUserSpecifiedModel(selection)
-    return modelSupportsEffort(model) ? [...getSupportedEffortLevels(model)] : []
-  }
+  return buildScheduledTaskOptionsCatalog({ getGlobalConfig, getModelOptions, effortOptionsForSelection, resolveModelSelectionProvider })
+}
+
+export function buildScheduledTaskOptionsCatalog({
+  getGlobalConfig, getModelOptions, effortOptionsForSelection, resolveModelSelectionProvider,
+}: CatalogReaders): ScheduledTaskOptionsResult {
   return {
     type: 'scheduled-options-result', version: 1,
-    models: getModelOptions(false).filter(option => option.value !== null).map(option => {
-      const provider = resolveModelSelectionProvider(option.value)
-      return { value: option.value!, label: option.label,
-        provider: provider === 'firstParty' ? 'anthropic' : provider,
-        effortOptions: effortOptions(option.value) }
+    models: getModelOptions(false).filter(option => option.value !== null).flatMap(option => {
+      try {
+        const provider = resolveModelSelectionProvider(option.value)
+        return [{ value: option.value!, label: option.label,
+          provider: provider === 'firstParty' ? 'anthropic' as const : provider,
+          effortOptions: effortOptionsForSelection(option.value) }]
+      } catch {
+        return []
+      }
     }),
-    defaultEffortOptions: effortOptions(null),
+    defaultEffortOptions: effortOptionsForSelection(null),
     projectPaths: Object.keys(getGlobalConfig().projects ?? {}),
   }
 }
