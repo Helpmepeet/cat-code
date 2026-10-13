@@ -2,6 +2,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { type ScheduledRun, type ScheduledTask, type ScheduledTaskCommand, type ScheduledTasksSnapshot } from '../../shared/scheduledTasks.js'
 import { getBridge } from './bridge.js'
+import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
+import { usePopover } from './composerPopover.js'
 import { handleMenuRovingKeyDown, usePopoverFocus } from './overlayFocus.js'
 import { basename } from './pathUtils.js'
 import { SAButton, SAModal } from './SAModal.js'
@@ -11,6 +13,8 @@ import {
   WEEKDAY_NAMES,
   activeRunFor,
   availableTimeZones,
+  displayPath,
+  effortChoicesFor,
   createResponseOrder,
   draftAfterRefusedSave,
   draftProblems,
@@ -27,6 +31,7 @@ import {
   previewNextRun,
   projectChoices,
   promptBytes,
+  providerLabel,
   readStoredScheduledSelection,
   readStoredScheduledTaskDraft,
   runStatusPresentation,
@@ -35,6 +40,7 @@ import {
   storeScheduledTaskDraft,
   type ProjectChoice,
   type ScheduledEffort,
+  type ScheduledModelOption,
   type ScheduledSelection,
   type ScheduledTaskDraft,
 } from './scheduledTasksModel.js'
@@ -77,12 +83,12 @@ const PRESET = 'preset'
 
 export function ScheduledTasksPage({
   sessions,
-  modelSuggestions,
+  modelOptions,
   onOpenChat,
 }: {
   sessions: readonly SessionDescriptor[]
-  /** Model choices reported by open sessions; any valid model name is accepted. */
-  modelSuggestions: readonly { value: string; label: string }[]
+  /** Models reported by open sessions' run controls; Default is always offered. */
+  modelOptions: readonly ScheduledModelOption[]
   onOpenChat: (appSessionId: string) => void
 }) {
   const [snapshot, setSnapshot] = useState<ScheduledTasksSnapshot | null>(null)
@@ -219,7 +225,7 @@ export function ScheduledTasksPage({
         task={editingTask}
         missing={draft.taskId !== null && editingTask === null}
         projects={projects}
-        modelSuggestions={modelSuggestions}
+        modelOptions={modelOptions}
         now={now}
         busy={!!pending[EDITOR]}
         error={errors[EDITOR] ?? null}
@@ -641,7 +647,6 @@ function HistoryPane({ runs, taskById, now, onBack, onOpenChat }: {
 }) {
   const [filter, setFilter] = useState('')
   const [limit, setLimit] = useState(RUN_PAGE)
-  const filterId = useId()
   const finished = partitionRuns(runs).finished
   const sources = useMemo(() => {
     const names = new Map<string, string>()
@@ -651,12 +656,14 @@ function HistoryPane({ runs, taskById, now, onBack, onOpenChat }: {
   const visible = filter ? finished.filter(run => run.taskId === filter) : finished
   const shown = visible.slice(0, limit)
   const filterControl = sources.length > 1 ? (
-    <span className="shrink-0">
-      <label htmlFor={filterId} className="sr-only">Show runs for</label>
-      <select id={filterId} value={filter} onChange={event => { setFilter(event.target.value); setLimit(RUN_PAGE) }} className={`${FIELD} h-[30px] w-[200px] border-shell-seam`}>
-        <option value="">All tasks</option>
-        {sources.map(([id, name]) => <option key={id} value={id}>{taskById.has(id) ? name : `${name} (deleted)`}</option>)}
-      </select>
+    <span className="w-[200px] shrink-0">
+      <Picker
+        label="Show runs for"
+        compact
+        value={filter}
+        options={[{ value: '', label: 'All tasks' }, ...sources.map(([id, name]) => ({ value: id, label: name, ...(taskById.has(id) ? {} : { detail: 'Deleted' }) }))]}
+        onChange={value => { setFilter(value); setLimit(RUN_PAGE) }}
+      />
     </span>
   ) : null
   return (
@@ -711,10 +718,16 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-0 flex-1 basis-[240px]">
               <label htmlFor={selectId} className={LABEL}>Project</label>
-              <select id={selectId} className={`${FIELD} border-shell-seam`} value={selected} disabled={busy || disabled} onChange={event => setSelected(event.target.value)}>
-                <option value="">Choose a project</option>
-                {projects.map(project => <option key={project.appSessionId} value={project.appSessionId}>{project.label} ({project.cwd})</option>)}
-              </select>
+              <Picker
+                id={selectId}
+                label="Project"
+                value={selected}
+                placeholder="Choose a project"
+                disabled={busy || disabled}
+                panelWidth="w-[min(440px,calc(100vw-16px))]"
+                options={projects.map(project => ({ value: project.appSessionId, label: project.label, detail: displayPath(project.cwd) }))}
+                onChange={setSelected}
+              />
             </div>
             <button type="button" className={`${TINTED} h-[33px]`} disabled={busy || disabled || !choice || exists} onClick={() => choice && onCreate(choice.appSessionId)}>
               {busy ? 'Creating…' : 'Create paused task'}
@@ -729,13 +742,13 @@ function PresetPane({ projects, tasks, busy, error, disabled, onBack, onCreate }
 }
 
 function EditorPane({
-  draft, task, missing, projects, modelSuggestions, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
+  draft, task, missing, projects, modelOptions, now, busy, error, disabled, onChange, onPickFolder, onSave, onCancel,
 }: {
   draft: ScheduledTaskDraft
   task: ScheduledTask | null
   missing: boolean
   projects: readonly ProjectChoice[]
-  modelSuggestions: readonly { value: string; label: string }[]
+  modelOptions: readonly ScheduledModelOption[]
   now: number
   busy: boolean
   error: string | null
@@ -745,9 +758,23 @@ function EditorPane({
   onSave: () => void
   onCancel: () => void
 }) {
-  const ids = { name: useId(), prompt: useId(), project: useId(), day: useId(), time: useId(), zone: useId(), minutes: useId(), model: useId(), effort: useId(), zones: useId(), models: useId() }
+  const ids = { name: useId(), prompt: useId(), project: useId(), day: useId(), time: useId(), zone: useId(), minutes: useId(), model: useId(), effort: useId() }
   const nameRef = useRef<HTMLInputElement>(null)
-  const zones = useMemo(() => availableTimeZones(), [])
+  const zones = useMemo(() => {
+    const local = localTimeZone()
+    return [local, ...availableTimeZones().filter(zone => zone !== local)]
+  }, [])
+  const efforts = effortChoicesFor(draft.model, modelOptions)
+  const models: PickerOption[] = [
+    { value: '', label: 'Default' },
+    ...modelOptions.map(option => ({ value: option.value, label: option.label, group: providerLabel(option.provider) })),
+    ...(draft.model && !modelOptions.some(option => option.value === draft.model) ? [{ value: draft.model, label: draft.model, group: 'Saved' }] : []),
+  ]
+  const projectOptions: PickerOption[] = [
+    ...(draft.taskId && task ? [{ value: 'saved', label: basename(task.cwd) || task.cwd, detail: displayPath(task.cwd), marker: 'Current' }] : []),
+    ...(draft.project.kind === 'folder' ? [{ value: 'folder', label: 'Chosen folder' }] : []),
+    ...projects.filter(project => project.cwd !== task?.cwd).map(project => ({ value: project.appSessionId, label: project.label, detail: displayPath(project.cwd) })),
+  ]
   const problems = draftProblems(draft)
   const blocked = Object.keys(problems).length > 0
   const set = <K extends keyof ScheduledTaskDraft>(key: K, value: ScheduledTaskDraft[K]) => onChange({ ...draft, [key]: value })
@@ -784,25 +811,17 @@ function EditorPane({
 
       <FormSection title="Where">
         <Field id={ids.project} label="Project" hiddenLabel problem={draft.project.kind === 'none' && draft.project.reason ? problems.project : undefined}>
-          <div className="flex flex-wrap gap-2">
-            <select
-              id={ids.project}
-              className={`${FIELD} flex-1 basis-[220px] border-shell-seam`}
-              value={projectValue}
-              onChange={event => {
-                const value = event.target.value
-                onChange({ ...draft, project: value === 'saved' ? { kind: 'saved' } : value ? { kind: 'session', appSessionId: value } : { kind: 'none' } })
-              }}
-            >
-              {draft.project.kind === 'none' ? <option value="">Choose a project</option> : null}
-              {draft.taskId && task ? <option value="saved">{basename(task.cwd)} ({task.cwd})</option> : null}
-              {draft.project.kind === 'folder' ? <option value="folder">Chosen folder</option> : null}
-              {projects.filter(project => project.cwd !== task?.cwd).map(project => (
-                <option key={project.appSessionId} value={project.appSessionId}>{project.label} ({project.cwd})</option>
-              ))}
-            </select>
-            <button type="button" className={`${BTN} h-[33px] text-text-muted`} onClick={onPickFolder}>Choose folder…</button>
-          </div>
+          <Picker
+            id={ids.project}
+            label="Project"
+            value={projectValue}
+            placeholder="Choose a project"
+            invalid={draft.project.kind === 'none' && !!draft.project.reason}
+            panelWidth="w-[min(440px,calc(100vw-16px))]"
+            options={projectOptions}
+            footer={{ label: 'Choose another folder…', onSelect: onPickFolder }}
+            onChange={value => onChange({ ...draft, project: value === 'saved' ? { kind: 'saved' } : value === 'folder' ? draft.project : { kind: 'session', appSessionId: value } })}
+          />
         </Field>
       </FormSection>
 
@@ -822,17 +841,23 @@ function EditorPane({
             <>
               {draft.scheduleKind === 'weekly' ? (
                 <Field id={ids.day} label="Day">
-                  <select id={ids.day} className={`${FIELD} border-shell-seam`} value={draft.day} onChange={event => set('day', Number(event.target.value))}>
-                    {WEEKDAY_NAMES.map((day, index) => <option key={day} value={index}>{day}</option>)}
-                  </select>
+                  <Picker id={ids.day} label="Day" value={String(draft.day)} options={WEEKDAY_NAMES.map((day, index) => ({ value: String(index), label: day }))} onChange={value => set('day', Number(value))} />
                 </Field>
               ) : null}
               <Field id={ids.time} label="Time" problem={problems.schedule}>
                 <input id={ids.time} type="time" className={`${FIELD} ${border(problems.schedule)}`} value={draft.time} onChange={event => set('time', event.target.value)} />
               </Field>
               <Field id={ids.zone} label="Time zone" problem={problems.timeZone}>
-                <input id={ids.zone} list={ids.zones} spellCheck={false} className={`${FIELD} font-mono text-[12px] ${border(problems.timeZone)}`} value={draft.timeZone} onChange={event => set('timeZone', event.target.value)} />
-                <datalist id={ids.zones}>{zones.map(zone => <option key={zone} value={zone} />)}</datalist>
+                <Picker
+                  id={ids.zone}
+                  label="Time zone"
+                  value={draft.timeZone}
+                  invalid={!!problems.timeZone}
+                  searchable
+                  panelWidth="w-72"
+                  options={(zones.includes(draft.timeZone) ? zones : [draft.timeZone, ...zones]).map(zone => ({ value: zone, label: zone, ...(zone === zones[0] ? { marker: 'This computer' } : {}) }))}
+                  onChange={value => set('timeZone', value)}
+                />
               </Field>
             </>
           )}
@@ -848,13 +873,27 @@ function EditorPane({
       <FormSection title="Runs with">
         <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-x-3">
           <Field id={ids.model} label="Model" problem={problems.model}>
-            <input id={ids.model} list={ids.models} spellCheck={false} placeholder="Default" className={`${FIELD} font-mono text-[12px] ${border(problems.model)}`} value={draft.model} onChange={event => set('model', event.target.value)} />
-            <datalist id={ids.models}>{modelSuggestions.map(model => <option key={model.value} value={model.value}>{model.label}</option>)}</datalist>
+            <Picker
+              id={ids.model}
+              label="Model"
+              value={draft.model}
+              invalid={!!problems.model}
+              options={models}
+              note={modelOptions.length === 0 ? 'Models appear here once a chat is open.' : undefined}
+              onChange={value => {
+                const allowed = effortChoicesFor(value, modelOptions)
+                onChange({ ...draft, model: value, effort: allowed.includes(draft.effort) ? draft.effort : 'default' })
+              }}
+            />
           </Field>
           <Field id={ids.effort} label="Effort">
-            <select id={ids.effort} className={`${FIELD} border-shell-seam`} value={draft.effort} onChange={event => set('effort', event.target.value as ScheduledEffort)}>
-              {(Object.keys(EFFORT_LABELS) as ScheduledEffort[]).map(effort => <option key={effort} value={effort}>{EFFORT_LABELS[effort]}</option>)}
-            </select>
+            <Picker
+              id={ids.effort}
+              label="Effort"
+              value={draft.effort}
+              options={efforts.map(effort => ({ value: effort, label: EFFORT_LABELS[effort] }))}
+              onChange={value => set('effort', value as ScheduledEffort)}
+            />
           </Field>
         </div>
         <span className={LABEL}>Permissions</span>
@@ -878,6 +917,135 @@ function EditorPane({
         </button>
       </div>
     </form>
+  )
+}
+
+type PickerOption = { value: string; label: string; detail?: string; group?: string; marker?: string }
+
+const MAX_SEARCH_RESULTS = 80
+
+/** A designed select: the composer's popover, menu roving, and focus lifecycle. */
+function Picker({
+  id, label, value, options, onChange, placeholder, invalid, disabled, compact, searchable, panelWidth = 'w-64', footer, note,
+}: {
+  id?: string
+  label: string
+  value: string
+  options: readonly PickerOption[]
+  onChange: (value: string) => void
+  placeholder?: string
+  invalid?: boolean
+  disabled?: boolean
+  compact?: boolean
+  searchable?: boolean
+  panelWidth?: string
+  footer?: { label: string; onSelect: () => void }
+  note?: string
+}) {
+  const { open, setOpen, close, ref, triggerRef, panelRef } = usePopover()
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const selected = options.find(option => option.value === value)
+  const needle = query.trim().toLowerCase()
+  const matches = needle ? options.filter(option => option.label.toLowerCase().includes(needle)).slice(0, MAX_SEARCH_RESULTS) : options.slice(0, searchable ? MAX_SEARCH_RESULTS : undefined)
+  const groups: { name: string | undefined; options: PickerOption[] }[] = []
+  for (const option of matches) {
+    const group = groups.find(entry => entry.name === option.group)
+    if (group) group.options.push(option)
+    else groups.push({ name: option.group, options: [option] })
+  }
+  useEffect(() => {
+    if (!open || !searchable) return
+    setQuery('')
+    // After the popover's own first-item focus, so typing lands in the search field.
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => searchRef.current?.focus()))
+    return () => cancelAnimationFrame(frame)
+  }, [open, searchable])
+  const choose = (next: string) => { close(); onChange(next) }
+  const items = (
+    <div ref={listRef} role="menu" aria-label={label} onKeyDown={handleMenuRovingKeyDown} className="flex flex-col">
+      {groups.map(group => (
+        <div key={group.name ?? ''}>
+          {group.name ? <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">{group.name}</div> : null}
+          {group.options.map(option => {
+            const active = option.value === value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
+                onClick={() => choose(option.value)}
+                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-shell-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${active ? 'bg-shell-active' : ''}`}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12.5px] text-text-primary">{option.label}</span>
+                  {option.detail ? <span className="block truncate font-mono text-[11px] text-text-subtle">{option.detail}</span> : null}
+                </span>
+                {option.marker ? <span className="shrink-0 text-[11px] text-text-subtle">{option.marker}</span> : null}
+                <CheckIcon className={`shrink-0 text-accent ${active ? '' : 'invisible'}`} />
+              </button>
+            )
+          })}
+        </div>
+      ))}
+      {matches.length === 0 ? <p className="px-2 py-1.5 text-[12px] text-text-subtle">No matches</p> : null}
+      {footer ? (
+        <>
+          <div className="my-1 h-px bg-shell-seam" />
+          <button type="button" role="menuitem" onClick={() => { close(); footer.onSelect() }} className="w-full rounded-md px-2 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-shell-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
+            {footer.label}
+          </button>
+        </>
+      ) : null}
+      {note ? <p className="px-2 pb-0.5 pt-1.5 text-[11.5px] text-text-subtle">{note}</p> : null}
+    </div>
+  )
+  return (
+    <div ref={ref} className="relative min-w-0">
+      <button
+        ref={triggerRef}
+        id={id}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={id ? undefined : label}
+        disabled={disabled}
+        onClick={() => setOpen(current => !current)}
+        className={`flex w-full min-w-0 items-center gap-2 rounded-[5px] border bg-surface-raised px-2.5 text-left transition-colors hover:border-text-ghost/40 disabled:cursor-default disabled:opacity-50 ${compact ? 'h-[30px]' : 'h-[33px]'} ${invalid ? 'border-tone-danger/60' : open ? 'border-accent/50' : 'border-shell-seam'} ${FOCUS}`}
+      >
+        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className={`truncate text-[12.5px] ${selected ? 'text-text-primary' : 'text-text-ghost'}`}>{selected?.label ?? placeholder ?? value}</span>
+          {selected?.detail ? <span className="min-w-0 truncate font-mono text-[11px] text-text-subtle">{selected.detail}</span> : null}
+        </span>
+        <ChevronDown />
+      </button>
+      {open ? (
+        <ComposerPopoverPanel panelRef={panelRef} triggerRef={triggerRef} gap={4} side="below">
+          <div className={`animate-pop-up max-h-[320px] overflow-auto rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-popover)] ${panelWidth}`} {...(searchable ? { role: 'dialog', 'aria-label': label } : {})}>
+            {searchable ? (
+              <div className="sticky -top-1.5 z-10 -mx-1.5 -mt-1.5 mb-1 bg-surface-raised p-1.5">
+              <input
+                ref={searchRef}
+                value={query}
+                aria-label={`Search ${label.toLowerCase()}`}
+                placeholder="Search"
+                spellCheck={false}
+                onChange={event => setQuery(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'ArrowDown') { event.preventDefault(); listRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]')?.focus() }
+                  if (event.key === 'Enter') { event.preventDefault(); if (matches[0]) choose(matches[0].value) }
+                }}
+                className="h-[30px] w-full rounded-md border border-shell-seam bg-app-bg px-2 text-[12.5px] text-text-primary outline-none placeholder:text-text-ghost focus:border-accent/50"
+              />
+              </div>
+            ) : null}
+            {items}
+          </div>
+        </ComposerPopoverPanel>
+      ) : null}
+    </div>
   )
 }
 
@@ -982,6 +1150,22 @@ function ChevronLeft() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="m15 6-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function ChevronDown() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="shrink-0 text-text-subtle">
+      <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" className={className}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

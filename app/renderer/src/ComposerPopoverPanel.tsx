@@ -10,12 +10,15 @@ export function ComposerPopoverPanel({
   triggerRef,
   align = 'start',
   gap = 8,
+  side = 'above',
 }: {
   children: ReactNode
   panelRef: RefObject<HTMLDivElement | null>
   triggerRef: RefObject<HTMLButtonElement | null>
   align?: 'start' | 'end'
   gap?: number
+  /** The preferred side; the panel flips when the other side has more room. */
+  side?: 'above' | 'below'
 }) {
   const { accent } = useContext(AccentThemeContext)
   useLayoutEffect(() => {
@@ -31,7 +34,9 @@ export function ComposerPopoverPanel({
       const height = content.offsetHeight
       const above = Math.max(0, anchor.top - gap - margin)
       const below = Math.max(0, window.innerHeight - anchor.bottom - gap - margin)
-      const placeAbove = height <= above || above >= below
+      const placeAbove = side === 'above'
+        ? height <= above || above >= below
+        : !(height <= below || below >= above)
       const available = Math.max(1, placeAbove ? above : below)
       const left = Math.max(margin, Math.min(
         align === 'end' ? anchor.right - width : anchor.left,
@@ -58,7 +63,7 @@ export function ComposerPopoverPanel({
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [align, gap, panelRef, triggerRef])
+  }, [align, gap, panelRef, side, triggerRef])
 
   if (typeof document === 'undefined') return children
   return createPortal(

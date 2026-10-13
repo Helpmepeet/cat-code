@@ -1,5 +1,5 @@
 import type { SessionDescriptor } from '../../shared/hostApi.js'
-import type { RunControlsSnapshot } from '../../shared/protocol.js'
+import type { RunControlProvider, RunControlsSnapshot } from '../../shared/protocol.js'
 import {
   isActiveScheduledRun,
   nextTaskOccurrence,
@@ -171,15 +171,46 @@ export function projectChoices(sessions: readonly SessionDescriptor[]): ProjectC
     .sort((a, b) => a.label.localeCompare(b.label) || a.cwd.localeCompare(b.cwd))
 }
 
+export type ScheduledModelOption = { value: string; label: string; provider: RunControlProvider; effortOptions: readonly string[] }
+
 /** Models the engine offered in open sessions, without the provider-local Default row. */
-export function modelSuggestions(snapshots: Iterable<RunControlsSnapshot>): { value: string; label: string }[] {
-  const byValue = new Map<string, string>()
+export function modelChoices(snapshots: Iterable<RunControlsSnapshot>): ScheduledModelOption[] {
+  const byValue = new Map<string, ScheduledModelOption>()
   for (const snapshot of snapshots) {
     for (const option of snapshot.model.options) {
-      if (option.value !== null && !byValue.has(option.value)) byValue.set(option.value, option.label)
+      if (option.value !== null && !byValue.has(option.value)) {
+        byValue.set(option.value, { value: option.value, label: option.label, provider: option.provider, effortOptions: option.effortOptions })
+      }
     }
   }
-  return [...byValue].map(([value, label]) => ({ value, label }))
+  return [...byValue.values()]
+}
+
+const SCHEDULED_EFFORTS = Object.keys(EFFORT_LABELS) as ScheduledEffort[]
+
+/**
+ * Effort levels the chosen model accepts, always including Default. The default
+ * model's own levels are unknown here, so it offers every level the parser accepts.
+ */
+export function effortChoicesFor(model: string, options: readonly ScheduledModelOption[]): ScheduledEffort[] {
+  const option = model ? options.find(entry => entry.value === model) : undefined
+  if (!option) return SCHEDULED_EFFORTS
+  return SCHEDULED_EFFORTS.filter(effort => effort === 'default' || option.effortOptions.includes(effort))
+}
+
+export function providerLabel(provider: RunControlProvider): string {
+  switch (provider) {
+    case 'anthropic': return 'Anthropic'
+    case 'openai': return 'OpenAI'
+    case 'bedrock': return 'AWS'
+    case 'vertex': return 'Vertex'
+    case 'foundry': return 'Foundry'
+  }
+}
+
+/** A display-only path with the home folder shortened. */
+export function displayPath(path: string): string {
+  return path.replace(/^\/(Users|home)\/[^/]+(?=\/|$)/, '~')
 }
 
 /** Matches main's duplicate check plus the preset's helper contract. */

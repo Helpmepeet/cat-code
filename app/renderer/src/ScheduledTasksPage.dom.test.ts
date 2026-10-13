@@ -18,6 +18,10 @@ afterAll(async () => {
 
 const TASK_ID = '11111111-1111-4111-8111-111111111111'
 const PRESET_ID = '44444444-4444-4444-8444-444444444444'
+const MODELS = [
+  { value: 'gpt-6-sol', label: 'GPT-6 Sol', provider: 'openai' as const, effortOptions: ['low', 'medium', 'high'] },
+  { value: 'haiku', label: 'Haiku', provider: 'anthropic' as const, effortOptions: [] },
+]
 const PROJECT = sessionDescriptor('33333333-3333-4333-8333-333333333333', { cwd: '/repo/cat-code', binding: { kind: 'project' } })
 
 function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
@@ -54,7 +58,7 @@ function installBridge(state: Bridge): void {
 }
 
 async function mount(opened: string[] = []): Promise<MountedTree> {
-  const tree = await harness.mount(createElement(ScheduledTasksPage, { sessions: [PROJECT], modelSuggestions: [], onOpenChat: (id: string) => { opened.push(id) } }))
+  const tree = await harness.mount(createElement(ScheduledTasksPage, { sessions: [PROJECT], modelOptions: MODELS, onOpenChat: (id: string) => { opened.push(id) } }))
   await flush()
   return tree
 }
@@ -94,6 +98,14 @@ async function type(control: HTMLInputElement | HTMLTextAreaElement | HTMLSelect
     control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
   })
 }
+/** Opens a picker by its label and chooses the option whose text starts with `option`. */
+async function choose(tree: MountedTree, label: string, option: string): Promise<void> {
+  await click(field<HTMLButtonElement>(tree, label))
+  const item = [...tree.container.ownerDocument.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find(entry => entry.textContent?.startsWith(option))
+  if (!item) throw new Error(`No option ${option} in ${label}`)
+  await click(item)
+}
+const menuOptions = (tree: MountedTree) => [...tree.container.ownerDocument.querySelectorAll('[role="menuitemradio"]')].map(entry => entry.textContent)
 const text = (tree: MountedTree) => tree.container.textContent ?? ''
 const heading = (tree: MountedTree) => tree.container.querySelector('h2')?.textContent
 const alerts = (tree: MountedTree) => [...tree.container.querySelectorAll('[role="alert"]')].map(entry => entry.textContent)
@@ -112,15 +124,32 @@ test('creating a task sends the project session, not a path, and opens the new t
   expect(button(tree, 'Create task').disabled).toBe(true)
   await type(field(tree, 'Name'), 'Nightly review')
   await type(field(tree, 'Instructions'), 'Review the diff')
-  await type(field(tree, 'Project'), PROJECT.appSessionId)
+  await choose(tree, 'Project', 'cat-code')
+  expect(field(tree, 'Project').textContent).toContain('/repo/cat-code')
   await click(button(tree, 'Auto'))
+  await choose(tree, 'Model', 'Haiku')
+  // Haiku takes no effort setting, so only Default remains.
+  await click(field(tree, 'Effort'))
+  expect(menuOptions(tree)).toEqual(['Default'])
+  await act(async () => { tree.container.ownerDocument.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+  await flush()
+  await choose(tree, 'Model', 'GPT-6 Sol')
+  await choose(tree, 'Effort', 'High')
+  await click(field(tree, 'Time zone'))
+  const search = tree.container.ownerDocument.querySelector<HTMLInputElement>('input[aria-label="Search time zone"]')!
+  await type(search, 'tokyo')
+  expect(menuOptions(tree)).toEqual(['Asia/Tokyo'])
+  await act(async () => { search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  await flush()
+  expect(field(tree, 'Time zone').textContent).toContain('Asia/Tokyo')
   expect(text(tree)).toContain('Next run')
   await click(button(tree, 'Create task'))
 
   expect(state.commands).toHaveLength(1)
   const saved = state.commands[0]!
   if (saved.type !== 'save') throw new Error('expected save')
-  expect(saved.task).toMatchObject({ name: 'Nightly review', prompt: 'Review the diff', workspaceSessionId: PROJECT.appSessionId, enabled: true, permissionMode: 'auto' })
+  expect(saved.task).toMatchObject({ name: 'Nightly review', prompt: 'Review the diff', workspaceSessionId: PROJECT.appSessionId, enabled: true, permissionMode: 'auto', model: 'gpt-6-sol', effort: 'high' })
+  expect(saved.task.schedule).toMatchObject({ kind: 'daily', timeZone: 'Asia/Tokyo' })
   expect(saved.task).not.toHaveProperty('cwd')
   expect(saved.task).not.toHaveProperty('cwdToken')
   expect(tree.container.querySelector('form')).toBeNull()
@@ -135,7 +164,9 @@ test('a refused save keeps the draft, explains the refusal, and asks for a spent
   await click(listRow(tree, 'New task'))
   await type(field(tree, 'Name'), 'Weekly')
   await type(field(tree, 'Instructions'), 'Summarize the week')
-  await click(button(tree, 'Choose folder…'))
+  await click(field(tree, 'Project'))
+  await click(button(tree, 'Choose another folder…'))
+  expect(field(tree, 'Project').textContent).toContain('Chosen folder')
   await click(button(tree, 'Create task'))
 
   const saved = state.commands[0]!
@@ -147,7 +178,8 @@ test('a refused save keeps the draft, explains the refusal, and asks for a spent
 
   state.pickToken = 'token-2'
   state.respond = () => ({ ok: true, snapshot: { tasks: [task({ name: 'Weekly' })], runs: [] } })
-  await click(button(tree, 'Choose folder…'))
+  await click(field(tree, 'Project'))
+  await click(button(tree, 'Choose another folder…'))
   await click(button(tree, 'Create task'))
   const retried = state.commands[1]!
   expect(retried.type === 'save' && retried.task.cwdToken).toBe('token-2')
@@ -279,7 +311,7 @@ test('the workspace-map preset is created paused for a chosen project session an
   const tree = await mount()
   await click(listRow(tree, 'Workspace-map refresh'))
   expect(button(tree, 'Create paused task').disabled).toBe(true)
-  await type(field(tree, 'Project'), PROJECT.appSessionId)
+  await choose(tree, 'Project', 'cat-code')
   await click(button(tree, 'Create paused task'))
   expect(state.commands).toEqual([{ type: 'workspace-maps', workspaceSessionId: PROJECT.appSessionId }])
   expect(heading(tree)).toBe('Refresh workspace maps')

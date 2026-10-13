@@ -3,11 +3,14 @@ import { parseScheduledTaskCommand, type ScheduledRun, type ScheduledTask } from
 import { sessionDescriptor } from './sessionDescriptorFixture.js'
 import {
   createResponseOrder,
+  displayPath,
   draftAfterRefusedSave,
+  effortChoicesFor,
   draftProblems,
   draftToInput,
   editTaskDraft,
   formatRunTime,
+  modelChoices,
   newTaskDraft,
   nextRunText,
   orderTasks,
@@ -142,4 +145,23 @@ test('a response issued before an applied one is dropped', () => {
   expect(order.accept(save)).toBe(true)
   expect(order.accept(poll)).toBe(false)
   expect(order.accept(order.issue())).toBe(true)
+})
+
+test('model choices come from run controls and limit the offered effort levels', () => {
+  const snapshot = (options: Array<{ value: string | null; label: string; effortOptions: string[] }>) =>
+    ({ model: { options: options.map(option => ({ ...option, provider: 'openai' })) } }) as unknown as import('../../shared/protocol.js').RunControlsSnapshot
+  const options = modelChoices([
+    snapshot([{ value: null, label: 'Default (recommended)', effortOptions: [] }, { value: 'gpt-6-sol', label: 'GPT-6 Sol', effortOptions: ['low', 'high', 'ultra'] }]),
+    snapshot([{ value: 'gpt-6-sol', label: 'duplicate', effortOptions: [] }, { value: 'haiku', label: 'Haiku', effortOptions: [] }]),
+  ])
+  expect(options.map(option => option.label)).toEqual(['GPT-6 Sol', 'Haiku'])
+  expect(effortChoicesFor('gpt-6-sol', options)).toEqual(['default', 'low', 'high'])
+  expect(effortChoicesFor('haiku', options)).toEqual(['default'])
+  expect(effortChoicesFor('', options)).toEqual(['default', 'low', 'medium', 'high', 'xhigh', 'max'])
+})
+
+test('paths shorten only the home folder', () => {
+  expect(displayPath('/Users/pt/cat-code')).toBe('~/cat-code')
+  expect(displayPath('/home/pt')).toBe('~')
+  expect(displayPath('/private/tmp/project')).toBe('/private/tmp/project')
 })
