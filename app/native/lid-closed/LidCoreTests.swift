@@ -108,6 +108,11 @@ import Darwin
         try start(); time = controller.snapshot().record.deadline
         _ = try controller.command(["op": "adjust", "identity": id, "allowance": 1800])
         precondition(controller.snapshot().record.phase == "ended" && controller.snapshot().record.reason == "expired", "expired adjustment revived lease")
+        // A fresh heartbeat arriving at the deadline is expiry, not loss of
+        // supervision. The native driver emits the same fresh-pulse sequence.
+        try start()
+        for _ in 0..<225 { time += 4; _ = try controller.command(["op": "pulse", "identity": id]) }
+        precondition(controller.snapshot().record.reason == "expired" && safety.sleepDisabled == false, "fresh deadline pulse mislabeled expiry")
         try start(); try controller.retire()
         reject(["op": "start", "identity": id, "allowance": 900])
         precondition(controller.snapshot().record.draining && safety.sleepDisabled == false)

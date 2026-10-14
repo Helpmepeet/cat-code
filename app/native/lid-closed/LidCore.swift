@@ -290,7 +290,7 @@ final class LidController {
                 // A heartbeat cannot revive an expired or stale lease, including
                 // when a request sat queued behind another transition.
                 guard time < record.deadline, time - record.clientPulse <= lidHeartbeatLimit else {
-                    try restore(&record, reason: "supervision-lost", sleep: safety.lidClosed == true); return
+                    try restore(&record, reason: time >= record.deadline ? "expired" : "supervision-lost", sleep: safety.lidClosed == true); return
                 }
                 record.clientPulse = time; try journal.write(record)
             case "adjust":

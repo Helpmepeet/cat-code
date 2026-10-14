@@ -1,7 +1,8 @@
 # Lid-closed pmset mechanism and bounded experiment
 
-Status: Native mechanism implemented and prepared. Privileged installation and
-live power experiments have not been run or approved. The app feature is not
+Status: Approved pinned installation and ten open-lid, 60-second-allowance leases
+ran on 2026-10-14. Restoration and uninstallation are verified. The operator
+deferred lid closure; actual Sleep was not exercised. The app feature is not
 integrated or hardware qualified. The accepted tradeoffs are in the
 [product spec](../design/2026-10-13-lid-closed-mode-spec.md).
 
@@ -65,17 +66,17 @@ monitoring; hardware qualification remains separate.
 Targets apply while macOS schedules the relevant job and power/IOKit operations
 are available. They are not unconditional guarantees.
 
-| Failure scenario | Response | Qualification target | Actual physical bound |
+| Failure scenario | Response | Qualification target | Observed result, open lid |
 | --- | --- | --- | --- |
-| Electron/bridge exits or stops sending supervision | Helper/watcher observes stale client heartbeat | Start restoration within 7 seconds; confirm within 12 seconds if commands/readings work | NOT RUN |
-| Helper crashes, including after journal intent or power change | launchd restarts it; watcher independently restores interrupted or stale authority | Confirm within 12 seconds under single-job failure | NOT RUN |
-| Helper is stopped or stalls outside transition lock | Watcher detects stale helper progress despite fresh client traffic | Confirm within 12 seconds | NOT RUN |
-| Helper/watch job stalls while holding transition lock | Surviving job verifies root-owned job marker, PID birth time, root UID, installed path and pinned signature before terminating that exact stalled instance; retries restoration | Confirm within 15 seconds under single-job failure and functioning kernel process termination | NOT RUN |
-| Watcher crashes | launchd restarts it; helper remains independent | Measure restart while helper protections remain operational | NOT RUN |
+| Electron/bridge exits or stops sending supervision | Helper/watcher observes stale client heartbeat | Start restoration within 7 seconds; confirm within 12 seconds if commands/readings work | Native supervision withdrawal: restoration started at 5.83 seconds after last pulse, confirmed at 6.06 seconds. Native client parent SIGKILL: confirmed by 5.17 seconds after signal. Electron itself NOT RUN |
+| Helper crashes, including after journal intent or power change | launchd restarts it; watcher independently restores interrupted or stale authority | Confirm within 12 seconds under single-job failure | SIGKILL after confirmed activation: restored by the 1.04-second observation. Crash during activation/power-command execution NOT RUN |
+| Helper is stopped or stalls outside transition lock | Watcher detects stale helper progress despite fresh client traffic | Confirm within 12 seconds | Helper SIGSTOP: watcher restored by 5.15 seconds after signal; the same helper PID was resumed. Fresh client traffic could not be processed by the stopped helper |
+| Helper/watch job stalls while holding transition lock | Surviving job verifies root-owned job marker, PID birth time, root UID, installed path and pinned signature before terminating that exact stalled instance; retries restoration | Confirm within 15 seconds under single-job failure and functioning kernel process termination | Watcher SIGSTOP with confirmed held lock, plus deliberate helper SIGKILL/relaunch: restored by 6.20 seconds; new watcher observed. Helper-held lock and in-flight pmset child failure NOT RUN |
+| Watcher crashes | launchd restarts it; helper remains independent | Measure restart while helper protections remain operational | New watcher observed by 4.04 seconds after SIGKILL; helper remained active and supervised. Lease then ended by deliberate loss of its own client |
 | Power command fails or required reading becomes unavailable | Persist unresolved recovery; retry; refuse new activation | No finite restoration claim | NOT RUN |
 | Both jobs disabled, launchd unavailable, or authority revoked during override | Automatic recovery may be unavailable | No finite bound; manual restoration required | NOT RUN |
 | Reboot with an interrupted journal | Attempt restoration before new activation; never resume mode | Measure after launchd starts jobs | NOT RUN |
-| Uninstall or upgrade | Attempt and observe restoration before stopping jobs | Refuse removal/upgrade if restoration unresolved | NOT RUN |
+| Uninstall or upgrade | Attempt and observe restoration before stopping jobs | Refuse removal/upgrade if restoration unresolved | Restore-first uninstall completed; kernel flag false and both jobs/helper absent. Upgrade and failed-restoration removal NOT RUN |
 
 The accepted exclusive-use requirement cannot detect another utility writing the
 same value. Activation refuses an already-disabled setting. Observable changes
@@ -167,9 +168,10 @@ source review and compilation do not close those physical qualification gaps.
 | Interrupted sleep receipt could repeat sleep after wake | MEDIUM / user-visible | Persist at-most-once attempt after confirmed restoration | Native suite; removing attempt guard fails intended assertion |
 | Installer resolved a root verification command through inherited PATH | LOW / internal | Use absolute `/bin/cat` | Generated installer inspected; shell syntax passed |
 
-These repairs do not qualify recovery bounds. All physical bounds in the table
-remain NOT RUN. The integrated app, enrollment, temporary context, and cup UX
-remain incomplete until mechanism qualification and the next implementation stage.
+These repairs alone do not qualify recovery bounds. The live observations above
+apply only to the tested conditions and pinned payload; they do not establish
+closed-lid operation or sleep. The integrated app, enrollment, temporary context,
+and cup UX remain incomplete until mechanism qualification and the next stage.
 
 ## Exact installation and experiment approval packet
 
@@ -247,3 +249,71 @@ app-wide lifecycle/IPC, first-use disclosure, numerals-only cup, shared-shell
 notices, direct Stop/End mode and sleep, original-deadline Continue, and persistent
 recovery. Run desktop/engine checks and authorized actual UI verification before
 calling the integrated feature complete.
+
+## Observed experiment results, 2026-10-14
+
+Tested source: `168e3c7e`, using the exact installer/helper hashes in the approval
+packet. Host: Mac16,8, macOS 26.6.2 (25G83). Root configuration/state permissions
+were 0600/0700, both launchd jobs were observed running, and the installed helper
+matched the approved digest and passed ordinary signature verification.
+
+Ten leases were used, each with a 60-second maximum allowance. All were observed
+on battery, with the lid open and nominal thermal readings. The operator approved
+the first open-lid check, then answered **“Wait; do not start the lid test.”**
+No lid test, intentional unplug/replug, ordinary Sleep action, or End mode and
+sleep action was performed. Battery operation was observed directly, not inferred
+from a requested physical step.
+
+| Lease | Trigger/action | Observation |
+| --- | --- | --- |
+| 1 | Native driver stops pulses after ten seconds | Override enabled, then restoration started 5.829 seconds after last pulse; confirmed false at 6.062 seconds |
+| 2–4 | Inject thermal, battery-reserve, and monitoring-unavailable end reasons | Real override restored in each case, no sleep request. These are simulated triggers, not real heat, low reserve, or missing readings |
+| 5 | Kill the experiment client parent by verified PID/birth identity | Restoration confirmed by 5.170 seconds after signal; original deadline still had approximately 52 seconds left |
+| 6 | Kill the verified installed helper after activation | launchd restarted it; reason interrupted; restoration confirmed by 1.044 seconds after signal |
+| 7 | Stop the verified helper | Independent watcher restored by 5.153 seconds; same stopped helper subsequently resumed; no automatic reactivation |
+| 8 | Kill the verified recovery watcher | New watcher observed by 4.035 seconds while helper remained active. Then killing only the owned driver caused supervision-loss restoration |
+| 9 | Keep supervision through the original deadline | Ended as expired at 60.831 seconds in driver sampling; restoration began 0.411 seconds after the native deadline; flag confirmed false |
+| 10 | Stop watcher while nonblocking lock probe confirms its held lock, then kill/relaunch helper | Restoration confirmed by 6.199 seconds after watcher stop; new watcher observed. Concurrent new-activation admission was not exercised |
+
+Confirmation times are upper bounds from discrete observations, not exact kernel
+transition times. Each failure case had one trial. Sampling used native continuous
+time and read-only snapshots; signal targets matched root job markers, kernel
+birth identity, UID, executable path, and the installed jobs. The stalled-watcher
+case intentionally included a helper relaunch, so it is not evidence for every
+possible single-job or dual-job failure. Supervision loss was exercised through
+the native experiment client, not a running Electron app.
+
+Feature-only raw observations are retained in
+[the evidence artifact](2026-10-14-lid-closed-pmset-evidence.json). It includes
+continuous clocks, sequence counts, native journal/safety snapshots, scoped
+signals, and final verification. It contains no credentials or unrelated work.
+
+### Final cleanup
+
+At 2026-10-14 13:13:03 Asia/Bangkok, restore-first cleanup observed
+`SleepDisabled=false`, `needsRestore=false`, `draining=true`, and no sleep request.
+Uninstallation then completed. A separate subsequent check confirmed the kernel
+flag still false, the helper and both launchd plist files absent, and both job
+lookups failing specifically with “Could not find service”. The root-only recovery
+journal/configuration were retained by the approved uninstaller. The fallback
+`pmset -a disablesleep 0` command was not needed or used.
+
+Cleanup waited for administrator authentication; during that wait, a separate
+kernel check confirmed the override remained off. No active mode was left waiting
+for operator coordination.
+
+### Remaining qualification and source correction
+
+Closed-lid progress, ordinary Sleep blockage, actual sleep after End mode and
+sleep, lid-open continuation, reboot recovery, and interruption during a live
+power command remain **UNQUALIFIED**. No physical sleep evidence was gathered.
+Nominal thermal samples do not prove thermal monitoring support. The mechanism
+must not be described as safe or ready based on these open-lid results.
+
+After uninstalling the approved payload, source review identified one expiry
+label edge case: a fresh pulse queued until the deadline restored correctly but
+could report supervision-lost. A native regression failed on that exact reason
+against the tested source, then passed after the pulse branch was corrected to
+report expired. The full native helper compiled after the correction. This source
+correction was not installed or power-tested; the evidence hashes identify the
+earlier approved payload. No replacement payload or privileged change is implied.

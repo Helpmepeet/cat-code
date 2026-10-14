@@ -192,3 +192,17 @@ passed. No app/engine runtime code changed, so desktop/engine builds, live GUI,
 model-facing context, and physical closed-lid tests were not run. The original
 end-to-end request remains incomplete and requires a viable authorized power
 mechanism, not a simulated UI or an unmeasured recovery promise.
+
+## Approved pmset experiment follow-up
+
+The subsequently approved [bounded experiment](2026-10-14-lid-closed-pmset-experiment.md)
+installed an ordinary signed, narrow root helper and ran ten open-lid leases on
+battery. Real global override activation/restoration, native supervision recovery,
+launchd helper/watcher recovery, deadline expiry, and restore-first uninstallation
+were observed. This supplies live evidence for the revised pmset route and does
+not reopen the rejected private-entitlement arrangement.
+
+The operator deferred physical lid testing. Closed-lid progress and actual Sleep
+remain unqualified; observed power settings are not physical sleep evidence.
+Measured times and the exact tested hashes are in the experiment report and its
+scoped evidence artifact. The app-wide feature remains incomplete.
