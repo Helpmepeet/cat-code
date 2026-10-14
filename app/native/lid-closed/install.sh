@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+umask 077
 # One-time reviewed administrator setup. No sudoers entries are installed.
 [[ $EUID == 0 ]] || { echo 'Run this reviewed installer with administrator authorization.' >&2; exit 1; }
 [[ $# == 1 ]] || { echo 'Usage: install.sh prepared-directory' >&2; exit 1; }
@@ -13,7 +14,24 @@ watcher=/Library/LaunchDaemons/com.catcode.lid-closed.recovery.plist
 # root code. Recovery configuration and journal are never reset during upgrade.
 [[ $(cd "$prepared" && pwd -P) = "$prepared" ]] || exit 1
 lid_payload_stage=$(/usr/bin/mktemp -d /private/tmp/cat-lid-payload.XXXXXX)
-trap '/bin/rm -rf "$lid_payload_stage"' EXIT
+lid_verified=false
+lid_guard_pid=''
+lid_install_exit() {
+  lid_result=$?
+  trap - EXIT
+  if [[ $lid_result != 0 && $lid_verified = true ]]; then
+    # Keep the recovery watcher if restoration remains unresolved. A started
+    # guard exits on its own bound; verify its exit before a fresh installation.
+    if "$helper" --restore-for-uninstall; then
+      /bin/bash "$state/uninstall.sh" || true
+    else
+      echo 'Restoration unresolved; recovery jobs retained. Use the approved fallback and verify the kernel flag.' >&2
+    fi
+  fi
+  /bin/rm -rf "$lid_payload_stage"
+  exit "$lid_result"
+}
+trap lid_install_exit EXIT
 # All verification inputs and destinations are now protected from the caller.
 for payload in helper configuration.json daemon.plist recovery.plist uninstall.sh; do
   /usr/bin/install -o root -g wheel -m 0600 "$prepared/$payload" "$lid_payload_stage/$payload"
@@ -44,10 +62,20 @@ fi
 /usr/bin/awk '{print $1}' expected-payload > expected-digests
 /usr/bin/cmp installed-digests expected-digests
 /usr/bin/codesign --verify --strict "$helper"
+lid_verified=true
 # On reinstall the old helper may be absent but the retained journal is still
 # checked by the verified new executable before either job admits work.
 "$helper" --restore-for-uninstall
 /bin/launchctl bootstrap system "$watcher"
 /bin/launchctl bootstrap system "$daemon"
 "$helper" --resume-after-install
-echo 'Installed bounded lid-closed helper and independent recovery watcher. Hardware is not qualified.'
+/bin/rm -f "$state/experiment-guard-owner.json"
+/usr/bin/nohup "$helper" --guard-experiment > "$state/experiment-cleanup.log" 2>&1 < /dev/null &
+lid_guard_pid=$!
+for ((lid_check=0; lid_check<20; lid_check++)); do
+  kill -0 "$lid_guard_pid" || exit 1
+  [[ ! -s "$state/experiment-guard-owner.json" ]] || break
+  /bin/sleep 0.1
+done
+[[ -s "$state/experiment-guard-owner.json" ]] && kill -0 "$lid_guard_pid"
+echo "Installed experimental helper and recovery watcher; temporary cleanup guardian PID $lid_guard_pid. Begin one lease within 30 seconds. Hardware is not qualified."

@@ -6,6 +6,8 @@ Status: Implementation in progress. Revised on 2026-10-14 with approved pmset tr
 
 The [approved experiment report](../research/2026-10-14-lid-closed-pmset-experiment.md) now records live open-lid activation/restoration on battery, bounded native client/helper/watch recovery observations, and verified uninstallation. The operator deferred lid closure; actual Sleep was not exercised. These observations do not qualify the app feature or replace closed-lid and Sleep evidence.
 
+The [remaining physical qualification packet](../research/2026-10-14-lid-closed-physical-qualification.md) pins a replacement experimental payload with explicit operator Sleep input and temporary restore-first cleanup supervision. It awaits its own approval; no new physical result or app integration is claimed.
+
 ## Approved power-control tradeoffs
 
 - Ordinary macOS Sleep may be blocked while the global override is active. Setup discloses this explicitly. The globally visible **End mode and sleep** action first restores the setting and confirms restoration, then requests sleep. A sleep request is not evidence that the Mac slept.

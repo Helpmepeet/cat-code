@@ -161,7 +161,7 @@ func lidProductionController(_ configuration: LidConfiguration) throws -> LidCon
 }
 
 func lidRegisterJob(_ role: String) throws {
-    guard let identity = LidProcessIdentity.read(getpid()), ["daemon", "watcher"].contains(role) else { throw LidFailure("owner-identity-unavailable") }
+    guard let identity = LidProcessIdentity.read(getpid()), ["daemon", "watcher", "experiment-guard"].contains(role) else { throw LidFailure("owner-identity-unavailable") }
     try JSONEncoder().encode(identity).write(to: URL(fileURLWithPath: lidStateDirectory + "/" + role + "-owner.json"), options: .atomic)
 }
 func lidRetireStalledOwner(_ configuration: LidConfiguration) {
@@ -174,7 +174,7 @@ func lidRetireStalledOwner(_ configuration: LidConfiguration) {
     var process = proc_bsdinfo()
     guard proc_pidinfo(owner.process.pid, PROC_PIDTBSDINFO, 0, &process, Int32(MemoryLayout<proc_bsdinfo>.size)) == MemoryLayout<proc_bsdinfo>.size,
           process.pbi_uid == 0 else { return }
-    let registered = ["daemon", "watcher"].contains { role in
+    let registered = ["daemon", "watcher", "experiment-guard"].contains { role in
         guard let bytes = try? Data(contentsOf: URL(fileURLWithPath: lidStateDirectory + "/" + role + "-owner.json")), bytes.count <= 1024,
               let identity = try? JSONDecoder().decode(LidProcessIdentity.self, from: bytes) else { return false }
         return identity == owner.process
@@ -237,4 +237,65 @@ func lidExecPowerCommand(_ action: String) throws {
     var argv = strings + [nil]
     argv.withUnsafeMutableBufferPointer { buffer in _ = execv("/usr/bin/pmset", buffer.baseAddress!) }
     throw LidFailure("power-exec-failed")
+}
+
+// Temporary proof setup gets one lease per installation. This root process
+// removes authority independently of the operator's shell and authentication
+// dialog, including when coordination never starts or the driver is cancelled.
+func lidGuardExperiment() throws {
+    let config = try lidConfiguration()
+    guard !config.parents.isEmpty, config.parents.allSatisfy({ $0.experiment }) else { throw LidFailure("not-experiment-setup") }
+    try lidRegisterJob("experiment-guard")
+    let controller = try lidProductionController(config)
+    var deadline = lidContinuousTime() + 30
+    var sawLease = false
+    while lidContinuousTime() < deadline {
+        let snapshot = controller.snapshot()
+        // resumeAfterInstall clears draining before launch. Experimental start
+        // consumes it under the transition lock, even if this process starts
+        // after the lease has already ended. Never infer admission from polling.
+        if !sawLease, snapshot.record.draining {
+            sawLease = true
+            deadline = min(lidContinuousTime() + 90, snapshot.record.deadline + 15)
+        }
+        if sawLease, !snapshot.record.needsRestore,
+           ["ended", "lid-open", "off"].contains(snapshot.record.phase),
+           !snapshot.record.sleepRequested || snapshot.record.sleepRequestSucceeded != nil { break }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    let cleanupDeadline = lidContinuousTime() + 15
+    while true {
+        do {
+            try controller.journal.locked { try lidPowerTracker(config).retire() }
+            try controller.retire(); break
+        }
+        catch {
+            if (error as? LidFailure)?.message == "transition-pending", lidContinuousTime() < cleanupDeadline {
+                lidRetireStalledOwner(config); usleep(250_000); continue
+            }
+            // Retire any pending command before fallback so an orphan enable
+            // cannot execute after the restoration observation.
+            guard sawLease || controller.snapshot().record.needsRestore else { throw error }
+            try controller.journal.locked {
+                try lidPowerTracker(config).retire()
+                try lidPmset(["-a", "disablesleep", "0"])
+            }
+            try controller.retire()
+            break
+        }
+    }
+    guard controller.snapshot().safety.sleepDisabled == false else { throw LidFailure("restoration-unresolved") }
+    let snapshot = try JSONEncoder().encode(controller.snapshot())
+    FileHandle.standardOutput.write(snapshot + Data([10]))
+    let removal = Process(); removal.executableURL = URL(fileURLWithPath: "/bin/bash")
+    removal.arguments = [lidStateDirectory + "/uninstall.sh"]
+    let finished = DispatchSemaphore(value: 0)
+    removal.terminationHandler = { _ in finished.signal() }
+    try removal.run()
+    let removalIdentity = LidProcessIdentity.read(removal.processIdentifier)
+    guard finished.wait(timeout: .now() + 30) == .success else {
+        if let identity = removalIdentity, lidProcessRunning(identity) { kill(identity.pid, SIGKILL) }
+        throw LidFailure("experiment-uninstall-timed-out")
+    }
+    guard removal.terminationStatus == 0 else { throw LidFailure("experiment-uninstall-failed") }
 }

@@ -242,6 +242,8 @@ until actual timestamps and observations replace the NOT RUN entries.
 
 ## Remaining product integration
 
+Continuation now has a separate [remaining physical qualification packet](2026-10-14-lid-closed-physical-qualification.md), awaiting approval for its exact replacement hashes. The installation packet above and the results below remain historical evidence; they do not authorize the replacement payload.
+
 After mechanism qualification: bind the real app parent, implement app-wide run
 inventory and enrollment through handoffs/background descendants, temporary
 model context with no replay authority, protective work admission/reduction,

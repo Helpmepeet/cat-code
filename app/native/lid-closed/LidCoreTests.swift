@@ -3,6 +3,10 @@ import Darwin
 
 @main struct LidCoreTests {
     static func main() throws {
+        if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--signal-child" {
+            print(try lidReadExperimentSignal().rawValue)
+            return
+        }
         if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--gate-child" {
             try lidAwaitPowerCommit()
             try Data("committed".utf8).write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
@@ -12,6 +16,19 @@ import Darwin
         let root = CommandLine.arguments[1]
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(atPath: root) }
+        // Real stdin/EOF boundary for the explicit Sleep cue. An untouched
+        // open pipe cannot request sleep; disconnect means cancel.
+        for (bytes, closeInput, expected) in [(Data([83]), false, "sleep"), (Data([67]), false, "cancel"), (Data(), true, "cancel"), (Data(), false, "none")] {
+            let reader = Process(); reader.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            reader.arguments = ["--signal-child"]
+            let input = Pipe(); let output = Pipe(); reader.standardInput = input; reader.standardOutput = output
+            try input.fileHandleForWriting.write(contentsOf: bytes)
+            if closeInput { try input.fileHandleForWriting.close() }
+            try reader.run(); reader.waitUntilExit()
+            let value = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+            precondition(reader.terminationStatus == 0 && value == expected + "\n", "operator signal or EOF misclassified")
+            if !closeInput { try input.fileHandleForWriting.close() }
+        }
         var time: Double = 100
         var safety = LidSafety(sleepDisabled: false, lidClosed: false, batteryPercent: 70, onBattery: true, thermal: "nominal")
         var failRestore = false
@@ -118,6 +135,29 @@ import Darwin
         precondition(controller.snapshot().record.draining && safety.sleepDisabled == false)
         try controller.resumeAfterInstall(); try start()
         _ = try controller.command(["op": "stop", "identity": id])
+        // The experimental admission is single-use independently of guardian
+        // scheduling. Pulses still supervise its one admitted lease.
+        func experimentStart() throws {
+            _ = try controller.command(["op": "start", "identity": id, "allowance": 60], experiment: true)
+        }
+        func rejectExperimentStart() {
+            do { try experimentStart(); preconditionFailure("second experimental lease accepted") } catch {}
+        }
+        try experimentStart()
+        precondition(controller.snapshot().record.draining)
+        time += 1; _ = try controller.command(["op": "pulse", "identity": id], experiment: true)
+        safety.lidClosed = true; try controller.tick()
+        safety.lidClosed = false; time += 1; try controller.tick()
+        reject(["op": "continue", "identity": id])
+        rejectExperimentStart()
+        try controller.resumeAfterInstall()
+        try experimentStart()
+        _ = try controller.command(["op": "stop", "identity": id], experiment: true)
+        rejectExperimentStart()
+        try controller.resumeAfterInstall()
+        failStart = true; try experimentStart(); failStart = false
+        precondition(safety.sleepDisabled == false)
+        rejectExperimentStart()
         // Real native child/pipe/process owner, with a harmless effect. Closing
         // an uncommitted gate forbids the effect; durable tracking then permits
         // precise retirement before another mutation can run.

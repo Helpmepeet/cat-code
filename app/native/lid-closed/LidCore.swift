@@ -272,7 +272,10 @@ final class LidController {
                 guard safety.sleepDisabled == false else { throw LidFailure("override-in-use") }
                 if let refusal = safety.refusal { throw LidFailure(refusal) }
                 if record.thermalRestart && safety.thermal != "nominal" { throw LidFailure("thermal-restart-refused") }
-                record = LidRecord(phase: "starting", identity: id, boot: boot, began: time,
+                // Experimental setup admits one activation, including a failed
+                // attempt. Consume admission durably before changing power;
+                // ongoing pulses and restoration remain available while drained.
+                record = LidRecord(phase: "starting", draining: experiment, identity: id, boot: boot, began: time,
                     deadline: time + seconds, allowance: seconds, clientPulse: time, helperPulse: time,
                     sawClosed: safety.lidClosed == true, needsRestore: true)
                 try journal.write(record)
@@ -405,4 +408,22 @@ final class LidPowerTracker {
 func lidAwaitPowerCommit() throws {
     var byte: UInt8 = 0
     guard read(STDIN_FILENO, &byte, 1) == 1 && byte == 71 else { throw LidFailure("command-not-committed") }
+}
+
+enum LidExperimentSignal: String { case none, sleep, cancel }
+func lidReadExperimentSignal() throws -> LidExperimentSignal {
+    var input = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+    let available = poll(&input, 1, 0)
+    guard available >= 0 else { throw LidFailure("experiment-input-failed") }
+    if available == 0 { return .none }
+    var byte: UInt8 = 0
+    let count = read(STDIN_FILENO, &byte, 1)
+    if count == 0 { return .cancel }
+    guard count == 1 else { throw LidFailure("experiment-input-failed") }
+    switch byte {
+    case 83: return .sleep
+    case 67: return .cancel
+    case 10, 13: return .none
+    default: throw LidFailure("invalid-experiment-signal")
+    }
 }

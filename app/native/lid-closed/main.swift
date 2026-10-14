@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CryptoKit
 
 @objc protocol LidControl {
     func command(_ request: Data, reply: @escaping (Data) -> Void)
@@ -121,17 +122,23 @@ func lidExperiment(_ scenario: String) throws {
     while lidContinuousTime() - started < 75 {
         let elapsed = lidContinuousTime() - started
         let response: [String: Any]
-        if elapsed < 10 || scenario == "progress" || (scenario == "sleep" && elapsed < 20) { response = try command(["op": "pulse", "identity": id]) }
-        else if scenario == "sleep" && !protectionSent {
-            protectionSent = true
-            response = try command(["op": "sleep", "identity": id])
+        if scenario == "sleep" {
+            switch try lidReadExperimentSignal() {
+            case .sleep: response = try command(["op": "sleep", "identity": id])
+            case .cancel: response = try command(["op": "stop", "identity": id])
+            case .none: response = try command(["op": "pulse", "identity": id])
+            }
         }
+        else if elapsed < 10 || scenario == "progress" { response = try command(["op": "pulse", "identity": id]) }
         else if ["thermal", "battery-reserve", "monitoring-unavailable"].contains(scenario) && !protectionSent {
             protectionSent = true
             response = try command(["op": "exercise-protection", "identity": id, "scenario": scenario])
         } else { response = try command(["op": "status"]) }
         let sample: [String: Any] = ["observedAt": ISO8601DateFormatter().string(from: Date()),
-            "elapsedSeconds": elapsed, "progressSequence": sequence, "response": response]
+            "elapsedSeconds": elapsed, "progressSequence": sequence,
+            "workBytesHashed": (sequence + 1) * 65536,
+            "workDigest": SHA256.hash(data: Data(repeating: UInt8(truncatingIfNeeded: sequence), count: 65536)).map { String(format: "%02x", $0) }.joined(),
+            "response": response]
         print(String(data: try JSONSerialization.data(withJSONObject: sample, options: [.sortedKeys]), encoding: .utf8)!)
         fflush(stdout)
         if let snapshot = response["snapshot"] as? [String: Any], let record = snapshot["record"] as? [String: Any], record["phase"] as? String != "active" {
@@ -201,6 +208,9 @@ let args = CommandLine.arguments
         guard args.count == 2, geteuid() == 0 else { throw LidFailure("root-required") }
         let controller = try lidProductionController(lidConfiguration())
         try controller.resumeAfterInstall()
+    case "--guard-experiment":
+        guard args.count == 2, geteuid() == 0 else { throw LidFailure("root-required") }
+        try lidGuardExperiment()
     default: throw LidFailure("invalid-operation")
     }
 } catch {
