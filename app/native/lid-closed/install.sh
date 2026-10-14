@@ -66,9 +66,9 @@ lid_verified=true
 # On reinstall the old helper may be absent but the retained journal is still
 # checked by the verified new executable before either job admits work.
 "$helper" --restore-for-uninstall
+"$helper" --resume-after-install
 /bin/launchctl bootstrap system "$watcher"
 /bin/launchctl bootstrap system "$daemon"
-"$helper" --resume-after-install
 /bin/rm -f "$state/experiment-guard-owner.json"
 # macOS nohup calls a console-detachment SPI which fails in administrator
 # authorization sessions. Ignore hangup in the shell and inherit it across exec;

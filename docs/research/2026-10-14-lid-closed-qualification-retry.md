@@ -2,6 +2,13 @@
 
 Prepared 2026-10-14. Approved by the operator for the exact hashes/commands, four further installations (five total attempts) and three 60-second leases. Status: **IDLE CHECK PASSED; BATTERY/LID ATTEMPT UNQUALIFIED; TESTING STOPPED AT OPERATOR REQUEST; INSTALLATION REMOVED**.
 
+This is the historical packet and stopped-trial report. Subsequent user approval
+superseded its per-hash and installation-attempt caps while retaining short
+leases, physical coordination, and restore-first cleanup. See the
+[continuation results](2026-10-14-lid-closed-physical-results.md) for observed
+battery closed-lid progress and ordinary Sleep blockage. The original approvals
+and observations below remain preserved as historical evidence.
+
 The [approved installation-only check](2026-10-14-lid-closed-physical-qualification.md#installation-only-observation-2026-10-14) failed at macOS nohup console detachment before the guardian started. Its restore-first failure path removed authority. One installation attempt was used, zero leases. Independent observations confirmed SleepDisabled=false, no helper/plists/jobs or remaining helper processes, no guard ownership marker, and no pending power child. Preserve [raw observations](2026-10-14-lid-closed-qualification-evidence.json) and all c9a8af09 recovery evidence. No physical lid, power or Sleep action has been performed.
 
 ## Concrete repair

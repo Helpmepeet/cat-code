@@ -80,6 +80,10 @@ struct LidSnapshot: Codable {
     var remainingSeconds: Double
     var hardwareQualified: Bool
     var error: String?
+    var restorationConfirmed: Bool {
+        error == nil && record.valid && ["off", "ended", "lid-open"].contains(record.phase) &&
+            !record.needsRestore && safety.sleepDisabled == false
+    }
 }
 
 // Both root jobs serialize transitions with the same advisory lock. Atomic

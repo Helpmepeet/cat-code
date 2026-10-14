@@ -134,6 +134,10 @@ func lidExperiment(_ scenario: String) throws {
             protectionSent = true
             response = try command(["op": "exercise-protection", "identity": id, "scenario": scenario])
         } else { response = try command(["op": "status"]) }
+        // Experimental auto-removal can close XPC before the next sample.
+        // That loses status visibility; it does not prove restoration failed.
+        guard let rawSnapshot = response["snapshot"] else { throw LidFailure("experiment-status-unavailable") }
+        let observed = try JSONDecoder().decode(LidSnapshot.self, from: JSONSerialization.data(withJSONObject: rawSnapshot))
         let sample: [String: Any] = ["observedAt": ISO8601DateFormatter().string(from: Date()),
             "elapsedSeconds": elapsed, "progressSequence": sequence,
             "workBytesHashed": (sequence + 1) * 65536,
@@ -141,14 +145,13 @@ func lidExperiment(_ scenario: String) throws {
             "response": response]
         print(String(data: try JSONSerialization.data(withJSONObject: sample, options: [.sortedKeys]), encoding: .utf8)!)
         fflush(stdout)
-        if let snapshot = response["snapshot"] as? [String: Any], let record = snapshot["record"] as? [String: Any], record["phase"] as? String != "active" {
-            if record["needsRestore"] as? Bool == false { return }
-        }
+        if observed.restorationConfirmed { return }
         sequence += 1; Thread.sleep(forTimeInterval: 1)
     }
     let final = try command(["op": "status"])
-    guard let snapshot = final["snapshot"] as? [String: Any], let record = snapshot["record"] as? [String: Any],
-          record["needsRestore"] as? Bool == false else { throw LidFailure("experiment-restoration-unresolved") }
+    guard let rawSnapshot = final["snapshot"] else { throw LidFailure("experiment-status-unavailable") }
+    let observed = try JSONDecoder().decode(LidSnapshot.self, from: JSONSerialization.data(withJSONObject: rawSnapshot))
+    guard observed.restorationConfirmed else { throw LidFailure("experiment-restoration-unresolved") }
 }
 
 let args = CommandLine.arguments

@@ -66,6 +66,7 @@ import Darwin
         safety.lidClosed = true; time += 1; try controller.tick()
         safety.lidClosed = false; time += 1; try controller.tick()
         precondition(controller.snapshot().record.phase == "lid-open" && safety.sleepDisabled == false)
+        precondition(controller.snapshot().restorationConfirmed, "settled lid-open restoration not confirmed")
         time += 20
         _ = try controller.command(["op": "continue", "identity": id])
         precondition(controller.snapshot().record.deadline == original, "Continue renewed deadline")
@@ -189,6 +190,7 @@ import Darwin
         flock(fd, LOCK_UN); close(fd)
         try Data("{\"version\":999}".utf8).write(to: URL(fileURLWithPath: root + "/recovery.json"))
         precondition(controller.snapshot().record.phase == "unresolved")
+        precondition(!controller.snapshot().restorationConfirmed, "unreadable journal reported restored from kernel flag alone")
         reject(["op": "start", "identity": id, "allowance": 900])
         print("PASS: durable activation, partial failure, fixed deadlines, stale pulse, watcher recovery, retry, protections, sleep ordering, lock and corrupt journal")
     }
