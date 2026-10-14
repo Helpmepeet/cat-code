@@ -2,7 +2,15 @@
 
 Date: 2026-10-13
 
-Status: Product design draft, revised after UX review. Implementation was requested on 2026-10-14 but is blocked at the power-control contract; see the [feasibility investigation](../research/2026-10-14-lid-closed-power-feasibility.md). The feature is not implemented. The agreed decisions below supersede the earlier activation panel, global countdown chip, return card, and external-power requirement. The cup remains numerals-only; explanations and named actions use the existing notice surface. Proposed defaults are identified separately. No power-control implementation or hardware safety claim is approved by this document.
+Status: Implementation in progress. Revised on 2026-10-14 with approved pmset tradeoffs. The historical [feasibility investigation](../research/2026-10-14-lid-closed-power-feasibility.md) records why the previous requirements blocked that route; it is not a universal impossibility finding. The cup remains numerals-only and explanations use the existing notice surface. Physical qualification is required before describing the feature as ready.
+
+## Approved power-control tradeoffs
+
+- Ordinary macOS Sleep may be blocked while the global override is active. Setup discloses this explicitly. The globally visible **End mode and sleep** action first restores the setting and confirms restoration, then requests sleep. A sleep request is not evidence that the Mac slept.
+- This mode requires exclusive use of the global sleep override. Refuse activation if sleep is already disabled. Detect observable setting conflicts and end the mode. Simultaneous writes of the same value by another utility cannot be distinguished reliably. Setup discloses that limitation; do not claim perfect restoration ownership.
+- Recovery bounds are measured targets for named scenarios, not unconditional guarantees. Report measured bounds separately for Electron crash/stall, helper crash/stall, restoration command failure, recovery watcher failure, reboot, revocation, and removal. Simultaneous loss of both recovery processes or failed system power commands can leave recovery unresolved.
+- Use a narrowly scoped privileged helper with one-time administrator setup. The helper owns the deadline and thermal/battery monitoring independently of Electron. An independent recovery owner uses durable recovery state written before a power change. Fresh Cat Code supervision is required; it cannot renew the original deadline. Account-wide passwordless sudo rules and restricted Apple entitlement arrangements are not the default route.
+
 
 ## Purpose
 
@@ -19,7 +27,7 @@ The main interaction is a small coffee cup in the composer. The control communic
 - The mode ends when included work finishes or the deadline is reached, whichever happens first.
 - Opening the lid ends the mode. Continue is available only after this end reason, while time remains, and uses the original deadline. Time keeps passing while the lid is open.
 - Heat, crash, time expiry, cancellation, and other protective endings require a fresh activation. They never offer Continue or restart automatically.
-- Loss of supervision must end the mode promptly. Failure to restore normal sleep behavior remains unresolved and visible until recovery succeeds; it must never appear as off.
+- Loss of supervision must promptly initiate restoration within the documented measured target scenarios. Failure to restore normal sleep behavior remains unresolved and visible until recovery succeeds; it must never appear as off.
 - Existing task permissions and approval requirements do not change.
 - A direct Stop action ends keep-awake mode without cycling through longer durations. Stopping the mode is not a promise that all jobs are cancelled.
 
@@ -54,7 +62,7 @@ During operation, liquid drains below the selected tick, the number counts down,
 | Off | Empty gray line cup, no status mark | Select 15 minutes and activate | No routine notice |
 | Setting up | Empty gray cup with dotted rim; no steam or running countdown | No duplicate setup or preset changes | Explain required setup; Cancel. Administrator authorization uses its own system surface |
 | Starting | Dotted rim with a restrained pulse; selected preset is shown, no steam | No duplicate start or preset changes | “Starting lid-closed mode.” Cancel |
-| Active | Caramel, draining liquid, restrained steam | Cycle duration; 120 → off ends the mode | Scope summary; Stop; Inspect work |
+| Active | Caramel, draining liquid, restrained steam | Cycle duration; 120 → off ends the mode | Scope summary; Stop; End mode and sleep; Inspect work |
 | Restoring sleep | Empty cup with a circular recovery mark; no steam | No start, Continue, or duplicate restore | “Restoring normal sleep.” No dismissal; no duplicate Retry while pending |
 | Ended because lid opened | Gray cup, two stationary bars, decreasing remaining-time numeral | Continue with the original deadline | Lid-open explanation; Continue with lid closed; Dismiss |
 | Protective end | Empty amber cup with warning mark | Fresh activation only after the reason is resolved | Specific end reason and observed work status when relevant; Dismiss |
@@ -116,7 +124,7 @@ Do not promise arbitrary processes can be safely paused, cancelled, or resumed. 
 
 All Cat Code-owned keep-awake behavior must respect the end decision; ordinary idle-sleep prevention cannot silently defeat this mode's protective ending. Other software may affect sleep too. An unresolved conflict cannot be reported as successful system sleep.
 
-User cancellation, explicit system sleep, quitting, and shutdown take precedence over keep-awake behavior. Restarting the app must recover unresolved restoration and must never silently reactivate an old mode.
+User cancellation, End mode and sleep, quitting, and shutdown initiate restoration. Ordinary macOS Sleep may be blocked while the override is active; setup and the active notice disclose this accepted limitation. Restarting the app must recover unresolved restoration and must never silently reactivate an old mode.
 
 An unresolved restoration state takes precedence over lid-open continuation, completion, expiry, and other ending reasons. It remains visible across chat navigation and app restart. Closing the originating chat cannot dismiss a machine-wide problem. A retry only restores sleep behavior; it does not resume work or start another timer. During restoration, a pending state must not briefly appear Off or allow a new activation.
 
@@ -161,17 +169,17 @@ The window is not a promised return time. The instruction must cease to apply wh
 
 The integration belongs to the [prompt surfaces owner](../prompts/2026-04-30-prompt-surfaces.md). No prompt changes are part of this specification edit.
 
-## Authorization and mechanism still open
+## Authorization and pmset mechanism
 
 [Current idle-sleep prevention](../../src/services/preventSleep.ts) uses `caffeinate -i`. That is not a promise of lid-closed operation. [Apple distinguishes forced sleep from idle sleep](https://developer.apple.com/library/archive/qa/qa1340/_index.html).
 
 The supplied Insomnia report describes one-time installation of account-scoped sudoers permissions for specific power commands, followed by noninteractive `pmset` calls. It does not describe an app-exclusive privileged helper. Its recovery agent waits for an unexpired session's deadline and does not independently monitor battery or temperature; that recovery behavior is insufficient for this specification.
 
-Before implementation approval, choose the privileged mechanism and settle:
+The pmset direction and tradeoffs above are approved. Settle and document:
 
 - What administrator consent grants, whether it is app-specific or account-wide, and how to revoke it.
 - Whether first-use setup avoids an administrator prompt on every activation.
-- A bounded recovery guarantee after app crash, monitoring loss, and failed restoration.
+- Measured recovery targets and observed bounds for specified crash, stall, monitoring-loss, and restoration-failure scenarios.
 - How explicit user sleep, pre-existing sleep settings, and another keep-awake app interact with ownership and restoration.
 - Reliable closed-lid display/backlight handling, supported configurations, and preservation of existing screen-lock behavior.
 
@@ -179,17 +187,17 @@ Do not adopt application freezing, audio muting, arbitrary fan control, or unrel
 
 ## Acceptance requirements
 
-Before describing the feature as ready, demonstrate:
+Before describing the feature as ready, demonstrate the approved tradeoffs and:
 
 1. Battery activation succeeds; unplugging does not end or renew the mode; the agreed reserve ends it.
 2. Scope remains the original work and its descendants through chat switches, new turns, and multiple composers.
 3. Preset changes obey the documented elapsed-time rule, and the deadline advances while the lid is open.
 4. Only a lid-open ending offers Continue, with the same deadline and scope and fresh safety checks.
-5. Serious heat, critical heat, unavailable monitoring, and a real app crash produce the required bounded protective response.
+5. Serious heat, critical heat, unavailable monitoring, app/helper crash and stall initiate protective restoration; report measured recovery bounds and their conditions. Inject protective readings for testing without overheating or deeply discharging the Mac.
 6. Restoration failure remains red and actionable across navigation and restart; Retry cannot activate the mode.
 7. Required approval is never bypassed; the temporary away instruction ends with the mode.
 8. On supported physical hardware, timestamped workload evidence shows actual progress while closed, and end/recovery evidence distinguishes restored settings from observed sleep.
-9. Display/backlight, locking, user-requested sleep, and reopening behave as specified on that hardware.
+9. Display/backlight, locking, reopening, ordinary Sleep blockage during active operation, and End mode and sleep after confirmed restoration behave as disclosed on that hardware.
 10. The actual animations, wheel input, keyboard controls, accessible descriptions, and both color themes are inspected. Synthetic state changes alone do not establish physical safety.
 11. From every active preset, the notice's Stop action ends the mode directly with pointer or keyboard input, without passing through another duration. It remains available when no composer is visible.
 12. A single non-dismissible restoration notice with Retry survives chats, Pages, the welcome screen, split panes, and app restart. Pending restoration never appears Off, accepts a new start, or offers Continue.
@@ -207,4 +215,4 @@ Before describing the feature as ready, demonstrate:
 
 The two HTML files remain separate, untracked design-session artifacts and are visual references, not authoritative behavior. They were not changed by this specification. The chosen mock still has the superseded external-power states, resets remaining time to a full preset when adjusted, and stops its countdown in the lid-open state. Those behaviors conflict with this spec's battery policy, proposed elapsed-time rule, and original-deadline requirement. Its piecewise liquid mapping is captured above. Animation and wheel behavior remain unverified.
 
-Pending product decisions are the proposed timer-adjustment rule, blocked-work grace periods, battery reserve, thermal restart condition, and final banner copy. Pending release decisions are the privilege model, measurable recovery bound, hardware support evidence, display handling, and input/color verification. The agreed battery-use and cup-design decisions are not reopened by these pending items.
+The implementation uses the specified elapsed-time adjustment, a 20-percent discharging reserve, and nominal thermal state before a fresh start after a thermal end. Blocked-work grace periods and final banner copy remain product integration work. The concrete privilege model is a narrow root launchd helper with independent recovery and one-time administrator setup, detailed in the [bounded experiment](../research/2026-10-14-lid-closed-pmset-experiment.md). Pending release evidence includes measured recovery bounds, hardware support, display handling, and actual input/color verification. The accepted power-control tradeoffs, battery-use, and cup-design decisions are not reopened by these pending items.

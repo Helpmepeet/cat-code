@@ -2,12 +2,16 @@
 
 Date: 2026-10-14 (Asia/Bangkok)
 
-Status: Implementation blocked at the power-control contract. The tested ad hoc helper also failed launch because of restricted entitlements on this Mac. The product feature
+Historical status at f1d7ff70: Implementation blocked at the original power-control contract. The tested ad hoc helper also failed launch because of restricted entitlements on this Mac. The product feature
 is not implemented. This investigation does not establish universal impossibility
 on macOS; it establishes that none of the candidates examined meets the requested
 contract with the current Cat Code build. No power settings were changed.
 
-## Requirements that constrain the mechanism
+## Approved continuation on 2026-10-14
+
+The user approved ordinary Sleep being blocked during active operation, an explicit End mode and sleep action, exclusive global-override use with disclosed indistinguishable same-value writes, and measured recovery targets rather than an unconditional guarantee. Those changes supersede the original rejection of pmset below. Implementation now proceeds through a narrowly scoped privileged helper and independent recovery watcher. The private-entitlement path remains rejected and will not be retried. Historical tests below remain evidence of the old path only.
+
+## Original requirements that constrained the mechanism
 
 The [product specification](../design/2026-10-13-lid-closed-mode-spec.md) and the
 implementation brief require battery operation, explicit user sleep taking
