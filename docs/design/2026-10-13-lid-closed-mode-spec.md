@@ -6,7 +6,7 @@ Status: Implementation in progress. Revised on 2026-10-14 with approved pmset tr
 
 The [approved experiment report](../research/2026-10-14-lid-closed-pmset-experiment.md) now records live open-lid activation/restoration on battery, bounded native client/helper/watch recovery observations, and verified uninstallation. The operator deferred lid closure; actual Sleep was not exercised. These observations do not qualify the app feature or replace closed-lid and Sleep evidence.
 
-The [remaining physical qualification packet](../research/2026-10-14-lid-closed-physical-qualification.md) was approved, but its installation-only check failed before the guardian launched. Restore-first failure cleanup left SleepDisabled=false and removed the helper/jobs. The [guardian launch repair and exact retry packet](../research/2026-10-14-lid-closed-qualification-retry.md) awaits new approval and agreement to one additional installation. No closed-lid or intentional Sleep result or app integration is claimed.
+The [remaining physical qualification packet](../research/2026-10-14-lid-closed-physical-qualification.md) failed before guardian launch and was cleaned up. The approved [guardian launch repair and retry report](../research/2026-10-14-lid-closed-qualification-retry.md) now verifies idle cleanup and one open-lid battery lease's expiry/restoration. The operator missed the close cue and stopped testing; no closed-lid or intentional Sleep result is claimed. Helper/jobs were removed, guardian exit confirmed, and SleepDisabled=false. App integration remains gated on the missing physical qualification.
 
 ## Approved power-control tradeoffs
 

@@ -49,6 +49,2742 @@
         "SleepDisabled": false,
         "lidClosed": false
       }
+    },
+    {
+      "kind": "repaired-installation-only",
+      "installationAttempt": 2,
+      "replacementAttempt": 1,
+      "leasesStarted": 0,
+      "installerSHA256": "f4857c21a06592ed43e5d423515217f49de800150c528335d3f9a8820d2f106b",
+      "start": {
+        "event": "root-metadata",
+        "observedAt": "2026-10-14T09:35:52.887347+00:00",
+        "experiment-guard-owner.json": {
+          "seconds": 1791970552,
+          "microseconds": 559270,
+          "pid": 13821
+        },
+        "daemon-owner.json": {
+          "microseconds": 541813,
+          "pid": 13818,
+          "seconds": 1791970552
+        },
+        "watcher-owner.json": {
+          "pid": 13816,
+          "microseconds": 534584,
+          "seconds": 1791970552
+        },
+        "power-child.json": null,
+        "recovery.json": {
+          "draining": false,
+          "sawClosed": false,
+          "needsRestore": false,
+          "allowance": 60,
+          "phase": "ended",
+          "identity": "5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A",
+          "reason": "supervision-lost",
+          "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+          "version": 1,
+          "deadline": 527019.50698975,
+          "began": 526959.50698975,
+          "sleepRequestAttempted": false,
+          "thermalRestart": false,
+          "helperPulse": 526965.3707033333,
+          "sleepRequested": false,
+          "clientPulse": 526959.5131607917
+        },
+        "experiment-cleanup.log": "",
+        "guardProcess": {
+          "available": true,
+          "identity": {
+            "pid": 13821,
+            "seconds": 1791970552,
+            "microseconds": 559270
+          },
+          "matchesMarker": true,
+          "uid": 0,
+          "status": 2,
+          "path": "/Library/PrivilegedHelperTools/com.catcode.lid-closed"
+        },
+        "helperAndPlistsAbsent": false,
+        "com.catcode.lid-closed": {
+          "exit": 0,
+          "pid": 13818
+        },
+        "com.catcode.lid-closed.recovery": {
+          "exit": 0,
+          "pid": 13816
+        },
+        "helperSHA256": "c2f637c1cc2ae1706c8a553a66840baf240e94687c2ff4a503cbc945600826b5",
+        "nativeSnapshot": {
+          "continuousSeconds": 541863.4355043333,
+          "observedAt": "2026-10-14T09:35:52Z",
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 526959.50698975,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 526959.5131607917,
+                "deadline": 527019.50698975,
+                "draining": false,
+                "helperPulse": 526965.3707033333,
+                "identity": "5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A",
+                "needsRestore": false,
+                "phase": "ended",
+                "reason": "supervision-lost",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 0,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": false,
+                "thermal": "nominal"
+              }
+            }
+          }
+        }
+      },
+      "independentObservations": [
+        {
+          "event": "idle-observation",
+          "observedAt": "2026-10-14T09:36:45.068308+00:00",
+          "secondsSinceGuardBirth": 52.50918388366699,
+          "kernel": {
+            "AppleClamshellState": "No",
+            "SleepDisabled": "No"
+          },
+          "helperAndPlistsAbsent": true,
+          "guardExited": true,
+          "guardProcess": {
+            "available": false,
+            "errno": 3
+          }
+        }
+      ],
+      "final": {
+        "event": "root-metadata",
+        "observedAt": "2026-10-14T09:39:00.324762+00:00",
+        "experiment-guard-owner.json": {
+          "seconds": 1791970552,
+          "microseconds": 559270,
+          "pid": 13821
+        },
+        "daemon-owner.json": {
+          "microseconds": 541813,
+          "pid": 13818,
+          "seconds": 1791970552
+        },
+        "watcher-owner.json": {
+          "pid": 13816,
+          "microseconds": 534584,
+          "seconds": 1791970552
+        },
+        "power-child.json": null,
+        "recovery.json": {
+          "sleepRequested": false,
+          "sleepRequestAttempted": false,
+          "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+          "allowance": 60,
+          "sawClosed": false,
+          "helperPulse": 526965.3707033333,
+          "thermalRestart": false,
+          "reason": "supervision-lost",
+          "version": 1,
+          "draining": true,
+          "identity": "5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A",
+          "phase": "ended",
+          "deadline": 527019.50698975,
+          "began": 526959.50698975,
+          "clientPulse": 526959.5131607917,
+          "needsRestore": false
+        },
+        "experiment-cleanup.log": "{\"remainingSeconds\":0,\"safety\":{\"lidClosed\":false,\"onBattery\":true,\"thermal\":\"nominal\",\"sleepDisabled\":false,\"batteryPercent\":100},\"hardwareQualified\":false,\"record\":{\"reason\":\"supervision-lost\",\"helperPulse\":526965.3707033333,\"needsRestore\":false,\"sleepRequested\":false,\"boot\":\"00C99374-E4B9-4967-A611-267395C308D9\",\"allowance\":60,\"phase\":\"ended\",\"deadline\":527019.50698975,\"draining\":true,\"sleepRequestAttempted\":false,\"clientPulse\":526959.5131607917,\"identity\":\"5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A\",\"sawClosed\":false,\"version\":1,\"thermalRestart\":false,\"began\":526959.50698975}}\n",
+        "guardProcess": {
+          "available": false,
+          "errno": 3
+        },
+        "helperAndPlistsAbsent": true,
+        "com.catcode.lid-closed": {
+          "exit": 113,
+          "output": "Bad request.\nCould not find service \"com.catcode.lid-closed\" in domain for system\n"
+        },
+        "com.catcode.lid-closed.recovery": {
+          "exit": 113,
+          "output": "Bad request.\nCould not find service \"com.catcode.lid-closed.recovery\" in domain for system\n"
+        },
+        "fileTimes": {
+          "experiment-cleanup.log": {
+            "mtimeNS": 1791970582609389600,
+            "mtimeUTC": "2026-10-14T09:36:22.609390+00:00"
+          },
+          "recovery.json": {
+            "mtimeNS": 1791970582686188800,
+            "mtimeUTC": "2026-10-14T09:36:22.686189+00:00"
+          }
+        }
+      },
+      "measurement": {
+        "restorationSnapshotLogWrittenSecondsAfterBirth": 30.050119638442993,
+        "removalAndGuardianExitConfirmedBySecondsAfterBirth": 52.50918388366699,
+        "qualification": "single idle check; initial observation occurred after cleanup; no active lease or actual Sleep",
+        "fallbackUsed": false,
+        "manualRemovalUsed": false,
+        "physicalActionsPerformed": false
+      }
+    },
+    {
+      "kind": "battery-lid-attempt",
+      "installationAttempt": 3,
+      "replacementAttempt": 2,
+      "lease": 1,
+      "operatorReport": "Operator reported missing the cue and asked to finish pending preparation, stop and wait. No physical closure/reopening confirmation was supplied.",
+      "operatorReadiness": {
+        "powerUnchanged": true,
+        "readyToCloseOnCue": true,
+        "agreed20SecondReopening": true
+      },
+      "installation": {
+        "event": "root-metadata",
+        "observedAt": "2026-10-14T09:48:28.605610+00:00",
+        "experiment-guard-owner.json": {
+          "seconds": 1791971308,
+          "microseconds": 421145,
+          "pid": 14202
+        },
+        "daemon-owner.json": {
+          "pid": 14199,
+          "seconds": 1791971308,
+          "microseconds": 401578
+        },
+        "watcher-owner.json": {
+          "microseconds": 393645,
+          "seconds": 1791971308,
+          "pid": 14197
+        },
+        "power-child.json": null,
+        "recovery.json": {
+          "began": 526959.50698975,
+          "reason": "supervision-lost",
+          "clientPulse": 526959.5131607917,
+          "sawClosed": false,
+          "sleepRequestAttempted": false,
+          "deadline": 527019.50698975,
+          "thermalRestart": false,
+          "allowance": 60,
+          "phase": "ended",
+          "needsRestore": false,
+          "draining": false,
+          "helperPulse": 526965.3707033333,
+          "sleepRequested": false,
+          "version": 1,
+          "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+          "identity": "5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A"
+        },
+        "experiment-cleanup.log": "",
+        "guardProcess": {
+          "available": true,
+          "identity": {
+            "pid": 14202,
+            "seconds": 1791971308,
+            "microseconds": 421145
+          },
+          "matchesMarker": true,
+          "uid": 0,
+          "status": 2,
+          "path": "/Library/PrivilegedHelperTools/com.catcode.lid-closed"
+        },
+        "helperAndPlistsAbsent": false,
+        "com.catcode.lid-closed": {
+          "exit": 0,
+          "pid": 14199
+        },
+        "com.catcode.lid-closed.recovery": {
+          "exit": 0,
+          "pid": 14197
+        },
+        "helperSHA256": "c2f637c1cc2ae1706c8a553a66840baf240e94687c2ff4a503cbc945600826b5",
+        "nativeSnapshot": {
+          "continuousSeconds": 542619.1539055,
+          "observedAt": "2026-10-14T09:48:28Z",
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 526959.50698975,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 526959.5131607917,
+                "deadline": 527019.50698975,
+                "draining": false,
+                "helperPulse": 526965.3707033333,
+                "identity": "5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A",
+                "needsRestore": false,
+                "phase": "ended",
+                "reason": "supervision-lost",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 0,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": false,
+                "thermal": "nominal"
+              }
+            }
+          }
+        }
+      },
+      "trace": [
+        {
+          "event": "driver-started",
+          "trial": "battery",
+          "observedAt": "2026-10-14T09:48:45.703772+00:00",
+          "identity": {
+            "pid": 14221,
+            "seconds": 1791971325,
+            "microseconds": 702875
+          }
+        },
+        {
+          "ok": true,
+          "snapshot": {
+            "safety": {
+              "lidClosed": false,
+              "onBattery": true,
+              "thermal": "nominal",
+              "batteryPercent": 100,
+              "sleepDisabled": true
+            },
+            "hardwareQualified": false,
+            "record": {
+              "sleepRequestAttempted": false,
+              "began": 542636.278293875,
+              "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+              "draining": true,
+              "thermalRestart": false,
+              "version": 1,
+              "helperPulse": 542636.278293875,
+              "phase": "active",
+              "sleepRequested": false,
+              "allowance": 60,
+              "clientPulse": 542636.278293875,
+              "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+              "needsRestore": true,
+              "deadline": 542696.278293875,
+              "sawClosed": false
+            },
+            "remainingSeconds": 59.999613416730426
+          }
+        },
+        {
+          "elapsedSeconds": 8.335337042808533e-8,
+          "observedAt": "2026-10-14T09:48:45Z",
+          "progressSequence": 0,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542636.2824609583,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542636.278293875,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 59.99535762507003,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 65536,
+          "workDigest": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31"
+        },
+        {
+          "elapsedSeconds": 1.0094863750273362,
+          "observedAt": "2026-10-14T09:48:46Z",
+          "progressSequence": 1,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542637.2958860833,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542637.00784375,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 58.97997283330187,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 131072,
+          "workDigest": "916b144867c340614f515c7b0e5415c74832d899c05264ded2a277a6e81d81ff"
+        },
+        {
+          "elapsedSeconds": 2.0267833332763985,
+          "observedAt": "2026-10-14T09:48:47Z",
+          "progressSequence": 2,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542638.3111779583,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542638.007973625,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 57.96559308341239,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 196608,
+          "workDigest": "da1acff5c9defdd68bfa1435c4b43e8d43ed10fcc7cbcb77a85c4482d5f5bda3"
+        },
+        {
+          "elapsedSeconds": 3.0394647083012387,
+          "observedAt": "2026-10-14T09:48:48Z",
+          "progressSequence": 3,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542639.3259919167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542639.0071975833,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 56.95078287506476,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 262144,
+          "workDigest": "3af3f1d870212fe8fcfe6eb321fd14d009bccc953fce3f59f698f0c446a1a39a"
+        },
+        {
+          "elapsedSeconds": 4.0516162916319445,
+          "observedAt": "2026-10-14T09:48:49Z",
+          "progressSequence": 4,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542640.3381221667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542640.007953375,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 55.938318625092506,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 327680,
+          "workDigest": "ac32e587c08925897c80a703080b055606911082361fbb25198873cfca8b72d0"
+        },
+        {
+          "elapsedSeconds": 5.067640666617081,
+          "observedAt": "2026-10-14T09:48:50Z",
+          "progressSequence": 5,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542641.3548745833,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542641.0075475416,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 54.92114191676956,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 393216,
+          "workDigest": "ac5f57d984b20f78b36a294e26cc99512a1196eb96e4c30d7cec153813e93e1b"
+        },
+        {
+          "elapsedSeconds": 6.083916833274998,
+          "observedAt": "2026-10-14T09:48:51Z",
+          "progressSequence": 6,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542642.367603375,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542642.0077791667,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 53.909552291734144,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 458752,
+          "workDigest": "570c8bbac0dfe325a89e8193cdb88560d4ce244ac2de3b5226791203107d74f5"
+        },
+        {
+          "elapsedSeconds": 7.0947517916793,
+          "observedAt": "2026-10-14T09:48:52Z",
+          "progressSequence": 7,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542643.3791681667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542643.0077158333,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 52.89791275002062,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 524288,
+          "workDigest": "07dcb6d11a03624831513672ffdb84d6b1730f54e90aaace444fe3a8ea9b2163"
+        },
+        {
+          "elapsedSeconds": 8.10671075002756,
+          "observedAt": "2026-10-14T09:48:53Z",
+          "progressSequence": 8,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542644.393384125,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542644.0077726666,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 51.88328408333473,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 589824,
+          "workDigest": "0e7424be9627f88499110c34e21214ed91e026e1657d9be3bd54e3e7e09fd867"
+        },
+        {
+          "elapsedSeconds": 9.118422666680999,
+          "observedAt": "2026-10-14T09:48:54Z",
+          "progressSequence": 9,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542645.4050050833,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542645.0077689167,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 50.87155579170212,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 655360,
+          "workDigest": "83c57546e5a31f700e7adc9edc55118bf2677bd04f0fc9089c6477b1646ffa1f"
+        },
+        {
+          "elapsedSeconds": 10.134185999981128,
+          "observedAt": "2026-10-14T09:48:55Z",
+          "progressSequence": 10,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542646.4199590416,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542646.007746625,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 49.85668095841538,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 720896,
+          "workDigest": "fbd7cceab2e0f5696b4628188d3d6e4ec3f4222c02638db114d8611cb3b7f2c3"
+        },
+        {
+          "elapsedSeconds": 11.14834579161834,
+          "observedAt": "2026-10-14T09:48:56Z",
+          "progressSequence": 11,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542647.4346396667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542647.0079094167,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 48.84201366675552,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 786432,
+          "workDigest": "1dfa33e4c49e3c0a9ef0b609c3fb26c5211f7cff763fa72194d884d15d86e68e"
+        },
+        {
+          "elapsedSeconds": 12.16247924999334,
+          "observedAt": "2026-10-14T09:48:57Z",
+          "progressSequence": 12,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542648.4485441666,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542648.0067517083,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 47.828044708352536,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 851968,
+          "workDigest": "e33be1b26d5978ac52b613bdad8c1940eaadf96e10b91026fa4d46862d6a95c4"
+        },
+        {
+          "elapsedSeconds": 13.177086708368734,
+          "observedAt": "2026-10-14T09:48:58Z",
+          "progressSequence": 13,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542649.4642654167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542649.0069289167,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 46.81154779170174,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 917504,
+          "workDigest": "400e4fece10a6141eaa845312e9e123b12f9dfd3197fd64d1ba502530cd58268"
+        },
+        {
+          "elapsedSeconds": 14.194302625022829,
+          "observedAt": "2026-10-14T09:48:59Z",
+          "progressSequence": 14,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542650.4795335,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542650.0089964167,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 45.79735920834355,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 983040,
+          "workDigest": "07b04a4f9611abedc5576c0f256a9570f1aae970e6698d37751aa9efa533edb1"
+        },
+        {
+          "elapsedSeconds": 15.205327708274126,
+          "observedAt": "2026-10-14T09:49:00Z",
+          "progressSequence": 15,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542651.4921934167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542651.0077715417,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 44.78392350010108,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1048576,
+          "workDigest": "2c0b16b7d64ad4d2d2b0c465477d6658c118609bbabde66f2a43f24e7bd75599"
+        },
+        {
+          "elapsedSeconds": 16.22190941660665,
+          "observedAt": "2026-10-14T09:49:01Z",
+          "progressSequence": 16,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542652.508137875,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542652.006803375,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 43.767843916779384,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1114112,
+          "workDigest": "db12c0f09c0880bf09890ae2931ac9b2ef7c66ff5e325e28e368596b341d8976"
+        },
+        {
+          "elapsedSeconds": 17.234484041691758,
+          "observedAt": "2026-10-14T09:49:03Z",
+          "progressSequence": 17,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542653.5205246666,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542653.0102355833,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 42.75598858331796,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1179648,
+          "workDigest": "2dc4424addd6f849f68402090e7d0d19018adf629de600210d807575932f2e2d"
+        },
+        {
+          "elapsedSeconds": 18.249420500011183,
+          "observedAt": "2026-10-14T09:49:04Z",
+          "progressSequence": 18,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542654.535789125,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542654.007924125,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 41.74053000006825,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1245184,
+          "workDigest": "efb7487915dc7278e69d902d55c08a19f728a38c5ab71a23b51052bfabc74508"
+        },
+        {
+          "elapsedSeconds": 19.26036520837806,
+          "observedAt": "2026-10-14T09:49:05Z",
+          "progressSequence": 19,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542655.5470209583,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542655.0073141666,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 40.72933879168704,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1310720,
+          "workDigest": "2b5db37cb1d7de9a93cfbeca5272c8089b18ec6ae39cd2f3c3814a519904dcd8"
+        },
+        {
+          "elapsedSeconds": 20.273525250027888,
+          "observedAt": "2026-10-14T09:49:06Z",
+          "progressSequence": 20,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542656.560284625,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542656.0078216667,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 39.716374208335765,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1376256,
+          "workDigest": "f62a51413a0fdebf105661dd277a70c8b338e5a7f20721d43a727ee8c827dd12"
+        },
+        {
+          "elapsedSeconds": 21.28606650000438,
+          "observedAt": "2026-10-14T09:49:07Z",
+          "progressSequence": 21,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542657.5733425,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542657.007842875,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 38.70283562503755,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1441792,
+          "workDigest": "81f253b80a2ea6f3693f6167193f6d2f9424da3b7e960ee8d7db8fb40a9481e7"
+        },
+        {
+          "elapsedSeconds": 22.302245375001803,
+          "observedAt": "2026-10-14T09:49:08Z",
+          "progressSequence": 22,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542658.5882229583,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542658.00781625,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 37.688033375074156,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1507328,
+          "workDigest": "b0a7a7b18061b1d795bc71d6f7532852e1fe23442f90e5ec82b5ad2ffbc3680f"
+        },
+        {
+          "elapsedSeconds": 23.31738008337561,
+          "observedAt": "2026-10-14T09:49:09Z",
+          "progressSequence": 23,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542659.6041659584,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542659.007987125,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 36.67223650007509,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1572864,
+          "workDigest": "f4b2c062d90362445dbc56af4628e6511315ab018340fb8818ed5d8adac4e0d1"
+        },
+        {
+          "elapsedSeconds": 24.33214958338067,
+          "observedAt": "2026-10-14T09:49:10Z",
+          "progressSequence": 24,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542660.618528125,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542660.0074575833,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 35.65787183330394,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1638400,
+          "workDigest": "c5a39f56a2e20783139ac1dd0b5128891c04a396b005dea873a4cb0f2c9901d5"
+        },
+        {
+          "elapsedSeconds": 25.343711833353154,
+          "observedAt": "2026-10-14T09:49:11Z",
+          "progressSequence": 25,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542661.6302007083,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542661.0078269166,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 34.64552354172338,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1703936,
+          "workDigest": "291497905f2ee4f8a9069efaf376f5a6156730193f8b1f449557178b9524c1f3"
+        },
+        {
+          "elapsedSeconds": 26.35942329163663,
+          "observedAt": "2026-10-14T09:49:12Z",
+          "progressSequence": 26,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542662.645800625,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542662.007581375,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 33.630258625024,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1769472,
+          "workDigest": "4596a3366738ba3e04647fe0a75534d8e5871397f230425d41ef22665f258db5"
+        },
+        {
+          "elapsedSeconds": 27.375328583293594,
+          "observedAt": "2026-10-14T09:49:13Z",
+          "progressSequence": 27,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542663.6622301667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542663.0079769583,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 32.61409024999011,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1835008,
+          "workDigest": "bf9011bff6ffe3470de06bbb966ae58e7155e99eb62d81132c4d40edc483b4fd"
+        },
+        {
+          "elapsedSeconds": 28.388090625056066,
+          "observedAt": "2026-10-14T09:49:14Z",
+          "progressSequence": 28,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542664.6747482917,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542664.00872775,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 31.6012140000239,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1900544,
+          "workDigest": "2dd78533abe4b857ac7f1faf275585826ffb5a10a3b01e5c1b035c12bfefeac8"
+        },
+        {
+          "elapsedSeconds": 29.40201933332719,
+          "observedAt": "2026-10-14T09:49:15Z",
+          "progressSequence": 29,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542665.689254875,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542665.0075857083,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 30.58646075008437,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 1966080,
+          "workDigest": "d6b327f3c5a3967808e98e0909fa7ab6397bc2aa723450b26f6951a76f88270f"
+        },
+        {
+          "elapsedSeconds": 30.4151432083454,
+          "observedAt": "2026-10-14T09:49:16Z",
+          "progressSequence": 30,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542666.700958375,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542666.0084189583,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 29.57549345830921,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2031616,
+          "workDigest": "b7e0bab0d07e52b281381fee02f368c8bb0ea9ad1f7866af11021ba0caa72ba6"
+        },
+        {
+          "elapsedSeconds": 31.430015458376147,
+          "observedAt": "2026-10-14T09:49:17Z",
+          "progressSequence": 31,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542667.7161441667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542667.006921375,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 28.560278000077233,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2097152,
+          "workDigest": "584fbb12be99ec778613361ca89515d62ccd0402b92ffa9d68aed34cbacac118"
+        },
+        {
+          "elapsedSeconds": 32.44320895837154,
+          "observedAt": "2026-10-14T09:49:18Z",
+          "progressSequence": 32,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542668.7304406667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542668.007740875,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 27.545224333414808,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2162688,
+          "workDigest": "0beca823b527427c6f6abccba22309ee6137100421b0037578e4521d5f2b7302"
+        },
+        {
+          "elapsedSeconds": 33.46033000003081,
+          "observedAt": "2026-10-14T09:49:19Z",
+          "progressSequence": 33,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542669.7471362917,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542669.0078398333,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 26.52893562510144,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2228224,
+          "workDigest": "b007fe445ff5b583c095c4688c75d8afef66d4c93eb6aeebcea0942e670e1cd3"
+        },
+        {
+          "elapsedSeconds": 34.47605120833032,
+          "observedAt": "2026-10-14T09:49:20Z",
+          "progressSequence": 34,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542670.7623608334,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542670.0066862917,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 25.514366208342835,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2293760,
+          "workDigest": "340693c442e3b90c375bc0896d7bbee8fa763a33a3960b36aeb426329dd52251"
+        },
+        {
+          "elapsedSeconds": 35.49112079164479,
+          "observedAt": "2026-10-14T09:49:21Z",
+          "progressSequence": 35,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542671.7774085833,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542671.0076398333,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 24.499254666734487,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2359296,
+          "workDigest": "5db9369e4054831e0a1df5a0cdcb8cc9f3f17fcf68e94f54eeae99fb8e3f1f05"
+        },
+        {
+          "elapsedSeconds": 36.506369000067934,
+          "observedAt": "2026-10-14T09:49:22Z",
+          "progressSequence": 36,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542672.79324975,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542672.0074854583,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 23.483301250031218,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2424832,
+          "workDigest": "cb7176385f8d7c300ce6aa3e77bc4ce3d4892e87a7a3366b56a50dd2d95d6827"
+        },
+        {
+          "elapsedSeconds": 37.51871454168577,
+          "observedAt": "2026-10-14T09:49:23Z",
+          "progressSequence": 37,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542673.8047583334,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542673.00775725,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 22.471667500096373,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2490368,
+          "workDigest": "167223a2ddf34a15b6fb040bc708328ab68052a254676d495fe918cfa1f6a5cb"
+        },
+        {
+          "elapsedSeconds": 38.53242062497884,
+          "observedAt": "2026-10-14T09:49:24Z",
+          "progressSequence": 38,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542674.8185684583,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542674.007593875,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 21.458121833391488,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2555904,
+          "workDigest": "0bf140dc5a39c038e5cee79b8ef68d5ea637ed4606f67a74f4b98ad836cf5a8b"
+        },
+        {
+          "elapsedSeconds": 39.54351533332374,
+          "observedAt": "2026-10-14T09:49:25Z",
+          "progressSequence": 39,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542675.83005275,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542675.0078650833,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 20.446401250083,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2621440,
+          "workDigest": "ccdcfcabb847bf64b067d42895d2459171a49fc552eb9abec9ee8159bab37512"
+        },
+        {
+          "elapsedSeconds": 40.55935900006443,
+          "observedAt": "2026-10-14T09:49:26Z",
+          "progressSequence": 40,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542676.8457830417,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542676.006816375,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 19.43084783339873,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2686976,
+          "workDigest": "33b1875510066b0d3165c19ff2cc11e1dedce3f842146e318586306a6c2cb904"
+        },
+        {
+          "elapsedSeconds": 41.57515029166825,
+          "observedAt": "2026-10-14T09:49:27Z",
+          "progressSequence": 41,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542677.86140825,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542677.0078639584,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 18.415192499989644,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2752512,
+          "workDigest": "eb610bf24a57c77e0b7777c17c1cbc2eab00c5132da38589c4ec7dd670115ab0"
+        },
+        {
+          "elapsedSeconds": 42.58604408334941,
+          "observedAt": "2026-10-14T09:49:28Z",
+          "progressSequence": 42,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542678.86922475,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542678.0069486666,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 17.4082678334089,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2818048,
+          "workDigest": "a1cbdb30233f8ca5786202446a21157e21da0ba7dab4bd98740e785b69c7fc7f"
+        },
+        {
+          "elapsedSeconds": 43.595335208345205,
+          "observedAt": "2026-10-14T09:49:29Z",
+          "progressSequence": 43,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542679.8816600416,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542679.0070549167,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 16.3945716250455,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2883584,
+          "workDigest": "6229e62e16585b9f9e9ca939f053e9a1a831cf715e1f5ff5904a86bfa87a0b01"
+        },
+        {
+          "elapsedSeconds": 44.610976958298124,
+          "observedAt": "2026-10-14T09:49:30Z",
+          "progressSequence": 44,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542680.898068875,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542680.0071677917,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 15.378196666715667,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 2949120,
+          "workDigest": "0316eeb4636a0484ac49bdefa1382e07764f7a2179745afeeb04e164a29e32ae"
+        },
+        {
+          "elapsedSeconds": 45.62695137504488,
+          "observedAt": "2026-10-14T09:49:31Z",
+          "progressSequence": 45,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542681.913609625,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542681.0076487917,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 14.362844499992207,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3014656,
+          "workDigest": "e480619625101551f6e1f85546a56f16861f612d68dc42011b062dd5b1a2a550"
+        },
+        {
+          "elapsedSeconds": 46.642703250050545,
+          "observedAt": "2026-10-14T09:49:32Z",
+          "progressSequence": 46,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542682.9291555,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542682.0067266667,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 13.34736562508624,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3080192,
+          "workDigest": "ee393fb4684d57253dbaeb2c80e6c0f8d3520817d58f8ebd43e62086b9442fc7"
+        },
+        {
+          "elapsedSeconds": 47.6578305416042,
+          "observedAt": "2026-10-14T09:49:33Z",
+          "progressSequence": 47,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542683.9442644167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542682.0067266667,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 12.332209250074811,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3145728,
+          "workDigest": "7a9ad6ffd12f3d1f7b78ea0b618d8036a72844d7bc61e2d0025ee7d5d9d463f8"
+        },
+        {
+          "elapsedSeconds": 48.6735463750083,
+          "observedAt": "2026-10-14T09:49:34Z",
+          "progressSequence": 48,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542684.9600481667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542684.006669875,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 11.316427125013433,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3211264,
+          "workDigest": "34dd6758c2908cf5be0e411173f61877f8faf2dcdcfed135b5a5fa90577447bc"
+        },
+        {
+          "elapsedSeconds": 49.68531112500932,
+          "observedAt": "2026-10-14T09:49:35Z",
+          "progressSequence": 49,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542685.972411625,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542685.0068361667,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 10.304252958390862,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3276800,
+          "workDigest": "4eefb9a7a40a8b314b586a00f307157043c0bbe4f59fa39cba88773680758bc3"
+        },
+        {
+          "elapsedSeconds": 50.70097695838194,
+          "observedAt": "2026-10-14T09:49:36Z",
+          "progressSequence": 50,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542686.9876014167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542686.0062300833,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 9.288909375085495,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3342336,
+          "workDigest": "d115cddae91748c4186e3877cf9262bb0b40353153730c6ece3aa481d11fb53e"
+        },
+        {
+          "elapsedSeconds": 51.716987999971025,
+          "observedAt": "2026-10-14T09:49:37Z",
+          "progressSequence": 51,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542688.0030830833,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542687.0067935833,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 8.273560125031509,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3407872,
+          "workDigest": "9e9c1dddb8787259606e29a6fe515a3df88249ed84331d7ac49f51759ba175a5"
+        },
+        {
+          "elapsedSeconds": 52.73202612507157,
+          "observedAt": "2026-10-14T09:49:38Z",
+          "progressSequence": 52,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542689.01697425,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542689.0077744167,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 7.25991979171522,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3473408,
+          "workDigest": "0d5bcf1ddfce38864b5de1c7b29fa9a6757d265edad621707ef312e57769b3b1"
+        },
+        {
+          "elapsedSeconds": 53.74270800000522,
+          "observedAt": "2026-10-14T09:49:39Z",
+          "progressSequence": 53,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542690.0279479166,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542690.0073925,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 6.248822250054218,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3538944,
+          "workDigest": "f790d342cca81bc826050f0b6ce23ce7b4c06c7f174ce97c499653e4202fd450"
+        },
+        {
+          "elapsedSeconds": 54.7563289583195,
+          "observedAt": "2026-10-14T09:49:40Z",
+          "progressSequence": 54,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542691.0417041667,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542691.0078119166,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 5.235065291752107,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3604480,
+          "workDigest": "468cf59e65dc37c3e74d1ca5d0bbccdfa4a1ab750c13dae1e378874e4d406580"
+        },
+        {
+          "elapsedSeconds": 55.767371416673996,
+          "observedAt": "2026-10-14T09:49:41Z",
+          "progressSequence": 55,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542692.0526524166,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542692.007561875,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 4.224233125103638,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3670016,
+          "workDigest": "68ca4f532428747f6847b5105f34f07e99c749770ee2b8decadedb83bc90f5eb"
+        },
+        {
+          "elapsedSeconds": 56.776920999982394,
+          "observedAt": "2026-10-14T09:49:42Z",
+          "progressSequence": 56,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542693.06317275,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542693.0092632917,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 3.2132574167335406,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3735552,
+          "workDigest": "a643ac588af340c9e123c40e01de8caf7b08359089ccb0f4413fb09294be7425"
+        },
+        {
+          "elapsedSeconds": 57.78868183330633,
+          "observedAt": "2026-10-14T09:49:43Z",
+          "progressSequence": 57,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542694.075408875,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542694.005755625,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 2.2004416250856593,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3801088,
+          "workDigest": "26422e370b9e0500747b533573f9a2de3d6915deb657492f8326c6c7a5fdba4d"
+        },
+        {
+          "elapsedSeconds": 58.805145833292045,
+          "observedAt": "2026-10-14T09:49:44Z",
+          "progressSequence": 58,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542695.089992625,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542695.0077192917,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 1.1870095417834818,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3866624,
+          "workDigest": "008961b09b072e5d0ac6446d1c1490acb4c744bd315fa63264f55cc77f555646"
+        },
+        {
+          "elapsedSeconds": 59.81808283331338,
+          "observedAt": "2026-10-14T09:49:45Z",
+          "progressSequence": 59,
+          "response": {
+            "ok": true,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542696.1041094167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542696.0077359166,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": true,
+                "phase": "active",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 0.17242079169955105,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": true,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3932160,
+          "workDigest": "55493bca59f2bb54d0fa82eb48fc4c61af5b9a8882a8900a30bd8efa2396b523"
+        },
+        {
+          "elapsedSeconds": 60.83086550002918,
+          "observedAt": "2026-10-14T09:49:46Z",
+          "progressSequence": 60,
+          "response": {
+            "error": "lease-not-active",
+            "ok": false,
+            "snapshot": {
+              "hardwareQualified": false,
+              "record": {
+                "allowance": 60,
+                "began": 542636.278293875,
+                "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+                "clientPulse": 542696.1041094167,
+                "deadline": 542696.278293875,
+                "draining": true,
+                "helperPulse": 542697.0086680417,
+                "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+                "needsRestore": false,
+                "phase": "ended",
+                "reason": "expired",
+                "sawClosed": false,
+                "sleepRequestAttempted": false,
+                "sleepRequested": false,
+                "thermalRestart": false,
+                "version": 1
+              },
+              "remainingSeconds": 0,
+              "safety": {
+                "batteryPercent": 100,
+                "lidClosed": false,
+                "onBattery": true,
+                "sleepDisabled": false,
+                "thermal": "nominal"
+              }
+            }
+          },
+          "workBytesHashed": 3997696,
+          "workDigest": "4c9320a20da8fffd14860791fb2136de21715d1e50a80986a2d0eab57dfca06e"
+        },
+        {
+          "event": "driver-exited",
+          "trial": "battery",
+          "observedAt": "2026-10-14T09:49:46.612356+00:00",
+          "status": 0
+        }
+      ],
+      "final": {
+        "event": "root-metadata",
+        "observedAt": "2026-10-14T09:51:40.375316+00:00",
+        "experiment-guard-owner.json": {
+          "seconds": 1791971308,
+          "microseconds": 421145,
+          "pid": 14202
+        },
+        "daemon-owner.json": {
+          "pid": 14199,
+          "seconds": 1791971308,
+          "microseconds": 401578
+        },
+        "watcher-owner.json": {
+          "microseconds": 393645,
+          "seconds": 1791971308,
+          "pid": 14197
+        },
+        "power-child.json": null,
+        "recovery.json": {
+          "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+          "thermalRestart": false,
+          "began": 542636.278293875,
+          "sleepRequestAttempted": false,
+          "needsRestore": false,
+          "identity": "36E0B8AB-4450-43C4-8257-59C368A0CE0C",
+          "reason": "expired",
+          "clientPulse": 542696.1041094167,
+          "allowance": 60,
+          "deadline": 542696.278293875,
+          "version": 1,
+          "helperPulse": 542697.0086680417,
+          "sawClosed": false,
+          "phase": "ended",
+          "draining": true,
+          "sleepRequested": false
+        },
+        "experiment-cleanup.log": "{\"record\":{\"thermalRestart\":false,\"began\":542636.278293875,\"draining\":true,\"version\":1,\"sleepRequestAttempted\":false,\"boot\":\"00C99374-E4B9-4967-A611-267395C308D9\",\"needsRestore\":false,\"identity\":\"36E0B8AB-4450-43C4-8257-59C368A0CE0C\",\"sawClosed\":false,\"helperPulse\":542697.0086680417,\"clientPulse\":542696.1041094167,\"deadline\":542696.278293875,\"allowance\":60,\"reason\":\"expired\",\"phase\":\"ended\",\"sleepRequested\":false},\"safety\":{\"lidClosed\":false,\"batteryPercent\":100,\"onBattery\":true,\"sleepDisabled\":false,\"thermal\":\"nominal\"},\"hardwareQualified\":false,\"remainingSeconds\":0}\n",
+        "guardProcess": {
+          "available": false,
+          "errno": 3
+        },
+        "helperAndPlistsAbsent": true,
+        "com.catcode.lid-closed": {
+          "exit": 113,
+          "output": "Bad request.\nCould not find service \"com.catcode.lid-closed\" in domain for system\n"
+        },
+        "com.catcode.lid-closed.recovery": {
+          "exit": 113,
+          "output": "Bad request.\nCould not find service \"com.catcode.lid-closed.recovery\" in domain for system\n"
+        }
+      },
+      "measurement": {
+        "samples": 61,
+        "closedSamples": 0,
+        "firstTimestamp": "2026-10-14T09:48:45Z",
+        "lastTimestamp": "2026-10-14T09:49:46Z",
+        "remainingDeadlineUnrenewed": true,
+        "restoreStartAfterDeadlineSeconds": 0.7303741666255519,
+        "restorationConfirmedAtElapsedSeconds": 60.83086550002918,
+        "progressBytes": 3997696,
+        "reason": "expired",
+        "fallbackUsed": false,
+        "manualRemovalUsed": false,
+        "qualification": "Battery open-lid progress/expiry/restoration/removal observed; physical closed-lid and Sleep unqualified"
+      },
+      "status": "physical qualification unobserved; testing stopped at operator request"
     }
   ]
 }

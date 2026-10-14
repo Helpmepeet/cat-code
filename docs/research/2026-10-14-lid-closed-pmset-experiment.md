@@ -242,7 +242,7 @@ until actual timestamps and observations replace the NOT RUN entries.
 
 ## Remaining product integration
 
-Continuation has a separate [physical qualification report](2026-10-14-lid-closed-physical-qualification.md): its approved installation-only attempt failed before guardian launch, then restore-first cleanup removed authority with SleepDisabled=false. The [exact guardian launch repair/retry packet](2026-10-14-lid-closed-qualification-retry.md) awaits new approval and an additional installation allowance. The installation packet above and results below remain historical evidence and do not authorize a replacement payload.
+Continuation has a separate [physical qualification report](2026-10-14-lid-closed-physical-qualification.md): its initial installation failed before guardian launch and was cleaned up. The approved [guardian launch repair/retry report](2026-10-14-lid-closed-qualification-retry.md) verifies idle cleanup and one open-lid battery lease's expiry/restoration. The close cue was missed; testing is stopped with physical qualification incomplete. The installation packet above and results below remain historical evidence and do not authorize a replacement payload.
 
 After mechanism qualification: bind the real app parent, implement app-wide run
 inventory and enrollment through handoffs/background descendants, temporary

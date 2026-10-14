@@ -1,6 +1,6 @@
 # Lid-closed guardian launch repair and retry approval packet
 
-Prepared 2026-10-14. Status: **AWAITING EXACT REPLACEMENT APPROVAL AND AGREEMENT TO ONE ADDITIONAL INSTALLATION; NOT INSTALLED**.
+Prepared 2026-10-14. Approved by the operator for the exact hashes/commands, four further installations (five total attempts) and three 60-second leases. Status: **IDLE CHECK PASSED; BATTERY/LID ATTEMPT UNQUALIFIED; TESTING STOPPED AT OPERATOR REQUEST; INSTALLATION REMOVED**.
 
 The [approved installation-only check](2026-10-14-lid-closed-physical-qualification.md#installation-only-observation-2026-10-14) failed at macOS nohup console detachment before the guardian started. Its restore-first failure path removed authority. One installation attempt was used, zero leases. Independent observations confirmed SleepDisabled=false, no helper/plists/jobs or remaining helper processes, no guard ownership marker, and no pending power child. Preserve [raw observations](2026-10-14-lid-closed-qualification-evidence.json) and all c9a8af09 recovery evidence. No physical lid, power or Sleep action has been performed.
 
@@ -66,6 +66,30 @@ sudo /usr/bin/pmset -a disablesleep 0
 
 If the child-retirement path is broken, retain evidence and diagnose before removing recovery authority. Independently observe kernel SleepDisabled=false after fallback, then run restore-first removal. Report fallback use. Confirm both helper/plist removal and missing-service results, guardian exit, and absence of pending power children before any extended wait. Root recovery evidence is retained.
 
-## Evidence limits
+## Evidence limits before replacement approval
 
 The identical native helper preserves the prior automated Core/process checks and historical open-lid recovery results. The replacement installer compiles/pins/verifies and passes shell syntax checks. Requested review-impl found no new defect in the launch repair. A real, harmless unprivileged Swift child launched through AppleScript do shell script returned control in 0.296 seconds, remained alive after its launcher exited, survived explicit SIGHUP and wrote completion after five seconds (launcher PID 9898, child PID 9900). A separate non-root shell probe also survived SIGHUP. These prove the shell/process contract without installation, administrator privileges or power operations. The administrator authorization environment and actual root guardian remain UNPROVEN until the new idle trial. Actual battery lid closure, ordinary Sleep, End mode and sleep, Electron lifecycle, cup/shared notice UI and packaged app/helper boundary remain unqualified or unimplemented. The feature is incomplete. App integration follows physical success under the specification and requires its own actual UI/package verification.
+
+## Observations after replacement approval
+
+### Repaired installation-only check
+
+Installation attempt 2 verified the approved payload and launched both jobs plus guardian PID 13821. Root observation matched the guard marker to the kernel PID/birth identity, UID 0 and exact installed executable. No lease was started. The native snapshot observed SleepDisabled=false, lid open, battery source at 100 percent and nominal thermal category. These readings do not qualify closed-lid operation, actual sleep or thermal protection.
+
+The administrator launcher returned while the guard continued independently. The guard's restoration-confirmed snapshot was written at 09:36:22.609390 UTC, 30.050 seconds after its kernel birth time. The independent removal/exit observation began after cleanup and confirmed helper/plists absent, SleepDisabled=false and that exact guardian gone (kernel ESRCH) by 52.509 seconds after birth. This is an observation upper bound, not an exact removal/exit timestamp. At 09:39:00 UTC root verification confirmed both jobs specifically missing (launchctl 113), the guard absent, no power child, and retained journal draining=true/needsRestore=false/sleepRequested=false. No manual removal or fallback was used.
+
+This check qualifies the repaired launch and idle cleanup under this one administrator-session scenario. It does not establish unconditional guardian survival or recovery. The prior c9a8af09 recovery evidence remains separate.
+
+### First battery/lid attempt
+
+After explicit readiness and agreement to a separate 20-second reopening step, installation attempt 3 launched guardian PID 14202. Lease 1 began at 09:48:45 UTC (16:48:45 Bangkok), confirmed battery source at 100 percent, nominal category and SleepDisabled=true. A close-now cue was sent after activation confirmation. The trace contains 61 SHA work samples through 09:49:46 UTC: each reported lidClosed=false and onBattery=true; there were zero closed-lid samples. Deadline remained fixed. The operator subsequently reported missing the cue and requested that pending preparation finish, then testing stop and wait. No physical closure/reopening confirmation was supplied; do not infer physical actions from elapsed time.
+
+The lease expired rather than ending for lid opening. Its recorded restoration began 0.730 seconds after the original deadline; the driver confirmed SleepDisabled=false/needsRestore=false/reason=expired at elapsed 60.831 seconds and exited with status 0. Total sampled SHA work reached 3,997,696 bytes. This proves open-lid battery progress and expiry/restoration, not closed-lid operation or actual sleep. At 09:51:40 UTC root verification showed helper/plists absent, both jobs missing (113), guardian PID 14202 absent (ESRCH), no power child, and retained ended/draining recovery with no sleep request. No manual removal or fallback was used. Subsequent independent checks again showed the flag false and files absent.
+
+Raw observations and trace are retained in [the evidence file](2026-10-14-lid-closed-qualification-evidence.json). Physical battery/lid qualification, ordinary Sleep, actual End mode and sleep, and app/UI/package integration remain incomplete.
+
+### Current limits and stopped state
+
+Three of five total installation attempts and one of three leases have been used. Two installations and two leases remain under this approval. The missed-cue lease cannot be silently reset or reused. Completing a new battery/lid attempt plus the two separately specified Sleep trials would require agreement to one additional installation and one additional 60-second lease. No further trial is started or authorized by that observation alone.
+
+Testing is stopped at the operator's request. Finish only independent preparation/documentation and wait for a new instruction. Keep the machine restored and the experimental installation removed during that wait; coordinate any resumed physical action explicitly.
