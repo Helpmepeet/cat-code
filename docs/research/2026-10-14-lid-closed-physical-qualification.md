@@ -1,6 +1,6 @@
 # Lid-closed remaining physical qualification packet
 
-Prepared: 2026-10-14. Status: **AWAITING EXACT APPROVAL; NOT INSTALLED OR RUN**.
+Prepared: 2026-10-14. Approved by the operator for these exact hashes and bounded actions. Status: **INSTALLATION-ONLY CHECK FAILED; RESTORATION/REMOVAL VERIFIED; NO LEASE STARTED**. This historical packet must not be used for a retry with modified source.
 
 This packet continues [the experiment report](2026-10-14-lid-closed-pmset-experiment.md). Preserve its c9a8af09 recovery evidence and raw artifact. Its previous installation was removed and SleepDisabled was false. That approval does not cover this replacement. No closed-lid or intentional Sleep result is implied here.
 
@@ -92,3 +92,15 @@ Full helper compiles and its prepared ordinary signature, payload manifest and s
 ## Product gate
 
 After physical qualification succeeds, complete app-wide enrollment/context/lifecycle and numeric cup/shared notice UX from [the specification](../design/2026-10-13-lid-closed-mode-spec.md), then verify actual Cat Code Dev interaction and packaged app/helper authentication. This proof packet does not install a qualified production app/helper configuration. No UI or feature-complete claim is made while those layers remain unverified.
+
+## Installation-only observation, 2026-10-14
+
+The first approved installation attempt verified its pinned installer/payload, then failed while launching the temporary guardian. The root cleanup log records `nohup: can't detach from console: Inappropriate ioctl for device`. The guardian ownership marker was never created. The installer readiness check rejected the exited background process and its failure trap performed restore-first removal. No lease, lid action, unplugging, or intentional Sleep occurred. One installation attempt is counted conservatively against the four-installation cap; zero of three leases were used.
+
+At 08:40:46 UTC the independent kernel observation showed SleepDisabled=false and an open lid, with helper and both plist files absent. At 08:42:45 UTC root observation confirmed both jobs missing (launchctl exit 113), no remaining helper processes, no guardian marker and no power-child record. The retained journal was ended/draining, needsRestore=false, sleepRequested=false; its earlier identity and supervision-loss evidence were preserved. No fallback was needed. There is no measured 30-second guardian cleanup result: the guardian did not launch. The overall AppleScript wrapper returned zero because later read-only commands succeeded; this is not an installation success receipt.
+
+Raw scoped observations are retained in [qualification evidence](2026-10-14-lid-closed-qualification-evidence.json). Apple's [upstream nohup implementation](https://raw.githubusercontent.com/apple-oss-distributions/shell_cmds/main/nohup/nohup.c) exits when private console detachment fails, before exec of the requested command. That source explains the observed diagnostic; it is not disassembly of the installed utility.
+
+The source repair replaces nohup with a redirected background shell that ignores SIGHUP before exec. It does not change Core, power commands, caller authentication or the helper deadline. Its root effect remains unqualified. A replacement packet and agreement to one additional installation-only trial are required before retry; completing that retry and the original three physical leases would raise the installation cap from four to five total attempts. No such retry is authorized by the original packet.
+
+The [exact replacement/retry packet](2026-10-14-lid-closed-qualification-retry.md) is now prepared and awaits that approval. Its helper bytes are unchanged; installer and expiring configuration hashes differ. Harmless process checks prove the replacement shell launch survives launcher exit and SIGHUP; they do not prove administrator-session survival or root cleanup.

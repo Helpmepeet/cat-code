@@ -70,7 +70,13 @@ lid_verified=true
 /bin/launchctl bootstrap system "$daemon"
 "$helper" --resume-after-install
 /bin/rm -f "$state/experiment-guard-owner.json"
-/usr/bin/nohup "$helper" --guard-experiment > "$state/experiment-cleanup.log" 2>&1 < /dev/null &
+# macOS nohup calls a console-detachment SPI which fails in administrator
+# authorization sessions. Ignore hangup in the shell and inherit it across exec;
+# the guard needs neither a terminal nor that private console operation.
+(
+  trap '' HUP
+  exec "$helper" --guard-experiment
+) > "$state/experiment-cleanup.log" 2>&1 < /dev/null &
 lid_guard_pid=$!
 for ((lid_check=0; lid_check<20; lid_check++)); do
   kill -0 "$lid_guard_pid" || exit 1

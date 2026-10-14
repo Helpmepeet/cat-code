@@ -242,7 +242,7 @@ until actual timestamps and observations replace the NOT RUN entries.
 
 ## Remaining product integration
 
-Continuation now has a separate [remaining physical qualification packet](2026-10-14-lid-closed-physical-qualification.md), awaiting approval for its exact replacement hashes. The installation packet above and the results below remain historical evidence; they do not authorize the replacement payload.
+Continuation has a separate [physical qualification report](2026-10-14-lid-closed-physical-qualification.md): its approved installation-only attempt failed before guardian launch, then restore-first cleanup removed authority with SleepDisabled=false. The [exact guardian launch repair/retry packet](2026-10-14-lid-closed-qualification-retry.md) awaits new approval and an additional installation allowance. The installation packet above and results below remain historical evidence and do not authorize a replacement payload.
 
 After mechanism qualification: bind the real app parent, implement app-wide run
 inventory and enrollment through handoffs/background descendants, temporary

@@ -1,0 +1,54 @@
+{
+  "trials": [
+    {
+      "observedAt": "2026-10-14T08:42:45.100598+00:00",
+      "installationAttempt": 1,
+      "leasesStarted": 0,
+      "experiment-guard-owner.json": null,
+      "experiment-cleanup.log": "nohup: can't detach from console: Inappropriate ioctl for device\n",
+      "recovery.json": {
+        "reason": "supervision-lost",
+        "thermalRestart": false,
+        "deadline": 527019.50698975,
+        "allowance": 60,
+        "phase": "ended",
+        "draining": true,
+        "began": 526959.50698975,
+        "boot": "00C99374-E4B9-4967-A611-267395C308D9",
+        "sleepRequested": false,
+        "sawClosed": false,
+        "version": 1,
+        "clientPulse": 526959.5131607917,
+        "identity": "5D6AFE14-419F-4FAF-8BF7-9D14E9142E2A",
+        "needsRestore": false,
+        "helperPulse": 526965.3707033333,
+        "sleepRequestAttempted": false
+      },
+      "power-child.json": null,
+      "com.catcode.lid-closed": {
+        "exit": 113,
+        "output": "Bad request.\nCould not find service \"com.catcode.lid-closed\" in domain for system\n"
+      },
+      "com.catcode.lid-closed.recovery": {
+        "exit": 113,
+        "output": "Bad request.\nCould not find service \"com.catcode.lid-closed.recovery\" in domain for system\n"
+      },
+      "helperAndPlistsAbsent": true,
+      "remainingHelperProcesses": [],
+      "failure": {
+        "stage": "installation-only",
+        "message": "nohup: can't detach from console: Inappropriate ioctl for device",
+        "idleGuardianTimingQualified": false,
+        "guardianStarted": false,
+        "physicalActionsPerformed": false,
+        "fallbackUsed": false,
+        "source": "approved installer 9c649e7016037316e36287f4f9758d3ac6c5ba9ebc36bf91c492597c08235332"
+      },
+      "kernelAfterCleanup": {
+        "observedAt": "2026-10-14T08:40:46.142Z",
+        "SleepDisabled": false,
+        "lidClosed": false
+      }
+    }
+  ]
+}
