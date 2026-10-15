@@ -16,8 +16,6 @@ user requirement or security constraint. Flag meaningful documentation drift.
   creating or changing UI; `app/renderer/src/theme.css` owns exact tokens.
 - `docs/maps/`: navigation maintained against source. Dated plans and migration
   program records describe past work; decision records may contain later amendments.
-- `renderer-theme/` and `scripts/typecheck/renderer-engine-types/`: legacy
-  harnesses; do not extend them.
 
 There is no public compatibility or rollout obligation. Preserve the user's
 saved sessions, settings, credentials, and running work when changing formats.

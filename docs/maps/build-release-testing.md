@@ -1,10 +1,9 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-10-12 against `CLAUDE.md`,
+Last refreshed: 2026-10-15 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/workspace-map-eval/`, `scripts/harness-design-eval/`,
 `scripts/test-codex-*.ts`,
-`scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
 `app/package.json`, `app/scripts/`, `src/migrations/`,
 update/release/upgrade command surfaces, and colocated tests.
 
@@ -52,8 +51,6 @@ files, then verify current source before changing code.
 | Development build | `scripts/build.ts` | `package.json` | `bun run build:dev` emits `./cli-dev`, sets development macros, experimental-build env, dev semver suffix, and git-log changelog macro. |
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
-| Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | Legacy design-token harness retained for reference; current desktop renderer work belongs under `app/renderer/`. Do not extend this harness. |
-| Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | Legacy type-only harness retained for reference. Use the current desktop and sidecar typecheck boundaries for active work; do not extend this harness. |
 | Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/main/mainDecisions.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process; `SIDECAR_RUNTIME_ARGS` enables the classifier and reactive-compaction runtime features. |
 | Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the hardening route also protects the fixed native file-selection boundary. The root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar/` and `app/shared/` diagnostics while tolerating known upstream engine diagnostics. |
 | Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/main/mainDecisions.ts`, `app/sidecar/packagedEntry.ts`, `app/sidecar/packagedEnvironment.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS arm64 `.app` into its generated output directory, wiping that directory first. It compiles the sidecar and its engine graph into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development. It also verifies and copies the pinned arm64 ripgrep companion into `Contents/Resources/bin`, appends that directory after the user's paths in the packaged sidecar's `PATH`, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID`, sets `com.catcode.desktop`, and ad-hoc signs both nested executables before the bundle. No package-manager packaging dependency is involved. |
@@ -216,8 +213,6 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Undefined-name gate | `bun run lint:undefined-names` | `scripts/undefinedNamesLint.ts`, `tsconfig.json` |
 | Docs-only whitespace/path sanity | `git diff --check` | Git diff |
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
-| Portable renderer theme | `cd renderer-theme && bun run build` | `renderer-theme/package.json`, Vite |
-| Renderer engine-type fixture | `bunx tsc --project scripts/typecheck/renderer-engine-types/tsconfig.json --noEmit` | Isolated renderer type-adoption config |
 | Electron desktop tests | `bun test app/` | Desktop unit, boundary, and round-trip tests |
 | Electron desktop typechecks | `bun run --cwd app typecheck && bun run --cwd app typecheck:sidecar` | Snapshot-isolated shell graph plus scoped real engine-sidecar diagnostics |
 | Electron desktop renderer | `bun run --cwd app renderer:build` | Vite renderer bundle |

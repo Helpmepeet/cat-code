@@ -8,7 +8,6 @@ const generatedPath = join(repoRoot, 'src/entrypoints/sdk/coreTypes.generated.ts
 const effortSnapshotPaths = [
   generatedPath,
   join(repoRoot, 'app/shared/sdk-types.snapshot.d.ts'),
-  join(repoRoot, 'scripts/typecheck/renderer-engine-types/sdk-types.snapshot.d.ts'),
 ]
 
 const schemas = readFileSync(schemasPath, 'utf-8')
@@ -134,7 +133,7 @@ for (const path of effortSnapshotPaths) {
 
 /**
  * `agent_name` is schema-owned transcript identity on nested subagent frames.
- * Keep the generated public type and both isolated-renderer snapshots in lock
+ * Keep the generated public type and the desktop snapshot in lock
  * step with the schema source, just as supportedEffortLevels above does.
  */
 const hasAgentNameSchema = /agent_name:\s*z\.string\(\)\.optional\(\)/.test(schemas)

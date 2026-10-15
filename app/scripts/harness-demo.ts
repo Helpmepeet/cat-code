@@ -31,10 +31,11 @@ async function main(): Promise<void> {
     return
   }
 
-  scratch = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-harness-cwd-')))
-  configHome = mkdtempSync(join(tmpdir(), 'catcode-harness-config-'))
-
   try {
+    scratch = mkdtempSync(join(tmpdir(), 'catcode-harness-cwd-'))
+    scratch = realpathSync(scratch)
+    configHome = mkdtempSync(join(tmpdir(), 'catcode-harness-config-'))
+
     const build = spawnSync('bun', ['run', join(here, 'build-electron.ts')], {
       stdio: 'inherit',
     })
