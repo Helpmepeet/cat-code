@@ -558,13 +558,8 @@ async function* runAgentInCleanupScope({
   const workerName =
     persistedWorkerHandle ??
     agentName ??
-    allocateWorkerName(agentDefinition.agentType, reservedWorkerHandles, {
-      allowGeneric: Boolean(sessionStateTracking),
-    })
-  const workerHandle = workerName ?? agentId
-  if (workerName) {
-    setupCleanups.push(() => releaseWorkerName(workerName))
-  }
+    allocateWorkerName(reservedWorkerHandles)
+  setupCleanups.push(() => releaseWorkerName(workerName))
 
   // Route this agent's transcript into a grouping subdirectory if requested
   // (e.g. workflow subagents write to subagents/workflows/<runId>/).
@@ -786,7 +781,7 @@ async function* runAgentInCleanupScope({
       resolvedAgentProvider,
       additionalWorkingDirectories,
       resolvedTools,
-      workerName ?? undefined,
+      workerName,
     ))
   const agentSystemPrompt = asSystemPrompt(
     workerCapabilityLine
@@ -1142,7 +1137,7 @@ async function* runAgentInCleanupScope({
     agentType: agentDefinition.agentType,
     model: resolvedAgentModel,
     provider: resolvedAgentProvider,
-    ...(workerName && { agentName: workerName }),
+    agentName: workerName,
     ...(cwd && { assignedCwd: cwd }),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
@@ -1158,7 +1153,7 @@ async function* runAgentInCleanupScope({
       ...(sessionStateTracking.statePath
         ? { statePath: sessionStateTracking.statePath }
         : {}),
-      handle: workerHandle,
+      handle: workerName,
       agentId,
       role: agentDefinition.agentType,
       description: description ?? 'Continue current objective',
@@ -1400,7 +1395,7 @@ async function* runAgentInCleanupScope({
     // instead of background shells: a worker's own child processes should not
     // outlive the worker.
     killDelegatedChildrenForAgent(agentId)
-    if (workerName) releaseWorkerName(workerName)
+    releaseWorkerName(workerName)
     /* eslint-disable @typescript-eslint/no-require-imports */
     if (feature('MONITOR_TOOL')) {
       const mcpMod =

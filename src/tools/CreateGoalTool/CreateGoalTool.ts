@@ -86,7 +86,6 @@ export const CreateGoalTool = buildTool({
       context,
       objective: input.objective,
       tokenBudget: input.token_budget,
-      resetWorkers: true,
     })
 
     return {

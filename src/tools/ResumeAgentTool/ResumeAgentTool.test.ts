@@ -275,7 +275,6 @@ describe('ResumeAgentTool', () => {
     writeSessionState(sessionId, {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
       knownWorkers: {
         'agent-current': {
           agentId: 'agent-current',

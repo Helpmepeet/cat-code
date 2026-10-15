@@ -23,16 +23,6 @@ import {
   updateThreadGoalStatusAction,
 } from './threadGoalActions.js'
 
-// No module mocking here on purpose. `withSession` points the session at a
-// temp project dir, so the real `updateSessionObjective` runs against it.
-// Stubbing it would have been a second file in this suite mocking
-// `utils/workerState.js`, and `mock.module` is process-global: the last
-// registration in a run wins and silently disarms the others.
-//
-// These tests therefore assert the goal state each action owns, NOT the Agent
-// Mode objective write. That write no-ops for a session with no existing
-// state file, so asserting it here would prove nothing about either.
-
 const originalSessionId = getSessionId()
 const originalProjectDir = getSessionProjectDir()
 const tempDirs: string[] = []
@@ -249,7 +239,6 @@ describe('goal control actions', () => {
       status: 'active',
       reason: 'user_resumed',
       actor: 'agent',
-      objective: complete.objective,
     })
 
     expect(result.ok).toBe(false)

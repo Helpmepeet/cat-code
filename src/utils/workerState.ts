@@ -27,7 +27,6 @@ export type WorkerSession = {
 export type WorkerSessionState = {
   sessionId: string
   mode: SessionMode
-  activeWorkers: Record<string, { role: string; agentId: string }>
   knownWorkers: Record<string, WorkerSession>
 }
 
@@ -108,23 +107,6 @@ function normalizePersistedSessionState(
   const mode = normalizeSessionMode(raw.mode)
   if (!mode || typeof raw.sessionId !== 'string') return null
 
-  const activeWorkers: WorkerSessionState['activeWorkers'] = {}
-  if (raw.activeWorkers && typeof raw.activeWorkers === 'object') {
-    for (const [handle, candidate] of Object.entries(raw.activeWorkers)) {
-      if (!candidate || typeof candidate !== 'object') continue
-      const worker = candidate as Record<string, unknown>
-      if (
-        typeof worker.role === 'string' &&
-        typeof worker.agentId === 'string'
-      ) {
-        activeWorkers[handle] = {
-          role: worker.role,
-          agentId: worker.agentId,
-        }
-      }
-    }
-  }
-
   const knownWorkers: WorkerSessionState['knownWorkers'] = {}
   if (raw.knownWorkers && typeof raw.knownWorkers === 'object') {
     for (const [agentId, candidate] of Object.entries(raw.knownWorkers)) {
@@ -133,7 +115,7 @@ function normalizePersistedSessionState(
     }
   }
 
-  return { sessionId: raw.sessionId, mode, activeWorkers, knownWorkers }
+  return { sessionId: raw.sessionId, mode, knownWorkers }
 }
 
 async function readStateFile(path: string): Promise<WorkerSessionState | null> {
@@ -207,7 +189,6 @@ export function createSessionState(opts: {
   return {
     sessionId: opts.sessionId,
     mode: normalizeSessionMode(opts.mode) ?? 'normal',
-    activeWorkers: {},
     knownWorkers: {},
   }
 }
@@ -251,19 +232,6 @@ export async function recordWorkerSessionSpawn({
       const effectiveHandle = existing?.handle ?? handle ?? agentId
       const effectiveSpawnedAt = existing?.spawnedAt ?? spawnedAt
       const terminalStatus = existing?.status
-      const isAlreadyTerminal =
-        terminalStatus !== undefined && terminalStatus !== 'running'
-
-      if (isAlreadyTerminal) {
-        for (const [activeHandle, worker] of Object.entries(
-          state.activeWorkers,
-        )) {
-          if (worker.agentId === agentId) delete state.activeWorkers[activeHandle]
-        }
-      } else {
-        state.activeWorkers[effectiveHandle] = { role, agentId }
-      }
-
       state.knownWorkers[agentId] = {
         ...existing,
         agentId,
@@ -354,10 +322,6 @@ export async function recordWorkerSessionTerminal({
     state => {
       const existing = state.knownWorkers[agentId]
       if (!existing && !createStateIfMissing) return
-
-      for (const [handle, worker] of Object.entries(state.activeWorkers)) {
-        if (worker.agentId === agentId) delete state.activeWorkers[handle]
-      }
 
       state.knownWorkers[agentId] = {
         agentId,

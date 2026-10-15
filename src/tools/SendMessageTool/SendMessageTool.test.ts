@@ -71,7 +71,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
     writeSessionState(sessionId, {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
       knownWorkers: {
         'agent-persistent': {
           agentId: 'agent-persistent',

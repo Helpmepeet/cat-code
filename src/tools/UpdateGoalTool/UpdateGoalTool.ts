@@ -284,7 +284,6 @@ export const UpdateGoalTool = buildTool({
         : 'agent_reported_blocked',
       actor: 'agent',
       expectedRevision: currentGoal.revision,
-      ...(isCompletion ? { objective: '', resetWorkers: true } : {}),
     })
 
     if (!result.ok) {

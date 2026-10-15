@@ -3,8 +3,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   allocateWorkerName,
   releaseWorkerName,
-  reserveWorkerName,
   resetWorkerNamesForTests,
+  selectWorkerNameCandidate,
   tryReserveWorkerName,
 } from './workerNames.js'
 
@@ -19,43 +19,43 @@ describe('workerNames', () => {
   test('allocates generic handles for workers', () => {
     Math.random = () => 0
 
-    expect(allocateWorkerName('implementor')).toBe('Ada')
+    expect(allocateWorkerName()).toBe('Ada')
   })
 
   test('skips names already reserved by restored workers', () => {
     Math.random = () => 0
-    reserveWorkerName('Ada')
+    expect(tryReserveWorkerName('Ada')).toBe(true)
 
-    expect(allocateWorkerName('implementor')).toBe('Katherine')
+    expect(allocateWorkerName()).toBe('Katherine')
   })
 
   test('does not immediately reuse a released worker handle', () => {
     Math.random = () => 0
 
-    const firstName = allocateWorkerName('implementor')
-    if (firstName) releaseWorkerName(firstName)
+    const firstName = allocateWorkerName()
+    releaseWorkerName(firstName)
 
-    expect(allocateWorkerName('implementor')).toBe('Katherine')
+    expect(allocateWorkerName()).toBe('Katherine')
   })
 
   test('uses a suffixed handle when the pool is exhausted', () => {
     Math.random = () => 0
     const names = Array.from(
       { length: 75 },
-      () => allocateWorkerName('implementor'),
+      () => allocateWorkerName(),
     )
 
     expect(new Set(names).size).toBe(75)
-    expect(allocateWorkerName('implementor')).toBe('Ada-2')
+    expect(allocateWorkerName(['ADA-2', 'ada-3'])).toBe('Ada-4')
+    expect(allocateWorkerName()).toBe('Katherine-2')
   })
 
-  test('skips reserved generic handles', () => {
+  test('excludes restored names case-insensitively without reserving candidate selection', () => {
     Math.random = () => 0
-    reserveWorkerName('Ada')
 
-    expect(
-      allocateWorkerName('general-purpose'),
-    ).toBe('Katherine')
+    expect(selectWorkerNameCandidate(['ada'])).toBe('Katherine')
+    expect(tryReserveWorkerName('Katherine')).toBe(true)
+    expect(allocateWorkerName(['ADA'])).toBe('Johnson')
   })
 
   test('atomic reservation rejects a case-variant of an already-held name', () => {

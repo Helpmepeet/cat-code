@@ -49,7 +49,6 @@ function ReplaceGoalConfirmation({
       context,
       objective,
       tokenBudget,
-      resetWorkers: true,
     })
     onDone(formatThreadGoalSummary(nextGoal), { display: 'system' })
   }
@@ -193,7 +192,6 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       status: 'paused',
       reason: 'user_paused',
       actor: 'user',
-      objective: currentGoal.objective,
     })
     if (!paused.ok) {
       onDone('Could not pause this goal.', { display: 'system' })
@@ -227,7 +225,6 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       status: 'active',
       reason: 'user_resumed',
       actor: 'user',
-      objective: currentGoal.objective,
     })
     if (!resumed.ok) {
       onDone('Could not resume this goal.', { display: 'system' })
@@ -242,7 +239,6 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       context,
       objective: parsed.objective,
       tokenBudget: parsed.tokenBudget,
-      resetWorkers: true,
     })
     onDone(formatThreadGoalSummary(nextGoal), { display: 'system' })
     return null
@@ -263,7 +259,6 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
     context,
     objective: parsed.objective,
     tokenBudget: parsed.tokenBudget,
-    resetWorkers: true,
   })
   onDone(formatThreadGoalSummary(nextGoal), { display: 'system' })
   return null
