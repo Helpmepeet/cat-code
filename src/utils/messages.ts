@@ -5801,8 +5801,11 @@ export function stripAdvisorBlocks(
   return changed ? result : messages
 }
 
+// The message lands between tool calls so a correction can change the next
+// step. Deferring every message to the end of the task ran the stale plan to
+// completion first; additions still wait so they do not abandon work midway.
 const HUMAN_INTERRUPT_WRAPPER = (raw: string): string =>
-  `The user sent a new message while you were working:\n${raw}\n\nIMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it.`
+  `The user sent a new message while you were working:\n${raw}\n\nIMPORTANT: If it corrects, redirects, or stops what you are doing, act on it before your next step. Otherwise finish your current task first, then address it.`
 
 export function wrapCommandText(
   raw: string,

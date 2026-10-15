@@ -123,6 +123,20 @@ work or side effects that already completed.`
     )
   })
 
+  test('a user correction takes effect at the next step, not after the task', () => {
+    // Delivery already lands between tool calls; the old wording told the model
+    // to finish the current task first, so a "stop, wrong file" ran the stale
+    // plan to completion before it was acted on.
+    const wrapped = wrapCommandText('stop, wrong file', undefined)
+
+    expect(wrapped).toContain('stop, wrong file')
+    expect(wrapped).toContain(
+      'If it corrects, redirects, or stops what you are doing, act on it before your next step.',
+    )
+    expect(wrapped).toContain('Otherwise finish your current task first')
+    expect(wrapped).not.toContain('After completing your current task')
+  })
+
   test('attributes a peer message to its sender, never to the user', () => {
     // A message from another session was falling through the closed-union
     // switch to the human default, which told a mid-turn recipient "The user
