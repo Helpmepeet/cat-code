@@ -31,7 +31,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-12 |
 | [`docs/maps/config-persistence.md`](config-persistence.md) | Settings layers, project identity, workspace path discovery, transcripts, memory, migrations, and persistence scope. | 2026-10-12 |
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-09-21 |
-| [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-10-12 |
+| [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-10-15 |
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
 | [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-14 |
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-09-29 |
