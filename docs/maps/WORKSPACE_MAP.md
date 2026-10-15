@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-10-14
+Last refreshed: 2026-10-15
 
 ## Purpose
 
@@ -35,7 +35,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
 | [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-14 |
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-09-29 |
-| [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, voice, and macOS power feasibility. | 2026-10-14 |
+| [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, voice, and the experimental macOS lid-closed helper. | 2026-10-15 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-09-29 |
 | [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, evaluation harnesses, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-10-12 |
 | [`docs/maps/harness-design-eval.md`](harness-design-eval.md) | Offline log audit and fixed-case task-restoration evaluation harness. | 2026-10-12 |
@@ -64,7 +64,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | Electron desktop app | `app/main/main.ts`, `app/supervisor/supervisor.ts` | `app/sidecar/`, `app/preload/preload.ts`, `app/renderer/`, `app/shared/` | [`docs/maps/web-app-runtime.md`](web-app-runtime.md), [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | IDE and LSP integration | `src/services/lsp/manager.ts`, `src/commands/ide/` | `src/tools/LSPTool/`, IDE components/hooks/utils, plugin LSP integration | [`docs/maps/ide-lsp.md`](ide-lsp.md) |
 | Native/browser/client integrations | `src/utils/claudeInChrome/`, `src/utils/computerUse/` | `src/native-ts/`, `src/voice/`, desktop/mobile/chrome/voice commands | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) |
-| macOS lid-closed power feasibility | `scripts/lid-closed/inspect.ts` | `scripts/lid-closed/{inspect.swift,probe-authority.swift,probe-entitlements.plist,inspect.test.ts}`, `docs/research/2026-10-14-lid-closed-power-feasibility.md` | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) |
+| macOS lid-closed helper and power feasibility | `app/native/lid-closed/prepare.ts`, `scripts/lid-closed/inspect.ts` | `app/native/lid-closed/`, `scripts/lid-closed/`, the current lid-closed design and physical qualification records | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) |
 | Proactive and assistant services | `src/proactive/` | `src/services/autoDream/`, `src/services/MagicDocs/`, `src/services/tips/`, trigger/sleep/brief surfaces | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) |
 | Workspace and repository discovery | `src/utils/cwd.ts`, `app/main/workspaceJumpCoordinator.ts` | `src/commands/add-dir/`, `src/utils/{detectRepository,githubRepoPathMapping}.ts`, `app/sidecar/workspaceJumpTools.ts`, `app/main/workspaceListingRunner.ts` | [`docs/maps/config-persistence.md`](config-persistence.md), [`docs/maps/web-app-runtime.md`](web-app-runtime.md), [`docs/maps/tools-permissions.md`](tools-permissions.md) |
 | Diagnostics, logging, and validation | `src/screens/Doctor.tsx`, `src/utils/debug.ts` | `src/utils/log.ts`, analytics/telemetry surfaces, stats/cost/status diagnostics | [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) |

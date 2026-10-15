@@ -1,13 +1,14 @@
 # Native Client Integrations Map
 
-Last refreshed: 2026-10-14 against the current source tree and
-`scripts/lid-closed/`.
+Last refreshed: 2026-10-15 against the experimental helper in
+`app/native/lid-closed/` and the inspector in `scripts/lid-closed/`.
 
 ## Purpose
 
 Daily-refreshable routing map for Chrome/browser automation, computer-use,
-native host and installer paths, native TypeScript shims, macOS power
-feasibility inspection, and the desktop/mobile/voice command surfaces.
+native host and installer paths, native TypeScript shims, the experimental
+macOS lid-closed helper and read-only feasibility inspection, and the
+desktop/mobile/voice command surfaces.
 
 Use this map to choose the first owner files before changing setup, command
 exposure, rendering, or validation. It is a routing layer, not the behavioral
@@ -24,7 +25,7 @@ feature-gated, platform-gated, or package-backed.
 | MCP wrapper behavior | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | Chrome/computer-use rendering or wrapper file |
 | Native install/update | [`../../src/utils/nativeInstaller/installer.ts`](../../src/utils/nativeInstaller/installer.ts) | [`../../src/utils/nativeInstaller/download.ts`](../../src/utils/nativeInstaller/download.ts), [`../../src/utils/nativeInstaller/pidLock.ts`](../../src/utils/nativeInstaller/pidLock.ts) |
 | Voice runtime | [`../../src/commands/voice/voice.ts`](../../src/commands/voice/voice.ts) | [`../../src/services/voice.ts`](../../src/services/voice.ts), [`../../src/services/voiceStreamSTT.ts`](../../src/services/voiceStreamSTT.ts) |
-| macOS lid-closed power feasibility | [`../../scripts/lid-closed/inspect.ts`](../../scripts/lid-closed/inspect.ts) | [`../../scripts/lid-closed/inspect.swift`](../../scripts/lid-closed/inspect.swift), [`../../scripts/lid-closed/probe-authority.swift`](../../scripts/lid-closed/probe-authority.swift), [`../../docs/research/2026-10-14-lid-closed-power-feasibility.md`](../../docs/research/2026-10-14-lid-closed-power-feasibility.md) |
+| macOS lid-closed helper and feasibility | [`../../app/native/lid-closed/prepare.ts`](../../app/native/lid-closed/prepare.ts) | [`../../app/native/lid-closed/LidCore.swift`](../../app/native/lid-closed/LidCore.swift), [`../../app/native/lid-closed/LidPlatform.swift`](../../app/native/lid-closed/LidPlatform.swift), [`../../app/native/lid-closed/main.swift`](../../app/native/lid-closed/main.swift), [`../../app/native/lid-closed/install.sh`](../../app/native/lid-closed/install.sh), [`../../app/native/lid-closed/native.test.ts`](../../app/native/lid-closed/native.test.ts), [`../../scripts/lid-closed/inspect.ts`](../../scripts/lid-closed/inspect.ts), [`../../docs/design/2026-10-13-lid-closed-mode-spec.md`](../../docs/design/2026-10-13-lid-closed-mode-spec.md), [`../../docs/research/2026-10-15-lid-closed-continuation.md`](../../docs/research/2026-10-15-lid-closed-continuation.md) |
 
 ## Routing Table
 
@@ -55,7 +56,7 @@ feature-gated, platform-gated, or package-backed.
 | Native installer public surface | [`../../src/utils/nativeInstaller/index.ts`](../../src/utils/nativeInstaller/index.ts) | [`../../src/utils/nativeInstaller/installer.ts`](../../src/utils/nativeInstaller/installer.ts) | External callers should come through the barrel. It re-exports the installer operations that the rest of the app is allowed to use. |
 | Native installer core | [`../../src/utils/nativeInstaller/installer.ts`](../../src/utils/nativeInstaller/installer.ts) | [`../../src/utils/nativeInstaller/download.ts`](../../src/utils/nativeInstaller/download.ts), [`../../src/utils/nativeInstaller/pidLock.ts`](../../src/utils/nativeInstaller/pidLock.ts), [`../../src/utils/nativeInstaller/packageManagers.ts`](../../src/utils/nativeInstaller/packageManagers.ts) | Owns version directories, binary activation, lock handling, cleanup, PATH/alias checks, and install/update sequencing. |
 | Native TypeScript shims | [`../../src/native-ts/`](../../src/native-ts/) | Caller listed below | Pure TypeScript replacements for native modules. Preserve caller-facing APIs before changing internals. |
-| macOS lid-closed power feasibility inspection | [`../../scripts/lid-closed/inspect.ts`](../../scripts/lid-closed/inspect.ts) | [`../../scripts/lid-closed/inspect.swift`](../../scripts/lid-closed/inspect.swift), [`../../scripts/lid-closed/probe-authority.swift`](../../scripts/lid-closed/probe-authority.swift), [`../../scripts/lid-closed/probe-entitlements.plist`](../../scripts/lid-closed/probe-entitlements.plist), [`../../scripts/lid-closed/inspect.test.ts`](../../scripts/lid-closed/inspect.test.ts), [`../../docs/research/2026-10-14-lid-closed-power-feasibility.md`](../../docs/research/2026-10-14-lid-closed-power-feasibility.md) | The default runner compiles a read-only allowlisted observer into temporary storage. `--probe-authority` is a separate live power-assertion probe; it requires explicit approval and does not qualify closed-lid support. The product feature is not implemented. |
+| macOS lid-closed experimental helper and feasibility inspection | [`../../app/native/lid-closed/prepare.ts`](../../app/native/lid-closed/prepare.ts) | [`../../app/native/lid-closed/LidCore.swift`](../../app/native/lid-closed/LidCore.swift), [`../../app/native/lid-closed/LidPlatform.swift`](../../app/native/lid-closed/LidPlatform.swift), [`../../app/native/lid-closed/main.swift`](../../app/native/lid-closed/main.swift), [`../../app/native/lid-closed/install.sh`](../../app/native/lid-closed/install.sh), [`../../app/native/lid-closed/uninstall.sh`](../../app/native/lid-closed/uninstall.sh), [`../../app/native/lid-closed/native.test.ts`](../../app/native/lid-closed/native.test.ts), [`../../scripts/lid-closed/inspect.ts`](../../scripts/lid-closed/inspect.ts), [`../../scripts/lid-closed/inspect.test.ts`](../../scripts/lid-closed/inspect.test.ts), [`../../docs/design/2026-10-13-lid-closed-mode-spec.md`](../../docs/design/2026-10-13-lid-closed-mode-spec.md), [`../../docs/research/2026-10-14-lid-closed-power-feasibility.md`](../../docs/research/2026-10-14-lid-closed-power-feasibility.md), [`../../docs/research/2026-10-14-lid-closed-physical-results.md`](../../docs/research/2026-10-14-lid-closed-physical-results.md), [`../../docs/research/2026-10-15-lid-closed-continuation.md`](../../docs/research/2026-10-15-lid-closed-continuation.md) | `prepare.ts` builds a standalone experimental Swift helper and a one-time administrator installer; the Electron app does not call it and production activation remains disabled. `LidCore.swift` owns durable transition and recovery state; `LidPlatform.swift` and `main.swift` own platform sampling, XPC identity checks, launchd recovery, and fixed power operations. The default inspector remains read-only; its separate `--probe-authority` path invokes a live power assertion and requires explicit approval. Physical results record battery-powered progress with the lid closed and confirmed restoration, while Sleep qualification and app integration remain pending. |
 
 For URI launch behavior, inspect `src/utils/deepLink/protocolHandler.ts`,
 `src/utils/deepLink/parseDeepLink.ts`, and `src/utils/deepLink/terminalLauncher.ts`.
@@ -140,10 +141,13 @@ Routing note: `src/commands.ts` conditionally registers `/voice` behind
   this repo is currently the `/mobile` command plus remote/mobile-safe message
   handling elsewhere.
 - `scripts/lid-closed/inspect.ts` is read-only by default. `--probe-authority`
-  ad hoc-signs and invokes a live power assertion; it needs explicit approval,
-  and neither declared entitlements nor a successful create proves safe or
-  effective operation with the lid closed. The product feature remains
-  unimplemented until an owned mechanism meets its sleep and recovery contract.
+  ad hoc-signs and invokes a live power assertion; it requires explicit
+  approval, is separate from the native helper, and does not qualify
+  closed-lid support by itself.
+- `app/native/lid-closed/prepare.ts` prepares a standalone, time-bounded
+  administrator experiment, not an Electron app feature. The physical record
+  supports closed-lid work and restoration on the tested machine; Sleep
+  qualification and Cat Code app integration remain unfinished.
 
 ## Tests And Validation
 
@@ -177,12 +181,22 @@ src/services/voice.ts
 src/services/voiceStreamSTT.ts
 src/utils/nativeInstaller/installer.ts
 src/native-ts
+app/native/lid-closed/prepare.ts
+app/native/lid-closed/LidCore.swift
+app/native/lid-closed/LidPlatform.swift
+app/native/lid-closed/main.swift
+app/native/lid-closed/install.sh
+app/native/lid-closed/uninstall.sh
+app/native/lid-closed/native.test.ts
 scripts/lid-closed/inspect.ts
 scripts/lid-closed/inspect.swift
 scripts/lid-closed/probe-authority.swift
 scripts/lid-closed/probe-entitlements.plist
 scripts/lid-closed/inspect.test.ts
 docs/research/2026-10-14-lid-closed-power-feasibility.md
+docs/design/2026-10-13-lid-closed-mode-spec.md
+docs/research/2026-10-14-lid-closed-physical-results.md
+docs/research/2026-10-15-lid-closed-continuation.md
 EOF
 ```
 
@@ -196,5 +210,6 @@ For code changes, scale verification by owner:
 | Native installer | Installer/download/pid-lock tests plus build validation only if the code path changes. |
 | Native TS shims | Caller-focused tests first: structured diff, file suggestions, or Ink layout. |
 | Lid-closed read-only inspection | `bun test scripts/lid-closed/inspect.test.ts` and, when a current-machine observation is needed, `bun run scripts/lid-closed/inspect.ts`. Do not use `--probe-authority` as a test. |
+| Lid-closed helper core | `bun test app/native/lid-closed/native.test.ts` exercises the durable native core suite; it does not qualify helper installation, packaged app authentication, physical Sleep, or app integration. |
 
 Docs-only map refreshes do not need `bun run build:dev:full`.
