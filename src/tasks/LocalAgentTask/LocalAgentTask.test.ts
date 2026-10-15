@@ -22,10 +22,16 @@ import {
 } from '../../services/api/codex-websocket-transport.js'
 import {
   appendLocalAgentSystemMessage,
+  claimPendingMessagesForRequest,
   completeAgentTask,
   enqueueAgentNotification,
+  failAgentTask,
+  killAsyncAgent,
   markAgentTaskResumed,
   queuePendingMessageIfRunning,
+  registerAsyncAgent,
+  settleAgentMessageDeliveries,
+  submitPreparedAgentMessages,
   unregisterAgentForeground,
   registerAgentForeground,
 } from './LocalAgentTask.js'
@@ -107,6 +113,37 @@ describe('LocalAgentTask foreground cleanup', () => {
     _setWebSocketFactoryForTest(null)
   })
 
+  function registerWithInstructions(agentId: string, foreground: boolean) {
+    const register = foreground ? registerAgentForeground : registerAsyncAgent
+    const registration = register({
+      agentId,
+      description: 'Instruction delivery agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    const runId = registration.runId!
+    queuePendingMessageIfRunning(agentId, 'earlier attempt', setAppState)
+    claimPendingMessagesForRequest(agentId, runId, setAppState)
+    const earlierIds = submitPreparedAgentMessages(agentId, runId, 'earlier-request', setAppState)
+    settleAgentMessageDeliveries(agentId, earlierIds, runId, 'uncertain', 'Earlier transport failed.', setAppState)
+    queuePendingMessageIfRunning(agentId, 'submitted instruction', setAppState)
+    claimPendingMessagesForRequest(agentId, runId, setAppState)
+    submitPreparedAgentMessages(agentId, runId, 'current-request', setAppState)
+    queuePendingMessageIfRunning(agentId, 'prepared instruction', setAppState)
+    claimPendingMessagesForRequest(agentId, runId, setAppState)
+    queuePendingMessageIfRunning(agentId, 'pending instruction', setAppState)
+    const task = appState.tasks[agentId]
+    if (task?.type !== 'local_agent') throw new Error('expected local agent')
+    return { runId, messages: task.pendingMessages, abortController: registration.abortController }
+  }
+
+  const terminalCases = [
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+    ['killed', 'was stopped'],
+  ] as const
+
   test('unregisterAgentForeground releases the foreground agent codex lease', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -139,31 +176,57 @@ describe('LocalAgentTask foreground cleanup', () => {
     expect(appState.tasks[agentId]).toBeUndefined()
   })
 
-  test('unregisterAgentForeground retains unresolved instructions for the parent', () => {
+  test.each(terminalCases)('unregisterAgentForeground retains unresolved instructions after %s', (status, reason) => {
     const agentId = 'sync-agent-unresolved'
-    registerAgentForeground({
-      agentId,
-      description: 'Unresolved foreground agent',
-      prompt: 'test prompt',
-      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
-      setAppState,
-    })
-    expect(queuePendingMessageIfRunning(agentId, 'finish the audit', setAppState)).toBe(
-      true,
-    )
+    const { messages } = registerWithInstructions(agentId, true)
 
-    unregisterAgentForeground(agentId, setAppState)
+    unregisterAgentForeground(agentId, setAppState, status)
 
     expect(appState.tasks[agentId]).toMatchObject({
-      status: 'completed',
+      status,
       acceptingMessages: false,
-      pendingMessages: [
-        {
-          message: 'finish the audit',
-          status: 'undelivered',
-        },
-      ],
     })
+    expect(appState.tasks[agentId]?.pendingMessages).toEqual([
+      messages[0],
+      { ...messages[1], status: 'uncertain', outcome: `Worker ${reason} while the instruction was in flight.` },
+      { ...messages[2], status: 'undelivered', outcome: `Worker ${reason} before the instruction was submitted.` },
+      { ...messages[3], status: 'undelivered', outcome: `Worker ${reason} before the instruction was submitted.` },
+    ])
+  })
+
+  test.each(terminalCases)('background %s settles instructions with the supplied run identity', (status, reason) => {
+    for (const explicitRun of [true, false]) {
+      const agentId = `terminal-${status}-${explicitRun}`
+      const { runId, messages, abortController } = registerWithInstructions(agentId, false)
+      const terminalRunId = explicitRun ? runId : undefined
+      if (status === 'completed') {
+        completeAgentTask({
+          agentId,
+          content: [{ type: 'text', text: 'done' }],
+          totalToolUseCount: 0,
+          totalDurationMs: 1,
+          totalTokens: 1,
+        }, setAppState, terminalRunId)
+      } else if (status === 'failed') {
+        failAgentTask(agentId, 'test failure', setAppState, terminalRunId)
+      } else {
+        if (explicitRun) {
+          const before = appState.tasks[agentId]
+          killAsyncAgent(agentId, setAppState, 'stale-run')
+          expect(appState.tasks[agentId]).toBe(before)
+          expect(abortController?.signal.aborted).toBe(false)
+        }
+        killAsyncAgent(agentId, setAppState, terminalRunId)
+      }
+
+      expect(appState.tasks[agentId]).toMatchObject({ status, acceptingMessages: false })
+      expect(appState.tasks[agentId]?.pendingMessages).toEqual([
+        messages[0],
+        { ...messages[1], status: 'uncertain', outcome: `Worker ${reason} while the instruction was in flight.`, runId: terminalRunId },
+        { ...messages[2], status: 'undelivered', outcome: `Worker ${reason} before the instruction was submitted.`, runId: terminalRunId },
+        { ...messages[3], status: 'undelivered', outcome: `Worker ${reason} before the instruction was submitted.`, runId: terminalRunId },
+      ])
+    }
   })
 
   test('unregisterAgentForeground hands back the account it just released', () => {

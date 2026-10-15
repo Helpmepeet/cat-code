@@ -285,6 +285,41 @@ function taskRunMatches(
   return runId === undefined || task.runId === runId
 }
 
+const TERMINAL_MESSAGE_OUTCOMES = {
+  completed: {
+    undelivered: 'Worker completed before the instruction was submitted.',
+    uncertain: 'Worker completed while the instruction was in flight.',
+  },
+  failed: {
+    undelivered: 'Worker failed before the instruction was submitted.',
+    uncertain: 'Worker failed while the instruction was in flight.',
+  },
+  killed: {
+    undelivered: 'Worker was stopped before the instruction was submitted.',
+    uncertain: 'Worker was stopped while the instruction was in flight.',
+  },
+}
+
+function settleTerminalMessageDeliveries(
+  messages: LocalAgentMessageDelivery[],
+  outcomes: Record<'undelivered' | 'uncertain', string>,
+  // Foreground cleanup preserves each record's run; other callers stamp theirs,
+  // including an explicitly undefined runId.
+  run: Pick<LocalAgentMessageDelivery, 'runId'> = {},
+): LocalAgentMessageDelivery[] {
+  return messages.map(message => {
+    let status: 'undelivered' | 'uncertain'
+    if (message.status === 'pending' || message.status === 'prepared') {
+      status = 'undelivered'
+    } else if (message.status === 'submitted') {
+      status = 'uncertain'
+    } else {
+      return message
+    }
+    return { ...message, status, outcome: outcomes[status], ...run }
+  })
+}
+
 function isUnresolvedDelivery(record: LocalAgentMessageDelivery): boolean {
   return (
     record.status === 'pending' ||
@@ -588,28 +623,11 @@ export function settleAgentMessagesForTerminal(
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (!taskRunMatches(task, runId)) return task
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const nextMessages = pendingMessages.map(message => {
-      if (
-        message.status === 'pending' ||
-        message.status === 'prepared'
-      ) {
-        return {
-          ...message,
-          status: 'undelivered' as const,
-          outcome,
-          runId,
-        }
-      }
-      if (message.status === 'submitted') {
-        return {
-          ...message,
-          status: 'uncertain' as const,
-          outcome,
-          runId,
-        }
-      }
-      return message
-    })
+    const nextMessages = settleTerminalMessageDeliveries(
+      pendingMessages,
+      { undelivered: outcome, uncertain: outcome },
+      { runId },
+    )
     return {
       ...task,
       acceptingMessages: false,
@@ -947,25 +965,11 @@ export function killAsyncAgent(
       ...task,
       status: 'killed',
       acceptingMessages: false,
-      pendingMessages: pendingMessages.map(message => {
-        if (message.status === 'pending' || message.status === 'prepared') {
-          return {
-            ...message,
-            status: 'undelivered' as const,
-            outcome: 'Worker was stopped before the instruction was submitted.',
-            runId,
-          }
-        }
-        if (message.status === 'submitted') {
-          return {
-            ...message,
-            status: 'uncertain' as const,
-            outcome: 'Worker was stopped while the instruction was in flight.',
-            runId,
-          }
-        }
-        return message
-      }),
+      pendingMessages: settleTerminalMessageDeliveries(
+        pendingMessages,
+        TERMINAL_MESSAGE_OUTCOMES.killed,
+        { runId },
+      ),
       endTime: Date.now(),
       evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
       abortController: undefined,
@@ -1143,25 +1147,11 @@ export function completeAgentTask(
     task.unregisterCleanup?.();
     const isBlocked = resultMetadata.handoffStatus === 'blocked';
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const terminalMessages = pendingMessages.map(message => {
-      if (message.status === 'pending' || message.status === 'prepared') {
-        return {
-          ...message,
-          status: 'undelivered' as const,
-          outcome: 'Worker completed before the instruction was submitted.',
-          runId,
-        }
-      }
-      if (message.status === 'submitted') {
-        return {
-          ...message,
-          status: 'uncertain' as const,
-          outcome: 'Worker completed while the instruction was in flight.',
-          runId,
-        }
-      }
-      return message
-    })
+    const terminalMessages = settleTerminalMessageDeliveries(
+      pendingMessages,
+      TERMINAL_MESSAGE_OUTCOMES.completed,
+      { runId },
+    )
     const deliveryReport = formatAgentMessageDeliveryRecords(
       terminalMessages.filter(message => !message.originAgentId),
     )
@@ -1217,25 +1207,11 @@ export function failAgentTask(
       ...task,
       status: 'failed',
       acceptingMessages: false,
-      pendingMessages: pendingMessages.map(message => {
-        if (message.status === 'pending' || message.status === 'prepared') {
-          return {
-            ...message,
-            status: 'undelivered' as const,
-            outcome: 'Worker failed before the instruction was submitted.',
-            runId,
-          }
-        }
-        if (message.status === 'submitted') {
-          return {
-            ...message,
-            status: 'uncertain' as const,
-            outcome: 'Worker failed while the instruction was in flight.',
-            runId,
-          }
-        }
-        return message
-      }),
+      pendingMessages: settleTerminalMessageDeliveries(
+        pendingMessages,
+        TERMINAL_MESSAGE_OUTCOMES.failed,
+        { runId },
+      ),
       error,
       endTime: Date.now(),
       evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
@@ -1497,37 +1473,9 @@ export function unregisterAgentForeground(
     shouldReleaseLease = true;
     const unresolved = getUnresolvedAgentMessageDeliveries(task);
     if (unresolved.length > 0) {
-      const pendingMessages = normalizePendingMessages(task.pendingMessages).map(
-        message => {
-          if (
-            message.status === 'pending' ||
-            message.status === 'prepared'
-          ) {
-            return {
-              ...message,
-              status: 'undelivered' as const,
-              outcome:
-                terminalStatus === 'killed'
-                  ? 'Worker was stopped before the instruction was submitted.'
-                  : terminalStatus === 'failed'
-                    ? 'Worker failed before the instruction was submitted.'
-                    : 'Worker completed before the instruction was submitted.',
-            };
-          }
-          if (message.status === 'submitted') {
-            return {
-              ...message,
-              status: 'uncertain' as const,
-              outcome:
-                terminalStatus === 'killed'
-                  ? 'Worker was stopped while the instruction was in flight.'
-                  : terminalStatus === 'failed'
-                    ? 'Worker failed while the instruction was in flight.'
-                    : 'Worker completed while the instruction was in flight.',
-            };
-          }
-          return message;
-        },
+      const pendingMessages = settleTerminalMessageDeliveries(
+        normalizePendingMessages(task.pendingMessages),
+        TERMINAL_MESSAGE_OUTCOMES[terminalStatus],
       );
       return {
         ...prev,
