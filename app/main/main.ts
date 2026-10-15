@@ -126,7 +126,6 @@ import {
   CH_SESSION_ACTION_VERB,
   CH_REMOTE_SETTINGS_VERB,
   CH_SETTINGS_VERB,
-  CH_STATS_QUERY,
   CH_PING,
   CH_RESTART,
   CH_SERVER_FRAME,
@@ -308,7 +307,7 @@ import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryT
 import { saveDiagnosticsBundle } from './saveDiagnosticsBundle.js'
 import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, type DeliveryStage } from '../shared/deliveryTrace.js'
 import {
-  ACCOUNT_VERB_TYPES,
+  SESSION_ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
   PROMPT_FORCE_VERB_TYPES,
   PROMPT_RECALL_VERB_TYPES,
@@ -332,7 +331,6 @@ import {
   type SubmitPrompt,
   type SessionsCatalogSnapshot,
   type SidecarClientMessage,
-  type StatsQueryMessage,
   type TranscriptCache,
 } from '../shared/protocol.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -2263,20 +2261,16 @@ function sendHostEvent(event: HostEvent): void {
  *
  * Handlers that do more than relay stay hand-written below: CH_SUBMIT resolves
  * attachment tokens, CH_SET_MODE mints the requestId in
- * main, CH_STATS_QUERY checks a second field, CH_PERMISSION and
+ * main, CH_PERMISSION and
  * CH_ANSWER_QUESTIONS carry engine-minted ids.
  */
-const RELAYED_ACCOUNT_VERB_TYPES = ACCOUNT_VERB_TYPES.filter(
-  type => type !== 'account.delete' && type !== 'account.logout',
-)
-
 const RELAYED_VERB_CHANNELS: ReadonlyArray<
   readonly [channel: string, verbTypes: readonly string[]]
 > = [
   // Session-local account verbs still use the sidecar's pool-resolved business
   // rules. Global profile mutations have dedicated host handlers below and
   // never enter this session relay.
-  [CH_ACCOUNT_VERB, RELAYED_ACCOUNT_VERB_TYPES],
+  [CH_ACCOUNT_VERB, SESSION_ACCOUNT_VERB_TYPES],
   // P4-15 — sidecar re-validates schema + the engine's trust persist for its OWN
   // cwd. HC1: no path crosses, the verb carries only a `requestId`.
   [CH_WORKSPACE_TRUST_VERB, WORKSPACE_TRUST_VERB_TYPES],
@@ -2440,21 +2434,6 @@ function registerIpcHandlers(): void {
       forward(arg.sessionId, arg.verb as SidecarClientMessage)
     })
   }
-
-  ipcMain.on(
-    CH_STATS_QUERY,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      const verb = arg.verb as { type?: unknown; range?: unknown } | null | undefined
-      if (
-        verb?.type !== 'stats.query' ||
-        (verb.range !== '7d' && verb.range !== '30d')
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as StatsQueryMessage)
-    },
-  )
 
   ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return

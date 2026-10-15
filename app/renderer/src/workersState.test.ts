@@ -39,7 +39,7 @@ function snapshot(
 test('reduce folds a workers.snapshot per session and prunes it on lifecycle/removal', () => {
   const frame: WorkersSnapshotFrame = {
     kind: 'workers.snapshot',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId: 's1',
     workers: snapshot([worker()]),
   }
@@ -49,7 +49,7 @@ test('reduce folds a workers.snapshot per session and prunes it on lifecycle/rem
 
   const lifecycle: LifecycleFrame = {
     kind: 'lifecycle',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId: 's1',
     status: 'exited',
   }

@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 /**
  * Acceptance for the 2026-07-08 session-switch/restore perf fixes (F3):
  *   1. A batched replay is folded into every store with ONE dispatch per store
@@ -34,7 +35,7 @@ const SID = 'replay-session'
 function ready(sessionId: string) {
   return {
     kind: 'ready' as const,
-    protocolVersion: 3 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -52,7 +53,7 @@ function ready(sessionId: string) {
 function assistantFrame(sessionId: string, index: number) {
   return {
     kind: 'event' as const,
-    protocolVersion: 3 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     replay: true as const,
     event: {
@@ -97,7 +98,6 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     dispatchConnection: count('connection') as never,
     dispatchSettings: count('settings') as never,
     dispatchAgentConfig: count('agentConfig') as never,
-    dispatchExtensions: count('extensions') as never,
     dispatchGoalMemory: count('goalMemory') as never,
     dispatchTasks: count('tasks') as never,
     dispatchWorkers: count('workers') as never,
@@ -130,7 +130,6 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'connection',
     'settings',
     'agentConfig',
-    'extensions',
     'goalMemory',
     'tasks',
     'workers',
@@ -166,7 +165,6 @@ test('an empty delivery dispatches nothing', () => {
     dispatchConnection: mark as never,
     dispatchSettings: mark as never,
     dispatchAgentConfig: mark as never,
-    dispatchExtensions: mark as never,
     dispatchGoalMemory: mark as never,
     dispatchTasks: mark as never,
     dispatchWorkers: mark as never,

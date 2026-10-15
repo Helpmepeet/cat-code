@@ -249,8 +249,8 @@ export function WorkspaceTrustGate({
 
 /**
  * The renderer-visible OAuth sub-states — a projection of the engine's real
- * `OAuthStatus` flow delivered on the `oauth.login.progress` back-channel
- * (`accountsDomain.ts`). `waiting` covers `starting`+`waiting_for_login` (`url`
+ * `OAuthStatus` flow delivered through the host's `account-oauth` event
+ * (`accountsDomain.ts` and the account-control worker). `waiting` covers `starting`+`waiting_for_login` (`url`
  * is null until the engine mints it); the live run is the operator's step.
  */
 export type StartupOAuthView =

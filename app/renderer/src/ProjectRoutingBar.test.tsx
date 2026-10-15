@@ -7,26 +7,8 @@ const route = {
   appSessionId: '93ad8a93-bc68-4954-8c3e-92115798fcce',
   submitId: '5b48eb57-5dc5-45ed-af3a-248863d962f2',
   text: 'Fix the route',
-  projectName: 'cat-code',
   message: null,
 } as const
-
-test.each(['checking', 'recovery'] as const)('ordinary submission has no project status bar during %s', phase => {
-  const html = renderToStaticMarkup(
-    <ProjectRoutingBar route={{ ...route, phase, projectName: null }} onChoice={() => {}} />,
-  )
-  expect(html).toBe('')
-})
-
-test('asks before moving an inferred project target', () => {
-  const html = renderToStaticMarkup(
-    <ProjectRoutingBar route={{ ...route, phase: 'ask' }} onChoice={() => {}} />,
-  )
-
-  expect(html).toContain('Work in <b>cat-code</b>?')
-  expect(html).toContain('Stay in chat')
-  expect(html).toContain('Move')
-})
 
 test('does not offer a second send while acceptance is pending', () => {
   const html = renderToStaticMarkup(
@@ -47,4 +29,13 @@ test('recovery distinguishes unsent input from an unknown outcome', () => {
   expect(unknown).toContain('may already have been sent')
   expect(unknown).toContain('Send again</button>')
   expect(unknown).toContain('Dismiss</button>')
+})
+
+
+test('failed context recovery describes the held message and offers resend or cancellation', () => {
+  const html = renderToStaticMarkup(<ProjectRoutingBar route={{ ...route, phase: 'failed', message: 'Project folder changed before sending.' }} onChoice={() => {}} />)
+  expect(html).toContain('Could not send the message in this project folder.')
+  expect(html).toContain('Project folder changed before sending.')
+  expect(html).toContain('Try again</button>')
+  expect(html).toContain('Cancel</button>')
 })

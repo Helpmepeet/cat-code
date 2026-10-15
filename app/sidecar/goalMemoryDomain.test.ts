@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -18,7 +19,7 @@ import {
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
   MemoryInstructionType,
-  MemorySnapshotFrame,
+  MemorySnapshot,
   ThreadGoalSnapshotFrame,
 } from '../shared/protocol.js'
 import { threadGoalSnapshot } from './goalDomain.js'
@@ -44,7 +45,7 @@ type EngineCoversProtocolInstructionTypes = AssertAssignable<
 type ProtocolCoversAutoMemoryTypes = AssertAssignable<
   Exclude<
     AutoMemoryType,
-    NonNullable<MemorySnapshotFrame['memory']['autoMemories'][number]['type']>
+    NonNullable<MemorySnapshot['autoMemories'][number]['type']>
   > extends never
     ? true
     : false
@@ -78,7 +79,7 @@ test('builds a thread goal display snapshot with the engine summary text', () =>
 
   const frame: ThreadGoalSnapshotFrame = {
     kind: 'thread-goal.snapshot',
-    protocolVersion: 3,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'sess-1',
     goal: snapshot,
   }
@@ -195,13 +196,7 @@ test('builds a memory metadata snapshot without exposing file contents', () => {
     type: 'feedback',
   })
 
-  const frame: MemorySnapshotFrame = {
-    kind: 'memory.snapshot',
-    protocolVersion: 3,
-    sessionId: 'sess-1',
-    memory: snapshot,
-  }
-  expect(scanForSecrets(frame).ok).toBe(true)
+  expect(scanForSecrets(snapshot).ok).toBe(true)
 })
 
 test('covers every instruction-file and auto-memory type from the engine scanners', () => {
@@ -298,8 +293,8 @@ test('agent-memory rows carry the engine-resolved directory and a real recursive
 /**
  * The CC-13 bug class, at its source. `readAgentMemories` runs inside a
  * `Promise.all` whose rejection makes `readMemorySnapshotOnce` return null, and a
- * null snapshot means no `memory.snapshot` frame and a Memory page stuck on its
- * waiting state. So an unreadable directory must resolve, not throw.
+ * null snapshot erases otherwise-readable inventory metadata. An unreadable
+ * agent directory must resolve with an unknown count, not throw.
  */
 test('an unreadable agent directory resolves to an unknown count instead of rejecting', async () => {
   const home = mkdtempSync(join(tmpdir(), 'p4-34-agent-memory-perm-'))
@@ -338,7 +333,7 @@ test('an unreadable agent directory resolves to an unknown count instead of reje
   }
 })
 
-test('a memory frame carrying agent rows is still secretGuard-clean', () => {
+test('a memory snapshot carrying agent rows is still secretGuard-clean', () => {
   const snapshot = buildMemorySnapshot({
     autoMemoryEnabled: true,
     autoMemoryDir: '/config/memory/',
@@ -354,13 +349,7 @@ test('a memory frame carrying agent rows is still secretGuard-clean', () => {
       },
     ],
   })
-  const frame: MemorySnapshotFrame = {
-    kind: 'memory.snapshot',
-    protocolVersion: 3,
-    sessionId: 'sess-1',
-    memory: snapshot,
-  }
-  expect(scanForSecrets(frame).ok).toBe(true)
+  expect(scanForSecrets(snapshot).ok).toBe(true)
 })
 
 test('a snapshot with no memory-carrying agents carries an empty list, never a missing field', () => {

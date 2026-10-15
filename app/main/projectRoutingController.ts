@@ -5,27 +5,10 @@ import type {
 } from '../shared/protocol.js'
 import type {
   ProjectRouteCommand,
-  ProjectRouteDecision,
   ProjectRouteSnapshot,
 } from '../shared/projectRouting.js'
 
-type RoutedSubmit = Extract<SidecarClientMessage, { type: 'app.submit' }> & {
-  options?: NonNullable<Extract<SidecarClientMessage, { type: 'app.submit' }>['options']> & {
-    submitId?: string
-  }
-}
-
-export type PendingRoute = {
-  sessionId: string
-  submitId: string
-  message: RoutedSubmit
-  routingText: string
-  sourceCwd: string
-  phase: ProjectRouteSnapshot['phase']
-  decision: Exclude<ProjectRouteDecision, { kind: 'stay' }> | null
-  messageText: string | null
-  outcome: 'unsent' | 'unknown' | 'accepted'
-}
+type PendingRoute = Omit<RouteRecord, 'phase'> & { phase: ProjectRouteSnapshot['phase'] }
 
 export type ProjectRoutingControllerOptions = {
   store?: ProjectRoutingStore
@@ -52,11 +35,11 @@ export class ProjectRoutingController {
     try {
       for (const route of options.store?.load() ?? []) {
         if (route.outcome === 'accepted') this.accepted.set(route.sessionId, route)
-        else {
-          route.phase = route.outcome === 'unknown' ? 'uncertain' : 'unsent'
-          route.messageText = null
-          this.pending.set(route.sessionId, route)
-        }
+        else this.pending.set(route.sessionId, {
+          ...route,
+          phase: route.outcome === 'unknown' ? 'uncertain' : 'unsent',
+          messageText: null,
+        })
       }
     } catch (error) {
       this.storageFailure = true
@@ -83,8 +66,7 @@ export class ProjectRoutingController {
       this.cancel(command.appSessionId)
       return
     }
-    if (['resend', 'stay'].includes(command.choice) &&
-        ['unsent', 'uncertain', 'ask', 'failed'].includes(route.phase)) {
+    if (command.choice === 'resend' && route.phase !== 'recovery') {
       route.outcome = 'unsent'
       await this.forwardHeld(route)
     }
@@ -125,10 +107,7 @@ export class ProjectRoutingController {
 
   cancel(sessionId: string): void {
     const route = this.pending.get(sessionId)
-    if (
-      route === undefined ||
-      !['checking', 'ask', 'failed', 'unsent', 'uncertain'].includes(route.phase)
-    ) return
+    if (route === undefined || route.phase === 'recovery') return
     if (route.outcome === 'unsent') this.options.answerRefused(sessionId, route.submitId, 'bad_request')
     this.clear(route)
   }
@@ -142,7 +121,9 @@ export class ProjectRoutingController {
       if (this.pending.get(route.sessionId) !== route) return
       const cwd = this.options.currentCwd(route.sessionId)
       if (cwd !== route.sourceCwd && cwd !== route.decision?.cwd) {
-        this.fail(route, 'Project folder changed before sending.')
+        route.phase = 'failed'
+        route.messageText = 'Project folder changed before sending.'
+        this.publish(route)
         return
       }
       route.outcome = 'unknown'
@@ -170,14 +151,6 @@ export class ProjectRoutingController {
     }
   }
 
-  private fail(route: PendingRoute, message: string): void {
-    if (this.pending.get(route.sessionId) !== route) return
-    route.phase = route.outcome === 'unsent' && route.decision !== null &&
-      this.options.currentCwd(route.sessionId) === route.decision.cwd ? 'unsent' : 'failed'
-    route.messageText = message
-    this.publish(route)
-  }
-
   private clearReceiptTimer(sessionId: string): void {
     const timer = this.receiptTimers.get(sessionId)
     if (timer !== undefined) clearTimeout(timer)
@@ -203,7 +176,6 @@ export class ProjectRoutingController {
       submitId: route.submitId,
       phase: route.phase,
       text: route.routingText,
-      projectName: route.decision?.name ?? null,
       message: route.messageText,
     }
   }

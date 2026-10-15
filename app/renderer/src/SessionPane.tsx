@@ -253,8 +253,8 @@ export function SessionPane({
   copyForLlm,
   denyPermission,
   history,
-  historyNav: controlledHistoryNav,
-  onHistoryNavChange,
+  historyNav,
+  onHistoryNavChange: setHistoryNav,
   images = [],
   mentionItems,
   onApprovePlan,
@@ -533,18 +533,6 @@ export function SessionPane({
     composerRef.current?.focus()
   }
 
-  // App retains navigation with the session so its saved draft survives pane
-  // remounts. Standalone consumers keep the local fallback.
-  const [localHistoryNav, setLocalHistoryNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
-  const historyNav = controlledHistoryNav ?? localHistoryNav
-  const setHistoryNav = (nav: HistoryNav): void => {
-    if (controlledHistoryNav === undefined) setLocalHistoryNav(nav)
-    onHistoryNavChange?.(nav)
-  }
-  useEffect(() => {
-    setLocalHistoryNav(EMPTY_HISTORY_NAV)
-  }, [activeSessionId])
-
   // P4-24 multi-line composer. `composerRef` gives the keydown/paste handlers the
   // live caret (for at-caret paste, whole-token Backspace, and edge-gated ↑/↓
   // history); `isComposingRef` guards Enter/arrows during IME composition
@@ -736,10 +724,9 @@ export function SessionPane({
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
-  const routeMoving = projectRoute?.phase === 'moving'
   const routeCancellable = projectRoute !== null &&
-    ['checking', 'ask', 'failed', 'unsent'].includes(projectRoute.phase)
-  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true || routeMoving
+    projectRoute.phase !== 'recovery'
+  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true
   const canExecuteDesktopCommand = canExecuteDesktopNewChat({
     hasOrigin: activeSessionId !== null && activeDescriptor?.appSessionId === activeSessionId,
     hasQueuedPrompt: pendingSubmit !== null || queuedPrompts.length > 0,
@@ -756,7 +743,7 @@ export function SessionPane({
   // peers use for it too. A row with no name (one that predates the field and
   // has not been spawned since) keeps the original prompt verbatim. The
   // connection copy is untouched either way.
-  const workspaceMoving = activeDescriptor?.moving === true || activeDescriptor?.workspaceMove?.phase === 'moving' || routeMoving
+  const workspaceMoving = activeDescriptor?.moving === true || activeDescriptor?.workspaceMove?.phase === 'moving'
   const composerPlaceholder = workspaceMoving ? composerPromptPlaceholder(activeDescriptor?.name ?? null) : managedFolderUnavailable
     ? 'Recreate the chat folder to continue'
     : composerGate.editable
@@ -2919,8 +2906,8 @@ type SessionPaneProps = {
   /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
   history: string[]
   /** App-owned per-session navigation, including the draft saved by ↑ recall. */
-  historyNav?: HistoryNav
-  onHistoryNavChange?: (nav: HistoryNav) => void
+  historyNav: HistoryNav
+  onHistoryNavChange: (nav: HistoryNav) => void
   /** Store a large paste as a collapsed chip and splice its token in at the
    * composer caret (`selectionStart`/`selectionEnd`); absent selection appends. */
   onPaste: (

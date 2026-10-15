@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fsModule from 'node:fs'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -27,12 +28,12 @@ import {
 } from '../../src/services/api/codexAccountLeaseManager.js'
 import type { OAuthTokens } from '../../src/services/oauth/types.js'
 import type { SettingsJson } from '../../src/utils/settings/types.js'
+import { ACCOUNT_CONTROL_VERSION, type AccountControlEvent } from '../shared/accountControlWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
   AccountProfileSignedOutMessage,
   AccountsSnapshotFrame,
   OAuthLoginProgress,
-  OAuthLoginProgressFrame,
 } from '../shared/protocol.js'
 import {
   type CodexAccountDeletionInput,
@@ -201,7 +202,7 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
     })
     const frame: AccountsSnapshotFrame = {
       kind: 'accounts.snapshot',
-      protocolVersion: 3,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
       accounts: snapshot,
     }
@@ -1907,7 +1908,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     expect(paste.result.ok).toBe(false)
   })
 
-  test('every emitted progress frame is secretGuard-clean (no token rides the back-channel)', async () => {
+  test('every emitted host progress event is secretGuard-clean (no token rides the back-channel)', async () => {
     const captured: OAuthLoginProgress[] = []
     const domain = makeDomain(fakeOAuthRunner({ url: 'https://auth.example/authz?state=xyz' }), captured)
     await domain.runVerb({ type: 'account.login', requestId: 'r1' })
@@ -1915,13 +1916,13 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     await domain.runVerb({ type: 'account.oauthAlias', requestId: 'r2', alias: 'work' })
     expect(captured.length).toBeGreaterThan(0)
     for (const progress of captured) {
-      const frame: OAuthLoginProgressFrame = {
-        kind: 'oauth.login.progress',
-        protocolVersion: 3,
-        sessionId: 's1',
+      const event: AccountControlEvent = {
+        type: 'progress',
+        version: ACCOUNT_CONTROL_VERSION,
+        provider: 'openai',
         progress,
       }
-      expect(scanForSecrets(frame).ok).toBe(true)
+      expect(scanForSecrets(event).ok).toBe(true)
     }
   })
 })

@@ -2,10 +2,12 @@ import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { UsagePage } from './UsagePage.js';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
-import { initialUsageDashboardState, reduceUsageDashboard } from './usageDashboardState.js';
+import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js';
 import { usageGraphColors } from './usageGraphState.js';
 import { UsageCacheSummary, UsageModelDonut } from './UsageOverviewDetails.js';
 import { UsageParallelSessions, UsageReasoningEffort } from './UsageWorkPatterns.js';
+
+const selectionProps = { selection: initialUsageSelection, onSelectionChange: () => {} };
 
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 const activityAsOf = '2026-10-08T12:00:00.000Z';
@@ -34,16 +36,16 @@ function populated() {
 }
 
 test('loading, failure and confirmed empty history are distinct', () => {
-    expect(renderToStaticMarkup(<UsagePage state={initialUsageDashboardState}/>)).toContain('Loading analytics');
-    expect(renderToStaticMarkup(<UsagePage state={{ snapshot: null, status: 'error' }}/>)).toContain('Usage could not be loaded');
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    expect(renderToStaticMarkup(<UsagePage {...selectionProps} state={initialUsageDashboardState}/>)).toContain('Loading analytics');
+    expect(renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: null, status: 'error' }}/>)).toContain('Usage could not be loaded');
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot, status: 'ready' }}/>);
     expect(html).toContain('No recorded activity in this period.');
     expect(html).not.toContain('usage-flow-chart');
 
     const incomplete = structuredClone(snapshot);
     incomplete.coverage.state = 'partial';
     incomplete.coverage.parseErrors = 1;
-    const partialHtml = renderToStaticMarkup(<UsagePage state={{ snapshot: incomplete, status: 'ready' }}/>);
+    const partialHtml = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: incomplete, status: 'ready' }}/>);
     expect(partialHtml).toContain('Activity for this period is incomplete.');
     expect(partialHtml).not.toContain('No recorded activity in this period.');
 });
@@ -51,13 +53,13 @@ test('loading, failure and confirmed empty history are distinct', () => {
 test('auto-mode attempts count as activity even without token records', () => {
     const copy = structuredClone(snapshot);
     copy.ranges['7d'].autoMode.allTools.outcomes.allowed = 1;
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }}/>);
     expect(html).toContain('Auto mode');
     expect(html).not.toContain('No recorded activity in this period.');
 });
 
 test('populated page presents five metrics and the agreed panels without duplicate disclosures', () => {
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: populated(), status: 'ready' }}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: populated(), status: 'ready' }}/>);
     for (const label of ['Analytics', 'Tokens', 'Prompt cache', 'Model usage', 'Tools', 'Daily activity', 'Parallel sessions', 'Reasoning effort', 'Auto mode', 'View as table']) expect(html).toContain(label);
     expect(html.match(/class="usage-values"/g)).toHaveLength(1);
     for (const removed of ['Execution timing', 'Tool activity', 'Partial history', 'Token volume by hour', 'Activity by hour']) expect(html).not.toContain(removed);
@@ -85,7 +87,7 @@ test('partial coverage retains visible counts and qualifies the recorded cache r
     const copy = populated();
     copy.coverage.state = 'partial';
     copy.coverage.parseErrors = 1;
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }}/>);
     expect(html).toContain('123');
     expect(html).not.toContain('Partial history');
     expect(html).toContain('Cache read rate, 0 to 100 percent');
@@ -97,7 +99,7 @@ test('refresh failure retains saved values and exposes retry', () => {
     const good = reduceUsageDashboard(initialUsageDashboardState, { type: 'usage', version: 1, snapshot: copy });
     const stale = reduceUsageDashboard(good, { type: 'error', version: 1, code: 'timeout' });
     expect(stale.snapshot).toBe(copy);
-    const html = renderToStaticMarkup(<UsagePage state={stale} onRefresh={() => {}}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={stale} onRefresh={() => {}}/>);
     expect(html).toContain('Refresh failed. Try again');
     expect(html).toContain('usage-flow-chart');
 });
@@ -161,7 +163,7 @@ test('missing contributor details do not erase recorded daily totals', () => {
     const copy = populated();
     const day = copy.ranges['7d'].days[0]!;
     day.contributors = { state: 'unavailable', omitted: 0, items: [] };
-    const render = () => renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: '7d', date: day.date }}/>);
+    const render = () => renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }} selection={{ range: '7d', date: day.date }}/>);
     expect(render()).toContain('Session details are unavailable for this day.');
     expect(render()).toContain('123</strong> tokens');
 });
@@ -173,7 +175,7 @@ test('comparison dates use the snapshot timezone on both sides of UTC midnight',
     ] as const) {
         const rows = ['2026-09-01T12:00:00.000Z', asOf].map((timestamp, index) => ({ type: 'user', sessionId: 'display-test', uuid: `user-${index}`, timestamp }));
         const copy = await activitySnapshot(rows, timezone, asOf);
-        const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+        const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }}/>);
         const freshness = html.match(/<p class="usage-freshness">(.*?)<\/p>/)?.[1];
         expect(freshness).toContain(current);
         expect(freshness).toContain(`vs ${previous}`);
@@ -184,7 +186,7 @@ test('zero-token user activity counts toward active days and streaks', async () 
     const copy = await activitySnapshot(['2026-09-01T12:00:00.000Z', activityAsOf].map((timestamp, index) => ({ type: 'user', sessionId: 'display-test', uuid: `user-${index}`, timestamp })));
     expect(copy.ranges['7d'].activeDays).toBe(1);
     expect(copy.ranges.all.activeDays).toBe(2);
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }}/>);
     expect(html).toContain('1 active days');
     expect(html).toContain('<b>2</b>active days');
     expect(html).toContain('<b>1</b>longest streak');
@@ -195,7 +197,7 @@ for (const count of [60, 61, 70]) test(`daily activity discloses bounded detail 
     const copy = await activitySnapshot(dailyRecords(count));
     expect(copy.ranges.all.activeDays).toBe(count);
     expect(copy.ranges.all.bucketDays ?? 1).toBe(count === 60 ? 1 : 2);
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: 'all', date: '' }}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }} selection={{ range: 'all', date: '' }}/>);
     expect(html).toContain(`${count} active days`);
     expect(html).toContain(`<h2>Total tokens</h2><strong>${count * 2}</strong>`);
     if (count === 60) {
@@ -216,7 +218,7 @@ for (const count of [60, 61, 70]) test(`daily activity discloses bounded detail 
 
 test('a known inactive day ends a current streak without inferring older bucketed days', async () => {
     const copy = await activitySnapshot(dailyRecords(70, [64]));
-    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: 'all', date: '' }}/>);
+    const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }} selection={{ range: 'all', date: '' }}/>);
     expect(html).toContain('69 active days');
     expect(html).toContain('Daily activity (last 30 days)');
     expect(html).toContain('<b>29</b>active days');

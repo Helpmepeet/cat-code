@@ -453,3 +453,11 @@ Counting version 21 invalidates version-20 summaries that had already grouped
 recent tool names, then rebuilds summaries from the existing redacted
 index-v11 records. The raw index projection, transcripts, sessions, and
 accounts are unchanged; no persisted engine migration is required.
+
+## Legacy session stats retirement, 2026-10-15
+
+[Session protocol v4](SESSION-PROTOCOL-V4.md) removes `stats.query`,
+`stats.usage.snapshot`, their fixed preload sender, and the unused per-session
+renderer cache. The independent usage worker, host event, retained-history
+collector, and terminal stats are unchanged by this retirement. No usage cache
+or transcript migration is required.

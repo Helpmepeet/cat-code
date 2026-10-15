@@ -20,7 +20,7 @@ import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projec
 import type {
   AccountDeleteMessage,
   AccountLogoutMessage,
-  AccountVerbMessage,
+  AccountSwitchMessage,
   AccountResultFrame,
   AskUserQuestionAnswer,
   CatCodeBridge,
@@ -42,7 +42,6 @@ import type {
   SubmitOptions,
   TaskControlVerbMessage,
   TranscriptCache,
-  UsageStatsRange,
   WorkspaceTrustMessage,
 } from '../shared/protocol.js'
 import type {
@@ -84,7 +83,6 @@ import {
   CH_SESSION_ACTION_VERB,
   CH_REMOTE_SETTINGS_VERB,
   CH_SETTINGS_VERB,
-  CH_STATS_QUERY,
   CH_PING,
   CH_RESTART,
   CH_SERVER_FRAME,
@@ -306,11 +304,11 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ANSWER_QUESTIONS, payload)
   },
-  accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void {
+  accountVerb(sessionId: SessionId, verb: AccountSwitchMessage): void {
     // P4-5 — HC3 fixed sender. The renderer supplies only a decided verb payload;
     // main light-coerces the type and the sidecar is the trust boundary (schema +
     // pool-resolved re-validation). No token ever crosses in either direction.
-    if (verb.type === 'account.delete' || verb.type === 'account.logout') return
+    if (verb.type !== 'account.switch') return
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
@@ -434,14 +432,6 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SETTINGS_VERB, payload)
-  },
-  queryStats(sessionId: SessionId, range: UsageStatsRange): void {
-    const payload = {
-      sessionId,
-      verb: { type: 'stats.query', range, requestId: crypto.randomUUID() },
-    }
-    sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_STATS_QUERY, payload)
   },
   ping(sessionId: SessionId, nonce: string): void {
     const payload = { sessionId, nonce }

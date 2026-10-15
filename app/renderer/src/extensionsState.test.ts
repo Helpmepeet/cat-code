@@ -1,15 +1,10 @@
 import { expect, test } from 'bun:test'
 import type {
   ExtensionsSnapshot,
-  ExtensionsSnapshotFrame,
   HookEntry,
-  LifecycleFrame,
   SkillEntry,
 } from '../../shared/protocol.js'
 import {
-  createExtensionsState,
-  reduceExtensionsState,
-  selectExtensionsSnapshot,
   selectHookGroups,
   selectSkillGroups,
 } from './extensionsState.js'
@@ -27,48 +22,6 @@ function skill(fields: Partial<SkillEntry> & { name: string; source: SkillEntry[
 function snapshot(fields: Partial<ExtensionsSnapshot> = {}): ExtensionsSnapshot {
   return { mcp: [], plugins: [], skills: [], hooks: [], ...fields }
 }
-
-function frame(sessionId: string, extensions: ExtensionsSnapshot): ExtensionsSnapshotFrame {
-  return { kind: 'extensions.snapshot', protocolVersion: 3, sessionId, extensions }
-}
-
-test('reducer stores the snapshot per session and select reads it back', () => {
-  let state = createExtensionsState()
-  state = reduceExtensionsState(state, { type: 'frame', frame: frame('s1', snapshot({ skills: [] })) })
-  expect(selectExtensionsSnapshot(state, 's1')?.skills).toEqual([])
-  expect(selectExtensionsSnapshot(state, 's2')).toBeNull()
-  expect(selectExtensionsSnapshot(state, null)).toBeNull()
-})
-
-// Every slice on this frame must reach a panel. A field that crosses the wire
-// and renders nowhere is the defect this record catches: adding one without a
-// panel leaves a key missing here and fails tsc.
-const RENDERED_EXTENSIONS_SLICES: Record<keyof ExtensionsSnapshot, true> = {
-  mcp: true,
-  plugins: true,
-  skills: true,
-  hooks: true,
-}
-
-test('a lifecycle frame drops the stale snapshot only for a tracked session', () => {
-  let state = createExtensionsState()
-  state = reduceExtensionsState(state, { type: 'frame', frame: frame('s1', snapshot()) })
-  const lifecycle: LifecycleFrame = {
-    kind: 'lifecycle',
-    protocolVersion: 3,
-    sessionId: 's1',
-    status: 'disconnected',
-  }
-  state = reduceExtensionsState(state, { type: 'frame', frame: lifecycle })
-  expect(selectExtensionsSnapshot(state, 's1')).toBeNull()
-  // An untracked session is not materialized into an empty slot.
-  const before = state
-  state = reduceExtensionsState(state, {
-    type: 'frame',
-    frame: { ...lifecycle, sessionId: 'untracked' },
-  })
-  expect(state).toBe(before)
-})
 
 test('selectSkillGroups groups by source in the canonical order and drops empty groups', () => {
   const skills: SkillEntry[] = [

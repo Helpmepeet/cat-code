@@ -2,6 +2,8 @@
 
 Date: 2026-10-15. Requested lens: ponytail, smallest complete implementation.
 
+Implementation: see the [implementation and validation record](2026-10-15-workspace-simplification-implementation.md). Source anchors below describe the audited baseline `008dc331`; removed paths are historical evidence.
+
 ## Assessment
 
 Yes, there are worthwhile simplifications. The clearest opportunities are
@@ -375,8 +377,8 @@ and adapter boundary suites. Never run these against the real account store.
 
 ## F10. Retire the two adopted migration harnesses
 
-**Evidence.** [renderer-theme](../../renderer-theme/README.md) and
-[renderer-engine-types](../../scripts/typecheck/renderer-engine-types/README.md)
+**Evidence.** the baseline `renderer-theme/README.md` and
+`scripts/typecheck/renderer-engine-types/README.md`
 still describe adoption into a future renderer. The actual app has its theme and
 isolated type configuration already. CLAUDE.md calls both legacy harnesses and
 says not to extend them.

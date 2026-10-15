@@ -1,5 +1,5 @@
 /**
- * CatCode desktop IPC protocol — v3.
+ * CatCode desktop IPC protocol — v4.
  *
  * This is the versioned engine/session protocol (PROGRAM-PLAN §5, layer 1): the
  * typed seam between the renderer, the Electron main process, the Electron-free
@@ -90,8 +90,8 @@ import type {
   SettingsWriteValue,
 } from './settingsEditable.js'
 
-/** Protocol wire version. Bump only on a breaking frame-shape change. */
-export const PROTOCOL_VERSION = 3 as const
+/** v4 retires session metadata/stats/OAuth; see decisions/SESSION-PROTOCOL-V4.md. */
+export const PROTOCOL_VERSION = 4 as const
 
 /**
  * A session address. In P1-0 there is exactly one sidecar and one sessionId,
@@ -180,50 +180,12 @@ export type AskUserQuestionAnswerMessage = {
   answers: AskUserQuestionAnswer[]
 }
 
-/* ------------------------------------------------------------------------- *
- * P4-5 — account lifecycle verbs (app-owned inbound; sidecar-LOCAL schema)
- * ------------------------------------------------------------------------- *
- *
- * The Accounts domain is the first W4 domain to accept MUTATION frames. Like
- * `permission.setMode` (C2), these are app-owned vocabulary the engine's shared
- * `appClientMessageSchema` deliberately does NOT carry — each is validated by a
- * sidecar-LOCAL Zod schema at the trust boundary and dispatched to the engine's
- * OWN account machinery (`codexAccountPool`/`codexTokenRefresh`), never a
- * re-implementation.
- *
- * The decision that makes these safe (recorded here inline, the way C2's
- * reasoning lives in PERMISSION-BOUNDARY.md §3):
- *
- *  - **Secret-owner invariant is untouched (SECURITY-MINIMUM §4).** No verb
- *    carries or returns token material, and none makes a token cross IPC. The
- *    renderer NAMES an account (by `accountId`) or an alias string; it never
- *    sees, sends, or receives a credential. Deletion/logout are availability
- *    operations, not confidentiality ones — the redacted `accounts.snapshot`
- *    read-seam remains the only account data the renderer ever holds.
- *  - **T6 — renderer authors no policy, only a target.** The engine-side account
- *    domain RE-RESOLVES every `accountId` against its loaded pool (never trusts a
- *    renderer-held record), validates aliases against the engine's OWN regex +
- *    uniqueness rule (`validateCodexAccountAlias`, not a renderer claim), and
- *    re-derives every guard (switchable/vault-backed) from the real pool. The
- *    domain runs inside either the addressed session sidecar or, for global
- *    profile deletion, main's one-shot engine worker. The worst a compromised
- *    renderer gains is the ability to run the same account commands the user can
- *    already run in the TUI (`/switch-account`, `/rename-account`,
- *    `/delete-account`, `/logout`, `/touch-all`, `/login`) — TUI-equivalent, and
- *    strictly less than the live auto-approval T5b already concedes.
- *  - **Destructive ops fail closed.** `account.delete` requires an explicit
- *    `confirm: true` (mirroring the TUI's `--confirm`); a missing/false confirm
- *    is rejected at the boundary, request unperformed.
- *  - **T5a-analog — every verb carries a renderer-minted `requestId`** echoed on
- *    the resulting `account.result` frame, so a UI can correlate the outcome;
- *    the sidecar never mints account state from an unmatched id.
- *  - **T7 — the existing inbound size/rate caps apply unchanged.**
- *
- * `account.login` begins the engine's REAL OAuth flow (browser + localhost:1455
- * callback, `codex-client.ts`); the engine owns the token write. Its live
- * completion/alias sub-protocol is coordinated with P4-15 (first-run auth owns
- * the shared OAuth surface); here the renderer drives navigation and the newly
- * added account simply appears on the next `accounts.snapshot` re-broadcast.
+/**
+ * Account-domain vocabulary shared by host management and pane switching.
+ * Sessions accept only SESSION_ACCOUNT_VERB_TYPES; the account-control and
+ * destructive-operation workers validate their own closed command subsets.
+ * Engine owners re-resolve targets, aliases and credential generations. No
+ * credential material crosses IPC. See decisions/ACCOUNTS-OWNERSHIP.md.
  */
 export const ACCOUNT_VERB_TYPES = [
   'account.switch',
@@ -235,14 +197,17 @@ export const ACCOUNT_VERB_TYPES = [
   // P4-15 — the OAuth login sub-protocol (paste-code fallback, alias step,
   // cancel). Same secret-owner + T5a + T7 posture as the other account verbs:
   // the renderer authors only the user-typed code/alias string, never a token,
-  // and the engine owns every credential write. Progress flows back on the
-  // `oauth.login.progress` outbound frame (non-secret state only).
+  // and the engine owns every credential write. Progress flows through the
+  // account-control worker and host event.
   'account.oauthPasteCode',
   'account.oauthAlias',
   'account.oauthCancel',
 ] as const
 
 export type AccountVerbType = (typeof ACCOUNT_VERB_TYPES)[number]
+
+/** Pane account switching is the only session account command. */
+export const SESSION_ACCOUNT_VERB_TYPES = ['account.switch'] as const
 
 /** Subscription provider selected for a desktop OAuth sign-in. */
 export type AccountLoginProvider = 'anthropic' | 'openai'
@@ -999,7 +964,7 @@ export type SidecarClientMessage =
   | AppClientMessage
   | PermissionSetModeMessage
   | AskUserQuestionAnswerMessage
-  | AccountVerbMessage
+  | AccountSwitchMessage
   | AccountProfileDeletedMessage
   | AccountProfileSignedOutMessage
   | WorkspaceTrustMessage
@@ -1009,7 +974,6 @@ export type SidecarClientMessage =
   | RunControlVerbMessage
   | SessionActionVerbMessage
   | ContextBreakdownVerbMessage
-  | StatsQueryMessage
   | PromptRecallMessage
   | PromptForceMessage
   | AppParkMessage
@@ -1575,8 +1539,7 @@ export type AutoMemoryHeader = {
 
 /**
  * P4-34 — read-only metadata for one real agent definition that carries a
- * persistent memory directory. Additive to the existing `memory.snapshot`
- * read seam (the C3 precedent, `decisions/PERMISSION-BOUNDARY.md`).
+ * persistent memory directory, read through the host-owned Settings inventory.
  *
  * Per-agent memory is an engine feature, not a prototype invention:
  * `src/tools/AgentTool/agentMemory.ts:13` defines the scope and `:52`
@@ -1606,13 +1569,6 @@ export type MemorySnapshot = {
   autoMemories: AutoMemoryHeader[]
   agentMemories: AgentMemorySnapshot[]
   notes: string[]
-}
-
-export type MemorySnapshotFrame = {
-  kind: 'memory.snapshot'
-  protocolVersion: typeof PROTOCOL_VERSION
-  sessionId: SessionId
-  memory: MemorySnapshot
 }
 
 /* ------------------------------------------------------------------------- *
@@ -2758,87 +2714,10 @@ export type AccountResultFrame = {
   signOut?: AccountSignOutReceipt
 }
 
-/* ------------------------------------------------------------------------- *
- * Usage Analytics Snapshot & Query Protocol (Real engine-backed stats)
- * ------------------------------------------------------------------------- */
-
-// The dedicated Usage destination uses usageDashboard.ts v1. This legacy
-// per-session query remains compatible and is not an overview publisher.
-// See decisions/USAGE-DASHBOARD.md.
-export type UsageStatsRange = '7d' | '30d'
-
-export type UsageStatsDailyModelTokens = {
-  date: string
-  tokensByModel: Record<string, number>
-}
-
-export type UsageStatsModelUsageItem = {
-  inputTokens: number
-  outputTokens: number
-  cacheCreationInputTokens: number
-  cacheReadInputTokens: number
-}
-
-export type UsageStatsDailyActivityItem = {
-  date: string
-  messageCount: number
-  sessionCount: number
-  toolCallCount: number
-}
-
-export type UsageStatsSnapshot = {
-  range: UsageStatsRange
-  totalTokens: number
-  dailyModelTokens: UsageStatsDailyModelTokens[]
-  modelUsage: Record<string, UsageStatsModelUsageItem>
-  dailyActivity: UsageStatsDailyActivityItem[]
-  cacheHitRate: number
-  cacheReadTokens: number
-  cacheWriteTokens: number
-  freshInputTokens: number
-  totalSessions: number
-  totalMessages: number
-  activeDays: number
-}
-
 /**
- * Both ranges together, as the HOST plane delivers them (accounts owner).
- * The per-session `stats.usage.snapshot` frame carries ONE range because a
- * session answers the range the renderer asked for; main's disposable worker has
- * no asker, so it aggregates both in the one run it pays for and the renderer
- * never waits on a round trip to flip the toggle.
- */
-export type UsageStatsByRange = Record<UsageStatsRange, UsageStatsSnapshot>
-
-export type UsageStatsSnapshotFrame = {
-  kind: 'stats.usage.snapshot'
-  protocolVersion: typeof PROTOCOL_VERSION
-  sessionId: SessionId
-  stats: UsageStatsSnapshot
-}
-
-export type StatsQueryMessage = {
-  type: 'stats.query'
-  range: UsageStatsRange
-  requestId: string
-}
-
-/**
- * P4-15 — the live OAuth login progress states, surfaced to the renderer so the
- * first-run sign-in surface and the reauth banner can drive their sub-states off
- * the REAL engine flow (`ConsoleOAuthFlow.tsx:35-55` `OAuthStatus`), not a
- * scripted timer. Mirrors the engine states the renderer needs, dropping the
- * ones that are engine-internal (`creating_api_key`, `about_to_retry`).
- *
- * SECRET POSTURE (SECURITY-MINIMUM §4 — proven by `secretGuard` on every
- * outbound frame): this carries NON-secret state ONLY. `url` is the OAuth
- * AUTHORIZE url the user must SEE to paste-fall-back — it holds the public PKCE
- * `code_challenge` + one-time `state`, NEVER the `code_verifier` or any token
- * (`codex-client.ts:140` builds it; the verifier stays engine-side). `message`
- * is the redacted human error text. The tokens themselves never leave the
- * engine: they are captured inside the sidecar's OAuth controller and written by
- * the engine's own `saveCodexOAuthTokens`/vault path — the `waiting_for_alias`
- * and `success` states carry no token field at all.
+ * Non-secret OAuth progress from the account-control worker to the host UI.
+ * The authorize URL contains the public challenge/state; the verifier and
+ * captured tokens stay engine-side. Errors are redacted before publication.
  */
 export type OAuthLoginProgress =
   /** Flow kicked off; browser opening, url not yet minted. */
@@ -2847,35 +2726,18 @@ export type OAuthLoginProgress =
   | { state: 'waiting_for_login'; url: string }
   /** Tokens captured engine-side; awaiting the optional account alias (new account). */
   | { state: 'waiting_for_alias' }
-  /** Token written; the account appears on the next `accounts.snapshot`. */
+  /** Token written; the host refreshes its global account pool. */
   | { state: 'success' }
   /** The flow failed; `message` is the redacted engine error (retryable). */
   | { state: 'error'; message: string }
 
-/**
- * P4-15 outbound frame — pushed as the engine OAuth flow advances (begun by the
- * `account.login` verb, driven by the paste-code/alias verbs). Broadcast to every
- * connection like a snapshot; carries non-secret state only (secretGuard-clean by
- * construction). NOT a snapshot: it is the transient flow progress, cleared when
- * the account lands (`accounts.snapshot` re-broadcast) or the attempt is cancelled.
- */
-export type OAuthLoginProgressFrame = {
-  kind: 'oauth.login.progress'
-  protocolVersion: typeof PROTOCOL_VERSION
-  sessionId: SessionId
-  progress: OAuthLoginProgress
-}
-
 /* ------------------------------------------------------------------------- *
- * Settings extensions read-seam (P4-12) — read-only config snapshots
+ * Settings inventory metadata — read-only configuration snapshots
  * ------------------------------------------------------------------------- *
  *
- * The MCP / Plugins / Skills / Hooks settings sub-panels. All four are
- * spawn-time reads of the engine's real config (like `settings.snapshot`, not a
- * live subscription), consolidated into ONE outbound frame because they are one
- * session's scope and all freeze at spawn. Each slice is independently nullable:
- * a failed read for one domain does not blank the others (the reader logs and
- * that slice arrives `null`).
+ * MCP / Plugins / Skills / Hooks metadata comes from the host-owned Settings
+ * inventory for its selected workspace. Each slice is independently nullable:
+ * one failed read does not erase the others.
  *
  * Secret posture (secretGuard-clean by construction): the snapshot carries
  * config METADATA only — no setting VALUES, no MCP `env`/`headers`, no hook
@@ -2884,7 +2746,7 @@ export type OAuthLoginProgressFrame = {
  *
  * Deliberate deferrals (P4-12 §0 flags — render truth, defer the rest):
  *  - MCP entries remain CONFIGURED-server metadata only. The sidecar has a live
- *    MCP runtime, but this spawn-time frame intentionally carries no connection
+ *    MCP runtime, but this inventory snapshot carries no connection
  *    status, tool/resource counts, or reconnect/auth/enable/remove actions.
  *    Those need a separate redacted live projection or write verb and are
  *    omitted here rather than mocked.
@@ -3028,18 +2890,6 @@ export type ExtensionsSnapshot = {
   skills: SkillEntry[] | null
   /** Configured hooks in canonical event order (null if the read failed). */
   hooks: HookEntry[] | null
-}
-
-/**
- * P4-12 outbound frame. Emitted on attach (after the agent-config snapshot,
- * before history replay). Read-only; writes go through the engine's own config
- * managers under the `SettingsUpdater`-under-lock write-seam, a later session.
- */
-export type ExtensionsSnapshotFrame = {
-  kind: 'extensions.snapshot'
-  protocolVersion: typeof PROTOCOL_VERSION
-  sessionId: SessionId
-  extensions: ExtensionsSnapshot
 }
 
 /* ------------------------------------------------------------------------- *
@@ -3847,7 +3697,6 @@ export type ServerFramePayload =
   | SettingsSnapshotFrame
   | AgentConfigSnapshotFrame
   | ThreadGoalSnapshotFrame
-  | MemorySnapshotFrame
   | ContextBreakdownSnapshotFrame
   | TasksSnapshotFrame
   | WorkersSnapshotFrame
@@ -3858,18 +3707,15 @@ export type ServerFramePayload =
   | SessionActionResultFrame
   | AccountsSnapshotFrame
   | AccountResultFrame
-  | OAuthLoginProgressFrame
   | WorkspaceTrustSnapshotFrame
   | WorkspaceTrustResultFrame
   | DiagnosticsSnapshotFrame
-  | ExtensionsSnapshotFrame
   | RemoteSettingsSnapshotFrame
   | RemoteSettingsResultFrame
   | SessionsCatalogSnapshotFrame
   | SlashCatalogSnapshotFrame
   | GeneratedImagePreviewFrame
   | SettingsResultFrame
-  | UsageStatsSnapshotFrame
   | QueuedPromptsSnapshotFrame
   | PromptRecallResultFrame
   | PromptForceResultFrame
@@ -3913,7 +3759,6 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'settings.result': true,
   'agent-config.snapshot': true,
   'thread-goal.snapshot': true,
-  'memory.snapshot': true,
   'context-breakdown.snapshot': true,
   'tasks.snapshot': true,
   'workers.snapshot': true,
@@ -3924,17 +3769,14 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'session-action.result': true,
   'accounts.snapshot': true,
   'account.result': true,
-  'oauth.login.progress': true,
   'workspace-trust.snapshot': true,
   'workspace.trust.result': true,
   'diagnostics.snapshot': true,
-  'extensions.snapshot': true,
   'remoteSettings.snapshot': true,
   'remoteSettings.result': true,
   'sessions.snapshot': true,
   'slash-catalog.snapshot': true,
   'generated-image-preview': true,
-  'stats.usage.snapshot': true,
   'queued-prompts.snapshot': true,
   'prompt-recall.result': true,
   'prompt-force.result': true,
@@ -4106,14 +3948,13 @@ export type CatCodeBridge = {
     answers: AskUserQuestionAnswer[],
   ): void
   /**
-   * P4-5 — request an account lifecycle verb on the addressed session's sidecar.
-   * The renderer NAMES a target (`accountId`/`alias`); the sidecar re-resolves it
-   * against the live pool and validates aliases against the engine's own rule
-   * (T6). No token ever crosses either way. The outcome arrives as an
+   * Switch an account on the addressed pane. The sidecar re-resolves its
+   * accountId against the live pool. No token crosses either way. The outcome
+   * arrives as an
    * `account.result` frame echoing `requestId`, followed by an updated
    * `accounts.snapshot` when the pool changed.
    */
-  accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void
+  accountVerb(sessionId: SessionId, verb: AccountSwitchMessage): void
   /** App-level account management; no chat session is needed. */
   manageAccount(verb: import('./accountControlWorker.js').AccountControlVerb): Promise<AccountResultFrame>
   /**
@@ -4221,10 +4062,6 @@ export type CatCodeBridge = {
    * `settings.snapshot` when the write landed.
    */
   settingsVerb(sessionId: SessionId, verb: SettingsVerbMessage): void
-  /**
-   * Usage stats query — requests a refreshed UsageStatsSnapshot for '7d' or '30d'.
-   */
-  queryStats(sessionId: SessionId, range: UsageStatsRange): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
   /**

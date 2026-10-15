@@ -1320,7 +1320,7 @@ describe('D5 — a refused submit comes back, images included', () => {
   function userMessageFrame(sessionId: string, replay?: true): ServerFrame {
     return {
       kind: 'event',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId,
       ...(replay ? { replay } : {}),
       event: {
@@ -1339,7 +1339,7 @@ describe('D5 — a refused submit comes back, images included', () => {
   function errorFrame(sessionId: string, requestId?: string): ServerFrame {
     return {
       kind: 'error',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId,
       ...(requestId === undefined ? {} : { requestId }),
       code: 'bad_request',
@@ -1355,7 +1355,7 @@ describe('D5 — a refused submit comes back, images included', () => {
   ): ServerFrame {
     return {
       kind: 'submit.result',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId,
       submitId,
       accepted,
@@ -1367,7 +1367,7 @@ describe('D5 — a refused submit comes back, images included', () => {
   function toolResultFrame(sessionId: string): ServerFrame {
     return {
       kind: 'event',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId,
       event: {
         type: 'message',
@@ -1390,7 +1390,7 @@ describe('D5 — a refused submit comes back, images included', () => {
   function stagedSnapshotFrame(sessionId: string): ServerFrame {
     return {
       kind: 'queued-prompts.snapshot',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId,
       prompts: [{ id: 'q-1', text: 'and check the logs' }],
     } as ServerFrame
@@ -1399,7 +1399,7 @@ describe('D5 — a refused submit comes back, images included', () => {
   function turnStatusFrame(sessionId: string, activeTurn: boolean): ServerFrame {
     return {
       kind: 'event',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId,
       event: { type: 'turn.status', activeTurn },
     } as ServerFrame
@@ -1549,7 +1549,7 @@ describe('D5 — a refused submit comes back, images included', () => {
       turnStatusFrame(S1, false),
       {
         kind: 'lifecycle',
-        protocolVersion: 3,
+        protocolVersion: 4,
         sessionId: S1,
         status: 'exited',
       } as ServerFrame,
@@ -1808,7 +1808,7 @@ describe('D5 — a refused submit comes back, images included', () => {
     const outcome = reduceSubmitAnswers(state, [
       {
         kind: 'error',
-        protocolVersion: 3,
+        protocolVersion: 4,
         sessionId: S1,
         requestId: 'recall-1',
         code: 'session_disconnected',
@@ -1834,7 +1834,7 @@ describe('D5 — a refused submit comes back, images included', () => {
     const outcome = reduceSubmitAnswers(state, [
       {
         kind: 'submit.result',
-        protocolVersion: 3,
+        protocolVersion: 4,
         sessionId: S1,
         submitId: 'sub-1',
         accepted: false,

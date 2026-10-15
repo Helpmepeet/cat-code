@@ -104,7 +104,7 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
-  ACCOUNT_VERB_TYPES,
+  SESSION_ACCOUNT_VERB_TYPES,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
   PROMPT_FORCE_VERB_TYPES,
@@ -121,7 +121,7 @@ import {
   ACTIVITY_PRESENCES,
   HOST_REQUEST_ERROR_CODES,
   PEER_DELIVER_REFUSAL_REASONS,
-  type AccountVerbMessage,
+  type AccountSwitchMessage,
   type ActivityPresence,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
@@ -132,7 +132,6 @@ import {
   type HostRequestValues,
   type HostRequestVerb,
   type WorkspaceHandoffMessage,
-  type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type QueuedPromptItem,
   type RecalledPrompt,
@@ -158,7 +157,6 @@ import type { SidecarPermissionDomain } from './permissionDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
-import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarWorkersDomain } from './workersDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
@@ -178,11 +176,8 @@ import {
 import type { SidecarAccountsDomain } from './accountsDomain.js'
 import type { SidecarWorkspaceTrustDomain } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
-import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
-import { tryGetUsageStatsSnapshot } from './statsDomain.js'
-import type { UsageStatsRange } from '../shared/protocol.js'
 
 /**
  * Why an outbound frame was refused, one value per refusing site. Closed and
@@ -322,11 +317,6 @@ export type SidecarServerOptions = {
    */
   goals?: SidecarGoalDomain
   /**
-   * Memory read-seam (P4-10). Optional because the P1-0 probe fixture has no
-   * cwd-configured engine; when absent, no `memory.snapshot` frame is emitted.
-   */
-  memory?: SidecarMemoryDomain
-  /**
    * Tasks read-seam (P4-9). Optional because the P1-0 probe fixture has no engine
    * app-state store; when absent, no `tasks.snapshot` frame is emitted.
    */
@@ -399,11 +389,6 @@ export type SidecarServerOptions = {
    * emitted.
    */
   diagnostics?: SidecarDiagnosticsDomain
-  /**
-   * Settings extensions read-seam (P4-12). Optional because the P1-0 probe fixture
-   * has no cwd-configured engine; when absent, no `extensions.snapshot` is emitted.
-   */
-  extensions?: SidecarExtensionsDomain
   /**
    * RemoteSettings read-seam + verbs (P4-13, D3 cut scope). Optional because the
    * P1-0 probe fixture has no engine app-state store or cwd-configured command
@@ -541,7 +526,6 @@ export class SidecarServer {
   private readonly settings: SidecarSettingsDomain | null
   private readonly agentConfig: SidecarAgentConfigDomain | null
   private readonly goals: SidecarGoalDomain | null
-  private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
   private readonly workers: SidecarWorkersDomain | null
   private readonly leases: SidecarLeaseDomain | null
@@ -570,7 +554,6 @@ export class SidecarServer {
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly onWorkspaceTrusted: (() => void) | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
-  private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private history: readonly SDKMessage[]
@@ -627,7 +610,6 @@ export class SidecarServer {
   private unsubscribePermissionContext: (() => void) | null = null
   private unsubscribeAgentConfigSnapshot: (() => void) | null = null
   private unsubscribeGoalSnapshot: (() => void) | null = null
-  private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
   private unsubscribeWorkersSnapshot: (() => void) | null = null
   private unsubscribeLeaseSnapshot: (() => void) | null = null
@@ -817,7 +799,6 @@ export class SidecarServer {
     this.settings = options.settings ?? null
     this.agentConfig = options.agentConfig ?? null
     this.goals = options.goals ?? null
-    this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
     this.workers = options.workers ?? null
     this.leases = options.leases ?? null
@@ -827,18 +808,9 @@ export class SidecarServer {
     this.sessionActions = options.sessionActions ?? null
     this.contextBreakdown = options.contextBreakdown ?? null
     this.accounts = options.accounts ?? null
-    // P4-15 — the OAuth login controller pushes progress through this sink; the
-    // server frames it as an `oauth.login.progress` broadcast (and re-broadcasts
-    // the accounts snapshot on `success`, so a completed login clears the
-    // first-run surface / reauth banner). The domain keeps ZERO transport
-    // knowledge — it emits an `OAuthLoginProgress`, the server owns framing.
-    this.accounts?.setOAuthProgressSink(progress =>
-      this.broadcastOAuthLoginProgress(progress),
-    )
     this.workspaceTrust = options.workspaceTrust ?? null
     this.onWorkspaceTrusted = options.onWorkspaceTrusted ?? null
     this.diagnostics = options.diagnostics ?? null
-    this.extensions = options.extensions ?? null
     this.remoteSettings = options.remoteSettings ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
@@ -1005,11 +977,6 @@ export class SidecarServer {
         this.broadcastThreadGoalSnapshot()
       })
     }
-    if (this.memory) {
-      this.unsubscribeMemorySnapshot = this.memory.subscribe(() => {
-        this.broadcastMemorySnapshot()
-      })
-    }
     if (this.tasks) {
       this.unsubscribeTasksSnapshot = this.tasks.subscribe(() => {
         this.broadcastTasksSnapshot()
@@ -1163,10 +1130,9 @@ export class SidecarServer {
     this.sendSettingsSnapshot(connection)
     // P4-7 — agent definition config snapshot, after settings and before replay.
     this.sendAgentConfigSnapshot(connection)
-    // P4-10 — read-only goals + memory snapshots, before replay and with no new
+    // Read-only goals, before replay and with no new
     // inbound vocabulary or renderer-authored state.
     this.sendThreadGoalSnapshot(connection)
-    this.sendMemorySnapshot(connection)
     // P4-9 — read-only background-task snapshot, alongside the other P4-10
     // snapshots and before replay; no new inbound vocabulary or renderer-
     // authored task state.
@@ -1186,9 +1152,6 @@ export class SidecarServer {
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
-    // Usage analytics is main-owned. Ordinary attachment must not multiply a
-    // full transcript scan across every session process; explicit stats.query is
-    // retained for the versioned protocol's supported request path.
     // The pool loads observation-only in the sidecar (no engine startup path
     // runs `initAccountPool`), so the first snapshot's usage hints are 0/null.
     // Fire the same read-only wham/usage GET the engine runs at startup, ONCE,
@@ -1200,9 +1163,6 @@ export class SidecarServer {
     // inbound vocabulary, no renderer-authored state).
     this.sendWorkspaceTrustSnapshot(connection)
     this.sendDiagnosticsSnapshot(connection)
-    // P4-12 — read-only settings extensions (MCP/plugins/skills/hooks) config
-    // snapshot, after the other snapshots and before replay. No inbound vocabulary.
-    this.sendExtensionsSnapshot(connection)
     // P4-13 — RemoteSettings read-seam (bridge status + command-filter truth),
     // after accounts and before replay. Read-only; re-broadcast after a
     // mutating `remoteSettings.*` verb.
@@ -1453,8 +1413,6 @@ export class SidecarServer {
     this.unsubscribeAgentConfigSnapshot = null
     this.unsubscribeGoalSnapshot?.()
     this.unsubscribeGoalSnapshot = null
-    this.unsubscribeMemorySnapshot?.()
-    this.unsubscribeMemorySnapshot = null
     this.unsubscribeTasksSnapshot?.()
     this.unsubscribeTasksSnapshot = null
     this.unsubscribeWorkersSnapshot?.()
@@ -1554,21 +1512,16 @@ export class SidecarServer {
         (server, connection, message) =>
           server.handleAskUserQuestionAnswer(connection, message),
       ],
-      // Usage stats query — real engine-backed aggregation.
-      [
-        ['stats.query'],
-        (server, connection, message) => server.handleStatsQuery(connection, message),
-      ],
       // P4-5 account lifecycle verbs, dispatched to the engine's own account
       // machinery. Host-originated account invalidations are deliberately NOT
-      // in `ACCOUNT_VERB_TYPES` and have their own handler.
+      // in `SESSION_ACCOUNT_VERB_TYPES` and have their own handler.
       [
         ['account.profileDeleted', 'account.profileSignedOut'],
         (server, connection, message) =>
           server.handleAccountProfileInvalidation(connection, message),
       ],
       [
-        ACCOUNT_VERB_TYPES,
+        SESSION_ACCOUNT_VERB_TYPES,
         (server, connection, message) => server.handleAccountVerb(connection, message),
       ],
       // P4-13 RemoteSettings verbs, dispatched to the engine's own
@@ -1852,7 +1805,7 @@ export class SidecarServer {
     if (!canPersistHandoffTranscript() || !this.controller.isTurnActive() || this.parking || this.conversationMutationInFlight ||
         this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification() ||
         this.controller.getPendingPermissionRequests().length > 0 || this.tasks?.hasLiveWork() ||
-        this.inFlightDurableWrites > 0 || this.accounts?.isOAuthLoginInFlight()) return false
+        this.inFlightDurableWrites > 0) return false
     try {
       this.controller.reserveHandoff(operationId)
       this.sourceHandoffOperation = operationId
@@ -3194,17 +3147,13 @@ export class SidecarServer {
    *      kill a live turn — a no-turn-loss breach). Covers background + foreground
    *      workers alike. Do not re-derive.
    *
-   * Two more gates, same rule (no half-finished durable write):
+   * Also keep half-finished durable writes alive:
    *   4. no accepted verb whose durable write is still in flight. A token
    *      refresh holds a cross-process lockfile and marks the vault record
    *      `in_flight` before a 15 s network call
    *      (`src/services/api/codexTokenRefresh.ts`); exiting there orphans the
    *      lock and gets the account quarantined by the next refresher, with no
    *      auth failure anywhere. A fork's transcript write has the same shape.
-   *   5. no OAuth sign-in under way. That verb returns immediately and the
-   *      real flow (browser + callback listener + credential write) continues
-   *      in the background, so the counter above cannot see it; the domain
-   *      reports its own liveness instead.
    */
   private isParkGateOpen(): boolean {
     if (this.activeTurn || this.controller.isTurnActive()) return false
@@ -3221,7 +3170,6 @@ export class SidecarServer {
     if (this.controller.getPendingPermissionRequests().length > 0) return false
     if (this.tasks && this.tasks.hasLiveWork()) return false
     if (this.inFlightDurableWrites > 0) return false
-    if (this.accounts?.isOAuthLoginInFlight()) return false
     return true
   }
 
@@ -3348,18 +3296,9 @@ export class SidecarServer {
     return null
   }
 
-  private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
-    const parsed = this.parseVerbMessage(connection, rawMessage, statsQueryMessageSchema, 'invalid stats query')
-    if (!parsed) {
-      return
-    }
-
-    void this.sendUsageStatsSnapshot(connection, parsed.range)
-  }
-
   /**
    * P4-5 — account lifecycle verbs (protocol.ts: the decision rationale lives on
-   * `ACCOUNT_VERB_TYPES`). Fail-closed order: sidecar-LOCAL structural schema →
+   * `SESSION_ACCOUNT_VERB_TYPES`). Fail-closed order: sidecar-LOCAL structural schema →
    * domain presence → pool-RESOLVED business validation + dispatch (in the
    * domain) → `account.result` frame → re-broadcast the snapshot when the pool
    * changed. Structural validation here NEVER trusts the renderer's account
@@ -3378,7 +3317,7 @@ export class SidecarServer {
     // The verb is now structurally valid; the domain owns the pool-resolved
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
-    const verb = parsed as AccountVerbMessage
+    const verb = parsed as AccountSwitchMessage
     const accountsBefore = accounts.getSnapshot()
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
@@ -4654,22 +4593,6 @@ export class SidecarServer {
   }
 
   /**
-   * P4-12 — build + send the settings extensions (MCP/plugins/skills/hooks)
-   * config snapshot to a single connection (attach). The domain carries config
-   * metadata only (no values, no env/headers, no hook/skill bodies), so this
-   * frame is secretGuard-clean by construction. Wrapped so a snapshot failure
-   * can never strand the connection or skip the subsequent history replay.
-   */
-  private sendExtensionsSnapshot(connection: Connection): void {
-    this.sendDomainSnapshot(connection, this.extensions, 'extensions.snapshot', extensions => ({
-      kind: 'extensions.snapshot',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      extensions,
-    }))
-  }
-
-  /**
    * P4-10 — current thread-goal snapshot from the runtime's live app-state store.
    * Writes stay on the engine's slash/action path; the desktop receives display
    * state only.
@@ -4711,23 +4634,6 @@ export class SidecarServer {
 
   private broadcastThreadGoalSnapshot(): void {
     this.broadcastToConnections(connection => this.sendThreadGoalSnapshot(connection))
-  }
-
-  /**
-   * P4-10 — read-only memory metadata snapshot. The domain excludes memory bodies;
-   * this shared path still applies clone/JSON checks, secretGuard, and size caps.
-   */
-  private sendMemorySnapshot(connection: Connection): void {
-    this.sendDomainSnapshot(connection, this.memory, 'memory.snapshot', memory => ({
-      kind: 'memory.snapshot',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      memory,
-    }))
-  }
-
-  private broadcastMemorySnapshot(): void {
-    this.broadcastToConnections(connection => this.sendMemorySnapshot(connection))
   }
 
   /**
@@ -5204,76 +5110,6 @@ export class SidecarServer {
 
   private broadcastAccountsSnapshot(): void {
     this.broadcastToConnections(connection => this.sendAccountsSnapshot(connection))
-  }
-
-  private async sendUsageStatsSnapshot(
-    connection: Connection,
-    range: UsageStatsRange = '7d',
-  ): Promise<void> {
-    try {
-      // `tryGet…`, not the throw-free variant: its empty-snapshot fallback would
-      // send zeros the read never measured, and the renderer draws those as
-      // "No session activity recorded". Sending nothing leaves the page on its
-      // last good value, or pending.
-      const raw = await tryGetUsageStatsSnapshot(range)
-      if (!raw) {
-        this.log('[sidecar] stats.usage.snapshot skipped (usage stats read failed)')
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'stats.usage.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'stats.usage.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        stats: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] stats.usage.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
-  }
-
-  /**
-   * P4-15 — broadcast one `oauth.login.progress` frame (the live sign-in
-   * back-channel). Carries non-secret state only; `send()`'s secretGuard is the
-   * proof (a token-keyed field would drop the whole frame). On `success` the
-   * account has just been written engine-side, so re-broadcast the accounts
-   * snapshot too, for BOTH the new-account (alias-submit) and re-link
-   * (auto-persist) paths uniformly.
-   *
-   * That re-broadcast reaches the SESSION-scoped surfaces only. It does NOT move
-   * the Accounts page or the account-health bar: both read the host-plane pool
-   * (`selectGlobalAccountsSnapshot`), which prefers main's worker snapshot over
-   * any session's, so a session frame cannot update them once main's first run
-   * has landed. Main re-reads the pool itself on this frame
-   * (`frameMutatedAccountsPool`, `app/main/mainDecisions.ts`).
-   */
-  private broadcastOAuthLoginProgress(progress: OAuthLoginProgress): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    const frame: ServerFrame = {
-      kind: 'oauth.login.progress',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      progress,
-    }
-    for (const connection of this.connections) {
-      this.send(connection, frame)
-    }
-    if (progress.state === 'success') {
-      this.broadcastAccountsSnapshot()
-      // OAuth success changes credential-dependent model availability. Refresh
-      // an already-open picker immediately instead of requiring a respawn or an
-      // unrelated run-control mutation.
-      this.broadcastRunControlsSnapshot()
-    }
   }
 
   /**
@@ -6281,33 +6117,8 @@ function checkStrictKeys(message: unknown): string | null {
     // `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` and
     // `docs/migration/decisions/SECURITY-MINIMUM.md`. Each key set is the exact
     // renderer-facing contract; anything else is rejected before the Zod parse.
-    // `account.delete` requires `confirm` and `account.logout` requires its
-    // targeted generation (destructive/stale-sensitive operations fail closed).
+    // Global management uses host workers; only pane switching is accepted here.
     ['account.switch', new Set(['type', 'requestId', 'accountId', 'provider'])],
-    ['account.rename', new Set(['type', 'requestId', 'accountId', 'alias'])],
-    [
-      'account.delete',
-      new Set([
-        'type',
-        'requestId',
-        'accountId',
-        'expectedCredentialGeneration',
-        'confirm',
-      ]),
-    ],
-    ['account.logout', new Set([
-      'type',
-      'requestId',
-      'accountId',
-      'expectedCredentialGeneration',
-    ])],
-    ['account.touchAll', new Set(['type', 'requestId'])],
-    ['account.login', new Set(['type', 'requestId', 'provider'])],
-    // P4-15 OAuth login sub-protocol. The renderer authors ONLY the user-typed
-    // code/alias string — never a token; the engine owns every credential write.
-    ['account.oauthPasteCode', new Set(['type', 'requestId', 'code'])],
-    ['account.oauthAlias', new Set(['type', 'requestId', 'alias'])],
-    ['account.oauthCancel', new Set(['type', 'requestId'])],
     ['account.profileDeleted', new Set(['type', 'requestId', 'accountId'])],
     [
       'account.profileSignedOut',
@@ -6361,8 +6172,6 @@ function checkStrictKeys(message: unknown): string | null {
     ['session.branchFromMessage', new Set(['type', 'requestId', 'userMessageId'])],
     // P4-29 — the renderer authors ONLY the tag name (empty string = remove).
     ['session.tag', new Set(['type', 'requestId', 'tag'])],
-    // Usage stats query verb — real engine-backed aggregation
-    ['stats.query', new Set(['type', 'requestId', 'range'])],
     // IDLE-PARK (decisions/IDLE-PARK.md §2/§6). Host-originated (no preload
     // channel forwards it), but on the closed allowlist as defence-in-depth. The
     // frame carries NO renderer-authored state — only `type` + `requestId`; any
@@ -6679,72 +6488,22 @@ const askUserQuestionAnswerMessageSchema = z.object({
  * rules. Structural validation is shape + bounds; business rules are
  * re-checked against the live engine pool in the domain (T6), never trusted
  * from the frame. `requestId`/`accountId` are length-bounded strings.
- * `account.logout` carries a safe nonnegative expected credential generation.
- * `confirm` MUST be literal `true`.
+ * Host sign-out invalidations carry the expected credential generation.
  */
 const accountRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 const accountIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
-const accountAliasSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 const accountCredentialGenerationSchema = z
   .number()
   .int()
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
 
-const accountVerbMessageSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('account.switch'),
-    requestId: accountRequestIdSchema,
-    accountId: accountIdSchema,
-    provider: z.enum(['anthropic', 'openai']).optional(),
-  }),
-  z.object({
-    type: z.literal('account.rename'),
-    requestId: accountRequestIdSchema,
-    accountId: accountIdSchema,
-    alias: accountAliasSchema,
-  }),
-  z.object({
-    type: z.literal('account.delete'),
-    requestId: accountRequestIdSchema,
-    accountId: accountIdSchema,
-    expectedCredentialGeneration: accountCredentialGenerationSchema,
-    confirm: z.literal(true),
-  }),
-  z.object({
-    type: z.literal('account.logout'),
-    requestId: accountRequestIdSchema,
-    accountId: accountIdSchema,
-    expectedCredentialGeneration: accountCredentialGenerationSchema,
-  }),
-  z.object({
-    type: z.literal('account.touchAll'),
-    requestId: accountRequestIdSchema,
-  }),
-  z.object({
-    type: z.literal('account.login'),
-    requestId: accountRequestIdSchema,
-    provider: z.enum(['anthropic', 'openai']).optional(),
-  }),
-  // P4-15 — OAuth login sub-protocol. Structural only (shape + bounds); the
-  // engine re-validates the alias and consumes the code. `code`/`alias` are
-  // length-bounded like every renderer-controlled string. `alias` may be empty
-  // (the "leave blank" skip); `code` must be non-empty to be worth submitting.
-  z.object({
-    type: z.literal('account.oauthPasteCode'),
-    requestId: accountRequestIdSchema,
-    code: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-  }),
-  z.object({
-    type: z.literal('account.oauthAlias'),
-    requestId: accountRequestIdSchema,
-    alias: z.string().max(MAX_TEXT_FIELD_CHARS),
-  }),
-  z.object({
-    type: z.literal('account.oauthCancel'),
-    requestId: accountRequestIdSchema,
-  }),
-])
+const accountVerbMessageSchema = z.object({
+  type: z.literal('account.switch'),
+  requestId: accountRequestIdSchema,
+  accountId: accountIdSchema,
+  provider: z.enum(['anthropic', 'openai']).optional(),
+})
 
 const accountProfileDeletedMessageSchema = z.object({
   type: z.literal('account.profileDeleted'),
@@ -6963,12 +6722,6 @@ const sessionActionVerbMessageSchema = z.discriminatedUnion('type', [
     tag: z.string().max(MAX_TEXT_FIELD_CHARS),
   }),
 ])
-
-const statsQueryMessageSchema = z.object({
-  type: z.literal('stats.query'),
-  range: z.enum(['7d', '30d']),
-  requestId: z.string().max(MAX_TEXT_FIELD_CHARS).optional(),
-})
 
 /**
  * P4-13 — sidecar-LOCAL schemas for the RemoteSettings verbs (protocol.ts:

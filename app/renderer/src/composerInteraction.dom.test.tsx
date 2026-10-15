@@ -53,22 +53,6 @@ test('slash options select through click activation while pointer down preserves
   expect(picked).toEqual(['help', 'help'])
 })
 
-test('standalone panes recall and restore the draft without controlled navigation props', async () => {
-  function Pane() {
-    const [prompt, setPrompt] = useState('unsent draft')
-    return <SessionPane {...idleSessionPaneProps()} prompt={prompt} setPrompt={setPrompt}
-      history={['previous prompt']} />
-  }
-  const tree = await harness.mount(<Pane />)
-  const field = fieldOf(tree)
-  field.focus()
-  placeComposerSelection(field, 0, 0)
-  await key(field, 'ArrowUp')
-  expect(field.textContent).toBe('previous prompt')
-  await key(field, 'ArrowDown')
-  expect(field.textContent).toBe('unsent draft')
-})
-
 test('controlled history restores each session draft across pane remounts and abandons it after editing', async () => {
   let bind!: (sessionId: string, mount: number) => void
   function Owner() {

@@ -4,12 +4,9 @@ import type {
   AccountStatus,
   AccountSignOutReceipt,
   AnthropicAccountStatus,
-  OAuthLoginProgress,
   ServerFrame,
   SessionId,
   SignedOutCodexProfileStatus,
-  UsageStatsRange,
-  UsageStatsSnapshot,
 } from '../../shared/protocol.js'
 import { useEffect, useState } from 'react'
 
@@ -68,38 +65,14 @@ export type AccountsState = {
   lastResult: AccountResultFrame | null
   signOutOverlays: Record<string, AccountSignOutOverlay>
   nextSignOutOverlaySequence: number
-  /**
-   * P4-15 — the live OAuth login progress per session (the first-run surface +
-   * reauth banner drive their sub-states from it). Transient: set by the
-   * `oauth.login.progress` frame, cleared by `oauthReset` (cancel/back) and when
-   * the session tears down.
-   */
-  oauthProgress: Record<SessionId, OAuthLoginProgress | null>
-  /**
-   * Real usage statistics aggregated from session transcript logs.
-   *
-   * `null` means NOT LOADED, and is never the same thing as a snapshot whose
-   * totals are zero. Readers must keep the two apart: a zero snapshot is a
-   * measured fact about the user's history, a null is the absence of any
-   * measurement, and rendering the second as the first is what made this page
-   * tell users with 33k messages that they had no session activity.
-   *
-   * A session's `stats.usage.snapshot` frame fills one range in answer to the
-   * legacy `stats.query` verb. The current Usage page uses `usageStatsWorker`.
-   */
-  usageStats: Record<UsageStatsRange, UsageStatsSnapshot | null>
-  activeStatsRange: UsageStatsRange
 }
 
 export type AccountsAction =
   | { type: 'frame'; frame: ServerFrame }
-  /** Cancel/back cleared the OAuth surface locally (also sends the cancel verb). */
-  | { type: 'oauthReset'; sessionId: SessionId }
   /** The global `accounts-pool` host event (accounts owner). Session-independent. */
   | { type: 'pool'; pool: AccountsSnapshot }
   /** The row is gone for good — drop its retained snapshot (see `lastSessions`). */
   | { type: 'session-removed'; sessionId: SessionId }
-  | { type: 'set-stats-range'; range: UsageStatsRange }
 
 export function createAccountsState(): AccountsState {
   return {
@@ -109,12 +82,6 @@ export function createAccountsState(): AccountsState {
     lastResult: null,
     signOutOverlays: {},
     nextSignOutOverlaySequence: 1,
-    oauthProgress: {},
-    usageStats: {
-      '7d': null,
-      '30d': null,
-    },
-    activeStatsRange: '7d',
   }
 }
 
@@ -334,30 +301,15 @@ export function reduceAccountsState(
     const { sessionId } = action
     if (
       !(sessionId in state.sessions) &&
-      !(sessionId in state.lastSessions) &&
-      !(sessionId in state.oauthProgress)
+      !(sessionId in state.lastSessions)
     ) {
       return state
     }
     const sessions = { ...state.sessions }
     const lastSessions = { ...state.lastSessions }
-    const oauthProgress = { ...state.oauthProgress }
     delete sessions[sessionId]
     delete lastSessions[sessionId]
-    delete oauthProgress[sessionId]
-    return { ...state, sessions, lastSessions, oauthProgress }
-  }
-
-  if (action.type === 'set-stats-range') {
-    return { ...state, activeStatsRange: action.range }
-  }
-
-  if (action.type === 'oauthReset') {
-    if (state.oauthProgress[action.sessionId] == null) return state
-    return {
-      ...state,
-      oauthProgress: { ...state.oauthProgress, [action.sessionId]: null },
-    }
+    return { ...state, sessions, lastSessions }
   }
 
   const { frame } = action
@@ -370,13 +322,6 @@ export function reduceAccountsState(
     }
   }
 
-  if (frame.kind === 'oauth.login.progress') {
-    return {
-      ...state,
-      oauthProgress: { ...state.oauthProgress, [frame.sessionId]: frame.progress },
-    }
-  }
-
   if (frame.kind === 'account.result') {
     if (frame.verb !== 'account.logout' || !frame.signOut) {
       return { ...state, lastResult: frame }
@@ -384,22 +329,11 @@ export function reduceAccountsState(
     return reduceAccountSignOutResult(state, frame, frame.signOut)
   }
 
-  if (frame.kind === 'stats.usage.snapshot') {
-    return {
-      ...state,
-      usageStats: {
-        ...state.usageStats,
-        [frame.stats.range]: frame.stats,
-      },
-    }
-  }
-
   if (frame.kind === 'lifecycle') {
     if (!(frame.sessionId in state.sessions)) return state
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: null },
-      oauthProgress: { ...state.oauthProgress, [frame.sessionId]: null },
     }
   }
 
@@ -427,15 +361,6 @@ export function selectLastAccountsSnapshot(
 ): AccountsSnapshot | null {
   if (!sessionId) return null
   return state.sessions[sessionId] ?? state.lastSessions[sessionId] ?? null
-}
-
-/** The active session's live OAuth login progress, or null when no flow is running. */
-export function selectOAuthProgress(
-  state: AccountsState,
-  sessionId: SessionId | null,
-): OAuthLoginProgress | null {
-  const progress = sessionId ? state.oauthProgress[sessionId] : undefined
-  return progress ?? null
 }
 
 /**
@@ -597,13 +522,4 @@ export function selectHasOtherSwitchable(
       a.status === 'healthy' &&
       !a.usageLimitReached,
   )
-}
-
-/** Resolves usage statistics for the given range ('7d' | '30d') or the active range. */
-export function selectUsageStatsForRange(
-  state: AccountsState,
-  range?: UsageStatsRange,
-): UsageStatsSnapshot | null {
-  const targetRange = range ?? state.activeStatsRange
-  return state.usageStats[targetRange]
 }

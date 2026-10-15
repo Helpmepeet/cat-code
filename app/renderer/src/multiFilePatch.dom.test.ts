@@ -84,14 +84,14 @@ async function projectPatchRows() {
   }
   const frames: ServerFrame[] = [
     {
-      kind: 'ready', protocolVersion: 3, sessionId, engineSessionId: 'engine-multi-file-patch',
+      kind: 'ready', protocolVersion: 4, sessionId, engineSessionId: 'engine-multi-file-patch',
       payload: {
         type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
         abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
       },
     },
     {
-      kind: 'event', protocolVersion: 3, sessionId,
+      kind: 'event', protocolVersion: 4, sessionId,
       event: { type: 'message', message: {
         type: 'assistant', session_id: 'engine-multi-file-patch', parent_tool_use_id: null,
         uuid: '00000000-0000-4000-8000-00000000f101',
@@ -104,7 +104,7 @@ async function projectPatchRows() {
       } },
     },
     {
-      kind: 'event', protocolVersion: 3, sessionId,
+      kind: 'event', protocolVersion: 4, sessionId,
       event: { type: 'message', message: {
         type: 'user', session_id: 'engine-multi-file-patch', parent_tool_use_id: null,
         uuid: '00000000-0000-4000-8000-00000000f102', isSynthetic: true,

@@ -17,43 +17,15 @@ import type {
   MemorySnapshot,
 } from '../shared/protocol.js'
 
-export type SidecarMemoryDomain = {
-  /** Read-only snapshot. null while loading or when the read failed. */
-  getSnapshot(): MemorySnapshot | null
-  subscribe(listener: () => void): () => void
-}
-
 /**
  * The subset of an agent definition this domain reads. Structural rather than
  * the whole `AgentConfig`, so the caller passes the engine's OWN active-agent
- * list (`agentDefinitions.activeAgents`, `app/sidecar/sessionController.ts`)
+ * list (`agentDefinitions.activeAgents` in `settingsInventoryWorker.ts`)
  * without this module importing the loader's shape.
  */
 export type AgentMemorySource = {
   agentType: string
   memory?: AgentMemoryScope | undefined
-}
-
-export function createSidecarMemoryDomain(
-  agents: readonly AgentMemorySource[],
-): SidecarMemoryDomain {
-  let snapshot: MemorySnapshot | null = null
-  const listeners = new Set<() => void>()
-  void readMemorySnapshotOnce(agents).then(value => {
-    snapshot = value
-    for (const listener of listeners) listener()
-  })
-  return {
-    getSnapshot() {
-      return snapshot
-    },
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => {
-        listeners.delete(listener)
-      }
-    },
-  }
 }
 
 export function buildMemorySnapshot({
@@ -115,7 +87,7 @@ export async function readMemorySnapshotOnce(
     })
   } catch (error) {
     process.stderr.write(
-      `[sidecar] memory snapshot read failed (session runs without a memory snapshot): ${
+      `[sidecar] memory inventory read failed: ${
         error instanceof Error ? error.message : String(error)
       }\n`,
     )

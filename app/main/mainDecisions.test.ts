@@ -699,14 +699,6 @@ describe('isTerminalLifecycleFrame', () => {
 })
 
 describe('frameMutatedAccountsPool', () => {
-  const oauth = (state: string): ServerFrame =>
-    ({
-      kind: 'oauth.login.progress',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: 's1',
-      progress: { state },
-    }) as unknown as ServerFrame
-
   const accountResult = (
     verb: string,
     ok: boolean,
@@ -720,18 +712,6 @@ describe('frameMutatedAccountsPool', () => {
       ok,
       message: 'done',
     }) as unknown as ServerFrame
-
-  test('a completed sign-in mutates the pool; its earlier phases do not', () => {
-    expect(frameMutatedAccountsPool(oauth('success'))).toBe(true)
-    for (const state of [
-      'starting',
-      'waiting_for_login',
-      'waiting_for_alias',
-      'error',
-    ]) {
-      expect(frameMutatedAccountsPool(oauth(state))).toBe(false)
-    }
-  })
 
   test('an account verb that landed mutates the pool; a refused one does not', () => {
     // These are the surfaces the operator asked about: without a re-read, a
@@ -752,8 +732,8 @@ describe('frameMutatedAccountsPool', () => {
   test('every verb the sidecar marks poolChanged:false is excluded, not just login', () => {
     // These four answer ok without touching the pool
     // (`app/sidecar/accountsDomain.ts`). Each false trigger is a ~189 MB worker
-    // boot plus a live usage fetch, and `oauthAlias` emits the success progress
-    // BEFORE its own ok, so counting it here bought two spawns for one sign-in.
+    // boot plus a live usage fetch. Login completion is published by app-wide
+    // account control.
     for (const verb of [
       'account.login',
       'account.oauthPasteCode',
@@ -775,11 +755,10 @@ describe('frameMutatedAccountsPool', () => {
     expect(frameMutatedAccountsPool(errorFrame())).toBe(false)
     expect(frameMutatedAccountsPool(pongFrame())).toBe(false)
     expect(frameMutatedAccountsPool(lifecycle('exited'))).toBe(false)
-    // main's handler runs inside the supervisor socket loop, which has no
-    // try/catch: a nested read on a frame missing its payload must not throw the
-    // loop out and drop delivery for that session.
+    // Malformed replies cannot refresh the pool or interrupt socket delivery.
     const malformed = {
-      kind: 'oauth.login.progress',
+      kind: 'account.result',
+      ok: true,
       protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
     } as unknown as ServerFrame

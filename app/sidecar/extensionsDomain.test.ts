@@ -10,7 +10,7 @@ import type { AgentDefinition } from '../../src/tools/AgentTool/loadAgentsDir.js
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
-  ExtensionsSnapshotFrame,
+  ExtensionsSnapshot,
   HookConfigSource,
   HookConfigType,
   McpConfigScope,
@@ -474,7 +474,7 @@ test.each(
 
 /* --------------------------- secret posture --------------------------- */
 
-test('a full extensions frame carries no secret material', () => {
+test('a full extensions snapshot carries no secret material', () => {
   const mcp = [
     buildMcpEntry('remote', {
       type: 'http',
@@ -499,15 +499,10 @@ test('a full extensions frame carries no secret material', () => {
     agentDefinitions: [],
   })
 
-  const frame: ExtensionsSnapshotFrame = {
-    kind: 'extensions.snapshot',
-    protocolVersion: 3,
-    sessionId: 'sess-1',
-    extensions: { mcp, plugins, skills, hooks },
-  }
-  const serialized = JSON.stringify(frame)
+  const snapshot: ExtensionsSnapshot = { mcp, plugins, skills, hooks }
+  const serialized = JSON.stringify(snapshot)
   expect(serialized).not.toContain('sk-live')
   expect(serialized).not.toContain('Authorization')
   expect(serialized).not.toContain('SECRET_PROMPT_BODY')
-  expect(scanForSecrets(frame).ok).toBe(true)
+  expect(scanForSecrets(snapshot).ok).toBe(true)
 })

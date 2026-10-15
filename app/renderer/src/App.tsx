@@ -232,11 +232,6 @@ import {
   selectAgentConfigSnapshot,
 } from './agentConfigState.js'
 import {
-  createExtensionsState,
-  reduceExtensionsState,
-  selectExtensionsSnapshot,
-} from './extensionsState.js'
-import {
   createGoalMemoryState,
   reduceGoalMemoryState,
   selectThreadGoalRows,
@@ -448,7 +443,6 @@ const reducePermissionStateBatched = withBatch(reducePermissionState)
 const reduceConnectionStateBatched = withBatch(reduceConnectionState)
 const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
-const reduceExtensionsStateBatched = withBatch(reduceExtensionsState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceTasksStateBatched = withBatch(reduceTasksState)
 const reduceWorkersStateBatched = withBatch(reduceWorkersState)
@@ -840,11 +834,6 @@ export function App() {
     undefined,
     createAgentConfigState,
   )
-  const [extensions, dispatchExtensions] = useReducer(
-    reduceExtensionsStateBatched,
-    undefined,
-    createExtensionsState,
-  )
   const [goalMemory, dispatchGoalMemory] = useReducer(
     reduceGoalMemoryStateBatched,
     undefined,
@@ -955,12 +944,7 @@ export function App() {
   // renderer lifetime. No disk store: the prompt explicitly forbids inventing
   // persistence for this convenience list.
   const [recentPaletteItemIds, setRecentPaletteItemIds] = useState<string[]>([])
-  // P4-15 OAuth flow-local state. The sub-states themselves are DRIVEN by the
-  // `oauth.login.progress` back-channel (`accountsState.oauthProgress`); these two
-  // are the renderer-local framing: `oauthContext` distinguishes the first-run
-  // full-screen surface from the add-account overlay (both begin the SAME
-  // `account.login` flow), and `oauthStarting` is the optimistic gap between the
-  // begin click and the first progress frame.
+  // Host-owned OAuth progress is shared by first-run and account-management views.
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
   const [oauthStarting, setOauthStarting] = useState(false)
   const [appOAuthProgress, setAppOAuthProgress] = useState<import('../../shared/protocol.js').OAuthLoginProgress | null>(null)
@@ -1168,7 +1152,6 @@ export function App() {
               dispatchConnection,
               dispatchSettings,
               dispatchAgentConfig,
-              dispatchExtensions,
               dispatchGoalMemory,
               dispatchTasks,
               dispatchWorkers,
@@ -5033,9 +5016,8 @@ export function App() {
           ) : showFirstRunOAuthSurface ? (
             // First-run: no credentialed Codex account exists. Surface the OAuth
             // flow — its sub-states (waiting/paste-code/alias/success/error) are
-            // DRIVEN by the real `oauth.login.progress` back-channel; the engine
-            // owns the token. Unmounts after the success dwell once the pool gains
-            // the account (the snapshot re-broadcast on `success`).
+            // driven by the host-owned account-control worker; the engine owns
+            // the token. Unmounts after success once the global pool gains it.
             <div className="relative flex min-h-0 flex-1">
               <StartupOAuth
                 view={firstRunOAuthView}

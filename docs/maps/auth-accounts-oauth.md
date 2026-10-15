@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-09-21
+Last refreshed: 2026-10-15
 
 ## Purpose
 
@@ -52,7 +52,7 @@ observation, structured diagnostics, secure storage).
 | Flow | Entry point | Core route | Persistence route |
 |---|---|---|---|
 | Interactive `/login` | `src/commands/login/login.tsx` | Shared `ConsoleOAuthFlow` provider picker | Anthropic routes use `installOAuthTokens()`; Codex uses `persistCodexLogin()`. |
-| Desktop subscription login | `app/renderer/src/StartupSurfaces.tsx`, `app/renderer/src/AccountsPage.tsx` | `account.login {provider}` → strict sidecar schema → provider-specific runner in `app/sidecar/accountsDomain.ts` | Both runners call the engine-owned persistence path. Codex installation is a lifecycle transaction that advances the credential generation; re-login can restore the same metadata profile. The renderer receives only OAuth progress and redacted pool/profile rows. |
+| Desktop subscription login | `app/renderer/src/StartupSurfaces.tsx`, `app/renderer/src/AccountsPage.tsx` | fixed host `manageAccount` API → `app/main/accountControlRunner.ts` → `app/sidecar/{accountControlWorker,accountControlSession}.ts` → provider-specific runner in `app/sidecar/accountsDomain.ts` | Both runners call the engine-owned persistence path. Codex installation is a lifecycle transaction that advances the credential generation; re-login can restore the same metadata profile. The renderer receives only host OAuth progress and redacted pool/profile rows. Session protocol v4 accepts only `account.switch` on a chat sidecar; see `docs/migration/decisions/SESSION-PROTOCOL-V4.md`. |
 | Anthropic Claude.ai login | `ConsoleOAuthFlow.startOAuth()` | `OAuthService.startOAuthFlow()` -> `exchangeCodeForTokens()` -> `fetchProfileInfo()` | `installOAuthTokens()` stores profile, appends Claude vault account, saves `claudeAiOauth`. |
 | Anthropic Console login | `ConsoleOAuthFlow.startOAuth()` with `loginWithClaudeAi=false` | Same OAuth service with Console authorize URL | `installOAuthTokens()` stores profile, creates Console API key through `createAndStoreApiKey()`, and saves managed key. |
 | Anthropic `setup-token` | `ConsoleOAuthFlow` mode `setup-token` | `OAuthService.startOAuthFlow({ inferenceOnly, expiresIn })` | Token is displayed for env use and is not saved to keychain. |

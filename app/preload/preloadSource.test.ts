@@ -27,7 +27,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // P4-5 — account lifecycle verb sender rides its own fixed channel (HC3).
   expect(channels).toContain("export const CH_ACCOUNT_VERB = 'catcode:account-verb'")
   expect(source).toContain(
-    'accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void',
+    'accountVerb(sessionId: SessionId, verb: AccountSwitchMessage): void',
   )
   expect(channels).toContain(
     "export const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
@@ -93,7 +93,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
   )
   expect(source).toContain('openHistorySession(')
-  // 19 frame-plane senders (including the fixed metadata-only delivery ack; no
+  // 18 frame-plane senders (including the fixed metadata-only delivery ack; no
   // generic logging IPC) (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
@@ -105,9 +105,6 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // session-independent deleteAccount).
   // subscribe / subscribeHost register a listener and send no payload, so they do
   // NOT (and must not) call the guard.
-  // Usage stats query sender rides its own fixed channel (HC3).
-  expect(channels).toContain("export const CH_STATS_QUERY = 'catcode:stats-query'")
-  expect(source).toContain('queryStats(')
   // IDLE-PARK §4(b) — the visible-pane hint is a fixed one-way sender like the
   // rest, guarded here and re-validated at main (`parseVisibleSessions`).
   expect(channels).toContain(
@@ -133,7 +130,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(65)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(64)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -181,7 +178,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(67)
+  expect(names.length).toBe(66)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -398,12 +395,12 @@ test('account deletion terminates in a one-shot worker, not a session forward', 
   expect(invalidation).toContain("type: 'account.profileDeleted'")
 })
 
-test('destructive account verbs cannot use the generic session relay', () => {
+test('the session account relay accepts only account switching', () => {
   const preload = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
   const protocol = readFileSync(new URL('../shared/protocol.ts', import.meta.url), 'utf8')
   expect(preload).toContain(
-    "if (verb.type === 'account.delete' || verb.type === 'account.logout') return",
+    "if (verb.type !== 'account.switch') return",
   )
   expect(preload).not.toContain("'account.profileSignedOut'")
   const relayStart = main.indexOf('const RELAYED_VERB_CHANNELS')
@@ -417,7 +414,7 @@ test('destructive account verbs cannot use the generic session relay', () => {
   expect(relay).not.toContain("'account.delete'")
   expect(relay).not.toContain("'account.logout'")
   expect(relay).not.toContain("'account.profileSignedOut'")
-  expect(relay).toContain('RELAYED_ACCOUNT_VERB_TYPES')
+  expect(relay).toContain('SESSION_ACCOUNT_VERB_TYPES')
   expect(protocol).toContain("'account.switch'")
   expect(protocol).toContain("'account.rename'")
   expect(protocol).toContain("'account.touchAll'")

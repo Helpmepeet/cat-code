@@ -200,3 +200,12 @@ The isolated process probe now also exercises closed saved and live, parked, and
 
 
 The isolated `app/host/projectRouting.process.test.ts` exercises the routing worker, real host relocation, parked-destination readiness, matching submit acceptance, destination transcript writes, established history, trust revoked between classification and movement, and recovery before/after movement. Every engine child uses temporary state and a network-blocking preload. `app/main/projectRoutingRecovery.test.ts` covers full-payload reconstruction across checking/Ask/Moving, admission and transport refusals, accepted receipts, unknown handoffs, lifecycle loss, explicit resend/dismissal, duplicate clicks, and unreadable records. Electron and GUI verification remain outstanding.
+
+## Routing recovery simplification, 2026-10-15
+
+[Session protocol v4](SESSION-PROTOCOL-V4.md) narrows the dormant classifier UI
+to recovery states and explicit resend/cancel. The disk reader still accepts old
+checking, Ask, and Moving records. Recovery preserves full payloads, source cwd,
+attachments, receipt evidence, uncertainty, and duplicate-submit/move fences.
+Unknown delivery requires explicit resend. The real host relocation and trust
+boundaries described above retain their existing ownership.

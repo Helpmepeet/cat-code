@@ -1,69 +1,9 @@
-/**
- * Settings extensions domain state (P4-12) — PROGRAM-PLAN §5 layer 3, the
- * renderer half of the `extensions.snapshot` read-seam. A reducer over the
- * read-only frame plus read-time selectors; it stays OUT of
- * `transcriptProjector.ts` (config state is not transcript state), exactly like
- * `settingsState.ts` / `agentConfigState.ts` (the recipe this copies).
- *
- * The snapshot is engine truth, faithful by construction; the four slices are
- * rendered by `SettingsExtensions.tsx`. Skills/hooks group by SOURCE and EVENT
- * respectively via the selectors here.
- */
-
 import type {
   ExtensionsSnapshot,
   HookEntry,
-  ServerFrame,
-  SessionId,
   SkillConfigSource,
   SkillEntry,
 } from '../../shared/protocol.js'
-
-export type ExtensionsState = {
-  sessions: Record<SessionId, ExtensionsSnapshot | null>
-}
-
-export type ExtensionsAction = { type: 'frame'; frame: ServerFrame }
-
-export function createExtensionsState(): ExtensionsState {
-  return { sessions: {} }
-}
-
-export function reduceExtensionsState(
-  state: ExtensionsState,
-  action: ExtensionsAction,
-): ExtensionsState {
-  const { frame } = action
-
-  if (frame.kind === 'extensions.snapshot') {
-    return {
-      ...state,
-      sessions: { ...state.sessions, [frame.sessionId]: frame.extensions },
-    }
-  }
-
-  // A process/transport reset drops the stale snapshot; a fresh one arrives on
-  // re-attach (mirrors settingsState's lifecycle handling). Untracked sessions
-  // are left alone so we don't materialize an empty slot for every lifecycle.
-  if (frame.kind === 'lifecycle') {
-    if (!(frame.sessionId in state.sessions)) return state
-    return {
-      ...state,
-      sessions: { ...state.sessions, [frame.sessionId]: null },
-    }
-  }
-
-  return state
-}
-
-/** The latest extensions snapshot for a session (null before the first frame). */
-export function selectExtensionsSnapshot(
-  state: ExtensionsState,
-  sessionId: SessionId | null,
-): ExtensionsSnapshot | null {
-  const snapshot = sessionId ? state.sessions[sessionId] : undefined
-  return snapshot ?? null
-}
 
 /**
  * The skill source group order + labels, mirroring the prototype's `SKILL_GROUPS`

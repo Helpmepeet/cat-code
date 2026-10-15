@@ -8,20 +8,10 @@ export function ProjectRoutingBar({
   route: ProjectRouteSnapshot
   onChoice?: (choice: ProjectRouteChoice) => void
 }) {
-  if (route.phase === 'checking' || (route.phase === 'recovery' && route.projectName === null)) return null
-
-  const projectName = route.projectName ?? 'project'
   const warning = route.phase === 'uncertain' || route.phase === 'failed' || route.phase === 'unsent'
   const choices: { label: string; choice: ProjectRouteChoice; primary?: boolean }[] = []
   let text
   switch (route.phase) {
-    case 'ask':
-      text = <>Work in <b>{projectName}</b>?</>
-      choices.push({ label: 'Stay in chat', choice: 'stay' }, { label: 'Move', choice: 'move', primary: true })
-      break
-    case 'moving':
-      text = <>Moving to <b>{projectName}</b></>
-      break
     case 'recovery':
       text = <>Sending message…</>
       break
@@ -34,14 +24,13 @@ export function ProjectRoutingBar({
       choices.push({ label: 'Send again', choice: 'resend', primary: true }, { label: 'Dismiss', choice: 'cancel' })
       break
     case 'failed':
-      text = <>Could not move to <b>{projectName}</b>.</>
-      choices.push({ label: 'Stay in chat', choice: 'stay' }, { label: 'Cancel', choice: 'cancel' })
+      text = <>Could not send the message in this project folder.</>
+      choices.push({ label: 'Try again', choice: 'resend', primary: true }, { label: 'Cancel', choice: 'cancel' })
       break
   }
 
   return (
     <div className={`project-routing-bar${warning ? ' project-routing-bar-warning' : ''}`}>
-      {route.phase === 'moving' ? <span className="project-routing-progress" aria-hidden="true" /> : null}
       <svg
         aria-hidden="true"
         className="project-routing-folder"

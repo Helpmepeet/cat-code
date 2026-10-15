@@ -372,7 +372,7 @@ test('status reply schedules a release retry after freeing its command slot with
     send: (id, message) => {
       if (message.action === 'release' && ++releases === 1) return true
       const gate = message.action === 'release' ? { mode: 'open' as const, reservationOperationId: null, requiresUserReconciliation: false } : { mode: 'held' as const, reservationOperationId: h.operationId, requiresUserReconciliation: false }
-      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: 3, sessionId: id, requestId: message.requestId, operationId: h.operationId, action: message.action, disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, gate) })
+      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: 4, sessionId: id, requestId: message.requestId, operationId: h.operationId, action: message.action, disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, gate) })
       return true
     },
   })

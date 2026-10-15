@@ -219,21 +219,10 @@ export type SidecarAccountsDomain = {
     notice: AccountProfileSignedOutMessage,
   ): Promise<boolean>
   /**
-   * P4-15 — register the sink the OAuth login controller pushes progress through.
-   * The server sets it once and broadcasts each `OAuthLoginProgress` as an
-   * `oauth.login.progress` frame (the domain keeps ZERO transport knowledge). An
-   * unset sink silently drops progress (e.g. a test that only asserts the ack).
+   * The account-control worker publishes this non-secret progress through its
+   * host event. The domain itself has no transport knowledge.
    */
   setOAuthProgressSink(sink: (progress: OAuthLoginProgress) => void): void
-  /**
-   * IDLE-PARK — true while a sign-in is under way. `account.login` acks
-   * immediately and the real flow (browser, callback listener, credential
-   * write) keeps running in the background, so the server cannot infer this
-   * from the verb promise; killing the process here abandons a half-finished
-   * login. Covers the synchronous dispatch window too, not just the phases
-   * after the authorize url arrives.
-   */
-  isOAuthLoginInFlight(): boolean
 }
 
 function isSidecarFirstRunEligible(): boolean {
@@ -1146,13 +1135,6 @@ export function createSidecarAccountsDomain(
       progressSink = sink
     },
 
-    isOAuthLoginInFlight() {
-      // `activeOAuthRunner` is set synchronously inside `beginLogin`, before
-      // the flow's first await, and cleared when it settles or is cancelled;
-      // `phase` covers the steps after `begin()` resolves (alias, persist).
-      return activeOAuthRunner !== null || phase !== 'idle'
-    },
-
     async runVerb(verb) {
       switch (verb.type) {
         case 'account.switch': {
@@ -1273,9 +1255,8 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.touchAll', result, poolChanged: true }
         }
         case 'account.login': {
-          // Begin the REAL OAuth flow; progress flows on the `oauth.login.progress`
-          // frame, the account appears on the `accounts.snapshot` re-broadcast the
-          // server fires on the `success` progress — never via this verb result.
+          // Login acknowledgement precedes completion; the host publishes progress
+          // and refreshes its pool only after the real engine flow succeeds.
           return {
             verb: 'account.login',
             result: beginLogin(verb.provider ?? 'openai'),

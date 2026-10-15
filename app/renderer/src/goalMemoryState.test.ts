@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type {
   MemorySnapshot,
@@ -10,7 +11,6 @@ import {
   reduceGoalMemoryState,
   selectInstructionFilesByType,
   selectMemoryInstructionCounts,
-  selectMemorySnapshot,
   selectThreadGoalRows,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
@@ -58,54 +58,35 @@ const MEMORY: MemorySnapshot = {
 function goalFrame(sessionId: SessionId, goal: ThreadGoalSnapshot | null): ServerFrame {
   return {
     kind: 'thread-goal.snapshot',
-    protocolVersion: 3,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     goal,
-  }
-}
-
-function memoryFrame(sessionId: SessionId, memory: MemorySnapshot): ServerFrame {
-  return {
-    kind: 'memory.snapshot',
-    protocolVersion: 3,
-    sessionId,
-    memory,
   }
 }
 
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
   return {
     kind: 'lifecycle',
-    protocolVersion: 3,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     status: 'disconnected',
   }
 }
 
-test('reduces goal and memory snapshots by session id', () => {
+test('reduces goal snapshots by session id', () => {
   let state = reduceGoalMemoryState(createGoalMemoryState(), {
     type: 'frame',
     frame: goalFrame('a', GOAL),
-  })
-  state = reduceGoalMemoryState(state, {
-    type: 'frame',
-    frame: memoryFrame('a', MEMORY),
   })
 
   expect(selectThreadGoalSnapshot(state, 'a')?.objective).toBe('Ship P4-10')
-  expect(selectMemorySnapshot(state, 'a')?.autoMemories).toHaveLength(1)
   expect(selectThreadGoalSnapshot(state, 'missing')).toBeNull()
-  expect(selectMemorySnapshot(state, 'missing')).toBeNull()
 })
 
-test('retains goals while clearing memory on lifecycle reset', () => {
+test('retains goals on lifecycle reset', () => {
   let state = reduceGoalMemoryState(createGoalMemoryState(), {
     type: 'frame',
     frame: goalFrame('a', GOAL),
-  })
-  state = reduceGoalMemoryState(state, {
-    type: 'frame',
-    frame: memoryFrame('a', MEMORY),
   })
   state = reduceGoalMemoryState(state, {
     type: 'frame',
@@ -113,7 +94,6 @@ test('retains goals while clearing memory on lifecycle reset', () => {
   })
 
   expect(selectThreadGoalSnapshot(state, 'a')).toEqual(GOAL)
-  expect(selectMemorySnapshot(state, 'a')).toBeNull()
 })
 
 test('aggregates roster goals by appSessionId in catalog order', () => {
