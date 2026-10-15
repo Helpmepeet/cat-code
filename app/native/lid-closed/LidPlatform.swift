@@ -5,6 +5,18 @@ import Security
 import AppKit
 import Darwin
 
+let lidQualificationEvidence = "2026-10-15/Mac16,8/25G83/battery-lid-and-sleep"
+func lidHardwareString(_ key: String) -> String? {
+    var size = 0
+    guard sysctlbyname(key, nil, &size, nil, 0) == 0, size > 0, size < 128 else { return nil }
+    var bytes = [CChar](repeating: 0, count: size)
+    guard sysctlbyname(key, &bytes, &size, nil, 0) == 0 else { return nil }
+    return String(cString: bytes)
+}
+func lidHardwareQualified() -> Bool {
+    lidHardwareString("hw.model") == "Mac16,8" && lidHardwareString("kern.osversion") == "25G83"
+}
+
 func lidBootID() throws -> String {
     var size = 0
     guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 0, size < 128 else { throw LidFailure("boot-identity-unavailable") }
@@ -104,8 +116,7 @@ struct LidConfiguration: Codable {
     var qualifiedOS: String?
     var qualificationEvidence: String?
     var qualified: Bool {
-        qualifiedBoot == (try? lidBootID()) && qualifiedOS == ProcessInfo.processInfo.operatingSystemVersionString &&
-            (qualificationEvidence?.count ?? 0) >= 16
+        lidHardwareQualified() && qualificationEvidence == lidQualificationEvidence
     }
 }
 func lidConfiguration() throws -> LidConfiguration {
@@ -134,7 +145,46 @@ func lidMatchesCode(_ pid: pid_t, _ requirementText: String) -> Bool {
     guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess else { return false }
     return SecCodeCheckValidity(guest, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
 }
-func lidAuthenticatedRole(_ connection: NSXPCConnection, _ config: LidConfiguration) -> Bool? {
+// A signed generic Electron executable is not an application identity. Require
+// the sealed payload, hardened runtime and startup fuses before granting a
+// persistent connection. The signature seals the fuse-bearing framework too.
+func lidSealedApplication(_ executable: String, _ requirementText: String? = nil) -> Bool {
+    let url = URL(fileURLWithPath: executable)
+    let bundle = url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    guard bundle.pathExtension == "app", executable == bundle.appendingPathComponent("Contents/MacOS/" + url.lastPathComponent).path,
+          let info = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")),
+          ["com.catcode.desktop", "com.catcode.desktop.dev"].contains(info["CFBundleIdentifier"] as? String ?? ""),
+          let integrity = info["ElectronAsarIntegrity"] as? [String: Any], integrity["Resources/app.asar"] != nil,
+          FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Resources/app.asar").path) else { return false }
+    var code: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code else { return false }
+    var requirement: SecRequirement?
+    if let requirementText {
+        guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess else { return false }
+    }
+    guard SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode | kSecCSCheckAllArchitectures), requirement) == errSecSuccess else { return false }
+    // CSCommon.h: kSecCodeSignatureRuntime (not imported by this Swift SDK).
+    var signing: CFDictionary?
+    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &signing) == errSecSuccess,
+          let details = signing as? [String: Any], let flags = details[kSecCodeInfoFlags as String] as? NSNumber,
+          flags.uint32Value & 0x10000 != 0,
+          let team = details[kSecCodeInfoTeamIdentifier as String] as? String, !team.isEmpty else { return false }
+    let entitlements = details[kSecCodeInfoEntitlementsDict as String] as? [String: Any] ?? [:]
+    for name in ["com.apple.security.get-task-allow", "com.apple.security.cs.disable-library-validation", "com.apple.security.cs.allow-dyld-environment-variables"] {
+        if entitlements[name] as? Bool == true { return false }
+    }
+    let framework = bundle.appendingPathComponent("Contents/Frameworks/Electron Framework.framework/Electron Framework")
+    guard let bytes = try? Data(contentsOf: framework, options: .mappedIfSafe),
+          let sentinel = "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX".data(using: .utf8),
+          let range = bytes.range(of: sentinel) else { return false }
+    let offset = range.upperBound
+    guard bytes.count > offset + 7, bytes[offset] == 1, bytes[offset + 1] >= 6 else { return false }
+    // Electron fuse V1: runAsNode, nodeOptions, CLI inspector off; ASAR
+    // integrity and exclusive ASAR loading on. Cookie policy is unchanged.
+    return [0, 2, 3].allSatisfy { bytes[offset + 2 + $0] == 48 } &&
+        [4, 5].allSatisfy { bytes[offset + 2 + $0] == 49 }
+}
+func lidAuthenticatedRole(_ connection: NSXPCConnection, _ config: LidConfiguration, verifyApplication: Bool = true) -> Bool? {
     let pid = connection.processIdentifier
     guard connection.effectiveUserIdentifier == config.uid,
           lidExecutablePath(pid) == "/Library/PrivilegedHelperTools/com.catcode.lid-closed",
@@ -148,7 +198,8 @@ func lidAuthenticatedRole(_ connection: NSXPCConnection, _ config: LidConfigurat
     if !allowed.experiment {
         guard let app = NSRunningApplication(processIdentifier: parent),
               app.bundleIdentifier == "com.catcode.desktop" || app.bundleIdentifier == "com.catcode.desktop.dev",
-              app.activationPolicy == .regular, app.executableURL?.path == path else { return nil }
+              app.activationPolicy == .regular, app.executableURL?.path == path,
+              !verifyApplication || lidSealedApplication(path, allowed.requirement) else { return nil }
     }
     if allowed.experiment && Date().timeIntervalSince1970 >= config.experimentUntil { return nil }
     return allowed.experiment

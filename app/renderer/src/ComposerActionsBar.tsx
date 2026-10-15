@@ -1,3 +1,4 @@
+import { LidClosedCup } from './LidClosedCup.js'
 import {
   useEffect,
   useRef,
@@ -1884,6 +1885,7 @@ export function ComposerActionsBar({
         <div className="composer-account-controls ml-auto flex min-w-0 items-center gap-[7px]">
           <div className="composer-account-identity flex min-w-0 items-center gap-[7px]">
           {cacheExpired ? <CacheExpiredIndicator /> : null}
+          <LidClosedCup faceProps={faceProps('lid-closed')} />
           {accountInteractive && account && onSwitchAccount ? (
             <AccountChip
               active={account}

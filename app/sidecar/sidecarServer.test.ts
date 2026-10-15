@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { installLidWorkRuntime } from '../../src/services/lidClosedWork.js'
 /**
  * SidecarServer security-boundary unit tests (SECURITY-MINIMUM T4/T5a/T6/T6b/T7).
  *
@@ -9477,4 +9479,35 @@ test('HR5/F6 — an unrecognised host error code degrades to the closed union', 
   const outcome = await pending
   expect(outcome.ok ? null : outcome.error.code).toBe('internal_error')
   expect(outcome.ok ? null : outcome.error.message).toBe('from a future main')
+})
+
+
+test('lid work control validates received windows and reports current controller runs', async () => {
+  const runtime = installLidWorkRuntime(() => ({}))
+  let finish!: () => void
+  const waiting = new Promise<void>(resolve => { finish = resolve })
+  const controller = new AppSessionController({ async *runTurn() {
+    await waiting
+  } })
+  const { server, conn, received } = connect(controller, { lidWork: runtime })
+  const turn = controller.submit('Work')
+  try {
+    await Promise.resolve()
+    const root = runtime.snapshot().runs[0]!.id
+    const identity = randomUUID()
+    const window = { identity, roots: [root], active: true, deadline: Date.now() + 60_000, lidClosed: false, block: false, suppressIdleSleep: false }
+    const requestId = randomUUID()
+    server.handleData(conn, rawFrame({ type: 'lid.work', requestId, window }))
+    const result = received.find(frame => frame.kind === 'lid.work' && frame.requestId === requestId)
+    expect(result?.kind).toBe('lid.work')
+    if (result?.kind !== 'lid.work') throw new Error('Missing work result')
+    expect(result.work.available).toBe(true); expect(result.work.runs.map(run => run.id)).toContain(root)
+    const before = received.filter(frame => frame.kind === 'lid.work').length
+    for (const invalid of [ { ...window, roots: ['not-a-run'] }, { ...window, deadline: Number.MAX_SAFE_INTEGER }, { ...window, permissions: 'allow' } ]) {
+      server.handleData(conn, rawFrame({ type: 'lid.work', requestId: randomUUID(), window: invalid }))
+    }
+    expect(received.filter(frame => frame.kind === 'lid.work')).toHaveLength(before)
+    server.handleData(conn, rawFrame({ type: 'lid.work', requestId: randomUUID(), window: { ...window, active: false } }))
+    expect(received.filter(frame => frame.kind === 'lid.work')).toHaveLength(before + 1)
+  } finally { finish(); await turn; runtime.dispose() }
 })

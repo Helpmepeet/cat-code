@@ -2164,3 +2164,11 @@ html[data-glass='on'] [data-window-overlay] {
 .subagent-dock-arrival .subagent-dock-badge { animation:subagent-badge-pop 260ms var(--ease-enter); }
 
 .subagent-dock-row-tipped, .subagent-dock-row-tipped:hover { background:var(--subagent-row-attached); border-color:var(--shell-seam); border-left-color:transparent; border-top-left-radius:0; border-bottom-left-radius:0; }
+
+/* Lid control roles preserve legible thin strokes in both appearances. */
+:root {
+  --color-lid-off: light-dark(#66666d, #75757b);
+  --color-lid-open: light-dark(#66666d, #838389);
+  --color-lid-active: light-dark(#85552f, #d4a274);
+  --color-lid-number: light-dark(#75451f, #f1dcc3);
+}

@@ -13,6 +13,7 @@
 
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { buildLidHelper } from './build-lid-helper.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -59,6 +60,7 @@ function stampDefines(): Record<string, string> {
 }
 
 async function build(): Promise<void> {
+  buildLidHelper()
   // main as ESM .js (package is type:module); preload as CJS .cjs (sandboxed
   // preload must be CommonJS, and .cjs opts out of the package's ESM default).
   await buildOne(join(appRoot, 'main', 'main.ts'), 'esm', 'js', {

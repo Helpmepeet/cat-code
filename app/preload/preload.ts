@@ -1,3 +1,5 @@
+import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
+import type { LidModeView } from '../shared/lidClosed.js'
 /**
  * Electron preload — the default-deny IPC allowlist bridge (SECURITY-MINIMUM
  * §2 R1, §3 "Preload surface").
@@ -255,6 +257,15 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
 })
 
 const bridge: CatCodeBridge = {
+  lidClosed: {
+    read: () => ipcRenderer.invoke(CH_LID_READ),
+    command: command => ipcRenderer.invoke(CH_LID_COMMAND, command),
+    subscribe: listener => {
+      const handle = (_event: unknown, view: LidModeView) => listener(view)
+      ipcRenderer.on(CH_LID_CHANGED, handle)
+      return () => { ipcRenderer.removeListener(CH_LID_CHANGED, handle) }
+    },
+  },
   readScheduledTasks() {
     sendGuard.assertAllowed({ readScheduledTasks: true })
     return ipcRenderer.invoke(CH_SCHEDULED_TASKS_READ)

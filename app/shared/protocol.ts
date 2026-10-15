@@ -59,6 +59,7 @@
 // isolation without dragging in the engine's Bun runtime graph. The sidecar,
 // which genuinely runs engine code, imports the real modules directly.
 import type { AppSessionEvent } from '@cat-code/engine/session-events'
+import type { LidWorkControl, LidWorkSnapshot, LidClosedBridge } from './lidClosed.js'
 import type { ProjectRouteCommand, ProjectRouteSnapshot } from './projectRouting.js'
 import type {
   AppClientMessage,
@@ -961,6 +962,7 @@ export type WorkspaceHandoffStateFrame = {
  * verb, and the two host-request-plane kinds above.
  */
 export type SidecarClientMessage =
+  | LidWorkControl
   | AppClientMessage
   | PermissionSetModeMessage
   | AskUserQuestionAnswerMessage
@@ -3684,6 +3686,7 @@ export type ActivityFrame = {
 }
 
 export type ServerFramePayload =
+  | { kind: 'lid.work'; protocolVersion: typeof PROTOCOL_VERSION; sessionId: SessionId; requestId: string; work: LidWorkSnapshot }
   | ReadyFrame
   | HistoryReplayCompleteFrame
   | HistoryAvailabilityFrame
@@ -3745,6 +3748,7 @@ export type ServerFrameKind = ServerFramePayload['kind']
  * a list entry that no payload declares.
  */
 const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
+  'lid.work': true,
   ready: true,
   'history.replay.complete': true,
   'history.availability': true,
@@ -3911,6 +3915,7 @@ export type OpenWorkspaceFileTarget =
 export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
+  lidClosed?: LidClosedBridge
   readScheduledTasks(): Promise<import('./scheduledTasks.js').ScheduledTasksSnapshot>
   readScheduledTaskOptions(request?: { refresh: true }): Promise<import('./scheduledTasks.js').ScheduledTaskOptions>
   scheduledTask(command: import('./scheduledTasks.js').ScheduledTaskCommand): Promise<import('./scheduledTasks.js').ScheduledTasksResult>

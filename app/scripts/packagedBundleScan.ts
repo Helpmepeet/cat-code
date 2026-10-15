@@ -1,3 +1,4 @@
+import { listPackage, extractFile } from '@electron/asar'
 /**
  * Stowaway scan for the packaged bundle (P5-1).
  *
@@ -131,9 +132,24 @@ export function scanPackagedBundle(
       if (rule.test(relPath)) findings.push({ path: relPath, reason: rule.reason })
     }
 
+    if (relPath === join('Contents', 'Resources', 'app.asar')) {
+      try {
+        for (const archiveEntry of listPackage(join(bundlePath, relPath), { isPack: false })) {
+          const name = archiveEntry.replace(/^\//, '')
+          const display = join('Contents', 'Resources', 'app', name)
+          for (const rule of DENIED_PATHS) if (rule.test(display)) findings.push({ path: relPath + ':' + name, reason: rule.reason })
+          if (!SCANNED_CONTENT.test(name)) continue
+          const content = extractFile(join(bundlePath, relPath), name).toString('latin1')
+          for (const rule of SECRET_PATTERNS) if (rule.pattern.test(content)) findings.push({ path: relPath + ':' + name, reason: rule.reason })
+          if (display === PRODUCTION_PRELOAD && content.includes('catcode:debug:shell-state')) findings.push({ path: relPath + ':' + name, reason: 'development debug bridge' })
+        }
+      } catch { findings.push({ path: relPath, reason: 'unreadable application archive' }) }
+      continue
+    }
     const executableResource =
       relPath === join('Contents', 'Resources', 'sidecar', sidecarBinary) ||
-      relPath.startsWith(join('Contents', 'Resources', 'bin') + sep)
+      relPath.startsWith(join('Contents', 'Resources', 'bin') + sep) ||
+      relPath === join('Contents', 'Resources', 'lid-closed', 'helper')
     if (!executableResource && !SCANNED_CONTENT.test(relPath)) continue
 
     const full = join(bundlePath, relPath)

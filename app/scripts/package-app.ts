@@ -1,3 +1,5 @@
+import { createPackage, getRawHeader } from '@electron/asar'
+import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses'
 /**
  * Build the double-clickable Cat Code application (P5-1).
  *
@@ -53,6 +55,9 @@ const RESOURCES = join(CONTENTS, 'Resources')
 const APP_PAYLOAD = join(RESOURCES, 'app')
 const PACKAGED_RIPGREP = join(RESOURCES, 'bin', 'rg')
 const RIPGREP_SOURCE = join(repoRoot, 'src', 'vendor', 'ripgrep', 'arm64-darwin', 'rg')
+// Local builds retain the existing ad-hoc posture. Persistent lid helper
+// authority additionally requires a hardened app with an Apple signing team.
+const SIGNING_IDENTITY = process.env.CATCODE_SIGNING_IDENTITY?.trim() || '-'
 // Official ripgrep 15.2.0 aarch64-apple-darwin release binary.
 // Release archive SHA-256: 3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4
 const RIPGREP_SHA256 = '8ec397688ca4e7564877143cbe771531e12995363c06c5dc266d51a983d4dc5a'
@@ -301,6 +306,11 @@ function copyPayload(): void {
 
   mkdirSync(join(APP_PAYLOAD, 'main'), { recursive: true })
   cpSync(join(appRoot, 'main', 'main.js'), join(APP_PAYLOAD, 'main', 'main.js'))
+  const lidAssets = join(RESOURCES, 'lid-closed')
+  mkdirSync(lidAssets, { recursive: true })
+  for (const name of ['helper', 'install.sh', 'uninstall.sh']) {
+    cpSync(join(appRoot, 'native', 'lid-closed', 'dist', name), join(lidAssets, name))
+  }
 
   // The PRODUCTION preload only. preload.dev.cjs carries the dev harness and has
   // no business in a bundle; the scan below fails the build if it appears.
@@ -316,15 +326,51 @@ function copyPayload(): void {
   cpSync(join(appRoot, 'resources', 'icon.png'), join(APP_PAYLOAD, 'resources', 'icon.png'))
 }
 
+async function sealApplication(): Promise<void> {
+  const archive = join(RESOURCES, 'app.asar')
+  await createPackage(APP_PAYLOAD, archive)
+  const hash = createHash('sha256').update(getRawHeader(archive).headerString).digest('hex')
+  const plist = join(CONTENTS, 'Info.plist')
+  spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Delete :ElectronAsarIntegrity', plist], { stdio: 'ignore' })
+  run('/usr/libexec/PlistBuddy', ['-c', 'Add :ElectronAsarIntegrity dict', plist])
+  run('/usr/libexec/PlistBuddy', ['-c', 'Add :ElectronAsarIntegrity:Resources/app.asar dict', plist])
+  run('/usr/libexec/PlistBuddy', ['-c', 'Add :ElectronAsarIntegrity:Resources/app.asar:algorithm string SHA256', plist])
+  run('/usr/libexec/PlistBuddy', ['-c', `Add :ElectronAsarIntegrity:Resources/app.asar:hash string ${hash}`, plist])
+  await flipFuses(APP_BUNDLE, {
+    version: FuseVersion.V1,
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,
+    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+    [FuseV1Options.OnlyLoadAppFromAsar]: true,
+  })
+  rmSync(APP_PAYLOAD, { recursive: true })
+}
+
 function sign(): void {
-  console.log('[package] ad-hoc signing')
+  console.log(`[package] ${SIGNING_IDENTITY === '-' ? 'ad-hoc' : 'hardened'} signing`)
   // LOCAL-USE-CONTRACT §5: nested executables first, then the bundle. Editing
   // Info.plist and renaming the executable both invalidate the signature the
   // stock Electron bundle ships with, and an unsigned nested binary makes the
   // whole app refuse to launch.
-  run('codesign', ['--sign', '-', '--force', PACKAGED_RIPGREP])
-  run('codesign', ['--sign', '-', '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
-  run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
+  run('codesign', ['--sign', SIGNING_IDENTITY, '--force', PACKAGED_RIPGREP])
+  run('codesign', ['--sign', SIGNING_IDENTITY, '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
+  if (SIGNING_IDENTITY === '-') {
+    // Hardened library validation rejects ad-hoc Electron frameworks because
+    // they have no Team ID. Do not disable library validation to enable power
+    // authority; the helper deliberately rejects this ordinary local build.
+    run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
+    run('codesign', ['--verify', '--deep', '--strict', APP_BUNDLE])
+    return
+  }
+  // JIT is required by Electron; debugger attachment, DYLD injection and
+  // unsigned library loading remain disabled by the hardened runtime.
+  const entitlements = join(OUT_DIR, 'runtime-entitlements.plist')
+  writeFileSync(entitlements, '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>')
+  run('codesign', ['--sign', SIGNING_IDENTITY, '--force', '--deep', '--options', 'runtime', '--entitlements', entitlements, APP_BUNDLE])
+  rmSync(entitlements)
+  run('codesign', ['--verify', '--deep', '--strict', APP_BUNDLE])
+  run(join(RESOURCES, 'lid-closed', 'helper'), ['--check-application', join(CONTENTS, 'MacOS', APP_NAME)])
 }
 
 function scan(): void {
@@ -337,7 +383,7 @@ function scan(): void {
   console.log('[package]   clean')
 }
 
-function main(): void {
+async function main(): Promise<void> {
   if (process.platform !== 'darwin') {
     throw new Error('the local-use contract targets macOS only')
   }
@@ -358,6 +404,8 @@ function main(): void {
   copyPayload()
   buildSidecar()
   copyRipgrep()
+  scan()
+  await sealApplication()
   sign()
   scan()
 
@@ -367,4 +415,4 @@ function main(): void {
   }
 }
 
-main()
+await main()

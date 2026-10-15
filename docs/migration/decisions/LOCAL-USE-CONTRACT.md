@@ -137,3 +137,18 @@ secrets out of the engine.
 
 Nor does it license silence about failure. A failed or partial restore must never open a
 fresh session that impersonates the operator's old one (P5-7).
+
+## Lid-closed authority addendum — 2026-10-15
+
+The ordinary local build retains §5's ad-hoc signing and no notarization.
+Persistent privileged power access has a stricter caller-authentication boundary:
+its app must be sealed and hardened with library validation. The attempted
+hardened ad-hoc Electron package failed at launch because it has no Team ID.
+No library-validation exception is permitted to make that build qualify.
+
+A supplied `CATCODE_SIGNING_IDENTITY` can select the hardened packaging branch;
+this does not create a certificate, change distribution scope, notarize, or
+install authority. No valid identity is currently configured, so local builds
+refuse privileged setup and the feature is not yet end-to-end qualified. See the
+[runtime contract](../../design/2026-10-15-lid-closed-runtime-contract.md) and
+[observed integration results](../../research/2026-10-15-lid-closed-integration-results.md).

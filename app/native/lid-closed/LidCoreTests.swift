@@ -131,6 +131,10 @@ import Darwin
         try start()
         for _ in 0..<225 { time += 4; _ = try controller.command(["op": "pulse", "identity": id]) }
         precondition(controller.snapshot().record.reason == "expired" && safety.sleepDisabled == false, "fresh deadline pulse mislabeled expiry")
+        let priorSleeps = sleeps
+        try start(); safety.thermal = "critical"; time += 1; try controller.tick()
+        precondition(sleeps == priorSleeps + 1 && safety.sleepDisabled == false && controller.snapshot().record.reason == "thermal", "critical thermal state did not request sleep with lid open")
+        safety.thermal = "nominal"
         try start(); try controller.retire()
         reject(["op": "start", "identity": id, "allowance": 900])
         precondition(controller.snapshot().record.draining && safety.sleepDisabled == false)

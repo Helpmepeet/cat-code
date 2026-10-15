@@ -38,6 +38,8 @@ import { ImageResizeError } from './utils/imageResizer.js'
 import { findToolByName, type ToolUseContext } from './Tool.js'
 import { getAcceptedHandoff, isHandoffExecutionFenced } from './app-runtime/handoff.js'
 import type { SystemPrompt } from './utils/systemPromptType.js'
+import { asSystemPrompt } from './utils/systemPromptType.js'
+import { assertLidWorkAdmission, lidWorkContext } from './services/lidClosedWork.js'
 import type {
   AssistantMessage,
   AttachmentMessage,
@@ -387,7 +389,7 @@ async function* queryLoop(
 > {
   // Immutable params — never reassigned during the query loop.
   const {
-    systemPrompt,
+    systemPrompt: baseSystemPrompt,
     userContext,
     systemContext,
     canUseTool,
@@ -461,6 +463,10 @@ async function* queryLoop(
   try {
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      assertLidWorkAdmission()
+      const temporaryWorkContext = lidWorkContext()
+      const systemPrompt = temporaryWorkContext
+        ? asSystemPrompt([...baseSystemPrompt, temporaryWorkContext]) : baseSystemPrompt
       // Destructure state at the top of each iteration. toolUseContext alone
     // is reassigned within an iteration (queryTracking, messages updates);
     // the rest are read-only between continue sites.

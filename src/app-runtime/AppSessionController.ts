@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { withLidWorkRun, noteLidWorkApproval, noteLidWorkProgress } from '../services/lidClosedWork.js'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { MessageOrigin } from '../types/message.js'
@@ -316,6 +317,7 @@ export class AppSessionController {
     }
 
     this.pendingPermissionRequests.delete(requestId)
+    noteLidWorkApproval(requestId, false)
     pendingRequest.resolve(response)
     this.emit(createPermissionResolvedEvent(pendingRequest.request, response))
     return true
@@ -414,7 +416,7 @@ export class AppSessionController {
       this.updateGoalSnapshot(options.goalSnapshot ?? null)
     }
 
-    await withStreamJsonAccountDiagnosticHook(
+    await withLidWorkRun(() => withStreamJsonAccountDiagnosticHook(
       {
         emit: message => {
           this.emit(createMessageEvent(message))
@@ -482,7 +484,7 @@ export class AppSessionController {
           }
         }
       }
-    )
+    ))
   }
 
   private getDiagnosticSessionId(): string {
@@ -505,6 +507,11 @@ export class AppSessionController {
   }
 
   private emit(event: AppSessionEvent): void {
+    if (event.type === 'message') {
+      const message = event.message
+      if (message.type === 'system' && message.subtype === 'api_retry') noteLidWorkProgress(true, message.parent_tool_use_id)
+      else if (message.type === 'assistant' && !message.error) noteLidWorkProgress(false, message.parent_tool_use_id)
+    }
     for (const listener of this.listeners) {
       listener(event)
     }
@@ -545,6 +552,7 @@ export class AppSessionController {
         request,
         resolve,
       })
+      noteLidWorkApproval(request.requestId, true, request.request.agent_id)
       this.emit(createPermissionRequestedEvent(request))
     })
   }

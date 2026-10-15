@@ -1,3 +1,4 @@
+import { LidClosedProvider, LidClosedNotice } from './LidClosedMode.js'
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { UsagePage } from './UsagePage.js'
 import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js'
@@ -4495,6 +4496,7 @@ export function App() {
   }, [oauthContext, oauthProgress])
 
   return (
+    <LidClosedProvider>
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
     <AgentFaceRegistryContext.Provider value={faceRegistry}>
       {/* `data-window-ground`: this frame repeats the page ground that `html`
@@ -4587,7 +4589,8 @@ export function App() {
           )}
         />
 
-        <div className="relative flex min-w-0 flex-1 flex-col">
+        <div className="lid-content relative flex min-w-0 flex-1 flex-col">
+          <LidClosedNotice currentSessionId={activeSessionId} onSelect={selectTab} />
           {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
            * inline rename editor. The menu resolves and acts against the row it was
            * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
@@ -5123,6 +5126,7 @@ export function App() {
       </div>
     </AgentFaceRegistryContext.Provider>
     </AgentFaceRegistryStoreContext.Provider>
+    </LidClosedProvider>
   )
 }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { registerLidShellTool } from '../../services/lidClosedWork.js'
 import type { UUID } from 'crypto'
 import { feature } from 'bun:bundle';
 import { recordThreadGoalCommandEvidence } from '../../utils/threadGoalEvidenceRecorder.js'
@@ -257,6 +258,7 @@ For commands that are harder to parse at a glance (piped commands, obscure flags
 - git reset --hard origin/main → "Discard all local changes and match remote main"
 - curl -s url | jq '.data[]' → "Fetch JSON from URL and extract data array elements"`),
   run_in_background: semanticBoolean(z.boolean().optional()).describe(`Set to true to run this command in the background. Use Read to read the output later.`),
+  work_lifetime: z.enum(['finite', 'service']).optional().describe('Use finite for background builds, tests, and other commands that will finish. Use service for servers and continuous watchers. Commands explicitly started with run_in_background: true need work_lifetime: finite to keep lid-closed mode active.'),
   dangerouslyDisableSandbox: semanticBoolean(z.boolean().optional()).describe('Set this to true to dangerously override sandbox mode and run commands without sandboxing.'),
 }));
 
@@ -688,6 +690,7 @@ export const BashTool = buildTool({
     };
   },
   async call(input: BashToolInput, toolUseContext, _canUseTool?: CanUseToolFn, parentMessage?: AssistantMessage, onProgress?: ToolCallProgress<BashProgress>) {
+    registerLidShellTool(toolUseContext.toolUseId, input.work_lifetime === 'finite' || !input.run_in_background && input.work_lifetime !== 'service');
     const trustedSedEdit = consumeTrustedSedEditForExecution(toolUseContext);
     const preparedSedState = toolUseContext.preparedExecution?.state;
     const sedPreview = isPreparedSedEditPreview(preparedSedState)

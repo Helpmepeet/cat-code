@@ -1,4 +1,6 @@
 import { createWorkspaceJumpTools } from './workspaceJumpTools.js'
+import { feature } from 'bun:bundle'
+import { installLidWorkRuntime, type LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { hasVerifiedSourceCompensation, readWorkspaceJump, workspaceJumpRequiresRetention, upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate } from '../../src/utils/workspaceJumpState.js'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtime/createQueryEngineAppSessionConfigFromSetup.js'
@@ -583,6 +585,7 @@ export async function createNormalSidecarQueryEngineConfig(
 }
 
 export type SidecarSession = {
+  lidWork?: LidWorkRuntime
   controller: AppSessionController
   /**
    * Permissions domain over the SAME store the runtime enforces (so C2 mode
@@ -834,6 +837,7 @@ export async function createSidecarSessionController({
   await controller.waitForInitialization()
   return {
     controller,
+    ...(feature('LID_CLOSED') ? { lidWork: installLidWorkRuntime(() => appStateStore.getState().tasks) } : {}),
     permissions: createSidecarPermissionDomain(appStateStore),
     settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd), {
       reloadAvailableOptions: () => loadAvailableSettingOptions(cwd),

@@ -4,6 +4,7 @@ import type { TaskState } from '../../tasks/types.js'
 import { randomUUID } from 'crypto'
 import { hasPendingTaskNotification } from '../messageQueueManager.js'
 import { enqueueSdkEvent } from '../sdkEventQueue.js'
+import { registerLidWorkTask } from '../../services/lidClosedWork.js'
 
 // Duration to display killed tasks before eviction
 export const STOPPED_DISPLAY_MS = 3_000
@@ -48,6 +49,7 @@ export function updateTaskState<T extends TaskState>(
  * Register a new task in AppState.
  */
 export function registerTask(task: TaskState, setAppState: SetAppState): void {
+  registerLidWorkTask(task)
   let isReplacement = false
   setAppState(prev => {
     const existing = prev.tasks[task.id]

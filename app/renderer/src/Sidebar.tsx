@@ -492,6 +492,8 @@ export function Sidebar({
       '--sidebar-expanded-width',
       `${sidebarWidth}px`,
     )
+    // App-wide safety notices must remain readable beside the overlay rail.
+    asideRef.current?.parentElement?.style.setProperty('--sidebar-expanded-width', `${sidebarWidth}px`)
   }, [sidebarWidth])
 
   /**

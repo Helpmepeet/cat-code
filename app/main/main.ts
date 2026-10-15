@@ -1,3 +1,7 @@
+import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
+import { LidNativeClient, inspectLidHardware, installLidHelper } from './lidClosedNative.js'
+import { isLidModeCommand } from '../shared/lidClosed.js'
+import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
 import { ScheduledTasks } from '../host/scheduledTasks.js'
 import { parseScheduledTaskCommand, type ScheduledTasksSnapshot, type ScheduledTasksResult } from '../shared/scheduledTasks.js'
 import { launchScheduledSession } from './scheduledTaskRunner.js'
@@ -2100,6 +2104,10 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // `event.sessionId` is the supervisor's routing key, i.e. the identity read
     // off the connection. That, and nothing inside the frame, is the requester
     // (HR2).
+    if (frame.kind === 'lid.work') {
+      lidMode?.receive(event.sessionId, frame.requestId, frame.work)
+      return
+    }
     if (frame.kind === 'host.request') {
       const received = traceFrame(frame, 'supervisor.socket.received')
       traceFrame(received, 'host.received')
@@ -2954,7 +2962,43 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * Handlers read the module-level `host`, so they survive a host rebuild (F5)
  * without re-registering listeners.
  */
+let lidMode: LidClosedMode | undefined
+let lidReady: Promise<void> = Promise.resolve()
+function ensureLidMode(): void {
+  if (lidMode) return
+  const previous = lidReady
+  const assets = app.isPackaged ? join(process.resourcesPath, 'lid-closed') : join(__dirname, '../native/lid-closed/dist')
+  const mode = new LidClosedMode({
+    native: new LidNativeClient(),
+    marker: join(defaultRegistryDir(), 'lid-closed-recovery.json'),
+    installed: lidHelperInstalled,
+    hardware: () => inspectLidHardware(assets),
+    install: recoveryOnly => installLidHelper(assets, process.execPath, recoveryOnly),
+    sessions: () => (supervisor?.listSessions() ?? []).filter(row => row.status === 'ready').flatMap(row => {
+      const generation = supervisor?.getSessionGeneration(row.sessionId)
+      if (!generation) return []
+      const descriptor = host?.listSessions().find(session => session.appSessionId === row.sessionId)
+      return [{ id: row.sessionId, generation, title: descriptor?.title ?? 'Chat' }]
+    }),
+    send: (id, message) => { if (!supervisor) throw new Error('Work unavailable'); supervisor.send(id, message) },
+    changed: view => { if (lidMode === mode && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH_LID_CHANGED, view) },
+  })
+  lidMode = mode
+  // A window reopened during old-owner cleanup must wait for restoration,
+  // and old-owner notifications must never overwrite its new global state.
+  lidReady = previous.catch(() => {}).then(async () => { if (lidMode === mode) await mode.initialize() }).catch(() => {})
+}
 function registerHostControlPlane(): void {
+  ipcMain.handle(CH_LID_READ, async event => {
+    if (!isMainWindowSender(event)) throw new Error('Unavailable')
+    await lidReady
+    return lidMode?.read()
+  })
+  ipcMain.handle(CH_LID_COMMAND, async (event, raw: unknown) => {
+    if (!isMainWindowSender(event) || !isLidModeCommand(raw)) throw new Error('Invalid lid-closed command')
+    await lidReady
+    return lidMode?.command(raw)
+  })
   const optionsService = new ScheduledTaskOptionsService(
     () => runScheduledTaskOptionsWorker({ command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('scheduled-options'), cwd: process.cwd() }),
@@ -4330,6 +4374,7 @@ function generateRequestId(): string {
 function ensureHost(): Host {
   if (host) return host
   supervisor = createSupervisor()
+  ensureLidMode()
   wireRendererBridge(supervisor)
 
   // The registry lives beside the supervisor in the host plane. Default storage
@@ -4645,6 +4690,9 @@ if (!gotSingleInstanceLock) {
  * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
  */
 function shutdownRuntime(): void {
+  const endingLidMode = lidMode
+  lidMode = undefined
+  if (endingLidMode) lidReady = endingLidMode.shutdown().catch(() => {})
   scheduledTasks?.stop()
   scheduledTasks = null
   if (host) {
@@ -4781,7 +4829,14 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+let lidQuitFinished = false
+app.on('before-quit', event => {
+  if (!lidQuitFinished && lidMode) {
+    event.preventDefault()
+    const ending = lidMode; lidMode = undefined
+    void ending.shutdown().finally(() => { lidQuitFinished = true; app.quit() })
+    return
+  }
   logOperational('app.shutdown.started', 'info', { reason: 'before-quit' })
   // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
   // (no live rows left to mark).

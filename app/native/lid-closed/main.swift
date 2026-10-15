@@ -28,7 +28,7 @@ final class LidEndpoint: NSObject, LidControl {
             if Date().timeIntervalSince(self.rateWindow) > 1 { self.rateWindow = Date(); self.count = 0 }
             self.count += 1
             guard request.count <= 1024, self.count <= 8, let connection = self.connection,
-                  let experiment = lidAuthenticatedRole(connection, self.configuration) else {
+                  let experiment = lidAuthenticatedRole(connection, self.configuration, verifyApplication: false) else {
                 reply(lidResponse(nil, "caller-refused")); return
             }
             do {
@@ -158,6 +158,23 @@ let args = CommandLine.arguments
  do {
     guard args.count >= 2 else { throw LidFailure("operation-required") }
     switch args[1] {
+    case "--hardware":
+        guard args.count == 2 else { throw LidFailure("invalid-operation") }
+        let info: [String: Any] = ["qualified": lidHardwareQualified(), "evidence": lidQualificationEvidence,
+            "model": lidHardwareString("hw.model") ?? "unknown", "osBuild": lidHardwareString("kern.osversion") ?? "unknown",
+            "safety": try JSONSerialization.jsonObject(with: JSONEncoder().encode(lidReadSafety()))]
+        print(String(data: try JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]), encoding: .utf8)!)
+    case "--check-application":
+        guard CommandLine.arguments.count == 3 else { throw LidFailure("invalid-command") }
+        guard lidSealedApplication(CommandLine.arguments[2]) else { throw LidFailure("application-not-sealed") }
+        print("qualified-application")
+    case "--installation-kind":
+        guard args.count == 2, geteuid() == 0 else { throw LidFailure("root-required") }
+        let configuration = try lidConfiguration()
+        guard !configuration.parents.isEmpty,
+              configuration.parents.allSatisfy({ $0.experiment }) || configuration.parents.allSatisfy({ !$0.experiment }) else { throw LidFailure("configuration-invalid") }
+        guard configuration.parents.allSatisfy({ $0.experiment || lidSealedApplication($0.path, $0.requirement) }) else { throw LidFailure("application-not-sealed") }
+        print(configuration.parents[0].experiment ? "experiment" : "application")
     case "--power-command":
         guard args.count == 3, geteuid() == 0 else { throw LidFailure("root-required") }
         try lidExecPowerCommand(args[2])

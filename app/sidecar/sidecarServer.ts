@@ -1,6 +1,8 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
+import { isLidWorkControl } from '../shared/lidClosed.js'
+import type { LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { isPathTrusted } from '../../src/utils/config.js'
 /**
  * The headless Bun engine sidecar's socket server.
@@ -339,6 +341,7 @@ export type SidecarServerOptions = {
    * own — the kill's store mutation drives the `tasks`/`workers` re-broadcasts.
    */
   taskControl?: SidecarTaskControlDomain
+  lidWork?: LidWorkRuntime
   /**
    * Terminal-worker eviction deadline owner. When present, it is started with the
    * server and stopped on `close()`, so a finished worker leaves `AppState.tasks`
@@ -527,6 +530,9 @@ export class SidecarServer {
   private readonly agentConfig: SidecarAgentConfigDomain | null
   private readonly goals: SidecarGoalDomain | null
   private readonly tasks: SidecarTasksDomain | null
+  private readonly lidWork: LidWorkRuntime | null
+  private lidWorkSequence = 0
+  private lidWorkRate = { at: 0, count: 0 }
   private readonly workers: SidecarWorkersDomain | null
   private readonly leases: SidecarLeaseDomain | null
   private readonly taskControl: SidecarTaskControlDomain | null
@@ -800,6 +806,7 @@ export class SidecarServer {
     this.agentConfig = options.agentConfig ?? null
     this.goals = options.goals ?? null
     this.tasks = options.tasks ?? null
+    this.lidWork = options.lidWork ?? null
     this.workers = options.workers ?? null
     this.leases = options.leases ?? null
     this.taskControl = options.taskControl ?? null
@@ -1422,6 +1429,7 @@ export class SidecarServer {
     this.unsubscribeRunControlsSnapshot?.()
     this.unsubscribeRunControlsSnapshot = null
     this.unsubscribeTaskNotificationQueue?.()
+    this.lidWork?.dispose()
     this.unsubscribeTaskNotificationQueue = null
     // Release the single-slot lifecycle listener, but only if it is still OURS:
     // in a process that built a second server (the boundary tests do), clearing
@@ -1492,6 +1500,7 @@ export class SidecarServer {
       // preload channel forwards it — but validated at the trust boundary
       // regardless.
       [['app.park'], (server, _connection, message) => server.handlePark(message)],
+      [['lid.work'], (server, connection, message) => server.handleLidWork(connection, message)],
       // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds.
       // `host.result` settles one request this sidecar minted an id for;
       // `peer.deliver` is a message another session sent, routed by main. Both
@@ -2305,6 +2314,21 @@ export class SidecarServer {
     this.turnStallReported = false
     this.onTurnLifecycle?.({ kind: 'started' })
     this.armTurnStallTimer(this.turnStallMs)
+  }
+
+  private handleLidWork(connection: Connection, raw: unknown): void {
+    if (!isLidWorkControl(raw) || Buffer.byteLength(JSON.stringify(raw)) > 32_768) return
+    const now = Date.now()
+    if (now - this.lidWorkRate.at > 1000) this.lidWorkRate = { at: now, count: 0 }
+    if (++this.lidWorkRate.count > 8) return
+    let available = this.lidWork !== null
+    try { if (raw.window) this.lidWork?.update(raw.window) }
+    catch { available = false }
+    const snapshot = this.lidWork?.snapshot()
+    let work = { generation: this.generation, sequence: ++this.lidWorkSequence,
+      available: available && snapshot?.available === true, runs: snapshot?.runs ?? [] }
+    if (JSON.stringify(work).length > 49_152) work = { ...work, available: false, runs: [] }
+    this.send(connection, { kind: 'lid.work', protocolVersion: PROTOCOL_VERSION, sessionId: this.sessionId, requestId: raw.requestId, work })
   }
 
   private endTurnObservation(outcome: 'ok' | 'failed'): void {
@@ -5746,6 +5770,7 @@ export class SidecarServer {
  * renderer-authored kind keeps its error frame unchanged.
  */
 const MAIN_ORIGINATED_MESSAGE_TYPES = new Set([
+  'lid.work',
   'host.result',
   'workspace.handoff',
   'peer.deliver',
@@ -6177,6 +6202,7 @@ function checkStrictKeys(message: unknown): string | null {
     // frame carries NO renderer-authored state — only `type` + `requestId`; any
     // other key is rejected before the sidecar-local Zod parse.
     ['app.park', new Set(['type', 'requestId'])],
+    ['lid.work', new Set(['type', 'requestId', 'window'])],
     // P4-13 RemoteSettings verbs (app-owned; see REMOTE_VERB_TYPES).
     ['remoteSettings.bridgeToggle', new Set(['type', 'requestId', 'enable'])],
     ['remoteSettings.directConnect', new Set(['type', 'requestId', 'serverUrl'])],

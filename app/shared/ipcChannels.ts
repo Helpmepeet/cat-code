@@ -96,3 +96,8 @@ export const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 export const CH_SCHEDULED_TASKS_READ = 'catcode:scheduled-tasks:read'
 export const CH_SCHEDULED_TASK_OPTIONS_READ = 'catcode:scheduled-tasks:options'
 export const CH_SCHEDULED_TASKS_COMMAND = 'catcode:scheduled-tasks:command'
+
+// Closed app-wide power control; never forwards an engine command.
+export const CH_LID_READ = 'catcode:lid:read'
+export const CH_LID_COMMAND = 'catcode:lid:command'
+export const CH_LID_CHANGED = 'catcode:lid:changed'

@@ -69,6 +69,12 @@ lid_verified=true
 "$helper" --resume-after-install
 /bin/launchctl bootstrap system "$watcher"
 /bin/launchctl bootstrap system "$daemon"
+lid_installation_kind=$("$helper" --installation-kind)
+if [[ $lid_installation_kind = application ]]; then
+  echo 'Installed lid-closed helper and recovery watcher.'
+  exit 0
+fi
+[[ $lid_installation_kind = experiment ]] || exit 1
 /bin/rm -f "$state/experiment-guard-owner.json"
 # macOS nohup calls a console-detachment SPI which fails in administrator
 # authorization sessions. Ignore hangup in the shell and inherit it across exec;

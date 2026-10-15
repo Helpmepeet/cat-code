@@ -243,8 +243,8 @@ final class LidController {
             else if safety.lidClosed == false && record.sawClosed { reason = "lid-open" }
             else { reason = nil }
             if let reason {
-                if reason == "thermal" { record.thermalRestart = true }
-                try restore(&record, reason: reason, sleep: safety.lidClosed == true)
+                if safety.thermal == "serious" || safety.thermal == "critical" { record.thermalRestart = true }
+                try restore(&record, reason: reason, sleep: safety.lidClosed == true || safety.thermal == "critical")
             } else if !watcher {
                 record.helperPulse = time
                 record.sawClosed = record.sawClosed || safety.lidClosed == true

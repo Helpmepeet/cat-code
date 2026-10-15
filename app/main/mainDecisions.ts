@@ -50,6 +50,7 @@ import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js
  * (`app/scripts/package-app.ts`), which is why both read this one array.
  */
 export const SIDECAR_RUNTIME_ARGS = [
+  '--feature=LID_CLOSED',
   '--feature=TRANSCRIPT_CLASSIFIER',
   '--feature=REACTIVE_COMPACT',
   '--feature=COMPACT_TASK_RESTORE',

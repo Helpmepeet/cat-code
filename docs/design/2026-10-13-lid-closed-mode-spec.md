@@ -6,7 +6,7 @@ Status: Implementation in progress. Revised on 2026-10-14 with approved pmset tr
 
 The [approved experiment report](../research/2026-10-14-lid-closed-pmset-experiment.md) now records live open-lid activation/restoration on battery, bounded native client/helper/watch recovery observations, and verified uninstallation. The operator deferred lid closure; actual Sleep was not exercised. These observations do not qualify the app feature or replace closed-lid and Sleep evidence.
 
-The [remaining physical qualification packet](../research/2026-10-14-lid-closed-physical-qualification.md) failed before guardian launch and was cleaned up. The approved [guardian launch repair and retry report](../research/2026-10-14-lid-closed-qualification-retry.md) verifies idle cleanup and one open-lid battery lease's expiry/restoration; the operator missed that trial's close cue. Under subsequent expanded authorization, the [physical results](../research/2026-10-14-lid-closed-physical-results.md) establish timestamped battery-powered progress while physically closed, confirmed restoration after reopening, and operator-observed ordinary Sleep blockage. The [Sleep qualification](../research/2026-10-15-lid-closed-sleep-results.md) establishes actual system Sleep after restoration, followed by background DarkWake and operator-confirmed keyboard wake, with the Razer mouse disconnected. That mouse caused an immediate wake in an earlier trial. This qualifies the mechanism in the tested configuration, not the integrated app feature. The experimental helper/jobs are removed, guardian/collector exit confirmed, and SleepDisabled=false. App integration and its verification remain unfinished.
+The [remaining physical qualification packet](../research/2026-10-14-lid-closed-physical-qualification.md) failed before guardian launch and was cleaned up. The approved [guardian launch repair and retry report](../research/2026-10-14-lid-closed-qualification-retry.md) verifies idle cleanup and one open-lid battery lease's expiry/restoration; the operator missed that trial's close cue. Under subsequent expanded authorization, the [physical results](../research/2026-10-14-lid-closed-physical-results.md) establish timestamped battery-powered progress while physically closed, confirmed restoration after reopening, and operator-observed ordinary Sleep blockage. The [Sleep qualification](../research/2026-10-15-lid-closed-sleep-results.md) establishes actual system Sleep after restoration, followed by background DarkWake and operator-confirmed keyboard wake, with the Razer mouse disconnected. That mouse caused an immediate wake in an earlier trial. This qualifies the mechanism in the tested configuration, not the integrated app feature. The experimental helper/jobs are removed, guardian/collector exit confirmed, and SleepDisabled=false. App integration is now implemented behind a fail-closed signing gate, but its end-to-end verification remains unfinished. The [integration results](../research/2026-10-15-lid-closed-integration-results.md) record the actual packaged launch failure without a signing Team ID, the repaired local-build fallback, observed UI behavior, and remaining qualification requirements.
 
 ## Approved power-control tradeoffs
 
@@ -25,7 +25,7 @@ The main interaction is a small coffee cup in the composer. The control communic
 ## Agreed behavior
 
 - Battery and external-power operation are both allowed. Unplugging does not end the mode.
-- Activation includes all eligible work currently running in this Cat Code app instance, with no per-session selection. Its ongoing child agents and commands belong to that work.
+- Activation includes all eligible work currently running in this Cat Code app instance, with no per-session selection. Its ongoing child agents and commands belong to that work. Independently created peer sessions are ordinary separate runs and do not become descendants merely because CreatePeer created them.
 - Idle chats, persistent servers, future scheduled runs, and new unrelated runs do not keep the mode active. A new turn in an existing chat is a new run, not an extension of the original scope.
 - Duration presets are 15, 30, 60, and 120 minutes. There is no unlimited option, automatic renewal, or remembered permission to activate later.
 - The mode ends when included work finishes or the deadline is reached, whichever happens first.
@@ -171,7 +171,7 @@ Proposed temporary instruction for included work:
 
 The window is not a promised return time. The instruction must cease to apply when the mode ends, including lid opening, and must not remain authoritative through transcript replay or continuation. Continue can reinstate it only while the mode is active. User input remains authoritative and is handled normally. Agents cannot activate the mode, extend time, relax safeguards, or interpret this instruction as additional permission.
 
-The integration belongs to the [prompt surfaces owner](../prompts/2026-04-30-prompt-surfaces.md). No prompt changes are part of this specification edit.
+The integration belongs to the [prompt surfaces owner](../prompts/2026-04-30-prompt-surfaces.md). The implementation derives this temporary context at query time and explicitly withdraws it after the window ends; it does not persist it as a user message. Already-issued requests cannot be recalled, so protective admission gates also prevent subsequent enrolled query/tool work.
 
 ## Authorization and pmset mechanism
 
@@ -219,4 +219,27 @@ Before describing the feature as ready, demonstrate the approved tradeoffs and:
 
 The two HTML files remain separate, untracked design-session artifacts and are visual references, not authoritative behavior. They were not changed by this specification. The chosen mock still has the superseded external-power states, resets remaining time to a full preset when adjusted, and stops its countdown in the lid-open state. Those behaviors conflict with this spec's battery policy, proposed elapsed-time rule, and original-deadline requirement. Its piecewise liquid mapping is captured above. Animation and wheel behavior remain unverified.
 
-The implementation uses the specified elapsed-time adjustment, a 20-percent discharging reserve, and nominal thermal state before a fresh start after a thermal end. Blocked-work grace periods and final banner copy remain product integration work. The concrete privilege model is a narrow root launchd helper with independent recovery and one-time administrator setup, detailed in the [bounded experiment](../research/2026-10-14-lid-closed-pmset-experiment.md). Pending release evidence includes measured recovery bounds, hardware support, display handling, and actual input/color verification. The accepted power-control tradeoffs, battery-use, and cup-design decisions are not reopened by these pending items.
+The implementation uses the specified elapsed-time adjustment, a 20-percent discharging reserve, and nominal thermal state before a fresh start after a thermal end. Blocked-work grace periods and the shared notice are implemented; their automated coverage is separate from live acceptance. The concrete privilege model is a narrow root launchd helper with independent recovery and one-time administrator setup, detailed in the [bounded experiment](../research/2026-10-14-lid-closed-pmset-experiment.md). Pending release evidence includes measured recovery bounds, hardware support, display handling, and actual input/color verification. The accepted power-control tradeoffs, battery-use, and cup-design decisions are not reopened by these pending items.
+
+## Integrated authority and qualification status (2026-10-15)
+
+Persistent helper access is pinned to the sealed packaged app and its bridge.
+The helper verifies the app signature, parent process, user, hardened runtime,
+ASAR loading/integrity fuses and forbidden injection/debugging entitlements.
+An app rebuild requires explicit repair/reauthorization. Root-owned recovery
+state is retained after restore-first removal as evidence. The removal script
+keeps recovery authority installed if restoration cannot be confirmed.
+
+The default local ad-hoc build remains usable for ordinary Cat Code work but
+cannot authorize the privileged mode. A hardened ad-hoc Electron build was
+actually rejected by macOS library validation because it lacks a Team ID; no
+Apple signing identity is configured on this Mac. A supplied signing identity
+can select the hardened packaging branch, whose actual launch and helper
+connection remain unverified. No macOS security setting is relaxed. This is a
+current integration prerequisite, not a reversal of the approved pmset tradeoffs.
+
+The app-wide notice, no-work refusal, real-work setup disclosure/cancellation,
+signing refusal and synthetic recovery visibility across restart/navigation
+have been observed in Cat Code Dev. Live packaged activation, app crash/stall
+recovery and active visual acceptance remain incomplete. Consult the integration
+results before describing this feature as ready.

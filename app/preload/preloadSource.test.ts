@@ -178,7 +178,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(66)
+  expect(names.length).toBe(69)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -274,8 +274,10 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(36)
+  expect(invokeChannels.length).toBe(38)
   const allowed = new Set([
+    'CH_LID_READ',
+    'CH_LID_COMMAND',
     'CH_SCHEDULED_TASKS_READ',
     'CH_SCHEDULED_TASK_OPTIONS_READ',
     'CH_SCHEDULED_TASKS_COMMAND',
@@ -555,7 +557,7 @@ test('the hardening allowlist matches the bridge preload actually exposes', () =
     throw new Error('preload.ts no longer declares the bridge the way this test locates it')
   }
   const exposed = [
-    ...source.slice(start, end).matchAll(/^ {2}([A-Za-z][A-Za-z0-9]*)\(/gm),
+    ...source.slice(start, end).matchAll(/^ {2}([A-Za-z][A-Za-z0-9]*)(?:\(|: \{)/gm),
   ]
     .map(match => match[1])
     .sort()

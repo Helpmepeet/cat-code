@@ -59,6 +59,7 @@ const SID = 'app-session-1'
 
 test('the production sidecar runtime enables the desktop engine features', () => {
   expect(SIDECAR_RUNTIME_ARGS).toEqual([
+    '--feature=LID_CLOSED',
     '--feature=TRANSCRIPT_CLASSIFIER',
     '--feature=REACTIVE_COMPACT',
     '--feature=COMPACT_TASK_RESTORE',
@@ -78,6 +79,7 @@ describe('sidecar launch resolution (P5-1)', () => {
     const plan = resolveSidecarLaunch(DEV)
     expect(plan.command).toBe('bun')
     expect(plan.argsFor('session')).toEqual([
+      '--feature=LID_CLOSED',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',
@@ -119,6 +121,7 @@ describe('sidecar launch resolution (P5-1)', () => {
 
   test('debug cleanup keeps the feature flags the session sidecar has', () => {
     expect(resolveSidecarLaunch(DEV).argsFor('debug-cleanup')).toEqual([
+      '--feature=LID_CLOSED',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',

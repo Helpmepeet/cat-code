@@ -24,6 +24,7 @@ export type BannerAction = {
   label: string
   /** A filled call-to-action (e.g. "Re-authenticate"); else an outline button. */
   primary?: boolean
+  disabled?: boolean
 }
 
 export type BannerNotice = {
@@ -32,6 +33,8 @@ export type BannerNotice = {
   tone: BannerTone
   title: string
   detail?: string
+  content?: ReactNode
+  live?: 'off' | 'polite'
   actions?: BannerAction[]
   /** Defaults to true; a `false` banner (e.g. a hard gate) hides the ×. */
   dismissable?: boolean
@@ -100,6 +103,7 @@ function BannerRow({
     <div
       className={`flex items-center gap-3 border-b px-[18px] py-[9px] text-[12.5px] ${t.softBg} ${t.softBorder}`}
       role="status"
+      aria-live={banner.live}
     >
       <span className={`flex shrink-0 ${t.text}`} aria-hidden="true">
         {banner.tone === 'info' || banner.tone === 'accent' ? (
@@ -113,11 +117,13 @@ function BannerRow({
         {banner.detail ? (
           <span className="ml-2 text-text-muted">{banner.detail}</span>
         ) : null}
+        {banner.content}
       </div>
       {(banner.actions ?? []).map(action => (
         <button
           key={action.key}
           type="button"
+          disabled={action.disabled}
           onClick={() => onAction?.(banner, action)}
           className={
             'rounded-md px-[11px] py-1 text-[11.5px] font-semibold transition-colors ' +
