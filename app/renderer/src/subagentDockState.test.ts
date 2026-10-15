@@ -21,6 +21,26 @@ function view(state: SubagentDockState, patch: Partial<SubagentDockInput> = {}) 
   return { state: next, ...selectSubagentDock(next, facts) }
 }
 
+test('dock reuses top-level agent candidates while live worker facts still refresh', () => {
+  let visits = 0
+  const rows = Array.from({ length: 256 }, (_, index) => {
+    const row = agentRow({ kind: 'tool-use', toolName: 'Bash', toolFamily: 'bash', toolUseId: `bash-${index}` })
+    Object.defineProperty(row, 'kind', { get: () => { visits++; return 'tool-use' } })
+    return row
+  })
+  rows.push(agentRow())
+  const first = view(createSubagentDockState(), { transcriptRows: rows, workers: [worker()] })
+  const afterFirst = visits
+  expect(first.active[0]?.state).toBe('running')
+  expect(afterFirst).toBeGreaterThan(0)
+  const changedWorker = view(first.state, { transcriptRows: rows, workers: [worker({ status: 'completed' })], nowMs: 2000 })
+  expect(changedWorker.active[0]?.state).toBe('completed')
+  expect(visits).toBe(afterFirst)
+  const changedRows = view(changedWorker.state, { transcriptRows: [...rows, agentRow({ toolUseId: 'launch-b', result: { isError: false, content: 'done', diff: null, agentId: 'b' } })], workers: [worker({ agentId: 'b' })], nowMs: 3000 })
+  expect(changedRows.active.some(row => row.agentId === 'b')).toBe(true)
+  expect(visits).toBeGreaterThan(afterFirst)
+})
+
 // This is the lifecycle owner: snapshots can evict records before parent results
 // arrive, and transcript launch acknowledgements must never imply completion.
 test('blocked completed workers stay waiting, ordered ahead of live work and unnamed rows lead with their task', () => {

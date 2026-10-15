@@ -111,6 +111,25 @@ test('no TodoWrite in the transcript means no plan', () => {
   expect(selectTodoPlan([])).toBeNull()
 })
 
+test('unchanged nested rows are inspected once, including an absent plan', () => {
+  for (const last of [bashRow('last-bash'), todoRow(FIVE)]) {
+    let visits = 0
+    const rows = Array.from({ length: 256 }, (_, index) => bashRow(`row-${index}`))
+    rows.push(last)
+    for (const row of rows) {
+      const kind = row.kind
+      Object.defineProperty(row, 'kind', { get: () => { visits++; return kind } })
+    }
+    const first = selectTodoPlan(rows)
+    const afterFirst = visits
+    expect(afterFirst).toBeGreaterThan(0)
+    expect(selectTodoPlan(rows)).toBe(first)
+    expect(visits).toBe(afterFirst)
+    expect(selectTodoPlan([...rows])).toEqual(first)
+    expect(visits).toBeGreaterThan(afterFirst)
+  }
+})
+
 // `allDone ? [] : todos` (`TodoWriteTool.ts:70`) — the engine clears the list
 // the moment every item is done, so the surface has to disappear rather than
 // rest on a finished plan.

@@ -198,6 +198,12 @@ type StreamState = {
   /** Keyed `sequence:deliveryAttempt`, so a replay accumulates on its own. */
   pending: Map<string, PendingFrame>
   highestByStage: Map<string, number>
+  dispatch: {
+    context: string
+    nextOrdinal: number
+    bySequence: Map<number, number>
+    highestByStage: Map<string, number>
+  } | null
   watermarks: DeliveryWatermarks
   losses: number
   anomalies: Map<string, number>
@@ -213,6 +219,7 @@ type StreamState = {
   /** Monotonic clock at the last mark, so quiet time is a duration not a date. */
   lastMarkedAtMs: number
   highestSequence: number
+  evictedThrough: number
   /**
    * The SDK message type of the last message-bearing frame (CC-48's tag). It is
    * what separates a session sitting idle after a `result` from one that went
@@ -443,6 +450,7 @@ export function createDeliveryTraceSink({
         stages: new Map(),
         pending: new Map(),
         highestByStage: new Map(),
+        dispatch: null,
         watermarks: {
           produced: 0, socketSent: 0, socketReceived: 0, hostReceived: 0, ipcSent: 0,
           preloadReceived: 0, applied: 0, committed: 0, nextExpected: 1,
@@ -454,6 +462,7 @@ export function createDeliveryTraceSink({
         lastTouched: Date.now(),
         lastMarkedAtMs: monotonicNow(),
         highestSequence: 0,
+        evictedThrough: 0,
         lastMessageKind: null,
         lastMessageKindSequence: 0,
         quiescenceReported: false,
@@ -664,8 +673,28 @@ export function createDeliveryTraceSink({
       state.lastMarkedAtMs = monotonicNow()
       state.quiescenceReported = false
       state.highestSequence = Math.max(state.highestSequence, trace.sequence)
+      const context = documentId && subscriptionEpoch !== undefined
+        ? JSON.stringify([documentId, subscriptionEpoch]) : null
+      if (stage === 'main.ipc.sent' && context && state.dispatch?.context !== context) {
+        // The old document cannot acknowledge this one. Flush its unfinished
+        // delivery records, then release its per-sequence stage keys.
+        for (const [key, pending] of state.pending) {
+          if (key.startsWith('delivery:') && !key.startsWith(`delivery:${context}:`)) {
+            flushFrame(state, key, pending, 'evicted')
+          }
+        }
+        for (const stages of state.stages.values()) {
+          for (const key of stages) {
+            if (key.startsWith('delivery:') && !key.startsWith(`delivery:${context}:`)) stages.delete(key)
+          }
+        }
+        state.dispatch = { context, nextOrdinal: 0, bySequence: new Map(), highestByStage: new Map() }
+      }
       const seenStages = state.stages.get(trace.sequence) ?? new Set<string>()
-      const stageKey = `${trace.deliveryAttempt}:${stage}`
+      const sourceOrdered = isSourceOrderedStage(stage)
+      const stageKey = sourceOrdered || !context
+        ? `${trace.deliveryAttempt}:${stage}`
+        : `delivery:${context}:${trace.deliveryAttempt}:${stage}`
       const duplicateStage = seenStages.has(stageKey)
       if (duplicateStage) {
         appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.duplicate')
@@ -673,11 +702,24 @@ export function createDeliveryTraceSink({
       seenStages.add(stageKey)
       state.stages.set(trace.sequence, seenStages)
 
-      const previousAtStage = state.highestByStage.get(stage) ?? 0
-      if (trace.sequence < previousAtStage) {
-        appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.out_of_order', previousAtStage + 1)
+      if (sourceOrdered) {
+        const previousAtStage = state.highestByStage.get(stage) ?? 0
+        if (trace.sequence < previousAtStage) {
+          appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.out_of_order', previousAtStage + 1)
+        }
+        state.highestByStage.set(stage, Math.max(previousAtStage, trace.sequence))
+      } else if (context && state.dispatch?.context === context) {
+        if (stage === 'main.ipc.sent' && !duplicateStage) {
+          state.dispatch.bySequence.set(trace.sequence, ++state.dispatch.nextOrdinal)
+        } else if (isRendererOrderedStage(stage)) {
+          const ordinal = state.dispatch.bySequence.get(trace.sequence)
+          if (ordinal !== undefined) {
+            const previous = state.dispatch.highestByStage.get(stage) ?? 0
+            if (ordinal < previous) appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.out_of_order')
+            state.dispatch.highestByStage.set(stage, Math.max(previous, ordinal))
+          }
+        }
       }
-      state.highestByStage.set(stage, Math.max(previousAtStage, trace.sequence))
       // Frame continuity is judged where frames actually arrive. A hole here
       // means a conversation frame did not cross the socket.
       if (stage === 'supervisor.socket.received' && trace.sequence > state.watermarks.nextExpected) {
@@ -696,11 +738,14 @@ export function createDeliveryTraceSink({
           appendAnomaly(state, sessionId, trace, stage, 'trace.source.incomplete', state.watermarks.produced + 1)
         }
       }
-      state.traces.set(trace.sequence, trace)
-      if (frameKind && isSafeFrameKind(frameKind)) state.frameKinds.set(trace.sequence, frameKind)
+      if (trace.sequence > state.evictedThrough &&
+          (!state.traces.has(trace.sequence) || stage === 'attachment.replayed' || stage === 'main.ipc.sent')) {
+        state.traces.set(trace.sequence, trace)
+      }
+      if (trace.sequence > state.evictedThrough && frameKind && isSafeFrameKind(frameKind)) state.frameKinds.set(trace.sequence, frameKind)
       // Gated against the closed vocabulary exactly as `frameKind` is: this
       // field is persisted and exported, so it is never an arbitrary string.
-      if (messageKind && isDeliveryMessageKind(messageKind)) {
+      if (trace.sequence > state.evictedThrough && messageKind && isDeliveryMessageKind(messageKind)) {
         state.messageKinds.set(trace.sequence, messageKind)
         // Keyed on the sequence, not on arrival order: a renderer acknowledgement
         // for an older frame is marked after newer ones, and it must not make an
@@ -717,7 +762,9 @@ export function createDeliveryTraceSink({
       const stageWall = stageWallTimestamp ?? (sourceStage ? trace.sourceWallTimestamp : now().toISOString())
       const stageMonotonic = stageMonotonicTimestampMs ?? (sourceStage ? trace.sourceMonotonicTimestampMs : monotonicNow())
       const stageWallMs = Date.parse(stageWall)
-      const pendingKey = `${trace.sequence}:${trace.deliveryAttempt}`
+      const pendingKey = trace.deliveryAttempt === 1 || !context
+        ? `${trace.sequence}:${trace.deliveryAttempt}`
+        : `delivery:${context}:${trace.sequence}:${trace.deliveryAttempt}`
       let pending = state.pending.get(pendingKey)
       // A stage observed AFTER this frame's record was written reopens the
       // accumulator, so late evidence is kept rather than dropped: in practice
@@ -751,10 +798,11 @@ export function createDeliveryTraceSink({
           if (stageInstanceId) pending.rendererProcessInstanceId = stageInstanceId
           if (stageStartedAt) pending.rendererProcessStartedAt = stageStartedAt
         }
-        if (isTerminalStage(stage, state.frameKinds.get(trace.sequence))) {
-          flushFrame(state, pendingKey, pending, stage === 'attachment.buffered' ? 'buffered' : 'terminal')
+        if (trace.sequence <= state.evictedThrough || isTerminalStage(stage, state.frameKinds.get(trace.sequence))) {
+          flushFrame(state, pendingKey, pending, trace.sequence <= state.evictedThrough ? 'evicted' : stage === 'attachment.buffered' ? 'buffered' : 'terminal')
         }
       }
+      if (trace.sequence <= state.evictedThrough) state.stages.delete(trace.sequence)
       trimState(state, sessionId, trace.streamEpoch, trace.sequence, noteLoss, flushPendingFrames)
       if (streams.size > MAX_DELIVERY_TRACE_STREAMS) {
         const oldest = [...streams.entries()].sort((a, b) => a[1].lastTouched - b[1].lastTouched)[0]
@@ -892,6 +940,19 @@ function hasStage(state: StreamState, sequence: number, stage: DeliveryStage): b
   return [...(state.stages.get(sequence) ?? [])].some(value => value.endsWith(`:${stage}`))
 }
 
+function isSourceOrderedStage(stage: DeliveryStage): boolean {
+  return stage === 'engine.produced' || stage === 'sidecar.received' ||
+    stage === 'sidecar.socket.queued' || stage === 'sidecar.socket.sent' ||
+    stage === 'supervisor.socket.received' || stage === 'host.received' ||
+    stage === 'attachment.buffered'
+}
+
+function isRendererOrderedStage(stage: DeliveryStage): boolean {
+  return stage === 'preload.received' || stage === 'renderer.subscription.received' ||
+    stage === 'renderer.state.queued' || stage === 'renderer.state.applied' ||
+    stage === 'renderer.ui.committed'
+}
+
 function trimState(
   state: StreamState,
   sessionId: string,
@@ -909,6 +970,8 @@ function trimState(
     state.frameKinds.delete(oldest)
     state.messageKinds.delete(oldest)
     state.stages.delete(oldest)
+    state.dispatch?.bySequence.delete(oldest)
+    state.evictedThrough = Math.max(state.evictedThrough, oldest)
     noteLoss(oldest, 'in_memory_eviction', { state, sessionId, streamEpoch })
   }
 }

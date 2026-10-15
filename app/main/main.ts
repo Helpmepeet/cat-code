@@ -1200,6 +1200,10 @@ function refreshAccountsPoolNow(): void {
 }
 
 function refreshUsageDashboardNow(): void {
+  if (!usageDriver) {
+    startUsageRefresh()
+    return
+  }
   usageActivityGate?.allowNextRun()
   usageDriver?.refreshNow()
 }
@@ -1860,7 +1864,6 @@ function createWindow(): void {
     // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): arm the pool refresh the
     // same way, so the Accounts page has live data with no session open.
     startupTimers.schedule(startAccountsPoolRefresh)
-    startupTimers.schedule(startUsageRefresh)
     // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
     // here too, off the launch critical path; it self-reschedules its TTL sweep
     // and re-evaluates the cap on host events.

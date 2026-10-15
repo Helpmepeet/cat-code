@@ -25,6 +25,7 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [])
     readProjectRoutes: async () => [],
     readSessionsCatalog: async () => null,
     rendererReady: () => {}, recordRenderCommit: () => {}, reportVisibleSessions: () => {},
+    refreshUsageDashboard: () => {},
     manageAccount: async verb => {
       calls.push(verb)
       return { kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '', requestId: verb.requestId, verb: verb.type, ok: !refusedVerbs.includes(verb.type), message: verb.type === 'account.oauthPasteCode' ? 'That code was refused.' : verb.type === 'account.oauthAlias' ? 'That name is taken.' : 'Done' }

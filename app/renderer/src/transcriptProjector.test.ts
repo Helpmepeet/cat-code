@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
-import type { ServerFrame, SessionId } from '../../shared/protocol.js'
+import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../../shared/protocol.js'
 import {
   createQueuedPromptsState,
   reduceQueuedPromptsState,
@@ -36,7 +36,7 @@ import {
 function ready(sessionId: string, turnInterrupted = false) {
   return {
     kind: 'ready' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     ...(turnInterrupted ? { turnInterrupted: true } : {}),
@@ -58,7 +58,7 @@ function messageFrame(
 ) {
   return {
     kind: 'event' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     event: { type: 'message' as const, message },
   }
@@ -111,6 +111,54 @@ test('nested row change spans identify tail updates, head inserts and middle reo
   expect(nestedRowsChange(moved)).toMatchObject({
     previous: inserted, start: 1, previousEnd: 3, nextEnd: 3,
   })
+})
+
+test('completed producer tool rows and an unaffected agent branch keep identity through streamed prose', () => {
+  const sessionId = 'completed-tools-stream'
+  let state = projectServerFrame(createTranscriptState(), ready(sessionId))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame(sessionId, message))
+  }
+  for (let index = 0; index < 256; index++) {
+    const id = `toolu_${index}`
+    const name = index === 0 ? 'Agent' : index % 2 ? 'Read' : 'Bash'
+    play({
+      type: 'assistant', session_id: `engine-${sessionId}`, parent_tool_use_id: null,
+      uuid: `00000000-0000-4000-8000-${String(index * 2).padStart(12, '0')}`,
+      message: { id: `message_${index}`, role: 'assistant', content: [
+        { type: 'tool_use', id, name, input: name === 'Agent' ? { prompt: 'inspect' } : {} },
+      ] },
+    } as SDKMessage)
+    play({
+      type: 'user', session_id: `engine-${sessionId}`, parent_tool_use_id: null,
+      uuid: `00000000-0000-4000-8000-${String(index * 2 + 1).padStart(12, '0')}`,
+      message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: id, content: 'finished', is_error: false },
+      ] },
+    } as SDKMessage)
+  }
+  play({
+    type: 'assistant', session_id: `engine-${sessionId}`, parent_tool_use_id: 'toolu_0',
+    uuid: '00000000-0000-4000-8000-000000000512',
+    message: { id: 'agent-child', role: 'assistant', content: [{ type: 'text', text: 'worker step' }] },
+  } as SDKMessage)
+  const before = selectNestedTranscriptRows(state, sessionId)
+  expect(before).toHaveLength(256)
+  expect(before.every(row => row.kind === 'tool-use' && row.status === 'success')).toBe(true)
+  for (const message of S1_STREAMING_TEXT_TURN.messages.slice(0, 3)) play(message)
+  const after = selectNestedTranscriptRows(state, sessionId)
+  expect(after.slice(0, 256).every((row, index) => row === before[index])).toBe(true)
+  expect(after[0]?.children).toBe(before[0]?.children)
+  expect(nestedRowsChange(after)).toMatchObject({ start: 256, previousEnd: 256, nextEnd: 257 })
+  state = projectServerFrame(state, { kind: 'transcript.reset', protocolVersion: PROTOCOL_VERSION, sessionId })
+  play({
+    type: 'assistant', session_id: `engine-${sessionId}`, parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000999',
+    message: { id: 'replacement', role: 'assistant', content: [
+      { type: 'tool_use', id: 'toolu_0', name: 'Agent', input: { prompt: 'again' } },
+    ] },
+  } as SDKMessage)
+  expect(selectNestedTranscriptRows(state, sessionId)[0]).not.toBe(after[0])
 })
 
 test('transcript reset discards projected rows before retained replay', () => {
@@ -252,6 +300,8 @@ test('marks a persisted cancelled tool result separately from a failure', () => 
     session_id: 'engine-session-1',
     uuid: '00000000-0000-4000-8000-000000000906',
   })
+  const pending = selectTranscriptRows(state, 'session-1')[0]
+  expect(pending).toMatchObject({ kind: 'tool-use', status: 'pending' })
   play({
     type: 'user',
     message: {
@@ -277,6 +327,7 @@ test('marks a persisted cancelled tool result separately from a failure', () => 
       result: expect.objectContaining({ isCancelled: true, isError: true }),
     }),
   ])
+  expect(selectTranscriptRows(state, 'session-1')[0]).not.toBe(pending)
 })
 
 test('projects typed provider error text before the curated result seam', () => {
@@ -4056,6 +4107,7 @@ test('ResumeAgent projects as an independent agent card joined to the original i
       uuid: '00000000-0000-4000-8000-0000000d1004',
     }),
   )
+  const beforeCompletion = selectTranscriptRows(state, 'session-1')
   state = projectServerFrame(
     state,
     messageFrame('session-1', {
@@ -4076,6 +4128,8 @@ test('ResumeAgent projects as an independent agent card joined to the original i
 
   const rows = selectTranscriptRows(state, 'session-1')
   expect(rows).toHaveLength(2)
+  expect(rows[0]).toBe(beforeCompletion[0])
+  expect(rows[1]).not.toBe(beforeCompletion[1])
   expect(rows[0]).toMatchObject({
     toolUseId: 'toolu_original_agent',
     result: { agentId: 'agent-1', agentName: 'Rue' },
@@ -4091,6 +4145,48 @@ test('ResumeAgent projects as an independent agent card joined to the original i
       usage: { totalTokens: 9500, toolUses: 5, durationMs: 52000 },
     },
   })
+})
+
+test('late producer identity enriches a cached ResumeAgent result without replacing its source row', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+  play({
+    type: 'assistant', parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000d1101',
+    message: { id: 'resume', role: 'assistant', content: [
+      { type: 'tool_use', id: 'toolu_resume_late', name: 'ResumeAgent', input: { agentId: 'agent-late' } },
+    ] },
+  } as SDKMessage)
+  play({
+    type: 'user', parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000d1102',
+    message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'toolu_resume_late', content: 'resumed', is_error: false },
+    ] },
+  } as SDKMessage)
+  const before = selectTranscriptRows(state, 'session-1')[0]
+  expect(before).toMatchObject({ kind: 'tool-use', status: 'success' })
+  play({
+    type: 'assistant', parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000d1103',
+    message: { id: 'original', role: 'assistant', content: [
+      { type: 'tool_use', id: 'toolu_original_late', name: 'Agent', input: { prompt: 'first run' } },
+    ] },
+  } as SDKMessage)
+  play({
+    type: 'user', parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000d1104',
+    message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'toolu_original_late', content: 'done', is_error: false },
+    ] },
+    tool_use_result: { agentId: 'agent-late', agentName: 'Rue', totalTokens: 400, totalToolUseCount: 2 },
+  } as SDKMessage)
+  const after = selectTranscriptRows(state, 'session-1')[0]
+  expect(after).not.toBe(before)
+  expect(after).toMatchObject({ result: { agentId: 'agent-late', agentName: 'Rue', agentUsage: { totalTokens: 400, toolUses: 2 } } })
+  expect(selectTranscriptRows(state, 'session-1')[0]).toBe(after)
 })
 
 test('TaskOutput narrows a local agent clean answer from its structured retrieval result', () => {
@@ -4869,9 +4965,10 @@ test('hidden tier: the mark is READ-TIME ONLY, never stored on a row', () => {
     userTextFrame(HIDDEN.hidden, 'engine bookkeeping', true),
   )
   // Reading the revealed view first must not leak the mark into the default one.
-  expect(selectTranscriptRows(state, 'session-1', true)[0]?.isHidden).toBe(true)
+  const revealed = selectTranscriptRows(state, 'session-1', true)[0]
+  expect(revealed?.isHidden).toBe(true)
   expect(selectTranscriptRows(state, 'session-1')).toEqual([])
-  expect(selectTranscriptRows(state, 'session-1', true)[0]?.isHidden).toBe(true)
+  expect(selectTranscriptRows(state, 'session-1', true)[0]).toBe(revealed)
 })
 
 test('hidden tier: absent by default, so no session grows an empty reveal', () => {

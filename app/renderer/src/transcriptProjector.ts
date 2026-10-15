@@ -659,7 +659,7 @@ export function removeTranscriptSession(
 
 /**
  * Rows are stored as pure producer facts; tool status/result are joined in
- * HERE from the correlation map on every read, never mutated onto a stored
+ * HERE from the correlation map at read time, never mutated onto a stored
  * row. A `tool-use` row with no matching entry yet reads as `pending`.
  *
  * P4-36: the hidden tier is the SECOND read-time join. `revealHidden` is the
@@ -680,12 +680,9 @@ export function selectTranscriptRows(
   const completions = session.agentCompletionsByToolUseId
   // P4-36 runs FIRST: the hidden tier decides which rows exist in this view.
   const hidden = session.hiddenFrameIds
-  const visible =
-    Object.keys(hidden).length === 0
-      ? session.rows
-      : revealHidden
-        ? session.rows.map(row => (hidden[row.frameId] ? markHidden(row) : row))
-        : session.rows.filter(row => !hidden[row.frameId])
+  const visible = Object.keys(hidden).length === 0 || revealHidden
+    ? session.rows
+    : session.rows.filter(row => !hidden[row.frameId])
   const resumedToolUseIds = new Set<string>()
   const agentIdentityById = new Map<
     string,
@@ -712,9 +709,10 @@ export function selectTranscriptRows(
       // background agent launches remain immutable launch records and their
       // finish stays here in arrival order.
       const merged = row.toolUseId !== null && resumedToolUseIds.has(row.toolUseId)
-      return merged ? [] : [row]
+      return merged ? [] : [revealHidden && hidden[row.frameId] ? markHidden(row) : row]
     }
-    if (row.kind !== 'tool-use') return [row]
+    const isHidden = revealHidden && hidden[row.frameId] === true
+    if (row.kind !== 'tool-use') return [isHidden ? markHidden(row) : row]
     const storedResult = session.toolResultsByUseId[row.toolUseId] ?? null
     const resumedAgentId =
       row.toolName === 'ResumeAgent' && typeof row.input.agentId === 'string'
@@ -722,6 +720,16 @@ export function selectTranscriptRows(
         : null
     const resumedIdentity =
       resumedAgentId === null ? undefined : agentIdentityById.get(resumedAgentId)
+    const agentCompletion = resumedToolUseIds.has(row.toolUseId)
+      ? (completions[row.toolUseId] ?? null)
+      : null
+    const views = joinedToolRows.get(row)
+    const cached = isHidden ? views?.hidden : views?.normal
+    if (cached && cached.storedResult === storedResult &&
+        cached.agentCompletion === agentCompletion &&
+        cached.resumedAgentId === resumedAgentId &&
+        cached.agentName === resumedIdentity?.agentName &&
+        cached.agentUsage === resumedIdentity?.agentUsage) return [cached.row]
     const result: ToolResultProjection | null =
       storedResult === null ||
       resumedIdentity === undefined ||
@@ -739,24 +747,46 @@ export function selectTranscriptRows(
           ? 'error'
           : 'success'
       : 'pending'
-    const agentCompletion = resumedToolUseIds.has(row.toolUseId)
-      ? (completions[row.toolUseId] ?? null)
-      : null
+    const source = isHidden ? markHidden(row) as ToolUseRow : row
     if (
-      row.status === status &&
-      row.result === result &&
-      row.agentCompletion === agentCompletion
+      source.status === status &&
+      source.result === result &&
+      source.agentCompletion === agentCompletion
     ) {
-      return [row]
+      return [source]
     }
-    return [{ ...row, status, result, agentCompletion }]
+    const joined = { ...source, status, result, agentCompletion }
+    joinedToolRows.set(row, {
+      ...views,
+      [isHidden ? 'hidden' : 'normal']: {
+        storedResult, agentCompletion, resumedAgentId,
+        agentName: resumedIdentity?.agentName, agentUsage: resumedIdentity?.agentUsage,
+        row: joined,
+      },
+    })
+    return [joined]
   })
   return projected
 }
 
-/** The read-time hidden-tier mark. Returns a COPY; the stored row is untouched. */
+type JoinedToolRow = {
+  storedResult: ToolResultProjection | null
+  agentCompletion: AgentCompletionProjection | null
+  resumedAgentId: string | null
+  agentName?: string
+  agentUsage?: { totalTokens: number; toolUses: number }
+  row: ToolUseRow
+}
+const joinedToolRows = new WeakMap<ToolUseRow, { normal?: JoinedToolRow; hidden?: JoinedToolRow }>()
+const hiddenRows = new WeakMap<TranscriptRow, TranscriptRow>()
+
+/** The read-time hidden-tier mark. Returns a stable copy; the stored row is untouched. */
 function markHidden(row: TranscriptRow): TranscriptRow {
-  return { ...row, isHidden: true }
+  const cached = hiddenRows.get(row)
+  if (cached) return cached
+  const marked = { ...row, isHidden: true as const }
+  hiddenRows.set(row, marked)
+  return marked
 }
 
 /**

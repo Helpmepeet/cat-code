@@ -963,6 +963,7 @@ export function App() {
     createTabNavigation,
   )
   const activeView = selectedPage(tabNavigation)
+  const usageActivatedRef = useRef(false)
   const selectedNavigationSessionId = selectedSessionId(tabNavigation)
   const tabNavigationRef = useRef(tabNavigation)
   tabNavigationRef.current = tabNavigation
@@ -1504,6 +1505,13 @@ export function App() {
       unsubscribe()
     }
   }, [hydrateHostRoster, queueTranscriptPreload])
+
+  // The host listener above is installed before activation can publish results.
+  useEffect(() => {
+    if (activeView !== 'usage' || usageActivatedRef.current) return
+    usageActivatedRef.current = true
+    getBridge().refreshUsageDashboard()
+  }, [activeView])
 
   // F2 — fold the cold-launch sessions-catalog baseline (the global engine-history
   // enumeration a sidecar last persisted to disk) as the lowest-precedence catalog

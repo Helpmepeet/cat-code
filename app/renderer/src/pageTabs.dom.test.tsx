@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act } from 'react'
+import { StrictMode, act } from 'react'
+import { collectRetainedUsage } from '../../../src/utils/statsUsage.js'
 import { App } from './App.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
@@ -32,7 +33,7 @@ function ready(id: string): ServerFrame {
     payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } }
 }
 
-async function mountApp(sessions: SessionDescriptor[] = [], split = false, savedActiveIndex = 0) {
+async function mountApp(sessions: SessionDescriptor[] = [], split = false, savedActiveIndex = 0, strict = false) {
   window.localStorage.clear()
   if (split) window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify({ version: 1, panels: ['a', 'b'], widths: [35, 65], activeIndex: savedActiveIndex }))
   let hostListener: (event: HostEvent) => void = () => {}
@@ -40,11 +41,13 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
   const lifecycle: string[] = []
   const visible: string[][] = []
   const inventoryCwds: (string | null)[] = []
+  const usageRefreshes: string[] = []
   const bridge: Partial<CatCodeBridge> = {
     subscribe: listener => { frameListener = listener; return () => {} },
     subscribeHost: listener => { hostListener = listener; return () => {} },
     listSessions: async () => sessions, readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
     rendererReady: () => {}, recordRenderCommit: () => {},
+    refreshUsageDashboard: () => { usageRefreshes.push('refresh') },
     reportVisibleSessions: ids => { visible.push([...ids]) },
     previewSession: async () => null,
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
@@ -54,7 +57,7 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
     createManagedChat: async () => { lifecycle.push('create'); return { ok: true, value: sessionDescriptor('created') } },
   }
   window.catcode = bridge as CatCodeBridge
-  const tree = await harness.mount(<App />)
+  const tree = await harness.mount(strict ? <StrictMode><App /></StrictMode> : <App />)
   const host = async (event: HostEvent) => { await act(async () => { hostListener(event) }) }
   const frames = async (...frames: ServerFrame[]) => { await act(async () => { frameListener(frames) }) }
   await host({ type: 'accounts-pool', pool: { accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true, anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true } })
@@ -69,8 +72,33 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
   const key = async (key: string) => { await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true })) }) }
   const tabs = () => [...tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
   const selected = () => tabs().filter(t => t.getAttribute('aria-selected') === 'true').map(t => t.getAttribute('aria-label'))
-  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, inventoryCwds }
+  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, inventoryCwds, usageRefreshes }
 }
+
+test('Analytics activation requests one collection per App document, including with retained results', async () => {
+  const app = await mountApp()
+  expect(app.usageRefreshes).toEqual([])
+  const snapshot = await collectRetainedUsage([], '2026-10-15T00:00:00.000Z')
+  await app.host({ type: 'usage-dashboard', result: { type: 'usage', version: 1, snapshot } })
+  await app.click('Analytics')
+  expect(app.usageRefreshes).toHaveLength(1)
+  await app.click('Refresh analytics')
+  expect(app.usageRefreshes).toHaveLength(2)
+  await app.click('Goals')
+  await app.click('Analytics')
+  expect(app.usageRefreshes).toHaveLength(2)
+  await harness.unmountAll()
+  const newWindow = await mountApp()
+  await newWindow.host({ type: 'usage-dashboard', result: { type: 'usage', version: 1, snapshot } })
+  await newWindow.click('Analytics')
+  expect(newWindow.usageRefreshes).toHaveLength(1)
+})
+
+test('StrictMode replay does not send a second Analytics activation', async () => {
+  const app = await mountApp([], false, 0, true)
+  await app.click('Analytics')
+  expect(app.usageRefreshes).toHaveLength(1)
+})
 
 test('all sidebar pages share a unique strip and empty close restores the credential-ready welcome', async () => {
   const app = await mountApp()
