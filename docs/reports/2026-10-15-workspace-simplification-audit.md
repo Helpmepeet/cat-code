@@ -14,10 +14,13 @@ introducing another state framework, or splitting every large file would help.
 Recent history, credential, and lifecycle repairs encode real failure cases.
 They should survive cleanup.
 
-This report contains eleven actionable findings. They are maintenance findings,
-not eleven claimed production bugs. Some remove unused internal contracts and
-therefore require coordinated protocol and decision-record changes. No
-application code or tests were changed for this audit.
+This report contains eleven simplification findings. Three fresh subagents
+independently verified them before implementation; their verdicts and corrections
+are recorded below. F8 needs a separate reservation-race regression and repair
+before changing allocation behavior. These are maintenance findings, not eleven
+claimed production bugs. Some remove unused internal contracts and therefore
+require coordinated protocol and decision-record changes. No application code or
+tests were changed for this audit or its verification.
 
 ## Scope and evidence
 
@@ -64,7 +67,7 @@ callers, fixtures, and contracts that must change together.
 | F5 | Stop persisting the unread `activeWorkers` index | High | Small; retain worker history and atomic writes. |
 | F6 | Remove unused standalone component state modes | High | Small; update tests to use the shipped ownership contract. |
 | F7 | Remove ignored goal-action arguments and dead helper | High | Small; no persisted format change. |
-| F8 | Make worker naming match its single actual pool | High | Small; retain reservation and retry semantics. |
+| F8 | Make worker naming match its single actual pool | Direction confirmed | Allocation caller changes gated on the newly reproduced reservation race. |
 | F9 | Test credential authorization through the real send entry | High | Small payoff; preserve all credential checks. |
 | F10 | Retire the two adopted migration harnesses | High | Small; remove the generator target simultaneously. |
 | F11 | Replace cleanup source-string tests with lifetime checks | Demonstrated | Small test/tooling change; retain unique cleanup coverage. |
@@ -91,8 +94,16 @@ sends/subscribes/replays the corresponding frames in `sidecarServer.ts`.
 **Smallest change.** Remove the unused session publishers, subscriptions,
 replay entries, frame variants, renderer stores, and their exclusive tests.
 Keep `loadExtensionsSnapshot()` and `readMemorySnapshotOnce()` because
-`settingsInventoryWorker.ts` actively uses them. Keep the goal half of
+`settingsInventoryWorker.ts` actively uses them. Keep shared metadata value types
+such as `ExtensionsSnapshot`, `MemorySnapshot`, and their child types; only the
+obsolete frame wrappers are retirement candidates. Keep the goal half of
 `goalMemoryState` and the agent-config feed used by composer mentions.
+
+The renderer modules are not wholly dead either. `SettingsExtensions.tsx` still
+uses `selectSkillGroups()` and `selectHookGroups()` from `extensionsState.ts`;
+`MemoryPage.tsx` uses `selectMemoryInstructionCounts()` and
+`selectInstructionFilesByType()` from `goalMemoryState.ts`. Preserve those
+helpers, constants, and their behavioral tests when removing session storage.
 
 **Reach and risk.** This spans `sessionController`, `index`, sidecar options,
 `sidecarServer`, protocol/replay inventories, batched reducers, App, and fixtures.
@@ -153,8 +164,15 @@ broadcasting and OAuth-specific parking/handoff guards.
 
 **Smallest change.** First delete the unread renderer session OAuth state,
 actions, selector, and obsolete reducer tests. This local reduction requires no
-wire change. Then restrict the session route to the needed account switch and
-retire the old session OAuth transport in a coordinated protocol change.
+wire change. Then restrict the session transport with its own switch-only subset
+and receiving allowlist, and retire the old session OAuth transport in a
+coordinated protocol change.
+
+Do not narrow the shared `AccountVerbMessage` union to `account.switch`:
+`AccountControlVerb` in `app/shared/accountControlWorker.ts:6` derives from it,
+and `accountsDomain.runVerb()` accepts that broad domain vocabulary. The host
+worker still needs login, rename, touch and OAuth commands. Preserve those shared
+types, OAuth progress value types, and the broad account-result verb vocabulary.
 
 **Reach and risk.** The follow-up spans main/preload/protocol, sidecar login
 schemas and broadcasts, replay inventories, and exclusive lifecycle guards.
@@ -187,6 +205,11 @@ advertise `checking`, `ask`, `moving`, and a `move` choice. The parser accepts
 recovery-only runtime/view type with the four reachable phases and resend /
 cancel actions. Remove unreachable classifier UI branches, spinners, and
 command choices. Keep the old target cwd only as recovery evidence where needed.
+The retained `failed` view must describe sending/context recovery and use
+resend/cancel actions. Its current "Could not move" / "Stay in chat" wording is
+left over from classification, although failure now comes from the resend cwd
+check. Keep that context check and never turn an unknown delivery into an
+automatic resend.
 
 **Reach and risk.** Controller/store disk-vs-runtime types, shared host
 commands, IPC parsing, preload, recovery bar, and SessionPane branches must
@@ -302,6 +325,24 @@ and release cleanup. Keep candidate selection separate from reservation: team
 allocation awaits external allocation between them and still needs conflict
 retry. Combining those stages would lose a real ownership distinction.
 
+**Independent verification correction.** The current automatic team path at
+[AgentTool.tsx:462-474](../../src/tools/AgentTool/AgentTool.tsx#L462) awaits a
+team allocation and ignores a false result from `tryReserveWorkerName()`. A
+controlled async reproduction against the real `resolveSystemSubagentName()`
+showed an explicit non-team caller reserving `Ada` during that await; the
+automatic caller then also returned `Ada` as its own process reservation.
+Releasing the automatic caller's claimed reservation freed the explicit caller's
+hold. The team allocator was mocked to control timing; name selection, explicit
+reservation, and automatic result handling used production code. This establishes
+a pre-existing ownership failure under that ordering, not a tested production
+team-file transaction.
+
+F8 is therefore not a routine allocation-caller cleanup. Add a targeted race
+regression and resolve the ownership failure before simplifying those callers;
+account for the already-issued external allocation when process reservation
+fails. Do not just retry and leave a live team allocation behind, or release
+another caller's reservation. No repair was implemented during verification.
+
 **Verification needed.** Worker-name sequence/exhaustion/collision tests and the
 AgentTool/runAgent suites, followed by the engine dev build.
 
@@ -385,8 +426,19 @@ This demonstrates both missed behavior and unnecessary refactoring friction.
 **Smallest change.** Replace the cleanup source-shape case with focused isolated
 runner checks using fake build/child executables and temporary directories.
 Exercise early build failure, failure after a child starts, and completion;
-assert owned children and scratch output are cleaned before exit. No broad
-test-only production hook is necessary.
+assert owned children and scratch output are cleaned before exit. A bounded
+copied-runner probe confirmed this is feasible with the existing scripts and
+launcher helper: PATH fakes for `bun`/`bunx`/Electron, harmless driver source for
+`Bun.build()`, and a preloaded readiness-fetch fake. Use one focused table-driven
+check with these fixtures, not a generic runner framework or a production seam.
+
+Both runners create scratch/config directories before entering `try/finally`
+(`harness-demo.ts:34-37`, `visual-acceptance.ts:53-74`); the visual runner also
+writes its optional usage fixture there. Failures in that setup are currently
+outside the cleanup guard. This gap was identified by source inspection, not a
+reproduced setup failure, and must be covered before claiming cleanup on every
+exit path. Keep requested capture output; cleanup assertions concern transient
+configuration/work directories and owned children.
 
 **Reach and risk.** Existing `devLauncher.test.ts` covers termination mechanics,
 but cannot prove the harness reaches cleanup. Therefore this is a replacement,
@@ -401,13 +453,16 @@ files and launcher tests. Real GUI acceptance remains a separate boundary.
 
 ## Suggested execution order
 
-1. Land local deletions first: F5, F7, F8, F9 and F6 in small owner-specific
+1. Land local deletions first: F5, F7, F9 and F6 in small owner-specific
    changes. Each can be reviewed without changing a wire contract.
 2. Replace F11's weak cleanup checks, then retire F10's adopted fixtures with
    their generator target. Keep these independent of feature work.
 3. Retire F1/F2/F3 protocol slices in coherent batches with version/decision
    updates. Start F3 with its renderer-only deletion if a smaller first step helps.
 4. Narrow F4's runtime vocabulary while retaining tolerant legacy recovery.
+5. Handle F8's reproduced reservation race in its own regression/repair batch
+   before simplifying allocation callers. Keep unrelated naming API deletion
+   separate if that makes the ownership proof easier to review.
 
 Do not bundle these into one workspace refactor. Count deleted owners, states,
 and contracts as the outcome; a target LOC reduction would reward the wrong cuts.
@@ -456,7 +511,68 @@ GUI launch, packaged installation, or physical lid test was run. Native Swift,
 all inherited terminal features, every dependency's internals, and every
 experimental harness were not comprehensively reviewed.
 
-Report validation passed: map lint (18 maps, zero warnings), whitespace checks,
-and 28 local source/document links including their numeric line anchors. No
-speed, memory, or reliability improvement is claimed without implementing and
+Initial report validation passed: map lint (18 maps, zero warnings), whitespace
+checks, and 28 local source/document links including their numeric line anchors.
+No speed, memory, or reliability improvement is claimed without implementing and
 measuring the corresponding change.
+
+## Independent verification before implementation
+
+At the user's request, three fresh subagents independently checked the committed
+report (`3f0750f2461630cf9acec51735235c700c8a0b4a`) against current source. They
+were separate from the original audit authors, used fresh contexts, and divided
+all eleven findings across desktop/runtime, engine, and renderer/tooling lanes.
+Each traced production and test consumers and challenged the proposed deletion
+scope. The parent checked the material corrections against source and updated
+this report. No production simplification or test edit has started.
+
+| Finding | Independent verdict | Correction or implementation constraint |
+|---|---|---|
+| F1 | Confirmed, scope clarified | Remove session stores/feeds, retaining the live Settings grouping/count helpers and shared metadata types. |
+| F2 | Confirmed | Intentional internal compatibility retirement; preserve the independent dashboard and terminal stats, and bump the session protocol coherently. |
+| F3 | Scope corrected | Narrow only session transport. The broad account/domain/result vocabulary remains required by the host worker. |
+| F4 | Confirmed, retained UI corrected in the plan | Keep legacy disk recovery; change failed-state move/stay language to sending/context recovery with resend/cancel. |
+| F5 | Confirmed | Preserve durable `knownWorkers`, terminal-before-spawn assertions, serialization and atomic rename. |
+| F6 | Confirmed | No additional product, preview or harness mounts found; interactive tests need actual parent state, not inert callbacks. |
+| F7 | Confirmed | Delete ignored arguments and the unused helper; retain creation's real objective and goal fencing. |
+| F8 | Needs correction before allocation-caller cleanup | Real resolver reproduced duplicate process reservation ownership under a controlled external-allocation await; add a separate race regression and ownership repair. |
+| F9 | Confirmed | Move the three retained scenarios to the send boundary and assert denial never invokes its callback. |
+| F10 | Confirmed, generator consequence demonstrated | Remove legacy output and generator target together; preserve active snapshots/drift checks/theme. |
+| F11 | Confirmed, test plan qualified | A bounded copied-runner lifetime check is feasible; retain capture output and independent safety guards. Pre-try setup failures still need proof. |
+
+The F8 probe used real naming and resolver code with a deferred mocked team
+allocator and isolated configuration. It proved the process-reservation failure
+under that async ordering, not a durable team-store transaction. A repair must
+own its process reservation across allocation and release only its own claim.
+If refusal occurs after external allocation, that allocation needs deliberate
+compensation; merely throwing or looping can leave a committed recipient behind.
+The explicit-team path has the same post-allocation compensation concern.
+
+Additional checks in this verification round:
+
+| Check | Observed result and limit |
+|---|---|
+| Desktop schemas/recovery/bar and extensions/goal-memory/accounts reducers, six files | 60 baseline tests passed using isolated configuration. |
+| Worker names/state, goal actions and credential use, four files | 34 baseline tests passed using isolated configuration. |
+| F8 real-resolver controlled async probe | Duplicate `Ada` ownership reproduced; releasing the automatic result freed the explicit caller's reservation. Team allocator mocked; no actual team store or network. |
+| Original F11 demo source mutations independently repeated | Baseline 2 pass; broken cleanup 2 pass; harmless rename 1 pass / 1 expected failure. |
+| Both copied runners across build failure, child failure and completion, plus deliberate cleanup/rename variants | 10 hermetic scenarios matched expectations. Both cleanup-after-catch mutants leaked transient directories on build failure; both renamed runners cleaned on completion. No owned children remained. |
+| SDK generator in temporary copies | Baseline succeeded; deleted legacy target alone failed; removing target plus generator entry succeeded. The two active generated outputs were hash-identical to baseline. |
+| Inventory and configuration parsing | The historical 2,443 / 2,845 / 798 counts and 12 legacy files / 1,501 lines were reproduced. TypeScript includes the legacy fixture and both declarations through root `scripts` input. |
+
+The **94 passing baseline tests** in this round overlap the earlier audit's
+tests; do not add them together as distinct regression coverage. Runner probes
+used PATH fakes, harmless driver inputs, a readiness-fetch fake, and the existing
+launcher helper. They exercised modeled lifetime paths without Electron,
+network, live accounts, or production changes. The original historical test
+totals were not independently recertified merely by rereading this report.
+
+Source HEAD remained `3f0750f2` during independent review. Other sessions kept
+editing lid-closed code, including the protocol, `index`, `sessionController`,
+and `sidecarServer` files needed by F1-F3. Those changes were left untouched;
+re-read and coordinate ownership before implementing an overlapping batch.
+No full build, full suite, process-recovery qualification, real GUI, live model,
+credential operation, or hardware check was performed in this verification.
+
+The updated report passed map lint (18 maps, zero warnings), whitespace checks,
+and checks of all 29 local links and 27 numeric source anchors.
