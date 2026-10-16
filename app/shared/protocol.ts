@@ -82,6 +82,7 @@ import type {
   SessionDescriptor,
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
+  WorkspaceBranchObservation,
 } from './hostApi.js'
 import type { SessionBinding } from './sessionBinding.js'
 import type { DebugRendererSnapshot } from './debugState.js'
@@ -4242,6 +4243,7 @@ export type CatCodeBridge = {
   ): Promise<HostResult<SessionDescriptor>>
   /** Read local Git branches from a host-owned session workspace. */
   listWorkspaceBranches(appSessionId: SessionId): Promise<HostResult<WorkspaceBranches>>
+  listWorkspaceBranches(appSessionId: SessionId, purpose: 'readout'): Promise<HostResult<WorkspaceBranchObservation>>
   /** Switch checkout and start a fresh session on the selected local branch. */
   switchWorkspaceBranch(
     appSessionId: SessionId,

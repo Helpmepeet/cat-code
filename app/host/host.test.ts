@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { createWorkspaceBranchSwitcher } from '../main/workspaceBranches.js'
+import { createSessionBranchReader, createWorkspaceBranchSwitcher } from '../main/workspaceBranches.js'
 import { createAttachmentFileTokenStore } from '../main/mainDecisions.js'
 
 import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
@@ -1435,6 +1435,20 @@ test('main branch transaction at cap retains the original tab and file capabilit
   const hydratedShell = mergeRosterSnapshot(updatedShell, h.host.listSessions(), new Set())
   expect(hydratedShell.byId[source]).toEqual(originalDescriptor)
   expect(hydratedShell.tabs[source]).toBe(true)
+})
+
+test('branch readout addresses one host row without enumerating the session roster', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const id = await readyBranchChat(h, h.cwd)
+  h.host.listSessions = () => { throw new Error('Readout enumerated all sessions') }
+  const reader = createSessionBranchReader({
+    host: () => h.host,
+    isLive: candidate => h.supervisor.records.has(candidate),
+    readSaved: async () => { throw new Error('Live readout started a saved-history worker') },
+  })
+  expect(await reader(id)).toEqual({ ok: true, value: { current: 'main', recordedBranch: 'main' } })
+  expect(h.host.getSessionDescriptor({ id })).toBeUndefined()
 })
 
 test('branch replacement reserves rate before checkout and retains the original on spawn failure', async () => {

@@ -668,9 +668,9 @@ const bridge: CatCodeBridge = {
       HostResult<SessionDescriptor>
     >
   },
-  listWorkspaceBranches(appSessionId: SessionId): Promise<HostResult<WorkspaceBranches>> {
-    sendGuard.assertAllowed({ appSessionId })
-    return ipcRenderer.invoke(CH_HOST_LIST_BRANCHES, appSessionId) as Promise<HostResult<WorkspaceBranches>>
+  listWorkspaceBranches(appSessionId: SessionId, purpose?: 'readout'): Promise<HostResult<WorkspaceBranches>> {
+    sendGuard.assertAllowed({ appSessionId, purpose })
+    return ipcRenderer.invoke(CH_HOST_LIST_BRANCHES, appSessionId, purpose) as Promise<HostResult<WorkspaceBranches>>
   },
   switchWorkspaceBranch(appSessionId: SessionId, branch: string): Promise<SwitchWorkspaceBranchResult> {
     sendGuard.assertAllowed({ appSessionId, branch })

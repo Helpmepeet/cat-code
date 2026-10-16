@@ -667,6 +667,9 @@ async function branchDraft(split = false) {
   await app.click('topic')
   expect(calls).toEqual([['a', 'topic']])
   expect(app.tree.container.querySelector('form[aria-label="Composer"]')?.getAttribute('aria-busy')).toBe('true')
+  const pendingPicker = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label^="Choose Git branch"]')!
+  expect(pendingPicker.textContent).toContain('topic')
+  expect(pendingPicker.textContent).not.toContain('!')
   return { ...app, pending, pasted, composer }
 }
 
@@ -695,6 +698,11 @@ test('branch handoff carries draft, paste IDs, unchanged image and file token in
 for (const branchChanged of [false, true]) {
   test(`failed branch handoff preserves source draft and all attachments (branchChanged=${branchChanged})`, async () => {
     const app = await branchDraft()
+    if (branchChanged) {
+      window.catcode.listWorkspaceBranches = async () => ({
+        ok: true, value: { current: 'topic', branches: ['topic', 'main'], dirty: false },
+      })
+    }
     await act(async () => {
       app.pending.resolve({
         ok: false, ...(branchChanged ? { branchChanged: true as const } : {}),
@@ -707,6 +715,7 @@ for (const branchChanged of [false, true]) {
     expect(app.tree.container.textContent).toContain('notes.txt')
     expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
     expect(app.tree.container.textContent).toContain('Synthetic handoff failed')
+    expect(app.tree.container.querySelector('button[aria-label^="Choose Git branch"]')?.getAttribute('aria-label')).toContain(`Current branch: ${branchChanged ? 'topic' : 'main'}`)
     const submissions: unknown[][] = []
     window.catcode.submit = (...args) => { submissions.push(args) }
     await act(async () => { app.composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
@@ -726,4 +735,33 @@ test('branch handoff replaces the focused split pane without moving its neighbor
   expect(saved.panels).toEqual(['replacement', 'b'])
   expect(saved.widths).toEqual([35, 65])
   expect(saved.activeIndex).toBe(0)
+})
+
+test('a cold cached conversation shows its mismatch through the read-only path without restoring an engine', async () => {
+  const dead = sessionDescriptor('dead', { status: 'exited', restorable: true })
+  const app = await mountApp([dead])
+  const reads: unknown[][] = []
+  window.catcode.listWorkspaceBranches = async (id: string, purpose?: 'readout') => {
+    reads.push([id, purpose])
+    return { ok: true, value: { current: 'external', recordedBranch: 'recorded', branches: [], dirty: false } }
+  }
+  window.catcode.previewSession = async () => ({
+    header: { appSessionId: 'dead', engineSessionId: 'engine-dead', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', guardVersion: 1, writtenAt: 0 },
+    frames: [{
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'dead',
+      event: { type: 'message', message: { type: 'assistant', uuid: 'cached-message',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'A conversation from before restart' }] } } },
+    }] as ServerFrame[],
+  })
+  await app.click('Pin sidebar open')
+  await act(async () => {
+    for (const header of app.tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"][aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"]')) header.click()
+  })
+  const row = [...app.tree.container.querySelectorAll<HTMLElement>('[role="button"]')].find(element => element.getAttribute('aria-label')?.includes('dead'))!
+  expect(row !== undefined).toBe(true)
+  await act(async () => row.click())
+  expect(app.tree.container.textContent).toContain('A conversation from before restart')
+  expect(app.tree.container.querySelector('.workspace-branch-changed')?.getAttribute('aria-label')).toBe('Checkout is on external. This chat was on recorded.')
+  expect(reads).toEqual([['dead', 'readout']])
+  expect(app.lifecycle).toEqual([])
 })

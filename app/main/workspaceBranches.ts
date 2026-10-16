@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { basename, resolve } from 'node:path'
-import type { HostResult, SwitchWorkspaceBranchResult, WorkspaceBranches } from '../shared/hostApi.js'
+import type { HostResult, SessionDescriptor, SwitchWorkspaceBranchResult, WorkspaceBranchObservation, WorkspaceBranches } from '../shared/hostApi.js'
 import type { Host } from '../host/host.js'
 import type { SessionId } from '../shared/protocol.js'
 
@@ -21,6 +21,55 @@ export async function gitRoot(cwd: string): Promise<string | null> {
     return await git(cwd, 'rev-parse', '--show-toplevel')
   } catch {
     return null
+  }
+}
+
+const pendingBranchReads = new Map<string, Promise<HostResult<WorkspaceBranchObservation>>>()
+
+/** A readout needs HEAD only, not a working-tree scan or picker blockers. */
+export function readWorkspaceBranch(cwd: string): Promise<HostResult<WorkspaceBranchObservation>> {
+  const pending = pendingBranchReads.get(cwd)
+  if (pending) return pending
+  const request = (async (): Promise<HostResult<WorkspaceBranchObservation>> => {
+    const current = await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
+    if (current) return { ok: true, value: { current } }
+    try {
+      return { ok: true, value: { current: null, detached: await git(cwd, 'rev-parse', '--short', 'HEAD') } }
+    } catch {
+      const root = await gitRoot(cwd)
+      return { ok: false, error: { code: 'branch_unavailable', message: root
+        ? 'Could not read this project’s branch.'
+        : 'This project is not a Git repository.' } }
+    }
+  })()
+  pendingBranchReads.set(cwd, request)
+  void request.finally(() => pendingBranchReads.delete(cwd))
+  return request
+}
+
+export function createSessionBranchReader(options: {
+  host: () => Pick<Host, 'getSessionDescriptor' | 'getWorkspaceObservation' | 'canPreview'> | null
+  isLive(id: SessionId): boolean
+  readSaved(session: SessionDescriptor): Promise<import('../shared/protocol.js').WorkspaceObservation>
+}) {
+  return async (id: unknown): Promise<HostResult<WorkspaceBranchObservation>> => {
+    const h = options.host()
+    const descriptor = h?.getSessionDescriptor(id)
+    if (!h || !descriptor) return { ok: false, error: { code: 'session_not_found', message: 'Session not found.' } }
+    let observation = h.getWorkspaceObservation(descriptor.appSessionId)
+    if (!options.isLive(descriptor.appSessionId) && h.canPreview(descriptor.appSessionId)) {
+      try {
+        observation = await options.readSaved(descriptor)
+      } catch {
+        return { ok: false, error: { code: 'branch_unavailable', message: 'Could not read this chat’s branch.' } }
+      }
+    }
+    if (!observation) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this chat to connect.' } }
+    const result = await readWorkspaceBranch(observation.cwd)
+    return result.ok ? { ok: true, value: {
+      ...result.value,
+      ...(observation.lastWorkingBranch !== undefined ? { recordedBranch: observation.lastWorkingBranch } : {}),
+    } } : result
   }
 }
 

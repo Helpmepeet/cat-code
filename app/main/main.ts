@@ -99,12 +99,15 @@ import {
   type SessionDescriptor,
   type SwitchWorkspaceBranchResult,
   type WorkspaceBranches,
+  type WorkspaceBranchObservation,
 } from '../shared/hostApi.js'
 import {
   gitRoot,
   listWorkspaceBranches,
   createWorkspaceBranchSwitcher,
+  createSessionBranchReader,
 } from './workspaceBranches.js'
+import { createSavedWorkspaceObservationReader, runWorkspaceObservationWorker } from './workspaceObservationRunner.js'
 import {
   DEBUG_SHELL_STATE_CHANNEL,
   DEBUG_STATE_VERSION,
@@ -3403,9 +3406,27 @@ function registerHostControlPlane(): void {
     },
   )
 
+  const readSavedWorkspace = createSavedWorkspaceObservationReader((cwd, engineSessionId) =>
+    runWorkspaceObservationWorker({
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('workspace-observation', ['--bare']),
+      cwd, engineSessionId,
+    }),
+  )
+  const readSessionBranch = createSessionBranchReader({
+    host: () => host,
+    isLive: id => isSessionLive(supervisor?.listSessions() ?? [], id),
+    readSaved: descriptor => {
+      if (!descriptor.engineSessionId) throw new Error('Conversation identity is unavailable')
+      return readSavedWorkspace(descriptor.cwd, descriptor.engineSessionId,
+        defaultTranscriptPath(descriptor.cwd, descriptor.engineSessionId))
+    },
+  })
   ipcMain.handle(
     CH_HOST_LIST_BRANCHES,
-    async (_e, appSessionId: unknown): Promise<HostResult<WorkspaceBranches>> => {
+    async (_e, appSessionId: unknown, purpose: unknown): Promise<HostResult<WorkspaceBranches | WorkspaceBranchObservation>> => {
+      if (purpose === 'readout') return readSessionBranch(appSessionId)
+      if (purpose !== undefined) return { ok: false, error: { code: 'branch_unavailable', message: 'Invalid branch request.' } }
       const h = host
       const descriptor = h?.listSessions().find(row => row.appSessionId === appSessionId)
       if (!h || !descriptor) return { ok: false, error: { code: 'session_not_found', message: 'Session not found.' } }

@@ -2044,6 +2044,10 @@ export class Host implements HostApi {
     return this.workspaceObservations.get(appSessionId)
   }
 
+  getSessionDescriptor(id: unknown): SessionDescriptor | undefined {
+    return typeof id === 'string' && isUuid(id) ? this.descriptorFor(id) : undefined
+  }
+
   beginBranchReplacement(appSessionId: SessionId): HostResult<void> {
     if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) {
       return hostError('branch_unavailable', 'Wait for the other chat to finish opening, then try again.')

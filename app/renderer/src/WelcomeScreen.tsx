@@ -291,7 +291,7 @@ function BranchPicker({
   const refresh = useCallback(() => {
     const ownRequest = ++requestRef.current
     setLoading(true)
-    void onList().then(result => {
+    return onList().then(result => {
       if (ownRequest !== requestRef.current) return
       if (result.ok) {
         setBranches(result.value)
@@ -352,7 +352,7 @@ function BranchPicker({
   }, [open, branches, error, switchError, loading, filter, ref, triggerRef])
 
   const current = pendingTarget ?? (handoffPending ? branch : null) ?? (error ? 'Unavailable' : branches ? branches.current ?? branches.detached ?? 'Detached' : branch ?? '…')
-  const sessionBranchStale = branches !== null && branch !== null && branches.current !== branch
+  const sessionBranchStale = !pending && branches !== null && branch !== null && branches.current !== branch
   const otherChats = branches?.otherChats ?? []
   const blocked = branches?.dirty || otherChats.length > 0
   const ordered = branches ? [
@@ -366,7 +366,8 @@ function BranchPicker({
     }
     setPendingTarget(name)
     setSwitchError(null)
-    void onSwitch(name).then(message => {
+    void onSwitch(name).then(async message => {
+      await refresh()
       if (message) setSwitchError(message)
       else close()
     }).catch(() => setSwitchError('Could not switch branches.')).finally(() => setPendingTarget(null))

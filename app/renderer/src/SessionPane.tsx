@@ -311,6 +311,10 @@ export function SessionPane({
     () => getBridge().listWorkspaceBranches(activeSessionId ?? ''),
     [activeSessionId],
   )
+  const readBranch = useCallback(
+    () => getBridge().listWorkspaceBranches(activeSessionId ?? '', 'readout'),
+    [activeSessionId],
+  )
   const toast = useToast()
   const moveBack = useCallback(() => {
     if (!activeSessionId) return
@@ -762,7 +766,7 @@ export function SessionPane({
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const workspaceBranch = useWorkspaceBranch(
     activeSessionId !== null && activeDescriptor !== undefined && !isManagedChat && nestedRows.length > 0 && !activeDescriptor.moving,
-    listBranches,
+    readBranch,
     branch,
   )
   const [dockCollapsed, setDockCollapsed] = useSubagentDockCollapsedPreference()

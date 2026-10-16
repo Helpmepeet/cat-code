@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
-import type { HostResult, WorkspaceBranches } from '../../shared/hostApi.js'
+import type { HostResult, WorkspaceBranchObservation } from '../../shared/hostApi.js'
 
 export type WorkspaceBranchReadout = { name: string; previous: string | null }
 
 /** Git observation never advances the conversation's working-branch baseline. */
 export function useWorkspaceBranch(
   enabled: boolean,
-  list: () => Promise<HostResult<WorkspaceBranches>>,
+  list: () => Promise<HostResult<WorkspaceBranchObservation>>,
   recordedBranch: string | null,
 ): WorkspaceBranchReadout | null {
-  const [observation, setObservation] = useState<WorkspaceBranches | null>(null)
+  const [observation, setObservation] = useState<WorkspaceBranchObservation | null>(null)
   useEffect(() => {
     setObservation(null)
     if (!enabled) return

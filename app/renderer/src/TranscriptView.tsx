@@ -50,7 +50,7 @@ import {
   readWorkspaceMoveDisplay,
   useWorkspaceMoveView,
 } from './workspaceMoveView.js'
-import type { SessionDescriptor, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
+import type { HostResult, SessionDescriptor, WorkspaceBranches, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { FileLinkTicker } from './FileLinkTicker.js'
@@ -408,7 +408,7 @@ export const TranscriptView = memo(function TranscriptView({
   cwd?: string | null
   managedChat?: boolean
   branch?: string | null
-  onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
+  onListBranches?: () => Promise<HostResult<WorkspaceBranches>>
   onSwitchBranch?: (branch: string) => Promise<string | null>
   onFocusBranchChat?: (sessionId: string) => void
   branchPending?: boolean
@@ -640,7 +640,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   cwd?: string | null
   managedChat?: boolean
   branch?: string | null
-  onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
+  onListBranches?: () => Promise<HostResult<WorkspaceBranches>>
   onSwitchBranch?: (branch: string) => Promise<string | null>
   onFocusBranchChat?: (sessionId: string) => void
   branchPending?: boolean

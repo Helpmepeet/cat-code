@@ -263,14 +263,17 @@ export type HostErrorCode =
   | 'managed_storage_invalid'
 
 /** Local branches for a host-validated session workspace. */
-export type WorkspaceBranches = {
+export type WorkspaceBranchObservation = {
   current: string | null
+  detached?: string
+  recordedBranch?: string | null
+}
+
+export type WorkspaceBranches = WorkspaceBranchObservation & {
   branches: string[]
   dirty: boolean
-  detached?: string
   occupied?: Record<string, string>
   otherChats?: Array<{ appSessionId: SessionId; title: string }>
-  recordedBranch?: string | null
 }
 
 /** A failed spawn can follow a successful checkout, so callers must know it moved. */

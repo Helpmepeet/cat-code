@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { listWorkspaceBranches, switchWorkspaceBranch } from './workspaceBranches.js'
+import { createSessionBranchReader, listWorkspaceBranches, readWorkspaceBranch, switchWorkspaceBranch } from './workspaceBranches.js'
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' })
@@ -16,6 +16,39 @@ function fixture(): string {
   git(cwd, 'branch', 'feature/login')
   return cwd
 }
+
+test('readouts share a HEAD read without scanning a broken index or enumerating picker state', async () => {
+  const cwd = fixture()
+  try {
+    writeFileSync(join(cwd, '.git', 'index'), 'not a Git index')
+    const first = readWorkspaceBranch(cwd)
+    const second = readWorkspaceBranch(cwd)
+    expect(first === second).toBe(true)
+    expect(await first).toEqual({ ok: true, value: { current: 'main' } })
+    expect((await listWorkspaceBranches(cwd)).ok).toBe(false)
+    git(cwd, 'symbolic-ref', 'HEAD', 'refs/heads/feature/login')
+    expect(await readWorkspaceBranch(cwd)).toEqual({ ok: true, value: { current: 'feature/login' } })
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('readout addressing refuses unknown or live-but-unobserved sessions before reading saved paths', async () => {
+  let savedReads = 0
+  let live = true
+  const reader = createSessionBranchReader({
+    host: () => ({
+      getSessionDescriptor: id => id === 'known' ? { appSessionId: 'known' } as never : undefined,
+      getWorkspaceObservation: () => undefined,
+      canPreview: () => false,
+    }),
+    isLive: () => live,
+    readSaved: async () => { savedReads++; return { cwd: '/should-not-be-read' } },
+  })
+  expect((await reader('unknown')).ok).toBe(false)
+  expect((await reader('known')).ok).toBe(false)
+  live = false
+  expect((await reader('known')).ok).toBe(false)
+  expect(savedReads).toBe(0)
+})
 
 test('preserves Git-valid Unicode whitespace and punctuation in branch names', async () => {
   const cwd = fixture()
