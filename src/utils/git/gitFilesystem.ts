@@ -332,9 +332,11 @@ class GitFileWatcher {
   private commonDir: string | null = null
   private initialized = false
   private initPromise: Promise<void> | null = null
-  private watchedPaths: string[] = []
+  private watchedPaths = new Map<string, () => void>()
   private branchRefPath: string | null = null
   private cache = new Map<string, CacheEntry<unknown>>()
+  private disposed = false
+  private unregisterCleanup: (() => void) | null = null
 
   async ensureStarted(): Promise<void> {
     if (this.initialized) {
@@ -357,6 +359,7 @@ class GitFileWatcher {
     // commonDir, not the per-worktree gitDir. Resolve once so we don't
     // re-read the commondir file on every branch switch.
     this.commonDir = await getCommonDir(this.gitDir)
+    if (this.disposed) return
 
     // Watch .git/HEAD and .git/config
     this.watchPath(join(this.gitDir, 'HEAD'), () => {
@@ -370,13 +373,15 @@ class GitFileWatcher {
     // Watch the current branch's ref file for commit changes
     await this.watchCurrentBranchRef()
 
-    registerCleanup(async () => {
-      this.stopWatching()
+    if (this.disposed) return
+    this.unregisterCleanup = registerCleanup(async () => {
+      this.dispose()
     })
   }
 
   private watchPath(path: string, callback: () => void): void {
-    this.watchedPaths.push(path)
+    if (this.disposed) return
+    this.watchedPaths.set(path, callback)
     watchFile(path, { interval: WATCH_INTERVAL_MS }, callback)
   }
 
@@ -390,6 +395,7 @@ class GitFileWatcher {
     }
 
     const head = await readGitHead(this.gitDir)
+    if (this.disposed) return
     // Branch refs live in commonDir for worktrees (gitDir for regular repos)
     const refsDir = this.commonDir ?? this.gitDir
     const refPath =
@@ -403,10 +409,9 @@ class GitFileWatcher {
     // Stop watching old branch ref. Runs for branch→branch AND
     // branch→detached (checkout --detach, rebase, bisect).
     if (this.branchRefPath) {
-      unwatchFile(this.branchRefPath)
-      this.watchedPaths = this.watchedPaths.filter(
-        p => p !== this.branchRefPath,
-      )
+      const callback = this.watchedPaths.get(this.branchRefPath)
+      if (callback) unwatchFile(this.branchRefPath, callback)
+      this.watchedPaths.delete(this.branchRefPath)
     }
 
     this.branchRefPath = refPath
@@ -440,10 +445,10 @@ class GitFileWatcher {
   }
 
   private stopWatching(): void {
-    for (const path of this.watchedPaths) {
-      unwatchFile(path)
+    for (const [path, callback] of this.watchedPaths) {
+      unwatchFile(path, callback)
     }
-    this.watchedPaths = []
+    this.watchedPaths.clear()
     this.branchRefPath = null
   }
 
@@ -458,6 +463,7 @@ class GitFileWatcher {
    */
   async get<T>(key: string, compute: () => Promise<T>): Promise<T> {
     await this.ensureStarted()
+    if (this.disposed) return compute()
     const existing = this.cache.get(key)
     if (existing && !existing.dirty) {
       return existing.value as T
@@ -480,9 +486,11 @@ class GitFileWatcher {
     return value
   }
 
-  /** Reset all state. Stops file watchers. For testing only. */
-  reset(): void {
+  dispose(): void {
+    this.disposed = true
     this.stopWatching()
+    this.unregisterCleanup?.()
+    this.unregisterCleanup = null
     this.cache.clear()
     this.initialized = false
     this.initPromise = null
@@ -493,6 +501,7 @@ class GitFileWatcher {
 
 // Each checkout owns its cache, including callers with async-local cwd overrides.
 const gitWatchers = new Map<string | null, GitFileWatcher>()
+const MAX_GIT_WATCHERS = 32
 
 async function getCachedGitValue<T>(
   key: string,
@@ -501,9 +510,17 @@ async function getCachedGitValue<T>(
   const gitDir = await resolveGitDir()
   let watcher = gitWatchers.get(gitDir)
   if (!watcher) {
+    if (gitWatchers.size >= MAX_GIT_WATCHERS) {
+      const oldest = gitWatchers.entries().next().value
+      if (oldest) {
+        oldest[1].dispose()
+        gitWatchers.delete(oldest[0])
+      }
+    }
     watcher = new GitFileWatcher(gitDir)
-    gitWatchers.set(gitDir, watcher)
   }
+  gitWatchers.delete(gitDir)
+  gitWatchers.set(gitDir, watcher)
   return watcher.get(key, () => compute(gitDir))
 }
 
@@ -590,7 +607,7 @@ export function getCachedDefaultBranch(): Promise<string> {
 /** Reset the git file watcher state. For testing only. */
 export function resetGitFileWatcher(): void {
   for (const watcher of gitWatchers.values()) {
-    watcher.reset()
+    watcher.dispose()
   }
   gitWatchers.clear()
 }

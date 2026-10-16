@@ -7,7 +7,7 @@ const readerPath = join(import.meta.dir, 'gitFilesystem.ts')
 const cwdPath = resolve(import.meta.dir, '../cwd.ts')
 const commandPath = resolve(import.meta.dir, '../../commands/commit-push-pr.ts')
 
-async function probe(body: string) {
+async function probe(body: string, beforeImport = '') {
   const root = mkdtempSync(join(tmpdir(), 'engine-branch-'))
   const project = join(root, 'project')
   mkdirSync(project)
@@ -16,6 +16,7 @@ async function probe(body: string) {
       import assert from 'node:assert/strict';
       import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
       import { join } from 'node:path';
+      ${beforeImport}
       const fsGit = await import(${JSON.stringify(readerPath)});
       const { runWithCwdOverride } = await import(${JSON.stringify(cwdPath)});
       const root = process.env.PROBE_ROOT;
@@ -118,6 +119,50 @@ test('Git-valid branch names survive HEAD, symref, loose and packed ref reading'
       assert.equal(await fsGit.readGitHead(gitDir), null, name);
       assert.equal(await fsGit.resolveRef(gitDir, name), null, name);
     }
+  `)
+})
+
+test('checkout watcher retirement is bounded and preserves shared-path listeners', async () => {
+  await probe(`
+    const paths = [];
+    for (let i = 0; i < 40; i++) {
+      const path = join(root, 'worktree-' + i);
+      git('worktree', 'add', '-b', 'branch-' + i, path);
+      paths.push(path);
+    }
+    await Promise.all(paths.map(branchAt));
+    assert.ok(cleanups.size <= 32, 'retired checkouts keep cleanup handlers');
+    const configPath = await originalFs.promises.realpath(join(project, '.git', 'config'));
+    assert.equal(watches.get(configPath)?.size, 32, 'eviction removed another checkout listener');
+    assert.ok([...watches.values()].reduce((sum, listeners) => sum + listeners.size, 0) <= 96);
+    assert.equal(await branchAt(paths[0]), 'branch-0');
+    assert.ok(cleanups.size <= 32);
+    fsGit.resetGitFileWatcher();
+    assert.equal(cleanups.size, 0);
+    assert.equal(watches.size, 0);
+  `, `
+    const { mock } = await import('bun:test');
+    const originalFs = await import('node:fs');
+    const watches = new Map();
+    const cleanups = new Set();
+    mock.module('fs', () => ({
+      ...originalFs,
+      watchFile(path, options, callback) {
+        const listeners = watches.get(path) ?? new Set();
+        listeners.add(callback);
+        watches.set(path, listeners);
+      },
+      unwatchFile(path, callback) {
+        if (callback) watches.get(path)?.delete(callback);
+        else watches.delete(path);
+        if (watches.get(path)?.size === 0) watches.delete(path);
+      },
+    }));
+    const originalCleanup = await import(${JSON.stringify(resolve(import.meta.dir, '../cleanupRegistry.ts'))});
+    mock.module(${JSON.stringify(resolve(import.meta.dir, '../cleanupRegistry.ts'))}, () => ({
+      ...originalCleanup,
+      registerCleanup(callback) { cleanups.add(callback); return () => cleanups.delete(callback); },
+    }));
   `)
 })
 
