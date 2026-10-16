@@ -376,7 +376,7 @@ function RunControl({
                   <ToggleSwitch
                     label="Fast mode"
                     value={snapshot.fast.active}
-                    disabled={!onSetFast || !snapshot.fast.available}
+                    disabled={!onSetFast || (!snapshot.fast.active && !snapshot.fast.available)}
                     onChange={onSetFast ?? (() => {})}
                     showValue={false}
                   />

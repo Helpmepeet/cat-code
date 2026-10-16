@@ -91,6 +91,20 @@ test('the cup tooltip explains endings the user did not choose and refused start
   expect(title()).toBe('Charge above 20% before starting.')
 })
 
+test('a refused start leaves the cup able to try again', async () => {
+  let receive!: (view: LidModeView) => void
+  const commands: LidModeCommand[] = []
+  const view: LidModeView = { ...initial(), phase: 'off', remainingSeconds: 0 }
+  window.catcode = { lidClosed: { read: async () => view, command: async (value: LidModeCommand) => { commands.push(value); return view },
+    subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
+  const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /></LidClosedProvider>)
+  const cup = tree.container.querySelector<HTMLButtonElement>('.lid-cup')!
+  await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
+  expect(cup.getAttribute('aria-disabled')).toBe('false')
+  await act(async () => { cup.click() })
+  expect(commands).toEqual([{ action: 'start', minutes: 15 }])
+})
+
 test('the numeral shows remaining minutes, the allowance while adjusting or starting, and warns at five minutes', async () => {
   let receive!: (view: LidModeView) => void
   const view = initial(60)
