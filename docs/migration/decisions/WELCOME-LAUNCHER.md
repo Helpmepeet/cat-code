@@ -114,3 +114,41 @@ plain "start locally," which needs nothing.
   `worktreeUxCopy.ts` for parity.
 - The launcher's account table + orchestrator toggle inherit their domains' read paths
   (W4-Accounts / Agent-Mode) — the welcome screen must not grow its own data feeds.
+
+## 7. Local branch switching and conversation readout (2026-10-16)
+
+The operator approved the [desktop Git branch UX review](../../reports/2026-10-16-git-branch-ux-review.md),
+including all six operator decisions. This supersedes W4 and the standalone
+branch-chooser cut in §3 for **empty project chats only**. The projectless start
+page still has no branch chooser, and worktree-at-launch remains deferred.
+
+The picker lists local branches and explicitly switches the **real checkout**,
+not a conversation-only branch. Main rechecks dirty files, ignored-file overwrite
+risk, other live desktop chats actually working in that checkout, branch
+availability and worktree occupancy. A clean checkout does not establish that
+terminal agents are inactive: terminal sessions are outside this guard. No
+terminal-activity inference or additional checkout-wide warning is introduced.
+
+The current branch leads the list, followed by most recently committed branches.
+Checkout blockers and named links to the affected chats stay above the scrolling
+list, alongside the filter and the single applicable consequence/status line.
+Branches held by another worktree are individually disabled. Refresh retains the
+known branch; a pending replacement displays its target, not “none”.
+
+Before moving Git, the host reserves the replacement's capacity and spawn budget,
+counting the live chat it replaces. Success replaces the empty chat in the same
+tab/pane and carries its unsent text, pasted blocks, images and file attachment.
+A failed handoff retains the unsent input in the original chat. Partial success
+must still say when Git moved but the chat handoff failed.
+
+Once the conversation has messages, a read-only branch readout sits immediately
+left of the lid-closed cup in the composer's right-hand action group. It follows
+the current checkout without switching it. A mismatch with the conversation's
+last working branch uses warning tone and a tooltip naming both branches, with
+no transcript notice. Continuing on the new branch clears the mismatch; opening
+history never switches the checkout. Managed chats and non-Git folders show no
+readout. Engine-recorded branch names follow the engine's actual working checkout,
+including worktree entry/exit, and retain every Git-valid name.
+
+These changes preserve the existing Unix-socket transport, process isolation,
+two session identities, receiving-side authority and raw engine-event stream.
