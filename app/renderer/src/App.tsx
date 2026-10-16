@@ -2857,13 +2857,9 @@ export function App() {
         return true
       }
     }
-    // Non-destructive: closeSession keeps the registry row and emits
-    // session-status(exited, restorable) — NOT session-removed (the row stays in
-    // the live∪restorable roster). The tab leaves the TabBar because that clean
-    // -close descriptor revokes tab membership in the shell reducer (a CRASH —
-    // restorable + disconnected — would keep it); the row then surfaces in the
-    // Sidebar as a restorable restore-offer. No optimistic local delete — the
-    // projection follows the HostEvent.
+    // Saved conversations become restore offers; unused rows are removed.
+    // Neither path deletes files. Roster and tab membership follow the host's
+    // event rather than an optimistic local delete.
     const bridge = getBridge()
     try {
       const result = await bridge.closeSession(sessionId)

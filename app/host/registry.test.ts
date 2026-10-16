@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -78,7 +79,7 @@ function makeRegistry(overrides: Partial<RegistryOptions> = {}): Harness {
 function writeTranscript(storageDir: string, engineSessionId: string): void {
   const dir = join(storageDir, 'transcripts')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `${engineSessionId}.jsonl`), '{"type":"summary"}\n')
+  writeFileSync(join(dir, `${engineSessionId}.jsonl`), '{"type":"user","message":{"role":"user","content":"Saved conversation"}}\n')
 }
 
 function readDoc(registryPath: string): RegistryDocument {
@@ -183,6 +184,7 @@ function baseRow(overrides: Partial<RegistrySession>): RegistrySession {
     createdAt: overrides.createdAt ?? 1_700_000_000_000,
     lastAttachedAt: overrides.lastAttachedAt ?? 1_700_000_000_000,
     lastMessageSentAt: overrides.lastMessageSentAt ?? null,
+    ...(overrides.hasAcceptedInput !== undefined ? { hasAcceptedInput: overrides.hasAcceptedInput } : {}),
     // Preserve an explicit `null` (orphan/live row) — `?? 'clean'` would mangle it.
     shutdown: 'shutdown' in overrides ? overrides.shutdown! : 'clean',
     ...(overrides.title !== undefined ? { title: overrides.title } : {}),
@@ -1675,4 +1677,160 @@ test('pending input protects a pre-ready row through launch until recovery is di
   const nextLaunch = new SessionRegistry({ storageDir, log: () => {} })
   await nextLaunch.launch()
   expect(nextLaunch.findSession('pending-chat')).toBeUndefined()
+})
+
+const managedBinding = {
+  kind: 'managed' as const,
+  storageRootId: '11111111-1111-4111-8111-111111111111',
+  storageId: '22222222-2222-4222-8222-222222222222',
+}
+
+test('explicit empty cleanup removes closed project and managed rows without touching files', async () => {
+  for (const binding of [{ kind: 'project' as const }, managedBinding]) {
+    const { registry, storageDir, registryPath } = makeRegistry()
+    await registry.launch()
+    await registry.upsertOnSpawn({ appSessionId: 'empty', cwd: storageDir, binding })
+    await registry.fillEngineSessionId('empty', 'empty-engine')
+    writeTranscript(storageDir, 'empty-engine')
+    const path = join(storageDir, 'transcripts', 'empty-engine.jsonl')
+    writeFileSync(path, '{"type":"summary"}\n')
+    const sentinel = join(storageDir, 'keep.txt')
+    writeFileSync(sentinel, 'managed work')
+    expect(await registry.discardEmptySession('empty')).toBe(false)
+    await registry.markParked('empty')
+    expect(await registry.discardEmptySession('empty')).toBe(false)
+    await registry.markClean('empty')
+    expect(await registry.discardEmptySession('empty')).toBe(true)
+    expect(await registry.discardEmptySession('empty')).toBe(false)
+    expect(registry.sessions).toEqual([])
+    expect(readDoc(registryPath).sessions).toEqual([])
+    expect(readFileSync(path, 'utf8')).toBe('{"type":"summary"}\n')
+    expect(readFileSync(sentinel, 'utf8')).toBe('managed work')
+  }
+})
+
+test('startup removes metadata-only legacy and missing never-used managed identities', async () => {
+  const { registry, storageDir, registryPath } = makeRegistry()
+  writeTranscript(storageDir, 'metadata')
+  writeFileSync(join(storageDir, 'transcripts', 'metadata.jsonl'), '{"type":"summary"}\n')
+  seed(registryPath, [
+    baseRow({ appSessionId: 'legacy', engineSessionId: 'metadata' }),
+    baseRow({ appSessionId: 'managed', engineSessionId: 'missing', binding: managedBinding, hasAcceptedInput: false }),
+  ])
+  expect(await registry.launch()).toEqual([])
+  expect(registry.lastRemovedEmptySessionIds.sort()).toEqual(['legacy', 'managed'])
+  expect(readDoc(registryPath).sessions).toEqual([])
+})
+
+test('accepted aborted input, sent messages, forks, and pending recovery retain empty rows', async () => {
+  let retained = true
+  const { registry, storageDir, registryPath } = makeRegistry({
+    retainSession: id => id === 'pending' && retained,
+  })
+  const rows = [
+    baseRow({ appSessionId: 'accepted', engineSessionId: null, hasAcceptedInput: true }),
+    baseRow({ appSessionId: 'sent', engineSessionId: null, lastMessageSentAt: 123 }),
+    baseRow({ appSessionId: 'fork', engineSessionId: null, forked: true }),
+    baseRow({ appSessionId: 'pending', engineSessionId: null }),
+  ]
+  seed(registryPath, rows)
+  await registry.launch()
+  for (const row of rows) expect(await registry.discardEmptySession(row.appSessionId)).toBe(false)
+  retained = false
+  expect(await registry.discardEmptySession('pending')).toBe(true)
+  const relaunched = makeRegistry({ storageDir }).registry
+  expect((await relaunched.launch()).map(row => row.appSessionId).sort()).toEqual(['accepted', 'fork', 'sent'])
+})
+
+test('malformed, oversized, nonregular, symlink and conversation transcripts survive cleanup', async () => {
+  const { registry, storageDir, registryPath } = makeRegistry()
+  const dir = join(storageDir, 'transcripts')
+  mkdirSync(dir)
+  const contents = {
+    malformed: '{"type":"summary"}\nnot json',
+    oversized: ' '.repeat(1024 * 1024 + 1),
+    user: '{"type":"user"}\n',
+    assistant: '{"type":"assistant"}\n',
+  }
+  for (const [id, text] of Object.entries(contents)) writeFileSync(join(dir, `${id}.jsonl`), text)
+  mkdirSync(join(dir, 'directory.jsonl'))
+  symlinkSync(join(dir, 'user.jsonl'), join(dir, 'symlink.jsonl'))
+  symlinkSync(join(dir, 'missing.jsonl'), join(dir, 'dangling.jsonl'))
+  const ids = [...Object.keys(contents), 'directory', 'symlink', 'dangling']
+  seed(registryPath, ids.map(id => baseRow({ appSessionId: id, engineSessionId: id })))
+  await registry.launch()
+  for (const id of ids) expect(await registry.discardEmptySession(id)).toBe(false)
+  expect(registry.sessions).toHaveLength(ids.length)
+})
+
+test('quit cleans newly closed empty live and parked rows but retains crashed rows and return semantics', async () => {
+  const { registry, registryPath } = makeRegistry()
+  await registry.launch()
+  for (const id of ['live', 'parked', 'crashed', 'accepted']) {
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: '/test' })
+  }
+  await registry.markParked('parked')
+  await registry.markCrashed('crashed')
+  await registry.markInputAccepted('accepted')
+  expect(registry.markLiveCleanSync().sort()).toEqual(['accepted', 'live', 'parked'])
+  expect(registry.lastRemovedEmptySessionIds.sort()).toEqual(['live', 'parked'])
+  expect(registry.sessions.map(row => row.appSessionId).sort()).toEqual(['accepted', 'crashed'])
+  expect(readDoc(registryPath).sessions).toEqual(registry.sessions)
+})
+
+test('cleanup evaluates accepted-input evidence written before acquiring its lock', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  let addEvidence = false
+  const { registry } = makeRegistry({
+    storageDir,
+    acquireLock: async () => {
+      if (addEvidence) {
+        const current = readDoc(registryPath)
+        current.sessions[0]!.hasAcceptedInput = true
+        writeFileSync(registryPath, JSON.stringify(current))
+      }
+      return async () => {}
+    },
+  })
+  await registry.launch()
+  await registry.upsertOnSpawn({ appSessionId: 'race', cwd: storageDir })
+  await registry.markClean('race')
+  addEvidence = true
+  expect(await registry.discardEmptySession('race')).toBe(false)
+  expect(registry.findSession('race')?.hasAcceptedInput).toBe(true)
+  expect(readDoc(registryPath).sessions[0]?.hasAcceptedInput).toBe(true)
+})
+
+test('moving and unreadable relocation records protect empty rows at startup and explicit cleanup', async () => {
+  const storageDir = tempDir()
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageDir
+  try {
+    const engineId = '33333333-3333-4333-8333-333333333333'
+    const appId = '44444444-4444-4444-8444-444444444444'
+    const { registry, registryPath } = makeRegistry({ storageDir })
+    const records = join(storageDir, 'session-relocations')
+    mkdirSync(records)
+    const recordPath = join(records, `${engineId}.json`)
+    const source = { cwd: '/managed', binding: managedBinding }
+    writeFileSync(recordPath, JSON.stringify({
+      version: 1, engineSessionId: engineId, appSessionId: appId,
+      phase: 'moving', original: source, source,
+      target: { cwd: '/project', binding: { kind: 'project' } },
+      controls: { mode: 'default' }, backup: '/backup', movedAt: 1,
+    }))
+    seed(registryPath, [baseRow({
+      appSessionId: appId, engineSessionId: engineId, cwd: '/managed',
+      binding: managedBinding, hasAcceptedInput: false,
+    })])
+    await registry.launch()
+    expect(await registry.discardEmptySession(appId)).toBe(false)
+    writeFileSync(recordPath, 'broken record')
+    expect(await registry.discardEmptySession(appId)).toBe(false)
+    expect((await makeRegistry({ storageDir }).registry.launch())).toHaveLength(1)
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
 })

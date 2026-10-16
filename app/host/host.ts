@@ -1206,8 +1206,8 @@ export class Host implements HostApi {
   }
 
   /* --------------------------------------------------------------------- *
-   * closeSession — graceful shutdown; row kept restorable + marked clean; MUST
-   * evict replay state (the P3-0 carry).
+   * closeSession — graceful shutdown; saved conversations stay restorable,
+   * unused sessions leave the registry. MUST evict replay state (the P3-0 carry).
    * --------------------------------------------------------------------- */
 
   async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
@@ -1229,8 +1229,10 @@ export class Host implements HostApi {
     // — the named eviction requirement; AttachmentGate.clearSession in main).
     this.workspaceTransitions.delete(appSessionId)
     this.evictReplay(appSessionId)
-    // Row is KEPT (restorable): mark clean, clear advisory runtime fields.
+    // Cleanup rechecks persisted input/history under the registry lock. Managed
+    // identity alone makes an open blank Chat resumable, not worth archiving.
     await this.registry.markClean(appSessionId)
+    await this.registry.discardEmptySession(appSessionId)
     this.surfaceRegistryHealth(appSessionId)
     this.closing.delete(appSessionId)
 
@@ -1960,18 +1962,20 @@ export class Host implements HostApi {
    * shutdownAll — die-with-window (B3). SYNCHRONOUS: mark every LIVE row clean
    * (one atomic write) + evict its replay, THEN kill the sidecars. A clean quit
    * must not masquerade as crash recovery on the next launch (which the orphan
-   * sweep would report if rows stayed `shutdown:null`). Rows are KEPT
-   * (restorable), same as closeSession. Sync because it runs on
+   * sweep would report if rows stayed `shutdown:null`). Saved conversations are
+   * kept; unused rows are discarded, as on closeSession. Sync because it runs on
    * `window-all-closed`/`before-quit`, where the process may exit before an async
    * persist could settle.
    * --------------------------------------------------------------------- */
 
   shutdownAll(): void {
     const marked = this.registry.markLiveCleanSync()
+    const removed = this.registry.lastRemovedEmptySessionIds
     for (const appSessionId of marked) {
       this.evictReplay(appSessionId)
     }
     this.supervisor.shutdown()
+    for (const appSessionId of removed) this.emitRemoved(appSessionId)
   }
 
   /* --------------------------------------------------------------------- *

@@ -386,12 +386,14 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   const activePeerRefusal = await reopenedHost.moveSession(appSessionId, null)
   expect(activePeerRefusal.ok).toBe(false)
   if (!activePeerRefusal.ok) expect(activePeerRefusal.error.message).toContain('active peer work')
-  const closedPeer = await reopenedHost.closeSession(peerId)
-  if (!closedPeer.ok) throw new Error(JSON.stringify(closedPeer.error))
+  reopenedSupervisor.send(peerId, { type: 'app.park', requestId: randomUUID() })
+  await waitFor(() => reopenedRegistry.findSession(peerId)?.shutdown === 'parked' ? true : undefined, 'peer park before mint')
   const peerMarker = `project-peer-${randomUUID()}`
   const peerHistory = await child([minter, peerReady.engineSessionId, peerMarker], projectCwd, configHome)
   if (peerHistory.code !== 0) throw new Error(peerHistory.stderr)
   expect(existsSync(defaultTranscriptPath(projectCwd, peerReady.engineSessionId))).toBe(true)
+  const closedPeer = await reopenedHost.closeSession(peerId)
+  if (!closedPeer.ok) throw new Error(JSON.stringify(closedPeer.error))
 
   const matchingControlsBeforeReturn = frames.filter(frame => frame.kind === 'run-controls.snapshot' &&
     frame.runControls.model.selected === chosenModel && frame.runControls.effort.selected === chosenEffort).length
@@ -536,7 +538,7 @@ test('manual Chat to trusted project and back keeps one conversation and both ou
   expect(existsSync(hookMarker)).toBe(false)
 }, 180_000)
 
-test('empty Chat moves live, parked and closed without losing its identity or startup artifacts', async () => {
+test('empty Chat moves live and parked, preserves startup artifacts, and is discarded only when closed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-empty-chat-move-'))
   roots.push(root)
   const configHome = join(root, 'config')
@@ -613,19 +615,15 @@ test('empty Chat moves live, parked and closed without losing its identity or st
   expect(movedParked.value).toMatchObject({ appSessionId, engineSessionId, cwd: original.cwd, binding: original.binding })
   expect(supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')).toBe(false)
 
-  await host.closeSession(appSessionId)
   const visibleEvents: string[] = []
   const unsubscribe = host.subscribe(event => {
     if (event.type === 'session-added' && event.session.appSessionId === appSessionId) visibleEvents.push('opened')
   })
-  const movedClosed = await host.moveSession(appSessionId, projectCwd)
-  if (!movedClosed.ok) throw new Error(JSON.stringify(movedClosed.error))
-  expect(movedClosed.value).toMatchObject({ appSessionId, engineSessionId, cwd: projectCwd, binding: { kind: 'project' } })
+  const movedAgain = await host.moveSession(appSessionId, projectCwd)
+  if (!movedAgain.ok) throw new Error(JSON.stringify(movedAgain.error))
+  expect(movedAgain.value).toMatchObject({ appSessionId, engineSessionId, cwd: projectCwd, binding: { kind: 'project' } })
   expect(visibleEvents).toEqual([])
   expect(supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')).toBe(false)
-  const relaunchedRegistry = new SessionRegistry({ storageDir: join(root, 'registry'), log: () => {} })
-  await relaunchedRegistry.launch()
-  expect(relaunchedRegistry.findSession(appSessionId)).toMatchObject({ engineSessionId, cwd: projectCwd })
   unsubscribe()
 
   const readyBeforeOpen = ready.length
@@ -682,4 +680,20 @@ test('empty Chat moves live, parked and closed without losing its identity or st
   const returnedArtifact = await host.moveSession(artifactAppId, null)
   if (!returnedArtifact.ok) throw new Error(JSON.stringify(returnedArtifact.error))
   expect(readFileSync(artifactTranscript, 'utf8')).toContain('startup-state')
+
+  // An empty moved Chat remains addressable while open/parked, but closing is
+  // no longer an instruction to archive a blank conversation indefinitely.
+  expect((await host.closeSession(artifactAppId)).ok).toBe(true)
+  expect(registry.findSession(artifactAppId)).toBeUndefined()
+  expect(host.listSessions().some(row => row.appSessionId === artifactAppId)).toBe(false)
+  expect(readFileSync(artifactTranscript, 'utf8')).toContain('startup-state')
+  expect(readFileSync(join(companion, 'startup-artifact'), 'utf8')).toBe('kept')
+
+  expect((await host.closeSession(appSessionId)).ok).toBe(true)
+  host.shutdownAll()
+  const relaunchedRegistry = new SessionRegistry({ storageDir: join(root, 'registry'), log: () => {} })
+  await relaunchedRegistry.launch()
+  expect(relaunchedRegistry.findSession(artifactAppId)).toBeUndefined()
+  expect(relaunchedRegistry.findSession(preReadyAppId)).toBeUndefined()
+  expect(relaunchedRegistry.findSession(appSessionId)).toMatchObject({ engineSessionId, hasAcceptedInput: true })
 }, 180_000)

@@ -341,7 +341,9 @@ function tempDir(): string {
 function writeTranscript(storageDir: string, engineSessionId: string): void {
   const dir = join(storageDir, 'transcripts')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `${engineSessionId}.jsonl`), '{"type":"summary"}\n')
+  writeFileSync(join(dir, `${engineSessionId}.jsonl`), `${JSON.stringify({
+    type: 'user', sessionId: engineSessionId, message: { role: 'user', content: 'Saved conversation' },
+  })}\n`)
 }
 
 /**
@@ -2098,6 +2100,7 @@ test('closeSession removes a pre-ready row instead of emitting an uncloseable ex
   expect(result.ok).toBe(true)
 
   expect(h.supervisor.records.has(appSessionId)).toBe(false)
+  expect(h.registry.findSession(appSessionId)).toBeUndefined()
   expect(h.host.listSessions().some(s => s.appSessionId === appSessionId)).toBe(false)
   expect(
     h.events.some(e => e.type === 'session-removed' && e.appSessionId === appSessionId),
@@ -2105,6 +2108,69 @@ test('closeSession removes a pre-ready row instead of emitting an uncloseable ex
   expect(
     h.events.some(e => e.type === 'session-status' && e.session.appSessionId === appSessionId),
   ).toBe(false)
+})
+
+test('closing unused managed Chats removes their sidebar rows and stays removed after relaunch', async () => {
+  const root = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(root, 'user-data'),
+    ownershipDir: join(root, 'ownership'),
+  })
+  const h = makeHost({
+    managedStorage,
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+  })
+  let shell = createShellState()
+  h.host.subscribe(event => { shell = reduceShellState(shell, event) })
+  for (const metadataOnly of [false, true]) {
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error('create failed')
+    const { appSessionId, cwd } = created.value
+    const engineId = randomUUID()
+    h.supervisor.emitReady(appSessionId, engineId)
+    await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineId)
+    const userFile = join(cwd, 'keep.txt')
+    writeFileSync(userFile, 'Do not remove user files')
+    if (metadataOnly) {
+      const dir = join(h.storageDir, 'transcripts')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `${engineId}.jsonl`), '{"type":"custom-title","customTitle":"New chat"}\n')
+    }
+    expect(shell.byId[appSessionId]).toBeDefined()
+    h.events.length = 0
+    expect((await h.host.closeSession(appSessionId)).ok).toBe(true)
+    expect(h.registry.findSession(appSessionId)).toBeUndefined()
+    expect(h.host.listSessions().some(row => row.appSessionId === appSessionId)).toBe(false)
+    expect(shell.byId[appSessionId]).toBeUndefined()
+    expect(shell.tabs[appSessionId]).toBeUndefined()
+    expect(h.events.filter(event => event.type === 'session-removed' && event.appSessionId === appSessionId)).toHaveLength(1)
+    expect(readFileSync(userFile, 'utf8')).toBe('Do not remove user files')
+  }
+  const relaunched = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+  })
+  expect(await relaunched.launch()).toEqual([])
+  expect(relaunched.sessions).toEqual([])
+})
+
+test('closing after an accepted first prompt preserves an interrupted conversation without a result', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const { appSessionId } = created.value
+  const engineId = randomUUID()
+  h.supervisor.emitReady(appSessionId, engineId)
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineId)
+  writeTranscript(h.storageDir, engineId)
+  h.supervisor.emitEventFrame(appSessionId, {
+    type: 'message', message: { type: 'user', message: { role: 'user', content: 'Interrupted first turn' } },
+  })
+  await settle(() => h.registry.findSession(appSessionId)?.hasAcceptedInput === true)
+  expect(h.registry.findSession(appSessionId)?.lastMessageSentAt).toBeNull()
+  expect((await h.host.closeSession(appSessionId)).ok).toBe(true)
+  expect(h.registry.findSession(appSessionId)?.hasAcceptedInput).toBe(true)
+  expect(h.host.listSessions().find(row => row.appSessionId === appSessionId)?.restorable).toBe(true)
 })
 
 /* ------------------------------------------------------------------------- *
@@ -2567,12 +2633,12 @@ test('a session opened and never typed in is never offered as restorable: no uni
   expect(restored.ok).toBe(false)
   if (!restored.ok) expect(restored.error.code).toBe('session_not_found')
 
-  // CONTRAST — the SAME row once a turn materializes its transcript is a real
-  // offer again. The verdict tracks the transcript, nothing else.
+  // A late file cannot resurrect a discarded desktop address. Real history
+  // remains discoverable independently through the engine catalog.
   writeTranscript(h.storageDir, 'engine-never-typed')
   const offered = h.host.listSessions().find(s => s.appSessionId === appSessionId)
-  expect(offered?.restorable).toBe(true)
-  expect(h.host.canPreview(appSessionId)).toBe(true)
+  expect(offered).toBeUndefined()
+  expect(h.host.canPreview(appSessionId)).toBe(false)
 })
 
 test('restartSession refuses to resume an engineSessionId with no transcript (the asymmetry with restoreSession is closed)', async () => {
@@ -2967,6 +3033,11 @@ test('shutdownAll marks live rows clean and kills the sidecars', async () => {
   const b = await h.host.createSession({ cwd: h.cwd })
   expect(a.ok && b.ok).toBe(true)
   if (!a.ok || !b.ok) return
+  h.supervisor.emitReady(a.value.appSessionId, 'engine-quit-a')
+  h.supervisor.emitReady(b.value.appSessionId, 'engine-quit-b')
+  await settle(() => h.registry.findSession(b.value.appSessionId)?.engineSessionId === 'engine-quit-b')
+  writeTranscript(h.storageDir, 'engine-quit-a')
+  writeTranscript(h.storageDir, 'engine-quit-b')
 
   // Both rows are live (shutdown: null) before the quit.
   expect(h.registry.findSession(a.value.appSessionId)?.shutdown).toBeNull()
@@ -2982,6 +3053,53 @@ test('shutdownAll marks live rows clean and kills the sidecars', async () => {
   expect(h.supervisor.records.size).toBe(0)
   expect(h.evicted).toContain(a.value.appSessionId)
   expect(h.evicted).toContain(b.value.appSessionId)
+})
+
+test('shutdownAll discards unused ready and parked Chats but preserves their files', async () => {
+  const root = tempDir()
+  const h = makeHost({
+    managedStorage: new ManagedStorage({
+      appDataBase: join(root, 'user-data'),
+      ownershipDir: join(root, 'ownership'),
+    }),
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+  })
+  const ids: string[] = []
+  const files: string[] = []
+  for (const parked of [false, true]) {
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error('create failed')
+    const { appSessionId, cwd } = created.value
+    const engineId = randomUUID()
+    ids.push(appSessionId)
+    files.push(join(cwd, 'keep.txt'))
+    writeFileSync(files.at(-1)!, 'preserved')
+    h.supervisor.emitReady(appSessionId, engineId)
+    await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineId)
+    if (parked) {
+      h.supervisor.emitPark(appSessionId)
+      await settle(() => h.registry.findSession(appSessionId)?.shutdown === 'parked')
+    }
+  }
+  // Supervisor callbacks persist asynchronously. Drain them before exercising
+  // the synchronous exit writer against the same registry file.
+  await settle(() => {
+    const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8')) as { sessions: { shutdown: string | null }[] }
+    return doc.sessions.some(row => row.shutdown === 'parked')
+  })
+  h.host.shutdownAll()
+  expect(h.supervisor.records.size).toBe(0)
+  expect(h.registry.sessions).toEqual([])
+  for (const id of ids) {
+    expect(h.evicted).toContain(id)
+    expect(h.events.some(event => event.type === 'session-removed' && event.appSessionId === id)).toBe(true)
+  }
+  for (const file of files) expect(readFileSync(file, 'utf8')).toBe('preserved')
+  const relaunched = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+  })
+  expect(await relaunched.launch()).toEqual([])
 })
 
 /* ------------------------------------------------------------------------- *
@@ -3137,6 +3255,7 @@ test('F3: closeSession still records a CLEAN shutdown (the closing guard holds)'
   const id = created.value.appSessionId
   h.supervisor.emitReady(id, 'engine-clean-test')
   await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-clean-test')
+  writeTranscript(h.storageDir, 'engine-clean-test')
 
   const closed = await h.host.closeSession(id)
   expect(closed.ok).toBe(true)
@@ -3301,6 +3420,12 @@ test('shutdownAll marks every live row clean so the next launch sweep sees no cr
   const first = await h.host.createSession({ cwd: h.cwd })
   const second = await h.host.createSession({ cwd: h.cwd })
   expect(first.ok && second.ok).toBe(true)
+  if (!first.ok || !second.ok) throw new Error('create failed')
+  h.supervisor.emitReady(first.value.appSessionId, 'engine-clean-first')
+  h.supervisor.emitReady(second.value.appSessionId, 'engine-clean-second')
+  await settle(() => h.registry.findSession(second.value.appSessionId)?.engineSessionId === 'engine-clean-second')
+  writeTranscript(h.storageDir, 'engine-clean-first')
+  writeTranscript(h.storageDir, 'engine-clean-second')
   expect(h.registry.sessions.every(row => row.shutdown === null)).toBe(true)
 
   h.host.shutdownAll()
