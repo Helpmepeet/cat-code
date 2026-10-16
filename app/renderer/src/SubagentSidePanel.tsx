@@ -95,8 +95,7 @@ export function SubagentSidePanel({ worker, workers, agent, steps, incomplete, c
         })
         previousTop.current = element.scrollTop
       }}>
-      {incomplete ? <p className="subagent-side-availability">This agent's steps aren't fully loaded.</p>
-        : steps.length === 0 && terminal ? <p className="subagent-side-availability">No steps recorded.</p> : null}
+      {incomplete ? <p className="subagent-side-availability">This agent's steps aren't fully loaded.</p> : null}
       {steps.length ? <TranscriptRowsView rows={steps} cwd={cwd} turnLive={!terminal} /> : null}
     </div>
   </aside>

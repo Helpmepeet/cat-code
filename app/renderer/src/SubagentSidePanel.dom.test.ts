@@ -3,9 +3,9 @@ import { act, createElement } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { ReasoningLayoutContext } from './reasoningLayout.js'
-import { selectSubagentPanelBranch } from './subagentPanelState.js'
+import { canOpenSubagentPanel, selectSubagentPanelBranch } from './subagentPanelState.js'
 import { reportPaneLayoutChange } from './markdownScrollCoordinator.js'
-import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
+import { createSubagentDockState, reconcileSubagentDockState, selectSubagentDock, type DerivedSubagentDock, type SubagentDockInput, type SubagentDockRow } from './subagentDockState.js'
 import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows, type NestedToolUseRow, type NestedTranscriptRow } from './transcriptProjector.js'
 import { SessionPane } from './SessionPane.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
@@ -89,7 +89,7 @@ test('dock opens an inline read-only panel, hides the dock, switches faces inclu
   expect(document.activeElement?.getAttribute('aria-label')).toBe('Close subagent panel')
   const firstBody = panel.querySelector<HTMLElement>('.subagent-side-body')!
   expect(firstBody.scrollTop).toBe(600)
-  firstBody.scrollTop = 100
+  await act(async () => { firstBody.scrollTop = 100; firstBody.dispatchEvent(new Event('scroll')) })
   await click(tree.container, '.subagent-side-switch[aria-current="true"]')
   expect(tree.container.querySelector('.subagent-side-body')).toBe(firstBody)
   expect(firstBody.scrollTop).toBe(100)
@@ -233,4 +233,85 @@ test('real SessionPane opens projected child reasoning and keeps parent Agent ex
   await act(async () => { expand.click() })
   expect(expand.getAttribute('aria-expanded')).toBe('true')
   expect(tree.container.querySelector('aside')).not.toBeNull()
+})
+
+test('an open panel revalidates the run before showing resumed or background work', async () => {
+  for (const next of [
+    worker('a', { state: 'resumed', runKey: 'resume:2000', resumedAt: 2000 }),
+    worker('a', { state: 'background' }),
+  ]) {
+    const calls: SubagentDockRow[] = []
+    const fallback = (row: SubagentDockRow) => { calls.push(row) }
+    const tree = await harness.mount(workspace({ fallback }))
+    await click(tree.container, '[data-dock-row="a"]')
+    await tree.render(workspace({ active: [next, b], finished: [], fallback }))
+    expect(tree.container.querySelector('aside') === null).toBe(true)
+    expect(calls).toEqual([next])
+    await tree.unmount()
+  }
+})
+
+test('terminal eviction retains the latest observed completion, not the opening snapshot', async () => {
+  const tree = await harness.mount(workspace())
+  await click(tree.container, '[data-dock-row="a"]')
+  await tree.render(workspace({ active: [b], finished: [worker('a', { state: 'completed', usageLabel: '3 tool calls' })] }))
+  expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, completed')
+  await tree.render(workspace({ active: [b], finished: [] }))
+  expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, completed')
+  expect(tree.container.querySelector('.subagent-side-header')?.textContent).toContain('3 tool calls')
+  expect(tree.container.querySelector('.subagent-side-switch[aria-current="true"]')?.getAttribute('aria-label')).toBe('worker-a, completed')
+})
+
+test('finished streamless launches keep fallback, while restored steps remain openable', async () => {
+  const calls: string[] = []
+  const launch: NestedToolUseRow = {
+    ...agent('async', []), status: 'success', input: { description: 'Async work', run_in_background: true },
+    result: { isError: false, content: 'Started', diff: null, agentId: 'async' },
+  }
+  for (const state of ['completed', 'failed', 'stopped'] as const) {
+    const tree = await harness.mount(workspace({
+      rows: [launch], active: [], finished: [worker('async', { state })],
+      fallback: row => calls.push(row.agentId),
+    }))
+    await click(tree.container, '[data-finished-toggle]')
+    await click(tree.container, '[data-dock-row="async"]')
+    expect(tree.container.querySelector('aside') === null).toBe(true)
+    await tree.unmount()
+  }
+  expect(calls).toEqual(['async', 'async', 'async'])
+  const restored = await harness.mount(workspace({
+    rows: [{ ...launch, children: [prose('restored-async', 'Restored worker steps')] }],
+    active: [], finished: [worker('async', { state: 'completed' })],
+  }))
+  await click(restored.container, '[data-finished-toggle]')
+  await click(restored.container, '[data-dock-row="async"]')
+  expect(restored.container.querySelector('aside')?.textContent).toContain('Restored worker steps')
+})
+
+test('a real completed resume cannot use its retained reveal target as current-run steps', () => {
+  const original: NestedToolUseRow = {
+    ...agent('a', [prose('old-answer', 'Original run only')]), status: 'success',
+    result: { isError: false, content: 'Finished', diff: null, agentId: 'a', agentName: 'worker-a' },
+  }
+  let input: SubagentDockInput = {
+    workers: [{ agentId: 'a', handle: '@worker-a', role: 'explore', description: 'Original task', status: 'completed', isBackgrounded: false }],
+    tasks: { items: [{ id: 'a', type: 'local_agent', label: 'Original task', status: 'completed', startTime: 100, endTime: 500, isBackgrounded: false }], subagents: [] },
+    transcriptRows: [original], leases: null, nowMs: 1000, reducedMotion: true,
+  }
+  let state = reconcileSubagentDockState(createSubagentDockState(), input)
+  input = {
+    ...input, nowMs: 2000, workers: [{ ...input.workers[0]!, status: 'running', isBackgrounded: true }],
+    tasks: { items: [{ ...input.tasks!.items[0]!, status: 'running', resumedAt: 2000, endTime: undefined, isBackgrounded: true }], subagents: [] },
+  }
+  state = reconcileSubagentDockState(state, input)
+  input = {
+    ...input, nowMs: 3000, workers: [{ ...input.workers[0]!, status: 'completed' }],
+    tasks: { items: [{ ...input.tasks!.items[0]!, status: 'completed', endTime: 3000 }], subagents: [] },
+  }
+  state = reconcileSubagentDockState(state, input)
+  const finished = selectSubagentDock(state, input).finished.find(row => row.agentId === 'a')!
+  expect(finished.state).toBe('completed')
+  expect(finished.runKey).toBe('resume:2000')
+  expect(finished.toolUseId).toBe('launch-a')
+  expect(canOpenSubagentPanel(finished, input.transcriptRows)).toBe(false)
 })

@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { SubagentDock } from './SubagentDock.js'
 import { SubagentSidePanel } from './SubagentSidePanel.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch } from './subagentPanelState.js'
@@ -21,8 +21,23 @@ export function SubagentWorkspace({ dock, collapsed, onCollapsedChange, onClearF
   const [selected, setSelected] = useState<SubagentDockRow | null>(null)
   const parent = useRef<HTMLDivElement>(null)
   const workers = [...dock.active, ...dock.finished]
-  const worker = selected ? workers.find(row => row.agentId === selected.agentId) ?? selected : null
+  const observed = selected ? workers.find(row => row.agentId === selected.agentId) : undefined
+  const changedRun = selected !== null && observed !== undefined && observed.runKey !== selected.runKey
+  const candidate = changedRun ? null : observed ?? selected
+  const worker = candidate && canOpenSubagentPanel(candidate, rows) ? candidate : null
   const branch = selectSubagentPanelBranch(rows, worker?.toolUseId ?? null)
+
+  useLayoutEffect(() => {
+    if (!selected) return
+    if (changedRun || !worker) {
+      setSelected(null)
+      onFallback(observed ?? selected)
+    } else if (observed && observed !== selected) {
+      // Finished retention can evict the row while its transcript is still open.
+      setSelected(observed)
+    }
+  }, [selected, observed, changedRun, worker, onFallback])
+
   const open = (row: SubagentDockRow) => {
     if (!canOpenSubagentPanel(row, rows)) { setSelected(null); onFallback(row); return }
     setSelected(row)

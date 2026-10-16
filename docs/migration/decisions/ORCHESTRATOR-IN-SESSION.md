@@ -508,11 +508,19 @@ Source inspection confirms that async launches return before the foreground
 `onProgress` loop (`src/tools/AgentTool/AgentTool.tsx`), and backgrounded/resumed
 runs do not forward live steps. Those live dock rows, including waiting async
 workers without steps, retain their existing Agent-card reveal or Workers-dialog
-fallback. Finished rows with retained history
-remain openable. Foreground reasoning arrives as completed blocks through
+fallback. Streamless finished launches keep that fallback too; absence of
+forwarded frames is not evidence that no steps were recorded. Finished rows with
+run-correlated retained history remain openable. Foreground reasoning arrives as completed blocks through
 `src/utils/queryHelpers.ts`; token-by-token subagent reasoning is not added.
 No protocol, sidecar, engine, or permission-state change is authorized here.
 Permission-waiting still has no distinct dock state.
+
+The panel selection is bound to the inspected run. A resume/run change or loss
+of eligibility returns to the existing fallback rather than showing an earlier
+run under the new identity. Synthetic resume keys without a run-owned transcript
+correlation cannot use their retained reveal target as current-run steps. If a
+finished row leaves the bounded dock roster while its panel remains open, the
+last observed terminal state and usage are retained, not the opening snapshot.
 
 Headless panel interaction and SessionPane integration checks live in
 `app/renderer/src/SubagentSidePanel.dom.test.ts`. Native visual acceptance,

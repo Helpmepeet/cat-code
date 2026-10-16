@@ -18,7 +18,11 @@ export function selectSubagentPanelBranch(rows: readonly NestedTranscriptRow[], 
 /** Async launches and resumed background runs do not forward live step frames. */
 export function canOpenSubagentPanel(row: SubagentDockRow, rows: readonly NestedTranscriptRow[]): boolean {
   if (row.toolUseId === null || row.state === 'background' || row.state === 'resumed') return false
+  // A synthetic resume key has no run-owned transcript correlation. Its reveal
+  // target can still point at the previous run.
+  if (row.runKey.startsWith('resume:') && row.runKey !== row.toolUseId) return false
   const branch = selectSubagentPanelBranch(rows, row.toolUseId)
-  // A blocked async worker can be "waiting" without ever forwarding steps.
-  return row.state !== 'waiting' || branch.steps.length > 0 || branch.incomplete
+  // Waiting and finished async runs can have only their launch acknowledgement.
+  // A foreground launch may open before its first step arrives.
+  return row.state === 'running' || branch.steps.length > 0 || branch.incomplete
 }

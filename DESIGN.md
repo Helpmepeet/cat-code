@@ -153,8 +153,10 @@ large pill treatments within one control group.
   running activity, shows waiting with the assistant baton, and shows settled
   usage on finish. Steps reuse the main transcript and reasoning layout, follow
   new work until the reader scrolls up, and resume at the bottom. Live
-  background/resumed workers keep the existing reveal/Workers fallback because
-  their steps are not forwarded. See `SubagentWorkspace.tsx` and
+  background/resumed workers and streamless finished launches keep the existing
+  reveal/Workers fallback. An open panel does not follow identity into a different
+  run; an evicted finished selection retains its last observed state.
+  See `SubagentWorkspace.tsx` and
   `SubagentSidePanel.tsx`.
 - **Composer:** Keep the input visually connected to the transcript. Put model,
   reasoning, permission, and account controls in a compact action row. Reuse

@@ -1480,6 +1480,13 @@ focus waiver and TasksDialog-only result language in historical rows below,
 including the §7 cross-reference; worker messaging and main-column replacement
 remain cut. Headless interaction checks do not establish native visual acceptance.
 
+**Live inspection review follow-up (2026-10-16).** Selection now revalidates run
+identity and eligibility, retains its latest observed terminal row after dock
+eviction, and keeps fallback for streamless finished launches. A synthetic
+resume key cannot present a retained previous-run branch as current work.
+Four lifecycle regressions reject the original implementation. The switch test
+now dispatches an upward scroll event and rejects removal of the keyed remount.
+
 **2026-08-04 desktop snapshot correction:** the P4-8 sidecar read seam is exact-session `readSessionState(getSessionId())` plus live `AppState.tasks`; it no longer imports prior-session continuity workers. The engine's `readSessionStateWithContinuity` behavior remains unchanged for engine resume tools. Compact worker rows show genuine names only, normalized type text instead of the visible `Resumable` word, one leading role marker in the docked roster, and one lifecycle pip without a duplicate type ring; structural roster/Workers-dialog assertions close F1 from `reviews/2026-08-04-subagent-panel-session-scope-review.md` headlessly. The historical 8a wording in the row below is superseded by this correction; desktop GUI acceptance remains pending.
 
 **Migration target:** `phase4.md P4-8`, **SPLIT into P4-8a (session plane — LANDED headless 2026-07-10, branch `p4-orchestrator`) + P4-8b/8c (deferred)**. **8a built:** read-seam `app/sidecar/agentModeDomain.ts` (persisted agent-mode state via engine `readSessionStateWithContinuity` ∪ live `local_agent` tasks) → outbound `agent-mode.snapshot` (`app/shared/protocol.ts`); renderer `orchestratorState.ts` (read-time two-axis selectors) + `AgentChrome.tsx` (React chip primitives) + `OrchestratorRoster.tsx` + `OrchestratorPage.tsx` (nav destination). **8b defer:** WorkerDetail/WorkerFocusView (teammate view) + TasksButton + Leases. **8c defer:** inline AgentToolCard/DelegateGroup (transcript plane, extends P2-2). real shapes = `src/agent-mode/AgentModeWorkerRoster.tsx`, `workerUxSummary.ts`, `sessionState.ts`, `BackgroundTasksDialog.tsx`, `BackgroundTaskStatus.tsx`, `teammateViewHelpers.ts`, `codexAccountLeaseManager.ts`, `AgentTool/UI.tsx`; vocab substrate `app/renderer/src/agentIdentity.ts` · **Overall:** 🔁 8a landed (headless GREEN, 🖐 GUI unverified) · 8b/8c deferred · **Prototype:** `~/catcode_prototype/cat-app/OrchestratorMode.jsx` (903 lines) · **INVENTORY:** W4 Orchestrator roster/detail/focus adapt (S5)
