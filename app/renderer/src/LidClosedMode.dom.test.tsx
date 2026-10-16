@@ -12,7 +12,7 @@ afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 const initial = (allowance = 15): LidModeView => ({ phase: 'active', allowance, remainingSeconds: allowance * 60 - 30, installed: true, sleepRequested: false })
 
-test('all presets have direct Stop for the whole Mac and one shared recovery notice after navigation', async () => {
+test('every session cup shows the one shared state, and only a restore failure adds a banner', async () => {
   let view = initial(); let receive!: (view: LidModeView) => void
   const commands: LidModeCommand[] = []
   window.catcode = { lidClosed: { read: async () => view, command: async (value: LidModeCommand) => { commands.push(value); return view }, subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
@@ -22,14 +22,21 @@ test('all presets have direct Stop for the whole Mac and one shared recovery not
   </LidClosedProvider>
   const tree = await harness.mount(shell())
   const button = (label: string) => [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === label)!
-  expect(tree.container.textContent).toContain('Keeping your Mac awake. 15 minutes left.')
-  expect(button('End mode and sleep')).toBeUndefined()
   for (const allowance of [15,30,60,120]) {
     await act(async () => { view = initial(allowance); receive(view) })
-    await act(async () => { button('Stop').click() })
-    expect(commands.at(-1)).toEqual({ action: 'stop' })
+    expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(0)
+    const cups = [...tree.container.querySelectorAll('.lid-cup-slot')]
+    expect(cups).toHaveLength(2)
+    // Ids from useId and the test's face labels differ; everything else must match.
+    const [a, b] = cups.map(cup => cup.outerHTML.replaceAll(/id="[^"]*"|url\(#[^)]*\)|data-composer-face="[^"]*"/g, ''))
+    expect(a).toBe(b!)
+    expect(cups[0]!.querySelectorAll('.lid-tick.selected')).toHaveLength(1)
   }
-  expect(commands).toHaveLength(4)
+  for (const phase of ['starting', 'restoring', 'ended', 'unavailable'] as const) {
+    await act(async () => { receive({ ...view, phase, reason: 'expired', error: phase === 'unavailable' ? 'Open the lid before starting.' : undefined }) })
+    expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(0)
+  }
+  expect(commands).toHaveLength(0)
   await act(async () => { receive({ ...view, phase: 'unresolved', error: 'restore-failed' }) })
   await tree.render(shell(false))
   expect(tree.container.querySelectorAll('[role=status]')).toHaveLength(1)
@@ -67,14 +74,19 @@ test('sign-in and first-use setup show no lid banner', async () => {
   expect(notice.container.querySelectorAll('.lid-notice')).toHaveLength(0)
 })
 
-test('only endings the user did not choose leave a banner', async () => {
+test('the cup tooltip explains endings the user did not choose and refused starts', async () => {
   let receive!: (view: LidModeView) => void
   const view = initial()
   window.catcode = { lidClosed: { read: async () => view, command: async () => view,
     subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
-  const tree = await harness.mount(<LidClosedProvider><LidClosedNotice /></LidClosedProvider>)
+  const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /></LidClosedProvider>)
+  const title = () => tree.container.querySelector('.lid-cup')!.getAttribute('title')
   await act(async () => { receive({ ...view, phase: 'ended', reason: 'stopped' }) })
-  expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(0)
+  expect(title()).toBe('Keep working with lid closed')
+  expect(tree.container.querySelector('.lid-mark')).toBeNull()
   await act(async () => { receive({ ...view, phase: 'ended', reason: 'expired' }) })
-  expect(tree.container.textContent).toContain('Lid-closed mode reached its time limit.')
+  expect(title()).toBe('Lid-closed mode reached its time limit.')
+  expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
+  await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
+  expect(title()).toBe('Charge above 20% before starting.')
 })

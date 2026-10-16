@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react'
 import { LID_PRESETS } from '../../shared/lidClosed.js'
-import { lidFill, useLidClosed } from './lidClosedState.js'
+import { lidFill, lidReason, useLidClosed } from './lidClosedState.js'
 import type { ComposerFaceProps } from './ComposerActionsBar.js'
 
 export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
@@ -17,6 +17,11 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const shown = Date.now() < selectedUntil || v.phase === 'starting' ? v.allowance : minute
   const fill = active ? lidFill(v.remainingSeconds / 60) : 0
   const shortcut = v.phase === 'unresolved' ? 'Retry restoration' : active ? 'Adjust duration' : 'Start for 15 minutes'
+  const unexpectedEnd = v.phase === 'ended' && (v.reason !== 'stopped' || !!v.error)
+  // Without banners, the tooltip explains a refused start or an ending the user did not choose.
+  const title = v.phase === 'unavailable' && v.error ? v.error
+    : unexpectedEnd ? `${lidReason(v.reason)}${v.error ? ' Sleep could not be confirmed. Check your Mac.' : ''}`
+    : 'Keep working with lid closed'
   const inspect = (value: boolean) => { setOpen(value); lid.inspect(value) }
   const adjust = (direction: number) => {
     if (pending || v.phase === 'unavailable' || v.phase === 'unresolved') return
@@ -32,13 +37,13 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
         <path className="lid-outline" d="M3 10h14v12a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5z M17 12h2a4 4 0 0 1 0 8h-2" />
         {LID_PRESETS.map((tick, i) => <path key={tick} className={v.allowance === tick && active ? 'lid-tick selected' : 'lid-tick'} d={`M4 ${23 - i * 4}h3`} />)}
         {active ? <path className="lid-steam" d="M7 7c-3-3 3-3 0-6 M12 7c-3-3 3-3 0-6" /> : null}
-        {v.phase === 'unresolved' || (v.phase === 'ended' && (v.reason !== 'stopped' || v.error)) ? <path className="lid-mark" d="M10 13v6 M10 22v1" /> : null}
+        {v.phase === 'unresolved' || unexpectedEnd ? <path className="lid-mark" d="M10 13v6 M10 22v1" /> : null}
         {v.phase === 'unavailable' ? <path className="lid-mark" d="M3 26L17 11" /> : null}
         {v.phase === 'restoring' ? <path className="lid-mark" d="M13 22a4 4 0 1 1 1-5 M14 14v4h-4" /> : null}
       </svg>
   )
   return <span className={`lid-cup-slot lid-${v.phase}`}>
-    <button {...faceProps} type="button" className="lid-cup" title="Keep working with lid closed"
+    <button {...faceProps} type="button" className="lid-cup" title={title}
       aria-label={`Keep working with lid closed: ${v.phase}. ${shortcut}. Keeps the whole Mac awake.`}
       aria-describedby={open ? `${id}-time` : undefined} aria-disabled={pending || v.phase === 'unavailable'}
       onFocus={() => { faceProps.onFocus(); inspect(true) }} onBlur={() => inspect(false)}

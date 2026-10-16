@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { getBridge } from './bridge.js'
 import { BannerStack, type BannerNotice } from './BannerStack.js'
-import { LidClosedContext, useLidClosed, lidReason } from './lidClosedState.js'
+import { LidClosedContext, useLidClosed } from './lidClosedState.js'
 import type { LidModeCommand, LidModeView } from '../../shared/lidClosed.js'
 import './lidClosed.css'
 
@@ -28,29 +28,13 @@ export function LidClosedProvider({ children }: { children: ReactNode }) {
 
 export function LidClosedNotice() {
   const lid = useLidClosed()
-  if (!lid) return null
+  // The composer cup carries every other state. Only a real restore failure
+  // needs a banner, because it asks the user to act.
+  if (!lid || lid.view.phase !== 'unresolved') return null
   const { view: v, command } = lid
-  const notice: BannerNotice = { id: 'lid-closed', tone: 'info', title: 'Keep working with lid closed', dismissable: false, live: 'off' }
-  const action = (key: string, label: string) => ({ key, label })
-  switch (v.phase) {
-    // The macOS administrator dialog is the whole first-use surface.
-    case 'off': case 'setup': return null
-    case 'starting': notice.title = 'Starting lid-closed mode.'; notice.actions = [action('cancel','Cancel')]; break
-    case 'active':
-      notice.title = `Keeping your Mac awake. ${Math.ceil(v.remainingSeconds / 60)} minutes left.`
-      notice.actions = [action('stop','Stop')]; break
-    case 'restoring': notice.title = 'Restoring normal sleep.'; notice.tone = 'warn'; break
-    case 'unresolved': notice.title = "Couldn't restore normal sleep. Keep your Mac open and on your desk."; notice.detail = v.error; notice.tone = 'danger'; notice.actions = [{ ...action('retry', v.repairRequired ? 'Repair and retry' : 'Retry'), disabled: v.recovering }]; break
-    case 'unavailable':
-      if (!v.error) return null
-      notice.title = v.error; notice.tone = 'warn'; notice.actions = [...(v.repairRequired ? [action('setup','Repair setup')] : []), action('dismiss','Dismiss')]; break
-    case 'ended':
-      // Stopping is the user's own action; only report endings they did not choose.
-      if (v.reason === 'stopped' && !v.error) return null
-      notice.title = lidReason(v.reason); notice.detail = v.error ? 'Sleep could not be confirmed. Check your Mac.' : undefined
-      notice.tone = ['thermal','battery-reserve','monitoring-unavailable','supervision-lost'].includes(v.reason ?? '') ? 'warn' : 'info'
-      notice.actions = [action('dismiss','Dismiss')]; break
-  }
+  const notice: BannerNotice = { id: 'lid-closed', tone: 'danger', title: "Couldn't restore normal sleep. Keep your Mac open and on your desk.",
+    detail: v.error, dismissable: false, live: 'off',
+    actions: [{ key: 'retry', label: v.repairRequired ? 'Repair and retry' : 'Retry', disabled: v.recovering }] }
   return <div className="lid-notice"><BannerStack banners={[notice]} onAction={(_banner, selected) => {
     command({ action: selected.key } as LidModeCommand)
   }} /></div>

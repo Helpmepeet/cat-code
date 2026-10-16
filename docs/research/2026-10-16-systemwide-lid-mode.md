@@ -223,6 +223,11 @@ unchanged. The user pressed Stop after about 49 seconds: root record
 `ended`/`stopped`, kernel `SleepDisabled=No`. Repeat start without a second
 administrator prompt is therefore observed on hardware.
 
+A third UX pass removed every lid banner except the red restore failure. The
+cup already reads one main-owned state, so every session shows the same preset;
+a DOM regression now compares two session cups across all presets. Refused
+starts and endings the user did not choose move to the cup tooltip.
+
 Final state: `SleepDisabled=No`, lid open, permanent helper and its launchd
 jobs installed and idle, no test app or watcher running.
 
