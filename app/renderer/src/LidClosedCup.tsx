@@ -40,7 +40,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const shortcut = v.phase === 'unresolved' ? 'Retry restoration' : active ? 'Adjust duration' : 'Start for 15 minutes'
   // Without banners, the tooltip explains a refused start or an ending the user did not choose.
   const title = v.phase === 'unavailable' && v.error ? v.error
-    : unexpectedEnd ? `${lidReason(v.reason)}${v.error ? ' Sleep could not be confirmed. Check your Mac.' : ''}`
+    : unexpectedEnd ? `${lidReason(v.reason)}${v.error && v.reason !== 'sleep-unconfirmed' ? ' Sleep could not be confirmed. Check your Mac.' : ''}`
     : 'Keep working with lid closed'
   const inspect = (value: boolean) => { setOpen(value); lid.inspect(value) }
   const adjust = (direction: number) => {

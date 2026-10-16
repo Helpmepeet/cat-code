@@ -105,6 +105,27 @@ test('a refused start leaves the cup able to try again', async () => {
   expect(commands).toEqual([{ action: 'start', minutes: 15 }])
 })
 
+test('restored power settings do not imply an unconfirmed Sleep request succeeded', async () => {
+  let receive!: (view: LidModeView) => void
+  const commands: LidModeCommand[] = []
+  const view: LidModeView = { ...initial(), phase: 'ended', reason: 'sleep-unconfirmed', sleepRequested: false }
+  window.catcode = { lidClosed: { read: async () => view, command: async (value: LidModeCommand) => { commands.push(value); return view },
+    subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
+  const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /><LidClosedNotice /></LidClosedProvider>)
+  const cup = tree.container.querySelector<HTMLButtonElement>('.lid-cup')!
+  for (const error of [undefined, 'sleep-request-failed']) {
+    await act(async () => { receive({ ...view, error }) })
+    expect(cup.title).toBe('Normal sleep restored. Sleep could not be confirmed. Check your Mac.')
+    expect(cup.title).not.toContain('Sleep was requested.')
+    expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
+    expect(tree.container.querySelector('.lid-notice')).toBeNull()
+  }
+  await act(async () => { cup.focus() })
+  expect(commands).toEqual([])
+  await act(async () => { receive({ ...view, reason: 'sleep-requested', sleepRequested: true }) })
+  expect(cup.title).toBe('Normal sleep restored. Sleep was requested.')
+})
+
 test('the numeral shows remaining minutes, the allowance while adjusting or starting, and warns at five minutes', async () => {
   let receive!: (view: LidModeView) => void
   const view = initial(60)
