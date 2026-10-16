@@ -1,4 +1,6 @@
 import { LidClosedCup } from './LidClosedCup.js'
+import type { WorkspaceBranchReadout } from './useWorkspaceBranch.js'
+import './workspaceBranch.css'
 import {
   useEffect,
   useRef,
@@ -1584,6 +1586,7 @@ export function ComposerActionsBar({
   onCompact,
   toolbarRef,
   onFocusComposer,
+  workspaceBranch = null,
 }: {
   attachDisabled: boolean
   onAttach: () => void
@@ -1648,6 +1651,7 @@ export function ComposerActionsBar({
   /** Feature #4 — return focus to the composer field (Escape, or Shift+Tab off
    * the first face). Owned by App.tsx, which holds the field ref. */
   onFocusComposer?: () => void
+  workspaceBranch?: WorkspaceBranchReadout | null
 }) {
   // Interactive when the live snapshot AND the setter handler are both present;
   // otherwise the P4-24 read-only faces render unchanged.
@@ -1885,6 +1889,25 @@ export function ComposerActionsBar({
         <div className="composer-account-controls ml-auto flex min-w-0 items-center gap-[7px]">
           <div className="composer-account-identity flex min-w-0 items-center gap-[7px]">
           {cacheExpired ? <CacheExpiredIndicator /> : null}
+          {workspaceBranch ? (
+            <span
+              {...faceProps('git-branch')}
+              className={`workspace-branch${workspaceBranch.previous ? ' workspace-branch-changed' : ''}`}
+              aria-label={workspaceBranch.previous
+                ? `Checkout is on ${workspaceBranch.name}. This chat was on ${workspaceBranch.previous}.`
+                : `Git branch: ${workspaceBranch.name}`}
+              title={workspaceBranch.previous ? undefined : workspaceBranch.name}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="6" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+                <circle cx="6" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+                <circle cx="18" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+                <path d="M6 8.4v7.2M18 9.4c0 4-3 4.6-6 5.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="workspace-branch-name">{workspaceBranch.name}</span>
+              {workspaceBranch.previous ? <span className="workspace-branch-label shadow-lg" aria-hidden="true">Checkout is on {workspaceBranch.name}. This chat was on {workspaceBranch.previous}.</span> : null}
+            </span>
+          ) : null}
           <LidClosedCup faceProps={faceProps('lid-closed')} />
           {accountInteractive && account && onSwitchAccount ? (
             <AccountChip

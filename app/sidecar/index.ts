@@ -64,6 +64,7 @@ import {
   SidecarResumeError,
 } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
+import { createWorkspaceObserver } from './workspaceObservation.js'
 import { setPeerHostRequester } from './peerHostRequester.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
 import { createSidecarMcpLifecycleStartGate } from './mcpLifecycleStartGate.js'
@@ -541,6 +542,7 @@ async function main(): Promise<void> {
   const exitCleanly = sidecarCleanup.exit
 
   const server = new SidecarServer({
+    workspaceObserver: args.probeOnAttach ? undefined : await createWorkspaceObserver(resumed),
     sessionId: args.sessionId,
     engineSessionId,
     generation: args.generation,

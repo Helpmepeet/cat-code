@@ -5,7 +5,7 @@ import { App } from './App.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
 import { WORKSPACE_LAYOUT_STORAGE_KEY } from './workspaceLayout.js'
-import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
+import type { HostEvent, SessionDescriptor, SwitchWorkspaceBranchResult } from '../../shared/hostApi.js'
 import { PROTOCOL_VERSION, type CatCodeBridge, type ServerFrame, type TranscriptCache, type SessionCatalogEntry } from '../../shared/protocol.js'
 
 let harness: DomTestHarness
@@ -629,4 +629,101 @@ test('a refused recalled prompt survives pagehide and renderer remount', async (
   const restored = await harness.mount(<App />)
   await app.frames(ready('a'))
   expect(restored.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('previously sent prompt')
+})
+
+async function branchDraft(split = false) {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')], split)
+  await app.key('1')
+  window.catcode.listWorkspaceBranches = async () => ({
+    ok: true, value: { current: 'main', branches: ['main', 'topic'], dirty: false },
+  })
+  const composer = () => app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  await act(async () => {
+    composer().textContent = 'unsent draft '
+    composer().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const pasted = 'large pasted block\n'.repeat(60)
+  await act(async () => {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { files: [], getData: () => pasted } })
+    composer().dispatchEvent(event)
+  })
+  window.catcode.pickAttachmentFile = async () => ({ kind: 'file', name: 'notes.txt', token: 'opaque-original-token' })
+  await app.click('Add attachment')
+  window.catcode.pickAttachmentFile = async () => ({
+    kind: 'image', name: 'sketch.png', mediaType: 'image/png', bytes: new Uint8Array([104, 105]),
+  })
+  await app.click('Add attachment')
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+  expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
+  expect(app.tree.container.textContent).toContain('notes.txt')
+  expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
+  const pending = deferred<SwitchWorkspaceBranchResult>()
+  const calls: string[][] = []
+  window.catcode.switchWorkspaceBranch = (id, branch) => { calls.push([id, branch]); return pending.promise }
+  const picker = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label^="Choose Git branch"]')
+  if (!picker) throw new Error('missing branch picker')
+  await act(async () => { picker.click() })
+  await app.click('topic')
+  expect(calls).toEqual([['a', 'topic']])
+  expect(app.tree.container.querySelector('form[aria-label="Composer"]')?.getAttribute('aria-busy')).toBe('true')
+  return { ...app, pending, pasted, composer }
+}
+
+test('branch handoff carries draft, paste IDs, unchanged image and file token in the same tab slot', async () => {
+  const app = await branchDraft()
+  await app.click('Goals')
+  await app.host({ type: 'session-added', session: sessionDescriptor('replacement') })
+  await app.host({ type: 'session-removed', appSessionId: 'a' })
+  expect(app.tabs().map(tab => tab.getAttribute('aria-label'))).toEqual(['Session a, live', 'Session b, live', 'Goals page', 'Session replacement, live'])
+  await act(async () => { app.pending.resolve({ ok: true, value: sessionDescriptor('replacement') }) })
+  expect(app.tabs().map(tab => tab.getAttribute('aria-label'))).toEqual(['Session replacement, live', 'Session b, live', 'Goals page'])
+  expect(app.selected()).toEqual(['Goals page'])
+  await app.key('1')
+  await app.frames(ready('replacement'))
+  expect(app.composer().textContent).toContain('unsent draft ')
+  expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
+  expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
+  const submissions: unknown[][] = []
+  window.catcode.submit = (...args) => { submissions.push(args) }
+  await act(async () => { app.composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+  expect(JSON.stringify(submissions)).toContain('opaque-original-token')
+  expect(JSON.stringify(submissions)).toContain('aGk=')
+  expect(JSON.stringify(submissions)).toContain('large pasted block')
+})
+
+for (const branchChanged of [false, true]) {
+  test(`failed branch handoff preserves source draft and all attachments (branchChanged=${branchChanged})`, async () => {
+    const app = await branchDraft()
+    await act(async () => {
+      app.pending.resolve({
+        ok: false, ...(branchChanged ? { branchChanged: true as const } : {}),
+        error: { code: 'spawn_failed', message: 'Synthetic handoff failed' },
+      })
+    })
+    expect(app.selected()).toEqual(['Session a, live'])
+    expect(app.composer().textContent).toContain('unsent draft ')
+    expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
+    expect(app.tree.container.textContent).toContain('notes.txt')
+    expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
+    expect(app.tree.container.textContent).toContain('Synthetic handoff failed')
+    const submissions: unknown[][] = []
+    window.catcode.submit = (...args) => { submissions.push(args) }
+    await act(async () => { app.composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    expect(JSON.stringify(submissions)).toContain('opaque-original-token')
+    expect(JSON.stringify(submissions)).toContain('aGk=')
+    expect(JSON.stringify(submissions)).toContain('large pasted block')
+  })
+}
+
+test('branch handoff replaces the focused split pane without moving its neighbors', async () => {
+  const app = await branchDraft(true)
+  await app.host({ type: 'session-added', session: sessionDescriptor('replacement') })
+  await app.host({ type: 'session-removed', appSessionId: 'a' })
+  await act(async () => { app.pending.resolve({ ok: true, value: sessionDescriptor('replacement') }) })
+  expect(app.selected()).toEqual(['Session replacement, live'])
+  const saved = JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!)
+  expect(saved.panels).toEqual(['replacement', 'b'])
+  expect(saved.widths).toEqual([35, 65])
+  expect(saved.activeIndex).toBe(0)
 })

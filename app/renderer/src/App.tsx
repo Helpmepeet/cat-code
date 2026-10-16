@@ -610,6 +610,12 @@ export function App() {
   const [fileAttachmentState, setFileAttachmentState] =
     useState<FileAttachmentState>(createFileAttachmentState)
   const [branchSwitchPendingSessions, setBranchSwitchPendingSessions] = useState<ReadonlySet<SessionId>>(() => new Set())
+  // Host close events can precede the switch reply. Keep the source's spatial
+  // slot until the reply can replace it, rather than letting roster repair
+  // choose another tab or collapse its split pane in between.
+  const branchSwitchSourcesRef = useRef(new Map<SessionId, SessionDescriptor>())
+  const [branchSwitchTargets, setBranchSwitchTargets] = useState<Partial<Record<SessionId, string>>>({})
+  const [branchSeeds, setBranchSeeds] = useState<Partial<Record<SessionId, string>>>({})
   const [composerFocusRequests, setComposerFocusRequests] = useState<
     Partial<Record<SessionId, number>>
   >({})
@@ -1610,7 +1616,12 @@ export function App() {
   const tabs: TabModel[] = useMemo(
     () =>
       filterInteractiveSessionDescriptors(
-        selectPaneSessions(shell),
+        [
+          ...selectPaneSessions(shell),
+          ...[...branchSwitchSourcesRef.current.values()].filter(
+            descriptor => !selectPaneSessions(shell).some(row => row.appSessionId === descriptor.appSessionId),
+          ),
+        ],
         sessionCatalogSnapshot,
       ).map(rawDescriptor => {
         // A terminal `/rename` writes only the engine transcript, so the registry
@@ -1642,7 +1653,7 @@ export function App() {
               }),
         }
       }),
-    [shell, connection, permissions, tabNavigation, sessionCatalogSnapshot],
+    [shell, connection, permissions, tabNavigation, sessionCatalogSnapshot, branchSwitchPendingSessions],
   )
   const tabBarEntries: TabBarEntry[] = useMemo(() => {
     const sessionEntries = new Map(
@@ -2889,14 +2900,15 @@ export function App() {
     if (selectPendingSubmit(pendingSubmitsRef.current, sessionId) !== null) {
       return 'This chat has a pending prompt. Start a new chat to choose another branch.'
     }
-    if (
-      selectPromptDraft(promptDraftsRef.current, sessionId).length > 0 ||
-      selectSessionPasteList(pasteState, sessionId).length > 0 ||
-      selectImageAttachments(imageAttachmentState, sessionId).length > 0 ||
-      selectFileAttachment(fileAttachmentState, sessionId)
-    ) {
-      return 'Remove your draft and attachments before switching branches.'
-    }
+    if (branchSwitchSourcesRef.current.has(sessionId)) return null
+    const source = shellRef.current.byId[sessionId]
+    if (!source) return 'This chat is no longer available.'
+    const draft = selectPromptDraft(promptDraftsRef.current, sessionId)
+    const pastes = selectSessionPasteState(pasteStateRef.current, sessionId)
+    const images = selectImageAttachments(imageAttachmentState, sessionId)
+    const file = selectFileAttachment(fileAttachmentState, sessionId)
+    branchSwitchSourcesRef.current.set(sessionId, source)
+    setBranchSwitchTargets(current => ({ ...current, [sessionId]: branch }))
     setBranchSwitchPendingSessions(current => new Set(current).add(sessionId))
     try {
       const result = await getBridge().switchWorkspaceBranch(sessionId, branch)
@@ -2909,18 +2921,49 @@ export function App() {
       }
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
-      focusCreatedSession(result.value.appSessionId, selectionClaim)
+      const replacementId = result.value.appSessionId
+      dispatchShell({ type: 'event', event: { type: 'session-added', session: result.value } })
+      updatePromptDrafts(current =>
+        reducePromptDrafts(reducePromptDrafts(current, sessionId, ''), replacementId, draft),
+      )
+      setPasteState(current => ({
+        ...reduceSessionPastesCleared(current, sessionId), [replacementId]: pastes,
+      }))
+      setImageAttachmentState(current =>
+        reduceSessionImagesReplaced(reduceSessionImagesReplaced(current, sessionId, []), replacementId, images),
+      )
+      setFileAttachmentState(current =>
+        reduceSessionFileAttachmentRestored(reduceFileAttachmentRemoved(current, sessionId), replacementId, file),
+      )
+      setBranchSeeds(current => ({ ...current, [replacementId]: branch }))
+      setWorkspaceLayoutState(current => ({
+        ...current,
+        panels: current.panels.map(panel =>
+          panel.sessionId === sessionId ? { sessionId: replacementId } : panel,
+        ),
+      }))
+      dispatchTabNavigation({ type: 'replace-session', sessionId, replacementId })
+      applyForegroundSelectionIfCurrent(foregroundSelectionClaimRef.current, selectionClaim, () => {
+        pendingExplicitSessionRef.current = replacementId
+        setActiveSessionId(replacementId)
+      })
       return null
     } catch (error) {
       return errorMessage(error)
     } finally {
+      branchSwitchSourcesRef.current.delete(sessionId)
+      setBranchSwitchTargets(current => {
+        const next = { ...current }
+        delete next[sessionId]
+        return next
+      })
       setBranchSwitchPendingSessions(current => {
         const next = new Set(current)
         next.delete(sessionId)
         return next
       })
     }
-  }, [focusCreatedSession, pasteState, imageAttachmentState, fileAttachmentState])
+  }, [imageAttachmentState, fileAttachmentState])
 
   const setPeerWakeBlocked = useCallback(
     async (sessionId: SessionId, blocked: boolean) => {
@@ -3576,6 +3619,7 @@ export function App() {
       value: string,
       reason: DraftWriteReason = 'edit',
     ) => {
+      if (branchSwitchSourcesRef.current.has(sessionId)) return
       updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
       // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
       // drop a live, uncommitted paste that ↓ is about to restore.
@@ -3855,6 +3899,7 @@ export function App() {
 	      const panelDiagnostics = selectDiagnosticsSnapshot(diagnostics, sessionId)
 	      const panelBranch =
 	        panelDiagnostics?.gitBranch ??
+	        branchSeeds[sessionId] ??
 	        sessionCatalogRows.find(r => r.appSessionId === sessionId)?.gitBranch ??
 	        null
 	      // Where this session's tools actually run. "Locally" is not a constant:
@@ -3953,6 +3998,8 @@ export function App() {
                 previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
 	            branchSwitchPending={branchSwitchPendingSessions.has(sessionId)}
+	            branchSwitchTarget={branchSwitchTargets[sessionId] ?? (panelDiagnostics ? null : branchSeeds[sessionId] ?? null)}
+	            onFocusBranchChat={selectTab}
 	            onSwitchBranch={descriptor?.status === 'ready' ? branch => switchBranchForSession(sessionId, branch) : undefined}
 	            sandboxed={panelSandboxed}
 	            model={rail.model}

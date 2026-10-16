@@ -1,0 +1,55 @@
+.workspace-branch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 160px;
+  padding: 3px 5px;
+  border-radius: 6px;
+  color: var(--color-text-subtle);
+  font: 12px var(--font-mono);
+  white-space: nowrap;
+}
+
+.workspace-branch svg {
+  flex-shrink: 0;
+  color: var(--color-text-ghost);
+}
+
+.workspace-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-branch-changed,
+.workspace-branch-changed svg {
+  color: var(--color-tone-warn);
+}
+
+.workspace-branch:focus-visible {
+  outline: 2px solid var(--color-accent);
+}
+
+.workspace-branch-label {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  z-index: 40;
+  display: none;
+  max-width: min(440px, 80vw);
+  margin-bottom: 8px;
+  border: 1px solid var(--color-shell-seam);
+  border-radius: 8px;
+  background: var(--color-surface-raised);
+  padding: 5px 9px;
+  color: var(--color-text-primary);
+  font: 500 11.5px var(--font-sans);
+  white-space: normal;
+}
+
+.workspace-branch:hover .workspace-branch-label,
+.workspace-branch:focus-visible .workspace-branch-label {
+  display: block;
+}

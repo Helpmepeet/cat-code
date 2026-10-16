@@ -1,6 +1,7 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
+import type { WorkspaceObserver } from './workspaceObservation.js'
 import { isLidWorkControl } from '../shared/lidClosed.js'
 import type { LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { isPathTrusted } from '../../src/utils/config.js'
@@ -392,6 +393,7 @@ export type SidecarServerOptions = {
    * emitted.
    */
   diagnostics?: SidecarDiagnosticsDomain
+  workspaceObserver?: WorkspaceObserver
   /**
    * RemoteSettings read-seam + verbs (P4-13, D3 cut scope). Optional because the
    * P1-0 probe fixture has no engine app-state store or cwd-configured command
@@ -560,6 +562,7 @@ export class SidecarServer {
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly onWorkspaceTrusted: (() => void) | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
+  private readonly workspaceObserver: WorkspaceObserver | undefined
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private history: readonly SDKMessage[]
@@ -818,6 +821,7 @@ export class SidecarServer {
     this.workspaceTrust = options.workspaceTrust ?? null
     this.onWorkspaceTrusted = options.onWorkspaceTrusted ?? null
     this.diagnostics = options.diagnostics ?? null
+    this.workspaceObserver = options.workspaceObserver
     this.remoteSettings = options.remoteSettings ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
@@ -852,6 +856,11 @@ export class SidecarServer {
     // server's broadcast model.)
     this.unsubscribeHandoffStatus = this.controller.subscribeHandoffStatus(() => this.publishHandoffState())
     this.unsubscribe = this.controller.subscribe(event => {
+      if (event.type === 'message' && (event.message.type === 'user' || event.message.type === 'result')) {
+        void this.workspaceObserver?.conversationContinued().then(() => {
+          for (const connection of this.connections) this.sendActivity(connection, this.currentPresence())
+        }).catch(error => this.log(`[sidecar] workspace branch observation failed: ${String(error)}`))
+      }
       this.runControls?.observeSessionEvent?.(event)
       // Before the broadcast: `broadcastEvent` returns early with no clients
       // attached, and a turn that hangs with the window closed is exactly the
@@ -1120,6 +1129,7 @@ export class SidecarServer {
         sessionId: this.sessionId,
         engineSessionId: this.engineSessionId,
         ...(this.turnInterrupted ? { turnInterrupted: true } : {}),
+        ...(this.workspaceObserver ? { workspace: this.workspaceObserver.getSnapshot() } : {}),
         payload: preparedPayload,
       })
     }
@@ -4429,6 +4439,7 @@ export class SidecarServer {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
       event: prepared,
+      ...(this.workspaceObserver ? { workspace: this.workspaceObserver.getSnapshot() } : {}),
     }
     for (const connection of this.connections) {
       this.send(connection, frame)
@@ -5521,6 +5532,7 @@ export class SidecarServer {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
       presence,
+      ...(this.workspaceObserver ? { workspace: this.workspaceObserver.getSnapshot() } : {}),
     })
   }
 

@@ -267,6 +267,10 @@ export type WorkspaceBranches = {
   current: string | null
   branches: string[]
   dirty: boolean
+  detached?: string
+  occupied?: Record<string, string>
+  otherChats?: Array<{ appSessionId: SessionId; title: string }>
+  recordedBranch?: string | null
 }
 
 /** A failed spawn can follow a successful checkout, so callers must know it moved. */

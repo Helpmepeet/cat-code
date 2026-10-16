@@ -42,6 +42,7 @@ import {
   type ComposerGhostSnapshot,
 } from './composerSendMotion.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
+import { useWorkspaceBranch } from './useWorkspaceBranch.js'
 import { ProjectRoutingBar } from './ProjectRoutingBar.js'
 import type { ProjectRouteChoice, ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
@@ -222,7 +223,9 @@ export function SessionPane({
   activeDescriptor,
   branch,
   branchSwitchPending: checkoutSwitchPending = false,
+  branchSwitchTarget = null,
   onSwitchBranch,
+  onFocusBranchChat,
   sandboxed,
   activeLog,
   activeSessionId,
@@ -757,6 +760,11 @@ export function SessionPane({
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const workspaceBranch = useWorkspaceBranch(
+    activeSessionId !== null && activeDescriptor !== undefined && !isManagedChat && nestedRows.length > 0 && !activeDescriptor.moving,
+    listBranches,
+    branch,
+  )
   const [dockCollapsed, setDockCollapsed] = useSubagentDockCollapsedPreference()
   const { dock, clearFinished, setDetailsVisible } = useSubagentDock(activeSessionId, activeDescriptor?.engineSessionId ?? null, {
     workers, tasks: tasksSnapshot, transcriptRows: nestedRows, leases, parentModel: model,
@@ -1781,7 +1789,9 @@ export function SessionPane({
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
             managedChat={activeDescriptor?.binding?.kind === 'managed'}
-            branch={branch}
+            branch={branchSwitchTarget ?? branch}
+            branchPending={checkoutSwitchPending || branchSwitchTarget !== null}
+            onFocusBranchChat={onFocusBranchChat}
             onListBranches={onSwitchBranch && !activeDescriptor?.moving ? listBranches : undefined}
             onSwitchBranch={onSwitchBranch && !activeDescriptor?.moving ? branchName => {
               if (preparingImage || pickingFile) return Promise.resolve('Wait for the attachment to finish before switching branches.')
@@ -2406,6 +2416,7 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
+          workspaceBranch={workspaceBranch}
           attachDisabled={
             !composerGate.editable ||
             managedFolderUnavailable ||
@@ -2728,7 +2739,9 @@ type SessionPaneProps = {
   branch: string | null
   /** Freeze unsent input while main changes this session's checkout. */
   branchSwitchPending?: boolean
+  branchSwitchTarget?: string | null
   onSwitchBranch?: (branch: string) => Promise<string | null>
+  onFocusBranchChat?: (sessionId: string) => void
   /** Whether this session's tools run sandboxed (`diagnostics.snapshot`), read by
    * the empty-state meta strip's "Start in" column. */
   sandboxed?: boolean

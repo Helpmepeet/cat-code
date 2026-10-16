@@ -11,6 +11,7 @@ export type TabNavigationState = {
 }
 
 export type TabNavigationAction =
+  | { type: 'replace-session'; sessionId: SessionId; replacementId: SessionId }
   | { type: 'reconcile-sessions'; sessionIds: readonly SessionId[] }
   | { type: 'open-page'; page: PageTab }
   | { type: 'select'; target: NavigationTarget }
@@ -61,6 +62,17 @@ export function reduceTabNavigation(
   action: TabNavigationAction,
 ): TabNavigationState {
   switch (action.type) {
+    case 'replace-session': {
+      const target: NavigationTarget = { kind: 'session', sessionId: action.replacementId }
+      return {
+        tabs: state.tabs
+          .filter(tab => tab.kind !== 'session' || tab.sessionId !== action.replacementId)
+          .map(tab => tab.kind === 'session' && tab.sessionId === action.sessionId ? target : tab),
+        selected: state.selected?.kind === 'session' && state.selected.sessionId === action.sessionId
+          ? target
+          : state.selected,
+      }
+    }
     case 'reconcile-sessions': {
       const ids = new Set(action.sessionIds)
       const tabs = state.tabs.filter(

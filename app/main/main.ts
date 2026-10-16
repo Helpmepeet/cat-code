@@ -102,7 +102,7 @@ import {
 import {
   gitRoot,
   listWorkspaceBranches,
-  switchWorkspaceBranch,
+  createWorkspaceBranchSwitcher,
 } from './workspaceBranches.js'
 import {
   DEBUG_SHELL_STATE_CHANNEL,
@@ -3408,92 +3408,46 @@ function registerHostControlPlane(): void {
     },
   )
 
-  const switchingGitRoots = new Set<string>()
   ipcMain.handle(
     CH_HOST_LIST_BRANCHES,
-    (_e, appSessionId: unknown): Promise<HostResult<WorkspaceBranches>> => {
-      const descriptor = host?.listSessions().find(row => row.appSessionId === appSessionId)
-      if (!descriptor) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Session not found.' } })
-      return listWorkspaceBranches(descriptor.cwd)
-    },
-  )
-
-  ipcMain.handle(
-    CH_HOST_SWITCH_BRANCH,
-    async (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> => {
+    async (_e, appSessionId: unknown): Promise<HostResult<WorkspaceBranches>> => {
       const h = host
       const descriptor = h?.listSessions().find(row => row.appSessionId === appSessionId)
       if (!h || !descriptor) return { ok: false, error: { code: 'session_not_found', message: 'Session not found.' } }
-      if (workspaceJump?.isReserved(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for the workspace change to settle.' } }
-      if (switchingSessionIds.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
-      if (descriptor.status !== 'ready') return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this session to connect before switching branches.' } }
-      if (descriptor.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new chat to choose another branch.' } }
-      if (typeof branch !== 'string' || branch.length === 0 || branch.length > 255) {
-        return { ok: false, error: { code: 'branch_unavailable', message: 'Choose a local branch from the list.' } }
-      }
-      switchingSessionIds.add(descriptor.appSessionId)
-      try {
-        const root = await gitRoot(descriptor.cwd)
-        if (!root) return { ok: false, error: { code: 'branch_unavailable', message: 'This project is not a Git repository.' } }
-        if (switchingGitRoots.has(root)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
-        switchingGitRoots.add(root)
-        let checkoutMoved = false
-        try {
-          // This gate is synchronous with Host.reserveSpawn. A spawn admitted
-          // before it is visible through pendingSpawns; one after it waits.
-          if (!h.beginBranchSwitch()) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for the other chat to finish opening, then try again.' } }
-          let switched: Awaited<ReturnType<typeof switchWorkspaceBranch>>
-          try {
-            const fresh = h.listSessions().find(row => row.appSessionId === descriptor.appSessionId)
-            if (fresh?.status !== 'ready' || fresh.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) {
-              return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new empty chat to choose another branch.' } }
-            }
-            const liveRecords = supervisor?.listSessions() ?? []
-            const otherLiveCwds = h.listSessions()
-              .filter(row => row.appSessionId !== descriptor.appSessionId && isSessionLive(liveRecords, row.appSessionId))
-              .map(row => row.cwd)
-            switched = await switchWorkspaceBranch(descriptor.cwd, branch, otherLiveCwds)
-            checkoutMoved = switched.ok || 'branchChanged' in switched
-          } finally {
-            h.endBranchSwitch()
-          }
-          if (!switched.ok) {
-            if ('branchChanged' in switched) await h.closeSession(descriptor.appSessionId)
-            return switched
-          }
-          // A checkout can remove the tracked subdirectory this session used.
-          // Main owns the validated Git root, so a fresh chat can still open.
-          const replacementCwd = validateCwd(descriptor.cwd).ok ? descriptor.cwd : root
-          const created = replacementCwd === descriptor.cwd
-            ? await h.createSessionInWorkspace(descriptor.appSessionId)
-            : await h.createSession({ cwd: root })
-          const closed = await h.closeSession(descriptor.appSessionId)
-          if (!created.ok) {
-            return {
-              ok: false, branchChanged: true,
-              error: { ...created.error, message: `Branch switched to ${branch}, but a new chat could not start. Open a new chat in this project. ${created.error.message}` },
-            }
-          }
-          if (!closed.ok) {
-            return { ok: false, branchChanged: true, error: { ...closed.error, message: `Branch switched to ${branch} and a new chat opened, but the previous chat could not close. ${closed.error.message}` } }
-          }
-          return created
-        } catch (error) {
-          logLegacyDiagnostic(`branch switch handoff failed: ${errText(error)}`, 'host', 'main')
-          if (checkoutMoved) {
-            // Never leave the old branch-cached engine running after HEAD moved,
-            // even if a registry write or replacement spawn throws.
-            await h.closeSession(descriptor.appSessionId).catch(() => undefined)
-            return { ok: false, branchChanged: true, error: { code: 'branch_unavailable', message: `Branch switched to ${branch}, but the chat handoff failed. Check open chats before continuing.` } }
-          }
-          return { ok: false, error: { code: 'branch_unavailable', message: 'Could not switch branches. Try again.' } }
-        } finally {
-          switchingGitRoots.delete(root)
+      const observation = h.getWorkspaceObservation(descriptor.appSessionId)
+      if (!observation) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this chat to connect.' } }
+      const listed = await listWorkspaceBranches(observation.cwd)
+      if (!listed.ok) return listed
+      const root = await gitRoot(observation.cwd)
+      const liveRecords = supervisor?.listSessions() ?? []
+      const otherChats: NonNullable<WorkspaceBranches['otherChats']> = []
+      for (const row of h.listSessions()) {
+        if (row.appSessionId === descriptor.appSessionId || !isSessionLive(liveRecords, row.appSessionId)) continue
+        const other = h.getWorkspaceObservation(row.appSessionId)
+        if (other && await gitRoot(other.cwd) === root) {
+          otherChats.push({ appSessionId: row.appSessionId, title: row.title ?? basename(row.cwd) })
         }
-      } finally {
-        switchingSessionIds.delete(descriptor.appSessionId)
       }
+      return { ok: true, value: {
+        ...listed.value, otherChats,
+        ...(observation.lastWorkingBranch !== undefined ? { recordedBranch: observation.lastWorkingBranch } : {}),
+      } }
     },
+  )
+
+  const switchBranch = createWorkspaceBranchSwitcher({
+    host: () => host,
+    switchingSessionIds,
+    sessionsWithSubmit,
+    isWorkspaceReserved: id => workspaceJump?.isReserved(id) ?? false,
+    isLive: id => isSessionLive(supervisor?.listSessions() ?? [], id),
+    validateCwd,
+    transferFiles: (from, to) => attachmentFileTokens.transfer(from, to),
+    log: message => logLegacyDiagnostic(message, 'host', 'main'),
+  })
+  ipcMain.handle(CH_HOST_SWITCH_BRANCH,
+    (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> =>
+      switchBranch(appSessionId, branch),
   )
 
   // SESSIONS-UNIFICATION: coalesce concurrent open-history spawns of the SAME

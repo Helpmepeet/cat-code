@@ -129,6 +129,7 @@ import {
 } from '../../src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
 import { asAgentId } from '../../src/types/ids.js'
+import { createWorkspaceObserver } from './workspaceObservation.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -328,6 +329,54 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
       pendingPermissionRequests: [],
     },
   })
+})
+
+test('workspace observation is outbound on attach and follows engine cwd on live events', async () => {
+  let cwd = '/opening-checkout'
+  let continued = 0
+  const controller = new AppSessionController(probeAdapter())
+  const { received } = connect(controller, {
+    workspaceObserver: {
+      getSnapshot: () => ({ cwd, lastWorkingBranch: 'recorded' }),
+      conversationContinued: async () => { continued++ },
+    },
+  })
+  const ready = received.find(frame => frame.kind === 'ready')
+  expect(ready?.kind === 'ready' && ready.workspace).toEqual({ cwd, lastWorkingBranch: 'recorded' })
+  expect(continued).toBe(0)
+  cwd = '/entered-worktree'
+  await controller.submit('go')
+  const events = received.filter(frame => frame.kind === 'event' && !frame.replay)
+  expect(events.length).toBeGreaterThan(0)
+  for (const frame of events) {
+    expect(frame.kind === 'event' && frame.workspace).toEqual({ cwd, lastWorkingBranch: 'recorded' })
+  }
+})
+
+test('live accepted conversation advances recorded branch, but attach and checkout observations do not', async () => {
+  let branch = 'external'
+  const observer = await createWorkspaceObserver({ lastWorkingBranch: 'recorded' }, {
+    cwd: () => '/restored-worktree',
+    branch: async () => branch,
+  })
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'user',
+        session_id: ENGINE_SESSION,
+        parent_tool_use_id: null,
+        uuid: randomUUID(),
+        message: { role: 'user', content: 'continue on this checkout' },
+      }
+    },
+  })
+  const { server, received, conn } = connect(controller, { workspaceObserver: observer })
+  expect(observer.getSnapshot().lastWorkingBranch).toBe('recorded')
+  branch = 'external-again'
+  expect(observer.getSnapshot().lastWorkingBranch).toBe('recorded')
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'continue', prompt: 'continue on this checkout' }))
+  await waitFor(() => received.some(frame => frame.kind === 'activity' && frame.workspace?.lastWorkingBranch === branch))
+  expect(observer.getSnapshot()).toEqual({ cwd: '/restored-worktree', lastWorkingBranch: 'external-again' })
 })
 
 test('production delivery envelope adds metadata beside, never inside, the raw ServerFrame', () => {

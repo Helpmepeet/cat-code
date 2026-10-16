@@ -829,6 +829,16 @@ describe('createCwdTokenStore (HC1)', () => {
 })
 
 describe('native file attachment tokens', () => {
+  test('transfers selected files only to the host-created replacement', () => {
+    const store = createAttachmentFileTokenStore()
+    const selection = store.mint(SID, '/private/report.md')
+    expect(store.resolve('replacement', selection.token)).toBeUndefined()
+    store.transfer(SID, 'replacement')
+    expect(store.resolve('replacement', selection.token)).toBe('/private/report.md')
+    expect(store.resolve(SID, selection.token)).toBeUndefined()
+    expect(store.resolve('another-chat', selection.token)).toBeUndefined()
+  })
+
   test('hide the path, bind the selection to one session, and expire it', () => {
     let clock = 1_000
     const store = createAttachmentFileTokenStore({

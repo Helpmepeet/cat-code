@@ -220,6 +220,8 @@ export class Host implements HostApi {
   /** All unfinished spawn reservations, including restarts that reuse a slot. */
   private pendingSpawns = 0
   private branchSwitching = false
+  private readonly workspaceObservations = new Map<SessionId, import('../shared/protocol.js').WorkspaceObservation>()
+  private branchReplacement: { appSessionId: SessionId; reservation: SpawnReservation } | null = null
   /** One restore owns a registry id from validation through child registration. */
   private readonly restoring = new Set<SessionId>()
   /** Internal relocation warmups must not open a closed Chat in the renderer. */
@@ -309,6 +311,10 @@ export class Host implements HostApi {
     const appSessionId = event.sessionId
 
     if (event.type === 'frame') {
+      if (event.frame.kind === 'ready') this.workspaceObservations.delete(appSessionId)
+      if ((event.frame.kind === 'ready' || event.frame.kind === 'event' || event.frame.kind === 'activity') && event.frame.workspace) {
+        this.workspaceObservations.set(appSessionId, event.frame.workspace)
+      }
       if (event.frame.kind === 'ready') {
         this.runControls.delete(appSessionId)
         this.permissionModes.delete(appSessionId)
@@ -2034,7 +2040,52 @@ export class Host implements HostApi {
     return true
   }
 
+  getWorkspaceObservation(appSessionId: SessionId): import('../shared/protocol.js').WorkspaceObservation | undefined {
+    return this.workspaceObservations.get(appSessionId)
+  }
+
+  beginBranchReplacement(appSessionId: SessionId): HostResult<void> {
+    if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) {
+      return hostError('branch_unavailable', 'Wait for the other chat to finish opening, then try again.')
+    }
+    if (!this.isLive(appSessionId)) return hostError('session_not_found', 'Session not found.')
+    const reservation = this.reserveSpawn(true, true)
+    if (!reservation.ok) return reservation.result
+    this.branchReplacement = { appSessionId, reservation }
+    this.branchSwitching = true
+    return { ok: true, value: undefined }
+  }
+
+  async completeBranchReplacement(cwd: string): Promise<HostResult<SessionDescriptor>> {
+    const replacement = this.branchReplacement
+    if (!replacement) return hostError('branch_unavailable', 'No branch switch is pending.')
+    const validated = this.validateCwd(cwd)
+    if (!validated.ok) return hostError('invalid_cwd', 'The project folder is no longer available.')
+    // At capacity the old process must relinquish its slot first. Below the
+    // cap it can survive a failed spawn; main closes it only after success.
+    if (this.liveCount() >= MAX_LIVE_SESSIONS) {
+      this.closing.add(replacement.appSessionId)
+      try {
+        this.supervisor.killSession(replacement.appSessionId)
+        await this.registry.markClean(replacement.appSessionId)
+      } finally {
+        this.closing.delete(replacement.appSessionId)
+      }
+    }
+    this.branchReplacement = null
+    return this.spawn({
+      appSessionId: randomUUID(),
+      cwd: validated.realpath,
+      title: undefined,
+      forked: false,
+    }, replacement.reservation)
+  }
+
   endBranchSwitch(): void {
+    if (this.branchReplacement) {
+      this.releaseSpawnReservation(this.branchReplacement.reservation)
+      this.branchReplacement = null
+    }
     this.branchSwitching = false
   }
 

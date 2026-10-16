@@ -1011,6 +1011,7 @@ export type ReadyFrame = {
   engineSessionId: string
   /** Desktop restore state. Additive when introduced; absent means no interrupted turn. */
   turnInterrupted?: boolean
+  workspace?: WorkspaceObservation
   payload: AppReadyPayload
 }
 
@@ -1081,6 +1082,7 @@ export type EventFrame = {
   kind: 'event'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
+  workspace?: WorkspaceObservation
   /**
    * Present (`true`) ONLY on restored-history frames a resumed sidecar replays
    * at attach (F2 — decisions/RESTORE-HISTORY.md): the same resumed `Message[]`
@@ -3683,6 +3685,13 @@ export type ActivityFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   presence: ActivityPresence
+  workspace?: WorkspaceObservation
+}
+
+/** Engine-owned working checkout and conversation provenance. Outbound only. */
+export type WorkspaceObservation = {
+  cwd: string
+  lastWorkingBranch?: string | null
 }
 
 export type ServerFramePayload =

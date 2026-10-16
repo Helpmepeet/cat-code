@@ -33,7 +33,10 @@ const SELECTED_MENU_ITEM_SELECTOR =
  * `<body>`. Pointer or keyboard focus departure dismisses without restoring the
  * trigger. Modal focus above the popover keeps its existing ownership.
  */
-export function usePopover(onFocusComposer?: () => void) {
+export function usePopover(
+  onFocusComposer?: () => void,
+  focusOptions?: { selector: string; prioritySelector: string },
+) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -50,8 +53,8 @@ export function usePopover(onFocusComposer?: () => void) {
     open,
     containerRef: focusRef,
     onEscape: closeWithoutRestore,
-    initialFocusSelector: POPOVER_ITEM_SELECTOR,
-    initialFocusPrioritySelector: SELECTED_MENU_ITEM_SELECTOR,
+    initialFocusSelector: focusOptions?.selector ?? POPOVER_ITEM_SELECTOR,
+    initialFocusPrioritySelector: focusOptions?.prioritySelector ?? SELECTED_MENU_ITEM_SELECTOR,
     onShiftTab: onFocusComposer,
   })
   const close = useCallback(() => {

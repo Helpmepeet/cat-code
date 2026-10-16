@@ -371,6 +371,8 @@ export const TranscriptView = memo(function TranscriptView({
   branch,
   onListBranches,
   onSwitchBranch,
+  onFocusBranchChat,
+  branchPending,
   sandboxed,
   restorePhase,
   revealHidden,
@@ -408,6 +410,8 @@ export const TranscriptView = memo(function TranscriptView({
   branch?: string | null
   onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
   onSwitchBranch?: (branch: string) => Promise<string | null>
+  onFocusBranchChat?: (sessionId: string) => void
+  branchPending?: boolean
   /** Whether this session's tools run sandboxed, read by the empty state's
    * "Start in" column. */
   sandboxed?: boolean
@@ -481,6 +485,8 @@ export const TranscriptView = memo(function TranscriptView({
       branch={branch ?? null}
       onListBranches={onListBranches}
       onSwitchBranch={onSwitchBranch}
+      onFocusBranchChat={onFocusBranchChat}
+      branchPending={branchPending}
       sandboxed={sandboxed ?? false}
       restorePhase={restorePhase ?? null}
       loadEarlierPending={loadEarlierPending ?? false}
@@ -597,6 +603,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   branch = null,
   onListBranches,
   onSwitchBranch,
+  onFocusBranchChat,
+  branchPending,
   sandboxed = false,
   restorePhase = null,
   loadEarlierPending = false,
@@ -634,6 +642,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   branch?: string | null
   onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
   onSwitchBranch?: (branch: string) => Promise<string | null>
+  onFocusBranchChat?: (sessionId: string) => void
+  branchPending?: boolean
   sandboxed?: boolean
   restorePhase?: RestorePhase | null
   loadEarlierPending?: boolean
@@ -824,6 +834,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             branch={branch}
             onListBranches={onListBranches}
             onSwitchBranch={onSwitchBranch}
+            onFocusBranchChat={onFocusBranchChat}
+            branchPending={branchPending}
             sandboxed={sandboxed}
             accounts={accounts}
             accountsUsagePending={accountsUsagePending}
@@ -908,6 +920,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             branch={branch}
             onListBranches={onListBranches}
             onSwitchBranch={onSwitchBranch}
+            onFocusBranchChat={onFocusBranchChat}
+            branchPending={branchPending}
             sandboxed={sandboxed}
             accounts={accounts}
             accountsUsagePending={accountsUsagePending}

@@ -782,6 +782,7 @@ export type AttachmentFileTokenStore = {
   mint(sessionId: SessionId, realpath: string): AttachmentFileTokenSelection
   /** Resolve only in the session that owns the selection. */
   resolve(sessionId: SessionId, token: string): string | undefined
+  transfer(from: SessionId, to: SessionId): void
 }
 
 export function detectAttachmentImageMediaType(
@@ -869,6 +870,11 @@ export function createAttachmentFileTokenStore(
         return undefined
       }
       return entry.sessionId === sessionId ? entry.realpath : undefined
+    },
+    transfer(from, to) {
+      for (const entry of tokens.values()) {
+        if (entry.sessionId === from) entry.sessionId = to
+      }
     },
   }
 }
