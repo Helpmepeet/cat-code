@@ -48,6 +48,17 @@ question is not sent.
 One notice per session. A call replaces the previous notice whole; there is
 no history and no append.
 
+**One writer per session: the conversational agent.** It posts the aggregate
+notice, including the areas its subagents will edit. Workers can inherit the
+parent's tools and its desktop prompt addendum (`runAgent.ts` passes
+`appendSystemPrompt` through), and `Announce` is not in
+`ALL_AGENT_DISALLOWED_TOOLS`. Main attributes every write by connection, so it
+cannot tell a worker from its parent. A worker following the doctrine would
+therefore replace the parent's notice with its own narrow slice, and two
+workers would overwrite each other. The tool refuses any call with
+`context.agentId` set, before it reaches main, the way `ListWorkspaces` and
+`JumpWorkspace` do in `app/sidecar/workspaceJumpTools.ts`.
+
 | field | required | content |
 |---|---|---|
 | `doing` | yes | One line: the goal, and whether the session is editing files or only reading. |
@@ -94,12 +105,39 @@ A row without a notice renders as today. Absence means "nothing posted", not
 - **Held on main's registry row**, next to the fields `ListPeers` already
   reads. It survives park and restore, since a parked session's uncommitted
   work is still in the tree. It is dropped when the row is closed.
-- **One size constant** for the whole notice, proposed `MAX_PEER_NOTICE_BYTES`
-  = 1 KiB in `app/shared/limits.ts`, enforced at main and re-bounded in the
-  sidecar, the way `MAX_PEER_TEXT_BYTES` is. The cap is a roster-cost bound as
-  much as a frame bound: every `ListPeers` call carries every peer's notice
-  into the caller's context. The cost of an unbounded roster was measured
-  once already (`CLOSED_PEERS_SHOWN` in `app/sidecar/listPeersTool.ts`).
+- **A per-notice size constant**, proposed `MAX_PEER_NOTICE_BYTES` = 1 KiB in
+  `app/shared/limits.ts`, enforced at main and re-bounded in the sidecar, the
+  way `MAX_PEER_TEXT_BYTES` is.
+- **An aggregate budget for the roster's notices**, applied in main before
+  serialization. The per-notice cap does not bound the answer: `peers.list`
+  returns every eligible row as one `host.result`
+  (`handlePeersList` in `app/main/peerRequestPlane.ts`), the closed-row bound
+  is applied only after the answer reaches the sidecar
+  (`boundClosedPeers` in `app/sidecar/listPeersTool.ts`), and the supervisor
+  refuses a frame to the sidecar over `MAX_FRAME_BYTES` (128 KiB). Parked rows
+  keep their notices and are bounded only by `MAX_REGISTRY_SESSIONS` (256), so
+  128 rows with full notices already pass the frame limit. A fixed notice
+  total is not safe either: measured 2026-10-17, 255 typical rows with no
+  notices serialize to about 98 KB, so 32 KiB of notices on top passes the
+  limit. The budget is therefore on the whole answer. Main serializes the
+  rows first, then adds notices newest-posted first while the answer stays
+  under `MAX_PEER_ROSTER_BYTES` (proposed: `MAX_FRAME_BYTES` minus envelope
+  headroom), and marks each row whose notice did not fit `noticeOmitted`.
+  Every row is still listed; only notice text is dropped, and
+  `ListPeers` says which peers' notices were left out, so a reader can message
+  the peer rather than read silence as "no notice". The budget is also the
+  roster-cost bound: every `ListPeers` call carries the notices into the
+  caller's context, and the cost of an unbounded roster was measured once
+  already (`CLOSED_PEERS_SHOWN` in `app/sidecar/listPeersTool.ts`).
+  `MAX_FRAME_BYTES` is the sidecar's inbound security limit and is not raised.
+- **Precondition, found while sizing this: the roster overflows today.** The
+  same measurement with 255 rows whose titles are at `MAX_SESSION_TITLE_CHARS`
+  (200) gives about 135 KB of ASCII, or 186 KB with two-byte characters, and
+  no notices at all. A long-lived workspace near the registry bound can
+  therefore already produce a `peers.list` answer the supervisor refuses.
+  That is a `ListPeers` defect independent of `Announce`, and its fix (for
+  example, applying the closed-row bound in main instead of the sidecar)
+  should land first, so the notice budget above always has room to work in.
 - **No new rate limiter.** Writes ride the request plane's existing bound
   (HOST-REQUEST-PLANE HR1).
 - **Desktop only**, like every peer tool. Terminal sessions never have a
@@ -154,11 +192,19 @@ Doctrine addition, appended to the peer paragraph:
 When you know roughly what you will work on, especially before you edit files,
 post a notice with Announce: what you are doing, and the areas or shared files
 you expect to touch. Replace it only if your scope changes; it is not for
-progress or momentary state. Before asking a peer what it is doing or which
-files it is editing, read its notice in ListPeers. Message it only when your
+progress or momentary state. Include work you hand to subagents; only you
+post the notice. Before asking a peer what it is doing or which files it is
+editing, read its notice in ListPeers. Ask about its scope only when your
 scope overlaps its notice, or it has no notice and you are about to edit near
 its work.
 ```
+
+The last sentence narrows scope questions only. It does not narrow the
+existing reasons to message a peer in the `SendToPeer` prompt
+(`app/sidecar/sendToPeerTool.ts`): needing something only that peer knows,
+finishing something it is waiting on, or being about to touch something it is
+working on. A notice replaces "which files are you editing?", not report-back
+or answers.
 
 `Announce` tool description:
 
@@ -166,7 +212,8 @@ its work.
 Post or replace your notice on the peer roster. Other sessions in this
 workspace see it when they call ListPeers; posting notifies no one. Describe
 your scope, not your progress: post it once you know what you will work on,
-and replace it only if that changes.
+and replace it only if that changes. Only the main conversational agent may
+call this tool; subagents report their scope to it instead.
 ```
 
 Field descriptions:
@@ -180,19 +227,29 @@ note: Anything else that stays true for this whole task and that a peer working 
 `ListPeers` description addition:
 
 ```text
-A peer's notice is its own statement of scope as of the time shown.
+A peer's notice is its own statement of scope as of the time shown. A peer
+marked as having a notice left out has one that did not fit in this list;
+message it if you need its scope.
 ```
 
 ## 9. Build sketch
 
-1. `app/shared/limits.ts`: `MAX_PEER_NOTICE_BYTES`. `app/shared/protocol.ts`:
-   the request verb and an optional `notice` on `PeerDescriptor`, with a
+0. Fix the existing roster overflow (§5 precondition) as its own change.
+1. `app/shared/limits.ts`: `MAX_PEER_NOTICE_BYTES` and
+   `MAX_PEER_ROSTER_BYTES`. `app/shared/protocol.ts`: the request verb,
+   and an optional `notice` and `noticeOmitted` on `PeerDescriptor`, with a
    version bump if the wire shape requires one.
 2. `app/host/registry.ts`: the notice on the row, cleared on close, persisted
-   with the row. Main handler with the closed schema. Boundary tests.
+   with the row. Main handler with the closed schema; `handlePeersList`
+   applies the aggregate budget. Boundary tests, including a full roster
+   (`MAX_REGISTRY_SESSIONS` eligible rows, every notice at the per-notice cap,
+   with posted times) that serializes under `MAX_FRAME_BYTES` and marks the
+   rows past the budget.
 3. `app/sidecar/announceTool.ts`, built through `buildTool` like
    `listPeersTool.ts`, appended in `sessionController.ts` beside the other peer
-   tools, with its classifier projection.
+   tools, with its classifier projection and the `context.agentId` refusal
+   (§3). Test that a worker call is refused and the session's notice is
+   unchanged.
 4. `app/sidecar/listPeersTool.ts`: render the notice and its posted time as
    quoted data.
 5. Doctrine and tool text (§8), then update the prompt-system map row and
