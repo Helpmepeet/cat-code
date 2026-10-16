@@ -386,6 +386,7 @@ test('the merged closed control shows the fast glyph only when supported and on'
   })
   expect(on).toContain('Fast mode on')
   expect(on).toContain('text-tone-warn')
+  expect(on).toContain('<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"')
   const unsupported = render({
     runControls: runControls({ fast: { active: false, supportedByModel: false } }),
     onSetFast: () => {},

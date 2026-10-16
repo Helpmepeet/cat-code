@@ -265,6 +265,54 @@ test('picking a model returns main and waits for the authoritative effort snapsh
   expect(menu(tree)?.querySelector('[aria-label="Model: Opus 5"]')).toBeTruthy()
 })
 
+for (const interaction of ['focus', 'hover', 'drag'] as const) {
+  test(`a shorter model snapshot discards the old effort ${interaction} without losing panel focus`, async () => {
+    const recorded = recorder()
+    const tree = await mountBar(recorded)
+    await openCard(tree)
+    await click(rowNamed(tree, 'Opus 5'))
+    const ultra = menu(tree)!.querySelector<HTMLButtonElement>('[aria-label="Ultra"]')!
+    const rail = ultra.closest<HTMLElement>('.touch-none')!
+    if (interaction === 'focus') {
+      await act(async () => ultra.focus())
+    } else if (interaction === 'hover') {
+      await act(async () => ultra.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })))
+    } else {
+      sizeRail(rail, 240)
+      await pointer(rail, 'pointerdown', 226)
+    }
+    expect(menu(tree)?.textContent).toContain('Ultra')
+    await act(async () => tree.render(bar(recorded, {
+      runControls: {
+        ...runControls({ current: 'opus', currentLabel: 'Opus 5', selected: 'opus', provider: 'anthropic' }),
+        effort: { current: 'high', selected: 'high', supported: true, options: OPUS_LEVELS },
+      },
+    })))
+    expect(rungs(tree)).toHaveLength(4)
+    expect(menu(tree)?.textContent).toContain('High')
+    expect(menu(tree)?.textContent).not.toContain('Ultra')
+    expect(focused()?.getAttribute('aria-label')).toBe('Model: Opus 5')
+    const newRail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
+    await pointer(newRail, 'pointerup', 226)
+    expect(recorded.efforts).toEqual([])
+  })
+}
+
+test('a model change cancels an effort drag even when both models have the same levels', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openLadder(tree)
+  const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
+  sizeRail(rail, 240)
+  await pointer(rail, 'pointerdown', 226)
+  await act(async () => tree.render(bar(recorded, {
+    runControls: runControls({ current: 'gpt-6-sol', currentLabel: 'GPT-6 Sol', selected: 'gpt-6-sol' }),
+  })))
+  await pointer(rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!, 'pointerup', 226)
+  expect(recorded.efforts).toEqual([])
+  expect(menu(tree)?.textContent).toContain('High')
+})
+
 test('the rail fills up to the chosen level, not just at it', async () => {
   const tree = await mountBar(recorder())
   await openLadder(tree)

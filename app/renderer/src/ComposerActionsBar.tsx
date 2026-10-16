@@ -3,6 +3,7 @@ import type { WorkspaceBranchReadout } from './useWorkspaceBranch.js'
 import './workspaceBranch.css'
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent as ReactFocusEvent,
@@ -103,8 +104,8 @@ function formatEffort(effort: string): string {
 function FastGlyph({ active }: { active: boolean }) {
   return (
     <svg
-      width="14"
-      height="14"
+      width="11"
+      height="11"
       viewBox="0 0 24 24"
       fill={active ? 'currentColor' : 'none'}
       stroke={active ? 'none' : 'currentColor'}
@@ -355,6 +356,7 @@ function RunControl({
               {hasEffort && snapshot && onSetEffort ? (
                 <div className="pt-1">
                   <EffortSlider
+                    key={JSON.stringify([snapshot.model.provider, snapshot.model.current, snapshot.effort.options])}
                     levels={snapshot.effort.options}
                     selected={snapshot.effort.selected}
                     onSelect={onSetEffort}
@@ -590,6 +592,18 @@ function EffortSlider({
   const [peekIndex, setPeekIndex] = useState<number | null>(null)
   const shownIndex = drag ? drag.index : currentIndex
   const labelIndex = drag?.index ?? peekIndex ?? currentIndex
+
+  useLayoutEffect(() => () => {
+    const rail = railRef.current
+    if (!rail?.contains(document.activeElement)) return
+    const modelRow = rail.closest('[role="menu"]')
+      ?.querySelector<HTMLButtonElement>('[data-run-model]')
+    // Restore only when the panel survives a model change, not when it closes
+    // or another focus owner has already taken over.
+    queueMicrotask(() => {
+      if (modelRow?.isConnected && document.activeElement === document.body) modelRow.focus()
+    })
+  }, [])
 
   useEffect(() => {
     const rail = railRef.current
