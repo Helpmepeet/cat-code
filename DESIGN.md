@@ -135,10 +135,13 @@ large pill treatments within one control group.
   the pane cannot contain the panel. Collapse is an app-wide preference.
   Waiting workers lead the active list; terminal workers settle into a Finished
   group, closed on load. Finished history and Clear survive reload and restart
-  for the session. Each agent occupies one row across resume. Resumed runs use
-  a background ring, the word “resumed”, and a brief `--source-project` arrival
-  wash. Hover or keyboard focus reveals only additional details in a two-line
-  strip attached to the row, with a clamped popover when left space is tight.
+  for the session. With no live work, the collapsed chip shows only uncleared
+  failures with red badges; done and stopped history never keeps it visible,
+  even while those rows settle in the panel. Each agent occupies one row across
+  resume. Resumed runs use a background ring, the word “resumed”, and a brief
+  `--source-project` arrival wash. Hover or keyboard focus reveals only additional
+  details in a two-line strip attached to the row, with a clamped popover when
+  left space is tight.
   Foreground workers alone show live activity. Background tasks remain available
   through ⌘K “Background tasks”. See `SubagentDock.tsx`,
   `subagentDockState.ts`, and `subagentDockPersistence.ts`.

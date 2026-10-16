@@ -44,11 +44,12 @@ export function SubagentDock({ state, collapsed, onCollapsedChange, onClearFinis
   const { flat, fits } = subagentDockLayout(geometry.width, geometry.transcriptWidth)
   const expanded = fits && ((flat && !collapsed) || floating)
   const panelShown = expanded || morphing
+  const hasChip = state.chipFaces.length > 0
   const visibleFaces = state.chipFaces.slice(0, Math.max(1, Math.min(6, Math.floor((geometry.width - 74) / 19))))
   const more = state.chipFaces.length - visibleFaces.length
   const tipRow = tip ? rows.find(row => row.agentId === tip.agentId) : null
 
-  const detailsVisible = tip !== null && tipRow !== null && !tip.hiding
+  const detailsVisible = tip !== null && !!tipRow && !tip.hiding
   useEffect(() => {
     onDetailsVisibleChange?.(detailsVisible)
     return () => onDetailsVisibleChange?.(false)
@@ -154,8 +155,9 @@ export function SubagentDock({ state, collapsed, onCollapsedChange, onClearFinis
     const element = tooltip.current
     const parent = pane.current
     const dock = root.current
+    if (tip && (!tipRow || !tip.anchor.isConnected || tip.anchor.closest('[inert]') ||
+        tip.mode === 'chip' && !state.chipFaces.some(row => row.agentId === tip.agentId))) { setTip(null); return }
     if (!tip || !tipRow || !element || !parent || !dock) return
-    if (!tip.anchor.isConnected || tip.anchor.closest('[inert]')) { setTip(null); return }
     const place = () => {
       const anchorBox = tip.anchor.getBoundingClientRect()
       const paneBox = parent.getBoundingClientRect()
@@ -186,7 +188,7 @@ export function SubagentDock({ state, collapsed, onCollapsedChange, onClearFinis
       currentPanel?.removeEventListener('scroll', place, true)
       tip.anchor.classList.remove('subagent-dock-row-tipped')
     }
-  }, [tip, tipRow, geometry, finishedOpen])
+  }, [tip, tipRow, geometry, finishedOpen, state.chipFaces])
 
   useEffect(() => {
     if (!hasRows) return
@@ -204,22 +206,22 @@ export function SubagentDock({ state, collapsed, onCollapsedChange, onClearFinis
   })
 
   useEffect(() => {
-    if (!reducedMotion) return
+    if (!reducedMotion && hasChip) return
     cancelMorph.current?.()
     cancelMorph.current = null
     pendingMorph.current = null
     setMorphing(false)
-  }, [reducedMotion])
+  }, [reducedMotion, hasChip])
   useEffect(() => () => { cancelMorph.current?.(); if (tipTimer.current) clearTimeout(tipTimer.current) }, [])
 
   if (!hasRows) return null
   const chipLabel = `Subagents: ${visibleFaces.map(row => `${row.name || row.task || 'Subagent'}, ${row.state}`).join('; ')}${more > 0 ? `; ${more} more` : ''}`
   return (
     <div ref={root} className={`subagent-dock${flat ? ' subagent-dock-flat' : ''}${reducedMotion ? ' subagent-dock-reduced' : ''}`} data-layout={expanded ? flat ? 'panel' : 'floating' : 'chip'}>
-      <button ref={chip} type="button" className={`subagent-dock-chip${panelShown ? ' subagent-dock-hidden' : ''}${state.active.length === 0 ? ' subagent-dock-all-finished' : ''}`} aria-label={chipLabel} aria-expanded={expanded} aria-controls={fits ? panelId : undefined} aria-hidden={panelShown || undefined} tabIndex={panelShown ? -1 : 0} aria-describedby={tip?.mode === 'chip' ? tipId : undefined} onClick={() => changeExpanded(true)} onFocus={event => { const first = visibleFaces[0]; if (first) showTip(first, event.currentTarget, 'chip') }} onBlur={() => closeTip()} onMouseLeave={() => closeTip()}>
+      {hasChip ? <button ref={chip} type="button" className={`subagent-dock-chip${panelShown ? ' subagent-dock-hidden' : ''}`} aria-label={chipLabel} aria-expanded={expanded} aria-controls={fits ? panelId : undefined} aria-hidden={panelShown || undefined} tabIndex={panelShown ? -1 : 0} aria-describedby={tip?.mode === 'chip' ? tipId : undefined} onClick={() => changeExpanded(true)} onFocus={event => { const first = visibleFaces[0]; if (first) showTip(first, event.currentTarget, 'chip') }} onBlur={() => closeTip()} onMouseLeave={() => closeTip()}>
         {visibleFaces.map(row => <span key={row.agentId} className="subagent-dock-chip-slot" onMouseEnter={event => showTip(row, event.currentTarget, 'chip')}><DockFace row={row} /></span>)}
         {more > 0 ? <span className="subagent-dock-more">+{more}</span> : null}
-      </button>
+      </button> : null}
       <div ref={panel} id={panelId} role="region" aria-label="Subagents" aria-hidden={!panelShown || undefined} inert={!expanded} className={`subagent-dock-panel${panelShown ? '' : ' subagent-dock-hidden'}${flat ? '' : ' subagent-dock-floating'}`}>
         <div className="subagent-dock-header"><span>SUBAGENTS</span><button type="button" aria-label="Collapse subagents" onClick={() => changeExpanded(false)}>⌃</button></div>
         <div className="subagent-dock-list">

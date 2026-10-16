@@ -330,7 +330,9 @@ export function selectSubagentDock(state: SubagentDockState, input: SubagentDock
   }
   active.sort((a, b) => Number(b.state === 'waiting') - Number(a.state === 'waiting') || a.launchOrder - b.launchOrder)
   finished.sort((a, b) => (b.terminalAt ?? 0) - (a.terminalAt ?? 0) || b.launchOrder - a.launchOrder)
-  return { active, finished, chipFaces: active.length ? active : finished, nextUpdateAt }
+  const chipFaces = active.some(row => !isSubagentDockTerminal(row.state))
+    ? active : [...active, ...finished].filter(row => row.state === 'failed')
+  return { active, finished, chipFaces, nextUpdateAt }
 }
 
 function usageLabel(usage: ReturnType<typeof agentUsageOf>, state: SubagentDockStatus): string | null {

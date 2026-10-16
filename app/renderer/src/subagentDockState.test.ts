@@ -78,10 +78,51 @@ for (const [status, delay, state] of [['failed', 1500, 'failed'], ['killed', 700
     const running = view(createSubagentDockState(), { workers: [worker()] })
     const terminal = view(running.state, { workers: [worker({ status })], nowMs: 2000 })
     expect(terminal.active[0]).toMatchObject({ state, settling: true })
+    expect(terminal.chipFaces.map(row => row.state)).toEqual(state === 'failed' ? ['failed'] : [])
     expect(view(terminal.state, { workers: [worker({ status })], nowMs: 2000 + delay - 1 }).active).toHaveLength(1)
     const finished = view(terminal.state, { workers: [worker({ status })], nowMs: 2000 + delay })
     expect(finished.finished[0]?.state).toBe(state)
-    expect(view(createSubagentDockState(Object.values(terminal.state.entries)), { workers: [worker({ status })], nowMs: 2001 }).finished[0]?.state).toBe(state)
+    expect(finished.chipFaces.map(row => row.state)).toEqual(state === 'failed' ? ['failed'] : [])
+    const restored = view(createSubagentDockState(Object.values(terminal.state.entries)), { workers: [worker({ status })], nowMs: 2001 })
+    expect(restored.finished[0]?.state).toBe(state)
+    expect(restored.chipFaces.map(row => row.state)).toEqual(state === 'failed' ? ['failed'] : [])
+  })
+}
+
+test('all-finished chip excludes done and stopped history, retains only failures until cleared, and keeps stored entries', () => {
+  const history = view(createSubagentDockState(), { workers: [
+    worker({ agentId: 'done', status: 'completed' }),
+    worker({ agentId: 'failed', status: 'failed' }),
+    worker({ agentId: 'stopped', status: 'killed' }),
+  ] })
+  expect(history.finished).toHaveLength(3)
+  expect(history.chipFaces.map(row => row.agentId)).toEqual(['failed'])
+  const clearMarkers = [{ agentId: 'failed', runKey: history.chipFaces[0]!.runKey }]
+  const cleared = view(history.state, { clearMarkers })
+  expect(cleared.chipFaces).toEqual([])
+  expect(cleared.finished.map(row => row.state).sort()).toEqual(['completed', 'stopped'])
+  expect(Object.values(cleared.state.entries)).toHaveLength(3)
+  const restored = view(createSubagentDockState(Object.values(cleared.state.entries)), { clearMarkers })
+  expect(restored.chipFaces).toEqual([])
+  expect(restored.finished).toHaveLength(2)
+})
+
+for (const liveState of ['running', 'waiting', 'background', 'resumed'] as const) {
+  test(`${liveState} chip keeps its current ordered active faces, including settling terminal rows`, () => {
+    const prior = view(createSubagentDockState(), { workers: [worker({ agentId: 'finishing' }), worker()] })
+    const facts: Partial<SubagentDockInput> = { nowMs: 2000, workers: [
+      worker({ agentId: 'finishing', status: 'completed' }),
+      worker({
+        isBackgrounded: liveState === 'background' || liveState === 'resumed',
+        ...(liveState === 'waiting' ? { status: 'completed', handoffStatus: 'blocked' } : {}),
+      }),
+    ], tasks: { items: [task({ resumedAt: liveState === 'resumed' ? 1500 : undefined })], subagents: [] } }
+    const live = view(prior.state, facts)
+    expect(live.active.find(row => row.agentId === 'a')?.state).toBe(liveState)
+    expect(live.chipFaces).toEqual(live.active)
+    expect(live.chipFaces).toHaveLength(2)
+    const settled = view(live.state, { ...facts, nowMs: 2700 })
+    expect(settled.chipFaces.map(row => row.state)).toEqual([liveState])
   })
 }
 

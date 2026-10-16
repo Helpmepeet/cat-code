@@ -2172,7 +2172,7 @@ html[data-glass='on'] [data-window-overlay] {
 .subagent-dock-word-completed { color:var(--tone-good); }
 .subagent-dock-word-failed { color:var(--tone-danger); }
 .subagent-dock-word-stopped { color:var(--tone-warn); }
-.subagent-dock-row-finished .subagent-dock-name, .subagent-dock-row-finished .subagent-dock-task, .subagent-dock-row-finished svg, .subagent-dock-all-finished svg { opacity:.55; }
+.subagent-dock-row-finished .subagent-dock-name, .subagent-dock-row-finished .subagent-dock-task, .subagent-dock-row-finished svg { opacity:.55; }
 .subagent-dock-finished-header { display:flex; align-items:center; justify-content:space-between; height:26px; margin-top:4px; padding:0 4px; border-top:1px solid var(--shell-seam); color:var(--text-faint); }
 .subagent-dock-finished-header button { display:flex; align-items:center; gap:5px; padding:2px 5px; border-radius:5px; font-size:11px; }
 .subagent-dock-finished-row { display:grid; grid-template-rows:1fr; transition:grid-template-rows 260ms var(--ease-enter), opacity 260ms var(--ease-enter); }
