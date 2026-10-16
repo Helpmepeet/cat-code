@@ -165,14 +165,19 @@ export function SubagentDock({ state, collapsed, onCollapsedChange, onClearFinis
         return
       }
       const origin = dock.getBoundingClientRect()
-      const box = placeSubagentTooltip(parent.getBoundingClientRect(), tip.anchor.getBoundingClientRect(), Math.min(element.scrollWidth || 300, tip.mode === 'row' ? 300 : 260), element.scrollHeight || (tip.mode === 'row' ? 50 : 70), tip.mode === 'row')
+      // Measure the natural border box, not the previous placement's inner size.
+      element.style.width = ''
+      element.style.height = ''
+      element.style.maxHeight = ''
+      element.classList.remove('subagent-dock-tip-attached')
+      const box = placeSubagentTooltip(paneBox, anchorBox, Math.min(element.offsetWidth || 300, tip.mode === 'row' ? 300 : 260), element.offsetHeight || (tip.mode === 'row' ? 50 : 70), tip.mode === 'row')
       element.classList.toggle('subagent-dock-tip-attached', box.attached)
       tip.anchor.classList.toggle('subagent-dock-row-tipped', box.attached && tip.mode === 'row')
       element.style.left = `${box.left - origin.left}px`
       element.style.top = `${box.top - origin.top}px`
       element.style.width = `${box.width}px`
       element.style.height = box.attached ? `${box.height}px` : ''
-      element.style.maxHeight = `${Math.max(0, parent.getBoundingClientRect().height - 16)}px`
+      element.style.maxHeight = `${Math.max(0, paneBox.height - 16)}px`
     }
     place()
     panel.current?.addEventListener('scroll', place, true)

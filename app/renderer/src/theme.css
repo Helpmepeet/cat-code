@@ -2139,7 +2139,7 @@ html[data-glass='on'] [data-window-overlay] {
 .subagent-dock-finished-row > button { min-height:0; overflow:hidden; }
 .subagent-dock-finished-closed { grid-template-rows:0fr; opacity:0; }
 .subagent-dock-finished-closed > button { padding-top:0; padding-bottom:0; border-top-width:0; border-bottom-width:0; }
-.subagent-dock-tip { overflow:hidden; position:absolute; z-index:40; max-width:300px; padding:6px 11px; border:1px solid var(--shell-seam); border-radius:7px; background:var(--surface-raised); box-shadow:var(--elev-popover); animation:subagent-tip-in 190ms var(--ease-enter); }
+.subagent-dock-tip { overflow:hidden; position:absolute; z-index:40; width:max-content; max-width:300px; padding:6px 11px; border:1px solid var(--shell-seam); border-radius:7px; background:var(--surface-raised); box-shadow:var(--elev-popover); animation:subagent-tip-in 190ms var(--ease-enter); }
 .subagent-dock-tip-attached { background:var(--subagent-row-attached); border-right:0; border-radius:7px 0 0 7px; }
 .subagent-dock-tip-who { display:flex; gap:7px; min-width:0; font:600 11px var(--font-mono); color:var(--peer); }
 .subagent-dock-tip-who > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

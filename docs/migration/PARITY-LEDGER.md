@@ -72,6 +72,11 @@ This amendment supersedes former roster-placement and footer-pill rulings in the
 historical rows below. See the [approved implementation plan](../plans/2026-10-08-subagent-dock-implementation-plan.md).
 Desktop GUI acceptance is pending operator verification.
 
+**Hover sizing correction (2026-10-16).** Row strips and chip popovers measure
+their natural border box before pane clamping, independently of the previous
+placement. Repeated-update, scroll, and resize regressions pass headlessly;
+the approved layout is unchanged and native hover acceptance remains pending.
+
 > **RULED + APPLIED 2026-07-26 — the 82 ORPHANED rows were PROMOTED to ❓, not waived.** Operator ruling: *"i dont
 > mind working it all. Just added it as a task in phase4 then."* Every row whose disposition read `⬜ deferred —
 > ORPHANED` now reads `❓ missing-no-owner — promoted from ⬜ ORPHANED 2026-07-26` (a greppable marker; per-row

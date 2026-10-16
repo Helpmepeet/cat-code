@@ -113,6 +113,50 @@ test('chip remains one button and names each face, and focus links row details u
   expect(tree.container.querySelector('[role="tooltip"]')).toBeNull()
 })
 
+for (const mode of ['attached', 'popover', 'chip'] as const) {
+  test(`${mode} details keep their size across live updates and scrolling, and recover after pane clamping`, async () => {
+    width = mode === 'attached' ? 1600 : mode === 'popover' ? 400 : 800
+    const initialWidth = width
+    const tree = await mount(fixture(state([row()]), mode === 'chip'))
+    if (mode === 'popover') {
+      await act(async () => button(tree.container, 'Subagents: Ada, running').click())
+    }
+    const anchor = button(tree.container, mode === 'chip' ? 'Subagents: Ada, running' : 'Ada, running')
+    anchor.getBoundingClientRect = () => new DOMRect(width - (mode === 'chip' ? 40 : 300), 30, mode === 'chip' ? 16 : 280, 50)
+    await act(async () => anchor.focus())
+    const tip = tree.container.querySelector<HTMLElement>('[role="tooltip"]')!
+    const naturalWidth = mode === 'chip' ? 214 : 242
+    const naturalHeight = mode === 'chip' ? 69 : 50
+    const borderWidth = () => tip.classList.contains('subagent-dock-tip-attached') ? 1 : 2
+    // Model border-box layout: scroll dimensions exclude borders and reflect
+    // the last assigned size. happy-dom itself does not calculate these.
+    Object.defineProperties(tip, {
+      offsetWidth: { get: () => Number.parseFloat(tip.style.width) || naturalWidth },
+      offsetHeight: { get: () => Number.parseFloat(tip.style.height) || naturalHeight },
+      scrollWidth: { get: () => (Number.parseFloat(tip.style.width) || naturalWidth) - borderWidth() },
+      scrollHeight: { get: () => (Number.parseFloat(tip.style.height) || naturalHeight) - 2 },
+    })
+    const panel = tree.container.querySelector('.subagent-dock-panel')!
+    for (let update = 0; update < 24; update++) {
+      await tree.render(fixture(state([row({ stripLines: ['GPT-6.1 Sol', `Reading file ${update}`] })]), mode === 'chip'))
+      expect(Number.parseFloat(tip.style.width)).toBe(naturalWidth)
+      expect(tip.classList.contains('subagent-dock-tip-attached')).toBe(mode === 'attached')
+      if (mode === 'attached') expect(Number.parseFloat(tip.style.height)).toBe(50)
+      await act(async () => panel.dispatchEvent(new Event('scroll')))
+      expect(Number.parseFloat(tip.style.width)).toBe(naturalWidth)
+    }
+    await resize(mode === 'attached' ? 1560 : mode === 'chip' ? 160 : 340)
+    height = 60
+    await resize(width)
+    expect(Number.parseFloat(tip.style.width)).toBeLessThanOrEqual(width - 16)
+    expect(Number.parseFloat(tip.style.maxHeight)).toBe(44)
+    height = 600
+    await resize(initialWidth)
+    expect(Number.parseFloat(tip.style.width)).toBe(naturalWidth)
+    expect(Number.parseFloat(tip.style.maxHeight)).toBe(584)
+  })
+}
+
 test('resume from Finished preserves the row and its full arrival across unrelated rerenders', async () => {
   const completed = row({ state: 'completed', stateWord: 'done', terminalAt: 20 })
   const tree = await mount(fixture(state([], [completed])))
