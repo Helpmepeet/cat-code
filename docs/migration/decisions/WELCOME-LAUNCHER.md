@@ -152,3 +152,17 @@ including worktree entry/exit, and retain every Git-valid name.
 
 These changes preserve the existing Unix-socket transport, process isolation,
 two session identities, receiving-side authority and raw engine-event stream.
+
+The readout uses a HEAD-only observation rather than repeating picker preflight.
+A cached project conversation can obtain its saved worktree and recorded branch
+through an observation-only worker without restoring an engine session, running
+hooks or advancing conversation provenance. Main derives the request from its
+session row; the renderer supplies only that row's id. Metadata is reused until
+the owned transcript changes, with one worker admitted at a time.
+
+**Review gap, 2026-10-16:** receiving-side cwd observations do not atomically fence
+an existing engine's worktree entry/exit. Another chat can return to the target
+checkout while Git preflight is awaiting subprocesses. Coordinating those engine
+transitions with the host reservation remains open; the current implementation
+must not be described as closing that race. Independent worktrees have not been
+silently added to the checkout-wide blocker.
