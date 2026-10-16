@@ -78,6 +78,7 @@ transport, effectively-once processing.
 | registry churn rule (refuse at 256 rows, none reappable) | in | one comparison; without it park-and-create is unbounded |
 | byte limits, classifier projections, untagged creation prompt, title on, name on restore, operational-log line | in | each is a constant, a string, or a boolean |
 | unread marker, audit view, file-overlap visibility | deferred | §12 |
+| file-overlap visibility | 🔁 **withdrawn 2026-10-17** (operator) | the agent-posted scope notice in [the `Announce` design](../../design/2026-10-17-peer-announce.md) answers the question it existed for |
 
 ## 1. Operator rulings (2026-09-03), all decided
 
@@ -1171,7 +1172,10 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
 - Broadcast, topics/contextId, user-chosen call signs: not in v1.
 
 **Deferred, flagged (not cut):**
-- **File-overlap visibility** between live peers on one checkout (which
+- 🔁 **WITHDRAWN 2026-10-17 by the operator.** Replaced by a scope notice
+  each peer posts itself and `ListPeers` shows (designed, not built); see [the `Announce` design](../../design/2026-10-17-peer-announce.md).
+  The original entry is kept below as history.
+  **File-overlap visibility** between live peers on one checkout (which
   files each is touching, and an overlap warning in `ListPeers`). Real for
   this repository, whose CLAUDE.md §4 exists because sessions collide on the
   tree, and the field treats write collision as first-class. Deferred because
