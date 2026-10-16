@@ -4010,6 +4010,7 @@ export function App() {
 	            cacheExpiresAt={rail.cacheExpiresAt}
 	            lastPermissionMode={rail.lastPermissionMode}
 	            runControls={panelRunControls}
+	            readOnlyRunControls={rail.readOnlyRunControls}
 	            contextBreakdown={panelContextBreakdown}
 	            // Only a pane with an engine behind it can be asked. The donut is
 	            // the one composer face that renders without one: it reads cached

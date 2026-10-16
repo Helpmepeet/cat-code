@@ -252,7 +252,7 @@ test('the MODEL chip shows the resolved session model, never a fabricated label'
 test('the REASONING chip shows the real effort tier, Title-cased, only when set', () => {
   const withEffort = render({ reasoningEffort: 'high' })
   expect(withEffort).toContain('High')
-  expect(withEffort).toContain('Reasoning effort: high')
+  expect(withEffort).toContain('Reasoning effort: High')
 
   // null = running at the provider default → no chip, not a fabricated "High".
   const noEffort = render({ reasoningEffort: null })
@@ -278,7 +278,7 @@ test('P4-24c — with runControls + handlers, the MODEL face becomes an interact
   })
   expect(html).toContain('GPT-5.6 Terra')
   expect(html).toContain('Model: GPT-5.6 Terra')
-  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(2)
+  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(1)
 })
 
 /**
@@ -353,7 +353,7 @@ test('P4-24c — the REASONING picker offers Auto even when no explicit tier is 
   // Static path would omit the reasoning face when the tier is null; the interactive
   // picker shows the "Auto" face so the user can still pick a tier.
   expect(html).toContain('Auto')
-  expect(html).toContain('Reasoning effort: auto')
+  expect(html).toContain('Reasoning effort: Auto')
 })
 
 test('P4-24c — reasoning shows the effective tier while preserving Auto selection', () => {
@@ -365,69 +365,65 @@ test('P4-24c — reasoning shows the effective tier while preserving Auto select
     onSetEffort: () => {},
   })
   expect(html).toContain('Medium (Auto)')
-  expect(html).toContain('Reasoning effort: medium (auto)')
+  expect(html).toContain('Reasoning effort: Medium (Auto)')
 })
 
-test('P4-24c — the FAST toggle offers an enable affordance when off but supported', () => {
+test('the merged closed control conveys fast off without a separate toolbar face', () => {
   const html = render({
-    fastMode: false,
     runControls: runControls({ fast: { active: false, supportedByModel: true, available: true } }),
     onSetFast: () => {},
   })
-  expect(html).toContain('Enable fast mode')
+  expect(html).toContain('Fast mode off')
+  expect(html).toContain('data-composer-face="run-controls"')
+  expect(html).not.toContain('data-composer-face="fast"')
+  expect(html).not.toContain('text-tone-warn')
 })
 
-test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
-  const off = render({
-    runControls: runControls({ fast: { active: false, supportedByModel: true, available: true } }),
-    onSetFast: () => {},
-  })
-  const offFast = off.match(/<button[^>]*data-composer-face="fast"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? ''
-  expect(offFast).toContain('data-composer-face="fast"')
-  expect(offFast).toContain('h-[22px] w-[22px]')
-  expect(offFast).toContain('fill="none"')
-  expect(offFast).toContain('stroke="currentColor"')
-  expect(offFast).toContain('text-text-ghost')
-
+test('the merged closed control shows the fast glyph only when supported and on', () => {
   const on = render({
     runControls: runControls({ fast: { active: true, supportedByModel: true, available: true } }),
     onSetFast: () => {},
   })
-  const onFast = on.match(/<button[^>]*data-composer-face="fast"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? ''
-  expect(onFast).toContain('data-composer-face="fast"')
-  expect(onFast).toContain('h-[22px] w-[22px]')
-  expect(onFast).toContain('fill="currentColor"')
-  expect(onFast).toContain('stroke="none"')
-  expect(onFast).not.toContain('border-tone-warn/30')
-  expect(onFast).not.toContain('bg-tone-warn/10')
-  expect(onFast).toContain('text-tone-warn')
-})
-
-test('P4-24c — the FAST toggle is disabled with the real reason when unavailable', () => {
-  const html = render({
-    fastMode: false,
-    runControls: runControls({
-      fast: {
-        active: false,
-        supportedByModel: true,
-        available: false,
-        unavailableReason: 'Fast mode requires a paid subscription',
-      },
-    }),
-    onSetFast: () => {},
-  })
-  expect(html).toContain('Fast mode requires a paid subscription')
-  expect(html).toContain('disabled=""')
-})
-
-test('P4-24c — the FAST toggle is hidden when off AND the model cannot run fast', () => {
-  const html = render({
-    fastMode: false,
+  expect(on).toContain('Fast mode on')
+  expect(on).toContain('text-tone-warn')
+  const unsupported = render({
     runControls: runControls({ fast: { active: false, supportedByModel: false } }),
     onSetFast: () => {},
   })
-  expect(html).not.toContain('Enable fast mode')
-  expect(html).not.toContain('Fast mode on')
+  expect(unsupported).not.toContain('text-tone-warn')
+})
+
+test('closed run composition omits visible Auto mode, separators, and unsupported stale effort', () => {
+  const html = render({
+    permissionContext: permissionContext({ mode: 'auto' }),
+    reasoningEffort: 'high',
+    runControls: runControls({ effort: { supported: false, options: [] } }),
+    onSetModel: () => {},
+  })
+  const face = html.match(/<button[^>]*data-composer-face="run-controls"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? ''
+  expect(face).toContain('Permission mode: Auto')
+  expect(face).not.toContain('Reasoning effort:')
+  expect(face.replace(/<[^>]*>/g, '')).not.toContain('Auto')
+  expect(face).not.toContain('border-l')
+  expect(face).not.toContain('role="separator"')
+  expect(face).toContain('composer-provider-logo composer-provider-openai')
+  expect(face).toContain('text-[12.5px]')
+  expect(face).toContain('font-medium')
+})
+
+test('a detached retained snapshot preserves effective Auto effort and provider without a trigger', () => {
+  const html = render({
+    permissionContext: null,
+    runControls: null,
+    readOnlyRunControls: runControls({
+      model: { provider: 'anthropic', current: 'opus', currentLabel: 'Opus', selected: 'opus' },
+      effort: { current: 'medium', selected: null },
+    }),
+  })
+  expect(html).toContain('Model: Opus, Reasoning effort: Medium (Auto)')
+  expect(html).toContain('composer-provider-logo composer-provider-anthropic')
+  expect(html).not.toContain('data-composer-face="run-controls"')
+  expect(html).not.toContain('aria-haspopup="menu"')
 })
 
 test('P4-24c — without runControls, the faces stay the P4-24 read-only static faces', () => {
@@ -435,8 +431,10 @@ test('P4-24c — without runControls, the faces stay the P4-24 read-only static 
   // The read-only fast face title (static), not the interactive toggle title.
   expect(html).toContain('Fast mode on')
   expect(html).not.toContain('Enable fast mode')
-  // No model/effort menu triggers — only the permission-mode chip.
-  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(1)
+  // A permission context without live run controls cannot arm the composition.
+  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(0)
+  expect(html).not.toContain('data-composer-face="run-controls"')
+  expect(countOccurrences(html, 'composer-run-face')).toBe(1)
 })
 
 // ── Profile account-switcher popover (the prototype's `AccountChip`) ──────────
@@ -444,15 +442,15 @@ test('P4-24c — without runControls, the faces stay the P4-24 read-only static 
 test('with a switch handler, the account face becomes an interactive menu trigger', () => {
   // Read-only (no handler) → a <span> face, no menu trigger (existing tests). WITH
   // onSwitchAccount → the face is a <button aria-haspopup="menu"> that opens the
-  // switcher. No runControls/model here, so the only OTHER trigger is the perm chip.
+  // switcher. Without live run controls it is the only menu trigger.
   const readOnly = render({ account: account({ alias: 'hiby' }) })
-  expect(countOccurrences(readOnly, 'aria-haspopup="menu"')).toBe(1)
+  expect(countOccurrences(readOnly, 'aria-haspopup="menu"')).toBe(0)
 
   const interactive = render({
     account: account({ alias: 'hiby' }),
     onSwitchAccount: () => {},
   })
-  expect(countOccurrences(interactive, 'aria-haspopup="menu"')).toBe(2)
+  expect(countOccurrences(interactive, 'aria-haspopup="menu"')).toBe(1)
   // Same alias + title contract as the read-only face (real status on the title).
   expect(interactive).toContain('hiby')
   expect(interactive).toContain('Active account: hiby · Available')
@@ -698,9 +696,9 @@ test('AccountSwitcherPanel: the Manage footer appears only when a handler is wir
 // ── Context donut usage popover (the prototype's `ContextChip`) ───────────────
 
 test('the context donut is an interactive dialog trigger when usage is present (ACCT-3: informational, not a menu)', () => {
-  // No runControls/account here, so the only OTHER trigger is the perm chip.
+  // Read-only run composition does not become a menu alongside context.
   const html = render({ contextUsage: USAGE })
-  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(1)
+  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(0)
   expect(countOccurrences(html, 'aria-haspopup="dialog"')).toBe(1)
   // The donut visual + its readout survive (real percent, never fabricated).
   expect(html).toContain('Context 21% used')
@@ -989,18 +987,18 @@ test('the action bar is an ARIA toolbar (keyboard-navigable face group)', () => 
 })
 
 test('roving tabindex: the first face (attach) is the single tab stop; others are -1', () => {
-  // Default render → two interactive faces: the attach glyph + the permission chip.
-  const html = render()
+  // A live snapshot arms the run controls beside attach.
+  const html = render({ runControls: runControls() })
   // The attach glyph is always first and rests as the toolbar's single tab stop.
   expect(html).toContain('data-composer-face="attach" tabindex="0"')
   // Every other face is out of the tab order (-1); reached with the arrow keys.
-  expect(html).toContain('data-composer-face="mode" tabindex="-1"')
+  expect(html).toContain('data-composer-face="run-controls" tabindex="-1"')
   // Exactly one tab stop across the whole bar (the roving invariant).
   expect(countOccurrences(html, 'tabindex="0"')).toBe(1)
 })
 
 test('every interactive face carries a data-composer-face marker for roving + entry', () => {
-  // A maximal bar: attach + model + effort + mode + fast + account + context.
+  // Run settings share a single face, independent of account and context.
   const html = render({
     model: 'gpt-5.6-terra',
     runControls: runControls(),
@@ -1013,28 +1011,24 @@ test('every interactive face carries a data-composer-face marker for roving + en
   })
   for (const id of [
     'attach',
-    'model',
-    'effort',
-    'mode',
-    'fast',
+    'run-controls',
     'account',
     'context',
   ]) {
     expect(html).toContain(`data-composer-face="${id}"`)
   }
-  // Still exactly one tab stop (attach); the other six faces are all -1.
+  // Still exactly one tab stop (attach); the other three faces are all -1.
   expect(html).toContain('data-composer-face="attach" tabindex="0"')
   expect(countOccurrences(html, 'tabindex="0"')).toBe(1)
-  expect(countOccurrences(html, 'tabindex="-1"')).toBe(6)
+  expect(countOccurrences(html, 'tabindex="-1"')).toBe(3)
 })
 
 test('read-only faces (no handlers) are not roving triggers', () => {
-  // Read-only model/effort/account render as <span> display faces, not buttons,
-  // so they never join the roving group — only attach + the perm chip do.
-  const html = render({ model: 'gpt-5.6-terra', reasoningEffort: 'high' })
-  expect(countOccurrences(html, 'data-composer-face')).toBe(2)
+  // Without an engine snapshot or live permission context only attach roves.
+  const html = render({ model: 'gpt-5.6-terra', reasoningEffort: 'high', permissionContext: null })
+  expect(countOccurrences(html, 'data-composer-face')).toBe(1)
   expect(html).toContain('data-composer-face="attach"')
-  expect(html).toContain('data-composer-face="mode"')
+  expect(html).not.toContain('data-composer-face="run-controls"')
   expect(html).not.toContain('data-composer-face="model"')
   expect(html).not.toContain('data-composer-face="effort"')
 })
@@ -1193,8 +1187,8 @@ test('a detached session still names its model, effort, mode, fast and account',
   const html = renderDetached()
   expect(html).toContain('gpt-5.6-sol')
   expect(html).toContain('Model: gpt-5.6-sol')
-  expect(html).toContain('Reasoning effort: high')
-  expect(html).toContain('Permission mode: Auto mode')
+  expect(html).toContain('Reasoning effort: High')
+  expect(html).toContain('Permission mode: Auto')
   expect(html).toContain('Active account: hiby · Available')
   // The context donut keeps the session's EXACT window, not the 200k default.
   expect(html).toContain('Context 39% used')
@@ -1205,7 +1199,7 @@ test('none of those faces is a control while there is no engine to take the verb
   // A picker announces itself with aria-haspopup; the read-only faces are spans.
   expect(html).not.toContain('aria-label="Model"')
   expect(html).not.toContain('aria-label="Reasoning effort"')
-  expect(html).not.toContain('aria-label="Permission mode: Auto"')
+  expect(html).not.toContain('data-composer-face="run-controls"')
   expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(0)
   // The donut is the one face that stays clickable without an engine: it opens a
   // read-only popover, and its recompute is gated by the pane, not by this bar.
@@ -1221,9 +1215,7 @@ test('a face whose value was never reported still renders nothing', () => {
 })
 
 test('the fast face survives a park with fast mode OFF, and says so', () => {
-  // Operator report (2026-08-09): parking made the ⚡ vanish. `false` is a real
-  // answer and must render, exactly as the live chip renders its off state;
-  // only "nothing knows" may drop the face.
+  // A known off value remains accessible without drawing an off-state glyph.
   const off = renderDetached({ fastMode: false })
   expect(off).toContain('Fast mode off')
   const on = renderDetached({ fastMode: true })

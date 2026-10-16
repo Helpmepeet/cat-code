@@ -108,7 +108,15 @@ function rail(
     attachDisabled: false, onAttach: () => {}, model: null, reasoningEffort: null,
     fastMode: null, permissionContext: null, onSetMode: () => {}, account: null,
     contextUsage: { usedTokens, contextWindow: 200_000, percentUsed: Math.round(usedTokens / 2_000) },
-    runControls: { autoCompact, cacheExpired, cacheExpiresAt } as RunControlsSnapshot,
+    runControls: {
+      model: {
+        current: 'gpt-5.6-sol', currentLabel: 'GPT-5.6 Sol', selected: 'gpt-5.6-sol',
+        contextWindow: 200_000, provider: 'openai', providerSwitchLocked: false, options: [],
+      },
+      effort: { current: null, selected: null, supported: false, options: [] },
+      fast: { active: false, supportedByModel: false, available: false, unavailableReason: null },
+      autoCompact, cacheExpired, cacheExpiresAt,
+    },
   })
 }
 

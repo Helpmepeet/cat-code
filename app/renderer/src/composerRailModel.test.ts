@@ -200,6 +200,23 @@ test('a session that lost its engine still reports every display fact', () => {
   ).toBeNull()
   expect(rail.lastPermissionMode).toBe('auto')
   expect(rail.provider).toBe('openai')
+  expect(rail.readOnlyRunControls).toEqual(SNAPSHOT)
+})
+
+test('a parked snapshot retains implicit effort without keeping a live setter seam', () => {
+  const snapshot = {
+    ...SNAPSHOT,
+    effort: { ...SNAPSHOT.effort, current: 'medium', selected: null },
+  }
+  let runControls = reduceRunControlsState(createRunControlsState(), frame({
+    kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: SID,
+    runControls: snapshot,
+  }))
+  runControls = reduceRunControlsState(runControls, frame(lifecycle()))
+  const rail = selectComposerRail(sources({ runControls, connectionStatus: 'disconnected' }))
+  expect(rail.readOnlyRunControls?.effort).toEqual(snapshot.effort)
+  expect(rail.readOnlyRunControls?.model.provider).toBe('openai')
+  expect(rail.liveRunControls).toBeNull()
 })
 
 test('and arms nothing, because there is no engine to take a verb', () => {

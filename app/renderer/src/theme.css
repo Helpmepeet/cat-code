@@ -155,6 +155,8 @@
    * so `text-text-subtle` — the app's most-used text colour — carries the same
    * legibility in both, and neither ramp is an arithmetic inversion of the other. */
   --text-primary: #f4f4f5;
+  --provider-claude: #d97757;
+  --provider-openai: var(--text-primary);
   --text-muted: #a1a1aa;
   --text-subtle: #98989f;
   --text-faint: #838389;
@@ -318,6 +320,8 @@ html[data-appearance='light'] {
   /* Contrast-matched to the dark ramp step for step, not inverted; the ratios
    * are in the `:root` note. */
   --text-primary: #18181b;
+  --provider-claude: #d97757;
+  --provider-openai: var(--text-primary);
   --text-muted: #52525b;
   --text-subtle: #575761;
   --text-faint: #6a6a74;

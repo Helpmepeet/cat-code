@@ -158,10 +158,21 @@ large pill treatments within one control group.
   run; an evicted finished selection retains its last observed state.
   See `SubagentWorkspace.tsx` and
   `SubagentSidePanel.tsx`.
-- **Composer:** Keep the input visually connected to the transcript. Put model,
-  reasoning, permission, and account controls in a compact action row. Reuse
-  the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)
-  before adding a new control style. Context pressure belongs on the ring, not
+- **Composer:** Keep the input visually connected to the transcript. Run settings
+  share one borderless 12.5px medium trigger: provider mark, cyan model name,
+  accent effort word (with “(Auto)” for an implicit tier), a filled amber bolt
+  only when fast is on, and the permission label in its tone only outside Auto.
+  Keep 6px gaps, with no internal dot separators. Auto is always the usual mode,
+  independent of the saved default. Claude's mark uses `--provider-claude`;
+  OpenAI's uses `--provider-openai` (primary text), independently of model cyan.
+  The stacked panel shows the current model row, its effort slider when supported,
+  a seam, the supported fast switch, and mode. Model and mode rows open subfaces
+  with Back controls. Model picks return to the stacked face with the engine's
+  updated effort; mode picks close the panel. Escape goes back one level before
+  closing. Read-only panes use the same value composition without a trigger.
+  Account, branch, lid cup, and context controls stay in the right cluster.
+  Reuse the existing composer controls before adding a new control style.
+  Context pressure belongs on the ring, not
   a separate triangle. Estimated cache expiry uses a display-only amber clock
   before the account face, with a small raised-surface hover label reading
   “Cache expired”. Unknown expiry shows nothing.

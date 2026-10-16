@@ -32,8 +32,10 @@ import {
   selectBreakdownRows,
   type ContextBreakdownRow,
 } from './contextBreakdownState.js'
-import { PermissionModeChip } from './PermissionModeChip.js'
+import { PermissionModeOptions } from './PermissionModeChip.js'
 import { ProviderLogo } from './ProviderLogo.js'
+import { permissionModeMeta, permissionModeShortLabel } from './permissionLabels.js'
+import { ToggleSwitch } from './SettingsEditors.js'
 import { ActionWarningIcon, Glyph } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
 import { useCacheExpiredEstimate } from './useCacheExpiredEstimate.js'
@@ -48,49 +50,8 @@ import type {
   ContextBreakdownSnapshot,
 } from '../../shared/protocol.js'
 
-/**
- * P4-24 composer actions row — the desktop analog of the prototype's composer
- * `ChipStrip` (`Chat.jsx:1454` → `Surfaces.jsx:745`). The prototype's rail is
- * NOT the bordered-pill `Chip` (`Surfaces.jsx:40`); it is `ColumnChipFace`
- * (`Surfaces.jsx:222`) — a BORDERLESS, background-less face that shows only the
- * quiet colored value text (the label is the hover tooltip, and the `icon`/`dot`
- * props are destructured-but-never-rendered, `Surfaces.jsx:240-243`), separated
- * by faint `·` dots. Left→right: attach glyph · [model] · permission MODE · ——
- * · [active account] · context donut.
- *
- * REAL DATA ONLY (the prototype's chip values are mock fixtures — source wins):
- *  - MODEL renders the RESOLVED session model (`RunControlsSnapshot.model.current`,
- *    the sidecar's `getMainLoopModel()` — the same resolver the QueryEngine uses
- *    at request time), under the engine's own display name for it
- *    (`.currentLabel`, from `getMarketingNameForModel`) so the face reads as the
- *    picker row does. It comes off the LIVE run-controls seam, re-broadcast on
- *    every model change, not the spawn-frozen `DiagnosticsSnapshot`. Absent only
- *    before the snapshot arrives; never a fabricated label.
- *  - REASONING renders the session's real effort tier (`reasoningEffort` ←
- *    `AppState.effortValue`, seeded from `getInitialEffortSetting()` in the
- *    sidecar). Absent when no explicit effort is set (running at the provider
- *    default) — not fabricated into a "High".
- *  - FAST ⚡ renders whenever the state is KNOWN and the model supports it, on
- *    or off (`fastMode` ← `AppState.fastMode`), matching the interactive chip.
- *    Absent means only that nothing has reported it.
- *  - ACCOUNT renders the real active alias (`selectActiveAccount`,
- *    `accountsState.ts:88`) as the prototype's quiet grey face — the TEXT is
- *    ALWAYS `text-text-muted`, never health-tinted (the prototype's `AccountChip`
- *    face is unconditionally `#a1a1aa`). Health rides the status dot beside it
- *    and the title; both read-only and interactive faces carry the dot, so a
- *    pane with no engine does not silently lose the signal.
- *  - CONTEXT donut is ALWAYS shown (the prototype's `ContextChip` never hides,
- *    `Surfaces.jsx:471-473`): `selectContextUsage` returns real result-frame usage
- *    once a turn provides it. Before a window is known the ring still draws, at
- *    rest and without a percentage, rather than dividing by the default constant.
- *
- * The prototype's RECAP icon (Chat.jsx:1438) is intentionally omitted (user
- * decision, 2026-07-13) — only the attach glyph remains in the icon slot.
- *
- * Tailwind discipline: the account tone rides a STATIC class map (no interpolated
- * `text-[…]` — the v4 dynamic-class trap); the model's cyan echo is a STATIC
- * arbitrary class (`text-[light-dark(#0e7490,#22d3ee)]`, allowed — only interpolation no-ops).
- */
+/** The run face reads live or retained engine values, never mock model names.
+ * Retaining display data must not retain the ability to send a setter. */
 
 /**
  * Feature #4 — roving-tabindex props applied to one action-bar face (its trigger
@@ -118,8 +79,6 @@ export type ComposerFaceProps = {
 // text, no border/background, 12.5px medium, ellipsised, brightening on hover.
 const RAIL_FACE =
   'inline-flex max-w-[170px] shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-[5px] py-[3px] text-[12.5px] font-medium transition-colors'
-const FAST_FACE =
-  'inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] p-0 transition-colors'
 
 /** The prototype's faint `·` divider (Surfaces.jsx:751 `Sep`, colour #3f3f46). */
 function RailSep() {
@@ -141,30 +100,6 @@ function formatEffort(effort: string): string {
   return effort.charAt(0).toUpperCase() + effort.slice(1)
 }
 
-/**
- * The prototype's fast-mode ⚡ (Surfaces.jsx:694 `FastChip`) — the READ-ONLY face,
- * for a pane with no engine to toggle it.
- *
- * Renders for a KNOWN state, on or off, matching the live chip's two looks. It
- * used to render only when fast was ON, which was right while the only caller
- * was a preview (a cache says nothing about fast, so "not on" and "unknown" were
- * the same thing) and wrong the moment a detached live session could answer:
- * parking a session with fast off made the face vanish, while every other face
- * stayed. Absent now means only that nothing knows.
- */
-function FastFace({ active }: { active: boolean }) {
-  const label = active ? 'Fast mode on' : 'Fast mode off'
-  return (
-    <span
-      className={`${FAST_FACE} ${active ? 'text-tone-warn' : 'text-text-ghost'}`}
-      title={label}
-      aria-label={label}
-    >
-      <FastGlyph active={active} />
-    </span>
-  )
-}
-
 function FastGlyph({ active }: { active: boolean }) {
   return (
     <svg
@@ -182,15 +117,6 @@ function FastGlyph({ active }: { active: boolean }) {
     </svg>
   )
 }
-
-/* --------------------------------------------------------------------------- *
- * P4-24c — INTERACTIVE run-control chips (the prototype's `RunChip` :99 /
- * `ReasoningChip` :137 / `FastChip` :694 popovers). Borderless faces driving the
- * REAL values + the real sidecar setters (via the app-owned `*.set` verbs). The
- * popover pattern (open state + outside-click/Escape dismiss, upward panel, in-panel
- * arrow roving) lives in `composerPopover.ts` (shared with `PermissionModeChip`).
- * Tailwind v4: only STATIC arbitrary classes.
- * --------------------------------------------------------------------------- */
 
 const POPOVER_PANEL =
   'animate-pop-up absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
@@ -234,84 +160,133 @@ const ANTHROPIC_STATUS_LABEL: Record<AnthropicAccountStatus['status'], string> =
   dead: 'Needs re-login',
 }
 
-/**
- * Interactive MODEL face → the composer's model card (`model.set`), a two-face
- * popover: a grouped list of the REAL selectable models, and, once one is
- * picked, that model's effort ladder (`effort.set`).
- *
- * The face reads the engine's display NAME for the resolved model (`label`), not
- * the model id (`current`): picking "Haiku 4.5" used to leave the face reading
- * `claude-haiku-4-5-20251001`, because `current` is what the engine resolves the
- * selection to. `current` is still the fallback, so a model the engine has no
- * name for shows its id rather than nothing.
- *
- * WHY EFFORT LIVES HERE TOO, next to a rail that already has its own effort
- * face. The two are one decision at the moment of switching: the valid levels
- * are a property of the model (`getSupportedEffortLevels`, and some models have
- * none at all), and a switch to a model that cannot take the level you
- * are on silently drops it (`reconcileEffortForModel`). Choosing a model in one
- * popover and discovering the reset in another is what this closes. The rail's
- * `ReasoningChip` is untouched and stays the direct route for an effort-only
- * change; both write the same `effort.set` verb, so they cannot disagree.
- *
- * ONE FACE AT A TIME, never both: the card's job is the switch, and a model list
- * standing beside a ladder spends the whole card on a comparison that only
- * matters for the row being picked. Picking a row with no levels at all (Haiku)
- * closes the card instead of advancing, which is why the rows that DO lead
- * somewhere carry a chevron — `option.effortOptions` is what makes that
- * predictable before the click, and it is the only reason that field exists.
- */
-function ModelChip({
-  current,
-  label,
-  selected,
-  provider,
-  providerSwitchLocked,
-  options,
-  effortSelected,
-  onSelect,
+/** One face for the session's run settings. The engine snapshot remains the
+ * authority after a model pick, including any reconciled effort selection. */
+function RunControl({
+  model,
+  modelLabel,
+  reasoningEffort,
+  fastMode,
+  snapshot,
+  readOnlySnapshot,
+  permissionContext,
+  readOnlyMode,
+  onSetModel,
   onSetEffort,
+  onSetFast,
+  onSetMode,
   faceProps,
   onFocusComposer,
 }: {
-  current: string | null
-  label: string | null
-  selected: string | null
-  provider: RunControlProvider
-  providerSwitchLocked: boolean
-  options: RunControlModelOption[]
-  /** `RunControlsSnapshot.effort.selected` — the RAW session selection, null = Auto. */
-  effortSelected: string | null
-  onSelect: (value: string | null) => void
-  /** Absent when the pane has no effort setter wired; the card is then the plain
-   * model list it was before, with no second face to reach. */
+  model: string | null
+  modelLabel: string | null
+  reasoningEffort: string | null
+  fastMode: boolean | null
+  snapshot?: RunControlsSnapshot | null
+  readOnlySnapshot?: RunControlsSnapshot | null
+  permissionContext: PermissionContextSnapshot | null
+  readOnlyMode: string | null
+  onSetModel?: (model: string | null) => void
   onSetEffort?: (effort: string) => void
+  onSetFast?: (active: boolean) => void
+  onSetMode: (mode: PermissionSetModeMode) => void
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover(onFocusComposer)
-  // The row whose ladder the second face is showing, or null for the model list.
-  // Held as the OPTION, not a model id: its `effortOptions` are the ladder, and
-  // they are already correct in the snapshot the user is looking at, so the face
-  // does not wait on the re-broadcast that follows `model.set`.
-  const [effortStep, setEffortStep] = useState<RunControlModelOption | null>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  // Set by the back control, read by the effect below. Leaving the second face
-  // unmounts the button that had focus, which would otherwise drop it on
-  // `<body>` — the same fall `usePopoverFocus` exists to prevent when the whole
-  // panel closes. Coming back is the same event one level down.
-  const returningToList = useRef(false)
+  const { open, setOpen, close, ref, triggerRef, panelRef } = usePopover(
+    onFocusComposer,
+    {
+      selector: 'button:not([disabled])',
+      prioritySelector: '[data-run-model], [aria-checked="true"]',
+    },
+  )
+  const [step, setStep] = useState<'main' | 'model' | 'mode'>('main')
+  const focusAfterStep = useRef<'model' | 'mode' | 'list' | null>(null)
   useEffect(() => {
-    if (effortStep !== null || !returningToList.current) return
-    returningToList.current = false
-    // The row you came from IS the checked one: reaching the second face
-    // applied the pick.
-    panelRef.current
-      ?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')
-      ?.focus()
-  }, [effortStep])
-  const face = label ?? current
-  const groups = groupOptionsByProvider(options)
+    const destination = focusAfterStep.current
+    if (!destination) return
+    focusAfterStep.current = null
+    const panel = panelRef.current
+    const target = destination === 'list'
+      ? panel?.querySelector<HTMLElement>('button[aria-checked="true"]:not([disabled])')
+      : panel?.querySelector<HTMLElement>(`[data-run-${destination}]`)
+    const landing = target ?? panel?.querySelector<HTMLElement>('button:not([disabled])')
+    landing?.focus()
+  }, [panelRef, step])
+
+  const display = snapshot ?? readOnlySnapshot
+  const currentModel = display?.model.current ?? model
+  const label = display?.model.currentLabel ?? modelLabel ?? currentModel
+  // Preview caches carry model ids but no provider snapshot. Only recognized
+  // model families can supply a mark in that fallback path.
+  const provider = display?.model.provider ?? (
+    currentModel?.startsWith('gpt-') ? 'openai' :
+    currentModel?.startsWith('claude-') ? 'anthropic' : null
+  )
+  const hasEffort = display
+    ? display.effort.supported && display.effort.options.length > 0
+    : reasoningEffort !== null
+  const effort = display?.effort.current ?? reasoningEffort
+  const effortLabel = hasEffort
+    ? effort
+      ? `${formatEffort(effort)}${display?.effort.selected === null ? ' (Auto)' : ''}`
+      : 'Auto'
+    : null
+  const fast = display
+    ? display.fast.supportedByModel ? display.fast.active : null
+    : fastMode
+  const mode = permissionContext?.mode ?? readOnlyMode
+  const modeLabel = mode ? permissionModeShortLabel(mode) : null
+  const modeTone = mode ? permissionModeMeta(mode)?.toneText ?? 'text-text-muted' : ''
+  const accessibleLabel = [
+    label ? `Model: ${label}` : null,
+    effortLabel ? `Reasoning effort: ${effortLabel}` : null,
+    fast !== null ? `Fast mode ${fast ? 'on' : 'off'}` : null,
+    modeLabel ? `Permission mode: ${modeLabel}` : null,
+  ].filter(Boolean).join(', ')
+  const interactive = snapshot != null && (
+    permissionContext !== null ||
+    onSetModel != null || onSetEffort != null || onSetFast != null
+  )
+  const modelEnabled = snapshot != null && onSetModel != null && snapshot.model.options.length > 0
+  const groups = groupOptionsByProvider(snapshot?.model.options ?? [])
+  const contents = (
+    <>
+      {provider && label ? <ProviderLogo provider={provider} size={12} className={`composer-provider-logo composer-provider-${provider}`} /> : null}
+      {label ? <span className="truncate text-[light-dark(#0e7490,#22d3ee)]">{label}</span> : null}
+      {effortLabel ? <span className="shrink-0 text-accent">{effortLabel}</span> : null}
+      {fast === true ? <span className="flex shrink-0 text-tone-warn"><FastGlyph active /></span> : null}
+      {modeLabel && mode !== 'auto' ? <span className={`shrink-0 ${modeTone}`}>{modeLabel}</span> : null}
+    </>
+  )
+  const returnToMain = () => {
+    focusAfterStep.current = step === 'mode' ? 'mode' : 'model'
+    setStep('main')
+  }
+  const openStep = (next: 'model' | 'mode') => {
+    focusAfterStep.current = 'list'
+    setStep(next)
+  }
+  useEffect(() => {
+    if (!interactive) {
+      setOpen(false)
+    } else if (
+      (step === 'mode' && !permissionContext) ||
+      (step === 'model' && !modelEnabled)
+    ) {
+      focusAfterStep.current = step === 'mode' ? 'mode' : 'model'
+      setStep('main')
+    }
+  }, [interactive, modelEnabled, permissionContext, setOpen, step])
+
+  if (!interactive) {
+    if (!accessibleLabel) return null
+    return (
+      <span className={`${RAIL_FACE} composer-run-face`} aria-label={accessibleLabel} title={accessibleLabel}>
+        {contents}
+      </span>
+    )
+  }
   return (
     <div ref={ref} className="relative shrink-0">
       <button
@@ -320,51 +295,117 @@ function ModelChip({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={face ? `Model: ${face}` : 'Select model'}
+        aria-label={accessibleLabel || 'Run controls'}
+        title={accessibleLabel || 'Run controls'}
         onClick={() => {
-          // Reopening always lands on the model list. An outside click closes
-          // without running `close`, so this is also where a step left behind by
-          // one is cleared.
-          setEffortStep(null)
+          triggerRef.current?.focus()
+          focusAfterStep.current = null
+          setStep('main')
           setOpen(value => !value)
         }}
-        className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)] hover:text-text-primary`}
+        className={`${RAIL_FACE} composer-run-face`}
       >
-        <ProviderLogo provider={provider} size={12} className="mr-1.5" />
-        <span className="truncate">{face ?? 'Model'}</span>
+        {contents}
       </button>
       {open ? (
-        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef}>
+        <ComposerPopoverPanel panelRef={panelRef} triggerRef={triggerRef}>
         <div
-          ref={panelRef}
           role="menu"
-          aria-label={effortStep ? 'Reasoning effort' : 'Model'}
-          onKeyDown={handleMenuRovingKeyDown}
+          aria-label={step === 'main' ? 'Run controls' : step === 'model' ? 'Model' : 'Permission mode'}
+          onKeyDown={event => {
+            if (event.key === 'Escape' && step !== 'main' && !event.defaultPrevented) {
+              event.preventDefault()
+              event.stopPropagation()
+              returnToMain()
+              return
+            }
+            handleMenuRovingKeyDown(event)
+          }}
           className={`${POPOVER_PANEL} max-h-[320px] w-64 overflow-auto`}
         >
-          {effortStep && onSetEffort ? (
-            <ModelEffortFace
-              option={effortStep}
-              selected={effortSelected}
-              onSelect={effort => {
-                onSetEffort(effort)
-                const selected = effort === 'auto' ? null : effort
-                if (effortSelected === selected) close()
-              }}
-              onBack={() => {
-                returningToList.current = true
-                setEffortStep(null)
-              }}
-            />
-          ) : (
+          {step !== 'main' ? (
+            <button
+              type="button"
+              role="menuitem"
+              aria-label="Back to run controls"
+              onClick={returnToMain}
+              className={`${MENU_FOCUS_RING} composer-run-back flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-shell-hover ${step === 'model' ? 'text-[light-dark(#0e7490,#22d3ee)]' : 'text-text-subtle'}`}
+            >
+              <StepChevron />
+              {step === 'model' ? label ?? 'Model' : 'Mode'}
+            </button>
+          ) : null}
+          {step === 'main' ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                data-run-model
+                aria-label={label ? `Model: ${label}` : 'Select model'}
+                disabled={!modelEnabled}
+                onClick={() => openStep('model')}
+                className={`${MENU_FOCUS_RING} composer-run-row text-[light-dark(#0e7490,#22d3ee)] disabled:opacity-50`}
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {provider ? <ProviderLogo provider={provider} size={12} className={`composer-provider-logo composer-provider-${provider}`} /> : null}
+                  <span className="truncate">{label ?? 'Model'}</span>
+                </span>
+                {modelEnabled ? <StepChevron /> : null}
+              </button>
+              {hasEffort && snapshot && onSetEffort ? (
+                <div className="pt-1">
+                  <EffortSlider
+                    levels={snapshot.effort.options}
+                    selected={snapshot.effort.selected}
+                    onSelect={onSetEffort}
+                  />
+                </div>
+              ) : null}
+              <div className="composer-run-seam" />
+              {snapshot?.fast.supportedByModel ? (
+                <div
+                  className="composer-run-row"
+                  title={!snapshot.fast.available ? snapshot.fast.unavailableReason ?? 'Fast mode unavailable' : undefined}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className={snapshot.fast.active ? 'text-tone-warn' : 'text-text-ghost'}><FastGlyph active /></span>
+                    Fast
+                  </span>
+                  <ToggleSwitch
+                    label="Fast mode"
+                    value={snapshot.fast.active}
+                    disabled={!onSetFast || !snapshot.fast.available}
+                    onChange={onSetFast ?? (() => {})}
+                    showValue={false}
+                  />
+                </div>
+              ) : null}
+              {modeLabel ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-run-mode
+                  aria-label={`Permission mode: ${modeLabel}`}
+                  disabled={!permissionContext}
+                  onClick={() => openStep('mode')}
+                  className={`${MENU_FOCUS_RING} composer-run-row disabled:opacity-50`}
+                >
+                  <span>Mode</span>
+                  <span className={`flex items-center gap-1.5 ${modeTone}`}>{modeLabel}<StepChevron /></span>
+                </button>
+              ) : null}
+            </>
+          ) : step === 'mode' && permissionContext ? (
+            <PermissionModeOptions context={permissionContext} onSelect={mode => { onSetMode(mode); close() }} />
+          ) : step === 'model' && snapshot ? (
             groups.map(group => {
               // The lock is a PROVIDER fact, so it reads at the group: four
               // identically dimmed rows say the same thing four times, and the
               // rows carried no visual state at all before (native `disabled`
               // alone paints nothing).
               const groupLocked =
-                providerSwitchLocked &&
-                (provider === 'openai') !== (group.provider === 'openai')
+                snapshot.model.providerSwitchLocked &&
+                (snapshot.model.provider === 'openai') !== (group.provider === 'openai')
               return (
                 <div
                   key={group.provider}
@@ -372,14 +413,12 @@ function ModelChip({
                 >
                   {groups.length > 1 ? (
                     <div className={`${POPOVER_HEADING} flex items-center gap-1.5`}>
-                      <ProviderLogo provider={group.provider} size={11} />
+                      <ProviderLogo provider={group.provider} size={11} className={`composer-provider-logo composer-provider-${group.provider}`} />
                       {formatProvider(group.provider)}
                     </div>
                   ) : null}
                   {group.options.map(option => {
-                    const active = selected === option.value
-                    const hasEffort =
-                      onSetEffort != null && option.effortOptions.length > 0
+                    const active = snapshot.model.selected === option.value
                     return (
                       <button
                         key={option.value ?? '__provider_default__'}
@@ -390,11 +429,8 @@ function ModelChip({
                         disabled={groupLocked}
                         onClick={() => {
                           if (groupLocked) return
-                          onSelect(option.value)
-                          // A model with no effort knob has no second face, so
-                          // the pick IS the whole interaction.
-                          if (hasEffort) setEffortStep(option)
-                          else close()
+                          onSetModel?.(option.value)
+                          returnToMain()
                         }}
                         className={`${MENU_FOCUS_RING} flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
                           active ? 'bg-white/[0.06]' : ''
@@ -416,7 +452,6 @@ function ModelChip({
                               {label}
                             </span>
                           ) : null}
-                          {hasEffort ? <StepChevron /> : null}
                         </span>
                       </button>
                     )
@@ -424,7 +459,7 @@ function ModelChip({
                 </div>
               )
             })
-          )}
+          ) : null}
         </div>
         </ComposerPopoverPanel>
       ) : null}
@@ -446,7 +481,7 @@ function groupOptionsByProvider(
   return groups
 }
 
-/** The chevron marking a row that leads to an effort ladder. */
+/** The chevron marking a row that opens another face. */
 function StepChevron() {
   return (
     <svg
@@ -501,78 +536,6 @@ function nextRungIndex(
   }
 }
 
-function ModelEffortFace({
-  option,
-  selected,
-  onSelect,
-  onBack,
-}: {
-  option: RunControlModelOption
-  selected: string | null
-  onSelect: (effort: string) => void
-  onBack: () => void
-}) {
-  const faceRef = useRef<HTMLDivElement>(null)
-  // Arriving here is a KEYBOARD move as often as a click: the pick that opened
-  // this face unmounted the row that had focus. Land on whatever is currently
-  // checked — the level, or Auto when no level is set — so the first arrow key
-  // moves from where the user already is.
-  useEffect(() => {
-    const face = faceRef.current
-    if (!face) return
-    const landing =
-      face.querySelector<HTMLElement>('[aria-checked="true"]') ??
-      face.querySelector<HTMLElement>('[role="menuitemradio"]')
-    landing?.focus()
-  }, [])
-
-  /**
-   * Escape leaves the LADDER, not the card. A second Escape then closes, because
-   * this handler stops only the first one from reaching the document listener
-   * `usePopoverFocus` dismisses on — the menu convention, where Escape unwinds
-   * one level at a time. Without it the two-face card would be the one place in
-   * the composer where stepping in and changing your mind costs you the popover.
-   */
-  function onFaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-    if (event.key !== 'Escape' || event.defaultPrevented) return
-    event.preventDefault()
-    event.stopPropagation()
-    onBack()
-  }
-
-  return (
-    <div ref={faceRef} onKeyDown={onFaceKeyDown}>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={onBack}
-        className={`${MENU_FOCUS_RING} flex w-full items-center gap-1.5 rounded-md px-2 pb-1.5 pt-1 text-left text-xs text-[light-dark(#0e7490,#22d3ee)] transition-colors hover:bg-white/5`}
-      >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="shrink-0 text-text-ghost"
-          aria-hidden
-        >
-          <polyline points="15 18 9 12 15 6" />
-        </svg>
-        <span className="min-w-0 truncate">{option.label}</span>
-      </button>
-      <EffortSlider
-        levels={option.effortOptions}
-        selected={selected}
-        onSelect={onSelect}
-      />
-    </div>
-  )
-}
-
 /**
  * Where the first and last tick sit, in pixels from the track's ends: half the
  * thumb's width, so a thumb at either end sits flush inside the pill. Shared by
@@ -591,16 +554,15 @@ function rungIndexAt(rail: HTMLElement, clientX: number, count: number): number 
 }
 
 /**
- * The effort slider, shared by the model card's second face and the rail's own
- * reasoning popover so the two read and behave as one control.
+ * The effort slider for the model currently reported by the engine.
  *
  * The levels are ordinal, so they are drawn as one track filled up to the chosen
  * level rather than as a list of equal rows: the fill says how far up you are,
  * and a track that runs out sooner says the model tops out sooner.
  *
- * `selected` is the RAW session selection, not the applied tier, for the reason
- * `ReasoningChip` gives: an env or provider default must not read back as a
- * level the user chose. Auto is therefore an empty track, and it is a control of
+ * `selected` is the RAW session selection, not the applied tier: an env or
+ * provider default must not read back as a level the user chose.
+ * Auto is therefore an empty track, and it is a control of
  * its own rather than a rung, because it is not a point on the scale.
  *
  * Each rung stays a real `menuitemradio` button so the menu's Up/Down roving and
@@ -687,8 +649,7 @@ function EffortSlider({
     if (!drag) return
     setDrag(null)
     rungButtons()[drag.index]?.focus()
-    // A drag that wandered and came back to where it started changed nothing,
-    // and must not read as re-picking the current level (which closes the card).
+    // A drag that wandered and came back to where it started changed nothing.
     if (drag.moved && drag.index === currentIndex) return
     onSelect(levels[drag.index]!)
   }
@@ -814,114 +775,6 @@ function formatProvider(provider: RunControlProvider): string {
     case 'foundry':
       return 'Foundry'
   }
-}
-
-/** Interactive REASONING face → a popover of the model's valid effort levels + Auto (`effort.set`). */
-function ReasoningChip({
-  current,
-  selected,
-  options,
-  onSelect,
-  faceProps,
-  onFocusComposer,
-}: {
-  current: string | null
-  selected: string | null
-  options: string[]
-  onSelect: (effort: string) => void
-  faceProps?: ComposerFaceProps
-  onFocusComposer?: () => void
-}) {
-  const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover(onFocusComposer)
-  // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
-  // The face shows the effective tier, while the slider reflects the raw
-  // selection so an env/default override never lies about what the API receives.
-  return (
-    <div ref={ref} className="relative shrink-0">
-      <button
-        ref={triggerRef}
-        {...faceProps}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={
-          current
-            ? `Reasoning effort: ${current}${selected === null ? ' (auto)' : ''}`
-            : 'Reasoning effort: auto'
-        }
-        onClick={() => setOpen(value => !value)}
-        className={`${RAIL_FACE} text-accent hover:text-text-primary`}
-      >
-        {current
-          ? `${formatEffort(current)}${selected === null ? ' (Auto)' : ''}`
-          : 'Auto'}
-      </button>
-      {open ? (
-        <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef}>
-        <div
-          role="menu"
-          aria-label="Reasoning effort"
-          onKeyDown={handleMenuRovingKeyDown}
-          className={`${POPOVER_PANEL} w-64 pt-2`}
-        >
-          {/* The same slider as the model card's second face, with the same
-            * rule: a change leaves the panel open because the fill is the
-            * confirmation, and re-picking the current level dismisses it. */}
-          <EffortSlider
-            levels={options}
-            selected={selected}
-            onSelect={effort => {
-              onSelect(effort)
-              if ((effort === 'auto' ? null : effort) === selected) close()
-            }}
-          />
-        </div>
-        </ComposerPopoverPanel>
-      ) : null}
-    </div>
-  )
-}
-
-/** Interactive FAST ⚡ toggle (`fast.set`) — gated on the engine's real support +
- * availability. Hidden whenever the model can't run fast; disabled (with the
- * real unavailable reason) when supported but org/runtime-unavailable. */
-function FastChip({
-  active,
-  supportedByModel,
-  available,
-  unavailableReason,
-  onToggle,
-  faceProps,
-}: {
-  active: boolean
-  supportedByModel: boolean
-  available: boolean
-  unavailableReason: string | null
-  onToggle: (active: boolean) => void
-  faceProps?: ComposerFaceProps
-}) {
-  if (!supportedByModel) return null
-  const canEnable = available
-  const disabled = !active && !canEnable
-  const title = active
-    ? 'Fast mode on, click to turn off'
-    : canEnable
-      ? 'Enable fast mode'
-      : (unavailableReason ?? 'Fast mode unavailable')
-  return (
-    <button
-      {...faceProps}
-      type="button"
-      aria-pressed={active}
-      aria-label={title}
-      title={title}
-      disabled={disabled}
-      onClick={() => onToggle(!active)}
-      className={`${FAST_FACE} ${active ? 'text-tone-warn hover:text-[light-dark(#834a00,#fde68a)]' : 'text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
-    >
-      <FastGlyph active={active} />
-    </button>
-  )
 }
 
 /** One account's compact used-percent bar (5h or weekly) — the prototype's
@@ -1087,7 +940,7 @@ export function AccountSwitcherPanel({
 /** Interactive PROFILE face → the account-switcher popover (the prototype's
  * `AccountChip`, Surfaces.jsx:584). The quiet active-alias face opens
  * {@link AccountSwitcherPanel} over the REAL Codex pool. Falls back to the P4-24
- * read-only face when no switch handler is wired (mirrors the ModelChip
+ * read-only face when no switch handler is wired (mirrors the run control's
  * interactive-vs-face pattern). */
 function AccountChip({
   active,
@@ -1570,6 +1423,7 @@ export function ComposerActionsBar({
   reasoningEffort,
   fastMode,
   runControls,
+  readOnlyRunControls,
   cacheExpiresAt,
   onSetModel,
   onSetEffort,
@@ -1596,9 +1450,9 @@ export function ComposerActionsBar({
   /** The RESOLVED model this session runs; null before the snapshot → face omitted. */
   model: string | null
   /** Its product name, when one was reported. The read-only face shows this and
-   * falls back to the id; the interactive `ModelChip` already had its own. */
+   * falls back to the id when the engine has no display name. */
   modelLabel?: string | null
-  /** The session's reasoning-effort tier; null when running at the provider default → face omitted. */
+  /** Effective effort for a read-only pane; null when no tier was reported. */
   reasoningEffort: string | null
   /**
    * Fast-mode state for the READ-ONLY face: true/false when it is known, null
@@ -1613,6 +1467,8 @@ export function ComposerActionsBar({
    * an interactive picker; absent, it falls back to the P4-24 read-only face.
    */
   runControls?: RunControlsSnapshot | null
+  /** Retained display data only. Unlike runControls, this never arms a setter. */
+  readOnlyRunControls?: RunControlsSnapshot | null
   /** Read-only retained/preview estimate when there is no live snapshot. */
   cacheExpiresAt?: number | null
   onSetModel?: (model: string | null) => void
@@ -1656,19 +1512,12 @@ export function ComposerActionsBar({
   onFocusComposer?: () => void
   workspaceBranch?: WorkspaceBranchReadout | null
 }) {
-  // Interactive when the live snapshot AND the setter handler are both present;
-  // otherwise the P4-24 read-only faces render unchanged.
-  const modelInteractive =
-    runControls != null && onSetModel != null && runControls.model.options.length > 0
-  const effortInteractive =
-    runControls != null && onSetEffort != null && runControls.effort.supported
-  const fastInteractive = runControls != null && onSetFast != null
   const accountAlias = account?.alias ?? null
   const showAccount = account != null && accountAlias != null
   const anthropicAccountLabel =
     anthropicAccount?.alias ?? anthropicAccount?.email ?? null
   // Interactive switcher when the active account AND a switch handler are both
-  // present; otherwise the P4-24 read-only alias face (mirrors the ModelChip gate).
+  // present; otherwise the read-only alias face.
   const accountInteractive = account != null && onSwitchAccount != null
   const cacheExpired = useCacheExpiredEstimate(
     runControls ? runControls.cacheExpiresAt : cacheExpiresAt,
@@ -1809,85 +1658,24 @@ export function ComposerActionsBar({
         </svg>
       </button>
 
-      {/* The columnar rail (Surfaces.jsx:756): left cluster [model ·] MODE, then
-       * an auto margin pushes account · context to the right edge. Faces are
-       * borderless quiet text — the composer's minimal grammar, not pills. */}
+      {/* Run settings share one face; the account cluster stays at the right edge. */}
       <div className="composer-controls flex min-w-0 flex-1 items-center gap-[7px]">
-        {modelInteractive && runControls && onSetModel ? (
-          <>
-            <ModelChip
-              current={runControls.model.current ?? model}
-              label={runControls.model.currentLabel}
-              selected={runControls.model.selected}
-              provider={runControls.model.provider}
-              providerSwitchLocked={runControls.model.providerSwitchLocked}
-              options={runControls.model.options}
-              effortSelected={runControls.effort.selected}
-              onSelect={onSetModel}
-              onSetEffort={onSetEffort}
-              faceProps={faceProps('model')}
-              onFocusComposer={onFocusComposer}
-            />
-            <RailSep />
-          </>
-        ) : model ? (
-          <>
-            {/* The LABEL, falling back to the id only when no name was reported
-              * (a preview reads a cache, which stores the id alone). Rendering
-              * the id here turned `Sonnet 4.5` into
-              * `claude-sonnet-4-5-20250929` the moment a session parked — the
-              * same defect `ModelChip` fixed for the live face above. */}
-            <span
-              className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)]`}
-              title={`Model: ${modelLabel ?? model}`}
-            >
-              {modelLabel ?? model}
-            </span>
-            <RailSep />
-          </>
-        ) : null}
-        {effortInteractive && runControls && onSetEffort ? (
-          <>
-            <ReasoningChip
-              current={runControls.effort.current ?? reasoningEffort}
-              selected={runControls.effort.selected}
-              options={runControls.effort.options}
-              onSelect={onSetEffort}
-              faceProps={faceProps('effort')}
-              onFocusComposer={onFocusComposer}
-            />
-            <RailSep />
-          </>
-        ) : reasoningEffort ? (
-          <>
-            <span
-              className={`${RAIL_FACE} text-accent`}
-              title={`Reasoning effort: ${reasoningEffort}`}
-            >
-              {formatEffort(reasoningEffort)}
-            </span>
-            <RailSep />
-          </>
-        ) : null}
-        <PermissionModeChip
-          context={permissionContext}
-          onSetMode={onSetMode}
+        <RunControl
+          model={model}
+          modelLabel={modelLabel}
+          reasoningEffort={reasoningEffort}
+          fastMode={fastMode}
+          snapshot={runControls}
+          readOnlySnapshot={readOnlyRunControls}
+          permissionContext={permissionContext}
           readOnlyMode={permissionModeReadOnly}
-          faceProps={faceProps('mode')}
+          onSetModel={onSetModel}
+          onSetEffort={onSetEffort}
+          onSetFast={onSetFast}
+          onSetMode={onSetMode}
+          faceProps={faceProps('run-controls')}
           onFocusComposer={onFocusComposer}
         />
-        {fastInteractive && runControls && onSetFast ? (
-          <FastChip
-            active={runControls.fast.active}
-            supportedByModel={runControls.fast.supportedByModel}
-            available={runControls.fast.available}
-            unavailableReason={runControls.fast.unavailableReason}
-            onToggle={onSetFast}
-            faceProps={faceProps('fast')}
-          />
-        ) : fastMode !== null ? (
-          <FastFace active={fastMode} />
-        ) : null}
 
         <div className="composer-account-controls ml-auto flex min-w-0 items-center gap-[7px]">
           <div className="composer-account-identity flex min-w-0 items-center gap-[7px]">

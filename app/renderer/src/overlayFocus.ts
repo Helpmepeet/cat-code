@@ -25,6 +25,7 @@ export const MENU_ITEM_SELECTOR = [
   // reach it like any other row; without this it is Tab-reachable but skipped by
   // the arrows, which reads as a dead row to anyone driving the menu by keyboard.
   'button[role="menuitemcheckbox"]:not([disabled])',
+  'button[role="switch"]:not([disabled])',
   '[role="menuitem"][tabindex]:not([tabindex="-1"])',
   '[role="menuitemradio"][tabindex]:not([tabindex="-1"])',
   '[role="menuitemcheckbox"][tabindex]:not([tabindex="-1"])',

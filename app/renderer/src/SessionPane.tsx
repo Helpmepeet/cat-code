@@ -241,6 +241,7 @@ export function SessionPane({
   model,
   modelLabel = null,
   reasoningEffort,
+  readOnlyRunControls,
   fastMode,
   contextWindow = null,
   cacheExpiresAt = null,
@@ -2433,6 +2434,7 @@ export function SessionPane({
           model={railModel}
           modelLabel={railModelLabel}
           reasoningEffort={railEffort}
+          readOnlyRunControls={preview ? null : readOnlyRunControls}
           permissionModeReadOnly={railPermissionMode}
           fastMode={fastMode}
           runControls={runControls}
@@ -2786,6 +2788,8 @@ type SessionPaneProps = {
    * `model` above stays the resolved id, which is what `selectContextUsage`
    * matches `modelUsage` on. */
   modelLabel?: string | null
+  /** Last snapshot is display-only once the live run-control seam disappears. */
+  readOnlyRunControls?: RunControlsSnapshot | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
   /** Fast state for the read-only face: true/false when known, null when nothing
