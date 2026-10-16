@@ -137,7 +137,7 @@ export async function generateTitleAndBranch(description: string, signal: AbortS
     });
 
     const response = await queryModelWithoutStreaming({
-      messages: normalizeMessagesForAPI(instructionAssembly.messages),
+      messages: normalizeMessagesForAPI(instructionAssembly.messages, [], provider),
       systemPrompt: instructionAssembly.systemPrompt,
       openAIInstructionAssembly: instructionAssembly.openAIInstructionAssembly,
       thinkingConfig: { type: 'disabled' },

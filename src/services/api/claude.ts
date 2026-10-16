@@ -1489,7 +1489,7 @@ async function* queryModel(
   })
 
   queryCheckpoint('query_message_normalization_start')
-  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools)
+  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools, requestProvider)
   queryCheckpoint('query_message_normalization_end')
 
   // Model-specific post-processing: strip tool-search-specific fields if the
@@ -1803,6 +1803,7 @@ async function* queryModel(
                 normalizeMessagesForAPI(
                   openAIInstructionAssembly.inputMessages,
                   filteredTools,
+                  requestProvider,
                 ),
               ),
               developerContext: openAIInstructionAssembly.developerContext,

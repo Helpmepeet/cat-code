@@ -2083,6 +2083,7 @@ function relocateToolReferenceSiblings(
 export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
+  provider: APIProvider = getAPIProvider(),
 ): (UserMessage | AssistantMessage)[] {
   // Build set of available tool names for filtering unavailable tool references
   const availableToolNames = new Set(tools.map(t => t.name))
@@ -2408,7 +2409,7 @@ export function normalizeMessagesForAPI(
   // replay visible thinking blocks as transcript state. OpenAI reasoning is
   // provider-managed and should not rely on these transcript repairs.
   const withFilteredOrphans =
-    getAPIProvider() === 'openai'
+    provider === 'openai'
       ? relocated
       : filterOrphanedThinkingOnlyMessages(relocated)
 
@@ -2425,7 +2426,7 @@ export function normalizeMessagesForAPI(
   // websocket continuation because the next translated input no longer matches
   // the transport's canonical output-item baseline.
   const withFilteredThinking =
-    getAPIProvider() === 'openai'
+    provider === 'openai'
       ? withFilteredOrphans
       : filterTrailingThinkingFromLastAssistant(withFilteredOrphans)
   const withFilteredWhitespace =

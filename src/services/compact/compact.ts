@@ -1451,6 +1451,7 @@ export async function streamCompactSummary({
           ]),
         ),
         context.options.tools,
+        provider,
       )
       // Build a provider-native instruction assembly so the OpenAI/Codex path
       // (the default on the Codex fork, where mainLoopModel is a gpt-* model)
