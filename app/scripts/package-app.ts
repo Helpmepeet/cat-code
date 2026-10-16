@@ -55,9 +55,6 @@ const RESOURCES = join(CONTENTS, 'Resources')
 const APP_PAYLOAD = join(RESOURCES, 'app')
 const PACKAGED_RIPGREP = join(RESOURCES, 'bin', 'rg')
 const RIPGREP_SOURCE = join(repoRoot, 'src', 'vendor', 'ripgrep', 'arm64-darwin', 'rg')
-// Local builds retain the existing ad-hoc posture. Persistent lid helper
-// authority additionally requires a hardened app with an Apple signing team.
-const SIGNING_IDENTITY = process.env.CATCODE_SIGNING_IDENTITY?.trim() || '-'
 // Official ripgrep 15.2.0 aarch64-apple-darwin release binary.
 // Release archive SHA-256: 3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4
 const RIPGREP_SHA256 = '8ec397688ca4e7564877143cbe771531e12995363c06c5dc266d51a983d4dc5a'
@@ -348,28 +345,40 @@ async function sealApplication(): Promise<void> {
 }
 
 function sign(): void {
-  console.log(`[package] ${SIGNING_IDENTITY === '-' ? 'ad-hoc' : 'hardened'} signing`)
+  console.log('[package] ad-hoc signing with exact library constraints')
   // LOCAL-USE-CONTRACT §5: nested executables first, then the bundle. Editing
   // Info.plist and renaming the executable both invalidate the signature the
   // stock Electron bundle ships with, and an unsigned nested binary makes the
   // whole app refuse to launch.
-  run('codesign', ['--sign', SIGNING_IDENTITY, '--force', PACKAGED_RIPGREP])
-  run('codesign', ['--sign', SIGNING_IDENTITY, '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
-  if (SIGNING_IDENTITY === '-') {
-    // Hardened library validation rejects ad-hoc Electron frameworks because
-    // they have no Team ID. Do not disable library validation to enable power
-    // authority; the helper deliberately rejects this ordinary local build.
-    run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
-    run('codesign', ['--verify', '--deep', '--strict', APP_BUNDLE])
-    return
-  }
-  // JIT is required by Electron; debugger attachment, DYLD injection and
-  // unsigned library loading remain disabled by the hardened runtime.
-  const entitlements = join(OUT_DIR, 'runtime-entitlements.plist')
-  writeFileSync(entitlements, '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>')
-  run('codesign', ['--sign', SIGNING_IDENTITY, '--force', '--deep', '--options', 'runtime', '--entitlements', entitlements, APP_BUNDLE])
-  rmSync(entitlements)
+  run('codesign', ['--sign', '-', '--force', PACKAGED_RIPGREP])
+  run('codesign', ['--sign', '-', '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
+  run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
+  // A native system-library-only client can use hardened ad-hoc signing.
+  // Electron instead pins every non-platform library at the kernel boundary.
+  run('codesign', ['--sign', '-', '--force', '--options', 'runtime', join(RESOURCES, 'lid-closed', 'helper')])
+  const libraries = [
+    'Electron Framework.framework/Versions/A/Electron Framework',
+    'Electron Framework.framework/Versions/A/Libraries/libEGL.dylib',
+    'Electron Framework.framework/Versions/A/Libraries/libGLESv2.dylib',
+    'Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib',
+    'Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib',
+    'Mantle.framework/Versions/A/Mantle', 'ReactiveObjC.framework/Versions/A/ReactiveObjC',
+    'Squirrel.framework/Versions/A/Squirrel',
+  ]
+  const hashes = libraries.map(path => {
+    const result = spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', join(CONTENTS, 'Frameworks', path)], { encoding: 'utf8' })
+    const hash = result.stderr.match(/^CDHash=([0-9a-f]{40})$/m)?.[1]
+    if (result.status !== 0 || !hash) throw new Error(`Cannot pin Electron library: ${path}`)
+    return hash
+  }).sort()
+  const constraint = join(OUT_DIR, 'libraries.coderequirement')
+  writeFileSync(constraint, `<?xml version="1.0"?><plist version="1.0"><dict><key>cdhash</key><dict><key>$in</key><array>${hashes.map(hash => `<data>${Buffer.from(hash, 'hex').toString('base64')}</data>`).join('')}</array></dict></dict></plist>`)
+  // No runtime exemption entitlements. Debugged/invalid callers are separately
+  // refused on every privileged message, including already-open connections.
+  run('codesign', ['--sign', '-', '--force', '--options', 'hard,kill', '--library-constraint', constraint, '--enforce-constraint-validity', APP_BUNDLE])
+  rmSync(constraint)
   run('codesign', ['--verify', '--deep', '--strict', APP_BUNDLE])
+  run(join(RESOURCES, 'lid-closed', 'helper'), ['--check-native'])
   run(join(RESOURCES, 'lid-closed', 'helper'), ['--check-application', join(CONTENTS, 'MacOS', APP_NAME)])
 }
 

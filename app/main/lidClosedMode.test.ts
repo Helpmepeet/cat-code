@@ -19,18 +19,31 @@ function fixture() {
   let failRestore = false
   let helperUnavailable = false
   let failInstall = false
+  let setupOnly = false
+  let partialInstallFailure = false
   let snapshot: LidNativeSnapshot = { record: { phase: 'off', began: 0, deadline: 0, allowance: 0, needsRestore: false, sleepRequested: false, sleepRequestAttempted: false },
     safety: { sleepDisabled: false, lidClosed: false, onBattery: true, batteryPercent: 75, thermal: 'nominal' }, remainingSeconds: 0, hardwareQualified: true }
   const phases: string[] = []
   const calls: string[] = []; const controls: LidWorkControl[] = []
   const deps = {
     marker, sessions: () => [session], installed: () => installed,
+    reopen: () => { calls.push('reopen') },
     hardware: async () => ({ qualified: true, evidence: 'fixture', model: 'fixture', osBuild: 'fixture', safety: snapshot.safety }),
-    install: async () => { calls.push('install'); await installGate?.promise; if (failInstall) throw new Error('Authorization cancelled'); installed = true },
+    install: async () => {
+      calls.push('install'); await installGate?.promise
+      if (failInstall) throw new Error('Authorization cancelled')
+      installed = true
+      if (partialInstallFailure) {
+        partialInstallFailure = false; failRestore = true
+        snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'unresolved', identity: randomUUID(), needsRestore: true }, safety: { ...snapshot.safety, sleepDisabled: true } }
+        throw new Error('Installation interrupted')
+      }
+    },
     native: { close() {}, async command(input: { op: string; identity?: string; allowance?: number }): Promise<LidNativeReply> {
       calls.push(input.op)
       if (helperUnavailable) throw new Error('Helper unavailable')
       if (input.op === 'start') {
+        if (setupOnly) return { ok: false, error: 'authorized-copy-required', setupOnly: true, snapshot: structuredClone(snapshot) }
         expect(JSON.parse(readFileSync(marker, 'utf8')).pending).toBe(true)
         await startGate?.promise
         snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'active', identity: input.identity, began: 100, deadline: 100 + input.allowance!, allowance: input.allowance!, needsRestore: true }, safety: { ...snapshot.safety, sleepDisabled: true }, remainingSeconds: input.allowance! }
@@ -40,7 +53,7 @@ function fixture() {
         snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'stopped' }, safety: { ...snapshot.safety, sleepDisabled: false } }
       }
       if (input.op === 'continue') snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'active', needsRestore: true }, safety: { ...snapshot.safety, sleepDisabled: true } }
-      return { ok: true, snapshot: structuredClone(snapshot) }
+      return { ok: true, snapshot: structuredClone(snapshot), ...(setupOnly ? { setupOnly: true } : {}) }
     } },
     changed(view: { phase: string }) { phases.push(view.phase) },
     send(_id: string, control: LidWorkControl) { controls.push(control); queueMicrotask(() => mode.receive(session.id, control.requestId, { generation: session.generation, sequence: ++sequence, available: true, runs })) },
@@ -51,6 +64,8 @@ function fixture() {
     setupGate() { installGate = deferred(); return installGate },
     nativeStartGate() { startGate = deferred(); return startGate },
     failRestore(value: boolean) { failRestore = value },
+    protectedCopyRequired() { installed = true; setupOnly = true },
+    failAfterPublishingAuthority() { partialInstallFailure = true },
     interrupted(kind: 'journal' | 'signature') {
       installed = true
       if (kind === 'journal') snapshot = { ...snapshot, error: 'journal-unreadable' }
@@ -147,4 +162,45 @@ test('unreadable installed authority stays red without a local marker, including
       expect(f.calls).not.toContain('start')
     } finally { await f.cleanup() }
   }
+})
+
+test('setup requires the protected copy and reopening waits for all current work', async () => {
+  const f = fixture()
+  try {
+    f.protectedCopyRequired()
+    await f.mode.initialize()
+    expect(f.mode.read().relaunchRequired).toBe(true)
+    expect(f.mode.read().phase).toBe('unavailable')
+    await f.mode.command({ action: 'reopen' })
+    expect(f.calls).not.toContain('reopen')
+    await f.mode.command({ action: 'start', minutes: 15 })
+    expect(f.calls).not.toContain('start')
+    await f.mode.command({ action: 'dismiss' })
+    expect(f.mode.read().phase).toBe('off')
+    await f.mode.command({ action: 'start', minutes: 15 })
+    expect(f.mode.read().phase).toBe('unavailable')
+    expect(f.calls).not.toContain('start')
+    f.setRuns([{ ...f.original, activeTurn: false, status: 'completed' }])
+    await f.mode.command({ action: 'reopen' })
+    expect(f.calls.filter(call => call === 'reopen')).toHaveLength(1)
+  } finally { await f.cleanup() }
+})
+
+test('a partially installed helper cannot make unresolved sleep a dismissible setup error', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'start', minutes: 15 })
+    f.failAfterPublishingAuthority()
+    await f.mode.command({ action: 'setup' })
+    expect(f.mode.read().phase).toBe('unresolved')
+    expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(true)
+    await f.mode.command({ action: 'dismiss' })
+    expect(f.mode.read().phase).toBe('unresolved')
+    expect(f.calls).not.toContain('start')
+    f.failRestore(false)
+    await f.mode.command({ action: 'retry' })
+    expect(f.mode.read().phase).toBe('ended')
+    expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+  } finally { await f.cleanup() }
 })

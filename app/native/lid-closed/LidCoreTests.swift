@@ -33,6 +33,7 @@ import Darwin
         var safety = LidSafety(sleepDisabled: false, lidClosed: false, batteryPercent: 70, onBattery: true, thermal: "nominal")
         var failRestore = false
         var failStart = false
+        var activationDelay: Double = 0
         var sleeps = 0
         var mutations = 0
         let journal = LidJournal(root)
@@ -44,6 +45,7 @@ import Darwin
                 if !value && failRestore { throw LidFailure("test-restoration-failure") }
                 safety.sleepDisabled = value
                 if value && failStart { throw LidFailure("test-partial-activation") }
+                if value { time += activationDelay }
             }, requestSleep: {
                 precondition(safety.sleepDisabled == false, "sleep requested before restoration")
                 let settled = try journal.read(boot: "boot-a")
@@ -163,6 +165,39 @@ import Darwin
         failStart = true; try experimentStart(); failStart = false
         precondition(safety.sleepDisabled == false)
         rejectExperimentStart()
+        try controller.resumeAfterInstall()
+        do {
+            _ = try controller.command(["op": "start", "identity": id, "allowance": 60], applicationTrial: true)
+            preconditionFailure("app trial weakened production preset validation")
+        } catch {}
+        let trialBegan = time
+        activationDelay = 3
+        _ = try controller.command(["op": "start", "identity": id, "allowance": 900], applicationTrial: true)
+        activationDelay = 0
+        let trialDeadline = controller.snapshot().record.deadline
+        precondition(trialDeadline == trialBegan + 60, "app trial deadline includes activation delay")
+        _ = try controller.command(["op": "adjust", "identity": id, "allowance": 7200], applicationTrial: true)
+        precondition(controller.snapshot().record.deadline == trialDeadline, "preset adjustment escaped trial cap")
+        safety.lidClosed = true; try controller.tick()
+        safety.lidClosed = false; time += 1; try controller.tick()
+        _ = try controller.command(["op": "continue", "identity": id], applicationTrial: true)
+        precondition(controller.snapshot().record.deadline == trialDeadline, "Continue escaped trial cap")
+        while time < trialDeadline { time = min(time + 4, trialDeadline); _ = try controller.command(["op": "pulse", "identity": id], applicationTrial: true) }
+        precondition(controller.snapshot().record.reason == "expired" && controller.snapshot().restorationConfirmed, "trial did not restore on expiry")
+        do {
+            _ = try controller.command(["op": "start", "identity": UUID().uuidString, "allowance": 900], applicationTrial: true)
+            preconditionFailure("second app trial lease admitted without administrator reset")
+        } catch {}
+        try controller.resumeAfterInstall()
+        _ = try controller.command(["op": "start", "identity": id, "allowance": 900], applicationTrial: true)
+        safety.lidClosed = true; try controller.tick()
+        safety.lidClosed = false; time += 1; try controller.tick()
+        try controller.retire()
+        do {
+            _ = try controller.command(["op": "continue", "identity": id], applicationTrial: true)
+            preconditionFailure("retired trial Continue accepted")
+        } catch {}
+        precondition(controller.snapshot().restorationConfirmed && safety.sleepDisabled == false, "retired trial reactivated")
         // Real native child/pipe/process owner, with a harmless effect. Closing
         // an uncommitted gate forbids the effect; durable tracking then permits
         // precise retirement before another mutation can run.

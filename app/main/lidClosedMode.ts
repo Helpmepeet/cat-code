@@ -12,6 +12,7 @@ type Dependencies = {
   send(id: string, message: LidWorkControl): void
   hardware(): Promise<LidHardware>
   install(recoveryOnly: boolean): Promise<void>
+  reopen(): void
   installed(): boolean
   marker: string
   changed(view: LidModeView): void
@@ -72,7 +73,11 @@ export class LidClosedMode {
         }
         // A restarted app never adopts or supervises an old active lease.
         else if (reply.snapshot.record.needsRestore) { this.needsRecovery = true; await this.end('recovered') }
-        else if (lidRestored(reply.snapshot)) { this.mark(false); this.set({ phase: 'off' }) }
+        else if (lidRestored(reply.snapshot)) {
+          this.mark(false)
+          if (reply.setupOnly) this.requireProtectedCopy()
+          else this.set({ phase: 'off' })
+        }
         else this.set({ phase: this.needsRecovery ? 'unresolved' : 'unavailable', error: 'Normal sleep could not be confirmed.' })
       } catch {
         this.needsRecovery = true
@@ -104,17 +109,27 @@ export class LidClosedMode {
           case 'setup':
             if (this.awaitingSetup) await this.start(this.view.allowance as LidPreset, true)
             else if (this.view.phase === 'unavailable') {
-              await this.deps.install(false); this.view.installed = true
-              this.accept((await this.deps.native.command({ op: 'status' })).snapshot)
+              await this.install(false)
+              const reply = await this.deps.native.command({ op: 'status' })
+              this.accept(reply.snapshot)
+              if (reply.setupOnly) this.requireProtectedCopy()
             }
             break
           case 'adjust':
             if (this.view.phase === 'active') this.accept((await this.deps.native.command({ op: 'adjust', identity: this.identity, allowance: command.minutes * 60 })).snapshot)
             break
+          case 'reopen':
+            if (!this.view.relaunchRequired || this.needsRecovery) break
+            if ((await this.work(false)).some(run => run.status !== 'completed')) {
+              this.set({ error: 'Finish current work before reopening Cat Code.' }); break
+            }
+            this.deps.reopen()
+            break
           case 'continue': await this.resume(); break
           case 'stop': case 'cancel':
             this.awaitingSetup = false
             if (this.needsRecovery) await this.end('stopped')
+            else if (this.view.relaunchRequired) this.requireProtectedCopy()
             else this.set({ phase: 'off', canContinue: false, error: undefined })
             break
           case 'sleep': if (this.needsRecovery || this.view.canContinue) await this.end('sleep-requested', true); break
@@ -122,13 +137,13 @@ export class LidClosedMode {
             if (this.view.phase !== 'unresolved') break
             this.set({ recovering: true })
             if (!this.deps.installed() || this.view.repairRequired) {
-              this.deps.native.close(); await this.deps.install(true); this.view.installed = true
+              this.deps.native.close(); await this.install(true)
             }
             await this.end('recovered')
             break
           case 'dismiss':
             if (!this.needsRecovery && !['starting','active','restoring','setup'].includes(this.view.phase)) {
-              if (this.deps.installed()) await this.deps.native.command({ op: 'dismiss' })
+              if (this.deps.installed() && !this.view.relaunchRequired) await this.deps.native.command({ op: 'dismiss' })
               this.identity = undefined; this.set({ phase: 'off', canContinue: false, error: undefined, reason: undefined, included: [] })
             }
         }
@@ -169,8 +184,24 @@ export class LidClosedMode {
     if (!['nominal','fair'].includes(h.safety.thermal) || h.safety.onBattery === undefined || h.safety.batteryPercent === undefined) throw new Error('Safety monitoring is unavailable or your Mac needs to cool down.')
     if (h.safety.onBattery && h.safety.batteryPercent <= 20) throw new Error('Charge above 20% before starting.')
   }
+  private async install(recoveryOnly: boolean): Promise<void> {
+    try { await this.deps.install(recoveryOnly); this.view.installed = true }
+    catch (error) {
+      // An installer can fail after publishing authority. Do not turn that
+      // partial result into a dismissible error merely because Start has not
+      // written local intent yet. Normal sleep must be observed again.
+      const sleepDisabled = await this.deps.hardware().then(h => h.safety.sleepDisabled).catch(() => undefined)
+      if (this.deps.installed() || sleepDisabled !== false) {
+        this.needsRecovery = true
+        try { this.mark(true) } catch { /* Unwritable intent remains unresolved in memory. */ }
+        this.set({ phase: 'unresolved', repairRequired: true })
+      }
+      throw error
+    }
+  }
   private async start(minutes: LidPreset, setup = false): Promise<void> {
     if (this.needsRecovery || ['active','starting','restoring','unresolved'].includes(this.view.phase)) return
+    if (this.view.relaunchRequired) { this.requireProtectedCopy(); return }
     const epoch = this.epoch
     const work = await this.work(false)
     const included = work.filter(run => run.status !== 'completed')
@@ -179,7 +210,7 @@ export class LidClosedMode {
     this.view.allowance = minutes
     if (!this.deps.installed() && !setup) { this.awaitingSetup = true; this.set({ phase: 'setup', error: undefined }); return }
     if (!this.deps.installed()) {
-      this.set({ phase: 'setup' }); await this.deps.install(false); this.view.installed = true
+      this.set({ phase: 'setup' }); await this.install(false)
     }
     this.awaitingSetup = false
     if (epoch !== this.epoch || this.stopped) { this.set({ phase: 'off' }); return }
@@ -197,6 +228,7 @@ export class LidClosedMode {
     const reply = await this.deps.native.command({ op: 'start', identity: this.identity, allowance: minutes * 60 })
     if (epoch !== this.epoch || this.stopped) { this.snapshot = reply.snapshot; await this.end('stopped'); return }
     this.accept(reply.snapshot)
+    if (reply.error === 'authorized-copy-required') { this.requireProtectedCopy(); return }
     if (!reply.ok) throw new Error(reply.error ?? 'Lid-closed mode could not start.')
     else if (this.read().phase === 'active') await this.work(true)
   }
@@ -212,6 +244,15 @@ export class LidClosedMode {
     if (epoch !== this.epoch || this.stopped) { this.snapshot = reply.snapshot; await this.end('stopped'); return }
     this.accept(reply.snapshot)
     if (this.read().phase === 'active') await this.work(true)
+  }
+  private requireProtectedCopy(): void {
+    if (this.needsRecovery) {
+      this.set({ phase: 'unresolved', relaunchRequired: false, canContinue: false,
+        error: 'Restore normal sleep before reopening Cat Code.' })
+      return
+    }
+    this.set({ phase: 'unavailable', relaunchRequired: true, canContinue: false,
+      error: 'Setup is ready. Reopen Cat Code to use the protected copy. Current work must finish first.' })
   }
   private accept(snapshot: LidNativeSnapshot | undefined): void {
     if (!snapshot || snapshot.error) throw new Error('The sleep helper could not confirm the power state.')
@@ -244,6 +285,7 @@ export class LidClosedMode {
       const op = sleep && this.identity ? 'sleep' : this.identity && this.snapshot?.record.phase === 'active' ? 'stop' : 'retry'
       const reply = await this.deps.native.command({ op, ...(['stop','sleep'].includes(op) ? { identity: this.identity } : {}) })
       this.accept(reply.snapshot)
+      if (reply.setupOnly && !this.needsRecovery) this.requireProtectedCopy()
       if (!this.needsRecovery) this.set({ reason, canContinue: false })
     } catch { this.set({ phase: 'unresolved', canContinue: false, repairRequired: true }) }
     await this.work(true).catch(() => {})

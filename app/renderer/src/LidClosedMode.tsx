@@ -38,8 +38,8 @@ export function LidClosedNotice({ currentSessionId, onSelect }: { currentSession
     case 'off': return null
     case 'setup':
       notice.title = 'Keep it on a hard surface. Never in a bag.'
-      notice.detail = 'Administrator setup is required. Ordinary macOS Sleep can be blocked while this mode is active; use End mode and sleep. Use no other utility that changes the global sleep override: simultaneous writes cannot be reliably distinguished. Recovery depends on the helper and macOS responding.'
-      notice.actions = [action('setup', 'Set up and start'), action('cancel', 'Cancel')]; break
+      notice.detail = 'One administrator setup creates a protected copy of Cat Code. Finish current work, then reopen it. Ordinary macOS Sleep can be blocked while this mode is active; use End mode and sleep. Use no other utility that changes the global sleep override: simultaneous writes cannot be reliably distinguished. Recovery depends on the helper and macOS responding.'
+      notice.actions = [action('setup', 'Set up'), action('cancel', 'Cancel')]; break
     case 'starting': notice.title = 'Starting lid-closed mode.'; notice.actions = [action('cancel','Cancel')]; break
     case 'active':
       notice.title = `Covers ${v.included.length} ${v.included.length === 1 ? 'run' : 'runs'} selected at activation across chats.`
@@ -53,7 +53,7 @@ export function LidClosedNotice({ currentSessionId, onSelect }: { currentSession
       notice.actions = v.canContinue ? [action('continue','Continue with lid closed'), action('dismiss','Dismiss')] : [action('dismiss','Dismiss')]; break
     case 'unavailable':
       if (!v.error) return null
-      notice.title = v.error; notice.tone = 'warn'; notice.actions = [...(v.repairRequired ? [action('setup','Repair setup')] : []), action('dismiss','Dismiss')]; break
+      notice.title = v.error; notice.tone = 'warn'; notice.actions = [...(v.relaunchRequired ? [action('reopen','Reopen Cat Code')] : []), ...(v.repairRequired ? [action('setup','Repair setup')] : []), action('dismiss','Dismiss')]; break
     case 'ended':
       notice.title = lidReason(v.reason); notice.detail = v.error ? 'Sleep could not be confirmed. Check your Mac.' : undefined
       notice.tone = ['thermal','battery-reserve','monitoring-unavailable','supervision-lost'].includes(v.reason ?? '') ? 'warn' : 'info'

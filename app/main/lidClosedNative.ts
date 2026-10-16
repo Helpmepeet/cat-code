@@ -2,11 +2,23 @@ import { spawn, execFile } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, writeFile, copyFile, chmod } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdtemp, readFile, writeFile, chmod } from 'node:fs/promises'
+import { join, dirname } from 'node:path'
 
 const run = promisify(execFile)
+declare const __CATCODE_LID_ASSET_SHA256__: Record<string, string> | undefined
 export const LID_HELPER = '/Library/PrivilegedHelperTools/com.catcode.lid-closed'
+export const LID_AUTHORIZED_APP = '/Library/PrivilegedHelperTools/com.catcode.lid-closed-app/Cat Code.app'
+async function verifiedLidAssets(assets: string): Promise<Record<string, Buffer>> {
+  if (typeof __CATCODE_LID_ASSET_SHA256__ === 'undefined') throw new Error('Rebuild the packaged app before setting up lid-closed mode.')
+  const result: Record<string, Buffer> = {}
+  for (const name of ['helper', 'install.sh', 'uninstall.sh']) {
+    const bytes = await readFile(join(assets, name))
+    if (createHash('sha256').update(bytes).digest('hex') !== __CATCODE_LID_ASSET_SHA256__[name]) throw new Error('Lid-closed setup files changed. Rebuild Cat Code before setting up again.')
+    result[name] = bytes
+  }
+  return result
+}
 export type LidNativeSnapshot = {
   record: { phase: string; identity?: string; began: number; deadline: number; allowance: number;
     reason?: string; error?: string; needsRestore: boolean; sleepRequested: boolean;
@@ -16,11 +28,12 @@ export type LidNativeSnapshot = {
   hardwareQualified: boolean
   error?: string
 }
-export type LidNativeReply = { ok: boolean; snapshot?: LidNativeSnapshot; error?: string }
+export type LidNativeReply = { ok: boolean; snapshot?: LidNativeSnapshot; error?: string; setupOnly?: boolean }
 export function parseLidNativeReply(value: unknown): LidNativeReply {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid helper response')
   const r = value as Record<string, unknown>
-  if (Object.keys(r).some(key => !['ok','snapshot','error'].includes(key)) || typeof r.ok !== 'boolean' ||
+  if (Object.keys(r).some(key => !['ok','snapshot','error','setupOnly'].includes(key)) || typeof r.ok !== 'boolean' ||
+      r.setupOnly !== undefined && typeof r.setupOnly !== 'boolean' ||
       r.error !== undefined && (typeof r.error !== 'string' || r.error.length > 512)) throw new Error('Invalid helper response')
   if (r.snapshot !== undefined) {
     const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -98,6 +111,7 @@ export class LidNativeClient {
 export type LidHardware = { qualified: boolean; evidence: string; model: string; osBuild: string;
   safety: LidNativeSnapshot['safety'] }
 export async function inspectLidHardware(assets: string): Promise<LidHardware> {
+  await verifiedLidAssets(assets)
   const result = await run(join(assets, 'helper'), ['--hardware'], { timeout: 5000, maxBuffer: 16_384, env: { PATH: '/usr/bin:/bin', LANG: 'C' } })
   const data = JSON.parse(result.stdout) as LidHardware
   if (typeof data.qualified !== 'boolean' || typeof data.evidence !== 'string' || !data.safety || typeof data.model !== 'string' || typeof data.osBuild !== 'string') throw new Error('Safety monitoring unavailable')
@@ -114,19 +128,31 @@ async function requirement(path: string): Promise<string> {
 // The administrator executes only the protected, digest-verified installer.
 // Renderer input never supplies a command, path, caller identity or signature.
 export async function installLidHelper(assets: string, executable: string, recoveryOnly = false): Promise<void> {
+  const verified = await verifiedLidAssets(assets)
   try {
     const caller = await run(join(assets, 'helper'), ['--check-application', executable], { timeout: 30_000, maxBuffer: 4096 })
     if (caller.stdout.trim() !== 'qualified-application') throw new Error('Unqualified app')
-  } catch { throw new Error('Lid-closed setup requires a sealed, hardened app signed with an Apple development identity. This local build cannot authorize the helper.') }
+  } catch { throw new Error('Lid-closed setup requires a packaged app with verified startup and library protections. Rebuild Cat Code before setting up again.') }
   const hardware = await inspectLidHardware(assets)
   if (!hardware.qualified && !recoveryOnly) throw new Error('This Mac and macOS version are not qualified')
   const prepared = await mkdtemp('/private/tmp/cat-lid-install-')
   await chmod(prepared, 0o700)
-  for (const name of ['helper','uninstall.sh']) await copyFile(join(assets, name), join(prepared, name))
-  await writeFile(join(prepared,'configuration.json'), JSON.stringify({ version: 1, uid: process.getuid!(),
+  for (const name of ['helper','uninstall.sh']) await writeFile(join(prepared, name), verified[name]!, { mode: name === 'helper' ? 0o700 : 0o600 })
+  const bundle = dirname(dirname(dirname(executable)))
+  await run('/bin/cp', ['-cRP', bundle, join(prepared, 'application.app')], { timeout: 30_000, maxBuffer: 4096 })
+  const appRequirement = await requirement(executable)
+  await writeFile(join(prepared,'configuration.json'), JSON.stringify({ version: 2, uid: process.getuid!(),
     bridgeRequirement: await requirement(join(prepared,'helper')),
-    parents: [{ path: executable, requirement: await requirement(executable), experiment: false }],
-    experimentUntil: 0, qualifiedBoot: null, qualifiedOS: null, qualificationEvidence: hardware.evidence }) + '\n', { mode: 0o600 })
+    parents: [
+      { path: join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code'), requirement: appRequirement, experiment: false },
+      ...(executable === join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code') ? [] :
+        [{ path: executable, requirement: appRequirement, experiment: false, setupOnly: true }]),
+    ],
+    experimentUntil: 0,
+    // Qualification only restricts authority: normal preset/caller/hardware
+    // validation remains, while root admits one lease capped at 60 seconds.
+    ...(process.env.CATCODE_LID_CLOSED_TRIAL === '1' ? { applicationTrialUntil: Date.now() / 1000 + 180 } : {}),
+    qualifiedBoot: null, qualifiedOS: null, qualificationEvidence: hardware.evidence }) + '\n', { mode: 0o600 })
   for (const [name,label,arg,mach] of [
     ['daemon.plist','com.catcode.lid-closed','--daemon',true],
     ['recovery.plist','com.catcode.lid-closed.recovery','--watch',false],
@@ -135,7 +161,7 @@ export async function installLidHelper(assets: string, executable: string, recov
   }
   const names = ['helper','configuration.json','daemon.plist','recovery.plist','uninstall.sh']
   const sums = await Promise.all(names.map(async name => `${createHash('sha256').update(await readFile(join(prepared,name))).digest('hex')}  ${name}`))
-  const installer = (await readFile(join(assets,'install.sh'),'utf8')).replace('__EXPECTED_PAYLOAD__',sums.join('\n'))
+  const installer = verified['install.sh']!.toString('utf8').replace('__EXPECTED_PAYLOAD__',sums.join('\n'))
   await writeFile(join(prepared,'install.sh'),installer,{ mode: 0o700 })
   const hash = createHash('sha256').update(installer).digest('hex')
   const script = `set -euo pipefail
@@ -145,5 +171,12 @@ trap '/bin/rm -rf "$lid_root_stage"' EXIT
 /bin/echo '${hash}  '"$lid_root_stage/install.sh" | /usr/bin/shasum -a 256 -c -
 /bin/bash "$lid_root_stage/install.sh" ${quote(prepared)}`
   const appleScript = `do shell script ${JSON.stringify('/bin/bash -c ' + quote(script))} with administrator privileges`
-  await run('/usr/bin/osascript', ['-e',appleScript], { timeout: 120_000, maxBuffer: 32_768 })
+  try {
+    await run('/usr/bin/osascript', ['-e',appleScript], { timeout: 120_000, maxBuffer: 32_768, env: { PATH: '/usr/bin:/bin', LANG: 'C' } })
+  } catch (error) {
+    const failure = error as { stderr?: string; killed?: boolean; signal?: string }
+    if (failure.stderr?.includes('(-128)')) throw new Error('Administrator setup was cancelled.')
+    if (failure.killed || failure.signal) throw new Error('Administrator setup timed out. Try again when you are ready.')
+    throw new Error('Lid-closed setup failed. Check normal sleep before trying again.')
+  }
 }

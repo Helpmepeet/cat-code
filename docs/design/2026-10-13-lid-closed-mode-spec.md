@@ -221,25 +221,26 @@ The two HTML files remain separate, untracked design-session artifacts and are v
 
 The implementation uses the specified elapsed-time adjustment, a 20-percent discharging reserve, and nominal thermal state before a fresh start after a thermal end. Blocked-work grace periods and the shared notice are implemented; their automated coverage is separate from live acceptance. The concrete privilege model is a narrow root launchd helper with independent recovery and one-time administrator setup, detailed in the [bounded experiment](../research/2026-10-14-lid-closed-pmset-experiment.md). Pending release evidence includes measured recovery bounds, hardware support, display handling, and actual input/color verification. The accepted power-control tradeoffs, battery-use, and cup-design decisions are not reopened by these pending items.
 
-## Integrated authority and qualification status (2026-10-15)
+## Integrated authority and qualification status (2026-10-16)
 
-Persistent helper access is pinned to the sealed packaged app and its bridge.
-The helper verifies the app signature, parent process, user, hardened runtime,
-ASAR loading/integrity fuses and forbidden injection/debugging entitlements.
-An app rebuild requires explicit repair/reauthorization. Root-owned recovery
-state is retained after restore-first removal as evidence. The removal script
-keeps recovery authority installed if restoration cannot be confirmed.
+The certificate-free implementation uses ad-hoc signing, sealed archive startup,
+an exact kernel library constraint and a root-controlled app snapshot. The
+receiving helper pins the user, native bridge and fixed protected app, checks
+live process protections on every message, and validates protected artifacts at
+connection admission. No repeated password or Touch ID approval is required.
 
-The default local ad-hoc build remains usable for ordinary Cat Code work but
-cannot authorize the privileged mode. A hardened ad-hoc Electron build was
-actually rejected by macOS library validation because it lacks a Team ID; no
-Apple signing identity is configured on this Mac. A supplied signing identity
-can select the hardened packaging branch, whose actual launch and helper
-connection remain unverified. No macOS security setting is relaxed. This is a
-current integration prerequisite, not a reversal of the approved pmset tradeoffs.
+One administrator setup creates that snapshot. The notice explains that current
+work must finish before Reopen Cat Code switches to it. The source copy can
+inspect/retry restoration but cannot activate, adjust, Continue or request
+Sleep. A rebuild needs administrator repair/reauthorization. Removal restores
+first and retains recovery state as evidence; a running protected copy is
+removed only after it exits. Initial setup assumes a trusted local build.
 
-The app-wide notice, no-work refusal, real-work setup disclosure/cancellation,
-signing refusal and synthetic recovery visibility across restart/navigation
-have been observed in Cat Code Dev. Live packaged activation, app crash/stall
-recovery and active visual acceptance remain incomplete. Consult the integration
-results before describing this feature as ready.
+The earlier hardened ad-hoc Team-ID failure remains in the historical results.
+It is not a certificate prerequisite. See the
+[runtime contract](2026-10-15-lid-closed-runtime-contract.md) for the replacement
+and its restrictive 60-second qualification configuration. Actual packaged
+activation, failure recovery and active visual acceptance must be demonstrated
+separately; consult the integration results before describing the feature as
+ready. Existing physical power/lid/Sleep observations remain valid within their
+recorded hardware and scenario limits.

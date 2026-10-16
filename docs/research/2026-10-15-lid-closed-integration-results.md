@@ -1,6 +1,6 @@
 # Lid-closed app integration results
 
-Date: 2026-10-15. Status: **not end-to-end qualified; persistent packaged authority is blocked**.
+Updated: 2026-10-16. Status: **not end-to-end qualified; live protected-app/helper verification awaits administrator authentication**.
 
 ## What is implemented
 
@@ -28,7 +28,82 @@ ending. Already-running tools are not promised to be killed. A fresh explicit
 user turn can restore the engine's ordinary idle-sleep assertion, without
 re-enrolling or unblocking the earlier protected run.
 
-## Concrete signing blocker
+## Certificate-free replacement (2026-10-16)
+
+The [runtime contract](../design/2026-10-15-lid-closed-runtime-contract.md)
+describes the replacement: ad-hoc hard/kill Electron with an exact signed
+library allowlist, a hardened native bridge, per-message XPC identity checks,
+and a root-controlled app snapshot. No Apple-issued certificate, Touch ID,
+security exception or sudoers entry is required. Initial setup assumes a
+trusted local build. Source callers are recovery-only; completing current work
+and Reopen Cat Code switches to the authorized snapshot. Rebuilds require
+administrator repair/reauthorization.
+
+Concrete authentication evidence:
+
+- The real sealed package launches and reaches renderer ready without the
+  previous Team-ID failure. The helper accepts its exact library constraint.
+  A DYLD-injected marker dylib is rejected before startup by the kernel library
+  constraint. No injection exception entitlement was added.
+- Static checks alone proved inadequate: substituted ASAR/Info.plist JavaScript
+  executed under the original native CDHash, then restoring both original files
+  made a later static qualification accept the bundle. The process retained
+  valid/hard/kill status. This reproduced attack is why persistent activation
+  is restricted to the protected snapshot; the snapshot/RPC repair still needs
+  actual root installation and negative-caller execution evidence.
+- Native identity tests execute compiled, signed processes: exact constraints
+  accepted; absent/broadened constraints, unprotected code, substituted payload,
+  remote-debugging arguments and write-granting ACLs rejected. These fixtures
+  do not establish actual Electron/XPC authorization.
+- Sealed setup-asset digests reject substitutions of helper, installer and
+  uninstaller before execution or administrator authorization. The final
+  packaged helper's SHA256 equals its prepackage embedded source digest.
+- The trial configuration admits one normal-preset lease capped at 60 seconds
+  by the root controller, including adjustment and Continue. A native test
+  preserves that deadline through activation delay, lid-open Continue and
+  expiry. Removing retirement's terminal transition makes the new test fail at
+  “retired trial Continue accepted”. No live trial has started.
+
+Current automated checks from a clean temporary snapshot based on `dc69e1b1`,
+with only this task's owned changes applied:
+
+- Package/renderer build, stowaway scan, deep signature, native qualification,
+  desktop typecheck and scoped sidecar typecheck pass. Sidecar checking ignores
+  5,575 upstream engine diagnostics.
+- Electron hardening smoke passes **19/19** outside the filesystem sandbox.
+  The sandboxed launch aborted; it is not counted as a product regression.
+- Full desktop suite: **5,954 pass, 3 skip, 1 fail**, 56,869 assertions across
+  416 files. The sole `sessionRelocationRepeat.storage.test.ts:137` failure was
+  reproduced on untouched `dc69e1b1` with the same expected-true/received-false
+  assertion. The old archived scratch loader error was absent from this clean
+  snapshot. The initial sandbox/socket-directory runs were discarded and fixed
+  before this run; they are not the reported result.
+- Focused native/owner/asset checks passed **9 tests / 82 assertions**. After
+  installer preflight and setup-copy wording changes, the selected owner/asset,
+  identity and user-copy checks passed **13 / 109**. The later partial-install
+  recovery repair passed **9 / 75** owner/asset/native checks. The renderer and
+  closed Reopen command checks passed **3 / 21**. Its recovery regression fails on
+  the preceding owner with `unavailable` instead of `unresolved`.
+
+Observed current UI uses an isolated **Cat Code Dev** package and a loopback SSE
+model fixture. Real accounts and quota were not used. Accessibility showed the
+fixture text, setup's protected-copy/reopen disclosure, Set up and Cancel. The
+actual administrator command was reached, but authentication timed out before
+installation. The error exposed internal shell text; that observed defect was
+repaired with explicit cancelled/timed-out/failed messages. Partial setup now
+observes kernel status and retains unresolved recovery if authority was
+published or sleep cannot be confirmed. The revised failure copy is not yet
+rechecked in the live UI.
+
+No root snapshot, helper, launchd job or guardian was installed in this pass.
+No live global sleep override or new physical lid/Sleep action occurred. Pending
+qualification is actual protected-copy launch/XPC admission, substituted caller
+rejection at that receiver, setup/repair/removal, real app crash/stall recovery
+and active visual/input acceptance. The previous physical evidence below is
+preserved and should not be repeated unless an affected behavior requires it.
+
+## Historical signing blocker (2026-10-15)
+
 
 Review found that pinning a generic Electron executable does not identify its
 JavaScript application: alternate startup/debugging paths could execute different
@@ -56,13 +131,12 @@ refuses it. Actual UI setup displays that limitation before administrator
 execution. This is a blocker for the **chosen persistent-authentication design**,
 not evidence that the already-tested pmset mechanism is impossible.
 
-`CATCODE_SIGNING_IDENTITY` selects a supplied Apple signing identity for the
-hardened build. That branch also runs the native qualification check after
-signing. No identity has been supplied or created, so the signed build's launch,
-XPC authorization, installation, repair after signature change, and live app
-leases remain unverified. The user was informed of this new prerequisite.
+That historical implementation offered `CATCODE_SIGNING_IDENTITY`. The branch
+has now been removed: a certificate is not a user requirement. The current
+certificate-free candidate and its remaining verification are described above;
+the failure below remains evidence about the earlier chosen mechanism.
 
-## Automated and process evidence
+## Earlier automated and process evidence (2026-10-15)
 
 - Engine dev build passed, including the undefined-name and map gates.
 - Desktop typecheck and scoped sidecar typecheck passed. The latter reports
@@ -94,7 +168,7 @@ leases remain unverified. The user was informed of this new prerequisite.
   `--inspect=127.0.0.1:18997` did not open the port. The normal app rendered.
   This limited negative probe does not prove all injection paths impossible.
 
-## Observed UI evidence
+## Earlier observed UI evidence (2026-10-15)
 
 An isolated **Cat Code Dev** copy loaded its renderer from `app.asar`. No user
 account or model quota was used. A loopback-only SSE fixture supplied model text;
@@ -167,4 +241,22 @@ Evidence logs and disposable bundles are retained under `/private/tmp/cat-lid-*`
 The durable summary here separates their observations from the immutable raw
 physical reports. Before a future live app test, retain the existing 60-second
 experiment boundary; the normal UI minimum of 15 minutes does not authorize a
-longer trial. A concrete bounded procedure needs agreement before that test.
+longer trial. The current restrictive app-trial configuration supplies that bound; physical participation still requires individual coordination.
+
+
+## Current cleanup (2026-10-16)
+
+After the uncompleted administrator attempt, the isolated app exited normally
+and its loopback fixture exited. The earlier scratch test app had required its
+runner's tracked-PID kill after a five-second shutdown wait; neither is running.
+Read-only audit confirms `SleepDisabled=No`, `AppleClamshellState=No`, helper,
+protected-copy directory and both launchd plists absent. Both system launchd
+labels return not found (113). No experiment guardian was started or remains.
+The recorded source app, sidecars, fixture servers and authorization process
+PIDs are gone; registry shutdown records are clean. The installed user app was
+not replaced, and no real accounts were accessed.
+
+Final source package and desktop typecheck include the timeout/partial-setup
+repair. Live receiver/active-UI qualification remains blocked on completing the
+one-time macOS administrator dialog; no new approval or Touch ID requirement is
+introduced for ordinary Start, adjustment or Continue.

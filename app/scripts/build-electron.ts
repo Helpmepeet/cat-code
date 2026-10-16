@@ -14,6 +14,8 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { buildLidHelper } from './build-lid-helper.js'
+import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -64,7 +66,10 @@ async function build(): Promise<void> {
   // main as ESM .js (package is type:module); preload as CJS .cjs (sandboxed
   // preload must be CommonJS, and .cjs opts out of the package's ESM default).
   await buildOne(join(appRoot, 'main', 'main.ts'), 'esm', 'js', {
-    define: stampDefines(),
+    define: { ...stampDefines(), __CATCODE_LID_ASSET_SHA256__: JSON.stringify(Object.fromEntries(
+      ['helper', 'install.sh', 'uninstall.sh'].map(name => [name,
+        createHash('sha256').update(readFileSync(join(appRoot, 'native/lid-closed/dist', name))).digest('hex')]),
+    )) },
   })
   await buildOne(join(appRoot, 'preload', 'preload.ts'), 'cjs', 'cjs', {
     define: { __CATCODE_DEV_HARNESS__: 'false' },

@@ -1,5 +1,5 @@
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
-import { LidNativeClient, inspectLidHardware, installLidHelper } from './lidClosedNative.js'
+import { LidNativeClient, inspectLidHardware, installLidHelper, LID_AUTHORIZED_APP } from './lidClosedNative.js'
 import { isLidModeCommand } from '../shared/lidClosed.js'
 import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
 import { ScheduledTasks } from '../host/scheduledTasks.js'
@@ -1621,6 +1621,7 @@ function createWindow(): void {
     icon: APP_ICON_PATH,
     webPreferences: {
       // SECURITY-MINIMUM §3 BrowserWindow/webPreferences — every box checked.
+      devTools: IS_DEV,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -2975,6 +2976,11 @@ function ensureLidMode(): void {
     installed: lidHelperInstalled,
     hardware: () => inspectLidHardware(assets),
     install: recoveryOnly => installLidHelper(assets, process.execPath, recoveryOnly),
+    reopen: () => {
+      if (!existsSync(join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code'))) throw new Error('The protected copy is unavailable. Set up lid-closed mode again.')
+      app.relaunch({ execPath: join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code'), args: process.argv.slice(1).filter(arg => arg.startsWith('--user-data-dir=')) })
+      app.quit()
+    },
     sessions: () => (supervisor?.listSessions() ?? []).filter(row => row.status === 'ready').flatMap(row => {
       const generation = supervisor?.getSessionGeneration(row.sessionId)
       if (!generation) return []

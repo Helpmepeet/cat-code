@@ -14,15 +14,14 @@ function run(command: string, args: string[], timeout = 60_000): string {
 }
 const helper = join(output, 'helper')
 run('/usr/bin/swiftc', ['-module-cache-path', join(output, 'cache'),
-  join(source, 'LidCore.swift'), join(source, 'LidPlatform.swift'), join(source, 'main.swift'), '-o', helper])
-// No entitlements. This is ordinary ad hoc signing, never the rejected route.
-run('/usr/bin/codesign', ['--force', '--sign', '-', helper])
+  join(source, 'LidCore.swift'), join(source, 'LidCodeIdentity.swift'), join(source, 'LidPlatform.swift'), join(source, 'main.swift'), '-o', helper])
+run('/usr/bin/codesign', ['--force', '--sign', '-', '--options', 'runtime', helper])
 const signature = run('/usr/bin/codesign', ['-d', '--verbose=4', helper])
 const cdhash = signature.match(/^CDHash=([a-f0-9]+)$/m)?.[1]
 if (!cdhash) throw new Error('Could not pin the native helper signature')
 const requirement = `cdhash H"${cdhash}"`
 const installed = '/Library/PrivilegedHelperTools/com.catcode.lid-closed'
-writeFileSync(join(output, 'configuration.json'), JSON.stringify({ version: 1, uid: process.getuid!(),
+writeFileSync(join(output, 'configuration.json'), JSON.stringify({ version: 2, uid: process.getuid!(),
   bridgeRequirement: requirement, parents: [{ path: installed, requirement, experiment: true }],
   experimentUntil: Date.now() / 1000 + 24 * 60 * 60,
   qualifiedBoot: null, qualifiedOS: null, qualificationEvidence: null }) + '\n', { mode: 0o600 })

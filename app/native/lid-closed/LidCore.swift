@@ -6,6 +6,9 @@ let lidRecoveryPoll: Double = 2
 let lidMaximumAllowance: Double = 7200
 let lidStateDirectory = "/Library/Application Support/Cat Code/LidClosed"
 let lidService = "com.catcode.lid-closed"
+let lidAuthorizedDirectory = "/Library/PrivilegedHelperTools/com.catcode.lid-closed-app"
+let lidAuthorizedApplication = lidAuthorizedDirectory + "/Cat Code.app"
+let lidAuthorizedExecutable = lidAuthorizedApplication + "/Contents/MacOS/Cat Code"
 
 func lidContinuousTime() -> Double {
     var info = mach_timebase_info_data_t(); mach_timebase_info(&info)
@@ -169,6 +172,9 @@ final class LidController {
             var record = try journal.read(boot: boot)
             record.draining = true; try journal.write(record)
             if record.needsRestore { try restore(&record, reason: "retired", sleep: record.sleepRequested || readSafety().lidClosed == true) }
+            if record.phase == "lid-open" {
+                record.phase = "ended"; record.reason = "retired"; try journal.write(record)
+            }
             guard !record.needsRestore, readSafety().sleepDisabled == false else { throw LidFailure("restoration-unresolved") }
         }
     }
@@ -252,7 +258,7 @@ final class LidController {
             }
         }
     }
-    func command(_ input: [String: Any], experiment: Bool = false) throws -> LidSnapshot {
+    func command(_ input: [String: Any], experiment: Bool = false, applicationTrial: Bool = false) throws -> LidSnapshot {
         guard let op = input["op"] as? String,
               Set(input.keys).isSubset(of: Set(["op", "identity", "allowance", "scenario"])) else { throw LidFailure("invalid-command") }
         let id = input["identity"] as? String
@@ -269,7 +275,7 @@ final class LidController {
                       let id, UUID(uuidString: id) != nil, input.count == 3,
                       let number = input["allowance"] as? NSNumber,
                       case let seconds = number.doubleValue, seconds.isFinite,
-                      experiment ? (seconds >= 10 && seconds <= 90) : [900.0, 1800, 3600, 7200].contains(seconds) else {
+                      experiment ? (seconds >= 10 && seconds <= 60) : [900.0, 1800, 3600, 7200].contains(seconds) else {
                     throw LidFailure("start-refused")
                 }
                 guard experiment || qualified else { throw LidFailure("hardware-unqualified") }
@@ -279,8 +285,9 @@ final class LidController {
                 // Experimental setup admits one activation, including a failed
                 // attempt. Consume admission durably before changing power;
                 // ongoing pulses and restoration remain available while drained.
-                record = LidRecord(phase: "starting", draining: experiment, identity: id, boot: boot, began: time,
-                    deadline: time + seconds, allowance: seconds, clientPulse: time, helperPulse: time,
+                let duration = applicationTrial ? min(seconds, 60) : seconds
+                record = LidRecord(phase: "starting", draining: experiment || applicationTrial, identity: id, boot: boot, began: time,
+                    deadline: time + duration, allowance: seconds, clientPulse: time, helperPulse: time,
                     sawClosed: safety.lidClosed == true, needsRestore: true)
                 try journal.write(record)
                 do {
@@ -288,7 +295,9 @@ final class LidController {
                     guard readSafety().sleepDisabled == true else { throw LidFailure("activation-not-observed") }
                     let confirmed = readSafety()
                     if let refusal = confirmed.refusal { throw LidFailure(refusal) }
-                    record.began = now(); record.deadline = record.began + seconds
+                    if !applicationTrial { record.began = now() }
+                    record.deadline = record.began + duration
+                    guard now() < record.deadline else { throw LidFailure("activation-expired") }
                     record.clientPulse = record.began; record.helperPulse = record.began
                     record.phase = "active"; try journal.write(record)
                 } catch { try restore(&record, reason: "start-failed", sleep: safety.lidClosed == true) }
@@ -301,17 +310,17 @@ final class LidController {
                 }
                 record.clientPulse = time; try journal.write(record)
             case "adjust":
-                guard !record.draining, !experiment, input.count == 3, record.phase == "active", record.identity == id,
+                guard (!record.draining || applicationTrial), !experiment, input.count == 3, record.phase == "active", record.identity == id,
                       let number = input["allowance"] as? NSNumber,
                       case let seconds = number.doubleValue, [900.0, 1800, 3600, 7200].contains(seconds) else { throw LidFailure("adjust-refused") }
                 guard record.boot == boot, time < record.deadline, time - record.clientPulse <= lidHeartbeatLimit else {
                     try restore(&record, reason: time >= record.deadline ? "expired" : "supervision-lost", sleep: safety.lidClosed == true); return
                 }
-                record.allowance = seconds; record.deadline = record.began + seconds
+                record.allowance = seconds; record.deadline = record.began + (applicationTrial ? min(seconds, 60) : seconds)
                 try journal.write(record)
                 if time >= record.deadline { try restore(&record, reason: "expired", sleep: safety.lidClosed == true) }
             case "continue":
-                guard !record.draining, input.count == 2, record.phase == "lid-open", !record.needsRestore, record.identity == id,
+                guard (!record.draining || applicationTrial), input.count == 2, record.phase == "lid-open", !record.needsRestore, record.identity == id,
                       record.boot == boot, time < record.deadline, safety.sleepDisabled == false else { throw LidFailure("continue-refused") }
                 if let refusal = safety.refusal { throw LidFailure(refusal) }
                 record.phase = "starting"; record.needsRestore = true

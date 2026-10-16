@@ -35,9 +35,10 @@ export type LidModeView = {
   sleepRequested: boolean
   recovering?: boolean
   repairRequired?: boolean
+  relaunchRequired?: boolean
 }
 export type LidModeCommand = { action: 'start' | 'adjust'; minutes: LidPreset } |
-  { action: 'stop' | 'sleep' | 'continue' | 'retry' | 'dismiss' | 'cancel' | 'setup' }
+  { action: 'stop' | 'sleep' | 'continue' | 'retry' | 'dismiss' | 'cancel' | 'setup' | 'reopen' }
 export type LidClosedBridge = {
   read(): Promise<LidModeView>
   command(command: LidModeCommand): Promise<LidModeView>
@@ -52,7 +53,7 @@ function uuid(value: unknown): value is string { return typeof value === 'string
 export function isLidModeCommand(value: unknown): value is LidModeCommand {
   if (!record(value) || typeof value.action !== 'string') return false
   if (value.action === 'start' || value.action === 'adjust') return keys(value, ['action', 'minutes']) && LID_PRESETS.includes(value.minutes as LidPreset)
-  return keys(value, ['action']) && ['stop','sleep','continue','retry','dismiss','cancel','setup'].includes(value.action)
+  return keys(value, ['action']) && ['stop','sleep','continue','retry','dismiss','cancel','setup','reopen'].includes(value.action)
 }
 export function isLidWorkControl(value: unknown): value is LidWorkControl {
   if (!record(value) || !keys(value, ['type','requestId','window']) || value.type !== 'lid.work' || !uuid(value.requestId)) return false

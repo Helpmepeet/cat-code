@@ -39,19 +39,63 @@ notifications cannot replace the new view.
 
 ## Setup, signing and removal
 
-The default local package remains ad-hoc signed. It is not granted persistent
-helper authority. A supplied `CATCODE_SIGNING_IDENTITY` enables a hardened build
-with library validation; this branch is currently unverified because this Mac
-has no suitable identity. No signing certificate, security exception or
-notarization workflow is automatically created.
+The local package uses ad-hoc signing without an Apple-issued certificate or
+Touch ID. The earlier Team-ID/library-validation build failed at launch; that
+historical result is preserved in the integration report. The replacement uses
+a sealed ASAR, startup fuses, hard/kill code flags and an exact signed kernel
+library constraint for eight Electron libraries, with no exception entitlements.
+Packaged renderer DevTools are disabled. Native admission also checks the live
+valid/hard/kill flags, sticky debugger status and a closed startup-argument list
+on every request. The native bridge uses hardened ad-hoc signing and the XPC
+connection enforces its code requirement on every message.
 
-One administrator setup pins the exact app and helper code, installs the fixed
-helper and watcher, and restores interrupted state before admitting work.
-Subsequent app signature changes require explicit repair/reauthorization.
-Removal uses the bundled fixed restore-first script, not a renderer-authored
-command. Failed restoration retains recovery authority and a visible warning.
+Those checks alone cannot authenticate loaded JavaScript from a mutable app:
+a local experiment ran substituted ASAR/Info.plist contents, restored them,
+and passed a later static check. Therefore one administrator setup creates a
+root-controlled snapshot at
+`/Library/PrivilegedHelperTools/com.catcode.lid-closed-app/Cat Code.app`.
+Only its fixed executable can activate, adjust, Continue or request Sleep.
+Ancestor ownership, modes, write-granting ACLs, the entire snapshot tree and
+symlink confinement are checked at connection admission. Setup checks protected
+destinations using the digest-verified root-stage helper before executing old
+or new installed helper code. The frozen snapshot must pass the pinned app
+requirement and deep resource verification before jobs start.
 
-Ordinary Sleep blockage, exclusive global override ownership and measured-only
-recovery bounds remain the approved tradeoffs. Current hardware qualification
-is limited to the recorded Mac16,8 / 25G83 evidence; app qualification remains
-separate and incomplete.
+The original source app has recovery-only access (`status` and `retry`). It
+instructs the user to finish current work and choose Reopen Cat Code. Reopen
+checks all observed work before quitting and launches only the fixed protected
+path. It does not transfer active work. Subsequent starts need no administrator
+prompt; a rebuilt app needs explicit repair/reauthorization. The ordinary
+installed application is not replaced.
+
+The initial administrator setup assumes a trusted, reviewed local build. Hashes
+embedded in sealed JavaScript bind helper/install/uninstall assets before those
+buffers are staged. They prevent external setup-resource substitution; they do
+not make an already compromised source JavaScript process a trustworthy broker
+for administrator consent.
+
+Root configuration is now version 2, with `setupOnly` parent capability and an
+optional restrictive qualification deadline. Older readers reject version 2,
+rather than silently losing that capability restriction. Restore-first setup
+runs the previous installed helper against its previous configuration before
+publishing version 2. The recovery journal format is unchanged.
+
+Removal retires admission and confirms restoration before unloading both jobs
+and deleting the helper. Failure retains recovery authority and the warning.
+A running protected snapshot is retained to avoid interrupting work; after it
+quits, rerunning the retained root-owned removal script removes that copy too.
+The root journal/configuration remain as evidence and cannot enable power
+without an installed helper.
+
+Qualification sets `CATCODE_LID_CLOSED_TRIAL=1` in the isolated app. This only
+restricts the root configuration: normal caller, hardware and preset validation
+remain. One lease is capped at 60 seconds from its original native start,
+including adjustment and Continue, and retirement makes it terminal. The
+independent guardian removes experimental authority after an unused 30-second
+setup window or the bounded lease/cleanup window. Production exposes no short
+preset and has no test command that grants broader authority.
+
+Ordinary Sleep blockage, exclusive override ownership and measured-only recovery
+bounds remain the approved tradeoffs. Hardware evidence is limited to
+Mac16,8 / 25G83; actual app/helper and active UI qualification is recorded
+separately in the integration results and remains required before completion.

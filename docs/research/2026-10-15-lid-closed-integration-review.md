@@ -1,5 +1,37 @@
 # Lid-closed integration review
 
+Updated 2026-10-16. **Qualification remains incomplete.** The certificate-free
+repair pass used the existing A+C, B/security and D/execution roster, including
+a B follow-up on the protected-snapshot repairs. No additional agents were
+spawned for that follow-up. The earlier review is retained below as history.
+
+## Current repair pass
+
+| Severity | Finding | Repair and evidence |
+|---|---|---|
+| High | Mutable ASAR/Info.plist swap and restore passes a later static check after substituted JavaScript runs. | Reproduced in a real Electron process. Activation now requires the fixed root-controlled snapshot; source is recovery-only. Actual protected installation/RPC negative qualification remains pending. |
+| High | Trial Continue can revive a retired lid-open record. | Retirement makes lid-open terminal under the transition lock. Native regression passes; removing the transition produces the intended fatal regression. |
+| High | Mutable setup resources can author their own expected privileged hashes. | Sealed main embeds three asset digests and verifies buffer reads before staging. All three substitutions reject before execution/authorization; packaged helper hash matches embedded source. Initial administrator setup still assumes a trusted local build. |
+| High | Installer executes installed helpers before excluding write-granting destination ancestors/ACLs. | Verified root-stage helper now checks fixed destination nodes before either installed generation executes and again after publishing. Native compilation and review pass; root preflight execution awaits administrator authentication. |
+| High | An installer failure after publishing authority can appear as dismissible Unavailable. | Recheck installed authority/kernel status, retain unresolved intent even if the marker cannot be written, and run recovery. Regression fails on the preceding owner and passes after repair. |
+| Medium | Actual authorization timeout displays internal shell text. | Map cancellation, timeout and other setup failures to user-facing messages. Source/type checks cover the change; revised failure copy awaits live recheck. |
+
+Provenance: no dependencies, test skips/deletions, agent-rule changes, unrelated
+subsystem repairs or installed-app replacement were added. Build changes bind
+setup assets and exact libraries to the sealed package. Root configuration v2
+adds `setupOnly` and an optional restrictive `applicationTrialUntil`; the older
+`19c92d0b` reader explicitly requires version 1 and rejects version 2. Recovery
+journal format is unchanged. `reopen` crosses the closed renderer command
+boundary and launches only the fixed protected executable after work checks;
+`relaunchRequired` and setup/recovery messages reach the shared shell notice.
+
+The live administrator attempt timed out before installation. No power lease
+was started. Therefore static review is not presented as proof of persistent
+authority, negative XPC callers, app crash/stall restoration or active UI. See
+the current [results](2026-10-15-lid-closed-integration-results.md).
+
+## Earlier review (2026-10-15)
+
 Scope: this task's lid-closed hunks and its supplied specification. Other
 shared-tree work is excluded. `review-impl` used five risk signals (reach,
 concurrency, trust boundary, runtime spread, derivation changes), with three
@@ -64,11 +96,12 @@ battery/lid, Sleep and native recovery evidence is preserved separately.
 
 Before completing the feature:
 
-1. Supply an Apple signing identity, build with `CATCODE_SIGNING_IDENTITY`, and
-   verify actual launch plus rejection of substituted/unqualified callers.
-   Do not add library-validation or DYLD/debugger exceptions.
-2. Agree a concrete short live app test: normal UI presets begin at 15 minutes,
-   while authorized physical experiment leases remain 60 seconds. Install with
+1. Complete one administrator setup of the certificate-free protected copy,
+   then verify actual launch and native receiving-boundary rejection of
+   substituted/unqualified callers. No certificate or repeated biometric
+   approval is required; do not add DYLD/debugger exceptions.
+2. Use the restrictive app-trial configuration: normal UI presets remain at
+   15 minutes while the native trial cap is 60 seconds. Install with
    independent bounded cleanup, then exercise real Stop, app failure recovery,
    original-scope enrollment, protection and restoration/removal.
 3. Inspect active presets, wheel gating, steam/reduced-motion, narrow/split panes,
