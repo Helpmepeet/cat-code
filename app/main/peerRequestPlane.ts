@@ -55,6 +55,7 @@ import {
   MAX_HOST_REQUEST_FRAMES_PER_WINDOW,
   MAX_PEER_DELIVERY_ATTEMPTS,
   MAX_PEER_HOPS,
+  MAX_PEER_ROSTER_BYTES,
   MAX_PEER_TEXT_BYTES,
   MAX_PENDING_PEER_MESSAGES,
   PEER_CHAIN_WINDOW_MS,
@@ -1061,6 +1062,17 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         (a, b) =>
           STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity,
       )
+    // Keep addressability intact, even with every registry row parked. Optional
+    // display details yield oldest/closed-first; the wire, not the tool's later
+    // closed-tail filter, is the boundary that needs the byte bound.
+    for (let i = peers.length - 1; utf8Bytes(JSON.stringify({ peers })) > MAX_PEER_ROSTER_BYTES && i >= 0; i--) {
+      const peer = peers[i]!
+      if (peer.title === null && peer.model === undefined && peer.effort === undefined) continue
+      peer.title = null
+      delete peer.model
+      delete peer.effort
+      peer.detailsOmitted = true
+    }
     return { peers }
   }
 

@@ -17,6 +17,8 @@ import {
 } from './peerRequestPlane.js'
 import {
   MAX_HOST_REQUEST_ARG_CHARS,
+  MAX_FRAME_BYTES,
+  MAX_PEER_ROSTER_BYTES,
   MAX_HOST_REQUEST_FRAMES_PER_WINDOW,
   MAX_HOST_REQUESTS_PER_WINDOW,
   MAX_PEER_DELIVERY_ATTEMPTS,
@@ -31,6 +33,8 @@ import {
   type PeerDeliverMessage,
   type SidecarClientMessage,
 } from '../shared/protocol.js'
+import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
+import { MAX_SESSION_TITLE_CHARS } from '../shared/hostApi.js'
 
 const ALEX = 'aaaaaaaa-0000-4000-8000-000000000001'
 const BEAR = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -196,6 +200,30 @@ function request(
     args,
   }
 }
+
+test.each(['x', '界', '\u0001'])('full registry roster fits the inbound frame with maximum titles (%s)', async character => {
+  const rows = Array.from({ length: MAX_REGISTRY_SESSIONS }, (_, i) => {
+    const id = `eeeeeeee-0000-4000-8000-${String(i).padStart(12, '0')}`
+    return row(id, `Peer-${i}`, {
+      engineSessionId: id,
+      title: character.repeat(MAX_SESSION_TITLE_CHARS),
+      createdBy: ALEX,
+      shutdown: i < 32 ? null : 'parked',
+    })
+  })
+  const h = harness({ rows: [row(ALEX, 'Alex'), ...rows.slice(1)], live: new Set([ALEX, ...rows.slice(1, 32).map(r => r.appSessionId)]) })
+  await h.plane.handleRequest(ALEX, request('peers.list', {}, 'r'.repeat(MAX_HOST_REQUEST_ARG_CHARS)))
+  const result = h.lastResult()!
+  expect(result.ok).toBe(true)
+  const value = result.value as { peers: Array<{ appSessionId: string; detailsOmitted?: true; title: string | null }> }
+  expect(value.peers.map(peer => peer.appSessionId).sort()).toEqual(rows.slice(1).map(r => r.appSessionId).sort())
+  expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+  expect(Buffer.byteLength(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, sessionId: ALEX, ...result }))).toBeLessThan(MAX_FRAME_BYTES)
+  for (const peer of value.peers) {
+    expect(peer.title === null).toBe(peer.detailsOmitted === true)
+  }
+  if (character !== 'x') expect(value.peers.some(peer => peer.detailsOmitted)).toBe(true)
+})
 
 test('internal cwd transitions validate closed shapes and use connection identity', async () => {
   const calls: unknown[][] = []

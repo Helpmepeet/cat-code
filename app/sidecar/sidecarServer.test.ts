@@ -9418,6 +9418,7 @@ test('HR5/F6 — a peers.list row carries the model and effort main observed, an
     ...BEAR_DESCRIPTOR,
     model: 'a-model-that-does-not-exist-yet',
     effort: 'high',
+    detailsOmitted: true,
   }
   server.handleData(
     conn,

@@ -6439,6 +6439,7 @@ const peerDescriptorSchema = z
       .optional(),
     title: z.string().max(MAX_TEXT_FIELD_CHARS).nullable(),
     lastActivity: z.number().finite(),
+    detailsOmitted: z.literal(true).optional(),
   })
   .strict()
 

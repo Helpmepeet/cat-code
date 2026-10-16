@@ -74,6 +74,12 @@ const closedRow = {
   lastActivity: 1_756_800_000_000,
 }
 
+test('roster detail omissions stay explicit without dropping a peer', () => {
+  expect(narrowPeerView({ ...liveRow, title: null, detailsOmitted: true })).toMatchObject({
+    name: 'Bear', title: null, detailsOmitted: true,
+  })
+})
+
 test('ListPeers renders the host roster, and shows no presence for a row that is not live', async () => {
   // PEER-SESSIONS §3: presence is ABSENT for a row that is not live, and the
   // decision is explicit that absence is rendered as absence. A default filled

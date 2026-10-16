@@ -321,6 +321,15 @@ terminal session from an hour ago can never be reached. So:
 - Cheap: it is a registry read in main; no transcript is opened
   (CATALOG-OWNERSHIP stays intact).
 
+**Roster byte bound, 2026-10-17.** Main bounds the serialized whole answer to
+`MAX_PEER_ROSTER_BYTES` (120 KiB), below the unchanged 128 KiB inbound frame
+limit. Every eligible row remains on the wire, including every live and parked
+peer. If necessary, title/model/effort are omitted together from rows in reverse
+roster order, with `detailsOmitted: true` on each affected row. This does not
+mean those values are unknown. The tool preserves and explains that marker.
+The ordinary five-closed-peer display bound still runs in the tool; `all: true`
+returns the entire roster, subject to the same explicit detail omissions.
+
 ## 4. Tools (v1)
 
 Five tools, exposed only in desktop sessions. They live under `app/sidecar/`
