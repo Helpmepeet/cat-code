@@ -152,6 +152,9 @@ export class LidClosedMode {
     if (h.safety.onBattery && h.safety.batteryPercent <= 20) throw new Error('Charge above 20% before starting.')
   }
   private async install(recoveryOnly: boolean): Promise<void> {
+    // Replacement invalidates the old Mach-service connection, even when its
+    // bridge process is still alive. Admission must use the new generation.
+    this.deps.native.close()
     try { await this.deps.install(recoveryOnly); this.view.installed = true }
     catch (error) {
       // An installer can fail after publishing authority. Do not turn that

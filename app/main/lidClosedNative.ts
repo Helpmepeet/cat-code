@@ -90,7 +90,12 @@ export class LidNativeClient {
           const pending = this.pending
           if (!pending || this.buffer.length) { this.close(); return }
           this.pending = undefined; clearTimeout(pending.timer)
-          try { pending.resolve(parseLidNativeReply(JSON.parse(line))) }
+          try {
+            const reply = parseLidNativeReply(JSON.parse(line))
+            pending.resolve(reply)
+            // An invalidated XPC connection cannot recover in the same bridge.
+            if (!reply.snapshot) this.close()
+          }
           catch { pending.reject(new Error('Invalid helper response')); this.close() }
         })
         child.stderr.resume()

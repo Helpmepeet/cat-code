@@ -13,6 +13,14 @@ The prior `process.exited` log was not actual exit evidence. The user identified
 and repaired the quit regression in `3e8992b4`; see the
 [OS-process investigation](../reports/2026-10-16-packaged-quit-regression.md).
 
+The actual account-grant boundary has now been exercised: installed bridge
+accepted this account, copied bridge and nobody UID were rejected, fixed preset
+adjustment preserved the trial deadline, and real Start/Stop, freeze/kill
+restoration, repair and timer expiry passed. A stale XPC-generation connection
+found during repeated setup was fixed and re-executed. Physical lid-open timer
+continuity still needs fresh user participation. All experimental authority is
+removed before that coordination. See the new report for measured bounds.
+
 ## Historical integration record
 
 The evidence and pending checks below describe the earlier architecture.

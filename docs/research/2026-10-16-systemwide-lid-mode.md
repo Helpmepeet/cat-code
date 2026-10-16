@@ -1,9 +1,9 @@
 # Manual whole-Mac lid mode
 
-Updated 2026-10-16. **Implementation and nonprivileged packaged UI verified;
-real root installation/XPC and new live power trials remain pending the user's
-administrator prompt. This feature is not end-to-end qualified.** No live lease
-or helper installation was performed in this revision's verification.
+Updated 2026-10-16. **Real packaged setup, XPC authentication, Start/Stop, app freeze/exit
+restoration and cleanup have now been observed on this Mac. The affected
+physical lid-close/reopen check remains unverified.** All live leases used the
+restrictive single-use 60-second trial, never an unrestricted production lease.
 
 ## User-approved behavior
 
@@ -102,35 +102,62 @@ Sleep/input wake and native recovery evidence remain in the
 unchanged power mechanisms on this Mac, not the new account grant or timer
 behavior through lid reopening.
 
-## Remaining integration work
+## Live qualification after administrator readiness
 
-The user was asked for readiness to complete the single macOS administrator
-prompt. No answer has arrived for this verification round; no prompt or root
-power test was started. Once ready, use the concrete final isolated package with
-`CATCODE_LID_CLOSED_TRIAL=1`. Production validation remains intact, while the
-root configuration admits one lease capped at 60 seconds and an independent
-guardian removes experimental authority.
+The user confirmed readiness for the administrator prompt. Actual packaged
+Set up and start installed the root helper, daemon, watcher and independent
+cleanup guardian. Root configuration v3 was read back: UID 501, explicit account
+access, exact bridge requirement and restrictive application-trial expiry.
+No Apple certificate or per-activation biometric mechanism was added.
 
-1. Through actual Set up and start, authenticate once and observe account grant,
-   active all-apps notice, kernel flag, fixed deadline and root journal.
-2. Exercise the installed bridge from a second account program; confirm copied
-   bridge/wrong-UID callers cannot invoke it. Source and code-sign checks alone
-   do not prove receiving XPC authentication.
-3. Test Stop/expiry and app kill/stall restoration with bounded reinstalls as
-   needed; verify kernel state, root job removal and guardian exit. A controller
-   fixture is not packaged failure recovery evidence.
-4. Separately coordinate only affected physical actions: new lid-open timer
-   continuity and any needed Sleep check. Do not repeat all earlier physical
-   qualification or infer user action from elapsed time.
-5. Restore first and remove authority before waiting or discussion. Leave the
-   installed normal Cat Code app and real accounts untouched.
+| Live boundary | Observation |
+|---|---|
+| No-job app activation | Actual packaged AX displayed all-apps active notice and Stop/Sleep controls inside first-run sign-in; no account or job was created. Kernel flag changed No → Yes. |
+| Approved account program | A separate Python-launched installed bridge returned authenticated status and changed the fixed preset from 15 to 30 minutes. The native 60-second deadline was unchanged. |
+| Substituted path | A copied, still-signed bridge returned `helper-unavailable` while the installed bridge returned valid active status. |
+| Receiving UID | Administrator test ran the installed signed bridge as nobody (UID 4294967294). It returned `helper-unavailable` while UID 501 status continued to succeed. Root itself is rejected earlier by `invalid-client`; that earlier root probe alone was not counted as receiving-UID proof. |
+| Closed command schema | A status request with an extra arbitrary path was rejected as `invalid-command`; no arbitrary command was executed. |
+| Actual expiry | Native deadline stayed exactly start + 60 seconds. Continuous observation captured active at 0.102 seconds remaining, then kernel No and root `ended`/`expired`; helper removal and guardian PID 32178 departure followed. |
+| Real Stop | The app confirmed normal sleep restored. Kernel returned No, helper/jobs were removed, tracked guardian PID 18364 exited. |
+| Frozen Electron main | SIGSTOP targeted only isolated PID 23677. Kernel restoration was observed 5.356468 seconds after injection; helper removal and guardian PID 26517 absence at 5.703175 seconds. Root record reported `supervision-lost`. Main was then resumed. |
+| Killed Electron main | SIGKILL targeted only that isolated PID. Kernel restoration was observed after 4.760483 seconds; helper removal and guardian absence after 5.122894 seconds. Guardian PIDs 28050 (unused setup) and 29435 (active run) were absent. |
+| Repair/startup recovery | Actual native Repair and retry settled the isolated pending marker before new admission. A subsequent real activation succeeded in the same process after helper replacement. |
 
-## Observed cleanup
+Repeated setup found one additional MEDIUM connection-lifetime bug: a bridge
+process can remain alive with an invalidated XPC connection after the temporary
+helper is removed. Before repair, reinstall left the UI unresolved even though
+fresh bridge probes confirmed normal sleep. Setup now closes the old connection
+before replacement, and a reply without a snapshot discards its dead bridge.
+The real stdin/stdout regression fails before the fix and passes afterward;
+10 focused checks, 70 assertions, typecheck, rebuilt package, packaged smoke and
+19/19 hardening checks pass. The fixed real repair/start path was re-executed.
+This adds no production test bypass or dependency.
 
-At the final nonprivileged check: `SleepDisabled=No`, clamshell open, installed
-helper absent, both system launchd jobs absent, and no helper/experimental guardian
-process present. No guardian was started in this revision, so there is no new
-guardian exit code to report. Root-only historical journal/configuration evidence
-is retained under `/Library/Application Support/Cat Code/LidClosed`; it cannot
-activate without the helper/jobs. Tracked isolated GUI processes exited. The
-normal installed Cat Code app was not replaced.
+One expiry attempt was deliberately excluded: concurrently launching the
+separate smoke/hardening app invoked restore-first startup and ended the shared
+lease with reason `recovered` after about 16 seconds. This was test interference,
+not timer expiry. The final expiry check ran without another Electron launch and passed: the native record reported `expired`, restored state, and the unchanged 60-second deadline.
+
+Detailed temporary evidence: `live-observer.jsonl` (Start/Stop),
+`live-stall.jsonl`, `live-crash.jsonl`, `live-expiry.jsonl`,
+`wrong-uid-xpc.json`, and reconnect regression/build logs under the scratch root.
+Native power observations and human-confirmed physical behavior remain separate.
+Repeated test repairs are needed because the restrictive guardian removes each
+trial installation; production activation after setup does not do that.
+
+## Remaining physical qualification
+
+Only the new lid-close/reopen timer continuity needs fresh user participation.
+The current source/controller tests keep the original deadline through both
+transitions, but this changed policy has not yet been observed physically.
+Earlier battery/Sleep/mechanism evidence is retained; do not redo all of it.
+No lid, power or Sleep action was requested or inferred during the live tests
+above. Remove authority and confirm normal sleep before asking for readiness.
+
+## Cleanup
+
+After final expiry: `SleepDisabled=No`, clamshell open, helper absent, both launchd jobs absent and guardian PID 32178 absent. The Start/Stop, freeze, crash and expiry trials all restored sleep and removed their authority. Some unused restrictive setups expired after their 30-second admission window and also removed themselves.
+The ordinary installed app and real accounts remain untouched. Retained root
+journal/configuration evidence cannot activate without helper/jobs. Guardian
+PID absence proves departure; the shell was not their parent, so process exit
+codes were not observed directly.
