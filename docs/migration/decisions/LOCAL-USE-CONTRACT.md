@@ -138,6 +138,25 @@ secrets out of the engine.
 Nor does it license silence about failure. A failed or partial restore must never open a
 fresh session that impersonates the operator's old one (P5-7).
 
+## Manual whole-Mac lid-closed authority, 2026-10-16
+
+The user explicitly chose a simpler personal-use, account-wide capability.
+One administrator setup grants the configured account fixed native power
+operations through the root-owned signed bridge. Other programs in that account
+may invoke it; parent Electron identity is no longer part of authorization.
+Ordinary ad-hoc app signing is sufficient, while the native helper retains
+hardened signing and receiving UID/path/signature checks. No protected app
+copy, Apple-issued certificate, repeated Touch ID or app rebuild reauthorization.
+
+A manually started timer keeps all apps awake without a Cat Code job. Native
+safety/restoration and experimental caps remain. See the current
+[runtime contract](../../design/2026-10-15-lid-closed-runtime-contract.md) and
+[verification report](../../research/2026-10-16-systemwide-lid-mode.md).
+
+## Historical app-exclusive authority addendum
+
+The following records the prior implementation choice, superseded above.
+
 ## Lid-closed authority addendum — 2026-10-16
 
 §5's ad-hoc signing and no-notarization contract remains. An Apple-issued

@@ -6,9 +6,6 @@ let lidRecoveryPoll: Double = 2
 let lidMaximumAllowance: Double = 7200
 let lidStateDirectory = "/Library/Application Support/Cat Code/LidClosed"
 let lidService = "com.catcode.lid-closed"
-let lidAuthorizedDirectory = "/Library/PrivilegedHelperTools/com.catcode.lid-closed-app"
-let lidAuthorizedApplication = lidAuthorizedDirectory + "/Cat Code.app"
-let lidAuthorizedExecutable = lidAuthorizedApplication + "/Contents/MacOS/Cat Code"
 
 func lidContinuousTime() -> Double {
     var info = mach_timebase_info_data_t(); mach_timebase_info(&info)
@@ -59,7 +56,7 @@ struct LidRecord: Codable {
     var allowance: Double = 0
     var clientPulse: Double = 0
     var helperPulse: Double = 0
-    var sawClosed = false
+    var sawClosed = false // Retained for the version-1 recovery journal.
     var reason: String?
     var needsRestore = false
     var sleepRequested = false
@@ -246,7 +243,6 @@ final class LidController {
             else if time >= record.deadline { reason = "expired" }
             else if let refusal = safety.refusal { reason = refusal }
             else if safety.sleepDisabled != true { reason = "override-conflict" }
-            else if safety.lidClosed == false && record.sawClosed { reason = "lid-open" }
             else { reason = nil }
             if let reason {
                 if safety.thermal == "serious" || safety.thermal == "critical" { record.thermalRestart = true }
@@ -280,6 +276,7 @@ final class LidController {
                 }
                 guard experiment || qualified else { throw LidFailure("hardware-unqualified") }
                 guard safety.sleepDisabled == false else { throw LidFailure("override-in-use") }
+                guard safety.lidClosed == false else { throw LidFailure("open-lid-required") }
                 if let refusal = safety.refusal { throw LidFailure(refusal) }
                 if record.thermalRestart && safety.thermal != "nominal" { throw LidFailure("thermal-restart-refused") }
                 // Experimental setup admits one activation, including a failed
@@ -319,19 +316,6 @@ final class LidController {
                 record.allowance = seconds; record.deadline = record.began + (applicationTrial ? min(seconds, 60) : seconds)
                 try journal.write(record)
                 if time >= record.deadline { try restore(&record, reason: "expired", sleep: safety.lidClosed == true) }
-            case "continue":
-                guard (!record.draining || applicationTrial), input.count == 2, record.phase == "lid-open", !record.needsRestore, record.identity == id,
-                      record.boot == boot, time < record.deadline, safety.sleepDisabled == false else { throw LidFailure("continue-refused") }
-                if let refusal = safety.refusal { throw LidFailure(refusal) }
-                record.phase = "starting"; record.needsRestore = true
-                record.clientPulse = time; record.helperPulse = time; record.sawClosed = safety.lidClosed == true
-                try journal.write(record)
-                do {
-                    try setDisabled(true)
-                    guard readSafety().sleepDisabled == true, now() < record.deadline else { throw LidFailure("continue-failed") }
-                    if let refusal = readSafety().refusal { throw LidFailure(refusal) }
-                    record.phase = "active"; try journal.write(record)
-                } catch { try restore(&record, reason: "continue-failed", sleep: safety.lidClosed == true) }
             case "stop", "sleep":
                 guard input.count == 2, record.identity == id else { throw LidFailure("identity-mismatch") }
                 guard record.needsRestore || record.phase == "lid-open" else { throw LidFailure("lease-not-active") }

@@ -2,7 +2,6 @@ import Foundation
 import IOKit
 import IOKit.ps
 import Security
-import AppKit
 import Darwin
 
 let lidQualificationEvidence = "2026-10-15/Mac16,8/25G83/battery-lid-and-sleep"
@@ -101,40 +100,40 @@ func lidPmset(_ arguments: [String]) throws {
 
 }
 
-struct LidParent: Codable {
-    var path: String
-    var requirement: String
-    var experiment: Bool
-    var setupOnly: Bool?
-}
+enum LidAccess: String, Codable { case account, experiment }
 struct LidConfiguration: Codable {
     var version: Int
     var uid: UInt32
     var bridgeRequirement: String
-    var parents: [LidParent]
+    var access: LidAccess
     var experimentUntil: Double
     var applicationTrialUntil: Double?
-    var qualifiedBoot: String?
-    var qualifiedOS: String?
     var qualificationEvidence: String?
     var qualified: Bool {
         lidHardwareQualified() && qualificationEvidence == lidQualificationEvidence
     }
     var applicationTrial: Bool { applicationTrialUntil != nil }
+    static func decode(_ data: Data) throws -> LidConfiguration {
+        let value = try JSONDecoder().decode(LidConfiguration.self, from: data)
+        var requirement: SecRequirement?
+        guard value.version == 3, value.uid > 0, value.bridgeRequirement.count < 512,
+              SecRequirementCreateWithString(value.bridgeRequirement as CFString, [], &requirement) == errSecSuccess,
+              value.experimentUntil.isFinite,
+              (value.access == .account ? value.experimentUntil == 0 : value.experimentUntil > 0),
+              value.applicationTrialUntil == nil || (value.access == .account && value.applicationTrialUntil!.isFinite && value.applicationTrialUntil! > 0)
+              else { throw LidFailure("configuration-invalid") }
+        return value
+    }
 }
 func lidConfiguration() throws -> LidConfiguration {
-    var statBuffer = stat()
-    guard lstat(lidStateDirectory, &statBuffer) == 0, statBuffer.st_uid == 0,
-          (statBuffer.st_mode & S_IFMT) == S_IFDIR, (statBuffer.st_mode & 0o077) == 0 else { throw LidFailure("configuration-unavailable") }
+    var info = stat()
+    guard lstat(lidStateDirectory, &info) == 0, info.st_uid == 0,
+          info.st_mode & S_IFMT == S_IFDIR, info.st_mode & 0o077 == 0 else { throw LidFailure("configuration-unavailable") }
     let path = lidStateDirectory + "/configuration.json"
-    guard lstat(path, &statBuffer) == 0, statBuffer.st_uid == 0,
-          (statBuffer.st_mode & S_IFMT) == S_IFREG, (statBuffer.st_mode & 0o077) == 0,
-          statBuffer.st_size <= 8192 else { throw LidFailure("configuration-unavailable") }
-    let value = try JSONDecoder().decode(LidConfiguration.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
-    guard value.version == 2, value.uid > 0, value.parents.count <= 3,
-          value.bridgeRequirement.count < 512, value.experimentUntil.isFinite,
-          value.applicationTrialUntil == nil || (value.applicationTrialUntil!.isFinite && value.applicationTrialUntil! > 0 && value.parents.allSatisfy({ !$0.experiment })) else { throw LidFailure("configuration-invalid") }
-    return value
+    guard lstat(path, &info) == 0, info.st_uid == 0,
+          info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o077 == 0,
+          info.st_size <= 8192 else { throw LidFailure("configuration-unavailable") }
+    return try LidConfiguration.decode(Data(contentsOf: URL(fileURLWithPath: path)))
 }
 func lidExecutablePath(_ pid: pid_t) -> String? {
     var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
@@ -149,42 +148,6 @@ func lidMatchesCode(_ pid: pid_t, _ requirementText: String) -> Bool {
     guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess else { return false }
     return SecCodeCheckValidity(guest, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
 }
-// A signed generic Electron executable is not an application identity. Require
-// the sealed payload, exact kernel library allowlist and startup fuses. The
-// caller's live validity and sticky debugger status are checked on every RPC.
-func lidSealedApplication(_ executable: String, _ requirementText: String? = nil) -> Bool {
-    let url = URL(fileURLWithPath: executable)
-    let bundle = url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    guard bundle.pathExtension == "app", executable == bundle.appendingPathComponent("Contents/MacOS/" + url.lastPathComponent).path,
-          let info = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")),
-          ["com.catcode.desktop", "com.catcode.desktop.dev"].contains(info["CFBundleIdentifier"] as? String ?? ""),
-          let integrity = info["ElectronAsarIntegrity"] as? [String: Any], integrity["Resources/app.asar"] != nil,
-          FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Resources/app.asar").path) else { return false }
-    var code: SecStaticCode?
-    guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code else { return false }
-    var requirement: SecRequirement?
-    if let requirementText {
-        guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess else { return false }
-    }
-    guard SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode | kSecCSCheckAllArchitectures), requirement) == errSecSuccess else { return false }
-    var signing: CFDictionary?
-    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &signing) == errSecSuccess,
-          let details = signing as? [String: Any], let flags = details[kSecCodeInfoFlags as String] as? NSNumber,
-          flags.uint32Value & (SecCodeStatus.hard.rawValue | SecCodeStatus.kill.rawValue) == (SecCodeStatus.hard.rawValue | SecCodeStatus.kill.rawValue),
-          lidConstrainedLibraries(bundle, code) else { return false }
-    let entitlements = details[kSecCodeInfoEntitlementsDict as String] as? [String: Any] ?? [:]
-    guard entitlements.isEmpty else { return false }
-    let framework = bundle.appendingPathComponent("Contents/Frameworks/Electron Framework.framework/Electron Framework")
-    guard let bytes = try? Data(contentsOf: framework, options: .mappedIfSafe),
-          let sentinel = "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX".data(using: .utf8),
-          let range = bytes.range(of: sentinel) else { return false }
-    let offset = range.upperBound
-    guard bytes.count > offset + 7, bytes[offset] == 1, bytes[offset + 1] >= 6 else { return false }
-    // Electron fuse V1: runAsNode, nodeOptions, CLI inspector off; ASAR
-    // integrity and exclusive ASAR loading on. Cookie policy is unchanged.
-    return [0, 2, 3].allSatisfy { bytes[offset + 2 + $0] == 48 } &&
-        [4, 5].allSatisfy { bytes[offset + 2 + $0] == 49 }
-}
 func lidHardenedNative(_ executable: String) -> Bool {
     var code: SecStaticCode?
     guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: executable) as CFURL, [], &code) == errSecSuccess,
@@ -196,7 +159,6 @@ func lidHardenedNative(_ executable: String) -> Bool {
     // This binary links only system libraries and needs no runtime exceptions.
     return (details[kSecCodeInfoEntitlementsDict as String] as? [String: Any] ?? [:]).isEmpty
 }
-enum LidCallerRole { case application, experiment, setup }
 func lidProtectedRootNode(_ path: String, directory: Bool) -> Bool {
     var info = stat()
     return lstat(path, &info) == 0 && info.st_uid == 0 &&
@@ -205,7 +167,7 @@ func lidProtectedRootNode(_ path: String, directory: Bool) -> Bool {
 }
 func lidSecureInstallationPaths() -> Bool {
     let directories = ["/", "/Library", "/Library/PrivilegedHelperTools", "/Library/LaunchDaemons",
-        "/Library/Application Support", "/Library/Application Support/Cat Code", lidStateDirectory, lidAuthorizedDirectory]
+        "/Library/Application Support", "/Library/Application Support/Cat Code", lidStateDirectory]
     let files = ["/Library/PrivilegedHelperTools/com.catcode.lid-closed",
         "/Library/LaunchDaemons/com.catcode.lid-closed.plist", "/Library/LaunchDaemons/com.catcode.lid-closed.recovery.plist",
         lidStateDirectory + "/configuration.json", lidStateDirectory + "/uninstall.sh"]
@@ -221,65 +183,14 @@ func lidSecureInstallationPaths() -> Bool {
     }
     return true
 }
-func lidProtectedApplication() -> Bool {
-    for path in ["/", "/Library", "/Library/PrivilegedHelperTools", lidAuthorizedDirectory, lidAuthorizedApplication] {
-        guard lidProtectedRootNode(path, directory: true) else { return false }
-    }
-    let root = URL(fileURLWithPath: lidAuthorizedApplication).resolvingSymlinksInPath().path
-    var unreadable = false
-    guard root == lidAuthorizedApplication,
-          let files = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil,
-              errorHandler: { _, _ in unreadable = true; return false }) else { return false }
-    var count = 0
-    while let url = files.nextObject() as? URL {
-        count += 1
-        guard count <= 20_000 else { return false }
-        let path = url.path
-        var info = stat()
-        guard lstat(path, &info) == 0, info.st_uid == 0 else { return false }
-        if info.st_mode & S_IFMT == S_IFLNK {
-            let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-            guard target.hasPrefix(root + "/") else { return false }
-        } else {
-            guard [S_IFREG, S_IFDIR].contains(info.st_mode & S_IFMT), info.st_mode & 0o022 == 0,
-                  lidReadOnlyACL(path) else { return false }
-        }
-    }
-    return !unreadable
-}
-func lidAuthorizedAppRunning() -> Bool {
-    let count = proc_listallpids(nil, 0)
-    guard count > 0, count < 100_000 else { return true }
-    var pids = [pid_t](repeating: 0, count: Int(count) + 1024)
-    let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-    guard found > 0, found <= pids.count else { return true }
-    return pids.prefix(Int(found)).contains { pid in
-        if pid == getpid() { return false }
-        guard let path = lidExecutablePath(pid) else { return false }
-        return path.hasPrefix(lidAuthorizedApplication + "/")
-    }
-}
-func lidAuthenticatedRole(_ connection: NSXPCConnection, _ config: LidConfiguration, verifyApplication: Bool = true) -> LidCallerRole? {
+// All programs in the administrator-approved account may launch this fixed
+// bridge. App path, parent code and JavaScript identity are deliberately not
+// authorization conditions. Other accounts remain outside the grant.
+func lidAuthenticated(_ connection: NSXPCConnection, _ config: LidConfiguration) -> Bool {
     let pid = connection.processIdentifier
-    guard connection.effectiveUserIdentifier == config.uid,
-          lidExecutablePath(pid) == "/Library/PrivilegedHelperTools/com.catcode.lid-closed",
-          lidMatchesCode(pid, config.bridgeRequirement) else { return nil }
-    var info = proc_bsdinfo()
-    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size)) == MemoryLayout<proc_bsdinfo>.size else { return nil }
-    let parent = pid_t(info.pbi_ppid)
-    guard let path = lidExecutablePath(parent), let allowed = config.parents.first(where: {
-        $0.path == path && lidMatchesCode(parent, $0.requirement)
-    }) else { return nil }
-    if !allowed.experiment {
-        guard lidUndebuggedCode(parent), lidSafeApplicationArguments(parent), let app = NSRunningApplication(processIdentifier: parent),
-              app.bundleIdentifier == "com.catcode.desktop" || app.bundleIdentifier == "com.catcode.desktop.dev",
-              app.activationPolicy == .regular, app.executableURL?.path == path,
-              !verifyApplication || lidSealedApplication(path, allowed.requirement) else { return nil }
-        if allowed.setupOnly == true { return .setup }
-        guard path == lidAuthorizedExecutable, !verifyApplication || lidProtectedApplication() else { return nil }
-    }
-    if allowed.experiment && Date().timeIntervalSince1970 >= config.experimentUntil { return nil }
-    return allowed.experiment ? .experiment : .application
+    return connection.effectiveUserIdentifier == config.uid &&
+        lidExecutablePath(pid) == "/Library/PrivilegedHelperTools/com.catcode.lid-closed" &&
+        lidMatchesCode(pid, config.bridgeRequirement)
 }
 func lidProductionController(_ configuration: LidConfiguration) throws -> LidController {
     return LidController(journal: LidJournal(lidStateDirectory), boot: try lidBootID(), qualified: configuration.qualified,
@@ -372,7 +283,7 @@ func lidExecPowerCommand(_ action: String) throws {
 // dialog, including when coordination never starts or the driver is cancelled.
 func lidGuardExperiment() throws {
     let config = try lidConfiguration()
-    guard !config.parents.isEmpty, config.applicationTrial || config.parents.allSatisfy({ $0.experiment }) else { throw LidFailure("not-experiment-setup") }
+    guard config.applicationTrial || config.access == .experiment else { throw LidFailure("not-experiment-setup") }
     try lidRegisterJob("experiment-guard")
     let controller = try lidProductionController(config)
     var deadline = lidContinuousTime() + 30

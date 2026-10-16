@@ -15,16 +15,12 @@ export function lidFill(minutes: number): number {
 }
 export function lidReason(reason?: string): string {
   switch (reason) {
-    case 'lid-open': return 'Lid opened. Work may still be running.'
     case 'thermal': return 'Lid-closed mode ended because your Mac got too hot.'
     case 'battery-reserve': return 'Lid-closed mode ended to preserve battery.'
     case 'supervision-lost': case 'monitoring-unavailable': return 'Lid-closed mode ended because safety monitoring was lost.'
     case 'override-conflict': return 'Lid-closed mode ended because the sleep setting changed.'
     case 'expired': return 'Lid-closed mode reached its time limit. Work may still be running.'
-    case 'approval': return 'Lid-closed mode ended while waiting for approval.'
-    case 'provider': return 'Lid-closed mode ended while waiting for a connection.'
     case 'sleep-requested': return 'Normal sleep restored. Sleep was requested.'
-    case 'completed': return 'Included work finished. Normal sleep restored.'
     default: return 'Lid-closed mode ended. Normal sleep restored.'
   }
 }

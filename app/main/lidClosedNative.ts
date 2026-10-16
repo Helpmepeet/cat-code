@@ -3,12 +3,11 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, writeFile, chmod } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
 
 const run = promisify(execFile)
 declare const __CATCODE_LID_ASSET_SHA256__: Record<string, string> | undefined
 export const LID_HELPER = '/Library/PrivilegedHelperTools/com.catcode.lid-closed'
-export const LID_AUTHORIZED_APP = '/Library/PrivilegedHelperTools/com.catcode.lid-closed-app/Cat Code.app'
 async function verifiedLidAssets(assets: string): Promise<Record<string, Buffer>> {
   if (typeof __CATCODE_LID_ASSET_SHA256__ === 'undefined') throw new Error('Rebuild the packaged app before setting up lid-closed mode.')
   const result: Record<string, Buffer> = {}
@@ -28,12 +27,11 @@ export type LidNativeSnapshot = {
   hardwareQualified: boolean
   error?: string
 }
-export type LidNativeReply = { ok: boolean; snapshot?: LidNativeSnapshot; error?: string; setupOnly?: boolean }
+export type LidNativeReply = { ok: boolean; snapshot?: LidNativeSnapshot; error?: string }
 export function parseLidNativeReply(value: unknown): LidNativeReply {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid helper response')
   const r = value as Record<string, unknown>
-  if (Object.keys(r).some(key => !['ok','snapshot','error','setupOnly'].includes(key)) || typeof r.ok !== 'boolean' ||
-      r.setupOnly !== undefined && typeof r.setupOnly !== 'boolean' ||
+  if (Object.keys(r).some(key => !['ok','snapshot','error'].includes(key)) || typeof r.ok !== 'boolean' ||
       r.error !== undefined && (typeof r.error !== 'string' || r.error.length > 512)) throw new Error('Invalid helper response')
   if (r.snapshot !== undefined) {
     const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -66,7 +64,7 @@ export class LidNativeClient {
   private pending: { resolve(value: LidNativeReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | undefined
   private buffer = ''
   private chain: Promise<unknown> = Promise.resolve()
-  command(value: { op: 'status' | 'pulse' | 'start' | 'adjust' | 'stop' | 'sleep' | 'continue' | 'retry' | 'dismiss'; identity?: string; allowance?: number }): Promise<LidNativeReply> {
+  command(value: { op: 'status' | 'pulse' | 'start' | 'adjust' | 'stop' | 'sleep' | 'retry' | 'dismiss'; identity?: string; allowance?: number }): Promise<LidNativeReply> {
     const call = this.chain.catch(() => {}).then(() => this.request(value))
     this.chain = call
     return call
@@ -127,40 +125,32 @@ async function requirement(path: string): Promise<string> {
 }
 // The administrator executes only the protected, digest-verified installer.
 // Renderer input never supplies a command, path, caller identity or signature.
-export async function installLidHelper(assets: string, executable: string, recoveryOnly = false): Promise<void> {
+export async function installLidHelper(assets: string, recoveryOnly = false): Promise<void> {
   const verified = await verifiedLidAssets(assets)
-  try {
-    const caller = await run(join(assets, 'helper'), ['--check-application', executable], { timeout: 30_000, maxBuffer: 4096 })
-    if (caller.stdout.trim() !== 'qualified-application') throw new Error('Unqualified app')
-  } catch { throw new Error('Lid-closed setup requires a packaged app with verified startup and library protections. Rebuild Cat Code before setting up again.') }
   const hardware = await inspectLidHardware(assets)
   if (!hardware.qualified && !recoveryOnly) throw new Error('This Mac and macOS version are not qualified')
   const prepared = await mkdtemp('/private/tmp/cat-lid-install-')
   await chmod(prepared, 0o700)
-  for (const name of ['helper','uninstall.sh']) await writeFile(join(prepared, name), verified[name]!, { mode: name === 'helper' ? 0o700 : 0o600 })
-  const bundle = dirname(dirname(dirname(executable)))
-  await run('/bin/cp', ['-cRP', bundle, join(prepared, 'application.app')], { timeout: 30_000, maxBuffer: 4096 })
-  const appRequirement = await requirement(executable)
-  await writeFile(join(prepared,'configuration.json'), JSON.stringify({ version: 2, uid: process.getuid!(),
-    bridgeRequirement: await requirement(join(prepared,'helper')),
-    parents: [
-      { path: join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code'), requirement: appRequirement, experiment: false },
-      ...(executable === join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code') ? [] :
-        [{ path: executable, requirement: appRequirement, experiment: false, setupOnly: true }]),
-    ],
+  const payload: Record<string, Buffer> = { helper: verified.helper!, 'uninstall.sh': verified['uninstall.sh']! }
+  await writeFile(join(prepared, 'helper'), payload.helper!, { mode: 0o700 })
+  payload['configuration.json'] = Buffer.from(JSON.stringify({ version: 3, uid: process.getuid!(),
+    access: 'account', bridgeRequirement: await requirement(join(prepared,'helper')),
     experimentUntil: 0,
     // Qualification only restricts authority: normal preset/caller/hardware
     // validation remains, while root admits one lease capped at 60 seconds.
     ...(process.env.CATCODE_LID_CLOSED_TRIAL === '1' ? { applicationTrialUntil: Date.now() / 1000 + 180 } : {}),
-    qualifiedBoot: null, qualifiedOS: null, qualificationEvidence: hardware.evidence }) + '\n', { mode: 0o600 })
+    qualificationEvidence: hardware.evidence }) + '\n')
   for (const [name,label,arg,mach] of [
     ['daemon.plist','com.catcode.lid-closed','--daemon',true],
     ['recovery.plist','com.catcode.lid-closed.recovery','--watch',false],
   ] as const) {
-    await writeFile(join(prepared,name), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${LID_HELPER}</string><string>${arg}</string></array><key>UserName</key><string>root</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>1</integer>${mach ? '<key>MachServices</key><dict><key>com.catcode.lid-closed</key><true/></dict>' : ''}</dict></plist>\n`)
+    payload[name] = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${LID_HELPER}</string><string>${arg}</string></array><key>UserName</key><string>root</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>1</integer>${mach ? '<key>MachServices</key><dict><key>com.catcode.lid-closed</key><true/></dict>' : ''}</dict></plist>\n`)
   }
+  // Approve immutable verified/generated bytes, never mutable account-owned
+  // staging. Substitution after this point must fail the root installer pins.
   const names = ['helper','configuration.json','daemon.plist','recovery.plist','uninstall.sh']
-  const sums = await Promise.all(names.map(async name => `${createHash('sha256').update(await readFile(join(prepared,name))).digest('hex')}  ${name}`))
+  const sums = names.map(name => `${createHash('sha256').update(payload[name]!).digest('hex')}  ${name}`)
+  for (const name of names.filter(name => name !== 'helper')) await writeFile(join(prepared, name), payload[name]!, { mode: 0o600 })
   const installer = verified['install.sh']!.toString('utf8').replace('__EXPECTED_PAYLOAD__',sums.join('\n'))
   await writeFile(join(prepared,'install.sh'),installer,{ mode: 0o700 })
   const hash = createHash('sha256').update(installer).digest('hex')

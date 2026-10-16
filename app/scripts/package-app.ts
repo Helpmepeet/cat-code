@@ -345,7 +345,7 @@ async function sealApplication(): Promise<void> {
 }
 
 function sign(): void {
-  console.log('[package] ad-hoc signing with exact library constraints')
+  console.log('[package] ad-hoc signing')
   // LOCAL-USE-CONTRACT §5: nested executables first, then the bundle. Editing
   // Info.plist and renaming the executable both invalidate the signature the
   // stock Electron bundle ships with, and an unsigned nested binary makes the
@@ -353,33 +353,12 @@ function sign(): void {
   run('codesign', ['--sign', '-', '--force', PACKAGED_RIPGREP])
   run('codesign', ['--sign', '-', '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
   run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
-  // A native system-library-only client can use hardened ad-hoc signing.
-  // Electron instead pins every non-platform library at the kernel boundary.
+  // The root helper validates its own narrow bridge; app rebuilds do not
+  // require a different account-wide power grant.
   run('codesign', ['--sign', '-', '--force', '--options', 'runtime', join(RESOURCES, 'lid-closed', 'helper')])
-  const libraries = [
-    'Electron Framework.framework/Versions/A/Electron Framework',
-    'Electron Framework.framework/Versions/A/Libraries/libEGL.dylib',
-    'Electron Framework.framework/Versions/A/Libraries/libGLESv2.dylib',
-    'Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib',
-    'Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib',
-    'Mantle.framework/Versions/A/Mantle', 'ReactiveObjC.framework/Versions/A/ReactiveObjC',
-    'Squirrel.framework/Versions/A/Squirrel',
-  ]
-  const hashes = libraries.map(path => {
-    const result = spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', join(CONTENTS, 'Frameworks', path)], { encoding: 'utf8' })
-    const hash = result.stderr.match(/^CDHash=([0-9a-f]{40})$/m)?.[1]
-    if (result.status !== 0 || !hash) throw new Error(`Cannot pin Electron library: ${path}`)
-    return hash
-  }).sort()
-  const constraint = join(OUT_DIR, 'libraries.coderequirement')
-  writeFileSync(constraint, `<?xml version="1.0"?><plist version="1.0"><dict><key>cdhash</key><dict><key>$in</key><array>${hashes.map(hash => `<data>${Buffer.from(hash, 'hex').toString('base64')}</data>`).join('')}</array></dict></dict></plist>`)
-  // No runtime exemption entitlements. Debugged/invalid callers are separately
-  // refused on every privileged message, including already-open connections.
-  run('codesign', ['--sign', '-', '--force', '--options', 'hard,kill', '--library-constraint', constraint, '--enforce-constraint-validity', APP_BUNDLE])
-  rmSync(constraint)
+  run('codesign', ['--sign', '-', '--force', APP_BUNDLE])
   run('codesign', ['--verify', '--deep', '--strict', APP_BUNDLE])
   run(join(RESOURCES, 'lid-closed', 'helper'), ['--check-native'])
-  run(join(RESOURCES, 'lid-closed', 'helper'), ['--check-application', join(CONTENTS, 'MacOS', APP_NAME)])
 }
 
 function scan(): void {

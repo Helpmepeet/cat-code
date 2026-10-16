@@ -10,8 +10,6 @@ helper=/Library/PrivilegedHelperTools/com.catcode.lid-closed
 state='/Library/Application Support/Cat Code/LidClosed'
 daemon=/Library/LaunchDaemons/com.catcode.lid-closed.plist
 watcher=/Library/LaunchDaemons/com.catcode.lid-closed.recovery.plist
-authorized_dir=/Library/PrivilegedHelperTools/com.catcode.lid-closed-app
-authorized_app="$authorized_dir/Cat Code.app"
 # Verify the reviewed payload, and verify installed copies again before executing
 # root code. Recovery configuration and journal are never reset during upgrade.
 [[ $(cd "$prepared" && pwd -P) = "$prepared" ]] || exit 1
@@ -48,6 +46,7 @@ PAYLOAD
 /bin/chmod 0755 "$lid_payload_stage/helper"
 /usr/bin/codesign --verify --strict "$lid_payload_stage/helper"
 "$lid_payload_stage/helper" --check-installation-paths
+"$lid_payload_stage/helper" --check-configuration "$lid_payload_stage/configuration.json"
 if [[ -e $helper ]]; then
   [[ -f $helper && ! -L $helper ]] || exit 1
   "$helper" --restore-for-uninstall
@@ -76,31 +75,6 @@ lid_verified=true
 # checked by the verified new executable before either job admits work.
 "$helper" --restore-for-uninstall
 "$helper" --resume-after-install
-if [[ -e "$prepared/application.app" ]]; then
-  [[ -d "$prepared/application.app" && ! -L "$prepared/application.app" && ! -L "$authorized_dir" ]] || exit 1
-  /bin/cp -RP "$prepared/application.app" "$lid_payload_stage/application.app"
-  [[ -d "$lid_payload_stage/application.app" && ! -L "$lid_payload_stage/application.app" ]] || exit 1
-  /bin/chmod -RPN "$lid_payload_stage/application.app"
-  /usr/sbin/chown -hR root:wheel "$lid_payload_stage/application.app"
-  /bin/chmod -RP a+rX,go-w "$lid_payload_stage/application.app"
-  app_pin=$(/usr/bin/plutil -extract parents.0.requirement raw -o - "$state/configuration.json")
-  "$helper" --check-application "$lid_payload_stage/application.app/Contents/MacOS/Cat Code" "$app_pin"
-  # Source bundles are mutable. Only this root-controlled snapshot may acquire
-  # power authority. Never replace a running authorized copy during repair.
-  if [[ -d "$authorized_app" ]] && "$helper" --check-application "$authorized_app/Contents/MacOS/Cat Code" "$app_pin" && "$helper" --check-protected-application; then
-    :
-  else
-    [[ $("$helper" --authorized-app-running) = idle ]] || { echo 'Quit the protected Cat Code copy before repairing setup.' >&2; exit 1; }
-    /usr/bin/install -d -o root -g wheel -m 0755 "$authorized_dir"
-    /bin/chmod -N "$authorized_dir"
-    /bin/rm -rf "$authorized_dir/previous.app" "$authorized_dir/next.app"
-    /bin/mv "$lid_payload_stage/application.app" "$authorized_dir/next.app"
-    if [[ -e "$authorized_app" ]]; then /bin/mv "$authorized_app" "$authorized_dir/previous.app"; fi
-    /bin/mv "$authorized_dir/next.app" "$authorized_app"
-    "$helper" --check-protected-application
-    /bin/rm -rf "$authorized_dir/previous.app"
-  fi
-fi
 /bin/launchctl bootstrap system "$watcher"
 /bin/launchctl bootstrap system "$daemon"
 lid_installation_kind=$("$helper" --installation-kind)

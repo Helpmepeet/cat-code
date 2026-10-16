@@ -1,101 +1,80 @@
 # Lid-closed runtime contract
 
-Implements the [approved product specification](2026-10-13-lid-closed-mode-spec.md).
-Qualification and limitations are tracked in the
-[integration results](../research/2026-10-15-lid-closed-integration-results.md).
+Updated 2026-10-16 for the user's manual, whole-Mac personal-use mode. This
+implements the current [product specification](2026-10-13-lid-closed-mode-spec.md).
+See [qualification results](../research/2026-10-16-systemwide-lid-mode.md) for
+observed behavior and remaining hardware/installation limits.
 
-## Owners and transport
+## Owners and boundaries
 
-| Boundary | Authority and validation |
+| Boundary | Contract |
 |---|---|
-| Renderer → preload → main | Three fixed channels: read, command, changed. Main checks the owning window sender and closed command schema. Only preset integers 15/30/60/120 and named actions are accepted. No arbitrary executable, path, command or permission rule is supplied. |
-| Main → supervisor → Unix socket → sidecar | `lid.work` carries a UUID request and optional bounded window. The sidecar receiving boundary validates keys, UUIDs, roots, booleans, deadline, byte size and request rate. No renderer bridge forwards this host control message to an engine. |
-| Sidecar → main | Runtime observations contain generation, monotonic sequence and bounded root/child rows. Main correlates request ID, session identity, current generation and increasing sequence. These frames are consumed before renderer forwarding and are not replayed. |
-| Main → native bridge → privileged XPC service | Fixed operations only. The helper checks UID, bridge signature/path, kernel parent identity, pinned app signature/path, regular app identity and sealed/hardened application policy. No caller-supplied shell strings reach pmset. |
-| Helper → macOS | Durable root journal and tracked power-command child precede changes. Native deadline, battery/thermal readings, stale supervision and independent recovery do not depend on renderer timers. |
+| Renderer → preload → main | Fixed read, command and changed channels. Owning-window checks and a closed command schema permit only four presets and named lifecycle actions. No paths, shell commands or permission rules. |
+| Main owner | One manually activated lease across views. No session inventory or job enrollment. Direct pulses supervise native authority. Native menu makes activation available without a job; detaching the owner disables menu controls. |
+| Main/native clients → root XPC | Any process in the configured account may launch the fixed root-owned bridge. The receiver authenticates kernel effective UID, exact installed bridge path and signature, with a per-message NSXPC code requirement. Parent app identity is deliberately not required. |
+| Root helper → macOS | Fixed power operations only; root journal persists intent before changes. Deadline, reserve, thermal/monitoring checks, stale supervision and independent recovery remain native. |
 
-`lid.work` is additive to protocol version 4. Old sidecars cannot supply usable
-work observations, so they time out rather than allow activation. It is not a
-persisted or replayed event. Wire validators reject extra keys and malformed
-values. The real socket and existing host/engine permission boundaries remain.
+Legacy `lid.work` shapes remain wire-compatible. Current main sends no work
+windows or temporary instructions and consumes old observations without renderer
+forwarding or replay. Legacy inbound sidecar controls are dormant compatibility
+code; they are not used to admit or supervise this mode. Existing engine
+permissions are unchanged.
 
-## Scope and lifecycle
+## Grant, packaging and setup
 
-Each actual controller turn has a fresh process-local root. Async descendants
-retain that root. Completed roots can remain visible but do not keep a mode
-active; unrelated later work and independently created peers are excluded.
-Temporary context and protected admission use the same root identity. Work
-observations expire after 2.5 seconds without a fresh host update; this withdraws
-context and blocks further enrolled scheduling. This is an engine observation
-TTL, not a measured promise about physical restoration latency.
+Administrator setup grants this UID access to a narrow native power service.
+It does not grant arbitrary root commands. Other apps benefit from the global
+awake state and may use the fixed bridge. Removing the helper and launchd jobs
+revokes this persistent capability. Cat Code rebuilds do not require app identity
+reauthorization; replacing the native helper can require setup repair.
 
-Main polls work and supervises the helper without extending its native deadline.
-It records local pending intent before admission. Startup restores an interrupted
-native session rather than adopting it. Native journal errors or inaccessible
-authority remain unresolved even if the local marker says false. The local
-marker cannot authorize power or supersede the root journal. Closing/reopening
-windows serializes old-owner cleanup before a new owner initializes; old-owner
-notifications cannot replace the new view.
+The Electron app uses ordinary ad-hoc signing plus existing ASAR/fuses. The
+native helper uses hardened ad-hoc signing and system libraries. There is no
+Apple-issued certificate, protected application copy, library-constraint SPI,
+DYLD/debug exception, broad sudoers entry or repeated biometric requirement.
 
-## Setup, signing and removal
+Sealed main embeds helper/install/removal hashes. Verified asset buffers and
+in-memory configuration/plists define every expected payload digest before
+administrator authentication. Root copies into protected staging, checks those
+digests and secure destination paths, validates configuration, restores existing
+authority, then publishes the fixed files. Same-account staging substitution
+fails closed rather than authoring new root payload pins.
 
-The local package uses ad-hoc signing without an Apple-issued certificate or
-Touch ID. The earlier Team-ID/library-validation build failed at launch; that
-historical result is preserved in the integration report. The replacement uses
-a sealed ASAR, startup fuses, hard/kill code flags and an exact signed kernel
-library constraint for eight Electron libraries, with no exception entitlements.
-Packaged renderer DevTools are disabled. Native admission also checks the live
-valid/hard/kill flags, sticky debugger status and a closed startup-argument list
-on every request. The native bridge uses hardened ad-hoc signing and the XPC
-connection enforces its code requirement on every message.
+Root configuration v3 explicitly encodes `access: account` or the restrictive
+`experiment` lane, configured UID and exact bridge requirement. Account grants
+require `experimentUntil: 0`; experimental grants require a finite expiry and
+cannot mix the application-trial field. v1/v2 readers reject v3. The root
+journal format remains v1 so restore-first upgrade can settle old leases.
+Legacy lid-open records remain readable for restoration only.
 
-Those checks alone cannot authenticate loaded JavaScript from a mutable app:
-a local experiment ran substituted ASAR/Info.plist contents, restored them,
-and passed a later static check. Therefore one administrator setup creates a
-root-controlled snapshot at
-`/Library/PrivilegedHelperTools/com.catcode.lid-closed-app/Cat Code.app`.
-Only its fixed executable can activate, adjust, Continue or request Sleep.
-Ancestor ownership, modes, write-granting ACLs, the entire snapshot tree and
-symlink confinement are checked at connection admission. Setup checks protected
-destinations using the digest-verified root-stage helper before executing old
-or new installed helper code. The frozen snapshot must pass the pinned app
-requirement and deep resource verification before jobs start.
+## Lease and restoration
 
-The original source app has recovery-only access (`status` and `retry`). It
-instructs the user to finish current work and choose Reopen Cat Code. Reopen
-checks all observed work before quitting and launches only the fixed protected
-path. It does not transfer active work. Subsequent starts need no administrator
-prompt; a rebuilt app needs explicit repair/reauthorization. The ordinary
-installed application is not replaced.
+Native Start checks initially open lid, exclusive global override, qualification
+and monitoring before recording intent or changing power. Later lid transitions
+do not end/reset the lease. Adjustments calculate the deadline from original
+start, not the adjustment. Root allows fixed 900/1800/3600/7200-second presets.
+A restrictive application trial accepts normal inputs but admits one activation
+capped at 60 seconds, including activation delay; its independent guardian also
+bounds stale/unused experimental authority.
 
-The initial administrator setup assumes a trusted, reviewed local build. Hashes
-embedded in sealed JavaScript bind helper/install/uninstall assets before those
-buffers are staged. They prevent external setup-resource substitution; they do
-not make an already compromised source JavaScript process a trustworthy broker
-for administrator consent.
+Stop, expiry, missing supervision, low battery, unsafe thermal readings and
+monitor failure restore normal sleep. Recovery intent is durable before power
+changes; a separate native watcher handles daemon interruption. Status never
+claims Off while restoration is unknown. End mode and sleep settles the override
+before requesting Sleep; successful commands alone do not prove actual Sleep.
+Observable external override conflicts end safely, but simultaneous writers
+cannot be perfectly attributed.
 
-Root configuration is now version 2, with `setupOnly` parent capability and an
-optional restrictive qualification deadline. Older readers reject version 2,
-rather than silently losing that capability restriction. Restore-first setup
-runs the previous installed helper against its previous configuration before
-publishing version 2. The recovery journal format is unchanged.
+Electron shutdown retains the `3e8992b4` deferred `setImmediate` resumed-quit
+repair. Exit evidence must observe OS process disappearance, not a lifecycle
+log named `process.exited`. The user's [quit investigation](../reports/2026-10-16-packaged-quit-regression.md)
+records the original bug and repair.
 
-Removal retires admission and confirms restoration before unloading both jobs
-and deleting the helper. Failure retains recovery authority and the warning.
-A running protected snapshot is retained to avoid interrupting work; after it
-quits, rerunning the retained root-owned removal script removes that copy too.
-The root journal/configuration remain as evidence and cannot enable power
-without an installed helper.
+## Qualification
 
-Qualification sets `CATCODE_LID_CLOSED_TRIAL=1` in the isolated app. This only
-restricts the root configuration: normal caller, hardware and preset validation
-remain. One lease is capped at 60 seconds from its original native start,
-including adjustment and Continue, and retirement makes it terminal. The
-independent guardian removes experimental authority after an unused 30-second
-setup window or the bounded lease/cleanup window. Production exposes no short
-preset and has no test command that grants broader authority.
-
-Ordinary Sleep blockage, exclusive override ownership and measured-only recovery
-bounds remain the approved tradeoffs. Hardware evidence is limited to
-Mac16,8 / 25G83; actual app/helper and active UI qualification is recorded
-separately in the integration results and remains required before completion.
+Mocks and native controller tests prove their named contracts only. Root XPC,
+administrator setup/removal, GUI controls, actual PID exit and physical lid/Sleep
+behavior need their own evidence. Reuse the earlier [physical results](../research/2026-10-14-lid-closed-physical-results.md)
+and [Sleep results](../research/2026-10-15-lid-closed-sleep-results.md) for unchanged
+mechanisms; they do not qualify this new app/helper grant. Every live trial is
+at most 60 seconds, and authority is removed before waiting for participation.

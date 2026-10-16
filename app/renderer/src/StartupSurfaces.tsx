@@ -38,6 +38,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { OAuthSubmitStatus } from './appModel.js'
 import { useModalFocus } from './overlayFocus.js'
+import { LidClosedNotice } from './LidClosedMode.js'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── shared chrome ─────────────────────────────────────────────────────────── */
@@ -138,7 +139,7 @@ export function StartupShell({
       aria-modal="true"
       aria-label={step === 'trust' ? 'Workspace trust' : 'Sign in'}
       tabIndex={-1}
-      className={`absolute inset-0 z-40 flex items-center justify-center overflow-auto p-6 ${
+      className={`absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 overflow-auto p-6 ${
         presentation === 'modal'
           ? 'animate-scrim-in bg-scrim backdrop-blur-sm'
           : 'bg-app-bg/95'
@@ -161,6 +162,7 @@ export function StartupShell({
           </div>
         </>
       ) : null}
+      <LidClosedNotice />
       <div
         className={`w-full rounded-2xl border border-shell-seam shadow-[var(--elev-modal)] ${
           step === 'auth'

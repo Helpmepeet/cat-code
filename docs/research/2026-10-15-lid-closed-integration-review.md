@@ -1,5 +1,22 @@
 # Lid-closed integration review
 
+## Current direction, 2026-10-16
+
+The user superseded app-exclusive/job-scoped activation with a manual whole-Mac
+mode available without any Cat Code job. Account programs may invoke the fixed
+native bridge after one administrator setup. Protected app copies, Continue,
+job enrollment and app rebuild reauthorization have been removed. Current
+implementation, review fixes and qualification limits are recorded in
+[the new report](2026-10-16-systemwide-lid-mode.md).
+
+The prior `process.exited` log was not actual exit evidence. The user identified
+and repaired the quit regression in `3e8992b4`; see the
+[OS-process investigation](../reports/2026-10-16-packaged-quit-regression.md).
+
+## Historical integration record
+
+The evidence and pending checks below describe the earlier architecture.
+
 Updated 2026-10-16. **Qualification remains incomplete.** The certificate-free
 repair pass used the existing A+C, B/security and D/execution roster, including
 a B follow-up on the protected-snapshot repairs. No additional agents were

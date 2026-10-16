@@ -1,5 +1,6 @@
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
-import { LidNativeClient, inspectLidHardware, installLidHelper, LID_AUTHORIZED_APP } from './lidClosedNative.js'
+import { lidClosedMenu } from './lidClosedMenu.js'
+import { LidNativeClient, inspectLidHardware, installLidHelper } from './lidClosedNative.js'
 import { isLidModeCommand } from '../shared/lidClosed.js'
 import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
 import { ScheduledTasks } from '../host/scheduledTasks.js'
@@ -1847,6 +1848,7 @@ function createWindow(): void {
   })
 
   window.once('ready-to-show', () => {
+    updateLidMenu(lidMode?.read())
     // Capture-run hook (verification only), sibling to CATCODE_SMOKE_EXIT_MS below.
     // A headless acceptance run photographs this window with `capturePage` and
     // drives it with `sendInputEvent`; both work on a window that is never shown,
@@ -2107,7 +2109,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // off the connection. That, and nothing inside the frame, is the requester
     // (HR2).
     if (frame.kind === 'lid.work') {
-      lidMode?.receive(event.sessionId, frame.requestId, frame.work)
+      // Retired job observations remain host-only for older sidecars.
       return
     }
     if (frame.kind === 'host.request') {
@@ -2966,6 +2968,7 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  */
 let lidMode: LidClosedMode | undefined
 let lidReady: Promise<void> = Promise.resolve()
+const updateLidMenu = lidClosedMenu(() => lidMode?.read(), command => { void lidReady.then(() => lidMode?.command(command)).catch(() => {}) })
 function ensureLidMode(): void {
   if (lidMode) return
   const previous = lidReady
@@ -2975,20 +2978,12 @@ function ensureLidMode(): void {
     marker: join(defaultRegistryDir(), 'lid-closed-recovery.json'),
     installed: lidHelperInstalled,
     hardware: () => inspectLidHardware(assets),
-    install: recoveryOnly => installLidHelper(assets, process.execPath, recoveryOnly),
-    reopen: () => {
-      if (!existsSync(join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code'))) throw new Error('The protected copy is unavailable. Set up lid-closed mode again.')
-      app.relaunch({ execPath: join(LID_AUTHORIZED_APP, 'Contents/MacOS/Cat Code'), args: process.argv.slice(1).filter(arg => arg.startsWith('--user-data-dir=')) })
-      app.quit()
+    install: recoveryOnly => installLidHelper(assets, recoveryOnly),
+    changed: view => {
+      if (lidMode !== mode) return
+      updateLidMenu(view)
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH_LID_CHANGED, view)
     },
-    sessions: () => (supervisor?.listSessions() ?? []).filter(row => row.status === 'ready').flatMap(row => {
-      const generation = supervisor?.getSessionGeneration(row.sessionId)
-      if (!generation) return []
-      const descriptor = host?.listSessions().find(session => session.appSessionId === row.sessionId)
-      return [{ id: row.sessionId, generation, title: descriptor?.title ?? 'Chat' }]
-    }),
-    send: (id, message) => { if (!supervisor) throw new Error('Work unavailable'); supervisor.send(id, message) },
-    changed: view => { if (lidMode === mode && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH_LID_CHANGED, view) },
   })
   lidMode = mode
   // A window reopened during old-owner cleanup must wait for restoration,
@@ -4654,6 +4649,7 @@ if (!gotSingleInstanceLock) {
 function shutdownRuntime(): void {
   const endingLidMode = lidMode
   lidMode = undefined
+  updateLidMenu()
   if (endingLidMode) lidReady = endingLidMode.shutdown().catch(() => {})
   scheduledTasks?.stop()
   scheduledTasks = null

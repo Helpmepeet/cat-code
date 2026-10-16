@@ -1,5 +1,37 @@
 # Lid closed mode product specification
 
+## Approved simplification, 2026-10-16
+
+This section supersedes the earlier job-scoped behavior below. The user chose
+personal-use, account-wide access: “Yes, keep all apps awake until Stop or the
+timer ends.” See the [current runtime contract](2026-10-15-lid-closed-runtime-contract.md).
+
+- Start is manual and needs no Cat Code job. The whole Mac stays awake for all
+  apps; completing a job, approval, provider state or new work does not end it.
+- Keep numeric 15/30/60/120-minute presets. Adjustments use elapsed time from
+  the original start. Opening or closing the lid neither ends nor renews the
+  timer. There is no Continue or protected-app reopen step.
+- One administrator setup grants this account access through the fixed native
+  bridge. No Apple certificate or repeated Touch ID approval is required.
+  Programs in this account may invoke the same fixed operations.
+- Start requires an initially open lid, qualified hardware, an available global
+  override and valid safety monitoring. Native thermal, battery reserve,
+  deadline and supervision protection can still end the mode early.
+- Stop restores normal sleep. End mode and sleep restores first, then requests
+  Sleep. Ordinary Sleep may be blocked while active. Recovery remains visible
+  until restoration is confirmed. Closing the app ends its supervision.
+- Numeric cup and shared notice remain. Native application-menu controls also
+  work from welcome and views without a composer. No agent permission or
+  temporary instruction changes are produced by this mode.
+- All live qualification leases stay independently capped at 60 seconds.
+  Physical actions require separate user readiness. Current verification and
+  limitations are recorded in the [results](../research/2026-10-16-systemwide-lid-mode.md).
+
+## Historical job-scoped specification
+
+The remaining text records the previous design and does not override the
+approved simplification above.
+
 Date: 2026-10-13
 
 Status: Implementation in progress. Revised on 2026-10-14 with approved pmset tradeoffs. The historical [feasibility investigation](../research/2026-10-14-lid-closed-power-feasibility.md) records why the previous requirements blocked that route; it is not a universal impossibility finding. The cup remains numerals-only and explanations use the existing notice surface. Physical qualification is required before describing the feature as ready.

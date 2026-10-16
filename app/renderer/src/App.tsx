@@ -4637,7 +4637,7 @@ export function App() {
         />
 
         <div className="lid-content relative flex min-w-0 flex-1 flex-col">
-          <LidClosedNotice currentSessionId={activeSessionId} onSelect={selectTab} />
+          {!(showTrustGate || showFirstRunOAuthSurface || showAddAccountOAuthSurface || adoptOrphanOAuth) ? <LidClosedNotice /> : null}
           {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
            * inline rename editor. The menu resolves and acts against the row it was
            * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.

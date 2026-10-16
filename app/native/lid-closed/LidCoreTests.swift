@@ -62,16 +62,17 @@ import Darwin
         safety.sleepDisabled = true; reject(["op": "start", "identity": id, "allowance": 900])
         precondition(mutations == 0, "pre-existing override changed")
         safety.sleepDisabled = false
+        safety.lidClosed = true
+        reject(["op": "start", "identity": id, "allowance": 900])
+        precondition(mutations == 0 && !controller.snapshot().record.needsRestore, "closed-lid Start changed power or admitted intent")
+        safety.lidClosed = false
         try start()
         precondition(controller.snapshot().record.phase == "active")
         let original = controller.snapshot().record.deadline
         safety.lidClosed = true; time += 1; try controller.tick()
         safety.lidClosed = false; time += 1; try controller.tick()
-        precondition(controller.snapshot().record.phase == "lid-open" && safety.sleepDisabled == false)
-        precondition(controller.snapshot().restorationConfirmed, "settled lid-open restoration not confirmed")
-        time += 20
-        _ = try controller.command(["op": "continue", "identity": id])
-        precondition(controller.snapshot().record.deadline == original, "Continue renewed deadline")
+        precondition(controller.snapshot().record.phase == "active" && safety.sleepDisabled == true, "opening the lid ended the manual timed lease")
+        precondition(controller.snapshot().record.deadline == original, "opening the lid reset the deadline")
         time += 6
         _ = try controller.command(["op": "pulse", "identity": id])
         precondition(controller.snapshot().record.phase == "ended" && safety.sleepDisabled == false, "late heartbeat revived stale lease")
@@ -157,6 +158,7 @@ import Darwin
         safety.lidClosed = false; time += 1; try controller.tick()
         reject(["op": "continue", "identity": id])
         rejectExperimentStart()
+        _ = try controller.command(["op": "stop", "identity": id], experiment: true)
         try controller.resumeAfterInstall()
         try experimentStart()
         _ = try controller.command(["op": "stop", "identity": id], experiment: true)
@@ -180,9 +182,8 @@ import Darwin
         precondition(controller.snapshot().record.deadline == trialDeadline, "preset adjustment escaped trial cap")
         safety.lidClosed = true; try controller.tick()
         safety.lidClosed = false; time += 1; try controller.tick()
-        _ = try controller.command(["op": "continue", "identity": id], applicationTrial: true)
-        precondition(controller.snapshot().record.deadline == trialDeadline, "Continue escaped trial cap")
-        while time < trialDeadline { time = min(time + 4, trialDeadline); _ = try controller.command(["op": "pulse", "identity": id], applicationTrial: true) }
+        precondition(controller.snapshot().record.phase == "active" && controller.snapshot().record.deadline == trialDeadline, "lid change escaped trial cap")
+        while time < trialDeadline { time = min(time + 1, trialDeadline); _ = try controller.command(["op": "pulse", "identity": id], applicationTrial: true) }
         precondition(controller.snapshot().record.reason == "expired" && controller.snapshot().restorationConfirmed, "trial did not restore on expiry")
         do {
             _ = try controller.command(["op": "start", "identity": UUID().uuidString, "allowance": 900], applicationTrial: true)
@@ -194,8 +195,8 @@ import Darwin
         safety.lidClosed = false; time += 1; try controller.tick()
         try controller.retire()
         do {
-            _ = try controller.command(["op": "continue", "identity": id], applicationTrial: true)
-            preconditionFailure("retired trial Continue accepted")
+            _ = try controller.command(["op": "start", "identity": id, "allowance": 900], applicationTrial: true)
+            preconditionFailure("retired trial Start accepted")
         } catch {}
         precondition(controller.snapshot().restorationConfirmed && safety.sleepDisabled == false, "retired trial reactivated")
         // Real native child/pipe/process owner, with a harmless effect. Closing

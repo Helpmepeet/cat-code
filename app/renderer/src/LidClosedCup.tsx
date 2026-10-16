@@ -16,10 +16,10 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const minute = Math.ceil(v.remainingSeconds / 60)
   const shown = Date.now() < selectedUntil || v.phase === 'starting' ? v.allowance : minute
   const fill = active ? lidFill(v.remainingSeconds / 60) : 0
-  const shortcut = v.phase === 'unresolved' ? 'Retry restoration' : v.canContinue ? 'Continue with the original deadline' : active ? 'Adjust duration' : 'Start for 15 minutes'
+  const shortcut = v.phase === 'unresolved' ? 'Retry restoration' : active ? 'Adjust duration' : 'Start for 15 minutes'
   const inspect = (value: boolean) => { setOpen(value); lid.inspect(value) }
   const adjust = (direction: number) => {
-    if (pending || v.phase === 'unavailable' || v.phase === 'unresolved' || v.phase === 'lid-open') return
+    if (pending || v.phase === 'unavailable' || v.phase === 'unresolved') return
     if (!active) { if (direction > 0) command({ action: 'start', minutes: 15 }); return }
     const index = LID_PRESETS.indexOf(v.allowance as typeof LID_PRESETS[number]) + direction
     if (index < 0 || index >= LID_PRESETS.length) command({ action: 'stop' })
@@ -32,7 +32,6 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
         <path className="lid-outline" d="M3 10h14v12a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5z M17 12h2a4 4 0 0 1 0 8h-2" />
         {LID_PRESETS.map((tick, i) => <path key={tick} className={v.allowance === tick && active ? 'lid-tick selected' : 'lid-tick'} d={`M4 ${23 - i * 4}h3`} />)}
         {active ? <path className="lid-steam" d="M7 7c-3-3 3-3 0-6 M12 7c-3-3 3-3 0-6" /> : null}
-        {v.phase === 'lid-open' ? <path className="lid-mark" d="M8 14v8 M12 14v8" /> : null}
         {['ended','unresolved'].includes(v.phase) ? <path className="lid-mark" d="M10 13v6 M10 22v1" /> : null}
         {v.phase === 'unavailable' ? <path className="lid-mark" d="M3 26L17 11" /> : null}
         {v.phase === 'restoring' ? <path className="lid-mark" d="M13 22a4 4 0 1 1 1-5 M14 14v4h-4" /> : null}
@@ -40,14 +39,13 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   )
   return <span className={`lid-cup-slot lid-${v.phase}`}>
     <button {...faceProps} type="button" className="lid-cup" title="Keep working with lid closed"
-      aria-label={`Keep working with lid closed: ${v.phase}. ${shortcut}. Current work across chats.`}
+      aria-label={`Keep working with lid closed: ${v.phase}. ${shortcut}. Keeps the whole Mac awake.`}
       aria-describedby={open ? `${id}-time` : undefined} aria-disabled={pending || v.phase === 'unavailable'}
       onFocus={() => { faceProps.onFocus(); inspect(true) }} onBlur={() => inspect(false)}
       onMouseEnter={() => inspect(true)} onMouseLeave={event => { if (event.currentTarget !== document.activeElement) inspect(false) }}
       onClick={() => {
         if (pending) return
         if (v.phase === 'unresolved') command({ action: 'retry' })
-        else if (v.canContinue) command({ action: 'continue' })
         else adjust(1)
       }}
       onKeyDown={event => {

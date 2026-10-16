@@ -5,13 +5,12 @@ import CryptoKit
 @objc protocol LidControl {
     func command(_ request: Data, reply: @escaping (Data) -> Void)
 }
-func lidResponse(_ snapshot: LidSnapshot?, _ error: String? = nil, setupOnly: Bool = false) -> Data {
+func lidResponse(_ snapshot: LidSnapshot?, _ error: String? = nil) -> Data {
     var result: [String: Any] = ["ok": error == nil]
     if let snapshot, let data = try? JSONEncoder().encode(snapshot), let object = try? JSONSerialization.jsonObject(with: data) {
         result["snapshot"] = object
     }
     if let error { result["error"] = error }
-    if setupOnly { result["setupOnly"] = true }
     return (try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])) ?? Data("{\"ok\":false,\"error\":\"encoding-failed\"}".utf8)
 }
 
@@ -29,19 +28,17 @@ final class LidEndpoint: NSObject, LidControl {
             if Date().timeIntervalSince(self.rateWindow) > 1 { self.rateWindow = Date(); self.count = 0 }
             self.count += 1
             guard request.count <= 1024, self.count <= 8, let connection = self.connection,
-                  let role = lidAuthenticatedRole(connection, self.configuration, verifyApplication: false) else {
+                  lidAuthenticated(connection, self.configuration) else {
                 reply(lidResponse(nil, "caller-refused")); return
             }
             do {
                 guard let object = try JSONSerialization.jsonObject(with: request) as? [String: Any] else { throw LidFailure("invalid-command") }
-                if role == .setup && !["status", "retry"].contains(object["op"] as? String ?? "") {
-                    reply(lidResponse(self.controller.snapshot(), "authorized-copy-required", setupOnly: true)); return
-                }
-                if let until = self.configuration.applicationTrialUntil,
-                   ["start", "adjust", "continue"].contains(object["op"] as? String ?? ""), Date().timeIntervalSince1970 >= until {
+                if ["start", "adjust"].contains(object["op"] as? String ?? ""),
+                   (self.configuration.access == .experiment && Date().timeIntervalSince1970 >= self.configuration.experimentUntil ||
+                    self.configuration.applicationTrialUntil.map({ Date().timeIntervalSince1970 >= $0 }) == true) {
                     throw LidFailure("trial-authorization-expired")
                 }
-                reply(lidResponse(try self.controller.command(object, experiment: role == .experiment, applicationTrial: self.configuration.applicationTrial), setupOnly: role == .setup))
+                reply(lidResponse(try self.controller.command(object, experiment: self.configuration.access == .experiment, applicationTrial: self.configuration.applicationTrial)))
             } catch {
                 reply(lidResponse(self.controller.snapshot(), (error as? LidFailure)?.message ?? "operation-failed"))
             }
@@ -54,7 +51,7 @@ final class LidListener: NSObject, NSXPCListenerDelegate {
     let queue = DispatchQueue(label: "com.catcode.lid.transitions")
     init(_ configuration: LidConfiguration, _ controller: LidController) { self.configuration = configuration; self.controller = controller }
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        guard lidAuthenticatedRole(connection, configuration) != nil else { return false }
+        guard lidAuthenticated(connection, configuration) else { return false }
         // Enforced against each message's peer identity, including exec races.
         connection.setCodeSigningRequirement(configuration.bridgeRequirement)
         connection.exportedInterface = NSXPCInterface(with: LidControl.self)
@@ -174,16 +171,10 @@ let args = CommandLine.arguments
             "model": lidHardwareString("hw.model") ?? "unknown", "osBuild": lidHardwareString("kern.osversion") ?? "unknown",
             "safety": try JSONSerialization.jsonObject(with: JSONEncoder().encode(lidReadSafety()))]
         print(String(data: try JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]), encoding: .utf8)!)
-    case "--check-application":
-        guard [3, 4].contains(args.count) else { throw LidFailure("invalid-command") }
-        guard lidSealedApplication(args[2], args.count == 4 ? args[3] : nil) else { throw LidFailure("application-not-sealed") }
-        print("qualified-application")
-    case "--authorized-app-running":
-        guard args.count == 2, geteuid() == 0 else { throw LidFailure("root-required") }
-        print(lidAuthorizedAppRunning() ? "running" : "idle")
-    case "--check-protected-application":
-        guard args.count == 2, lidProtectedApplication() else { throw LidFailure("application-not-protected") }
-        print("protected-application")
+    case "--check-configuration":
+        guard args.count == 3 else { throw LidFailure("invalid-command") }
+        _ = try LidConfiguration.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
+        print("valid-configuration")
     case "--check-installation-paths":
         guard args.count == 2, lidSecureInstallationPaths() else { throw LidFailure("installation-paths-not-protected") }
         print("protected-installation-paths")
@@ -193,10 +184,7 @@ let args = CommandLine.arguments
     case "--installation-kind":
         guard args.count == 2, geteuid() == 0, lidHardenedNative(args[0]) else { throw LidFailure("qualified-root-helper-required") }
         let configuration = try lidConfiguration()
-        guard !configuration.parents.isEmpty,
-              configuration.parents.allSatisfy({ $0.experiment }) || configuration.parents.allSatisfy({ !$0.experiment }) else { throw LidFailure("configuration-invalid") }
-        guard configuration.parents.allSatisfy({ $0.experiment || lidSealedApplication($0.path, $0.requirement) }) else { throw LidFailure("application-not-sealed") }
-        print(configuration.parents[0].experiment || configuration.applicationTrial ? "experiment" : "application")
+        print(configuration.access == .experiment || configuration.applicationTrial ? "experiment" : "application")
     case "--power-command":
         guard args.count == 3, geteuid() == 0 else { throw LidFailure("root-required") }
         try lidExecPowerCommand(args[2])

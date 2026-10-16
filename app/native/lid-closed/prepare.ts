@@ -14,17 +14,17 @@ function run(command: string, args: string[], timeout = 60_000): string {
 }
 const helper = join(output, 'helper')
 run('/usr/bin/swiftc', ['-module-cache-path', join(output, 'cache'),
-  join(source, 'LidCore.swift'), join(source, 'LidCodeIdentity.swift'), join(source, 'LidPlatform.swift'), join(source, 'main.swift'), '-o', helper])
+  join(source, 'LidCore.swift'), join(source, 'LidSecurity.swift'), join(source, 'LidPlatform.swift'), join(source, 'main.swift'), '-o', helper])
 run('/usr/bin/codesign', ['--force', '--sign', '-', '--options', 'runtime', helper])
 const signature = run('/usr/bin/codesign', ['-d', '--verbose=4', helper])
 const cdhash = signature.match(/^CDHash=([a-f0-9]+)$/m)?.[1]
 if (!cdhash) throw new Error('Could not pin the native helper signature')
 const requirement = `cdhash H"${cdhash}"`
 const installed = '/Library/PrivilegedHelperTools/com.catcode.lid-closed'
-writeFileSync(join(output, 'configuration.json'), JSON.stringify({ version: 2, uid: process.getuid!(),
-  bridgeRequirement: requirement, parents: [{ path: installed, requirement, experiment: true }],
+writeFileSync(join(output, 'configuration.json'), JSON.stringify({ version: 3, uid: process.getuid!(),
+  bridgeRequirement: requirement, access: 'experiment',
   experimentUntil: Date.now() / 1000 + 24 * 60 * 60,
-  qualifiedBoot: null, qualifiedOS: null, qualificationEvidence: null }) + '\n', { mode: 0o600 })
+  qualificationEvidence: null }) + '\n', { mode: 0o600 })
 function plist(label: string, argument: string, mach = false) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>Label</key><string>${label}</string>\n<key>ProgramArguments</key><array><string>${installed}</string><string>${argument}</string></array>\n<key>UserName</key><string>root</string><key>RunAtLoad</key><true/>\n<key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>1</integer>\n${mach ? '<key>MachServices</key><dict><key>com.catcode.lid-closed</key><true/></dict>' : ''}\n</dict></plist>\n`
 }

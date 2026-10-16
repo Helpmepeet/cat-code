@@ -25,9 +25,6 @@ aside.sidebar-expanded + .lid-content > .lid-notice { margin-left: max(0px, calc
 .lid-shell[data-lid-inspecting] .lid-time-detail,
 .lid-notice:focus-within .lid-time-detail,
 .lid-notice[data-expanded] .lid-time-detail { display: block; }
-.lid-work-list { margin-top: 8px; list-style: none; }
-.lid-work-list ul { padding-left: 18px; }
-.lid-work-list button { text-decoration: underline; }
 @keyframes lid-steam { 0%,100% { transform: translateY(0); opacity: .7; } 50% { transform: translateY(-1px); opacity: 1; } }
 @keyframes lid-pulse { 50% { opacity: .65; } }
 @media (prefers-reduced-motion: reduce) { .lid-steam, .lid-starting .lid-outline { animation: none; } .lid-liquid { transition: none; } }
