@@ -744,6 +744,8 @@ export type PeerDescriptor = {
   createdBy?: { appSessionId: SessionId; name: string | null }
   title: string | null
   lastActivity: number
+  /** Title/model/effort left out to fit the roster; the peer itself is still listed. */
+  detailsOmitted?: true
 }
 
 /** Why main refused to route a peer message (HRP §4 step 6). */

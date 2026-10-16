@@ -96,6 +96,7 @@ export type PeerView = {
   createdBy?: string
   title: string | null
   lastActivity: string
+  detailsOmitted?: true
 }
 
 /**
@@ -195,6 +196,7 @@ export function narrowPeerView(value: unknown): PeerView | null {
     ...(creator !== undefined ? { createdBy: creator } : {}),
     title: typeof title === 'string' ? title : null,
     lastActivity: new Date(lastActivity).toISOString(),
+    ...(value.detailsOmitted === true ? { detailsOmitted: true as const } : {}),
   }
 }
 
@@ -286,6 +288,7 @@ export function createListPeersTool(
         // for: an effort level the session did not recognise was dropped in
         // favour of the user's own setting.
         'A peer that is live or parked also carries the model it is running and its reasoning effort, as that peer last reported them. Use them to send work to a peer already on the model you want it done by, and to check that a peer you created on a particular model really came up on it.',
+        'A row marked detailsOmitted had its title, model and effort left out to fit this list; those missing values do not describe the peer.',
         '',
         // Presence exists so a creator can tell busy from stuck (§0a), and
         // nothing said what its states do NOT establish. The `ReadPeer` prompt

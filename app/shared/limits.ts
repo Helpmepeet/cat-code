@@ -18,6 +18,9 @@
 /** Max serialized INBOUND frame size (hostile renderer traffic). */
 export const MAX_FRAME_BYTES = 128 * 1024
 
+/** Whole peers.list value, leaving room for the host.result envelope. */
+export const MAX_PEER_ROSTER_BYTES = MAX_FRAME_BYTES - 8 * 1024
+
 /** Handoff evidence is metadata; it must never grow into a transcript channel. */
 export const MAX_HANDOFF_STATE_BYTES = 16 * 1024
 export const MAX_HANDOFF_STATES_PER_WINDOW = 32
