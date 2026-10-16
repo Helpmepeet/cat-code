@@ -39,6 +39,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { OAuthSubmitStatus } from './appModel.js'
 import { useModalFocus } from './overlayFocus.js'
 import { LidClosedNotice } from './LidClosedMode.js'
+import { ProviderLogo } from './ProviderLogo.js'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── shared chrome ─────────────────────────────────────────────────────────── */
@@ -280,20 +281,17 @@ const PROVIDER_COPY: Record<
   {
     name: string
     detail: string
-    initial: string
     pastePlaceholder: string
   }
 > = {
   anthropic: {
     name: 'Claude',
     detail: 'Claude subscription',
-    initial: 'C',
     pastePlaceholder: 'Paste the code from the sign-in page',
   },
   openai: {
     name: 'ChatGPT',
     detail: 'ChatGPT subscription for Codex models',
-    initial: 'G',
     pastePlaceholder: 'Paste the page address',
   },
 }
@@ -314,7 +312,7 @@ function ProviderMark({ provider }: { provider: OAuthProvider }): ReactNode {
           : 'border-tone-info/25 bg-tone-info/10 text-tone-info'
       }`}
     >
-      {PROVIDER_COPY[provider].initial}
+      <ProviderLogo provider={provider} size={18} />
     </span>
   )
 }

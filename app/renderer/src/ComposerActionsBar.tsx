@@ -33,6 +33,7 @@ import {
   type ContextBreakdownRow,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
+import { ProviderLogo } from './ProviderLogo.js'
 import { ActionWarningIcon, Glyph } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
 import { useCacheExpiredEstimate } from './useCacheExpiredEstimate.js'
@@ -329,7 +330,8 @@ function ModelChip({
         }}
         className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)] hover:text-text-primary`}
       >
-        {face ?? 'Model'}
+        <ProviderLogo provider={provider} size={12} className="mr-1.5" />
+        <span className="truncate">{face ?? 'Model'}</span>
       </button>
       {open ? (
         <ComposerPopoverPanel panelRef={popoverRef} triggerRef={triggerRef}>
@@ -369,7 +371,8 @@ function ModelChip({
                   className={groupLocked ? 'opacity-40' : undefined}
                 >
                   {groups.length > 1 ? (
-                    <div className={POPOVER_HEADING}>
+                    <div className={`${POPOVER_HEADING} flex items-center gap-1.5`}>
+                      <ProviderLogo provider={group.provider} size={11} />
                       {formatProvider(group.provider)}
                     </div>
                   ) : null}

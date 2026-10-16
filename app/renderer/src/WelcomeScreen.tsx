@@ -60,6 +60,7 @@ import catThinking from './assets/welcome-cat-thinking.png'
 import catYarning from './assets/welcome-cat-yarn.png'
 import catYawning from './assets/welcome-cat-yawning.png'
 import { basename } from './pathUtils.js'
+import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
@@ -700,7 +701,7 @@ function CodexTable({
       <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
         <div className="flex items-center gap-2.5">
           <span className="flex text-accent">
-            <CubeIcon />
+            <ProviderLogo provider="openai" size={16} />
           </span>
           <span className="text-[16px] font-semibold text-text-primary">
             Codex
@@ -960,20 +961,6 @@ function BranchIcon() {
       <circle cx="6" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
       <circle cx="18" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.7" />
       <path d="M6 8.4v7.2M18 9.4c0 4-3 4.6-6 5.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-function CubeIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
-      <path d="m3.3 7 8.7 5 8.7-5M12 22V12" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   )
 }

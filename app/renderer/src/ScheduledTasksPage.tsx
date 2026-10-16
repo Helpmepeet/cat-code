@@ -5,6 +5,7 @@ import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import { usePopover } from './composerPopover.js'
 import { handleMenuRovingKeyDown, usePopoverFocus } from './overlayFocus.js'
 import { basename } from './pathUtils.js'
+import { ProviderLogo } from './ProviderLogo.js'
 import { SAButton, SAModal } from './SAModal.js'
 import {
   EFFORT_LABELS,
@@ -826,7 +827,7 @@ function EditorPane({
   const efforts = supportedEfforts.includes(draft.effort) ? supportedEfforts : [...supportedEfforts, draft.effort]
   const models: PickerOption[] = [
     { value: '', label: 'Default' },
-    ...modelOptions.map(option => ({ value: option.value, label: option.label, group: providerLabel(option.provider) })),
+    ...modelOptions.map(option => ({ value: option.value, label: option.label, group: providerLabel(option.provider), provider: option.provider })),
     ...(draft.model && !modelOptions.some(option => option.value === draft.model) ? [{ value: draft.model, label: draft.model, group: 'Saved' }] : []),
   ]
   const projectOptions: PickerOption[] = [
@@ -980,7 +981,7 @@ function EditorPane({
   )
 }
 
-type PickerOption = { value: string; label: string; detail?: string; group?: string; marker?: string }
+type PickerOption = { value: string; label: string; detail?: string; group?: string; marker?: string; provider?: string }
 
 const MAX_SEARCH_RESULTS = 80
 
@@ -1026,7 +1027,7 @@ function Picker({
     <div ref={listRef} role="menu" aria-label={label} onKeyDown={handleMenuRovingKeyDown} className="flex flex-col">
       {groups.map(group => (
         <div key={group.name ?? ''}>
-          {group.name ? <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">{group.name}</div> : null}
+          {group.name ? <div className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle"><ProviderLogo provider={group.options[0]?.provider ?? ''} size={11} />{group.name}</div> : null}
           {group.options.map(option => {
             const active = option.value === value
             return (
@@ -1074,6 +1075,7 @@ function Picker({
         className={`flex w-full min-w-0 items-center gap-2 rounded-[5px] border bg-surface-raised px-2.5 text-left transition-colors hover:border-text-ghost/40 disabled:cursor-default disabled:opacity-50 ${compact ? 'h-[30px]' : 'h-[33px]'} ${invalid ? 'border-tone-danger/60' : open ? 'border-accent/50' : 'border-shell-seam'} ${FOCUS}`}
       >
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          {selected?.provider ? <ProviderLogo provider={selected.provider} size={12} className="self-center text-text-subtle" /> : null}
           <span className={`truncate text-[12.5px] ${selected ? 'text-text-primary' : 'text-text-ghost'}`}>{selected?.label ?? placeholder ?? value}</span>
           {selected?.detail ? <span className="min-w-0 truncate font-mono text-[11px] text-text-subtle">{selected.detail}</span> : null}
         </span>
