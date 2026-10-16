@@ -211,7 +211,7 @@ launch smoke. Afterward a permanent (non-trial) helper was found installed at
 agent. Its root record showed a 15-minute lease that ended `expired` with
 normal sleep restored. The user did not recall approving it; a human password
 or Touch ID approval is required, so the approval is attributed to someone at
-this Mac, not confirmed. The user chose to keep the helper. With a permanent
+this Mac, not confirmed. The helper was left in place. With a permanent
 helper, any agent-started lease would not be independently capped at 60 seconds,
 so the live packaged repeat-start check (no second administrator prompt) was
 not run. It remains unverified on hardware; source routes an installed helper
