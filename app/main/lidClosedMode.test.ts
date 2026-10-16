@@ -60,6 +60,7 @@ function fixture() {
     failRestore(value: boolean) { failRestore = value },
     failAfterPublishingAuthority() { partialInstallFailure = true },
     cancelAdministratorDialog() { cancelInstall = true },
+    battery(batteryPercent: number) { snapshot = { ...snapshot, safety: { ...snapshot.safety, batteryPercent } } },
     leftoverNote(sleepDisabled: boolean) { writeFileSync(marker, JSON.stringify({ pending: true }) + '\n'); snapshot = { ...snapshot, safety: { ...snapshot.safety, sleepDisabled } } },
     interrupted(kind: 'journal' | 'signature') {
       installed = true
@@ -81,6 +82,19 @@ test('manual mode starts without any running Cat Code work', async () => {
     expect(f.calls.slice(0, 2)).toEqual(['install', 'start'])
     expect(f.mode.read().phase).toBe('active')
     await until(() => f.calls.includes('pulse'))
+    expect(f.mode.read().phase).toBe('active')
+  } finally { await f.cleanup() }
+})
+
+test('a start refused for low battery can start again once charged', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    f.battery(20)
+    await f.mode.command({ action: 'start', minutes: 15 })
+    expect(f.mode.read()).toMatchObject({ phase: 'unavailable', error: 'Charge above 20% before starting.' })
+    f.battery(80)
+    await f.mode.command({ action: 'start', minutes: 15 })
     expect(f.mode.read().phase).toBe('active')
   } finally { await f.cleanup() }
 })

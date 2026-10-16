@@ -787,7 +787,7 @@ test('unavailable fast remains a disabled switch with the actual reason on its r
   expect(fast).toEqual([])
 })
 
-test('an active but unavailable fast switch remains disabled', async () => {
+test('an active but unavailable fast switch can still be turned off', async () => {
   const fast: boolean[] = []
   const tree = await mountBar(recorder(), {
     runControls: {
@@ -802,9 +802,9 @@ test('an active but unavailable fast switch remains disabled', async () => {
   await openEffort(tree)
   const toggle = menu(tree)?.querySelector('[role="switch"][aria-label="Fast mode"]')
   expect(toggle?.getAttribute('aria-checked')).toBe('true')
-  expect(toggle?.hasAttribute('disabled')).toBe(true)
+  expect(toggle?.hasAttribute('disabled')).toBe(false)
   await click(toggle)
-  expect(fast).toEqual([])
+  expect(fast).toEqual([false])
 })
 
 test('losing the live control seam closes an open subface and leaves only retained values', async () => {

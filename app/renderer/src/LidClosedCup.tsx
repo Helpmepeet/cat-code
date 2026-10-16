@@ -44,7 +44,8 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
     : 'Keep working with lid closed'
   const inspect = (value: boolean) => { setOpen(value); lid.inspect(value) }
   const adjust = (direction: number) => {
-    if (pending || v.phase === 'unavailable' || v.phase === 'unresolved') return
+    // A refused start stays retryable; main rechecks the hardware on every start.
+    if (pending || v.phase === 'unresolved') return
     if (!active) { if (direction > 0) command({ action: 'start', minutes: 15 }); return }
     const index = LID_PRESETS.indexOf(v.allowance as typeof LID_PRESETS[number]) + direction
     if (index < 0 || index >= LID_PRESETS.length) command({ action: 'stop' })
@@ -58,7 +59,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   return <span className={`lid-cup-slot lid-${phase}${adjusting ? (adjustDir > 0 ? ' lid-adjust-up' : ' lid-adjust-down') : ''}`}>
     <button {...faceProps} type="button" className="lid-cup" title={title}
       aria-label={`Keep working with lid closed: ${phase}. ${shortcut}. Keeps the whole Mac awake.`}
-      aria-describedby={open ? `${id}-time` : undefined} aria-disabled={pending || v.phase === 'unavailable'}
+      aria-describedby={open ? `${id}-time` : undefined} aria-disabled={pending}
       onFocus={() => { faceProps.onFocus(); inspect(true) }} onBlur={() => inspect(false)}
       onMouseEnter={() => inspect(true)} onMouseLeave={event => { if (event.currentTarget !== document.activeElement) inspect(false) }}
       onClick={() => {
