@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { LidModeCommand, LidModeView, LidPreset } from '../shared/lidClosed.js'
-import { LID_HELPER, lidRestored, type LidNativeClient, type LidNativeSnapshot, type LidHardware } from './lidClosedNative.js'
+import { LID_HELPER, LidSetupCancelled, lidRestored, type LidNativeClient, type LidNativeSnapshot, type LidHardware } from './lidClosedNative.js'
 
 type Dependencies = {
   native: Pick<LidNativeClient, 'command' | 'close'>
@@ -26,7 +26,6 @@ export class LidClosedMode {
   private stopped = false
   private epoch = 0
   private busy = false
-  private awaitingSetup = false
   private needsRecovery = false
 
   constructor(private readonly deps: Dependencies) {}
@@ -84,8 +83,7 @@ export class LidClosedMode {
         switch (command.action) {
           case 'start': await this.start(command.minutes); break
           case 'setup':
-            if (this.awaitingSetup) await this.start(this.view.allowance as LidPreset, true)
-            else if (this.view.phase === 'unavailable') {
+            if (this.view.phase === 'unavailable') {
               await this.install(false)
               const reply = await this.deps.native.command({ op: 'status' })
               this.accept(reply.snapshot)
@@ -95,7 +93,6 @@ export class LidClosedMode {
             if (this.view.phase === 'active') this.accept((await this.deps.native.command({ op: 'adjust', identity: this.identity, allowance: command.minutes * 60 })).snapshot)
             break
           case 'stop': case 'cancel':
-            this.awaitingSetup = false
             if (this.needsRecovery) await this.end('stopped')
             else this.set({ phase: 'off', error: undefined })
             break
@@ -116,6 +113,7 @@ export class LidClosedMode {
         }
       } catch (error) {
         if (this.needsRecovery) { this.set({ error: message(error) }); await this.end('monitoring-unavailable') }
+        else if (error instanceof LidSetupCancelled) this.set({ phase: 'off', error: undefined })
         else this.set({ phase: 'unavailable', error: message(error) })
       } finally { this.busy = false; this.view.recovering = false; this.emit() }
       return this.read()
@@ -169,17 +167,16 @@ export class LidClosedMode {
       throw error
     }
   }
-  private async start(minutes: LidPreset, setup = false): Promise<void> {
+  private async start(minutes: LidPreset): Promise<void> {
     if (this.needsRecovery || ['active','starting','restoring','unresolved'].includes(this.view.phase)) return
     const epoch = this.epoch
     this.checkHardware(await this.deps.hardware())
     if (epoch !== this.epoch || this.stopped) return
     this.view.allowance = minutes
-    if (!this.deps.installed() && !setup) { this.awaitingSetup = true; this.set({ phase: 'setup', error: undefined }); return }
+    // First use goes straight to the macOS administrator dialog.
     if (!this.deps.installed()) {
-      this.set({ phase: 'setup' }); await this.install(false)
+      this.set({ phase: 'setup', error: undefined }); await this.install(false)
     }
-    this.awaitingSetup = false
     if (epoch !== this.epoch || this.stopped) { this.set({ phase: 'off' }); return }
     this.checkHardware(await this.deps.hardware())
     if (epoch !== this.epoch || this.stopped) { this.set({ phase: 'off' }); return }

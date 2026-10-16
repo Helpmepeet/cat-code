@@ -152,6 +152,8 @@ The fixed timer and protections remain effective while the window is hidden or t
 
 These protections do not establish that the laptop is ventilated or safe inside a bag. Retain the first-use note: “Keep it on a hard surface. Never in a bag.” Apple recommends a stable, ventilated surface and unobstructed vents: [temperature guidance](https://support.apple.com/en-us/102336).
 
+Amended 2026-10-16 by the user: no first-use note or setup banner. Choosing a duration opens the macOS administrator dialog directly on first use; cancelling it returns to Off silently. The native thermal, battery, deadline and supervision protections are the safety mechanism. Lid banners are not shown on the trust or sign-in surfaces.
+
 ## Ending and recovery
 
 Ending the mode and stopping a job are separate outcomes. With the lid open, normal completion, expiry, or cancellation restores ordinary sleep behavior while work may continue normally. With the lid closed, end further included scheduling, preserve available progress without an unbounded delay, remove Cat Code's sleep prevention, and request sleep. Thermal emergencies require prompt reduction of controlled work regardless of lid position.
@@ -178,7 +180,7 @@ Proposed copy:
 
 | Situation | Banner and action |
 | --- | --- |
-| First-use safety note | “Keep it on a hard surface. Never in a bag.” |
+| First-use safety note | None (amended 2026-10-16; see Safety) |
 | Active | “Covers 3 runs selected at activation across chats.” with Stop and Inspect work |
 | Active in an excluded run | Add “This run is not included.” Scope details remain available |
 | Adjusting duration | “30 minutes total; 20 minutes remaining.” Stop remains available |

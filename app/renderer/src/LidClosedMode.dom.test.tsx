@@ -54,16 +54,14 @@ test('focus does not activate; active keyboard adjustment sends only fixed prese
 })
 
 
-test('first-run dialog keeps lid setup accessible without an account or composer', async () => {
-  const commands: LidModeCommand[] = []
-  const view: LidModeView = { ...initial(), phase: 'setup', installed: false }
+test('sign-in and first-use setup show no lid banner', async () => {
+  let receive!: (view: LidModeView) => void
+  const view: LidModeView = { ...initial(), phase: 'unresolved', error: 'restore-failed' }
   window.catcode = { lidClosed: { read: async () => view,
-    command: async (value: LidModeCommand) => { commands.push(value); return view }, subscribe: () => () => {} } } as unknown as CatCodeBridge
+    command: async () => view, subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
   const tree = await harness.mount(<LidClosedProvider><StartupShell step="auth">Sign in</StartupShell></LidClosedProvider>)
-  const dialog = tree.container.querySelector('[role=dialog]')!
-  const setup = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Set up and start')!
-  expect(setup).toBeDefined()
-  expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(1)
-  await act(async () => { setup.click() })
-  expect(commands).toEqual([{ action: 'setup' }])
+  expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(0)
+  const notice = await harness.mount(<LidClosedProvider><LidClosedNotice /></LidClosedProvider>)
+  await act(async () => { receive({ ...view, phase: 'setup', installed: false, error: undefined }) })
+  expect(notice.container.querySelectorAll('.lid-notice')).toHaveLength(0)
 })

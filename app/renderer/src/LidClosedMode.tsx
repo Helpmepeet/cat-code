@@ -34,11 +34,8 @@ export function LidClosedNotice() {
   const action = (key: string, label: string) => ({ key, label })
   const time = `${v.allowance} minutes total; ${Math.ceil(v.remainingSeconds / 60)} minutes remaining.`
   switch (v.phase) {
-    case 'off': return null
-    case 'setup':
-      notice.title = 'Keep it on a hard surface. Never in a bag.'
-      notice.detail = 'One administrator setup allows programs in your macOS account to control this timed mode. Ordinary macOS Sleep can be blocked while this mode is active; use End mode and sleep. Use no other utility that changes the global sleep override: simultaneous writes cannot be reliably distinguished. Recovery depends on the helper and macOS responding.'
-      notice.actions = [action('setup', 'Set up and start'), action('cancel', 'Cancel')]; break
+    // The macOS administrator dialog is the whole first-use surface.
+    case 'off': case 'setup': return null
     case 'starting': notice.title = 'Starting lid-closed mode.'; notice.actions = [action('cancel','Cancel')]; break
     case 'active':
       notice.title = 'Keeps your Mac awake for all apps.'

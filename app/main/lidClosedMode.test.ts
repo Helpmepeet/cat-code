@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { LidClosedMode } from './lidClosedMode.js'
-import type { LidNativeSnapshot, LidNativeReply } from './lidClosedNative.js'
+import { LidSetupCancelled, type LidNativeSnapshot, type LidNativeReply } from './lidClosedNative.js'
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 function fixture() {
@@ -16,6 +16,7 @@ function fixture() {
   let failRestore = false
   let helperUnavailable = false
   let failInstall = false
+  let cancelInstall = false
   let partialInstallFailure = false
   let snapshot: LidNativeSnapshot = { record: { phase: 'off', began: 0, deadline: 0, allowance: 0, needsRestore: false, sleepRequested: false, sleepRequestAttempted: false },
     safety: { sleepDisabled: false, lidClosed: false, onBattery: true, batteryPercent: 75, thermal: 'nominal' }, remainingSeconds: 0, hardwareQualified: true }
@@ -27,6 +28,7 @@ function fixture() {
     install: async () => {
       calls.push('install'); await installGate?.promise
       if (failInstall) throw new Error('Authorization cancelled')
+      if (cancelInstall) throw new LidSetupCancelled('Administrator setup was cancelled.')
       installed = true
       if (partialInstallFailure) {
         partialInstallFailure = false; failRestore = true
@@ -57,6 +59,7 @@ function fixture() {
     nativeStartGate() { startGate = deferred(); return startGate },
     failRestore(value: boolean) { failRestore = value },
     failAfterPublishingAuthority() { partialInstallFailure = true },
+    cancelAdministratorDialog() { cancelInstall = true },
     interrupted(kind: 'journal' | 'signature') {
       installed = true
       if (kind === 'journal') snapshot = { ...snapshot, error: 'journal-unreadable' }
@@ -74,7 +77,7 @@ test('manual mode starts without any running Cat Code work', async () => {
   try {
     await f.mode.initialize()
     await f.mode.command({ action: 'start', minutes: 15 })
-    await f.mode.command({ action: 'setup' })
+    expect(f.calls.slice(0, 2)).toEqual(['install', 'start'])
     expect(f.mode.read().phase).toBe('active')
     await until(() => f.calls.includes('pulse'))
     expect(f.mode.read().phase).toBe('active')
@@ -84,8 +87,8 @@ test('manual mode starts without any running Cat Code work', async () => {
 test('cancel during setup and native admission cannot activate a late result', async () => {
   const f = fixture()
   try {
-    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
-    const gate = f.setupGate(); const setup = f.mode.command({ action: 'setup' })
+    await f.mode.initialize()
+    const gate = f.setupGate(); const setup = f.mode.command({ action: 'start', minutes: 15 })
     await until(() => f.calls.includes('install'))
     const cancel = f.mode.command({ action: 'cancel' }); gate.resolve()
     await Promise.all([setup, cancel]); expect(f.calls).not.toContain('start'); expect(f.mode.read().phase).toBe('off')
@@ -102,7 +105,7 @@ test('cancel during setup and native admission cannot activate a late result', a
 test('failed restoration stays unresolved across restart and retry cannot activate work', async () => {
   const f = fixture()
   try {
-    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 }); await f.mode.command({ action: 'setup' })
+    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
     f.failRestore(true); await f.mode.command({ action: 'stop' })
     expect(f.mode.read().phase).toBe('unresolved'); expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(true)
     await f.restart(); expect(f.mode.read().phase).toBe('unresolved')
@@ -118,7 +121,7 @@ test('failed restoration stays unresolved across restart and retry cannot activa
 test('a cooled thermal ending is terminal and cannot offer Continue', async () => {
   const f = fixture()
   try {
-    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 }); await f.mode.command({ action: 'setup' })
+    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
     f.thermalEnd(); await until(() => f.mode.read().phase === 'ended')
     expect(f.mode.read().reason).toBe('thermal')
     expect(f.calls).not.toContain('continue')
@@ -148,9 +151,8 @@ test('a partially installed helper cannot make unresolved sleep a dismissible se
   const f = fixture()
   try {
     await f.mode.initialize()
-    await f.mode.command({ action: 'start', minutes: 15 })
     f.failAfterPublishingAuthority()
-    await f.mode.command({ action: 'setup' })
+    await f.mode.command({ action: 'start', minutes: 15 })
     expect(f.mode.read().phase).toBe('unresolved')
     expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(true)
     await f.mode.command({ action: 'dismiss' })
@@ -160,5 +162,17 @@ test('a partially installed helper cannot make unresolved sleep a dismissible se
     await f.mode.command({ action: 'retry' })
     expect(f.mode.read().phase).toBe('ended')
     expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+  } finally { await f.cleanup() }
+})
+
+test('cancelling the administrator dialog returns to off without an error', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    f.cancelAdministratorDialog()
+    await f.mode.command({ action: 'start', minutes: 30 })
+    expect(f.calls).toEqual(['install'])
+    expect(f.mode.read().phase).toBe('off')
+    expect(f.mode.read().error).toBeUndefined()
   } finally { await f.cleanup() }
 })

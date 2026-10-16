@@ -190,6 +190,15 @@ IOPMrootDomain and native snapshots; the agent did not observe the lid directly.
 Detailed temporary evidence: `live-physical-3.jsonl` (qualified run) and
 `live-physical-2-idle.jsonl` (timed-out observer) in the scratch directory.
 
+## Follow-up UX amendment
+
+After reviewing the qualified run, the user removed the first-use setup banner
+and lid banners on the trust/sign-in surfaces. Choosing a duration now opens the
+macOS administrator dialog directly; cancelling it returns to Off with no
+error. This supersedes the MEDIUM startup-notice repair above. Owner and DOM
+regressions fail on the previous source and pass afterward. Not yet observed in
+a packaged app.
+
 ## Cleanup
 
 After the qualified physical run: `SleepDisabled=No`, clamshell open, helper,

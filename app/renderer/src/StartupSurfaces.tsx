@@ -38,7 +38,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { OAuthSubmitStatus } from './appModel.js'
 import { useModalFocus } from './overlayFocus.js'
-import { LidClosedNotice } from './LidClosedMode.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { toneClasses, type Tone } from './tone.js'
 
@@ -163,7 +162,6 @@ export function StartupShell({
           </div>
         </>
       ) : null}
-      <LidClosedNotice />
       <div
         className={`w-full rounded-2xl border border-shell-seam shadow-[var(--elev-modal)] ${
           step === 'auth'

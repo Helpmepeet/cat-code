@@ -128,6 +128,7 @@ async function requirement(path: string): Promise<string> {
   if (!cdhash) throw new Error('App signature unavailable')
   return `cdhash H"${cdhash}"`
 }
+export class LidSetupCancelled extends Error {}
 // The administrator executes only the protected, digest-verified installer.
 // Renderer input never supplies a command, path, caller identity or signature.
 export async function installLidHelper(assets: string, recoveryOnly = false): Promise<void> {
@@ -170,7 +171,7 @@ trap '/bin/rm -rf "$lid_root_stage"' EXIT
     await run('/usr/bin/osascript', ['-e',appleScript], { timeout: 120_000, maxBuffer: 32_768, env: { PATH: '/usr/bin:/bin', LANG: 'C' } })
   } catch (error) {
     const failure = error as { stderr?: string; killed?: boolean; signal?: string }
-    if (failure.stderr?.includes('(-128)')) throw new Error('Administrator setup was cancelled.')
+    if (failure.stderr?.includes('(-128)')) throw new LidSetupCancelled('Administrator setup was cancelled.')
     if (failure.killed || failure.signal) throw new Error('Administrator setup timed out. Try again when you are ready.')
     throw new Error('Lid-closed setup failed. Check normal sleep before trying again.')
   }
