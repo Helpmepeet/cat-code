@@ -205,6 +205,18 @@ banner is reduced to the remaining minutes and Stop, a user Stop leaves no
 ended banner, and the expiry message no longer mentions work tracking. Each
 change has an owner or DOM regression that fails on the previous source.
 
+Packaging from a clean `f5466107` snapshot passed, as did the full packaged
+launch smoke. Afterward a permanent (non-trial) helper was found installed at
+20:39:47 by a dev app started from a Ghostty terminal at 20:39:12, not by this
+agent. Its root record showed a 15-minute lease that ended `expired` with
+normal sleep restored. The user did not recall approving it; a human password
+or Touch ID approval is required, so the approval is attributed to someone at
+this Mac, not confirmed. The user chose to keep the helper. With a permanent
+helper, any agent-started lease would not be independently capped at 60 seconds,
+so the live packaged repeat-start check (no second administrator prompt) was
+not run. It remains unverified on hardware; source routes an installed helper
+directly to `start` without `install`.
+
 ## Cleanup
 
 After the qualified physical run: `SleepDisabled=No`, clamshell open, helper,
