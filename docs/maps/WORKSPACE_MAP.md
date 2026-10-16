@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-10-15
+Last refreshed: 2026-10-16
 
 ## Purpose
 
@@ -23,9 +23,9 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 
 | Sub-map | Scope | Last refreshed |
 |---|---|---|
-| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-10-12 |
+| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-10-16 |
 | [`docs/maps/tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. | 2026-10-12 |
-| [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-10-09 |
+| [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-10-16 |
 | [`docs/maps/terminal-ui-state.md`](terminal-ui-state.md) | Terminal UI, REPL state, Ink components, prompt input, messages, keybindings, and dialogs. | 2026-09-29 |
 | [`docs/maps/codex-core.md`](codex-core.md) | Codex-backed API behavior, account pool, request/response shaping, and provider routing. | 2026-10-12 |
 | [`docs/maps/query-provider-runtime.md`](query-provider-runtime.md) | Provider-neutral query loop, model/provider routing, context assembly, and API client flow. | 2026-10-12 |
@@ -33,11 +33,11 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/auth-accounts-oauth.md`](auth-accounts-oauth.md) | Auth source selection, OAuth, account storage/switching, secure storage, and account pools. | 2026-10-15 |
 | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) | Slash command aggregation, skills, plugins, workflows, marketplace/install flows, and dynamic command sources. | 2026-10-15 |
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
-| [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, local transports, renderer state, and startup seams. | 2026-10-15 |
+| [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, lid-closed supervision, local transports, renderer state, and startup seams. | 2026-10-16 |
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-09-29 |
-| [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, voice, and the experimental macOS lid-closed helper. | 2026-10-15 |
+| [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, voice, and integrated macOS lid-closed mode and helper. | 2026-10-16 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-09-29 |
-| [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, evaluation harnesses, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-10-15 |
+| [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, evaluation harnesses, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-10-16 |
 | [`docs/maps/harness-design-eval.md`](harness-design-eval.md) | Offline log audit and fixed-case task-restoration evaluation harness. | 2026-10-12 |
 | [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. | 2026-10-12 |
 
@@ -51,7 +51,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | Build scripts and feature gates | `package.json`, `scripts/build.ts` | Runtime `feature(...)` call sites in entrypoints, commands, tools, and tasks | [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | Workspace map maintenance and evaluation | `scripts/workspaceMapRefreshState.ts` | `scripts/workspaceMapLint.ts`, `scripts/workspace-map-eval/taskInventory.ts`, `scripts/workspace-map-eval/prep/` | [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | Offline log audit and task restoration evaluation | `scripts/harness-design-eval/README.md` | `scripts/harness-design-eval/{audit.ts,task-restore/}`, `src/services/compact/taskRestoration.ts` | [`docs/maps/harness-design-eval.md`](harness-design-eval.md) |
-| Prompt system and instruction behavior | `docs/prompts/` prompt-surface notes | `src/constants/prompts.ts`, `src/context.ts`, `src/utils/queryContext.ts`, `src/tools/AgentTool/` | [`docs/maps/prompt-system.md`](prompt-system.md) |
+| Prompt system and instruction behavior | `docs/prompts/` prompt-surface notes | `src/constants/prompts.ts`, `src/context.ts`, `src/utils/queryContext.ts`, `src/utils/messages.ts`, `src/tools/AgentTool/` | [`docs/maps/prompt-system.md`](prompt-system.md) |
 | Agents and delegated workers | `src/tools/AgentTool/` | `src/tasks/`, `src/coordinator/`, `src/screens/REPL.tsx`, `src/QueryEngine.ts` | [`docs/maps/tasks-workers.md`](tasks-workers.md) |
 | Built-in tools, MCP, permissions, sandboxing | `src/tools.ts`, `src/hooks/useCanUseTool.tsx` | `src/tools/`, `src/services/mcp/`, `src/utils/permissions/`, `src/utils/sandbox/` | [`docs/maps/tools-permissions.md`](tools-permissions.md) |
 | Background tasks and task UI | `src/tasks.ts` | `src/tasks/`, `src/components/tasks/`, `src/hooks/useBackgroundTaskNavigation.ts` | [`docs/maps/tasks-workers.md`](tasks-workers.md) |
@@ -64,7 +64,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | Electron desktop app | `app/main/main.ts`, `app/supervisor/supervisor.ts` | `app/sidecar/`, `app/preload/preload.ts`, `app/renderer/`, `app/shared/` | [`docs/maps/web-app-runtime.md`](web-app-runtime.md), [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | IDE and LSP integration | `src/services/lsp/manager.ts`, `src/commands/ide/` | `src/tools/LSPTool/`, IDE components/hooks/utils, plugin LSP integration | [`docs/maps/ide-lsp.md`](ide-lsp.md) |
 | Native/browser/client integrations | `src/utils/claudeInChrome/`, `src/utils/computerUse/` | `src/native-ts/`, `src/voice/`, desktop/mobile/chrome/voice commands | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) |
-| macOS lid-closed helper and power feasibility | `app/native/lid-closed/prepare.ts`, `scripts/lid-closed/inspect.ts` | `app/native/lid-closed/`, `scripts/lid-closed/`, the current lid-closed design and physical qualification records | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) |
+| macOS lid-closed mode and power qualification | `app/main/lidClosedMode.ts`, `app/native/lid-closed/` | `app/shared/lidClosed.ts`, `src/services/lidClosedWork.ts`, `app/renderer/src/{LidClosedMode,LidClosedCup}.tsx`, `app/scripts/build-lid-helper.ts`, `scripts/lid-closed/inspect.ts`, current integration and physical qualification records | [`docs/maps/native-client-integrations.md`](native-client-integrations.md), [`docs/maps/web-app-runtime.md`](web-app-runtime.md), [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | Proactive and assistant services | `src/proactive/` | `src/services/autoDream/`, `src/services/MagicDocs/`, `src/services/tips/`, trigger/sleep/brief surfaces | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) |
 | Workspace and repository discovery | `src/utils/cwd.ts`, `app/main/workspaceJumpCoordinator.ts` | `src/commands/add-dir/`, `src/utils/{detectRepository,githubRepoPathMapping}.ts`, `app/sidecar/workspaceJumpTools.ts`, `app/main/workspaceListingRunner.ts` | [`docs/maps/config-persistence.md`](config-persistence.md), [`docs/maps/web-app-runtime.md`](web-app-runtime.md), [`docs/maps/tools-permissions.md`](tools-permissions.md) |
 | Diagnostics, logging, and validation | `src/screens/Doctor.tsx`, `src/utils/debug.ts` | `src/utils/log.ts`, analytics/telemetry surfaces, stats/cost/status diagnostics | [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) |

@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-10-09.
+Last refreshed: 2026-10-16.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -8,7 +8,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 
 - `src/tasks.ts` and `src/Task.ts` for task exposure and base types.
 - `src/tasks/` for concrete lifecycle and stop behavior.
-- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `agentLifecycleOwnership.ts`, `runAgent.ts`, `resumeAgent.ts`, and `loadAgentsDir.ts` for local-agent work and definition loading.
+- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `agentLifecycleOwnership.ts`, `runAgent.ts`, `resumeAgent.ts`, `loadAgentsDir.ts`, and `src/utils/workerNames.ts` for local-agent launch, naming, and definition loading.
 - `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, and `src/utils/swarm/inProcessRunner.ts` for teammate routing.
 - `src/components/tasks/`, `src/screens/REPL.tsx`, `src/hooks/useBackgroundTaskNavigation.ts`, and `src/state/selectors.ts` for terminal task UI.
 - `src/coordinator/` and `src/tasks/` for coordinator-safe worker state and persistence.
@@ -46,6 +46,7 @@ Start with `src/tools/AgentTool/AgentTool.tsx` for launch decisions:
 - Synchronous subagents can register a foreground local-agent task, show a background hint after `PROGRESS_THRESHOLD_MS`, and then background via `backgroundAgentTask()` or `backgroundAll()`.
 - Explicit model selections resolve a worker's model and provider together through `src/utils/model/agent.ts:resolveAgentModel()`. Prompt identity, edit tools, and account leases follow that route; metadata preserves it for resume. Completion results name the actual response model. The Codex adapter rejects the exact Opus 5.5 pin rather than substituting a GPT model.
 - `name` plus team context routes to teammate spawn instead of a local async agent.
+- `src/utils/workerNames.ts` owns the process-local reservation set and shared generic-name pool; `AgentTool` holds candidates across asynchronous team allocation. Team recipient records remain owned by `teamHelpers.ts`.
 - In-process teammates are blocked from spawning background agents.
 - Coordinator worker state is recorded through the neutral worker-state tracking helpers used by `src/tools/AgentTool/`.
 
@@ -142,6 +143,7 @@ Start with `src/state/selectors.ts`.
 - Viewed local-agent input appends a user message immediately, then re-reads fresh AppState and calls `queuePendingMessageIfRunning()` (`src/tasks/LocalAgentTask/LocalAgentTask.tsx`). The synchronous state update accepts only a running task whose acceptance gate is open and records a uniquely identified delivery record before returning success. At normal no-tool completion, `query()` atomically either claims the exact pending batch for another model round or closes acceptance; input that loses that race is rejected and resumes through `resumeAgentBackground()` after the worker stops.
 - Viewed teammate input queues through `injectUserMessageToTeammate()`.
 - `src/tools/SendMessageTool/SendMessageTool.ts` `routeToLocalWorker()` follows the same fresh-read-then-`queuePendingMessageIfRunning()` pattern rather than trusting the state captured when `resolveAgentTarget()` ran. A worker-originated instruction records the sender agent ID so an undelivered or uncertain terminal outcome is queued back to that worker; main-origin input is reported in the ordinary parent notification.
+- `src/utils/messages.ts:wrapCommandText()` owns model-facing framing after accepted input is attached mid-turn; it is separate from delivery and acceptance, and is routed in `prompt-system.md`.
 
 ## Lifecycle And Notifications
 

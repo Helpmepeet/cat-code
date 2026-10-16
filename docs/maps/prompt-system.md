@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-10-12
+Last refreshed: 2026-10-16
 
 ## Purpose
 
@@ -92,7 +92,7 @@ src/services/api/claude.ts
 | Output style | `src/constants/prompts.ts` | dynamic system-prompt section | Loaded from built-in, user/project, or plugin output-style sources. |
 | Scratchpad instructions | `src/constants/prompts.ts` | dynamic system-prompt section | Present only when scratchpad support is enabled. |
 | Tracked-work reminders | `src/utils/attachments.ts` | `src/utils/messages.ts`, `src/tools/{TaskCreateTool,TodoWriteTool}/prompt.ts` | Reminder attachments appear only for unfinished work after the turn thresholds; unchanged lists and lists with no unfinished items are omitted. The model-facing text asks for a relevant status update and does not request new tasks just because a reminder appeared. |
-| Injected-origin framing (`wrapCommandText`) | `src/utils/messages.ts` | mid-turn attachment text | The model-facing framing of every injected origin: peer, teammate, channel, coordinator, task-notification. Applied only when a queued command becomes a mid-turn attachment; an idle recipient's turn is started with the raw value, so the peer creation-prompt arm is read by no model today. |
+| Injected-origin framing (`wrapCommandText`) | `src/utils/messages.ts` | `src/query.ts`, `src/utils/messages.test.ts` | Model-facing text is added only when a queued command becomes a mid-turn attachment. Human corrections, redirects, and stops should affect the next step; additive requests should follow the current task. Peer, teammate, channel, coordinator, and task-notification origins keep separate authority wording. Idle turns start with the raw prompt. This framing does not control delivery, cancellation, or admission. |
 
 ## Instruction And Recalled-Memory Discovery
 
@@ -152,6 +152,7 @@ Use focused checks first, then the documented build:
 | Optional Git context timeout and fallback | `bun test src/context.gitStatus.test.ts src/utils/execFileNoThrow.test.ts` |
 | Tracked-work reminder attachments | `bun test src/utils/attachments.test.ts` |
 | Main query behavior | `bun test src/query.test.ts` |
+| Mid-turn injected-origin framing | `bun test src/utils/messages.test.ts` |
 | Agent tool prompt/resume behavior | `bun test src/tools/AgentTool/prompt.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/AgentTool.test.ts` |
 | Skill-loading prompt policy | `bun test src/tools/SkillTool/` |
 | Compaction behavior | `bun test src/services/compact/compact.test.ts` |
@@ -165,6 +166,9 @@ For emitted-prompt inspection, use prompt dumps when available:
 
 ## Traps And Stale Assumptions
 
+- `HUMAN_INTERRUPT_WRAPPER` is model-facing guidance, not an engine interrupt.
+  Query and task owners still decide when queued input is delivered and whether
+  work is cancelled or admitted.
 - Do not assume `src/constants/prompts.ts` always wins. Coordinator mode, main-thread agent prompts, custom prompts, and override prompts can replace it.
 - Do not assume `appendSystemPrompt` replaces the prompt. It appends to the winning branch, except when `overrideSystemPrompt` is set.
 - Do not assume custom prompts still get `gitStatus`. `fetchSystemPromptParts()` skips `getSystemContext()` when `customSystemPrompt` is present.
