@@ -67,6 +67,90 @@ test('an unfinished label stays literal and cannot produce a bare file chip', as
   expect(prose.querySelector('button') === null).toBe(true)
 })
 
+test('an unfinished outer label remains protected as nested brackets arrive', async () => {
+  const tree = await harness.mount(draw('See [src/file.ts '))
+  const prose = tree.container.querySelector('.md-prose')!
+  for (const source of ['See [src/file.ts [foo', 'See [src/file.ts [foo\\']) {
+    await tree.render(draw(source))
+    expect(prose.textContent).toBe(source)
+    expect(prose.querySelectorAll('button').length).toBe(0)
+  }
+  await tree.render(draw('See [src/file.ts [foo]](./src/file.ts'))
+  const chip = prose.querySelector<HTMLButtonElement>('button')!
+  expect(chip.disabled).toBe(true)
+  await tree.render(draw('See [src/file.ts [foo]](./src/file.ts)'))
+  expect(prose.querySelector('button') === chip).toBe(true)
+  expect(chip.disabled).toBe(false)
+})
+
+for (const [destination, open, close] of [
+  ['./src/file.ts', '"', '"'], ['./src/file.ts', "'", "'"], ['./src/file.ts', '(', ')'],
+  ['README.md', '"', '"'], ['README.md', "'", "'"], ['README.md', '(', ')'],
+]) {
+  test(`a pending title delimited by ${open} retains its inert chip and destination-only ticker (${destination})`, async () => {
+    const prefix = `See [file](${destination} `
+    const tree = await harness.mount(draw(prefix))
+    const prose = tree.container.querySelector('.md-prose')!
+    const chip = prose.querySelector<HTMLButtonElement>('button')!
+    expect(chip !== null).toBe(true)
+    for (const title of ['', `${open}Useful source`, `${open}Useful source${close}`]) {
+      await tree.render(draw(prefix + title))
+      expect(prose.querySelector('button') === chip).toBe(true)
+      expect(chip.disabled).toBe(true)
+      expect(chip.querySelector('.file-link-ticker')?.textContent).toBe(destination.split('/').at(-1))
+      expect(prose.textContent?.includes('./src/')).toBe(false)
+      expect(prose.textContent?.includes('Useful source')).toBe(false)
+    }
+    await tree.render(draw(`${prefix}${open}Useful source${close})`))
+    expect(prose.querySelector('button') === chip).toBe(true)
+    expect(chip.disabled).toBe(false)
+    expect(chip.textContent).toBe('file')
+  })
+}
+
+for (const source of [
+  'See [file](./src/a\\(b\\).ts "Useful \\"quoted\\" source")',
+  'See [file]( <./src/file.ts> "Useful source")',
+]) {
+  test(`every destination and title prefix remains protected (${source})`, async () => {
+    const start = source.indexOf('](') + 5
+    const tree = await harness.mount(draw(source.slice(0, start)))
+    const prose = tree.container.querySelector('.md-prose')!
+    const chip = prose.querySelector<HTMLButtonElement>('button')!
+    for (let end = start; end < source.length; end++) {
+      await tree.render(draw(source.slice(0, end)))
+      expect(prose.querySelector('button') === chip).toBe(true)
+      expect(chip.disabled).toBe(true)
+      expect(prose.textContent?.includes('./src/')).toBe(false)
+      expect(prose.textContent?.includes('Useful')).toBe(false)
+    }
+    await tree.render(draw(source))
+    expect(prose.querySelector('button') === chip).toBe(true)
+    expect(chip.disabled).toBe(false)
+  })
+}
+
+for (const prefix of [
+  '| Ref |\n| --- |\n| ',
+  '| A | B | C |\n| - | - | - |\n| x | ',
+  '> | Ref |\n> | --- |\n> | ',
+]) {
+  test(`a pending table-cell link retains its chip through completion (${prefix.split('\n')[0]})`, async () => {
+    const source = `${prefix}[file](./src/file.ts`
+    const tree = await harness.mount(draw(source))
+    const prose = tree.container.querySelector('.md-prose')!
+    const chip = prose.querySelector<HTMLButtonElement>('td button')!
+    expect(chip !== null).toBe(true)
+    expect(chip.disabled).toBe(true)
+    expect(chip.querySelector('.file-link-ticker')?.textContent).toBe('file.ts')
+    expect(prose.textContent?.includes('./src/')).toBe(false)
+    await tree.render(draw(`${source}) |`))
+    expect(prose.querySelector('td button') === chip).toBe(true)
+    expect(chip.disabled).toBe(false)
+    expect(chip.textContent).toBe('file')
+  })
+}
+
 test('non-file links never flash a file chip at any pending prefix', async () => {
   const tree = await harness.mount(draw('See [src/file.ts]('))
   for (const target of ['https://example.com/readme.md', '//example.com/readme.md', '#section', 'mailto:person@example.com', 'javascript:alert(1)']) {
@@ -139,6 +223,27 @@ test('ticker clips to remaining line room, keeps its newest segment, and hides i
     expect(ticker.textContent).toBe('supervisor.ts:21')
     expect(ticker.hasAttribute('data-clipped')).toBe(false)
     expect(ticker.hasAttribute('data-no-room')).toBe(false)
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = original
+  }
+})
+
+test('ticker remeasures when preceding text repositions an unchanged chip without resizing it', async () => {
+  const original = HTMLElement.prototype.getBoundingClientRect
+  let chipRight = 100
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    const right = this.tagName === 'P' ? 400 : this.tagName === 'BUTTON' ? chipRight : 180
+    return { ...original.call(this), right, width: this.tagName === 'P' ? 400 : 100 } as DOMRect
+  }
+  try {
+    const drawTicker = (prefix: string) => <p>{prefix}<button><FileLinkTicker destination="/src/file.ts" /></button></p>
+    const tree = await harness.mount(drawTicker('short'))
+    const ticker = tree.container.querySelector<HTMLElement>('.file-link-ticker')!
+    expect(ticker.style.getPropertyValue('--file-link-ticker-room')).toBe('297px')
+    chipRight = 390
+    await tree.render(drawTicker('prefix moved the unchanged chip'))
+    expect(ticker.style.getPropertyValue('--file-link-ticker-room')).toBe('7px')
+    expect(ticker.hasAttribute('data-no-room')).toBe(true)
   } finally {
     HTMLElement.prototype.getBoundingClientRect = original
   }

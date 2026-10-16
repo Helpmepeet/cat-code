@@ -412,13 +412,16 @@ function pendingLinkTree(
   // link rather than escaped text, an image, inline code, or fenced code.
   // Descend through the final containers, not through inline formatting. A
   // large list can have a tiny final paragraph that is still cheap to probe.
+  const containers = ['ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr']
   let block = [...settled.children].reverse().find(child => child.type === 'element')
-  while (block?.type === 'element' && ['ul', 'ol', 'li', 'blockquote'].includes(block.tagName)) {
-    const last = [...block.children].reverse().find(child => child.type === 'element' || child.type === 'text' && child.value.trim() !== '')
-    if (last?.type !== 'element' || !['ul', 'ol', 'li', 'blockquote', 'p'].includes(last.tagName)) break
+  while (block?.type === 'element' && containers.includes(block.tagName)) {
+    const last = [...block.children].reverse().find(child =>
+      child.type === 'element' && (child.position || child.children.length > 0) ||
+      child.type === 'text' && child.value.trim() !== '')
+    if (last?.type !== 'element' || ![...containers, 'p', 'td', 'th'].includes(last.tagName)) break
     block = last
   }
-  if (block?.type !== 'element' || !['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(block.tagName)) return null
+  if (block?.type !== 'element' || !['p', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(block.tagName)) return null
   const first = block.children.find(child => child.position)?.position?.start
   if (first?.offset === undefined) return null
   const offset = first.offset
@@ -462,17 +465,47 @@ function pendingLinkTree(
   collect(block)
   // Pathological bracket runs must not multiply parser work per token.
   let probes = 0
-  for (const start of candidates.reverse().slice(0, 8)) {
+  for (const start of candidates.slice(-8)) {
     const delimiter = source.indexOf('](', start)
     const destination = delimiter < 0 ? null : source.slice(delimiter + 2)
+    let destinationStart = delimiter + 2
+    while (/\s/.test(source[destinationStart] ?? '') && destinationStart < source.length) destinationStart++
+    let destinationEnd = destinationStart
+    const angleDestination = source[destinationStart] === '<'
+    let parentheses = 0
+    // Remark validates the grammar. This scan only keeps the raw URL separate
+    // from its optional title, so presentation never includes title syntax.
+    while (destinationEnd < source.length) {
+      const char = source[destinationEnd]!
+      if (char === '\\') {
+        destinationEnd = Math.min(source.length, destinationEnd + 2)
+        continue
+      }
+      if (angleDestination) {
+        destinationEnd++
+        if (char === '>') break
+        continue
+      }
+      if (/\s/.test(char) || char === ')' && parentheses === 0) break
+      if (char === '(') parentheses++
+      if (char === ')') parentheses--
+      destinationEnd++
+    }
     const suffixes = destination === null
-      ? ['](cat-code-pending-label)']
+      ? Array.from(
+        { length: Math.min(32, source.slice(start).match(/\[/g)?.length ?? 1) },
+        (_, index) => `${']'.repeat(index + 1)}(cat-code-pending-label)`,
+      )
       : Array.from(
         { length: Math.min(32, (destination.match(/\(/g)?.length ?? 0) + 1) },
         (_, index) => ')'.repeat(index + 1),
       )
-    if (destination?.startsWith('<')) suffixes.unshift('>)')
-    for (const suffix of suffixes) {
+    if (destination !== null && angleDestination) suffixes.unshift('>)')
+    const titleDelimiter = source.slice(destinationEnd).trimStart()[0]
+    if (destination !== null && (titleDelimiter === '"' || titleDelimiter === "'")) suffixes.push(`${titleDelimiter})`)
+    const incompleteEscape = ((source.match(/\\+$/)?.[0].length ?? 0) % 2) === 1
+    for (const closing of suffixes) {
+      const suffix = incompleteEscape ? `\\${closing}` : closing
       if (++probes > 32) return null
       const mdast = processor.parse(source + suffix)
       let pending: Link | undefined
@@ -490,7 +523,13 @@ function pendingLinkTree(
         if (labelEnd > delimiter || source.slice(labelEnd, delimiter).includes(']')) continue
         pending.data = {
           ...pending.data,
-          hProperties: { dataPendingDestination: wholeSource.slice(offsets[delimiter + 2]!) },
+          hProperties: {
+            // A separator proves that an otherwise ambiguous URL cannot grow into a scheme.
+            dataPendingDestination: wholeSource.slice(
+              offsets[destinationStart]!,
+              offsets[destinationEnd + (/\s/.test(source[destinationEnd] ?? '') ? 1 : 0)]!,
+            ),
+          },
         }
       } else {
         // Preserve literal label syntax and shield it from bare-path plugins.

@@ -2,13 +2,14 @@ import { useLayoutEffect, useRef } from 'react'
 
 /** The destination is display-only until its Markdown link closes. */
 export function FileLinkTicker({ destination }: { destination: string }) {
-  const path = destination.startsWith('<') ? destination.slice(1).replace(/>$/, '') : destination
+  const rawPath = destination.trimEnd()
+  const path = rawPath.startsWith('<') ? rawPath.slice(1).replace(/>$/, '') : rawPath
   const ref = useRef<HTMLSpanElement>(null)
   const measureRef = useRef<() => void>(() => {})
   useLayoutEffect(() => {
     const ticker = ref.current
     const chip = ticker?.parentElement
-    const line = chip?.closest('p, li, .md-prose')
+    const line = chip?.closest('p, li, td, th, .md-prose')
     if (!ticker || !chip || !line) return
     const measure = () => {
       const available = Math.max(0, line.getBoundingClientRect().right - chip.getBoundingClientRect().right - 3)
@@ -26,7 +27,8 @@ export function FileLinkTicker({ destination }: { destination: string }) {
       observer?.disconnect()
     }
   }, [])
-  useLayoutEffect(() => { measureRef.current() }, [destination])
+  // Preceding text can move the chip without changing any observed size.
+  useLayoutEffect(() => { measureRef.current() })
   return (
     <span ref={ref} className="file-link-ticker" aria-hidden="true">
       <span>{path.slice(path.lastIndexOf('/') + 1)}</span>
