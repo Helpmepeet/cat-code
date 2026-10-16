@@ -330,9 +330,19 @@ mean those values are unknown. The tool preserves and explains that marker.
 The ordinary five-closed-peer display bound still runs in the tool; `all: true`
 returns the entire roster, subject to the same explicit detail omissions.
 
+**Scope notices, 2026-10-17.** A live or parked row may carry the writer's
+notice (`doing`, optional `touches` and `note`) with an absolute `postedAt`.
+Absence means nothing posted, not touching nothing. Main first reserves an
+explicit `noticeOmitted` marker for every notice, bounds the base roster
+including those markers, then includes notices newest-posted first while the
+whole answer fits. A maximum-sized roster may have no room for any full notice;
+each remains explicitly marked omitted. The model-facing result quotes control
+text and says notices are peer-authored data, not instructions. This is passive
+scope information; it adds no overlap parsing, message, wake or enforcement.
+
 ## 4. Tools (v1)
 
-Five tools, exposed only in desktop sessions. They live under `app/sidecar/`
+Five peer tools, exposed only in desktop sessions. They live under `app/sidecar/`
 and are appended to the engine's tool list after `getTools(...)`
 (`app/sidecar/sessionController.ts:321`) so the terminal never sees them.
 Names, send and create resolve through `HOST-REQUEST-PLANE` verbs; read is an
@@ -341,6 +351,7 @@ in-process file read.
 | tool | args | notes |
 |---|---|---|
 | `ListPeers` | none | §3. Read-only, no prompt. |
+| `Announce` | `doing`, optional `touches`, `note` | One standing scope notice per session, replaced whole. Only the main conversational agent may call; workers are refused before a host request. Main validates the closed shape, stamps the absolute posted time, and stores opaque text on the registry row. No delivery, wake or notification. Retained through park/restore, removed on close/quit. Serialized content is at most 1 KiB excluding the timestamp; `touches` has at most 16 non-empty strings. See [the built design](../../design/2026-10-17-peer-announce.md). |
 | `SendToPeer` | `to` (name), `text` | Every message is a request: a busy recipient reads it between tool calls, an idle one starts a turn, a parked or closed one wakes (HOST-REQUEST-PLANE §4). The hop chain is main-derived per pair (step 2); the sidecar never authors hops. Result states the outcome. Ordinary permission gate. (A `notify` kind that starts no turn was designed, reviewed and cut, §0a; its sketch is HOST-REQUEST-PLANE §4 step 4a, marked DEFERRED.) |
 | `ReadPeer` | `peer`, `before` (turn cursor from `nextPosition`), `query` (present means search, absent means tail), `maxBytes` (default 32 KiB, max 128 KiB) | §8. Same workspace only, read-only, no prompt. Returns TURNS (`asked` / `said` / `touched`), not messages. 🔁 AMENDED 2026-09-05: `view`, `limit` and `includeToolResults` were removed, see §8. |
 | `CreatePeer` | `prompt`, optional `model`, `effort` | Model and effort default to the creator's current values (R7): the requesting sidecar fills them from its own state, main threads them into the child's spawn env as `CATCODE_SIDECAR_MODEL` / `CATCODE_SIDECAR_EFFORT`, and the child applies them where it applies `resumedModel` today (`sessionController.ts:231`, `:319`). They are sidecar-authored and that is fine: a model choice is not permission posture. **Permission mode is neither an argument nor inherited** (🔁 §0a): the peer starts at the settings default like any new tab. Returns the new name. Ordinary permission gate and the HC4 caps every session has; no peer budget (R8). Account: R10. |
@@ -355,7 +366,9 @@ classifier reads as "no security relevance" and permits without evaluation
 So in auto mode the "ordinary permission gate" R8 relies on is the classifier,
 and it sees `CreatePeer` and `SendToPeer` only if they project. `CreatePeer`
 projects its full prompt and overrides; `SendToPeer` projects recipient, kind
-and full text. `ListPeers` and
+and full text. `Announce` projects its full input as JSON, including all scope
+and standing context. It has no ordinary permission prompt; Auto still evaluates
+the projection. `ListPeers` and
 `ReadPeer` are read-only and project `''` deliberately. Tests: a `SendToPeer`
 whose text relays a denied action is evaluated, not skipped.
 
@@ -424,6 +437,15 @@ acknowledgment; a short okay or silence can both be right. Preserve essential
 context, constraints, uncertainty, and exact identifiers; no fixed template is
 required. Answer blocking questions promptly when possible; sending a message
 does not guarantee an answer.
+
+When you know roughly what you will work on, especially before you edit files,
+post a notice with Announce: what you are doing, and the areas or shared files
+you expect to touch. Replace it only if your scope changes; it is not for
+progress or momentary state. Include work you hand to subagents; only the main
+conversational agent posts the notice. Before asking a peer what it is doing or
+which files it is editing, read its notice in ListPeers. Ask about its scope only
+when your scope overlaps its notice, or it has no notice and you are about to
+edit near its work.
 
 When the user asks for a session, create a peer; when they ask to reach a
 session that exists, message it; when they ask for a prompt, write text; do not
@@ -1182,7 +1204,7 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
 
 **Deferred, flagged (not cut):**
 - 🔁 **WITHDRAWN 2026-10-17 by the operator.** Replaced by a scope notice
-  each peer posts itself and `ListPeers` shows (designed, not built); see [the `Announce` design](../../design/2026-10-17-peer-announce.md).
+  each peer posts itself and `ListPeers` shows (built 2026-10-17); see [the `Announce` design](../../design/2026-10-17-peer-announce.md).
   The original entry is kept below as history.
   **File-overlap visibility** between live peers on one checkout (which
   files each is touching, and an overlap warning in `ListPeers`). Real for

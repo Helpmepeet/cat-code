@@ -67,6 +67,7 @@ import { getTranscriptPath } from '../../src/utils/sessionStorage.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
 import { createListPeersTool } from './listPeersTool.js'
+import { createAnnounceTool } from './announceTool.js'
 import {
   createCreatePeerTool,
   inheritedEffort,
@@ -454,6 +455,7 @@ export async function createNormalSidecarQueryEngineConfig(
       ? []
       : [
           createListPeersTool(),
+          createAnnounceTool(),
           createCreatePeerTool(),
           createSendToPeerTool(),
           createReadPeerTool(),

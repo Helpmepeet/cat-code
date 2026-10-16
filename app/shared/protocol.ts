@@ -85,6 +85,7 @@ import type {
   WorkspaceBranchObservation,
 } from './hostApi.js'
 import type { SessionBinding } from './sessionBinding.js'
+import type { PeerNotice, PeerNoticeInput } from './peerNotice.js'
 import type { DebugRendererSnapshot } from './debugState.js'
 import type {
   EditableSettingSource,
@@ -619,6 +620,8 @@ export type HistoryLoadEarlierMessage = {
  */
 export const HOST_REQUEST_VERBS = [
   'peers.list',
+  // Additive verb, not a new inbound kind. See design/2026-10-17-peer-announce.md.
+  'peer.announce',
   'peer.create',
   'peer.deliver',
   'peer.ack',
@@ -746,6 +749,9 @@ export type PeerDescriptor = {
   lastActivity: number
   /** Title/model/effort left out to fit the roster; the peer itself is still listed. */
   detailsOmitted?: true
+  notice?: PeerNotice
+  /** A notice exists but its text did not fit the whole-answer budget. */
+  noticeOmitted?: true
 }
 
 /** Why main refused to route a peer message (HRP §4 step 6). */
@@ -817,6 +823,7 @@ export type HostRequestArgs = {
   'workspace.transition.begin': { operationId: string }
   'workspace.transition.finish': { operationId: string; cwd: string }
   'peers.list': Record<string, never>
+  'peer.announce': PeerNoticeInput
   'peer.create': { prompt: string; model?: string; effort?: string }
   'peer.deliver': {
     to: string
@@ -846,6 +853,7 @@ export type HostRequestValues = {
   'workspace.transition.begin': { operationId: string }
   'workspace.transition.finish': { operationId: string }
   'peers.list': { peers: PeerDescriptor[] }
+  'peer.announce': { postedAt: number }
   'peer.create': {
     name: string
     appSessionId: SessionId

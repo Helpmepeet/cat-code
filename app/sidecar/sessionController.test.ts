@@ -722,6 +722,7 @@ test('PEER-SESSIONS §4 — a desktop session carries the peer tools the termina
   // unreachable by any model: that is the failure this test exists for, and it
   // has to be able to see every tool the feature ships.
   expect(names).toContain('ListPeers')
+  expect(names).toContain('Announce')
   expect(names).toContain('CreatePeer')
   expect(names).toContain('SendToPeer')
   expect(names).toContain('ReadPeer')

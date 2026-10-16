@@ -128,6 +128,7 @@ test('a host.request that crossed the real socket is accepted by the plane', asy
   const answers: SidecarClientMessage[] = []
   const plane = createPeerRequestPlane({
     rows: () => [row(sessionId, 'Bear'), row(SENDER, 'Alex')],
+    setPeerNotice: async () => null,
     isLive: () => true,
     isReady: () => true,
     canResume: () => true,

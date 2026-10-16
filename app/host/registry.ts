@@ -49,6 +49,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { SessionBinding } from '../shared/sessionBinding.js'
 import { isSessionBinding } from '../shared/sessionBinding.js'
+import { parsePeerNotice, parsePeerNoticeInput, type PeerNotice, type PeerNoticeInput } from '../shared/peerNotice.js'
 
 /* ------------------------------------------------------------------------- *
  * Schema (§3, registryVersion 1)
@@ -197,6 +198,8 @@ export type RegistrySession = {
    * there is nothing to reopen.
    */
   peerWakeBlocked?: boolean
+  /** Standing scope, retained through park/restore and removed on close. */
+  peerNotice?: PeerNotice
   /** [D] */
   createdAt: number
   /** [D] recency for restore-ordering / reaping. */
@@ -1225,6 +1228,17 @@ export class SessionRegistry {
     })
   }
 
+  async setPeerNotice(appSessionId: string, input: PeerNoticeInput): Promise<PeerNotice | null> {
+    const content = parsePeerNoticeInput(input)
+    const row = this.find(appSessionId)
+    if (!content || !row || row.shutdown !== null) return null
+    const notice = { ...content, postedAt: Date.now() }
+    await this.mutate('setPeerNotice', appSessionId, current => {
+      current.peerNotice = notice
+    })
+    return notice
+  }
+
   async markInputAccepted(appSessionId: string): Promise<void> {
     await this.mutate('markInputAccepted', appSessionId, row => {
       if (row.hasAcceptedInput === true) return false
@@ -1272,6 +1286,7 @@ export class SessionRegistry {
   async markClean(appSessionId: string): Promise<void> {
     await this.mutate('markClean', appSessionId, row => {
       row.shutdown = 'clean'
+      delete row.peerNotice
     })
   }
 
@@ -1331,6 +1346,7 @@ export class SessionRegistry {
     for (const row of this.doc.sessions) {
       if (row.shutdown !== null && row.shutdown !== 'parked') continue
       row.shutdown = 'clean'
+      delete row.peerNotice
       marked.push(row.appSessionId)
     }
     if (marked.length === 0) return marked
@@ -1577,6 +1593,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.createdBy === right.createdBy &&
     left.createdByName === right.createdByName &&
     left.peerWakeBlocked === right.peerWakeBlocked &&
+    JSON.stringify(left.peerNotice) === JSON.stringify(right.peerNotice) &&
     left.titleUpdatedAt === right.titleUpdatedAt &&
     left.createdAt === right.createdAt &&
     left.lastAttachedAt === right.lastAttachedAt &&
@@ -1627,6 +1644,9 @@ function mergeRegistryRow(
     baseline && local.peerWakeBlocked === baseline.peerWakeBlocked
       ? latest.peerWakeBlocked
       : local.peerWakeBlocked
+  const peerNotice = baseline && JSON.stringify(local.peerNotice) === JSON.stringify(baseline.peerNotice)
+    ? latest.peerNotice
+    : local.peerNotice
 
   return {
     appSessionId: local.appSessionId,
@@ -1642,6 +1662,7 @@ function mergeRegistryRow(
     ...(createdBy !== undefined ? { createdBy } : {}),
     ...(createdByName !== undefined ? { createdByName } : {}),
     ...(peerWakeBlocked ? { peerWakeBlocked } : {}),
+    ...(runtime.shutdown !== 'clean' && peerNotice ? { peerNotice } : {}),
     createdAt: Math.min(latest.createdAt, local.createdAt),
     lastAttachedAt: Math.max(latest.lastAttachedAt, local.lastAttachedAt),
     lastMessageSentAt: maxNullableTimestamp(
@@ -1740,6 +1761,8 @@ function validateRow(candidate: unknown): RegistrySession | null {
   // Absent ⇒ false (PEER-SESSIONS §6). Only `true` is stored, so an old row and a
   // row the user cleared are byte-identical on disk.
   if (candidate.peerWakeBlocked === true) row.peerWakeBlocked = true
+  const peerNotice = parsePeerNotice(candidate.peerNotice)
+  if (shutdown !== 'clean' && peerNotice) row.peerNotice = peerNotice
   // Absent on rows written before the field existed → "never stamped", which the
   // renderer reads as 0, so a real transcript title wins and a terminal rename
   // made before this shipped still surfaces.

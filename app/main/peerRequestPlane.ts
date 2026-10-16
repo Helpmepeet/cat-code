@@ -65,6 +65,7 @@ import {
   PEER_WAKE_TIMEOUT_MS,
 } from '../shared/limits.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
+import { parsePeerNoticeInput, type PeerNotice, type PeerNoticeInput } from '../shared/peerNotice.js'
 
 /* ------------------------------------------------------------------------- *
  * Injected dependencies — the narrowest slice of each collaborator, so this
@@ -81,6 +82,7 @@ export type PeerRegistryRow = {
   name?: string
   createdBy?: string
   peerWakeBlocked?: boolean
+  peerNotice?: PeerNotice
   lastAttachedAt: number
   lastMessageSentAt: number | null
   shutdown: 'clean' | 'crashed' | 'parked' | null
@@ -103,6 +105,7 @@ export type PeerRequestPlaneDeps = {
   }
   /** Every current registry row, live and dead alike. Read-only. */
   rows: () => readonly PeerRegistryRow[]
+  setPeerNotice: (appSessionId: SessionId, notice: PeerNoticeInput) => Promise<PeerNotice | null>
   /** Does a sidecar record still EXIST for this row, live or in between? */
   isLive: (appSessionId: SessionId) => boolean
   /**
@@ -220,6 +223,7 @@ const VERB_ARG_KEYS: Record<
   { required: readonly string[]; optional: readonly string[] }
 > = {
   'peers.list': { required: [], optional: [] },
+  'peer.announce': { required: ['doing'], optional: ['touches', 'note'] },
   'peer.create': { required: ['prompt'], optional: ['model', 'effort'] },
   // `expectCreatorId` is optional and is checked exactly like `model` /
   // `effort`: a string, bounded by `MAX_HOST_REQUEST_ARG_CHARS`. It narrows a
@@ -284,6 +288,7 @@ function readRequestId(frame: unknown): string | null {
 /** The validated request, narrowed to one verb and its own arg shape. */
 export type ValidatedHostRequest =
   | { verb: 'peers.list' }
+  | { verb: 'peer.announce'; notice: PeerNoticeInput }
   | { verb: 'peer.create'; prompt: string; model?: string; effort?: string }
   | {
       verb: 'peer.deliver'
@@ -367,6 +372,12 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
     if (!shape.required.includes(key) && !shape.optional.includes(key)) {
       return { ok: false, requestId, error: fail('bad_request', `unexpected arg "${key}"`) }
     }
+  }
+  if (verb === 'peer.announce') {
+    const notice = parsePeerNoticeInput(args)
+    return notice
+      ? { ok: true, requestId, request: { verb, notice } }
+      : { ok: false, requestId, error: fail('bad_request', 'Notice needs one non-empty doing line, up to 16 areas, and at most 1 KiB of text.') }
   }
   const strings: Record<string, string> = {}
   for (const key of shape.required) {
@@ -1062,6 +1073,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         (a, b) =>
           STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity,
       )
+    // Reserve every omission marker before budgeting any text.
+    const notices = peers.flatMap(peer => {
+      const notice = peer.status === 'closed' ? undefined : rowFor(peer.appSessionId)?.peerNotice
+      if (!notice) return []
+      peer.noticeOmitted = true
+      return [{ peer, notice }]
+    }).sort((a, b) => b.notice.postedAt - a.notice.postedAt)
     // Keep addressability intact, even with every registry row parked. Optional
     // display details yield oldest/closed-first; the wire, not the tool's later
     // closed-tail filter, is the boundary that needs the byte bound.
@@ -1072,6 +1090,14 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       delete peer.model
       delete peer.effort
       peer.detailsOmitted = true
+    }
+    for (const { peer, notice } of notices) {
+      delete peer.noticeOmitted
+      peer.notice = notice
+      if (utf8Bytes(JSON.stringify({ peers })) > MAX_PEER_ROSTER_BYTES) {
+        delete peer.notice
+        peer.noticeOmitted = true
+      }
     }
     return { peers }
   }
@@ -1556,6 +1582,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
             value: handlePeersList(requesterRow),
           })
           return
+        case 'peer.announce': {
+          const notice = await deps.setPeerNotice(sessionId, request.notice)
+          answer(sessionId, validated.requestId, notice
+            ? { ok: true, value: { postedAt: notice.postedAt } }
+            : { ok: false, error: fail('session_not_found', 'This conversation is no longer available.') })
+          return
+        }
         case 'peer.create':
           answer(
             sessionId,
