@@ -778,12 +778,48 @@ path per `(from, to)` pair inside `PEER_CHAIN_WINDOW_MS`. The send result tells
 the sender what happened, so silent non-delivery cannot leave it reasoning
 from a false belief (a reported upstream failure mode, research §6).
 
+🔁 **AMENDED 2026-10-16** after two failures in real peer conversations
+(`docs/reports/2026-10-15-busy-agent-messaging-research.md`, "Observed peer
+conversations"). Both are operator-approved.
+
+- **The send result says `queued`, not `delivered`** (amends ruling 13 of
+  2026-09-06 in `docs/prompts/2026-09-05-peer-sessions-instruction-surface-audit.md`).
+  The three facts stay three, but the first changes name: `SendToPeerDelivery`
+  is `queued | not_delivered | unconfirmed`, and the outcomes `delivered` and
+  `delivered_on_start` become `queued` and `queued_on_start`. The wire outcomes
+  `queued_live` and `queued_wake` always meant "held in the recipient's command
+  queue" and are untouched; the tool had been mapping them to "delivered",
+  which a busy recipient made false: one sender was told "delivered" for a
+  message its recipient took 35 minutes later. The ack at consumption
+  (§4 step 6 of HOST-REQUEST-PLANE) is main's and nothing carries it back to
+  the sender, so the sender is told what is true at the send. Reporting the
+  later consumption to the sender is NOT built; it needs new host-to-session
+  traffic and is a separate decision. The renderer still reads `delivered` in
+  transcript rows recorded before this change.
+- **The hop budget restarts on a user message** (amends ruling 12, which kept
+  16 hops "until actual conversations were observed"). A user-requested
+  interview between two peers was refused at question 9, because 8 questions
+  and 8 answers are 16 hops. A counter cannot tell that from two agents
+  chattering at each other, but a user turn can, since nothing an agent does
+  produces one. So the `chain_too_long` refusal tells the sending agent to ask
+  the user whether to continue, and a user message in EITHER session of a pair
+  sets that pair's count back to zero (`PeerRequestPlane.onUserMessage`, called
+  from main's `handOff` for a renderer-origin, non-meta `app.submit`). The
+  alternative of simply raising `MAX_PEER_HOPS` was rejected for the same
+  reason: it only moves where the interview and the runaway both stop.
+  Unchanged: `hop_loop` ring detection and the route inside each record, the
+  10-minute chain window, the per-pair token bucket, the dedup window and the
+  pending cap. A user message resets the count only; it does not shorten a
+  route, so it cannot launder a ring. It resets every pair the session is in,
+  since a user turn does not say which pair it is about. Scheduled-task
+  submits, `peer.deliver` and the plane's own traffic are not user messages.
+
 Values, so the build does not invent them (all new constants in
 `app/shared/limits.ts`, named here so a later change is a visible diff):
 
 | constant | value | note |
 |---|---|---|
-| `MAX_PEER_HOPS` | 16 | caps a repeated active route and per-pair back-and-forth; a route through distinct peers is not capped here |
+| `MAX_PEER_HOPS` | 16 | caps a repeated active route and per-pair back-and-forth; a route through distinct peers is not capped here. 🔁 AMENDED 2026-10-16: the per-pair count starts over when the user sends either session a message (§7 amendment) |
 | `MAX_PENDING_PEER_MESSAGES` | 50 | per recipient, undelivered, main-side |
 | `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all model-facing verbs. 🔁 `peer.ack` is exempt (amended 2026-09-03 during the build): an ack is main-induced bookkeeping forced by a delivery, so charging it here let a few senders spend a recipient's whole allowance and starve it off the plane. Every frame including acks is still charged to `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` below |
 | `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |

@@ -914,6 +914,65 @@ describe('loop and channel guards', () => {
     )
   })
 
+  describe('a user message restarts the pair hop budget', () => {
+    /** Alex and Bear alternate until `count` sends have been made; returns each outcome. */
+    async function converse(h: ReturnType<typeof harness>, count: number, turn: { n: number }) {
+      const outcomes: string[] = []
+      for (let i = 0; i < count; i++) {
+        const fromAlex = turn.n % 2 === 0
+        h.advance(3_000)
+        await h.plane.handleRequest(
+          fromAlex ? ALEX : BEAR,
+          request(
+            'peer.deliver',
+            { to: fromAlex ? 'Bear' : 'Alex', text: `turn ${turn.n}` },
+            `req-${turn.n}`,
+          ),
+        )
+        outcomes.push((h.lastResult()?.value as { outcome: string }).outcome)
+        turn.n += 1
+      }
+      return outcomes
+    }
+
+    async function atTheLimit() {
+      const h = harness()
+      const turn = { n: 0 }
+      const first = await converse(h, MAX_PEER_HOPS, turn)
+      expect(first.every(outcome => outcome === 'queued_live')).toBe(true)
+      expect(await converse(h, 1, turn)).toEqual(['refused:hop_runaway'])
+      return { h, turn }
+    }
+
+    test.each([
+      ['the sender', ALEX],
+      ['the recipient', BEAR],
+    ])('a user message to %s lets the exchange continue', async (_who, userSession) => {
+      const { h, turn } = await atTheLimit()
+      h.plane.onUserMessage(userSession)
+      const after = await converse(h, 4, turn)
+      expect(after).toEqual(['queued_live', 'queued_live', 'queued_live', 'queued_live'])
+    })
+
+    test('without a user message the pair stays refused, and a stranger\'s message does not count', async () => {
+      const { h, turn } = await atTheLimit()
+      h.plane.onUserMessage(CORAL)
+      expect(await converse(h, 3, turn)).toEqual([
+        'refused:hop_runaway',
+        'refused:hop_runaway',
+        'refused:hop_runaway',
+      ])
+    })
+
+    test('the restarted budget is a full one, and it ends again at the same cap', async () => {
+      const { h, turn } = await atTheLimit()
+      h.plane.onUserMessage(ALEX)
+      const second = await converse(h, MAX_PEER_HOPS + 1, turn)
+      expect(second.slice(0, MAX_PEER_HOPS).every(outcome => outcome === 'queued_live')).toBe(true)
+      expect(second[MAX_PEER_HOPS]).toBe('refused:hop_runaway')
+    })
+  })
+
   test('a three-way cycle may close but is stopped when its active route exceeds the hop cap', async () => {
     const h = harness({
       rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],

@@ -554,6 +554,26 @@ export function stampHistoryViewAnchor<T extends { type: string }>(
 }
 
 /**
+ * Is this frame a message the USER sent into a session?
+ *
+ * The peer plane restarts a pair's hop budget on one (`onUserMessage`), so the
+ * answer must be something no agent can produce. `peer.deliver` is a different
+ * message type, and the scheduler and the plane's own sends use the internal
+ * audience, so only a renderer-origin `app.submit` qualifies. `isMeta` marks the
+ * renderer's synthetic submits, which are not the user speaking.
+ */
+export function isUserTurnSubmit(
+  message: { type: string; options?: { isMeta?: boolean } },
+  audience: 'renderer' | 'internal',
+): boolean {
+  return (
+    audience === 'renderer' &&
+    message.type === 'app.submit' &&
+    message.options?.isMeta !== true
+  )
+}
+
+/**
  * Is a supervisor record a LIVE engine, or a tombstone?
  *
  * `SidecarSupervisor.listSessions()` returns every record it holds with its

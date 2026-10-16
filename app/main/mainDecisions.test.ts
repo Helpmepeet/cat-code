@@ -47,6 +47,7 @@ import {
   selectTranscriptBackfillCandidates,
   stampHistoryViewAnchor,
   isLiveSidecarStatus,
+  isUserTurnSubmit,
   isReadyForFrames,
   isSessionLive,
   isSessionReadyForFrames,
@@ -1460,5 +1461,21 @@ describe('isSessionLive (HOST-REQUEST-PLANE — liveness, not membership)', () =
     }
     expect(isSessionReadyForFrames(records, 'never-existed')).toBe(false)
     expect(isSessionReadyForFrames([], 'ready-1')).toBe(false)
+  })
+})
+
+describe('user turn detection for the peer hop budget', () => {
+  const submit = { type: 'app.submit' }
+
+  test('only a renderer-origin submit is the user speaking', () => {
+    expect(isUserTurnSubmit(submit, 'renderer')).toBe(true)
+    expect(isUserTurnSubmit({ ...submit, options: { isMeta: false } }, 'renderer')).toBe(true)
+  })
+
+  test('synthetic, internal and peer traffic is not', () => {
+    expect(isUserTurnSubmit({ ...submit, options: { isMeta: true } }, 'renderer')).toBe(false)
+    expect(isUserTurnSubmit(submit, 'internal')).toBe(false)
+    expect(isUserTurnSubmit({ type: 'peer.deliver' }, 'renderer')).toBe(false)
+    expect(isUserTurnSubmit({ type: 'app.abort' }, 'renderer')).toBe(false)
   })
 })

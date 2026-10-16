@@ -545,6 +545,11 @@ export type PeerRequestPlane = {
   reservationsFor: (sessionId: SessionId) => number
   /** Retry ready recipients after a host move has finished changing its scope. */
   onMoveSettled: (sessionId: SessionId) => void
+  /**
+   * The user sent this session a message. Gives every pair this session is in a
+   * fresh hop budget; see `resetPairHops`.
+   */
+  onUserMessage: (sessionId: SessionId) => void
   /** The presence main last heard from a row, for `peers.list` and for tests. */
   presenceOf: (sessionId: SessionId) => ActivityPresence | undefined
 }
@@ -873,6 +878,25 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       return { refusal }
     }
     return { hops, pairHops }
+  }
+
+  /**
+   * A user message in either session of a pair restarts that pair's budget.
+   *
+   * `MAX_PEER_HOPS` cannot tell a long interview the user asked for from two
+   * agents chattering at each other, because both are one counter ticking up.
+   * A user turn can: nothing an agent does produces one. So the refusal asks the
+   * sender to put the question to the user, and the user's answer arrives here.
+   *
+   * Only `pairHops` is zeroed. The route in each record is ring evidence for
+   * `hop_loop` and stays, and so do the window, rate and queue bounds, so a
+   * user message cannot be used to launder a ring.
+   */
+  function resetPairHops(sessionId: SessionId): void {
+    for (const [key, record] of chains) {
+      const [recipient, sender] = key.split('|')
+      if (recipient === sessionId || sender === sessionId) record.pairHops = 0
+    }
   }
 
   /** Record a hop main actually delivered toward `to` from `from`. */
@@ -1619,6 +1643,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       runControls.set(sessionId, controls)
     },
     onReady,
+    onUserMessage: resetPairHops,
     onMoveSettled: movedSessionId => {
       for (const recipientId of pending.keys()) {
         const held = pending.get(recipientId) ?? []

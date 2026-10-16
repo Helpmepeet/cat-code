@@ -98,32 +98,34 @@ async function send(
   return result.data
 }
 
-test('a live recipient is reported as delivered, with the name in the summary', async () => {
+test('a live recipient is reported as queued, with the name in the summary', async () => {
   const fake = delivering('queued_live')
   const result = await send(fake.requestHost, {
     to: 'Bear',
     text: 'the build is green',
   })
 
-  expect(result.delivery).toBe('delivered')
-  expect(result.outcome).toBe('delivered')
+  expect(result.delivery).toBe('queued')
+  expect(result.outcome).toBe('queued')
   expect(result.summary).toContain('Bear')
+  expect(result.summary).not.toMatch(/deliver/i)
   expect(fake.calls).toEqual([
     { verb: 'peer.deliver', args: { to: 'Bear', text: 'the build is green' } },
   ])
 })
 
-test('a woken recipient is delivered too, and says so distinctly', async () => {
+test('a woken recipient is queued too, and says so distinctly', async () => {
   const result = await send(delivering('queued_wake').requestHost, {
     to: 'Bear',
     text: 'hello',
   })
 
-  expect(result.delivery).toBe('delivered')
-  expect(result.outcome).toBe('delivered_on_start')
+  expect(result.delivery).toBe('queued')
+  expect(result.outcome).toBe('queued_on_start')
+  expect(result.summary).not.toMatch(/deliver/i)
 })
 
-test('every refusal reason is rendered, and none of them reads as delivered', async () => {
+test('every refusal reason is rendered, and none of them reads as queued', async () => {
   const summaries = new Set<string>()
   const outcomes = new Set<string>()
 
@@ -134,8 +136,8 @@ test('every refusal reason is rendered, and none of them reads as delivered', as
     })
 
     expect(result.delivery).toBe('not_delivered')
-    expect(result.outcome).not.toBe('delivered')
-    expect(result.outcome).not.toBe('delivered_on_start')
+    expect(result.outcome).not.toBe('queued')
+    expect(result.outcome).not.toBe('queued_on_start')
     // Every reason needs its OWN wording: one shared "it did not work" leaves
     // the model nothing to act on, which is the failure §7 names.
     expect(result.summary.length).toBeGreaterThan(20)
@@ -266,6 +268,20 @@ test('a stopped loop reads as this exchange, for now, not as a standing rule', a
   expect(result.summary).toContain('message Bear again')
 })
 
+test('a pair at its limit is told to ask the user, who can restart the exchange', async () => {
+  const result = await send(delivering('refused:hop_runaway').requestHost, {
+    to: 'Bear',
+    text: 'hello',
+  })
+
+  expect(result.delivery).toBe('not_delivered')
+  expect(result.outcome).toBe('chain_too_long')
+  expect(result.summary).toContain('Ask the user whether to continue')
+  expect(result.summary).toContain('message Bear again')
+  expect(result.summary).not.toContain('Finish the work yourself')
+  expect(result.summary).not.toContain('—')
+})
+
 test('the prompt says that messaging a closed peer holds up the sending turn', async () => {
   const prompt = await createSendToPeerTool(
     delivering('queued_live').requestHost,
@@ -371,7 +387,7 @@ test('text exactly at the byte cap is still sent whole', async () => {
   const text = 'x'.repeat(MAX_PEER_TEXT_BYTES)
   const result = await send(fake.requestHost, { to: 'Bear', text })
 
-  expect(result.delivery).toBe('delivered')
+  expect(result.delivery).toBe('queued')
   const sent = fake.calls[0]?.args
   expect(sent).toEqual({ to: 'Bear', text })
 })

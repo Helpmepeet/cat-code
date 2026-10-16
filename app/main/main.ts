@@ -216,6 +216,7 @@ import {
   supervisorEventToServerFrame,
   isSessionLive,
   isSessionReadyForFrames,
+  isUserTurnSubmit,
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
@@ -4210,6 +4211,7 @@ function handOff(
     }
     supervisor.send(sessionId, message)
     if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
+    if (isUserTurnSubmit(message, audience)) peerPlane?.onUserMessage(sessionId)
     return null
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error)

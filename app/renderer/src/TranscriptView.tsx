@@ -3201,7 +3201,8 @@ function AskUserQuestionAnswerRow({
  * What became of a send, read from the tool's OWN result rather than from the
  * row status.
  *
- * THREE VALUES, NOT TWO. The tool reports confirmed delivery, confirmed
+ * THREE VALUES, NOT TWO. The tool reports a queued message (`delivered` in
+ * rows recorded before the 2026-10-16 amendment of ruling 13), confirmed
  * non-delivery and unconfirmed delivery as distinct facts: a request that timed
  * out may still be delivered once the peer finishes starting, so `unconfirmed`
  * is neither a success nor a failure and must not be drawn as either.
@@ -3229,7 +3230,7 @@ function AskUserQuestionAnswerRow({
  */
 function peerSendDelivery(
   row: ToolUseNestedRow,
-): 'delivered' | 'not_delivered' | 'unconfirmed' | null {
+): 'queued' | 'delivered' | 'not_delivered' | 'unconfirmed' | null {
   const content = row.result?.content
   if (typeof content !== 'string' || content.length === 0) return null
   try {
@@ -3238,6 +3239,7 @@ function peerSendDelivery(
     const fields = parsed as Record<string, unknown>
     const value = fields['delivery']
     if (
+      value === 'queued' ||
       value === 'delivered' ||
       value === 'not_delivered' ||
       value === 'unconfirmed'
