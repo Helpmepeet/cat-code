@@ -27,6 +27,7 @@ export class LidClosedMode {
   private epoch = 0
   private busy = false
   private needsRecovery = false
+  private ending?: { reason: string; sleep: boolean }
 
   constructor(private readonly deps: Dependencies) {}
   read(): LidModeView { return structuredClone(this.view) }
@@ -81,7 +82,10 @@ export class LidClosedMode {
   command(command: LidModeCommand): Promise<LidModeView> {
     // Cancel can invalidate an administrator dialog or native request before
     // the serialized mutation returns. Its late result must restore, not start.
-    if (['cancel', 'stop', 'sleep'].includes(command.action)) this.epoch++
+    if (['cancel', 'stop', 'sleep'].includes(command.action)) {
+      this.epoch++
+      if (this.needsRecovery) this.ending = { reason: command.action === 'sleep' ? 'sleep-requested' : 'stopped', sleep: command.action === 'sleep' }
+    }
     return this.enqueue(async () => {
       if (this.stopped) return this.read()
       this.busy = true
@@ -199,17 +203,25 @@ export class LidClosedMode {
     this.snapshot = snapshot
     this.view.allowance = snapshot.record.allowance ? snapshot.record.allowance / 60 : this.view.allowance
     this.view.remainingSeconds = snapshot.remainingSeconds
-    this.view.sleepRequested = snapshot.record.sleepRequested
-    if (snapshot.record.phase === 'active' && snapshot.record.identity === this.identity && snapshot.record.needsRestore && snapshot.safety.sleepDisabled === true) {
+    this.view.sleepRequested = snapshot.record.sleepRequested || this.ending?.sleep === true
+    if (!this.ending && snapshot.record.phase === 'active' && snapshot.record.identity === this.identity && snapshot.record.needsRestore && snapshot.safety.sleepDisabled === true) {
       this.set({ phase: 'active', error: undefined }); return
     }
-    this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason: snapshot.record.reason })
-    if (!lidRestored(snapshot)) { this.set({ phase: 'unresolved' }); return }
+    this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason: this.ending?.reason ?? snapshot.record.reason })
+    if (!lidRestored(snapshot)) {
+      this.set({ phase: 'unresolved', ...(this.ending ? { error: 'Normal sleep has not been restored. Retry recovery.' } : {}) }); return
+    }
     this.mark(false)
+    const reason = this.ending?.reason ?? snapshot.record.reason
+    this.ending = undefined
+    this.view.sleepRequested = snapshot.record.sleepRequested
     this.set({ phase: snapshot.record.phase === 'off' ? 'off' : 'ended',
-      error: snapshot.record.error, repairRequired: false, reason: snapshot.record.reason })
+      error: snapshot.record.error, repairRequired: false, reason })
   }
   private async end(reason: string, sleep = false): Promise<void> {
+    this.ending ??= { reason, sleep }
+    reason = this.ending.reason
+    sleep = this.ending.sleep
     this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason })
     try {
       const op = sleep && this.identity ? 'sleep' : this.identity && this.snapshot?.record.phase === 'active' ? 'stop' : 'retry'
@@ -221,7 +233,7 @@ export class LidClosedMode {
   private async tick(): Promise<void> {
     if (!['active','unresolved','restoring'].includes(this.view.phase)) return
     try {
-      if (this.view.phase === 'active') {
+      if (this.view.phase === 'active' && !this.ending) {
         this.accept((await this.deps.native.command({ op: 'pulse', identity: this.identity })).snapshot)
       } else {
         this.accept((await this.deps.native.command({ op: 'status' })).snapshot)

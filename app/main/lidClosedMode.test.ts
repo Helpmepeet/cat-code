@@ -14,6 +14,8 @@ function fixture() {
   let installGate: ReturnType<typeof deferred> | undefined
   let startGate: ReturnType<typeof deferred> | undefined
   let failRestore = false
+  let transitionPending = false
+  let pulseGate: ReturnType<typeof deferred> | undefined
   let helperUnavailable = false
   let failInstall = false
   let cancelInstall = false
@@ -38,6 +40,7 @@ function fixture() {
     },
     native: { close() {}, async command(input: { op: string; identity?: string; allowance?: number }): Promise<LidNativeReply> {
       calls.push(input.op)
+      if (input.op === 'pulse') await pulseGate?.promise
       if (helperUnavailable) throw new Error('Helper unavailable')
       if (input.op === 'start') {
         expect(JSON.parse(readFileSync(marker, 'utf8')).pending).toBe(true)
@@ -45,6 +48,7 @@ function fixture() {
         snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'active', identity: input.identity, began: 100, deadline: 100 + input.allowance!, allowance: input.allowance!, needsRestore: true }, safety: { ...snapshot.safety, sleepDisabled: true }, remainingSeconds: input.allowance! }
       }
       if (['stop','retry','sleep'].includes(input.op)) {
+        if (transitionPending) return { ok: false, error: 'transition-pending', snapshot: structuredClone(snapshot) }
         if (failRestore) return { ok: false, snapshot: { ...snapshot, record: { ...snapshot.record, phase: 'unresolved' } } }
         snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'stopped' }, safety: { ...snapshot.safety, sleepDisabled: false } }
       }
@@ -58,6 +62,8 @@ function fixture() {
     setupGate() { installGate = deferred(); return installGate },
     nativeStartGate() { startGate = deferred(); return startGate },
     failRestore(value: boolean) { failRestore = value },
+    transitionPending(value: boolean) { transitionPending = value },
+    nativePulseGate() { pulseGate = deferred(); return pulseGate },
     failAfterPublishingAuthority() { partialInstallFailure = true },
     cancelAdministratorDialog() { cancelInstall = true },
     battery(batteryPercent: number) { snapshot = { ...snapshot, safety: { ...snapshot.safety, batteryPercent } } },
@@ -69,7 +75,7 @@ function fixture() {
     },
     thermalEnd() { snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'thermal', thermalRestart: true }, safety: { ...snapshot.safety, sleepDisabled: false, thermal: 'nominal' } } },
     async restart() { await mode.shutdown(); mode = new LidClosedMode(deps); await mode.initialize() },
-    async cleanup() { failRestore = false; installGate?.resolve(); startGate?.resolve(); await mode.shutdown(); rmSync(directory, { recursive: true, force: true }) },
+    async cleanup() { failRestore = false; transitionPending = false; pulseGate?.resolve(); installGate?.resolve(); startGate?.resolve(); await mode.shutdown(); rmSync(directory, { recursive: true, force: true }) },
   }
 }
 async function until(check: () => boolean) { const end = Date.now() + 4000; while (!check() && Date.now() < end) await Bun.sleep(10); expect(check()).toBe(true) }
@@ -130,6 +136,55 @@ test('failed restoration stays unresolved across restart and retry cannot activa
     expect(f.mode.read().phase).toBe('ended'); expect(f.calls).not.toContain('continue')
     expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
     expect(f.calls.filter(call => call === 'start')).toHaveLength(count)
+  } finally { await f.cleanup() }
+})
+
+for (const action of ['stop', 'sleep'] as const) {
+  test(`${action} intent survives failed active replies and status until explicit recovery`, async () => {
+    const f = fixture()
+    try {
+      await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
+      f.transitionPending(true)
+      const from = f.phases.length
+      await f.mode.command({ action })
+      expect(f.mode.read()).toMatchObject({
+        phase: 'unresolved', reason: action === 'sleep' ? 'sleep-requested' : 'stopped',
+        sleepRequested: action === 'sleep', error: 'Normal sleep has not been restored. Retry recovery.',
+      })
+      expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(true)
+      await until(() => f.calls.includes('status'))
+      expect(f.phases.slice(from)).not.toContain('active')
+      expect(f.calls).not.toContain('pulse')
+      await f.mode.command({ action: 'dismiss' })
+      await f.mode.command({ action: 'start', minutes: 120 })
+      expect(f.mode.read().phase).toBe('unresolved')
+      expect(f.calls.filter(call => call === 'start')).toHaveLength(1)
+      f.transitionPending(false)
+      const recoveryFrom = f.calls.length
+      await f.mode.command({ action: 'retry' })
+      expect(f.calls.slice(recoveryFrom)).toEqual([action])
+      expect(f.mode.read().phase).toBe('ended')
+      expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+      await f.mode.command({ action: 'start', minutes: 15 })
+      expect(f.mode.read().phase).toBe('active')
+    } finally { await f.cleanup() }
+  })
+}
+
+test('stop intent prevents an in-flight pulse reply from readmitting active work', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
+    const gate = f.nativePulseGate()
+    await until(() => f.calls.includes('pulse'))
+    f.transitionPending(true)
+    const from = f.phases.length
+    const stop = f.mode.command({ action: 'stop' })
+    gate.resolve(); await stop
+    expect(f.phases.slice(from)).not.toContain('active')
+    expect(f.mode.read().phase).toBe('unresolved')
+    await until(() => f.calls.includes('status'))
+    expect(f.calls.filter(call => call === 'pulse')).toHaveLength(1)
   } finally { await f.cleanup() }
 })
 
