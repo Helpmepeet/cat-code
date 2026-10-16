@@ -85,6 +85,60 @@ function readDoc(registryPath: string): RegistryDocument {
   return JSON.parse(readFileSync(registryPath, 'utf8')) as RegistryDocument
 }
 
+test('scope notice survives park, persisted reload and restore, but not close or reopen', async () => {
+  const { registry, storageDir, registryPath } = makeRegistry()
+  await registry.launch()
+  await registry.upsertOnSpawn({ appSessionId: 'notice', cwd: '/workspace', engineSessionId: 'notice-engine' })
+  writeTranscript(storageDir, 'notice-engine')
+  const notice = await registry.setPeerNotice('notice', { doing: 'Editing', touches: ['../opaque', 'app/sidecar'], note: 'Standing context' })
+  if (!notice) throw new Error('notice was not accepted')
+  expect(notice?.postedAt).toBeGreaterThan(0)
+  await registry.markParked('notice')
+  expect(registry.sessions[0]?.peerNotice).toEqual(notice)
+  expect(readDoc(registryPath).sessions[0]?.peerNotice).toEqual(notice)
+  const restored = makeRegistry({ storageDir }).registry
+  await restored.launch()
+  expect(restored.sessions[0]?.peerNotice).toEqual(notice)
+  await restored.upsertOnSpawn({ appSessionId: 'notice', cwd: '/workspace' })
+  expect(restored.sessions[0]?.peerNotice).toEqual(notice)
+  await restored.markClean('notice')
+  expect(restored.sessions[0]?.peerNotice).toBeUndefined()
+  expect(readDoc(registryPath).sessions[0]?.peerNotice).toBeUndefined()
+  expect(await restored.setPeerNotice('notice', { doing: 'Too late' })).toBeNull()
+  await restored.upsertOnSpawn({ appSessionId: 'notice', cwd: '/workspace' })
+  expect(restored.sessions[0]?.peerNotice).toBeUndefined()
+})
+
+test('an unrelated stale registry writer cannot erase a notice or resurrect it after close', async () => {
+  const { registry, storageDir, registryPath } = makeRegistry()
+  await registry.launch()
+  await registry.upsertOnSpawn({ appSessionId: 'notice', cwd: '/workspace', engineSessionId: 'notice-engine' })
+  writeTranscript(storageDir, 'notice-engine')
+  const stale = makeRegistry({ storageDir, isProcessAlive: () => true }).registry
+  await stale.launch()
+  const notice = await registry.setPeerNotice('notice', { doing: 'New scope' })
+  if (!notice) throw new Error('notice was not accepted')
+  await stale.setTitle('notice', 'Unrelated title')
+  expect(readDoc(registryPath).sessions[0]?.peerNotice).toEqual(notice)
+  await registry.markClean('notice')
+  await stale.setTitle('notice', 'Another title')
+  expect(readDoc(registryPath).sessions[0]?.peerNotice).toBeUndefined()
+})
+
+test('synchronous quit drops notices from both live and parked rows', async () => {
+  const { registry, storageDir, registryPath } = makeRegistry()
+  await registry.launch()
+  for (const id of ['live', 'parked']) {
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: '/workspace', engineSessionId: id })
+    writeTranscript(storageDir, id)
+    await registry.setPeerNotice(id, { doing: 'Editing' })
+  }
+  await registry.markParked('parked')
+  registry.markLiveCleanSync()
+  expect(registry.sessions.every(row => row.peerNotice === undefined)).toBe(true)
+  expect(readDoc(registryPath).sessions.every(row => row.peerNotice === undefined)).toBe(true)
+})
+
 /** Seed an on-disk registry document directly (pre-launch state). */
 function seed(registryPath: string, sessions: RegistrySession[]): void {
   const doc: RegistryDocument = {
