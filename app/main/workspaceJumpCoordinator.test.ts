@@ -392,6 +392,65 @@ test('status reply schedules a release retry after freeing its command slot with
   } finally { control.dispose() }
 })
 
+for (const interruption of ['none', 'cancel', 'replace'] as const) test(`status state before acknowledgement defers continuation without spending its retry (${interruption})`, async () => {
+  const h = harness()
+  const sent: Parameters<ConstructorParameters<typeof WorkspaceHandoffControl>[0]['send']>[1][] = []
+  let sequence = 0, unavailableContinuations = 0
+  const terminal = { outcome: 'success' as const, order: 1, checkpoint: checkpoint() }
+  const control = new WorkspaceHandoffControl({
+    generation: h.generation,
+    acceptsStatus: (id, status) => id === h.appSessionId && status.engineSessionId === h.row.engineSessionId,
+    observe: (id, status) => { h.coordinator.observe(id, status) },
+    recover: id => h.coordinator.queryStatus(id),
+    send: (id, message) => {
+      sent.push(message)
+      if (message.action === 'status' || message.action === 'cancel') return true
+      const gate = { mode: 'open' as const, reservationOperationId: null, requiresUserReconciliation: false }
+      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: 4, sessionId: id,
+        requestId: message.requestId, operationId: h.operationId, action: message.action,
+        disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, message.action === 'release' ? gate : undefined) })
+      return true
+    },
+  })
+  h.deps.control = async (state, action) => {
+    const delivery = await control.request(state.appSessionId, state.operationId, action)
+    if (action.action === 'continue' && delivery.kind === 'unavailable') unavailableContinuations++
+    return delivery
+  }
+  const move = h.deps.host.moveWorkspaceJump
+  h.deps.host.moveWorkspaceJump = async (...args) => {
+    const result = await move(...args)
+    h.coordinator.queryStatus(h.appSessionId, true)
+    return result
+  }
+  try {
+    await h.accept()
+    await h.coordinator.handleRequest(h.appSessionId, h.ready)
+    h.coordinator.afterResponse(h.appSessionId, h.ready, true)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(unavailableContinuations).toBe(1)
+    expect(sent.map(message => message.action)).toEqual(['status'])
+    const observed = snapshot(h, ++sequence)
+    control.receiveState(h.appSessionId, observed)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(unavailableContinuations).toBe(1)
+    expect(sent.map(message => message.action)).toEqual(['status'])
+    if (interruption === 'cancel') await h.coordinator.cancel(h.appSessionId)
+    if (interruption === 'replace') h.setGeneration()
+    const status = sent[0]!
+    control.receiveFrame(h.appSessionId, { kind: 'workspace.handoff.result', protocolVersion: 4,
+      sessionId: h.appSessionId, requestId: status.requestId, operationId: h.operationId,
+      action: 'status', disposition: 'accepted', status: { ...observed, statusSeq: ++sequence } })
+    if (interruption !== 'none') control.disconnect(h.appSessionId)
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(sent.filter(message => message.action === 'continue')).toHaveLength(interruption === 'none' ? 1 : 0)
+    if (interruption === 'none') {
+      expect(h.coordinator.snapshot(h.appSessionId)?.continuation.outcome).toBe('success')
+      expect(h.coordinator.isReserved(h.appSessionId)).toBe(false)
+    }
+  } finally { control.dispose() }
+})
+
 test('verified source compensation permits a later request but a later manual relocation cannot reset authority', async () => {
   const h = harness()
   await h.accept(); await h.coordinator.handleRequest(h.appSessionId, h.ready)

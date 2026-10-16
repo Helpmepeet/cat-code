@@ -284,8 +284,33 @@ export class WorkspaceJumpCoordinator {
       const current = this.snapshot(appSessionId)
       if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation) return
       if (delivery.kind === 'result' && delivery.result.status) this.observe(appSessionId, delivery.result.status)
-    }).catch(() => undefined).finally(() => { this.effectKeys.delete(key); this.effects.delete(task) })
+    }).finally(() => {
+      this.effectKeys.delete(key)
+      this.effects.delete(task)
+      if (action.action === 'status') this.retryContinuation(appSessionId)
+    }).catch(() => undefined)
     this.effects.add(task)
+  }
+  private retryContinuation(appSessionId: string): void {
+    const state = this.snapshot(appSessionId)
+    const status = this.observations.get(appSessionId)
+    const generation = this.identity(appSessionId)?.generation
+    if (!state || !status || !generation || status.operationId !== state.operationId ||
+        status.observerGeneration !== generation || status.admissionGeneration !== state.continuation.admissionGeneration ||
+        status.execution !== 'idle' || status.record.kind !== 'absent' ||
+        state.continuation.admissionGeneration !== generation || state.continuation.dispatch !== 'unknown' ||
+        state.continuation.outcome !== 'pending' || state.cancellation) return
+    const action = { action: 'continue' as const, continuationId: state.continuation.id }
+    const prefix = `${state.operationId}:${generation}:`
+    // State can arrive before the status acknowledgement frees the command slot.
+    // Neither that wait nor an already scheduled continuation spends the retry.
+    if (this.effectKeys.has(`${prefix}${JSON.stringify({ action: 'status' })}`) ||
+        this.effectKeys.has(`${prefix}${JSON.stringify(action)}`)) return
+    const attempts = this.redeliveries.get(state.operationId) ?? 0
+    if (attempts < 1) {
+      this.redeliveries.set(state.operationId, attempts + 1)
+      this.effect(appSessionId, action)
+    }
   }
   private settleWarning(appSessionId: string, outcome: 'failed' | 'cancelled' | 'uncertain'): void {
     const state = this.snapshot(appSessionId)
@@ -326,10 +351,7 @@ export class WorkspaceJumpCoordinator {
     else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
     else if (status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
     else if (['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
-    else if (status.execution === 'idle' && status.record.kind === 'absent' && next.continuation.admissionGeneration === generation && next.continuation.dispatch === 'unknown' && next.continuation.outcome === 'pending' && !next.cancellation) {
-      const attempts = this.redeliveries.get(next.operationId) ?? 0
-      if (attempts < 1) { this.redeliveries.set(next.operationId, attempts + 1); this.effect(appSessionId, { action: 'continue', continuationId: next.continuation.id }) }
-    }
+    else this.retryContinuation(appSessionId)
     return true
   }
   liveObservation(appSessionId: string): WorkspaceHandoffSnapshot | undefined { return this.observations.get(appSessionId) }
