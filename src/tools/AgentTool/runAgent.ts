@@ -83,6 +83,7 @@ import { registerFrontmatterHooks } from '../../utils/hooks/registerFrontmatterH
 import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
+import { stampSubagentFrames, toSDKMessages } from '../../utils/messages/mappers.js'
 import {
   formatBlockedHandoff,
   parseAskParentSessionEscalation,
@@ -95,6 +96,9 @@ import type { ModelAlias } from '../../utils/model/aliases.js'
 import { type EffortLevel, resolveSubagentEffort } from '../../utils/effort.js'
 import {
   clearAgentTranscriptSubdir,
+  MAX_AGENT_RUN_RECORDS,
+  previousAgentRuns,
+  readAgentMetadata,
   recordSidechainTranscript,
   setAgentTranscriptSubdir,
   writeAgentMetadata,
@@ -411,6 +415,7 @@ async function* runAgentInCleanupScope({
   transcriptSubdir,
   sessionStateTracking,
   onQueryProgress,
+  publishDisplaySteps,
 }: {
   agentDefinition: AgentDefinition
   promptMessages: Message[]
@@ -442,6 +447,13 @@ async function* runAgentInCleanupScope({
   outputFormat?: BetaJSONOutputFormat
   /** Preserve toolUseResult on messages for subagents with viewable transcripts */
   preserveToolUseResults?: boolean
+  /**
+   * Publish this run's display steps through the parent context's
+   * `publishSubagentFrame`, nested under the parent's current tool use. Only
+   * the Agent and ResumeAgent tools set it: skills, slash commands, teammates
+   * and internal services also run here and have no card to nest under.
+   */
+  publishDisplaySteps?: boolean
   /** Precomputed tool pool for the worker agent. Computed by the caller
    * (AgentTool.tsx) to avoid a circular dependency between runAgent and tools.ts.
    * Always contains the full tool pool assembled with the worker's own permission
@@ -1133,18 +1145,52 @@ async function* runAgentInCleanupScope({
   ).catch(_err =>
     logForDebugging(`Failed to record sidechain transcript: ${_err}`),
   )
-  void writeAgentMetadata(agentId, {
-    agentType: agentDefinition.agentType,
-    model: resolvedAgentModel,
-    provider: resolvedAgentProvider,
-    agentName: workerName,
-    ...(cwd && { assignedCwd: cwd }),
-    ...(worktreePath && { worktreePath }),
-    ...(description && { description }),
-    parentSessionId: getSessionId(),
-    parentToolUseId: toolUseContext.toolUseId,
-    spawnedAt: new Date().toISOString(),
-  }).catch(_err => logForDebugging(`Failed to write agent metadata: ${_err}`))
+  // A run's first own message marks where it starts in the shared sidechain
+  // chain; a resume's seeded history is excluded from `persistedInitialMessages`.
+  const runStartUuid = persistedInitialMessages.find(
+    message => message.type !== 'progress',
+  )?.uuid
+  const parentToolUseId = toolUseContext.toolUseId
+  // Owner captured at launch: a background run outlives the turn, and nothing
+  // later may re-derive which card its steps belong to.
+  const publishFrame = publishDisplaySteps ? toolUseContext.publishSubagentFrame : undefined
+  const publishSteps = (messages: Message[]) => {
+    if (!publishFrame || !parentToolUseId) return
+    for (const frame of stampSubagentFrames(toSDKMessages(messages), parentToolUseId, workerName)) {
+      // Display is an observer: a failing subscriber must not fail the run.
+      try {
+        publishFrame(frame)
+      } catch (error) {
+        logForDebugging(`Failed to publish subagent step: ${errorMessage(error)}`, { level: 'warn' })
+      }
+    }
+  }
+  publishSteps(persistedInitialMessages)
+  void readAgentMetadata(agentId)
+    .catch(() => null)
+    .then(previous => writeAgentMetadata(agentId, {
+      agentType: agentDefinition.agentType,
+      model: resolvedAgentModel,
+      provider: resolvedAgentProvider,
+      agentName: workerName,
+      ...(cwd && { assignedCwd: cwd }),
+      ...(worktreePath && { worktreePath }),
+      ...(description && { description }),
+      parentSessionId: getSessionId(),
+      parentToolUseId,
+      spawnedAt: new Date().toISOString(),
+      ...(parentToolUseId
+        ? {
+            runs: [
+              ...previousAgentRuns(previous),
+              runStartUuid
+                ? { parentToolUseId, firstMessageUuid: runStartUuid }
+                : { parentToolUseId },
+            ].slice(-MAX_AGENT_RUN_RECORDS),
+          }
+        : {}),
+    }))
+    .catch(_err => logForDebugging(`Failed to write agent metadata: ${_err}`))
 
   if (sessionStateTracking && sessionStateTracking.recordSpawn !== false) {
     void recordWorkerSessionSpawn({
@@ -1303,6 +1349,8 @@ async function* runAgentInCleanupScope({
         if (message.type !== 'progress') {
           lastRecordedUuid = message.uuid
         }
+        // After the record, so a restore can always reproduce what was shown.
+        publishSteps([message])
         yield message
 
         if (message.type === 'assistant') {

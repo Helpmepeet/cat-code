@@ -504,7 +504,8 @@ This also narrows Q2: transcript-owned worker prose may appear in this read-only
 panel as it already does inside Agent cards. Worker-snapshot result/verdict
 drilldown remains in TasksDialog; no snapshot is passed off as transcript prose.
 
-Source inspection confirms that async launches return before the foreground
+Superseded by §12 for live steps: the paragraph below records the state when
+§11 shipped. Source inspection confirms that async launches return before the foreground
 `onProgress` loop (`src/tools/AgentTool/AgentTool.tsx`), and backgrounded/resumed
 runs do not forward live steps. Those live dock rows, including waiting async
 workers without steps, retain their existing Agent-card reveal or Workers-dialog
@@ -526,3 +527,40 @@ Headless panel interaction and SessionPane integration checks live in
 `app/renderer/src/SubagentSidePanel.dom.test.ts`. Native visual acceptance,
 real wheel/layout behavior, light/dark/narrow appearance and keyboard operation
 remain operator checks until an authorized Cat Code Dev run.
+
+## 12. Every subagent run publishes its steps (2026-10-17)
+
+The operator asked for live steps that behave the same for foreground,
+background and resumed runs, and approved a narrow engine change for it. This
+amends §11's "no engine change" limit and its fallback for live background and
+resumed rows. Plan and review: `docs/plans/2026-10-17-subagent-live-steps.md`.
+
+What §11 left true was worse than recorded: foreground runs forwarded only tool
+calls and results through `onProgress`, so live reasoning and prose appeared
+only after a restore, and background runs forwarded nothing.
+
+- `runAgent` publishes each step the moment it records it, through the parent
+  context's `publishSubagentFrame`, when the Agent or ResumeAgent tool opts in
+  (`publishDisplaySteps`). The owner is the launching tool use, captured at run
+  start. Other `runAgent` callers do not publish. The desktop wires the callback
+  to `AppSessionController.emitMessage`; the terminal leaves it unset.
+- One frame form: `stampSubagentFrames` over `toSDKMessages`, shared with
+  restore, so a stored message has one identity live and restored. No wire kind
+  or field is added.
+- Each run records where it starts (`AgentMetadata.runs`), so a restore puts
+  the original run and each resume under their own cards. Files written earlier
+  keep every step under their one recorded card.
+- Out-of-turn frames are not parent-turn activity: the sidecar stall clock and
+  the goal scheduler count a nested frame only while its tool use is pending in
+  the running turn (`turnFrameOwnership.ts`), and workspace branch observation
+  ignores nested frames. A worker's provider error or interruption nests under
+  its run.
+- A live background, resumed or waiting row opens the panel before its first
+  step. A finished launch recorded before this change keeps the fallback. An
+  open panel follows its run into the background; a resume without a run-owned
+  tool use still returns to the fallback.
+
+Publication failures are logged and never change the worker's result. Delivery
+remains bounded per frame only, as for every other frame; restore from disk is
+the recovery path. Token-by-token subagent reasoning and a distinct
+permission-waiting dock state remain out of scope.

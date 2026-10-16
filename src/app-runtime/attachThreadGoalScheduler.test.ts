@@ -23,6 +23,8 @@ type ScriptedTurn = {
   cumulativeOutput?: number
   assistantError?: { status?: number; error?: string }
   isError?: boolean
+  /** Changing tool calls from a worker an earlier turn launched. */
+  backgroundToolUses?: number
 }
 
 /**
@@ -76,6 +78,25 @@ function createFakeController(script: () => ScriptedTurn) {
               },
             ],
           },
+        } as never,
+      })
+    }
+    for (let i = 0; i < (turn.backgroundToolUses ?? 0); i++) {
+      const id = `bg-${submitted.length}-${i}`
+      emit({
+        type: 'message',
+        message: {
+          type: 'assistant',
+          parent_tool_use_id: 'tu-earlier-turn',
+          message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: id } }] },
+        } as never,
+      })
+      emit({
+        type: 'message',
+        message: {
+          type: 'user',
+          parent_tool_use_id: 'tu-earlier-turn',
+          message: { content: [{ type: 'tool_result', tool_use_id: id, content: `output ${id}` }] },
         } as never,
       })
     }
@@ -308,6 +329,19 @@ describe('the app runtime drives the same loop', () => {
     expect(h.submitted.length).toBeLessThanOrEqual(
       DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS + 1,
     )
+  })
+
+  test('an earlier worker\'s tool calls are not progress for an idle automatic turn', async () => {
+    const h = harness(activeGoal(), () => ({ toolUses: 0, backgroundToolUses: 2 }))
+
+    await h.runClientTurn('kick off')
+    for (let i = 0; i < 30; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      if (h.getGoal()?.status !== 'active') break
+    }
+
+    expect(h.getGoal()!.status).toBe('stalled')
+    expect(h.getGoal()!.statusReason).toBe('no_progress')
   })
 
   test('a tool-using loop that repeats itself is stopped, not run forever', async () => {

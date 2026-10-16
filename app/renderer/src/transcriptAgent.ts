@@ -139,10 +139,10 @@ export function agentProgressBadge(
 ): string | null {
   const activity = agentActivityOf(row)
   if (state === 'running') return activity ?? 'starting'
-  // A BACKGROUNDED agent yields no nested progress to this card: the async
-  // branch returns its launch ack (`AgentTool.tsx:1279`) before the branch that
-  // calls `onProgress` (`:1320`). So it has no activity to report, and
-  // `starting` would sit there for the worker's entire life.
+  // A BACKGROUNDED agent's card says so instead of naming an activity. Its
+  // steps now nest under the card (`runAgent` publishes them out of turn), but
+  // the launch ack settles the tool use at once, so this word is the card's only
+  // statement that the worker left the turn.
   //
   // It says so itself now. The redesign took the lifecycle word off the card
   // (2026-08-19), so with the slot empty and the face turned away this card

@@ -301,6 +301,7 @@ async function resumeAgentBackgroundLocked(
 
   const runAgentParams: Parameters<typeof runAgent>[0] = {
     agentDefinition: selectedAgent,
+    publishDisplaySteps: true,
     promptMessages: [
       ...resumedMessages,
       createUserMessage({ content: prompt }),

@@ -427,6 +427,8 @@ export type InjectedTurnRow = RowSource & {
 
 export type SystemNoticeRow = FrameRowSource & {
   kind: 'system-notice'
+  /** Set when a subagent's own provider error nests under its run's card. */
+  parentToolUseId?: string | null
   noticeType:
     | 'api_retry'
     | 'local_command_output'
@@ -438,6 +440,8 @@ export type SystemNoticeRow = FrameRowSource & {
 /** Durable user-interruption provenance, rendered without its hidden body. */
 export type TurnStoppedRow = FrameRowSource & {
   kind: 'turn-stopped'
+  /** Set when a subagent was interrupted; the parent turn was not. */
+  parentToolUseId?: string | null
 }
 
 export type ResultRow = FrameRowSource & {
@@ -1188,9 +1192,10 @@ function collectReferencedParentIds(
  *
  *  - `toolFamily === 'agent'`, not ResumeAgent, not a background launch — the
  *    same three clauses `isAgentToolUseRow` uses. A background launch's
- *    `tool_result` is only an ack that the worker started and its steps never
- *    join this transcript at all, so it is childless BY DESIGN and would be the
- *    first false positive.
+ *    `tool_result` is only an ack that the worker started: its success says
+ *    nothing about whether the run's steps arrived, so it would be the first
+ *    false positive. A restore that could not load them reports it through
+ *    `history.availability` instead.
  *  - `status === 'success'` — the agent ran and ANSWERED. A refused, denied or
  *    interrupted agent resolves to an error result with nothing under it, which
  *    is the second false positive; a still-running one is `pending`.
@@ -2031,6 +2036,7 @@ function projectAssistantFrame(
       'provider_error',
       text,
       recoveryInsertAt,
+      nonEmptyString(message.parent_tool_use_id),
     ) || changed
   }
   const messageId = nonEmptyString(body.id) ?? frameId
@@ -2275,6 +2281,7 @@ function projectUserFrame(
       sessionId: draft.sessionId,
       frameId,
       kind: 'turn-stopped',
+      ...(parentToolUseId ? { parentToolUseId } : {}),
     }], recoveryInsertAt) || changed
   }
   const rows = blocks.flatMap((block, blockIndex) => {
@@ -2486,6 +2493,7 @@ function appendSystemNotice(
   noticeType: SystemNoticeRow['noticeType'],
   content: string,
   recoveryInsertAt: number | null,
+  parentToolUseId?: string | null,
 ): boolean {
   return appendFrameRows(draft, frameId, [{
     id: frameRowId(draft.sessionId, frameId, noticeType),
@@ -2494,6 +2502,7 @@ function appendSystemNotice(
     kind: 'system-notice',
     noticeType,
     content,
+    ...(parentToolUseId ? { parentToolUseId } : {}),
   }], recoveryInsertAt)
 }
 

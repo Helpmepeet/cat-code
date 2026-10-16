@@ -1474,8 +1474,9 @@ TasksDialog-only limit as recorded in `decisions/ORCHESTRATOR-IN-SESSION.md`
 §11. `SubagentWorkspace.tsx` and `SubagentSidePanel.tsx` provide a 480px inline,
 read-only view of existing nested transcript steps, with current reasoning
 layout, face switching, dock hiding, and follow-until-scrolled-back behavior.
-Active background/resumed workers retain the old fallback because no live steps
-are forwarded. Missing/partial history is marked. This supersedes the blanket
+Active background/resumed workers retained the old fallback because no live
+steps were forwarded; the 2026-10-17 amendment (§12 of the same decision) makes
+every run publish its steps and opens those rows too. Missing/partial history is marked. This supersedes the blanket
 focus waiver and TasksDialog-only result language in historical rows below,
 including the §7 cross-reference; worker messaging and main-column replacement
 remain cut. Headless interaction checks do not establish native visual acceptance.
