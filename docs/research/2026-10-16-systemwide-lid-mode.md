@@ -1,8 +1,8 @@
 # Manual whole-Mac lid mode
 
 Updated 2026-10-16. **Real packaged setup, XPC authentication, Start/Stop, app freeze/exit
-restoration and cleanup have now been observed on this Mac. The affected
-physical lid-close/reopen check remains unverified.** All live leases used the
+restoration, cleanup and physical lid close/reopen timer continuity have now
+been observed on this Mac.** All live leases used the
 restrictive single-use 60-second trial, never an unrestricted production lease.
 
 ## User-approved behavior
@@ -145,18 +145,58 @@ Native power observations and human-confirmed physical behavior remain separate.
 Repeated test repairs are needed because the restrictive guardian removes each
 trial installation; production activation after setup does not do that.
 
-## Remaining physical qualification
+## Physical lid close/reopen qualification
 
-Only the new lid-close/reopen timer continuity needs fresh user participation.
-The current source/controller tests keep the original deadline through both
-transitions, but this changed policy has not yet been observed physically.
-Earlier battery/Sleep/mechanism evidence is retained; do not redo all of it.
-No lid, power or Sleep action was requested or inferred during the live tests
-above. Remove authority and confirm normal sleep before asking for readiness.
+Source/controller tests keep the original deadline through both transitions;
+the attempts below observe that policy on hardware. Earlier battery/Sleep/
+mechanism evidence is retained and was not redone. No lid, power or Sleep action
+was requested or inferred during the live tests above. Authority was removed and
+normal sleep confirmed before each request for readiness.
+
+### Physical coordination attempt
+
+After the user confirmed readiness, a fresh empty-state packaged trial was
+prepared and the close/reopen cue was sent after native activation. Throughout
+that 60-second window, IOPMrootDomain and authenticated native snapshots reported
+the lid open; no closed/reopened transition was recorded. The window ended with
+`SleepDisabled=No`, helper/jobs removed and guardian PID 35548 gone. Isolated
+app PID 34996 then exited in 164 ms after SIGTERM. This attempt is not counted
+as physical qualification. The user then confirmed missing the cue and asked
+to stop, so the lid was not closed: the attempt proves neither success nor
+failure of closed-lid behavior. Previous readiness lapsed with it.
+Detailed temporary evidence is `live-physical.jsonl` in the scratch directory.
+
+### Qualified physical run
+
+After restored state was reconfirmed and the user confirmed readiness again, a
+fresh isolated packaged app (PID 40500) and an observer with audible cues ran.
+The first observer timed out before the user acted and recorded nothing beyond
+normal sleep. The app opened on `unresolved` with Repair and retry: its
+isolated state still held the previous attempt's pending marker while the kernel
+already reported `SleepDisabled=No`. The user ran Repair and retry, then started
+a 15-minute preset from the native menu; this is the startup-recovery path
+qualified earlier, not a new finding.
+
+| Hardware observation | Result |
+|---|---|
+| Activation | Kernel `SleepDisabled` No → Yes; native record active with deadline = start + 60 s (restrictive trial). |
+| Lid closed | `AppleClamshellState=Yes` 6.1 s after activation. 53 authenticated native snapshots over 16.2 s all reported lid closed, phase `active`, `sleepDisabled` true and the unchanged original identity, start and deadline. The Mac stayed awake for the observer and helper throughout. |
+| Lid reopened | `AppleClamshellState=No` 22.6 s after activation. Record still active with the original identity/start/deadline (`originalPreserved` true) and `sawClosed` true: reopening neither ended nor renewed the timer. |
+| Stop and restore | Observer Stop 3.1 s after reopen returned `ended`/`stopped`; kernel returned No, helper and launchd jobs were removed and guardian PID 46941 was gone. Isolated app exited about 0.3 s after SIGTERM. |
+
+Power was AC with battery at 100%; closed-lid behavior on battery is covered by
+the earlier physical record, not re-observed here. Hardware state came from
+IOPMrootDomain and native snapshots; the agent did not observe the lid directly.
+Detailed temporary evidence: `live-physical-3.jsonl` (qualified run) and
+`live-physical-2-idle.jsonl` (timed-out observer) in the scratch directory.
 
 ## Cleanup
 
-After final expiry: `SleepDisabled=No`, clamshell open, helper absent, both launchd jobs absent and guardian PID 32178 absent. The Start/Stop, freeze, crash and expiry trials all restored sleep and removed their authority. Some unused restrictive setups expired after their 30-second admission window and also removed themselves.
+After the qualified physical run: `SleepDisabled=No`, clamshell open, helper,
+launchd daemons and system jobs absent, guardian PID 46941 absent, isolated app
+and observers exited.
+
+Earlier, after final expiry: `SleepDisabled=No`, clamshell open, helper absent, both launchd jobs absent and guardian PID 32178 absent. The Start/Stop, freeze, crash and expiry trials all restored sleep and removed their authority. Some unused restrictive setups expired after their 30-second admission window and also removed themselves.
 The ordinary installed app and real accounts remain untouched. Retained root
 journal/configuration evidence cannot activate without helper/jobs. Guardian
 PID absence proves departure; the shell was not their parent, so process exit
