@@ -50,6 +50,59 @@ test('a failed switch leaves the picker open with a reason', async () => {
   expect(tree.container.textContent).toContain('Commit or stash local changes')
 })
 
+test('a refused switch keeps the real current branch on the trigger', async () => {
+  const tree = await harness.mount(
+    <WelcomeScreen
+      variant="session"
+      cwd="/work/cat-code"
+      branch="main"
+      accounts={null}
+      onListBranches={async () => ({ ok: true, value: { current: 'main', branches: ['feature/login', 'main'], dirty: false } })}
+      onSwitchBranch={async () => 'Remove your draft and attachments before switching branches.'}
+    />,
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>('[aria-label^="Choose Git branch"]')!
+  await act(async () => trigger.click())
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('[role="menuitemradio"]')?.click())
+  expect(tree.container.querySelector('[role="menu"]')?.textContent).toContain('Remove your draft and attachments before switching branches.')
+  expect(trigger.textContent).toContain('main')
+  expect(trigger.textContent).not.toContain('Unavailable')
+  expect(trigger.getAttribute('aria-label')).toBe('Choose Git branch. Current branch: main')
+  expect(tree.container.querySelector('[aria-checked="true"]')?.textContent).toContain('main')
+})
+
+test('a branch list that fails to load shows Unavailable on the trigger and the reason in the menu', async () => {
+  const rejected = await harness.mount(
+    <WelcomeScreen
+      variant="session"
+      cwd="/work/cat-code"
+      branch="main"
+      accounts={null}
+      onListBranches={async () => { throw new Error('boom') }}
+      onSwitchBranch={async () => null}
+    />,
+  )
+  const rejectedTrigger = rejected.container.querySelector<HTMLButtonElement>('[aria-label^="Choose Git branch"]')!
+  await act(async () => rejectedTrigger.click())
+  expect(rejectedTrigger.textContent).toContain('Unavailable')
+  expect(rejected.container.querySelector('[role="menu"]')?.textContent).toContain('Could not read branches for this project.')
+
+  const refused = await harness.mount(
+    <WelcomeScreen
+      variant="session"
+      cwd="/work/cat-code"
+      branch="main"
+      accounts={null}
+      onListBranches={async () => ({ ok: false, error: { code: 'invalid_cwd', message: 'Not a Git repository.' } })}
+      onSwitchBranch={async () => null}
+    />,
+  )
+  const refusedTrigger = refused.container.querySelector<HTMLButtonElement>('[aria-label^="Choose Git branch"]')!
+  await act(async () => refusedTrigger.click())
+  expect(refusedTrigger.textContent).toContain('Unavailable')
+  expect(refused.container.querySelector('[role="menu"]')?.textContent).toContain('Not a Git repository.')
+})
+
 test('opening the picker refreshes an externally changed branch before selection', async () => {
   let current = 'main'
   const chosen: string[] = []

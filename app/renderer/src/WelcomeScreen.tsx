@@ -268,6 +268,7 @@ function BranchPicker({
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   const [branches, setBranches] = useState<WorkspaceBranches | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [switchError, setSwitchError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState(false)
   const [menuPosition, setMenuPosition] = useState<{
@@ -285,6 +286,7 @@ function BranchPicker({
       setLoading(true)
       setBranches(null)
       setError(null)
+      setSwitchError(null)
       void onList().then(result => {
         if (!active || ownRequest !== request) return
         if (result.ok) setBranches(result.value)
@@ -330,7 +332,7 @@ function BranchPicker({
       window.removeEventListener('resize', place)
       document.removeEventListener('scroll', place, true)
     }
-  }, [open, branches, error, loading, ref, triggerRef])
+  }, [open, branches, error, switchError, loading, ref, triggerRef])
 
   const current = loading ? 'Checking…' : error ? 'Unavailable' : branches ? branches.current ?? 'Detached HEAD' : branch ?? 'none'
   const sessionBranchStale = branches !== null && branch !== null && branches.current !== branch
@@ -357,7 +359,7 @@ function BranchPicker({
           className="fixed z-[71] overflow-y-auto rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
           style={menuPosition ? menuPosition : { visibility: 'hidden' }}
         >
-          {error ? <p className="px-2.5 py-2 text-[12px] text-tone-danger">{error}</p> : null}
+          {error ?? switchError ? <p className="px-2.5 py-2 text-[12px] text-tone-danger">{error ?? switchError}</p> : null}
           {loading ? <p className="px-2.5 py-2 text-[12px] text-text-subtle">Loading branches…</p> : null}
           {branches?.branches.map(name => (
             <button
@@ -372,11 +374,11 @@ function BranchPicker({
                   return
                 }
                 setPending(true)
-                setError(null)
+                setSwitchError(null)
                 void onSwitch(name).then(message => {
-                  if (message) setError(message)
+                  if (message) setSwitchError(message)
                   else close()
-                }).catch(() => setError('Could not switch branches.')).finally(() => setPending(false))
+                }).catch(() => setSwitchError('Could not switch branches.')).finally(() => setPending(false))
               }}
               className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[12px] text-text-primary hover:bg-white/[0.045] disabled:opacity-50"
             >
