@@ -692,6 +692,22 @@ describe('SendMessageTool deterministic routing and truthful delivery', () => {
     expect(idle.data).toMatchObject({ success: true })
   })
 
+  test('refuses urgent teammate and broadcast sends without writing a mailbox', async () => {
+    const harness = createTeamHarness({ members: [makeMember('alice')] })
+    const append = spyOn(teammateMailbox, 'writeToMailbox')
+    try {
+      for (const to of ['alice', '*']) {
+        const result = await SendMessageTool.call(
+          { to, message: 'stop and report', urgent: true },
+          harness.context, undefined as never, undefined as never,
+        )
+        expect(result.data.success).toBe(false)
+      }
+      expect(append).not.toHaveBeenCalled()
+      expect(existsSync(getInboxPath('alice', 'review-team'))).toBe(false)
+    } finally { append.mockRestore() }
+  })
+
   test('reports partial broadcast delivery truthfully', async () => {
     const broadcastHarness = createTeamHarness({
       members: [makeMember('alice'), makeMember('bob'), makeMember('carol')],

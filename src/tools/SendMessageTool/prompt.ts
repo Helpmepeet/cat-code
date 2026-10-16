@@ -3,6 +3,7 @@ import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 
 export const DESCRIPTION = 'Send a message to another agent'
+const URGENT_GUIDANCE = "Set urgent: true only when the message makes the worker's current work wrong or wasted: a correction, a change of direction, or an instruction to stop and report. It cuts the worker's current model response so the message is read within seconds; the unfinished part of that response is lost. It does not stop a running tool; use TaskStop to stop the worker entirely. Leave it off for additions and questions. Sending only queues the message: until TaskOutput shows it as seen, do not tell the user the worker has acted on it."
 
 export function getPrompt(): string {
   if (!isAgentSwarmsEnabled()) {
@@ -15,7 +16,9 @@ This tool targets recipients that are currently running. An explicit \`@name\` (
 {"to": "implement-auth", "summary": "fix failing test", "message": "The auth test is failing on the expired-token branch. Please inspect the failure and patch only your assigned files."}
 \`\`\`
 
-Use this to queue a follow-up to a relevant running worker instead of spawning a duplicate. A queued message is delivered in the worker's next model round; it does not interrupt the worker's current work.
+Use this to queue a follow-up to a relevant running worker instead of spawning a duplicate. A normal queued message is delivered in the worker's next model round; it does not interrupt the worker's current work.
+
+${URGENT_GUIDANCE}
 
 Available without Agent Teams:
 
@@ -45,7 +48,9 @@ Send a message to another running agent.
 | \`"@researcher"\` | \`@name\` always explicitly targets a local subagent, never a teammate — use this when a local worker and a teammate happen to share a name. A stopped local worker is not addressable this way; use ${RESUME_AGENT_TOOL_NAME} to restart it first. |
 | \`"*"\` | Broadcast to all teammates — expensive (linear in team size), use only when everyone genuinely needs it |
 
-Your plain text output is NOT visible to other agents. To communicate, you MUST call this tool. A message is delivered in the recipient's next model round; it does not interrupt their current work. Messages from teammates are delivered automatically; you don't check an inbox. Refer to teammates by name, never by UUID. When relaying, don't quote the original; it's already rendered to the user.
+Your plain text output is NOT visible to other agents. To communicate, you MUST call this tool. A normal message is delivered in the recipient's next model round; it does not interrupt their current work. Messages from teammates are delivered automatically; you don't check an inbox. Refer to teammates by name, never by UUID. When relaying, don't quote the original; it's already rendered to the user.
+
+${URGENT_GUIDANCE}
 
 ## Protocol responses
 

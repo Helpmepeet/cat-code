@@ -564,6 +564,7 @@ export type Attachment =
       imagePasteIds?: number[]
       /** Original queue mode — 'prompt' for user messages, 'task-notification' for system events */
       commandMode?: string
+      urgent?: boolean
       /** Provenance carried from QueuedCommand so mid-turn drains preserve it */
       origin?: MessageOrigin
       /** Carried from QueuedCommand.isMeta — distinguishes human-typed from system-injected */
@@ -1149,6 +1150,7 @@ export function createAgentPendingMessageAttachment(
     prompt: message.message,
     source_uuid: message.id as UUID,
     commandMode: 'local-agent-message',
+    ...(message.urgent ? { urgent: true } : {}),
     origin,
     isMeta: true,
   }

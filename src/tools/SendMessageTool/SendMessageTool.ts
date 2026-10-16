@@ -110,6 +110,9 @@ const inputSchema = lazySchema(() =>
           StructuredMessage(),
         ])
       : z.string().describe('Plain text message content'),
+    urgent: z.boolean().default(false).optional().describe(
+      'Cut a local worker model response to deliver a correction or stop-and-report instruction. Main session only; does not stop tools.',
+    ),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
@@ -301,6 +304,7 @@ async function routeToLocalWorker(
   displayInput: string,
   message: string,
   context: ToolUseContext,
+  urgent = false,
 ): Promise<{ data: MessageOutput } | null> {
   const appState = context.getAppState()
   const resolved = await resolveAgentTarget({
@@ -323,12 +327,13 @@ async function routeToLocalWorker(
       message,
       context.setAppStateForTasks ?? context.setAppState,
       context.agentId,
+      urgent,
     )
     if (queued) {
       return {
         data: {
           success: true,
-          message: `Message queued for delivery to ${displayInput} in this worker execution.`,
+          message: `${urgent ? 'Urgent message' : 'Message'} queued for delivery to ${displayInput} in this worker execution.`,
         },
       }
     }
@@ -1199,6 +1204,15 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     },
 
     async call(input, context, _canUseTool, _assistantMessage) {
+      // External builds remove Agent/ResumeAgent/TaskStop from every agent via
+      // ALL_AGENT_DISALLOWED_TOOLS. All local workers therefore belong to the
+      // main thread; nested-agent support must revisit this authority boundary.
+      if (input.urgent && context.agentId !== undefined) {
+        return { data: { success: false, message: 'Only the main session can send an urgent message to a local worker.' } }
+      }
+      if (input.urgent && (typeof input.message !== 'string' || input.to === '*' || parseAddress(input.to).scheme !== 'other')) {
+        return { data: { success: false, message: 'Urgent messages can only target a running local worker.' } }
+      }
       if (feature('UDS_INBOX') && typeof input.message === 'string') {
         const addr = parseAddress(input.to)
         if (addr.scheme === 'bridge') {
@@ -1286,6 +1300,9 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               }
             }
             if (roster.kind === 'member') {
+              if (input.urgent) {
+                return { data: { success: false, message: 'Urgent messages cannot target teammates. Use an explicit @name for a local worker.' } }
+              }
               const teammateMessage = toTeammateMessageContract({
                 from: getAgentName() || (isTeammate() ? 'teammate' : TEAM_LEAD_NAME),
                 text: input.message,
@@ -1302,10 +1319,14 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           input.to,
           input.message,
           context,
+          input.urgent,
         )
         if (localResult) return localResult
       }
 
+      if (input.urgent) {
+        return { data: { success: false, message: 'Urgent messages can only target a running local worker.' } }
+      }
       if (!isAgentSwarmsEnabled()) {
         return {
           data: {
