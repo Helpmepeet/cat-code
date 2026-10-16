@@ -131,6 +131,12 @@ export function StartupShell({
     containerRef: shellRef,
     onEscape: onEscape ?? (() => {}),
     escapeEnabled: onEscape !== undefined,
+    // The machine-wide recovery action stays reachable without opening the
+    // modal's keyboard loop to the rest of the app.
+    getAdditionalFocusElements: () => Array.from(
+      shellRef.current?.closest('.lid-content')
+        ?.querySelectorAll<HTMLButtonElement>(':scope > .lid-notice button:not([disabled])') ?? [],
+    ),
   })
   return (
     <div

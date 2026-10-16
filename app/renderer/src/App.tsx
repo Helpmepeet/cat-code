@@ -4638,7 +4638,9 @@ export function App() {
         />
 
         <div className="lid-content relative flex min-w-0 flex-1 flex-col">
-          {!(showTrustGate || showFirstRunOAuthSurface || showAddAccountOAuthSurface || adoptOrphanOAuth) ? <LidClosedNotice /> : null}
+          <LidClosedNotice />
+          {/* Startup overlays must not cover machine-wide recovery actions. */}
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
            * inline rename editor. The menu resolves and acts against the row it was
            * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
@@ -5138,6 +5140,7 @@ export function App() {
               />
             </div>
           )}
+          </div>
         </div>
         </div>
 
