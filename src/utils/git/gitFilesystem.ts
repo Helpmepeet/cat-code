@@ -80,39 +80,27 @@ export async function resolveGitDir(
 // ---------------------------------------------------------------------------
 
 /**
- * Validate that a ref/branch name read from .git/ is safe to use in path
- * joins, as git positional arguments, and when interpolated into shell
- * commands (commit-push-pr skill interpolates the branch into shell).
- * An attacker who controls .git/HEAD or a loose ref file could otherwise
- * embed path traversal (`..`), argument injection (leading `-`), or shell
- * metacharacters — .git/HEAD is a plain text file that can be written
- * without git's own check-ref-format validation.
- *
- * Allowlist: ASCII alphanumerics, `/`, `.`, `_`, `+`, `-`, `@` only. This
- * covers all legitimate git branch names (e.g. `feature/foo`,
- * `release-1.2.3+build`, `dependabot/npm_and_yarn/@types/node-18.0.0`)
- * while rejecting everything that could be dangerous in shell context
- * (newlines, backticks, `$`, `;`, `|`, `&`, `(`, `)`, `<`, `>`, spaces,
- * tabs, quotes, backslash) and path traversal (`..`).
+ * Git ref-format rules, allowing a one-component branch name.
+ * This protects ref path joins, not shell interpolation: Git permits shell
+ * metacharacters, so command consumers must quote names or use argv arrays.
  */
 export function isSafeRefName(name: string): boolean {
   if (!name || name.startsWith('-') || name.startsWith('/')) {
     return false
   }
-  if (name.includes('..')) {
+  if (name.includes('..') || name.includes('@{') || name.endsWith('.')) {
     return false
   }
   // Reject single-dot and empty path components (`.`, `foo/./bar`, `foo//bar`,
   // `foo/`). Git-check-ref-format rejects these, and `.` normalizes away in
   // path joins so a tampered HEAD of `refs/heads/.` would make us watch the
   // refs/heads directory itself instead of a branch file.
-  if (name.split('/').some(c => c === '.' || c === '')) {
+  if (
+    name.split('/').some(c => c.startsWith('.') || c === '' || c.endsWith('.lock'))
+  ) {
     return false
   }
-  // Allowlist-only: alphanumerics, /, ., _, +, -, @. Rejects all shell
-  // metacharacters, whitespace, NUL, and non-ASCII. Git's forbidden @{
-  // sequence is blocked because { is not in the allowlist.
-  if (!/^[a-zA-Z0-9/._+@-]+$/.test(name)) {
+  if (/[\x00-\x20\x7f~^:?*\[\\]/.test(name)) {
     return false
   }
   return true
@@ -142,7 +130,7 @@ export function isValidGitSha(s: string): boolean {
  *   - `ref: <other-ref>\n`          — unusual symref (e.g. during bisect)
  *   - `<hex-sha>\n`                 — detached HEAD (e.g. during rebase)
  *
- * Git strips trailing whitespace via strbuf_rtrim; .trim() is equivalent.
+ * Git strips ASCII trailing whitespace via strbuf_rtrim.
  * Git allows any whitespace between "ref:" and the path; we handle
  * this by trimming after slicing past "ref:".
  */
@@ -152,9 +140,11 @@ export async function readGitHead(
   { type: 'branch'; name: string } | { type: 'detached'; sha: string } | null
 > {
   try {
-    const content = (await readFile(join(gitDir, 'HEAD'), 'utf-8')).trim()
+    const content = (await readFile(join(gitDir, 'HEAD'), 'utf-8')).replace(
+      /[ \t\r\n\v\f]+$/, '',
+    )
     if (content.startsWith('ref:')) {
-      const ref = content.slice('ref:'.length).trim()
+      const ref = content.slice('ref:'.length).replace(/^[ \t\r\n\v\f]+/, '')
       if (ref.startsWith('refs/heads/')) {
         const name = ref.slice('refs/heads/'.length)
         // Reject path traversal and argument injection from a tampered HEAD.
@@ -204,6 +194,9 @@ export async function resolveRef(
   gitDir: string,
   ref: string,
 ): Promise<string | null> {
+  if (!isSafeRefName(ref)) {
+    return null
+  }
   const result = await resolveRefInDir(gitDir, ref)
   if (result) {
     return result
@@ -224,9 +217,11 @@ async function resolveRefInDir(
 ): Promise<string | null> {
   // Try loose ref file
   try {
-    const content = (await readFile(join(dir, ref), 'utf-8')).trim()
+    const content = (await readFile(join(dir, ref), 'utf-8')).replace(
+      /[ \t\r\n\v\f]+$/, '',
+    )
     if (content.startsWith('ref:')) {
-      const target = content.slice('ref:'.length).trim()
+      const target = content.slice('ref:'.length).replace(/^[ \t\r\n\v\f]+/, '')
       // Reject path traversal in a tampered symref chain.
       if (!isSafeRefName(target)) {
         return null
@@ -290,9 +285,11 @@ export async function readRawSymref(
   branchPrefix: string,
 ): Promise<string | null> {
   try {
-    const content = (await readFile(join(gitDir, refPath), 'utf-8')).trim()
+    const content = (await readFile(join(gitDir, refPath), 'utf-8')).replace(
+      /[ \t\r\n\v\f]+$/, '',
+    )
     if (content.startsWith('ref:')) {
-      const target = content.slice('ref:'.length).trim()
+      const target = content.slice('ref:'.length).replace(/^[ \t\r\n\v\f]+/, '')
       if (target.startsWith(branchPrefix)) {
         const name = target.slice(branchPrefix.length)
         // Reject path traversal and argument injection from a tampered symref.
@@ -331,7 +328,7 @@ type CacheEntry<T> = {
 const WATCH_INTERVAL_MS = process.env.NODE_ENV === 'test' ? 10 : 1000
 
 class GitFileWatcher {
-  private gitDir: string | null = null
+  constructor(private gitDir: string | null) {}
   private commonDir: string | null = null
   private initialized = false
   private initPromise: Promise<void> | null = null
@@ -351,7 +348,6 @@ class GitFileWatcher {
   }
 
   private async start(): Promise<void> {
-    this.gitDir = await resolveGitDir()
     this.initialized = true
     if (!this.gitDir) {
       return
@@ -495,10 +491,23 @@ class GitFileWatcher {
   }
 }
 
-const gitWatcher = new GitFileWatcher()
+// Each checkout owns its cache, including callers with async-local cwd overrides.
+const gitWatchers = new Map<string | null, GitFileWatcher>()
 
-async function computeBranch(): Promise<string> {
+async function getCachedGitValue<T>(
+  key: string,
+  compute: (gitDir: string | null) => Promise<T>,
+): Promise<T> {
   const gitDir = await resolveGitDir()
+  let watcher = gitWatchers.get(gitDir)
+  if (!watcher) {
+    watcher = new GitFileWatcher(gitDir)
+    gitWatchers.set(gitDir, watcher)
+  }
+  return watcher.get(key, () => compute(gitDir))
+}
+
+async function computeBranch(gitDir: string | null): Promise<string> {
   if (!gitDir) {
     return 'HEAD'
   }
@@ -509,8 +518,7 @@ async function computeBranch(): Promise<string> {
   return head.type === 'branch' ? head.name : 'HEAD'
 }
 
-async function computeHead(): Promise<string> {
-  const gitDir = await resolveGitDir()
+async function computeHead(gitDir: string | null): Promise<string> {
   if (!gitDir) {
     return ''
   }
@@ -524,8 +532,7 @@ async function computeHead(): Promise<string> {
   return head.sha
 }
 
-async function computeRemoteUrl(): Promise<string | null> {
-  const gitDir = await resolveGitDir()
+async function computeRemoteUrl(gitDir: string | null): Promise<string | null> {
   if (!gitDir) {
     return null
   }
@@ -541,8 +548,7 @@ async function computeRemoteUrl(): Promise<string | null> {
   return null
 }
 
-async function computeDefaultBranch(): Promise<string> {
-  const gitDir = await resolveGitDir()
+async function computeDefaultBranch(gitDir: string | null): Promise<string> {
   if (!gitDir) {
     return 'main'
   }
@@ -566,24 +572,27 @@ async function computeDefaultBranch(): Promise<string> {
 }
 
 export function getCachedBranch(): Promise<string> {
-  return gitWatcher.get('branch', computeBranch)
+  return getCachedGitValue('branch', computeBranch)
 }
 
 export function getCachedHead(): Promise<string> {
-  return gitWatcher.get('head', computeHead)
+  return getCachedGitValue('head', computeHead)
 }
 
 export function getCachedRemoteUrl(): Promise<string | null> {
-  return gitWatcher.get('remoteUrl', computeRemoteUrl)
+  return getCachedGitValue('remoteUrl', computeRemoteUrl)
 }
 
 export function getCachedDefaultBranch(): Promise<string> {
-  return gitWatcher.get('defaultBranch', computeDefaultBranch)
+  return getCachedGitValue('defaultBranch', computeDefaultBranch)
 }
 
 /** Reset the git file watcher state. For testing only. */
 export function resetGitFileWatcher(): void {
-  gitWatcher.reset()
+  for (const watcher of gitWatchers.values()) {
+    watcher.reset()
+  }
+  gitWatchers.clear()
 }
 
 /**
