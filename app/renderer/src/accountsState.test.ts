@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { describe, expect, test } from 'bun:test'
 import type {
   AccountResultFrame,
@@ -17,13 +18,10 @@ import {
   selectFirstAccountsSnapshot,
   selectGlobalAccountsSnapshot,
   selectHasOtherSwitchable,
-  selectOAuthProgress,
   selectReadyLabel,
   selectTakenAliases,
-  selectUsageStatsForRange,
   selectWelcomeAccountsSnapshot,
 } from './accountsState.js'
-import type { OAuthLoginProgressFrame } from '../../shared/protocol.js'
 
 function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
@@ -85,7 +83,7 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
 }
 
 function snapFrame(sessionId: string, accounts: AccountsSnapshot): AccountsSnapshotFrame {
-  return { kind: 'accounts.snapshot', protocolVersion: 3, sessionId, accounts }
+  return { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, accounts }
 }
 
 function signOutResult(
@@ -93,7 +91,7 @@ function signOutResult(
 ): AccountResultFrame {
   return {
     kind: 'account.result',
-    protocolVersion: 3,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 's1',
     requestId: receipt.operationId,
     verb: 'account.logout',
@@ -133,7 +131,7 @@ describe('accountsState reducer', () => {
     let state = createAccountsState()
     const result: AccountResultFrame = {
       kind: 'account.result',
-      protocolVersion: 3,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
       requestId: 'r1',
       verb: 'account.switch',
@@ -157,75 +155,12 @@ describe('accountsState reducer', () => {
     state = reduceAccountsState(state, { type: 'frame', frame: snapFrame('s1', snapshot()) })
     const death: LifecycleFrame = {
       kind: 'lifecycle',
-      protocolVersion: 3,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
       status: 'exited',
     } as LifecycleFrame
     state = reduceAccountsState(state, { type: 'frame', frame: death })
     expect(state.sessions.s1).toBeNull()
-  })
-})
-
-describe('P4-15 OAuth login progress projection', () => {
-  function progressFrame(
-    progress: OAuthLoginProgressFrame['progress'],
-    sessionId = 's1',
-  ): OAuthLoginProgressFrame {
-    return { kind: 'oauth.login.progress', protocolVersion: 3, sessionId, progress }
-  }
-
-  test('reduces oauth.login.progress into the per-session view; selector reads it', () => {
-    let state = createAccountsState()
-    expect(selectOAuthProgress(state, 's1')).toBeNull()
-    state = reduceAccountsState(state, {
-      type: 'frame',
-      frame: progressFrame({ state: 'waiting_for_login', url: 'https://auth.example/x' }),
-    })
-    expect(selectOAuthProgress(state, 's1')).toEqual({
-      state: 'waiting_for_login',
-      url: 'https://auth.example/x',
-    })
-    // Latest frame wins; other sessions are untouched.
-    state = reduceAccountsState(state, {
-      type: 'frame',
-      frame: progressFrame({ state: 'waiting_for_alias' }),
-    })
-    expect(selectOAuthProgress(state, 's1')?.state).toBe('waiting_for_alias')
-    expect(selectOAuthProgress(state, 's2')).toBeNull()
-  })
-
-  test('oauthReset clears the session progress (cancel / back / dwell)', () => {
-    let state = createAccountsState()
-    state = reduceAccountsState(state, {
-      type: 'frame',
-      frame: progressFrame({ state: 'error', message: 'timed_out' }),
-    })
-    expect(selectOAuthProgress(state, 's1')?.state).toBe('error')
-    state = reduceAccountsState(state, { type: 'oauthReset', sessionId: 's1' })
-    expect(selectOAuthProgress(state, 's1')).toBeNull()
-  })
-
-  test('lifecycle death clears any in-flight OAuth progress for that session', () => {
-    let state = createAccountsState()
-    state = reduceAccountsState(state, {
-      type: 'frame',
-      frame: progressFrame({ state: 'waiting_for_login', url: 'u' }),
-    })
-    // Seed the session so the lifecycle branch (which requires membership) runs.
-    state = {
-      ...state,
-      sessions: { ...state.sessions, s1: null },
-    }
-    state = reduceAccountsState(state, {
-      type: 'frame',
-      frame: {
-        kind: 'lifecycle',
-        protocolVersion: 3,
-        sessionId: 's1',
-        status: 'exited',
-      } as never,
-    })
-    expect(selectOAuthProgress(state, 's1')).toBeNull()
   })
 })
 
@@ -264,7 +199,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 3,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -292,7 +227,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'account.result',
-        protocolVersion: 3,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId: 's1',
         requestId: 'mutation',
         verb: 'account.rename',
@@ -312,7 +247,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 3,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -327,7 +262,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 3,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId: 's1',
         accounts: snapshot(),
       } as AccountsSnapshotFrame,
@@ -337,7 +272,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 3,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId: 's1',
         status: 'exited',
       } as LifecycleFrame,
@@ -672,43 +607,5 @@ describe('accountsState selectors', () => {
     expect(selectAccountRows(null)).toEqual([])
   })
 
-  test('reduces stats.usage.snapshot and selectUsageStatsForRange resolves by range', () => {
-    let state = createAccountsState()
-    expect(selectUsageStatsForRange(state, '7d')).toBeNull()
 
-    const snap7d = {
-      range: '7d' as const,
-      totalTokens: 100000,
-      dailyModelTokens: [],
-      modelUsage: {},
-      dailyActivity: [],
-      cacheHitRate: 85,
-      cacheReadTokens: 50000,
-      cacheWriteTokens: 10000,
-      freshInputTokens: 20000,
-      totalSessions: 5,
-      totalMessages: 50,
-      activeDays: 3,
-    }
-
-    state = reduceAccountsState(state, {
-      type: 'frame',
-      frame: {
-        kind: 'stats.usage.snapshot',
-        protocolVersion: 3,
-        sessionId: 's1',
-        stats: snap7d,
-      },
-    })
-
-    expect(state.usageStats['7d']).toEqual(snap7d)
-    expect(selectUsageStatsForRange(state, '7d')).toEqual(snap7d)
-    expect(selectUsageStatsForRange(state, '30d')).toBeNull()
-
-    state = reduceAccountsState(state, {
-      type: 'set-stats-range',
-      range: '30d',
-    })
-    expect(state.activeStatsRange).toBe('30d')
-  })
 })

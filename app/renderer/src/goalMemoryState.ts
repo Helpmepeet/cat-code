@@ -9,7 +9,6 @@ import type { MergedSessionRow } from './sessionsCatalogState.js'
 
 export type GoalMemoryState = {
   goals: Record<SessionId, ThreadGoalSnapshot | null>
-  memory: Record<SessionId, MemorySnapshot | null>
 }
 
 export type GoalMemoryAction = { type: 'frame'; frame: ServerFrame }
@@ -22,7 +21,7 @@ export type ThreadGoalRow = {
 }
 
 export function createGoalMemoryState(): GoalMemoryState {
-  return { goals: {}, memory: {} }
+  return { goals: {} }
 }
 
 export function reduceGoalMemoryState(
@@ -36,22 +35,6 @@ export function reduceGoalMemoryState(
       ...state,
       goals: { ...state.goals, [frame.sessionId]: frame.goal },
     }
-  }
-
-  if (frame.kind === 'memory.snapshot') {
-    return {
-      ...state,
-      memory: { ...state.memory, [frame.sessionId]: frame.memory },
-    }
-  }
-
-  if (frame.kind === 'lifecycle') {
-    if (!(frame.sessionId in state.goals) && !(frame.sessionId in state.memory)) {
-      return state
-    }
-    if (!(frame.sessionId in state.memory)) return state
-    const nextMemory = { ...state.memory, [frame.sessionId]: null }
-    return { ...state, memory: nextMemory }
   }
 
   return state
@@ -81,14 +64,6 @@ export function selectThreadGoalSnapshot(
   sessionId: SessionId | null,
 ): ThreadGoalSnapshot | null {
   const snapshot = sessionId ? state.goals[sessionId] : undefined
-  return snapshot ?? null
-}
-
-export function selectMemorySnapshot(
-  state: GoalMemoryState,
-  sessionId: SessionId | null,
-): MemorySnapshot | null {
-  const snapshot = sessionId ? state.memory[sessionId] : undefined
   return snapshot ?? null
 }
 

@@ -47,6 +47,7 @@ import {
   selectTranscriptBackfillCandidates,
   stampHistoryViewAnchor,
   isLiveSidecarStatus,
+  isUserTurnSubmit,
   isReadyForFrames,
   isSessionLive,
   isSessionReadyForFrames,
@@ -59,6 +60,7 @@ const SID = 'app-session-1'
 
 test('the production sidecar runtime enables the desktop engine features', () => {
   expect(SIDECAR_RUNTIME_ARGS).toEqual([
+    '--feature=LID_CLOSED',
     '--feature=TRANSCRIPT_CLASSIFIER',
     '--feature=REACTIVE_COMPACT',
     '--feature=COMPACT_TASK_RESTORE',
@@ -78,6 +80,7 @@ describe('sidecar launch resolution (P5-1)', () => {
     const plan = resolveSidecarLaunch(DEV)
     expect(plan.command).toBe('bun')
     expect(plan.argsFor('session')).toEqual([
+      '--feature=LID_CLOSED',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',
@@ -111,10 +114,15 @@ describe('sidecar launch resolution (P5-1)', () => {
       'run',
       '/repo/app/sidecar/settingsWriteWorker.ts',
     ])
+    expect(plan.argsFor('scheduled-options')).toEqual([
+      'run',
+      '/repo/app/sidecar/scheduledTaskOptionsWorker.ts',
+    ])
   })
 
   test('debug cleanup keeps the feature flags the session sidecar has', () => {
     expect(resolveSidecarLaunch(DEV).argsFor('debug-cleanup')).toEqual([
+      '--feature=LID_CLOSED',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',
@@ -695,14 +703,6 @@ describe('isTerminalLifecycleFrame', () => {
 })
 
 describe('frameMutatedAccountsPool', () => {
-  const oauth = (state: string): ServerFrame =>
-    ({
-      kind: 'oauth.login.progress',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: 's1',
-      progress: { state },
-    }) as unknown as ServerFrame
-
   const accountResult = (
     verb: string,
     ok: boolean,
@@ -716,18 +716,6 @@ describe('frameMutatedAccountsPool', () => {
       ok,
       message: 'done',
     }) as unknown as ServerFrame
-
-  test('a completed sign-in mutates the pool; its earlier phases do not', () => {
-    expect(frameMutatedAccountsPool(oauth('success'))).toBe(true)
-    for (const state of [
-      'starting',
-      'waiting_for_login',
-      'waiting_for_alias',
-      'error',
-    ]) {
-      expect(frameMutatedAccountsPool(oauth(state))).toBe(false)
-    }
-  })
 
   test('an account verb that landed mutates the pool; a refused one does not', () => {
     // These are the surfaces the operator asked about: without a re-read, a
@@ -748,8 +736,8 @@ describe('frameMutatedAccountsPool', () => {
   test('every verb the sidecar marks poolChanged:false is excluded, not just login', () => {
     // These four answer ok without touching the pool
     // (`app/sidecar/accountsDomain.ts`). Each false trigger is a ~189 MB worker
-    // boot plus a live usage fetch, and `oauthAlias` emits the success progress
-    // BEFORE its own ok, so counting it here bought two spawns for one sign-in.
+    // boot plus a live usage fetch. Login completion is published by app-wide
+    // account control.
     for (const verb of [
       'account.login',
       'account.oauthPasteCode',
@@ -771,11 +759,10 @@ describe('frameMutatedAccountsPool', () => {
     expect(frameMutatedAccountsPool(errorFrame())).toBe(false)
     expect(frameMutatedAccountsPool(pongFrame())).toBe(false)
     expect(frameMutatedAccountsPool(lifecycle('exited'))).toBe(false)
-    // main's handler runs inside the supervisor socket loop, which has no
-    // try/catch: a nested read on a frame missing its payload must not throw the
-    // loop out and drop delivery for that session.
+    // Malformed replies cannot refresh the pool or interrupt socket delivery.
     const malformed = {
-      kind: 'oauth.login.progress',
+      kind: 'account.result',
+      ok: true,
       protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
     } as unknown as ServerFrame
@@ -842,6 +829,16 @@ describe('createCwdTokenStore (HC1)', () => {
 })
 
 describe('native file attachment tokens', () => {
+  test('transfers selected files only to the host-created replacement', () => {
+    const store = createAttachmentFileTokenStore()
+    const selection = store.mint(SID, '/private/report.md')
+    expect(store.resolve('replacement', selection.token)).toBeUndefined()
+    store.transfer(SID, 'replacement')
+    expect(store.resolve('replacement', selection.token)).toBe('/private/report.md')
+    expect(store.resolve(SID, selection.token)).toBeUndefined()
+    expect(store.resolve('another-chat', selection.token)).toBeUndefined()
+  })
+
   test('hide the path, bind the selection to one session, and expire it', () => {
     let clock = 1_000
     const store = createAttachmentFileTokenStore({
@@ -1474,5 +1471,21 @@ describe('isSessionLive (HOST-REQUEST-PLANE — liveness, not membership)', () =
     }
     expect(isSessionReadyForFrames(records, 'never-existed')).toBe(false)
     expect(isSessionReadyForFrames([], 'ready-1')).toBe(false)
+  })
+})
+
+describe('user turn detection for the peer hop budget', () => {
+  const submit = { type: 'app.submit' }
+
+  test('only a renderer-origin submit is the user speaking', () => {
+    expect(isUserTurnSubmit(submit, 'renderer')).toBe(true)
+    expect(isUserTurnSubmit({ ...submit, options: { isMeta: false } }, 'renderer')).toBe(true)
+  })
+
+  test('synthetic, internal and peer traffic is not', () => {
+    expect(isUserTurnSubmit({ ...submit, options: { isMeta: true } }, 'renderer')).toBe(false)
+    expect(isUserTurnSubmit(submit, 'internal')).toBe(false)
+    expect(isUserTurnSubmit({ type: 'peer.deliver' }, 'renderer')).toBe(false)
+    expect(isUserTurnSubmit({ type: 'app.abort' }, 'renderer')).toBe(false)
   })
 })

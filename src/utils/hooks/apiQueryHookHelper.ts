@@ -101,7 +101,7 @@ export function createApiQueryHook<TResult>(
 
       // Make API call
       const response = await queryModelWithoutStreaming({
-        messages: normalizeMessagesForAPI(assembly.messages),
+        messages: normalizeMessagesForAPI(assembly.messages, [], provider),
         systemPrompt: assembly.systemPrompt,
         openAIInstructionAssembly: assembly.openAIInstructionAssembly,
         thinkingConfig: { type: 'disabled' as const },

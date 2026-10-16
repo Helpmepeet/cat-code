@@ -55,6 +55,10 @@ import type { SessionBinding } from './sessionBinding.js'
 export type CreateSessionRequest = {
   /** Session root. Host re-validates (realpath / exists / isDirectory) — HC1. */
   cwd: string
+  /** Host-owned scheduled-run controls; renderer create input cannot carry these. */
+  model?: string
+  effort?: string
+  permissionMode?: 'default' | 'auto'
   /** Present ⇒ restore, not a fresh spawn (REGISTRY.md R3). Main-set only. */
   resumeEngineSessionId?: string
   /** Display only; length-capped by the host (`MAX_SESSION_TITLE_CHARS`). */
@@ -259,10 +263,17 @@ export type HostErrorCode =
   | 'managed_storage_invalid'
 
 /** Local branches for a host-validated session workspace. */
-export type WorkspaceBranches = {
+export type WorkspaceBranchObservation = {
   current: string | null
+  detached?: string
+  recordedBranch?: string | null
+}
+
+export type WorkspaceBranches = WorkspaceBranchObservation & {
   branches: string[]
   dirty: boolean
+  occupied?: Record<string, string>
+  otherChats?: Array<{ appSessionId: SessionId; title: string }>
 }
 
 /** A failed spawn can follow a successful checkout, so callers must know it moved. */

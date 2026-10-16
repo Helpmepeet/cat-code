@@ -110,14 +110,21 @@ function narrowPlan(input: Record<string, unknown>): TodoPlan | null {
  * The live plan, or null when this session has none. Walks backward so the
  * newest call wins without materialising the whole list of matches.
  */
+const planByRows = new WeakMap<readonly NestedTranscriptRow[], TodoPlan | null>()
+
 export function selectTodoPlan(rows: readonly NestedTranscriptRow[]): TodoPlan | null {
+  const cached = planByRows.get(rows)
+  if (cached !== undefined) return cached
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]
     if (row === undefined) continue
     if (row.kind !== 'tool-use') continue
     if (row.toolName !== TODO_WRITE_TOOL_NAME) continue
-    return narrowPlan(row.input)
+    const plan = narrowPlan(row.input)
+    planByRows.set(rows, plan)
+    return plan
   }
+  planByRows.set(rows, null)
   return null
 }
 

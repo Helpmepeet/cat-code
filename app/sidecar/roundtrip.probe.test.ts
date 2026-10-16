@@ -83,7 +83,7 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
   const ready = await waitForFrame(supervisor, frame => frame.kind === 'ready')
   expect(ready).toMatchObject({
     kind: 'ready',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId,
     payload: {
       type: 'app.ready',

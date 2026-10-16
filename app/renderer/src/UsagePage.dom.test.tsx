@@ -4,14 +4,19 @@ import { readFileSync } from 'node:fs';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js';
 import { UsagePage } from './UsagePage.js';
-import type { UsageSelection } from './usageDashboardState.js';
+import { initialUsageSelection, type UsageSelection } from './usageDashboardState.js';
 import { usageProjectId } from '../../shared/usageDashboard.js';
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
 
 let harness: DomTestHarness;
 beforeAll(async () => { harness = await createDomTestHarness(); });
 afterEach(async () => { await harness.unmountAll(); });
 afterAll(async () => { await harness.teardown(); });
+
+function AnalyticsOwner(props: Omit<ComponentProps<typeof UsagePage>, 'selection' | 'onSelectionChange'>) {
+    const [selection, setSelection] = useState(initialUsageSelection);
+    return <UsagePage {...props} selection={selection} onSelectionChange={setSelection}/>;
+}
 
 async function recordedSnapshot() {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
@@ -29,7 +34,7 @@ test('analytics layout keeps one bottom table and uses the selected range', asyn
     const snapshot = await recordedSnapshot();
     snapshot.ranges['30d'].tokens.fresh = 123;
     snapshot.ranges['30d'].records = 1;
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     expect(tree.container.querySelectorAll('.usage-metric')).toHaveLength(5);
     expect([...tree.container.querySelectorAll('.usage-panel-heading')].map(node => node.textContent)).toContain('Tokens');
     expect(tree.container.querySelector('.usage-heatmap')).not.toBeNull();
@@ -48,7 +53,7 @@ test('analytics layout keeps one bottom table and uses the selected range', asyn
 
 test('day focus does not select until activated; selection opens the session detail inline', async () => {
     const snapshot = await recordedSnapshot();
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     const hits = tree.container.querySelectorAll<SVGGElement>('.usage-flow-hit');
     await act(async () => hits[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
     expect(document.activeElement).toBe(hits[1]);
@@ -65,7 +70,7 @@ test('selected-day concurrency shows local time and exact zero-valued slots', as
     const day = snapshot.ranges['7d'].days[0]!;
     day.sessions = 2;
     day.parallel = { state: 'available', minutes: [1, 1, 0], peak: 2, tenMinutePeaks: [[6, 2]] };
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     await act(async () => tree.container.querySelector<SVGGElement>('.usage-flow-hit')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     const running = tree.container.querySelector<SVGSVGElement>('.usage-running svg')!;
     expect(running.textContent).toContain('00:00');
@@ -84,7 +89,7 @@ test('daily heatmap exposes recorded values and selects only days in the current
     const snapshot = await recordedSnapshot();
     const recorded = snapshot.ranges['7d'].days[0]!.date;
     snapshot.ranges['30d'].days.find(day => day.date === recorded)!.tokens.fresh = 123;
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     const cells = tree.container.querySelectorAll<SVGGElement>('.usage-heat-cell');
     expect(cells).toHaveLength(30);
     const boxes = [...tree.container.querySelectorAll<SVGRectElement>('.usage-heatmap rect')];
@@ -112,7 +117,7 @@ test('exact values are mounted only after opening the single disclosure', async 
     snapshot.ranges['7d'].days[0]!.tokens.write = 125;
     snapshot.ranges['7d'].days[0]!.cacheWriteReporting = 'partial';
     snapshot.ranges['30d'].days.at(-1)!.tokens.fresh = 67_890;
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     const disclosure = tree.container.querySelector<HTMLDetailsElement>('.usage-values')!;
     expect(disclosure.querySelectorAll('table')).toHaveLength(0);
     await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
@@ -128,7 +133,7 @@ test('exact values are mounted only after opening the single disclosure', async 
 test('refresh reports failure while retaining saved analytics', async () => {
     const snapshot = await recordedSnapshot();
     let refreshes = 0;
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'error' }} onRefresh={() => refreshes++}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'error' }} onRefresh={() => refreshes++}/>);
     const button = tree.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
     expect(button.getAttribute('aria-label')).toBe('Refresh failed. Try again');
     expect(tree.container.querySelector('.usage-flow-chart')).not.toBeNull();
@@ -138,7 +143,7 @@ test('refresh reports failure while retaining saved analytics', async () => {
 test('refresh is disabled while analytics is loading', async () => {
     const snapshot = await recordedSnapshot();
     let refreshes = 0;
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'loading' }} onRefresh={() => refreshes++}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'loading' }} onRefresh={() => refreshes++}/>);
     const button = tree.container.querySelector<HTMLButtonElement>('.usage-refresh')!;
     expect(button.disabled).toBe(true);
     expect(button.getAttribute('aria-label')).toBe('Refreshing analytics');
@@ -169,7 +174,7 @@ test('selected contributor opens its matching catalog session', async () => {
     const row = { sessionId, appSessionId: null, cwd: '/work/project', cwdExists: true, title: 'Investigate usage', displayLabel: 'Investigate usage', name: null, live: false, restorable: false, parked: false, status: 'history' as const, inRegistry: false, modifiedAtMs: 0, createdAtMs: 0, lastMessageSentAt: null, transcriptActivityAtMs: null, gitBranch: null, tag: null, mode: null, agentSetting: null, prNumber: null, prRepository: null };
     day.contributors = { state: 'truncated', omitted: 1, items: [{ id: 'session-a', engineSessionId: sessionId, project: { id: usageProjectId(row.cwd), label: 'project' }, tokens: { fresh: 123, read: 0, write: 0, output: 0 }, requests: 0, results: 0, errors: 0, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { usd: 0, pricedTokens: 0 }, models: [], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] };
     const opened: string[] = [];
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }} sessionRows={[row]} onOpenSession={item => opened.push(item.sessionId)}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }} sessionRows={[row]} onOpenSession={item => opened.push(item.sessionId)}/>);
     await act(async () => tree.container.querySelector<SVGGElement>('.usage-flow-hit')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('Investigate usage');
     await act(async () => tree.container.querySelector<HTMLButtonElement>('.usage-session-name')!.click());
@@ -185,7 +190,7 @@ test('model slices remain keyboard operable', async () => {
         { id: 'tiny', kind: 'named', label: 'Tiny', tokens: { fresh: 1, read: 0, write: 0, output: 0 }, tokenCost: { usd: 0, pricedTokens: 0 } },
         { id: 'large', kind: 'named', label: 'Large', tokens: { fresh: 9_999, read: 0, write: 0, output: 0 }, tokenCost: { usd: 0, pricedTokens: 0 } },
     ];
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     const slice = [...tree.container.querySelectorAll<SVGElement>('.usage-model-donut [role="button"]')].find(item => item.getAttribute('aria-label')?.includes('Tiny'))!;
     await act(async () => slice.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(slice.getAttribute('aria-pressed')).toBe('true');
@@ -203,7 +208,7 @@ test('model usage names current models and keeps retired Sol and Luna in All mod
     summary.tokens.fresh = 4500;
     summary.days[0]!.tokens.fresh = 4500;
     summary.days[0]!.models = summary.models.map(model => ({ id: model.id, total: model.tokens.fresh }));
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     const key = () => tree.container.querySelector('.usage-model-key')!.textContent!;
     for (const name of current) expect(key()).toContain(name);
     expect(key()).not.toContain('gpt-5.6-sol');
@@ -225,7 +230,7 @@ test('heatmap selection in All resolves to its local aggregate bucket', async ()
     all.tokens.fresh = 123;
     all.records = 1;
     all.days = [{ ...structuredClone(snapshot.ranges['7d'].days[0]!), date: '2026-09-06', hours: undefined }];
-    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
     await act(async () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'All')!.click());
     const cell = tree.container.querySelector<SVGGElement>('[data-date="2026-09-07"]')!;
     await act(async () => cell.dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -248,7 +253,7 @@ test('volume comparisons stay neutral in both directions while cache rate keeps 
         const snapshot = await recordedSnapshot();
         const summary = snapshot.ranges['7d'];
         summary.activeDays = 1;
-        const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+        const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
         for (const increase of [true, false]) {
             const current = increase ? { fresh: 20, read: 80, write: 0, output: 0 } : { fresh: 40, read: 10, write: 0, output: 0 };
             const previous = increase ? { fresh: 30, read: 20, write: 0, output: 0 } : { fresh: 20, read: 80, write: 0, output: 0 };
@@ -262,7 +267,7 @@ test('volume comparisons stay neutral in both directions while cache rate keeps 
                 records: 1, requests: increase ? 10 : 20,
                 cachedInputShare: null, cacheWriteReporting: 'unreported',
             };
-            await tree.render(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+            await tree.render(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
             const tiles = [...tree.container.querySelectorAll('.usage-metric')];
             expect(tiles).toHaveLength(5);
             for (const tile of tiles) {

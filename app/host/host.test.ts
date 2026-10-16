@@ -24,6 +24,9 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { createSessionBranchReader, createWorkspaceBranchSwitcher } from '../main/workspaceBranches.js'
+import { createAttachmentFileTokenStore } from '../main/mainDecisions.js'
 
 import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
@@ -46,6 +49,7 @@ import {
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
 import { createShellState, reduceShellState } from '../renderer/src/shellState.js'
+import { mergeRosterSnapshot } from '../renderer/src/rosterBootstrap.js'
 import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
 /* ------------------------------------------------------------------------- *
@@ -216,7 +220,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'ready',
-        protocolVersion: 3,
+        protocolVersion: 4,
         sessionId,
         engineSessionId,
         payload: { type: 'app.ready' } as never,
@@ -239,7 +243,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'event',
-        protocolVersion: 3,
+        protocolVersion: 4,
         sessionId,
         ...(opts.replay ? { replay: true } : {}),
         event,
@@ -441,11 +445,11 @@ function makeHost(
 
 function emitMoveReadyContext(supervisor: FakeSupervisor, appSessionId: SessionId): void {
   supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
-    kind: 'run-controls.snapshot', protocolVersion: 3, sessionId: appSessionId,
+    kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: appSessionId,
     runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
   } as never })
   supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
-    kind: 'permission.context', protocolVersion: 3, sessionId: appSessionId,
+    kind: 'permission.context', protocolVersion: 4, sessionId: appSessionId,
     context: { mode: 'default', permissionClassifierEnabled: false },
   } as never })
 }
@@ -605,11 +609,11 @@ test.each(['pending delivery', 'in-flight reservation'] as const)(
 
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
   const replay = {
-    kind: 'event', protocolVersion: 3, sessionId: appSessionId, replay: true,
+    kind: 'event', protocolVersion: 4, sessionId: appSessionId, replay: true,
     event: { type: 'message', message: { type: 'user', message: { role: 'user', content: 'retained' } } },
   } as never
   expect(gate.onFrame(appSessionId, replay)).toEqual([])
-  const complete = { kind: 'history.replay.complete', protocolVersion: 3, sessionId: appSessionId } as never
+  const complete = { kind: 'history.replay.complete', protocolVersion: 4, sessionId: appSessionId } as never
   const released = gate.onFrame(appSessionId, complete)
   expect(released).toContainEqual(replay)
   expect(released).toContainEqual(complete)
@@ -671,14 +675,14 @@ test('a worker-refused move keeps the reopened conversation behind replay comple
   expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
   expect(sourceCachePreservationRequested).toBe(true)
 
-  const ready = { kind: 'ready', protocolVersion: 3, sessionId: appSessionId,
+  const ready = { kind: 'ready', protocolVersion: 4, sessionId: appSessionId,
     engineSessionId, payload: { type: 'app.ready' } } as never
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
-  const replay = { kind: 'event', protocolVersion: 3, sessionId: appSessionId,
+  const replay = { kind: 'event', protocolVersion: 4, sessionId: appSessionId,
     replay: true, event: { type: 'message', message: { type: 'user' } } } as never
   expect(gate.onFrame(appSessionId, replay)).toEqual([])
   const released = gate.onFrame(appSessionId, {
-    kind: 'history.replay.complete', protocolVersion: 3, sessionId: appSessionId,
+    kind: 'history.replay.complete', protocolVersion: 4, sessionId: appSessionId,
   } as never)
   expect(released[0]).toMatchObject(ready)
   expect(released).toContainEqual(replay)
@@ -1227,6 +1231,370 @@ test('createSession reports spawn_failed when the supervisor throws, and marks t
 /* ------------------------------------------------------------------------- *
  * HC4 — session_limit (rate cap + row cap)
  * ------------------------------------------------------------------------- */
+
+function branchGit(cwd: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' }).replace(/\n$/, '')
+}
+
+function initializeBranchRepo(cwd: string): void {
+  branchGit(cwd, 'init', '-b', 'main')
+  branchGit(cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'initial')
+  branchGit(cwd, 'branch', 'target')
+}
+
+async function readyBranchChat(h: Harness, openingCwd: string, actualCwd = openingCwd): Promise<SessionId> {
+  const created = await h.host.createSession({ cwd: openingCwd })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  const engineId = randomUUID()
+  h.supervisor.emitReady(id, engineId)
+  await settle(() => h.registry.findSession(id)?.engineSessionId === engineId)
+  h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'activity', protocolVersion: 4, sessionId: id, presence: 'idle',
+      workspace: { cwd: actualCwd, lastWorkingBranch: 'main' } },
+  })
+  return id
+}
+
+function branchCoordinator(
+  h: Harness,
+  transfers: Array<[SessionId, SessionId]> = [],
+  transferFiles?: (from: SessionId, to: SessionId) => void,
+) {
+  return createWorkspaceBranchSwitcher({
+    host: h.host,
+    switchingSessionIds: new Set(),
+    sessionsWithSubmit: new Set(),
+    isWorkspaceReserved: () => false,
+    isLive: id => h.supervisor.records.has(id),
+    validateCwd: cwd => ({ ok: existsSync(cwd) }),
+    transferFiles: (from, to) => { transfers.push([from, to]); transferFiles?.(from, to) },
+    log: message => h.logs.push(message),
+  })
+}
+
+test('main branch transaction guards the actual checkout, not another chat opening folder', async () => {
+  const h = makeHost({ validateCwd: cwd => ({ ok: true, realpath: cwd }) })
+  initializeBranchRepo(h.cwd)
+  const outside = tempDir()
+  initializeBranchRepo(outside)
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, outside, h.cwd)
+  const switchBranch = branchCoordinator(h)
+  const refused = await switchBranch(source, 'target')
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.message).toContain('other live sessions')
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+  // The same other chat now actually works elsewhere. Its opening folder
+  // remains irrelevant and no longer blocks the target checkout.
+  h.supervisor.emit({
+    type: 'frame', sessionId: other,
+    frame: { kind: 'activity', protocolVersion: 4, sessionId: other, presence: 'idle',
+      workspace: { cwd: outside, lastWorkingBranch: 'main' } },
+  })
+  const switched = await switchBranch(source, 'target')
+  expect(switched.ok).toBe(true)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+})
+
+test('main branch transaction uses entered worktree cwd and reserves before Git mutation', async () => {
+  const h = makeHost({ validateCwd: cwd => ({ ok: true, realpath: cwd }) })
+  initializeBranchRepo(h.cwd)
+  const worktree = join(h.storageDir, 'entered-worktree')
+  branchGit(h.cwd, 'worktree', 'add', '-b', 'entered', worktree)
+  const source = await readyBranchChat(h, h.cwd, worktree)
+  const admitted = h.host.beginBranchReplacement.bind(h.host)
+  h.host.beginBranchReplacement = id => {
+    expect(branchGit(worktree, 'symbolic-ref', '--short', 'HEAD')).toBe('entered')
+    const result = admitted(id)
+    if (result.ok) writeFileSync(join(h.cwd, '.git', 'reserved-before-switch'), '')
+    return result
+  }
+  const hook = join(h.cwd, '.git', 'hooks', 'post-checkout')
+  writeFileSync(hook, `#!/bin/sh\ntest -f "${join(h.cwd, '.git', 'reserved-before-switch')}"\n`)
+  chmodSync(hook, 0o755)
+  const transfers: Array<[SessionId, SessionId]> = []
+  const result = await branchCoordinator(h, transfers)(source, 'target')
+  expect(result.ok).toBe(true)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+  expect(branchGit(worktree, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  if (result.ok) {
+    expect(h.supervisor.records.get(result.value.appSessionId)?.cwd).toBe(worktree)
+    expect(transfers).toEqual([[source, result.value.appSessionId]])
+  }
+})
+
+test('a worktree return during async Git preflight is refused until branch handoff settles', async () => {
+  const h = makeHost({ validateCwd: cwd => ({ ok: true, realpath: cwd }) })
+  initializeBranchRepo(h.cwd)
+  const worktree = join(h.storageDir, 'independent-worktree')
+  branchGit(h.cwd, 'worktree', 'add', '-b', 'independent', worktree)
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, h.cwd, worktree)
+  const observe = h.host.getWorkspaceObservation.bind(h.host)
+  let transitionAttempted = false
+  let attempted!: () => void
+  const attemptedTransition = new Promise<void>(resolve => { attempted = resolve })
+  h.host.getWorkspaceObservation = id => {
+    const snapshot = observe(id)
+    if (id === other && !transitionAttempted) {
+      transitionAttempted = true
+      // Schedule after the observation is captured, during real subprocess
+      // preflight, rather than relying on another last-moment observation.
+      setImmediate(() => {
+        expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+        expect(h.host.beginWorkspaceTransition(other, 'return-during-preflight')).toBe(false)
+        attempted()
+      })
+    }
+    return snapshot
+  }
+  const switching = branchCoordinator(h)(source, 'target')
+  await attemptedTransition
+  const result = await switching
+  expect(transitionAttempted).toBe(true)
+  expect(result.ok).toBe(true)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  expect(branchGit(worktree, 'symbolic-ref', '--short', 'HEAD')).toBe('independent')
+  expect(observe(other)?.cwd).toBe(worktree)
+  expect(h.host.beginWorkspaceTransition(other, 'return-after-handoff')).toBe(true)
+  expect(h.host.finishWorkspaceTransition(other, 'return-after-handoff', h.cwd)).toBe(true)
+})
+
+test('an admitted worktree return excludes branch mutation until its fresh observation is published', async () => {
+  const h = makeHost({ validateCwd: cwd => ({ ok: true, realpath: cwd }) })
+  initializeBranchRepo(h.cwd)
+  const worktree = join(h.storageDir, 'independent-worktree')
+  branchGit(h.cwd, 'worktree', 'add', '-b', 'independent', worktree)
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, h.cwd, worktree)
+  expect(h.host.beginWorkspaceTransition(other, 'return-first')).toBe(true)
+  expect((await branchCoordinator(h)(source, 'target')).ok).toBe(false)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+  expect(h.host.finishWorkspaceTransition(other, 'wrong-operation', h.cwd)).toBe(false)
+  expect(h.host.beginBranchReplacement(source).ok).toBe(false)
+  expect(h.host.finishWorkspaceTransition(other, 'return-first', h.cwd)).toBe(true)
+  expect(h.host.getWorkspaceObservation(other)?.cwd).toBe(h.cwd)
+  const refused = await branchCoordinator(h)(source, 'target')
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.message).toContain('other live sessions')
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+})
+
+test('uncertain transition holds do not expire, but closing or restarting the owner releases them', async () => {
+  const h = makeHost()
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, h.cwd)
+  expect(h.host.beginWorkspaceTransition(other, 'lost-reply')).toBe(true)
+  h.setNow(h.now() + 1_000_000)
+  expect(h.host.beginBranchReplacement(source).ok).toBe(false)
+  // A ready frame may come from a reconnect, not a new process.
+  h.supervisor.emitReady(other, randomUUID())
+  expect(h.host.beginBranchReplacement(source).ok).toBe(false)
+  h.supervisor.restartSession(other, { cwd: h.cwd })
+  h.supervisor.emitReady(other, randomUUID())
+  expect(h.host.beginBranchReplacement(source).ok).toBe(true)
+  h.host.endBranchSwitch()
+  expect(h.host.beginWorkspaceTransition(other, 'close-before-finish')).toBe(true)
+  await h.host.closeSession(other)
+  expect(h.host.beginBranchReplacement(source).ok).toBe(true)
+  h.host.endBranchSwitch()
+})
+
+test('main branch transaction refuses the rate limit before Git moves', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const source = await readyBranchChat(h, h.cwd)
+  for (let i = 1; i < MAX_SPAWNS_PER_WINDOW; i++) {
+    const extra = await h.host.createSession({ cwd: h.cwd })
+    if (!extra.ok) throw new Error(extra.error.message)
+    await h.host.closeSession(extra.value.appSessionId)
+  }
+  const transfers: Array<[SessionId, SessionId]> = []
+  const result = await branchCoordinator(h, transfers)(source, 'target')
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect(result.error.code).toBe('session_limit')
+    expect(result.error.message).toBe('Wait a moment before switching branches.')
+  }
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+  expect(h.supervisor.records.has(source)).toBe(true)
+  expect(transfers).toEqual([])
+})
+
+test('main branch transaction reports checkout movement without retiring the original on failed handoff below cap', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const source = await readyBranchChat(h, h.cwd)
+  h.supervisor.throwOnNextSpawn = new Error('cannot spawn replacement')
+  const transfers: Array<[SessionId, SessionId]> = []
+  const result = await branchCoordinator(h, transfers)(source, 'target')
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect('branchChanged' in result && result.branchChanged).toBe(true)
+    expect(result.error.message).toContain('new chat could not start')
+  }
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  expect(h.supervisor.records.has(source)).toBe(true)
+  expect(transfers).toEqual([])
+  expect(h.events.some(event => event.type === 'session-removed' && event.appSessionId === source)).toBe(false)
+})
+
+test('main branch transaction preserves Git partial success without spawning or transferring files', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const source = await readyBranchChat(h, h.cwd)
+  const hook = join(h.cwd, '.git', 'hooks', 'post-checkout')
+  writeFileSync(hook, '#!/bin/sh\nmv .git .git-hidden\n')
+  chmodSync(hook, 0o755)
+  let replacementCalls = 0
+  const complete = h.host.completeBranchReplacement.bind(h.host)
+  h.host.completeBranchReplacement = async cwd => { replacementCalls++; return complete(cwd) }
+  const transfers: Array<[SessionId, SessionId]> = []
+  const result = await branchCoordinator(h, transfers)(source, 'target')
+  expect(!result.ok && 'branchChanged' in result && result.branchChanged).toBe(true)
+  expect(branchGit(h.cwd, '--git-dir', join(h.cwd, '.git-hidden'), 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  expect(replacementCalls).toBe(0)
+  expect(transfers).toEqual([])
+  expect(h.supervisor.records.has(source)).toBe(true)
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(true)
+})
+
+test('main branch transaction does not transfer file capabilities when closing the original fails', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const source = await readyBranchChat(h, h.cwd)
+  const tokens = createAttachmentFileTokenStore()
+  const file = tokens.mint(source, '/private/unsent.md')
+  const transfers: Array<[SessionId, SessionId]> = []
+  h.host.closeSession = async () => ({ ok: false, error: { code: 'session_unreachable', message: 'close failed' } })
+  const result = await branchCoordinator(h, transfers, (from, to) => tokens.transfer(from, to))(source, 'target')
+  expect(!result.ok && 'branchChanged' in result && result.branchChanged).toBe(true)
+  if (!result.ok) expect(result.error.message).toContain('previous chat could not close')
+  expect(transfers).toEqual([])
+  expect(tokens.resolve(source, file.token)).toBe('/private/unsent.md')
+  expect(h.supervisor.records.has(source)).toBe(true)
+})
+
+test('main branch transaction at cap retains the original tab and file capability on failed replacement', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const source = await readyBranchChat(h, h.cwd)
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+  // Unrelated live processes also report their actual cwd, so the receiving
+  // guard must let them pass before exercising replacement-capacity handling.
+  const outside = tempDir()
+  initializeBranchRepo(outside)
+  for (let i = 1; i < MAX_LIVE_SESSIONS; i++) {
+    h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+    await readyBranchChat(h, h.cwd, outside)
+  }
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const tokens = createAttachmentFileTokenStore()
+  const file = tokens.mint(source, '/private/unsent.md')
+  const transfers: Array<[SessionId, SessionId]> = []
+  const switchBranch = branchCoordinator(h, transfers, (from, to) => tokens.transfer(from, to))
+  const originalDescriptor = h.host.listSessions().find(row => row.appSessionId === source)!
+  const originalShell = reduceShellState(createShellState(), { type: 'session-added', session: originalDescriptor })
+  const eventStart = h.events.length
+  h.supervisor.throwOnNextSpawn = new Error('cannot spawn at cap')
+  const result = await switchBranch(source, 'target')
+  expect(result.ok).toBe(false)
+  expect(!result.ok && 'branchChanged' in result && result.branchChanged).toBe(true)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  expect(h.supervisor.records.has(source)).toBe(false)
+  expect(h.registry.findSession(source)).toBeDefined()
+  expect(h.events.some(event => event.type === 'session-removed' && event.appSessionId === source)).toBe(false)
+  expect(tokens.resolve(source, file.token)).toBe('/private/unsent.md')
+  expect(transfers).toEqual([])
+  const updatedShell = h.events.slice(eventStart).reduce(reduceShellState, originalShell)
+  const hydratedShell = mergeRosterSnapshot(updatedShell, h.host.listSessions(), new Set())
+  expect(hydratedShell.byId[source]).toEqual(originalDescriptor)
+  expect(hydratedShell.tabs[source]).toBe(true)
+})
+
+test('branch readout addresses one host row without enumerating the session roster', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const id = await readyBranchChat(h, h.cwd)
+  h.host.listSessions = () => { throw new Error('Readout enumerated all sessions') }
+  const reader = createSessionBranchReader({
+    host: () => h.host,
+    isLive: candidate => h.supervisor.records.has(candidate),
+    readSaved: async () => { throw new Error('Live readout started a saved-history worker') },
+  })
+  expect(await reader(id)).toEqual({ ok: true, value: { current: 'main', recordedBranch: 'main' } })
+  expect(h.host.getSessionDescriptor({ id })).toBeUndefined()
+})
+
+test('branch replacement reserves rate before checkout and retains the original on spawn failure', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const id = created.value.appSessionId
+  h.supervisor.emitReady(id, randomUUID())
+  expect(h.host.beginBranchReplacement(id).ok).toBe(true)
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(false)
+  h.supervisor.throwOnNextSpawn = new Error('replacement failed')
+  expect((await h.host.completeBranchReplacement(h.cwd)).ok).toBe(false)
+  expect(h.supervisor.records.has(id)).toBe(true)
+  h.host.endBranchSwitch()
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(true)
+})
+
+test('branch replacement transfers the saturated live slot without increasing the cap', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('fixture create failed')
+  const id = created.value.appSessionId
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+  h.supervisor.emitReady(id, randomUUID())
+  for (let i = 1; i < MAX_LIVE_SESSIONS; i++) {
+    h.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`, generation: randomUUID(), status: 'ready',
+      pid: i, socketPath: `/tmp/fake-${i}`, cwd: h.cwd,
+    })
+  }
+  expect(h.host.beginBranchReplacement(id).ok).toBe(true)
+  const replacement = await h.host.completeBranchReplacement(h.cwd)
+  expect(replacement.ok).toBe(true)
+  expect(h.supervisor.records.has(id)).toBe(false)
+  expect(h.supervisor.records.size).toBe(MAX_LIVE_SESSIONS)
+  h.host.endBranchSwitch()
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(false)
+})
+
+test('branch replacement refuses a saturated spawn rate before stopping the original', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('fixture create failed')
+  for (let i = 1; i < MAX_SPAWNS_PER_WINDOW; i++) {
+    const next = await h.host.createSession({ cwd: h.cwd })
+    if (!next.ok) throw new Error('fixture create failed')
+    await h.host.closeSession(next.value.appSessionId)
+  }
+  const admission = h.host.beginBranchReplacement(created.value.appSessionId)
+  expect(admission.ok).toBe(false)
+  if (!admission.ok) expect(admission.error.code).toBe('session_limit')
+  expect(h.supervisor.records.has(created.value.appSessionId)).toBe(true)
+})
+
+test('host tracks engine workspace observations rather than the opening folder', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('fixture create failed')
+  const id = created.value.appSessionId
+  h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'activity', protocolVersion: 4, sessionId: id, presence: 'idle',
+      workspace: { cwd: '/entered-worktree', lastWorkingBranch: 'recorded' } },
+  })
+  expect(h.host.getWorkspaceObservation(id)).toEqual({ cwd: '/entered-worktree', lastWorkingBranch: 'recorded' })
+  h.supervisor.emitReady(id, randomUUID())
+  expect(h.host.getWorkspaceObservation(id)).toBeUndefined()
+})
 
 test('branch switch admission blocks concurrent spawns and releases cleanly', async () => {
   const h = makeHost()

@@ -213,7 +213,6 @@ describe('resolveAgentTarget', () => {
     writeSessionState(sessionId, {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
       knownWorkers: {
         'agent-current': {
           agentId: 'agent-current',
@@ -242,7 +241,6 @@ describe('resolveAgentTarget', () => {
     writeSessionState(sessionId, {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
       knownWorkers: {
         'agent-current': {
           agentId: 'agent-current',
@@ -271,7 +269,6 @@ describe('resolveAgentTarget', () => {
     writeSessionState(sessionId, {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
       knownWorkers: {
         'agent-current': {
           agentId: 'agent-current',

@@ -1,11 +1,10 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-10-09 against `CLAUDE.md`,
+Last refreshed: 2026-10-16 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
-`scripts/workspace-map-eval/`,
+`scripts/workspace-map-eval/`, `scripts/harness-design-eval/`,
 `scripts/test-codex-*.ts`,
-`scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
-`app/package.json`, `app/scripts/`, `src/migrations/`,
+`app/package.json`, `app/scripts/`, `app/native/lid-closed/`, `src/migrations/`,
 update/release/upgrade command surfaces, and colocated tests.
 
 Use this as the daily-refreshable routing layer for build, development,
@@ -22,6 +21,7 @@ files, then verify current source before changing code.
 | Desktop build, checks, and packaging | `app/package.json`, `app/scripts/` |
 | Persisted-state migrations | `src/migrations/runEngineMigrations.ts` |
 | Workspace map refresh and evaluation preparation | `scripts/workspaceMapRefreshState.ts`, `scripts/workspace-map-eval/taskInventory.ts`, `scripts/workspace-map-eval/prep/` |
+| Offline log audit and task restoration evaluation | `scripts/harness-design-eval/README.md`, [`docs/maps/harness-design-eval.md`](harness-design-eval.md) |
 | Map references, index, and section validation | `scripts/workspaceMapLint.ts` |
 
 ## Refresh Checklist
@@ -51,11 +51,9 @@ files, then verify current source before changing code.
 | Development build | `scripts/build.ts` | `package.json` | `bun run build:dev` emits `./cli-dev`, sets development macros, experimental-build env, dev semver suffix, and git-log changelog macro. |
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
-| Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | Legacy design-token harness retained for reference; current desktop renderer work belongs under `app/renderer/`. Do not extend this harness. |
-| Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | Legacy type-only harness retained for reference. Use the current desktop and sidecar typecheck boundaries for active work; do not extend this harness. |
 | Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/main/mainDecisions.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process; `SIDECAR_RUNTIME_ARGS` enables the classifier and reactive-compaction runtime features. |
 | Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the hardening route also protects the fixed native file-selection boundary. The root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar/` and `app/shared/` diagnostics while tolerating known upstream engine diagnostics. |
-| Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/main/mainDecisions.ts`, `app/sidecar/packagedEntry.ts`, `app/sidecar/packagedEnvironment.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS arm64 `.app` into its generated output directory, wiping that directory first. It compiles the sidecar and its engine graph into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development. It also verifies and copies the pinned arm64 ripgrep companion into `Contents/Resources/bin`, appends that directory after the user's paths in the packaged sidecar's `PATH`, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID`, sets `com.catcode.desktop`, and ad-hoc signs both nested executables before the bundle. No package-manager packaging dependency is involved. |
+| Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/scripts/{build-electron,build-lid-helper}.ts`, `app/native/lid-closed/`, `app/main/mainDecisions.ts`, `app/sidecar/{packagedEntry,packagedEnvironment}.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS arm64 `.app` into its generated output directory, wiping that directory first. `build-electron.ts` compiles the lid helper, which packaging copies with its installer scripts to `Contents/Resources/lid-closed`. The sidecar and engine graph compile into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development. Packaging verifies/copies the pinned arm64 ripgrep companion into `Contents/Resources/bin`, appends it after the user's PATH in the sidecar, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID`, sets `com.catcode.desktop`, and signs nested executables before the bundle. Default ad-hoc builds cannot obtain persistent helper authority; the hardened Apple-team-signed branch checks the sealed app with the helper but remains unverified without a supplied identity. No package-manager packaging dependency is involved. |
 | Local desktop installation | `app/scripts/install-local-app.sh` | `app/package.json`, `app/scripts/package-app.ts`, `app/scripts/packaged-launch-smoke.ts` | `bun run --cwd app install:local` builds committed HEAD in a clean temporary checkout, verifies the bundle, runs the headless packaged smoke, replaces the closed installed app while retaining a rollback copy, and opens the updated app. Uncommitted changes are excluded. |
 | Packaged bundle stowaway scan | `app/scripts/packagedBundleScan.ts` | `app/scripts/package-app.ts`, `app/scripts/packagedBundleScan.test.ts` | Path and content rules that fail the packaging build when a credential, key material, test source, source map, `node_modules` tree, or the development preload appears in the bundle. Compiled sidecar and companion-bin executables are content-scanned despite lacking text extensions. There is deliberately no artifact manifest; the local-use contract rules one out. |
 | Packaged launch verification | `app/scripts/packaged-launch-smoke.ts` | `app/scripts/package-app.ts`, `app/main/main.ts` | `bun run --cwd app smoke:packaged:headless` proves the generated artifact's sidecar and pinned ripgrep work outside the checkout with no Bun, Homebrew, or external ripgrep on `PATH`; it verifies real match/no-match behavior, proves the engine inside the sidecar finds that ripgrep through its runtime `PATH` by listing a user agent through `settings-inventory`, and rejects non-system dylib dependencies without opening Electron. `bun run --cwd app smoke:packaged` additionally launches the artifact, proves the packaged renderer branch, and requires authorization because it opens Electron. |
@@ -138,7 +136,8 @@ dev-full` or `--feature-set=dev-full` adds the current experimental set from
 ```text
 AGENT_MEMORY_SNAPSHOT, AGENT_TRIGGERS, AGENT_TRIGGERS_REMOTE, AWAY_SUMMARY,
 BASH_CLASSIFIER, BRIDGE_MODE, BUILTIN_EXPLORE_PLAN_AGENTS, CACHED_MICROCOMPACT,
-CCR_AUTO_CONNECT, CCR_MIRROR, CCR_REMOTE_SETUP, COMPACTION_REMINDERS,
+CCR_AUTO_CONNECT, CCR_MIRROR, CCR_REMOTE_SETUP,
+COMPACTION_REMINDERS, COMPACT_TASK_RESTORE,
 CONNECTOR_TEXT, EXTRACT_MEMORIES, HISTORY_PICKER, HOOK_PROMPTS, KAIROS_BRIEF,
 KAIROS_CHANNELS, LODESTONE, MCP_RICH_OUTPUT, MESSAGE_ACTIONS,
 NATIVE_CLIPBOARD_IMAGE, NEW_INIT, POWERSHELL_AUTO_MODE,
@@ -146,6 +145,10 @@ PROMPT_CACHE_BREAK_DETECTION, QUICK_SEARCH, SHOT_STATS, TEAMMEM, TOKEN_BUDGET,
 TREE_SITTER_BASH, TREE_SITTER_BASH_SHADOW, ULTRAPLAN, ULTRATHINK,
 UNATTENDED_RETRY, VOICE_MODE
 ```
+
+The desktop sidecar also compiles `COMPACT_TASK_RESTORE`. The candidate stays
+off unless `CAT_CODE_EVAL_COMPACT_TASK_RESTORE` is explicitly enabled at
+runtime; see [`harness-design-eval.md`](harness-design-eval.md).
 
 Feature changes need both sides checked: the build-time list in
 `scripts/build.ts` and runtime `feature(...)` call sites in entrypoints,
@@ -210,8 +213,6 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Undefined-name gate | `bun run lint:undefined-names` | `scripts/undefinedNamesLint.ts`, `tsconfig.json` |
 | Docs-only whitespace/path sanity | `git diff --check` | Git diff |
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
-| Portable renderer theme | `cd renderer-theme && bun run build` | `renderer-theme/package.json`, Vite |
-| Renderer engine-type fixture | `bunx tsc --project scripts/typecheck/renderer-engine-types/tsconfig.json --noEmit` | Isolated renderer type-adoption config |
 | Electron desktop tests | `bun test app/` | Desktop unit, boundary, and round-trip tests |
 | Electron desktop typechecks | `bun run --cwd app typecheck && bun run --cwd app typecheck:sidecar` | Snapshot-isolated shell graph plus scoped real engine-sidecar diagnostics |
 | Electron desktop renderer | `bun run --cwd app renderer:build` | Vite renderer bundle |
@@ -242,6 +243,7 @@ paths.
 | Tasks and workers | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
 | Compact/context behavior | `bun test src/services/compact/*.test.ts` |
 | App runtime | `bun test src/app-runtime/*.test.ts` |
+| Lid-closed app supervision and native helper | `bun test app/main/lidClosedMode.test.ts src/services/lidClosedWork.test.ts app/native/lid-closed/native.test.ts`; tests do not prove signed helper authentication or physical qualification. |
 | P5-5c cross-process contention probes | `src/utils/atomicFile.probe.test.ts`, `src/utils/transcriptLease.probe.test.ts`, `src/migrations/runEngineMigrations.probe.test.ts`, `src/codex-core/accountRefreshContention.probe.test.ts`, `src/utils/secureStorage/crossProcessStorage.probe.test.ts`, `src/services/autoDream/consolidationLock.probe.test.ts`, `src/services/teamMemorySync/teamMemorySync.probe.test.ts` | Run `bun test src/utils/atomicFile.probe.test.ts src/utils/transcriptLease.probe.test.ts src/migrations/runEngineMigrations.probe.test.ts src/codex-core/accountRefreshContention.probe.test.ts src/utils/secureStorage/crossProcessStorage.probe.test.ts src/services/autoDream/consolidationLock.probe.test.ts src/services/teamMemorySync/teamMemorySync.probe.test.ts` with synthetic isolated files and no live account/network access. |
 | Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts`. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |

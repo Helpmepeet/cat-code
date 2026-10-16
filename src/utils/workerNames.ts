@@ -17,7 +17,7 @@ const GENERIC_WORKER_NAMES = [
 ]
 
 const activeNames = new Set<string>()
-const poolCursors = new Map<string[], number>()
+let poolCursor: number | undefined
 
 function getReservedNames(
   reservedNames: Iterable<string> = [],
@@ -29,46 +29,24 @@ function getReservedNames(
   return reserved
 }
 
-function getPoolCursor(pool: string[]): number {
-  const existing = poolCursors.get(pool)
-  if (existing !== undefined) return existing
-  const initial = Math.floor(Math.random() * pool.length)
-  poolCursors.set(pool, initial)
-  return initial
-}
-
-function advancePoolCursor(pool: string[], index: number): void {
-  poolCursors.set(pool, (index + 1) % pool.length)
-}
-
-function pickNext(pool: string[], reservedNames: Iterable<string>): string {
+function pickNext(reservedNames: Iterable<string>): string {
   const reserved = getReservedNames(reservedNames)
-  const startIndex = getPoolCursor(pool)
+  const pool = GENERIC_WORKER_NAMES
+  const startIndex = poolCursor ?? Math.floor(Math.random() * pool.length)
   for (let offset = 0; offset < pool.length; offset += 1) {
     const index = (startIndex + offset) % pool.length
     const candidate = pool[index]!
     if (!reserved.has(recipientNameKey(candidate))) {
-      advancePoolCursor(pool, index)
+      poolCursor = (index + 1) % pool.length
       return candidate
     }
   }
 
-  for (let offset = 0; offset < pool.length; offset += 1) {
-    const index = (startIndex + offset) % pool.length
-    const baseName = pool[index]!
-    let suffix = 2
-    let candidate = `${baseName}-${suffix}`
-
-    while (reserved.has(recipientNameKey(candidate))) {
-      suffix += 1
-      candidate = `${baseName}-${suffix}`
-    }
-
-    advancePoolCursor(pool, index)
-    return candidate
-  }
-
-  throw new Error('Worker name pool must not be empty')
+  const baseName = pool[startIndex]!
+  let suffix = 2
+  while (reserved.has(recipientNameKey(`${baseName}-${suffix}`))) suffix += 1
+  poolCursor = (startIndex + 1) % pool.length
+  return `${baseName}-${suffix}`
 }
 
 /**
@@ -85,32 +63,21 @@ export function tryReserveWorkerName(name: string): boolean {
 
 /**
  * Advances the pool cursor and returns a free candidate name without
- * reserving it. Callers that need atomic ownership must follow up with
- * `tryReserveWorkerName` (or an external allocation) before acting on the
- * candidate, since another caller could claim it first.
+ * reserving it. Callers must acquire `tryReserveWorkerName` before awaiting
+ * external allocation or using the candidate.
  */
 export function selectWorkerNameCandidate(
-  _agentType: string,
   reservedNames: Iterable<string> = [],
-  _options: { allowGeneric?: boolean } = {},
-): string | null {
-  return pickNext(GENERIC_WORKER_NAMES, reservedNames)
+): string {
+  return pickNext(reservedNames)
 }
 
 export function allocateWorkerName(
-  agentType: string,
   reservedNames: Iterable<string> = [],
-  options: { allowGeneric?: boolean } = {},
-): string | null {
-  const name = selectWorkerNameCandidate(agentType, reservedNames, options)
-  if (!name) return null
+): string {
+  const name = selectWorkerNameCandidate(reservedNames)
   tryReserveWorkerName(name)
   return name
-}
-
-/** Compatibility wrapper — callers that only ever add (never race) a name. */
-export function reserveWorkerName(name: string): void {
-  tryReserveWorkerName(name)
 }
 
 export function releaseWorkerName(name: string): void {
@@ -119,5 +86,5 @@ export function releaseWorkerName(name: string): void {
 
 export function resetWorkerNamesForTests(): void {
   activeNames.clear()
-  poolCursors.clear()
+  poolCursor = undefined
 }

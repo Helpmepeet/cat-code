@@ -338,7 +338,11 @@ export const MAX_HOST_REQUEST_ARG_CHARS = 256
  */
 export const MAX_PEER_DELIVERY_ATTEMPTS = 3
 
-/** Maximum repeated route length and per-pair back-and-forth before refusal. */
+/**
+ * Maximum repeated route length and per-pair back-and-forth before refusal.
+ * The per-pair count starts over when the user next sends either session a
+ * message (`PeerRequestPlane.onUserMessage`).
+ */
 export const MAX_PEER_HOPS = 16
 
 /**

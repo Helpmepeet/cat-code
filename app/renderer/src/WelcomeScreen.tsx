@@ -43,7 +43,8 @@
  * it.
  */
 
-import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import './branchPicker.css'
 import { shouldShowFirstRunOAuth } from './appModel.js'
 import {
   handleMenuRovingKeyDown,
@@ -59,6 +60,7 @@ import catThinking from './assets/welcome-cat-thinking.png'
 import catYarning from './assets/welcome-cat-yarn.png'
 import catYawning from './assets/welcome-cat-yawning.png'
 import { basename } from './pathUtils.js'
+import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
@@ -129,6 +131,8 @@ type WelcomeScreenProps =
       onListBranches?: () => Promise<HostResult<WorkspaceBranches>>
       /** Returns an error to show in place, or null after opening a new session. */
       onSwitchBranch?: (branch: string) => Promise<string | null>
+      onFocusBranchChat?: (sessionId: string) => void
+      branchPending?: boolean
       /** Whether this session's tools run sandboxed (`diagnostics.snapshot`).
        * The "Start in" column's only real variable, now that the launcher's
        * worktree option is cut. */
@@ -233,9 +237,11 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                         branch={props.branch}
                         onList={props.onListBranches}
                         onSwitch={props.onSwitchBranch}
+                        onFocusChat={props.onFocusBranchChat}
+                        handoffPending={props.branchPending}
                       />
                     ) : (
-                      <span className="truncate font-mono text-[13px] text-text-muted">
+                      <span className={`truncate font-mono text-[13px] text-text-muted${props.branchPending ? ' opacity-50' : ''}`}>
                         {props.branch ?? 'none'}
                       </span>
                     )}
@@ -260,45 +266,60 @@ function BranchPicker({
   branch,
   onList,
   onSwitch,
+  onFocusChat,
+  handoffPending = false,
 }: {
   branch: string | null
   onList: () => Promise<HostResult<WorkspaceBranches>>
   onSwitch: (branch: string) => Promise<string | null>
+  onFocusChat?: (sessionId: string) => void
+  handoffPending?: boolean
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(undefined, {
+    selector: 'input, [role="menuitemradio"]:not(:disabled), .branch-picker-chat-link',
+    prioritySelector: 'input, [aria-checked="true"]',
+  })
   const [branches, setBranches] = useState<WorkspaceBranches | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [switchError, setSwitchError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [pending, setPending] = useState(false)
-  const [menuPosition, setMenuPosition] = useState<{
-    top: number
-    left: number
-    width: number
-    maxHeight: number
-  } | null>(null)
+  const [pendingTarget, setPendingTarget] = useState<string | null>(null)
+  const [filter, setFilter] = useState('')
+  const filterRef = useRef<HTMLInputElement>(null)
+  const requestRef = useRef(0)
+  const pending = handoffPending || pendingTarget !== null
 
+  const refresh = useCallback(() => {
+    const ownRequest = ++requestRef.current
+    setLoading(true)
+    return onList().then(result => {
+      if (ownRequest !== requestRef.current) return
+      if (result.ok) {
+        setBranches(result.value)
+        setError(null)
+      } else setError(result.error.message)
+    }).catch(() => {
+      if (ownRequest === requestRef.current) setError('Could not read branches for this project.')
+    }).finally(() => {
+      if (ownRequest === requestRef.current) setLoading(false)
+    })
+  }, [onList])
   useEffect(() => {
-    let active = true
-    let request = 0
-    const refresh = () => {
-      const ownRequest = ++request
-      setLoading(true)
-      setBranches(null)
-      setError(null)
-      void onList().then(result => {
-        if (!active || ownRequest !== request) return
-        if (result.ok) setBranches(result.value)
-        else setError(result.error.message)
-      }).catch(() => {
-        if (active && ownRequest === request) setError('Could not read branches for this project.')
-      }).finally(() => {
-        if (active && ownRequest === request) setLoading(false)
-      })
-    }
     refresh()
     window.addEventListener('focus', refresh)
-    return () => { active = false; window.removeEventListener('focus', refresh) }
-  }, [onList, open])
+    return () => { ++requestRef.current; window.removeEventListener('focus', refresh) }
+  }, [refresh])
+  useEffect(() => {
+    if (open) refresh()
+    else {
+      setSwitchError(null)
+      setFilter('')
+    }
+  }, [open, refresh])
+  const showFilter = (branches?.branches.length ?? 0) > 8
+  useEffect(() => {
+    if (open && showFilter) filterRef.current?.focus()
+  }, [open, showFilter])
 
   useLayoutEffect(() => {
     if (!open) return
@@ -307,6 +328,7 @@ function BranchPicker({
       const menu = ref.current?.querySelector<HTMLElement>('[role="menu"]')
       if (!trigger || !menu) return
       const rect = trigger.getBoundingClientRect()
+      const edge = ref.current?.getBoundingClientRect().left ?? rect.left
       const gap = 6
       const margin = 8
       const width = Math.min(300, window.innerWidth - margin * 2)
@@ -316,12 +338,10 @@ function BranchPicker({
       const placeAbove = below < desiredHeight && above > below
       const available = placeAbove ? above : below
       const maxHeight = Math.min(320, available)
-      setMenuPosition({
-        top: placeAbove ? rect.top - gap - Math.min(desiredHeight, maxHeight) : rect.bottom + gap,
-        left: Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin)),
-        width,
-        maxHeight,
-      })
+      menu.style.setProperty('--branch-menu-top', `${placeAbove ? rect.top - gap - Math.min(desiredHeight, maxHeight) : rect.bottom + gap}px`)
+      menu.style.setProperty('--branch-menu-left', `${Math.max(margin, Math.min(edge, window.innerWidth - width - margin))}px`)
+      menu.style.setProperty('--branch-menu-width', `${width}px`)
+      menu.style.setProperty('--branch-menu-height', `${maxHeight}px`)
     }
     place()
     window.addEventListener('resize', place)
@@ -330,10 +350,29 @@ function BranchPicker({
       window.removeEventListener('resize', place)
       document.removeEventListener('scroll', place, true)
     }
-  }, [open, branches, error, loading, ref, triggerRef])
+  }, [open, branches, error, switchError, loading, filter, ref, triggerRef])
 
-  const current = loading ? 'Checking…' : error ? 'Unavailable' : branches ? branches.current ?? 'Detached HEAD' : branch ?? 'none'
-  const sessionBranchStale = branches !== null && branch !== null && branches.current !== branch
+  const current = pendingTarget ?? (handoffPending ? branch : null) ?? (error ? 'Unavailable' : branches ? branches.current ?? branches.detached ?? 'Detached' : branch ?? '…')
+  const sessionBranchStale = !pending && branches !== null && branch !== null && branches.current !== branch
+  const otherChats = branches?.otherChats ?? []
+  const blocked = branches?.dirty || otherChats.length > 0
+  const ordered = branches ? [
+    ...branches.branches.filter(name => name === branches.current),
+    ...branches.branches.filter(name => name !== branches.current),
+  ].filter(name => name.toLocaleLowerCase().includes(filter.toLocaleLowerCase())) : []
+  const choose = (name: string) => {
+    if (name === branches?.current && (!sessionBranchStale || blocked)) {
+      close()
+      return
+    }
+    setPendingTarget(name)
+    setSwitchError(null)
+    void onSwitch(name).then(async message => {
+      await refresh()
+      if (message) setSwitchError(message)
+      else close()
+    }).catch(() => setSwitchError('Could not switch branches.')).finally(() => setPendingTarget(null))
+  }
   return (
     <div ref={ref} className="relative inline-block max-w-full">
       <button
@@ -342,10 +381,11 @@ function BranchPicker({
         aria-label={`Choose Git branch. Current branch: ${current}${sessionBranchStale ? `. This chat started on ${branch}` : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
+        disabled={pending}
         onClick={() => setOpen(value => !value)}
         className="inline-flex max-w-full items-center gap-1.5 rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
-        <span className="truncate font-mono text-[13px] text-text-muted">{current}</span>
+        <span className={`truncate font-mono text-[13px] text-text-muted${pending ? ' opacity-50' : ''}`}>{current}</span>
         {sessionBranchStale ? <span className="text-tone-warn" title={`This chat started on ${branch}. Start a fresh chat to use ${branches?.current ?? 'this checkout'}.`}>!</span> : null}
         <ChevronIcon open={open} />
       </button>
@@ -353,40 +393,55 @@ function BranchPicker({
         <div
           role="menu"
           aria-label="Local Git branches"
-          onKeyDown={handleMenuRovingKeyDown}
-          className="fixed z-[71] overflow-y-auto rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
-          style={menuPosition ? menuPosition : { visibility: 'hidden' }}
+          onKeyDown={event => {
+            if (event.target === filterRef.current) {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter') {
+                event.preventDefault()
+                const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:not(:disabled)')]
+                const row = event.key === 'ArrowUp' ? rows.at(-1) : rows[0]
+                if (event.key === 'Enter') row?.click()
+                else row?.focus()
+              }
+              return
+            }
+            handleMenuRovingKeyDown(event)
+          }}
+          className="branch-picker-menu fixed z-[71] rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
         >
-          {error ? <p className="px-2.5 py-2 text-[12px] text-tone-danger">{error}</p> : null}
-          {loading ? <p className="px-2.5 py-2 text-[12px] text-text-subtle">Loading branches…</p> : null}
-          {branches?.branches.map(name => (
+          {branches?.dirty ? (
+            <p className="branch-picker-heading text-tone-warn">Commit or stash local changes before switching.</p>
+          ) : otherChats.length > 0 ? (
+            <p className="branch-picker-heading text-tone-warn">Close {otherChats.map((chat, index) => (
+              <span key={chat.appSessionId}>
+                {index > 0 ? index === otherChats.length - 1 ? ' and ' : ', ' : ''}
+                <button type="button" className="branch-picker-chat-link" onClick={() => { close(); onFocusChat?.(chat.appSessionId) }}>{chat.title}</button>
+              </span>
+            ))} to switch.</p>
+          ) : sessionBranchStale ? (
+            <p className="branch-picker-heading text-tone-warn">This chat started on {branch}. Select {branches?.current ?? 'the current branch'} to open a fresh chat on the current checkout.</p>
+          ) : error ?? switchError ? (
+            <p className="branch-picker-heading text-tone-danger">{error ?? switchError}</p>
+          ) : branches?.branches.some(name => name !== branches.current && !branches.occupied?.[name]) ? (
+            <p className="branch-picker-heading text-text-subtle">Switching closes this empty chat and opens a new one.</p>
+          ) : null}
+          {showFilter ? <input ref={filterRef} aria-label="Filter branches" placeholder="Filter branches" className="branch-picker-filter" value={filter} onChange={event => setFilter(event.target.value)} /> : null}
+          <div className="branch-picker-scroll" aria-busy={loading}>
+          {ordered.map(name => (
             <button
               key={name}
               type="button"
               role="menuitemradio"
-              aria-checked={name === branches.current}
-              disabled={pending}
-              onClick={() => {
-                if (name === branches.current && !sessionBranchStale) {
-                  close()
-                  return
-                }
-                setPending(true)
-                setError(null)
-                void onSwitch(name).then(message => {
-                  if (message) setError(message)
-                  else close()
-                }).catch(() => setError('Could not switch branches.')).finally(() => setPending(false))
-              }}
+              aria-checked={name === branches?.current}
+              disabled={pending || (name !== branches?.current && (blocked || Boolean(branches?.occupied?.[name])))}
+              onClick={() => choose(name)}
               className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[12px] text-text-primary hover:bg-white/[0.045] disabled:opacity-50"
             >
               <span className="min-w-0 flex-1 truncate" title={name}>{name}</span>
-              {name === branches.current ? <span className="text-accent">✓</span> : null}
+              {branches?.occupied?.[name] && name !== branches.current ? <span className="branch-picker-occupant" title={branches.occupied[name]}>{branches.occupied[name]}</span> : null}
+              {name === branches?.current ? <span className="text-accent">✓</span> : null}
             </button>
           ))}
-          {branches?.dirty ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-tone-warn">Commit or stash local changes before switching.</p> : null}
-          {sessionBranchStale ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-tone-warn">This chat started on {branch}. Select {branches?.current ?? 'the current branch'} to open a fresh chat on the current checkout.</p> : null}
-          {branches ? <p className="border-t border-shell-seam px-2.5 pb-1 pt-2 text-[11px] text-text-subtle">Switching closes this empty chat and opens a new one.</p> : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -646,7 +701,7 @@ function CodexTable({
       <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
         <div className="flex items-center gap-2.5">
           <span className="flex text-accent">
-            <CubeIcon />
+            <ProviderLogo provider="openai" size={16} />
           </span>
           <span className="text-[16px] font-semibold text-text-primary">
             Codex
@@ -906,20 +961,6 @@ function BranchIcon() {
       <circle cx="6" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
       <circle cx="18" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.7" />
       <path d="M6 8.4v7.2M18 9.4c0 4-3 4.6-6 5.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-function CubeIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
-      <path d="m3.3 7 8.7 5 8.7-5M12 22V12" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   )
 }

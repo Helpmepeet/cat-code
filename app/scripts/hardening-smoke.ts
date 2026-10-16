@@ -30,7 +30,7 @@ Object.defineProperty(app, 'isPackaged', {
 const frames: ServerFrame[] = [
   {
     kind: 'ready',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId: HARDENING_SESSION_ID,
     engineSessionId: 'hardening-engine-session',
     payload: {
@@ -45,7 +45,7 @@ const frames: ServerFrame[] = [
   },
   {
     kind: 'event',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId: HARDENING_SESSION_ID,
     event: {
       type: 'message',
@@ -91,13 +91,13 @@ const frames: ServerFrame[] = [
 const gateFrames: ServerFrame[] = [
   {
     kind: 'workspace-trust.snapshot',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId: HARDENING_SESSION_ID,
     workspaceTrust: { trusted: true, detectedRepo: null, trustRoot: null },
   },
   {
     kind: 'accounts.snapshot',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId: HARDENING_SESSION_ID,
     accounts: {
       accounts: [],
@@ -208,6 +208,10 @@ async function runProductionHardeningSmoke(
     })()`)
 
     const expectedBridgeKeys = [
+      'readScheduledTasks',
+      'lidClosed',
+      'readScheduledTaskOptions',
+      'scheduledTask',
       // Frame plane (engine commands + attachment).
       'abort',
       'accountVerb',
@@ -268,6 +272,7 @@ async function runProductionHardeningSmoke(
       'openHistorySession',
       'pickAttachmentFile',
       'pickDirectory',
+      'pickScheduledTaskDirectory',
       'previewSession',
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',
@@ -328,11 +333,6 @@ async function runProductionHardeningSmoke(
       // Glass mode is a fixed main-only preference sender. Its bounded boolean
       // preserves a solid native background during renderer paint gaps when off.
       'setGlassMode',
-      // Usage analytics — the renderer requests an engine-backed stats snapshot.
-      // It authors no query: the `stats.query` frame carries a bounded range enum
-      // and a request id, schema-validated AT THE SIDECAR (`statsQueryMessageSchema`)
-      // which fails closed with `bad_request`, and the snapshot is secretGuard-clean.
-      'queryStats',
       // Freeze telemetry — the renderer reports that React committed a render.
       // Argument-free and IPC-free: it only increments a preload-local counter
       // (with an overflow guard) that the health probe reads at sample time, so

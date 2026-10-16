@@ -256,3 +256,12 @@ dashboard.
 - `SECURITY-MINIMUM.md` — the baseline §3 conforms to.
 - `PER-SESSION-COST.md` — the ~189 MB per-process engine-import figure the
   cadence choice prices against.
+
+## Session transport retirement, 2026-10-15
+
+[Session protocol v4](SESSION-PROTOCOL-V4.md) removes the unused chat OAuth
+progress feed and rejects session account-management commands other than
+`account.switch`. Host account-control workers, the broad account domain types,
+redacted progress, manual-code/cancel flows, pool refresh, and dedicated
+sign-out/deletion invalidations remain the management path. No account data or
+credential generation is migrated.

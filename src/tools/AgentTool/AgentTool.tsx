@@ -161,9 +161,7 @@ export async function finalizeFailedAgentLaunch({
     )
       .map(worker => worker.handle)
       .filter((handle): handle is string => Boolean(handle && handle.length > 0))
-    const workerName = allocateWorkerName(agentType, reservedWorkerHandles, {
-      allowGeneric: true,
-    })
+    const workerName = allocateWorkerName(reservedWorkerHandles)
 
     try {
       await recordSpawn({
@@ -172,7 +170,7 @@ export async function finalizeFailedAgentLaunch({
         ...(sessionStateTracking.statePath
           ? { statePath: sessionStateTracking.statePath }
           : {}),
-        handle: workerName ?? agentId,
+        handle: workerName,
         agentId,
         role: agentType,
         description,
@@ -191,7 +189,7 @@ export async function finalizeFailedAgentLaunch({
         logForDebugging(`Failed to record worker launch failure: ${_err}`),
       )
     } finally {
-      if (workerName) releaseWorkerName(workerName)
+      releaseWorkerName(workerName)
     }
   }
 
@@ -383,10 +381,7 @@ function normalizeExplicitSubagentName(explicitName: string): string {
 
 export type ResolvedSystemSubagentName = {
   agentName: string
-  // Always set (unlike the old optional `allocatedAgentName`) so callers can
-  // unconditionally release it — whether the name came from an explicit
-  // caller value, a themed pool, or a team allocation, it was held in the
-  // process-local reservation set during async setup.
+  // Owned in the process-local reservation set throughout async setup.
   processReservationName: string
   teamAllocation?: {
     teamName: string
@@ -396,19 +391,15 @@ export type ResolvedSystemSubagentName = {
 
 export async function resolveSystemSubagentName({
   explicitName,
-  agentType,
   appState,
   sessionId,
   sessionStateTracking,
-  agentId,
   teamName,
 }: {
   explicitName?: string
-  agentType: string
   appState: ReturnType<ToolUseContext['getAppState']>
   sessionId: string
   sessionStateTracking?: AgentSessionStateTracking
-  agentId: string
   teamName?: string
 }): Promise<ResolvedSystemSubagentName> {
   const reservedSubagentNames = await getReservedSubagentNames({
@@ -420,44 +411,40 @@ export async function resolveSystemSubagentName({
 
   if (explicitName) {
     const agentName = normalizeExplicitSubagentName(explicitName)
-    if (reservedSubagentNames.includes(agentName)) {
+    if (
+      forbiddenKeys.has(recipientNameKey(agentName)) ||
+      !tryReserveWorkerName(agentName)
+    ) {
       throw new Error(`Subagent name "${agentName}" is already in use`)
     }
     if (teamName) {
-      const record = await allocateTeamRecipient({
-        teamName,
-        requestedName: agentName,
-        kind: 'local',
-        conflict: 'error',
-        forbiddenKeys,
-        sessionId,
-      })
-      if (!tryReserveWorkerName(record.name)) {
-        throw new Error(`Subagent name "${record.name}" is already in use`)
+      try {
+        const record = await allocateTeamRecipient({
+          teamName,
+          requestedName: agentName,
+          kind: 'local',
+          conflict: 'error',
+          forbiddenKeys,
+          sessionId,
+        })
+        return {
+          agentName: record.name,
+          processReservationName: agentName,
+          teamAllocation: { teamName, allocationId: record.allocationId },
+        }
+      } catch (error) {
+        releaseWorkerName(agentName)
+        throw error
       }
-      return {
-        agentName: record.name,
-        processReservationName: record.name,
-        teamAllocation: { teamName, allocationId: record.allocationId },
-      }
-    }
-    if (!tryReserveWorkerName(agentName)) {
-      throw new Error(`Subagent name "${agentName}" is already in use`)
     }
     return { agentName, processReservationName: agentName }
   }
 
   if (teamName) {
     for (;;) {
-      const candidate = selectWorkerNameCandidate(agentType, forbiddenKeys, {
-        allowGeneric: true,
-      })
-      if (!candidate) {
-        // No themed pool for this agentType (or pool logic exhausted) —
-        // fall back to the agent's own ID, which is never entered into the
-        // team's shared namespace.
-        return { agentName: agentId, processReservationName: agentId }
-      }
+      const candidate = selectWorkerNameCandidate(forbiddenKeys)
+      // Hold the process name across the team transaction so no other launch can claim it.
+      if (!tryReserveWorkerName(candidate)) continue
       try {
         const record = await allocateTeamRecipient({
           teamName,
@@ -467,26 +454,21 @@ export async function resolveSystemSubagentName({
           forbiddenKeys,
           sessionId,
         })
-        tryReserveWorkerName(record.name)
         return {
           agentName: record.name,
-          processReservationName: record.name,
+          processReservationName: candidate,
           teamAllocation: { teamName, allocationId: record.allocationId },
         }
-      } catch (e) {
-        if (!(e instanceof RecipientConflictError)) throw e
+      } catch (error) {
+        releaseWorkerName(candidate)
+        if (!(error instanceof RecipientConflictError)) throw error
         forbiddenKeys.add(recipientNameKey(candidate))
       }
     }
   }
 
-  const allocatedAgentName = allocateWorkerName(
-    agentType,
-    reservedSubagentNames,
-    { allowGeneric: true },
-  )
-  const finalName = allocatedAgentName ?? agentId
-  return { agentName: finalName, processReservationName: finalName }
+  const agentName = allocateWorkerName(reservedSubagentNames)
+  return { agentName, processReservationName: agentName }
 }
 
 function registerAgentName(
@@ -1108,11 +1090,9 @@ export const AgentTool = buildTool({
       teamAllocation,
     } = await resolveSystemSubagentName({
       explicitName: name,
-      agentType: selectedAgent.agentType,
       appState,
       sessionId: parentSessionId,
       sessionStateTracking,
-      agentId: earlyAgentId,
       teamName,
     });
     let registeredAgentName = false;

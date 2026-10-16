@@ -109,15 +109,27 @@ export function createSubagentDockState(restoredEntries: readonly SubagentDockEn
   return { entries, initialized: false, nextLaunchOrder: Math.max(0, ...restoredEntries.map(entry => entry.launchOrder + 1)) }
 }
 
+const agentCandidatesByRows = new WeakMap<readonly NestedTranscriptRow[], readonly NestedToolUseRow[]>()
+
+function agentCandidates(rows: readonly NestedTranscriptRow[]): readonly NestedToolUseRow[] {
+  const cached = agentCandidatesByRows.get(rows)
+  if (cached) return cached
+  const candidates = rows.filter((row): row is NestedToolUseRow =>
+    row.kind === 'tool-use' && row.toolFamily === 'agent')
+  agentCandidatesByRows.set(rows, candidates)
+  return candidates
+}
+
 function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'tasks' | 'workers'>, state: SubagentDockState): Map<string, NestedToolUseRow> {
   const { transcriptRows: rows, tasks, workers } = input
+  const candidates = agentCandidates(rows)
   const agentByToolUseId = new Map((tasks?.subagents ?? []).map(agent => [agent.toolUseId, agent.agentId]))
   const knownAgents = new Map(Object.values(state.entries).map(entry => [entry.agentId, entry.name]))
   const rememberedByToolUseId = new Map(Object.values(state.entries).filter(entry => entry.toolUseId !== null).map(entry => [entry.toolUseId!, entry.agentId]))
   for (const worker of workers) knownAgents.set(worker.agentId, selectWorkerDisplayName(worker))
   for (const agent of tasks?.subagents ?? []) knownAgents.set(agent.agentId, agent.agentName ?? null)
-  for (const row of rows) {
-    if (row.kind === 'tool-use' && row.toolFamily === 'agent' && row.toolName !== 'ResumeAgent' && row.result?.agentId) {
+  for (const row of candidates) {
+    if (row.toolName !== 'ResumeAgent' && row.result?.agentId) {
       knownAgents.set(row.result.agentId, row.result.agentName ?? knownAgents.get(row.result.agentId) ?? null)
     }
   }
@@ -129,8 +141,7 @@ function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'task
   }
   const byId = new Map<string, NestedToolUseRow>()
   // Only parent agent cards belong in the parent's dock; nested agents have their own owner.
-  for (const row of rows) {
-    if (row.kind !== 'tool-use' || row.toolFamily !== 'agent') continue
+  for (const row of candidates) {
     if (row.toolName === 'ResumeAgent' && row.result) {
       // A rejected resume is a successful tool invocation with success:false.
       // It cannot replace the last actual run or its Clear marker.
@@ -319,7 +330,9 @@ export function selectSubagentDock(state: SubagentDockState, input: SubagentDock
   }
   active.sort((a, b) => Number(b.state === 'waiting') - Number(a.state === 'waiting') || a.launchOrder - b.launchOrder)
   finished.sort((a, b) => (b.terminalAt ?? 0) - (a.terminalAt ?? 0) || b.launchOrder - a.launchOrder)
-  return { active, finished, chipFaces: active.length ? active : finished, nextUpdateAt }
+  const chipFaces = active.some(row => !isSubagentDockTerminal(row.state))
+    ? active : [...active, ...finished].filter(row => row.state === 'failed')
+  return { active, finished, chipFaces, nextUpdateAt }
 }
 
 function usageLabel(usage: ReturnType<typeof agentUsageOf>, state: SubagentDockStatus): string | null {

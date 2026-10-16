@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act } from 'react'
+import { StrictMode, act } from 'react'
+import { collectRetainedUsage } from '../../../src/utils/statsUsage.js'
 import { App } from './App.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
 import { WORKSPACE_LAYOUT_STORAGE_KEY } from './workspaceLayout.js'
-import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
+import type { HostEvent, SessionDescriptor, SwitchWorkspaceBranchResult } from '../../shared/hostApi.js'
 import { PROTOCOL_VERSION, type CatCodeBridge, type ServerFrame, type TranscriptCache, type SessionCatalogEntry } from '../../shared/protocol.js'
 
 let harness: DomTestHarness
@@ -32,7 +33,7 @@ function ready(id: string): ServerFrame {
     payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } }
 }
 
-async function mountApp(sessions: SessionDescriptor[] = [], split = false, savedActiveIndex = 0) {
+async function mountApp(sessions: SessionDescriptor[] = [], split = false, savedActiveIndex = 0, strict = false) {
   window.localStorage.clear()
   if (split) window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify({ version: 1, panels: ['a', 'b'], widths: [35, 65], activeIndex: savedActiveIndex }))
   let hostListener: (event: HostEvent) => void = () => {}
@@ -40,11 +41,13 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
   const lifecycle: string[] = []
   const visible: string[][] = []
   const inventoryCwds: (string | null)[] = []
+  const usageRefreshes: string[] = []
   const bridge: Partial<CatCodeBridge> = {
     subscribe: listener => { frameListener = listener; return () => {} },
     subscribeHost: listener => { hostListener = listener; return () => {} },
     listSessions: async () => sessions, readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
     rendererReady: () => {}, recordRenderCommit: () => {},
+    refreshUsageDashboard: () => { usageRefreshes.push('refresh') },
     reportVisibleSessions: ids => { visible.push([...ids]) },
     previewSession: async () => null,
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
@@ -54,7 +57,7 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
     createManagedChat: async () => { lifecycle.push('create'); return { ok: true, value: sessionDescriptor('created') } },
   }
   window.catcode = bridge as CatCodeBridge
-  const tree = await harness.mount(<App />)
+  const tree = await harness.mount(strict ? <StrictMode><App /></StrictMode> : <App />)
   const host = async (event: HostEvent) => { await act(async () => { hostListener(event) }) }
   const frames = async (...frames: ServerFrame[]) => { await act(async () => { frameListener(frames) }) }
   await host({ type: 'accounts-pool', pool: { accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true, anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true } })
@@ -69,8 +72,33 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
   const key = async (key: string) => { await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true })) }) }
   const tabs = () => [...tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
   const selected = () => tabs().filter(t => t.getAttribute('aria-selected') === 'true').map(t => t.getAttribute('aria-label'))
-  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, inventoryCwds }
+  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, inventoryCwds, usageRefreshes }
 }
+
+test('Analytics activation requests one collection per App document, including with retained results', async () => {
+  const app = await mountApp()
+  expect(app.usageRefreshes).toEqual([])
+  const snapshot = await collectRetainedUsage([], '2026-10-15T00:00:00.000Z')
+  await app.host({ type: 'usage-dashboard', result: { type: 'usage', version: 1, snapshot } })
+  await app.click('Analytics')
+  expect(app.usageRefreshes).toHaveLength(1)
+  await app.click('Refresh analytics')
+  expect(app.usageRefreshes).toHaveLength(2)
+  await app.click('Goals')
+  await app.click('Analytics')
+  expect(app.usageRefreshes).toHaveLength(2)
+  await harness.unmountAll()
+  const newWindow = await mountApp()
+  await newWindow.host({ type: 'usage-dashboard', result: { type: 'usage', version: 1, snapshot } })
+  await newWindow.click('Analytics')
+  expect(newWindow.usageRefreshes).toHaveLength(1)
+})
+
+test('StrictMode replay does not send a second Analytics activation', async () => {
+  const app = await mountApp([], false, 0, true)
+  await app.click('Analytics')
+  expect(app.usageRefreshes).toHaveLength(1)
+})
 
 test('all sidebar pages share a unique strip and empty close restores the credential-ready welcome', async () => {
   const app = await mountApp()
@@ -601,4 +629,139 @@ test('a refused recalled prompt survives pagehide and renderer remount', async (
   const restored = await harness.mount(<App />)
   await app.frames(ready('a'))
   expect(restored.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('previously sent prompt')
+})
+
+async function branchDraft(split = false) {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')], split)
+  await app.key('1')
+  window.catcode.listWorkspaceBranches = async () => ({
+    ok: true, value: { current: 'main', branches: ['main', 'topic'], dirty: false },
+  })
+  const composer = () => app.tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+  await act(async () => {
+    composer().textContent = 'unsent draft '
+    composer().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const pasted = 'large pasted block\n'.repeat(60)
+  await act(async () => {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { files: [], getData: () => pasted } })
+    composer().dispatchEvent(event)
+  })
+  window.catcode.pickAttachmentFile = async () => ({ kind: 'file', name: 'notes.txt', token: 'opaque-original-token' })
+  await app.click('Add attachment')
+  window.catcode.pickAttachmentFile = async () => ({
+    kind: 'image', name: 'sketch.png', mediaType: 'image/png', bytes: new Uint8Array([104, 105]),
+  })
+  await app.click('Add attachment')
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+  expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
+  expect(app.tree.container.textContent).toContain('notes.txt')
+  expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
+  const pending = deferred<SwitchWorkspaceBranchResult>()
+  const calls: string[][] = []
+  window.catcode.switchWorkspaceBranch = (id, branch) => { calls.push([id, branch]); return pending.promise }
+  const picker = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label^="Choose Git branch"]')
+  if (!picker) throw new Error('missing branch picker')
+  await act(async () => { picker.click() })
+  await app.click('topic')
+  expect(calls).toEqual([['a', 'topic']])
+  expect(app.tree.container.querySelector('form[aria-label="Composer"]')?.getAttribute('aria-busy')).toBe('true')
+  const pendingPicker = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label^="Choose Git branch"]')!
+  expect(pendingPicker.textContent).toContain('topic')
+  expect(pendingPicker.textContent).not.toContain('!')
+  return { ...app, pending, pasted, composer }
+}
+
+test('branch handoff carries draft, paste IDs, unchanged image and file token in the same tab slot', async () => {
+  const app = await branchDraft()
+  await app.click('Goals')
+  await app.host({ type: 'session-added', session: sessionDescriptor('replacement') })
+  await app.host({ type: 'session-removed', appSessionId: 'a' })
+  expect(app.tabs().map(tab => tab.getAttribute('aria-label'))).toEqual(['Session a, live', 'Session b, live', 'Goals page', 'Session replacement, live'])
+  await act(async () => { app.pending.resolve({ ok: true, value: sessionDescriptor('replacement') }) })
+  expect(app.tabs().map(tab => tab.getAttribute('aria-label'))).toEqual(['Session replacement, live', 'Session b, live', 'Goals page'])
+  expect(app.selected()).toEqual(['Goals page'])
+  await app.key('1')
+  await app.frames(ready('replacement'))
+  expect(app.composer().textContent).toContain('unsent draft ')
+  expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
+  expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
+  const submissions: unknown[][] = []
+  window.catcode.submit = (...args) => { submissions.push(args) }
+  await act(async () => { app.composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+  expect(JSON.stringify(submissions)).toContain('opaque-original-token')
+  expect(JSON.stringify(submissions)).toContain('aGk=')
+  expect(JSON.stringify(submissions)).toContain('large pasted block')
+})
+
+for (const branchChanged of [false, true]) {
+  test(`failed branch handoff preserves source draft and all attachments (branchChanged=${branchChanged})`, async () => {
+    const app = await branchDraft()
+    if (branchChanged) {
+      window.catcode.listWorkspaceBranches = async () => ({
+        ok: true, value: { current: 'topic', branches: ['topic', 'main'], dirty: false },
+      })
+    }
+    await act(async () => {
+      app.pending.resolve({
+        ok: false, ...(branchChanged ? { branchChanged: true as const } : {}),
+        error: { code: 'spawn_failed', message: 'Synthetic handoff failed' },
+      })
+    })
+    expect(app.selected()).toEqual(['Session a, live'])
+    expect(app.composer().textContent).toContain('unsent draft ')
+    expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
+    expect(app.tree.container.textContent).toContain('notes.txt')
+    expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()
+    expect(app.tree.container.textContent).toContain('Synthetic handoff failed')
+    expect(app.tree.container.querySelector('button[aria-label^="Choose Git branch"]')?.getAttribute('aria-label')).toContain(`Current branch: ${branchChanged ? 'topic' : 'main'}`)
+    const submissions: unknown[][] = []
+    window.catcode.submit = (...args) => { submissions.push(args) }
+    await act(async () => { app.composer().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    expect(JSON.stringify(submissions)).toContain('opaque-original-token')
+    expect(JSON.stringify(submissions)).toContain('aGk=')
+    expect(JSON.stringify(submissions)).toContain('large pasted block')
+  })
+}
+
+test('branch handoff replaces the focused split pane without moving its neighbors', async () => {
+  const app = await branchDraft(true)
+  await app.host({ type: 'session-added', session: sessionDescriptor('replacement') })
+  await app.host({ type: 'session-removed', appSessionId: 'a' })
+  await act(async () => { app.pending.resolve({ ok: true, value: sessionDescriptor('replacement') }) })
+  expect(app.selected()).toEqual(['Session replacement, live'])
+  const saved = JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!)
+  expect(saved.panels).toEqual(['replacement', 'b'])
+  expect(saved.widths).toEqual([35, 65])
+  expect(saved.activeIndex).toBe(0)
+})
+
+test('a cold cached conversation shows its mismatch through the read-only path without restoring an engine', async () => {
+  const dead = sessionDescriptor('dead', { status: 'exited', restorable: true })
+  const app = await mountApp([dead])
+  const reads: unknown[][] = []
+  window.catcode.listWorkspaceBranches = async (id: string, purpose?: 'readout') => {
+    reads.push([id, purpose])
+    return { ok: true, value: { current: 'external', recordedBranch: 'recorded', branches: [], dirty: false } }
+  }
+  window.catcode.previewSession = async () => ({
+    header: { appSessionId: 'dead', engineSessionId: 'engine-dead', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', guardVersion: 1, writtenAt: 0 },
+    frames: [{
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'dead',
+      event: { type: 'message', message: { type: 'assistant', uuid: 'cached-message',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'A conversation from before restart' }] } } },
+    }] as ServerFrame[],
+  })
+  await app.click('Pin sidebar open')
+  await act(async () => {
+    for (const header of app.tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"][aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"]')) header.click()
+  })
+  const row = [...app.tree.container.querySelectorAll<HTMLElement>('[role="button"]')].find(element => element.getAttribute('aria-label')?.includes('dead'))!
+  expect(row !== undefined).toBe(true)
+  await act(async () => row.click())
+  expect(app.tree.container.textContent).toContain('A conversation from before restart')
+  expect(app.tree.container.querySelector('.workspace-branch-changed')?.getAttribute('aria-label')).toBe('Checkout is on external. This chat was on recorded.')
+  expect(reads).toEqual([['dead', 'readout']])
+  expect(app.lifecycle).toEqual([])
 })

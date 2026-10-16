@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-10-09
+Last refreshed: 2026-10-12
 
 ## Purpose
 
@@ -79,7 +79,7 @@ active local features.
 | Desktop operational lifecycle | `app/main/operationalLogSink.ts:createOperationalLogSink` | `app/shared/operationalLog.ts`, `app/main/main.ts`, `app/supervisor/supervisor.ts`, `app/sidecar/operationalLogger.ts` | Separate from engine debug logs and product telemetry. The sink uses private permissions, bounded rotation/retention, deduplication, and a synchronous fatal close; records carry no raw diagnostic line or engine stderr. |
 | Desktop delivery trace | `app/main/deliveryTraceSink.ts:createDeliveryTraceSink` | `app/shared/deliveryTrace.ts`, `app/main/main.ts`, `app/preload/{preload,deliveryAckQueue}.ts`, `app/renderer/src/App.tsx` | Metadata-only trace records and bounded watermarks identify a frame through main/preload/renderer delivery stages. Renderer acknowledgements are fixed, schema-validated IPC payloads; the preload queue retains rate-limited batches so diagnostics traffic cannot unmount the renderer. |
 | Desktop GUI debug snapshot | `app/renderer/src/debugStateReport.ts` | `app/main/devHarness.ts`, `app/shared/debugState.ts` | Producer samples the newest 128 sidebar rows and retains the active row within that cap. The receiver remains closed and bounded; full host session rows remain separate. This diagnostic snapshot does not enter model prompts or the support bundle. |
-| Desktop support bundle | `app/main/diagnosticsBundle.ts:buildDiagnosticsBundle` | `app/main/main.ts`, `app/renderer/src/SettingsShell.tsx`, `app/shared/operationalLog.ts` | Exports only parsed operational records and allowlisted delivery-trace objects. Coverage records distinguish rotated/tail-truncated sources, bounded export omission, rejected records, and known producer loss from a clean trace. Transcripts, caches, settings, vaults, raw debug logs, and renderer debug state are excluded. |
+| Desktop support bundle | `app/main/diagnosticsBundle.ts:buildDiagnosticsBundle` | `app/main/{main,saveDiagnosticsBundle}.ts`, `app/renderer/src/SettingsShell.tsx`, `app/renderer/src/diagnosticsSaveAction.ts`, `app/shared/operationalLog.ts` | Exports only parsed operational records and allowlisted delivery-trace objects. Coverage records distinguish rotated/tail-truncated sources, bounded export omission, rejected records, and known producer loss from a clean trace. Settings and transcript consumers distinguish cancellation from failure; transcripts, caches, settings, vaults, raw debug logs, and renderer debug state are excluded. |
 | Error recording | `src/utils/log.ts:logError` | Adds to in-memory errors and routes to attached sink unless disabled by provider/privacy/error-reporting gates. |
 | Error sink attachment | `src/utils/log.ts:attachErrorLogSink` | Queues pre-sink errors and drains when the sink attaches. |
 | API query event | `src/services/api/logging.ts:logAPIQuery` | Records model, message count, temperature, provider, permission/query metadata, thinking/effort/fast mode, and env model/base URL metadata. |

@@ -11,6 +11,7 @@
 
 import type { ComponentProps } from 'react'
 import type { SessionPane } from './SessionPane.js'
+import { EMPTY_HISTORY_NAV } from './composerState.js'
 import { createTranscriptState } from './transcriptProjector.js'
 
 /** A minimal live, idle session pane. Spread and override the one field a test
@@ -41,6 +42,8 @@ export function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
     copyForLlm: () => {},
     denyPermission: () => {},
     history: [],
+    historyNav: EMPTY_HISTORY_NAV,
+    onHistoryNavChange: () => {},
     mentionItems: [],
     onApprovePlan: () => {},
     onPaste: () => {},

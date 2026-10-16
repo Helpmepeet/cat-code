@@ -128,14 +128,14 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
  *
  * `sticky` lists exactly the once-per-attach state frames, in the send order of
  * `SidecarServer.addConnection`. A few of them also re-broadcast on change
- * (settings / run-controls / accounts / goal / memory / tasks / workers /
+ * (settings / run-controls / accounts / goal / tasks / workers /
  * workspace-trust / remoteSettings / permission.context / queued-prompts); a
  * re-broadcast replaces the slot's value and keeps its original position,
  * because these are point-in-time state a reader applies wholesale, not
  * transcript rows whose position carries meaning.
  *
  * `ring` covers transcript traffic (`event` and `transcript.reset`), request-scoped replies
- * (`*.result`, `pong`, `error`, `oauth.login.progress`), `lifecycle`, and the
+ * (`*.result`, `pong`, `error`), `lifecycle`, and the
  * two kinds this buffer never sees: `session-title` (main consumes it and
  * relays it to the durable registry, `main.ts:674`) and `sessions.snapshot`
  * (catalog decision #4 — a main-supervised worker owns the catalog, the sidecar
@@ -146,6 +146,7 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
  * should not replay stale; reopening the popover queries the sidecar cache).
  */
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
+  'lid.work': 'none',
   ready: 'head',
   'history.replay.complete': 'none',
   // Branch availability must survive renderer reload independently of the
@@ -160,7 +161,6 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'settings.snapshot': 'sticky',
   'agent-config.snapshot': 'sticky',
   'thread-goal.snapshot': 'sticky',
-  'memory.snapshot': 'sticky',
   'tasks.snapshot': 'sticky',
   'workers.snapshot': 'sticky',
   'lease.snapshot': 'sticky',
@@ -170,10 +170,8 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'accounts.snapshot': 'sticky',
   'workspace-trust.snapshot': 'sticky',
   'diagnostics.snapshot': 'sticky',
-  'extensions.snapshot': 'sticky',
   'remoteSettings.snapshot': 'sticky',
   'slash-catalog.snapshot': 'sticky',
-  'stats.usage.snapshot': 'sticky',
   // Sticky, not ring: this is the list of messages waiting for the running
   // response, applied wholesale and replaced by the next one. A reload during a
   // long turn would otherwise lose the rows for messages the user has already
@@ -206,7 +204,6 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'run-control.result': 'ring',
   'session-action.result': 'ring',
   'account.result': 'ring',
-  'oauth.login.progress': 'ring',
   'workspace.trust.result': 'ring',
   'remoteSettings.result': 'ring',
   'settings.result': 'ring',

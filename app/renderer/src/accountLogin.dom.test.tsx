@@ -3,8 +3,11 @@ import { act } from 'react'
 import { App } from './App.js'
 import { ToastContext } from './toastContext.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
-import { PROTOCOL_VERSION, type CatCodeBridge, type AccountVerbMessage } from '../../shared/protocol.js'
+import { PROTOCOL_VERSION, type CatCodeBridge, type AccountVerbMessage, type ServerFrame } from '../../shared/protocol.js'
 import type { HostEvent } from '../../shared/hostApi.js'
+import type { LidModeCommand, LidModeView } from '../../shared/lidClosed.js'
+import { sessionDescriptor } from './sessionDescriptorFixture.js'
+import { selectFocusableElements } from './overlayFocus.js'
 
 let harness: DomTestHarness
 let previous: CatCodeBridge
@@ -12,19 +15,29 @@ beforeAll(async () => { harness = await createDomTestHarness(); previous = windo
 afterEach(async () => { await harness.unmountAll(); window.catcode = previous })
 afterAll(async () => { await harness.teardown() })
 
-async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = []) {
+async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [], recovery = false) {
   window.localStorage.clear()
   const calls: AccountVerbMessage[] = []
   const lifecycleCalls: string[] = []
   const toasts: string[] = []
   let hostEvent: (event: HostEvent) => void = () => {}
+  let frames: (frames: ServerFrame[]) => void = () => {}
+  let lidUpdate: (view: LidModeView) => void = () => {}
+  const lidCommands: LidModeCommand[] = []
+  const lidView: LidModeView = { phase: 'unresolved', allowance: 15, remainingSeconds: 0, installed: true, sleepRequested: false, error: 'Synthetic restoration failure' }
   const bridge: Partial<CatCodeBridge> = {
-    subscribe: () => () => {},
+    subscribe: listener => { frames = listener; return () => {} },
     subscribeHost: listener => { hostEvent = listener; return () => {} },
-    listSessions: async () => [],
+    listSessions: async () => recovery ? [sessionDescriptor('recovery-chat')] : [],
     readProjectRoutes: async () => [],
     readSessionsCatalog: async () => null,
     rendererReady: () => {}, recordRenderCommit: () => {}, reportVisibleSessions: () => {},
+    refreshUsageDashboard: () => {},
+    ...(recovery ? { lidClosed: {
+      read: async () => lidView,
+      subscribe: (listener: (view: LidModeView) => void) => { lidUpdate = listener; return () => {} },
+      command: async (command: LidModeCommand) => { lidCommands.push(command); return lidView },
+    } } : {}),
     manageAccount: async verb => {
       calls.push(verb)
       return { kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '', requestId: verb.requestId, verb: verb.type, ok: !refusedVerbs.includes(verb.type), message: verb.type === 'account.oauthPasteCode' ? 'That code was refused.' : verb.type === 'account.oauthAlias' ? 'That name is taken.' : 'Done' }
@@ -51,8 +64,94 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [])
     if (!button) throw new Error(`missing button ${label}`)
     await act(async () => { button.click() })
   }
-  return { calls, lifecycleCalls, toasts, tree, click, pool, hostEvent: (event: HostEvent) => hostEvent(event) }
+  return { calls, lifecycleCalls, toasts, tree, click, pool, hostEvent: (event: HostEvent) => hostEvent(event),
+    frames: (values: ServerFrame[]) => frames(values), lidCommands,
+    lidUpdate: (view: Partial<LidModeView>) => lidUpdate({ ...lidView, ...view }) }
 }
+
+test.each(['trust', 'first-run', 'add-account', 'orphan'] as const)(
+  'machine-wide recovery warning and Retry survive %s and page navigation',
+  async surface => {
+    const app = await mountAccountsApp([], true)
+    if (surface === 'trust') {
+      await act(async () => {
+        app.frames([{ kind: 'workspace-trust.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'recovery-chat',
+          workspaceTrust: { trusted: false, trustRoot: '/tmp/recovery-chat', detectedRepo: null } }])
+      })
+    } else if (surface === 'add-account') {
+      await app.click('Accounts')
+      await app.click('+ Add account')
+    } else if (surface === 'orphan') {
+      await act(async () => {
+        app.hostEvent({ type: 'accounts-pool', pool: { ...app.pool, anthropicRouteAvailable: true } })
+        app.hostEvent({ type: 'account-oauth', provider: 'openai', progress: { state: 'waiting_for_login', url: 'https://example.test/login' } })
+      })
+    }
+    const assertRecovery = () => {
+      const notice = app.tree.container.querySelector<HTMLElement>('.lid-notice')!
+      expect(notice?.textContent).toContain("Couldn't restore normal sleep")
+      expect(notice?.textContent).toContain('Synthetic restoration failure')
+      const retry = [...notice.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Retry')!
+      expect(retry.disabled).toBe(false)
+      expect(notice.querySelector('[aria-label="Dismiss"]')).toBeNull()
+      // Absolute startup overlays are confined to the sibling below the notice,
+      // not the notice's own containing block.
+      const dialog = app.tree.container.querySelector('[role="dialog"]')
+      if (dialog) {
+        expect(notice.nextElementSibling?.contains(dialog)).toBe(true)
+        expect(notice.nextElementSibling?.classList.contains('relative')).toBe(true)
+      }
+      return retry
+    }
+    expect(app.tree.container.querySelector('[role="dialog"]')?.getAttribute('aria-label'))
+      .toBe(surface === 'trust' ? 'Workspace trust' : 'Sign in')
+    const tab = async (shiftKey = false) => {
+      await act(async () => {
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }))
+      })
+    }
+    const dialogControls = () => selectFocusableElements(app.tree.container.querySelector<HTMLElement>('[role="dialog"]')!)
+    const retry = assertRecovery()
+    let controls = dialogControls()
+    await act(async () => { controls.at(-1)!.focus() })
+    await tab()
+    expect(document.activeElement).toBe(retry)
+    await tab()
+    expect(document.activeElement).toBe(controls[0])
+    await tab(true)
+    expect(document.activeElement).toBe(retry)
+    await tab(true)
+    expect(document.activeElement).toBe(controls.at(-1)!)
+    // No sidebar, page-tab, or underlying account control joins the loop.
+    await act(async () => { retry.focus() })
+    for (const expected of [...controls, retry]) {
+      await tab()
+      expect(document.activeElement).toBe(expected)
+    }
+    await act(async () => { assertRecovery().click() })
+    expect(app.lidCommands).toEqual([{ action: 'retry' }])
+    await app.click('Goals')
+    assertRecovery()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true, bubbles: true }))
+    })
+    assertRecovery()
+    await act(async () => { app.lidUpdate({ recovering: true }) })
+    expect(app.tree.container.querySelector<HTMLButtonElement>('.lid-notice button')?.disabled).toBe(true)
+    controls = dialogControls()
+    await act(async () => { controls.at(-1)!.focus() })
+    await tab()
+    expect(document.activeElement).toBe(controls[0])
+    await act(async () => { app.lidUpdate({ phase: 'off', error: undefined }) })
+    expect(app.tree.container.querySelector('.lid-notice')).toBeNull()
+    controls = dialogControls()
+    await act(async () => { controls.at(-1)!.focus() })
+    await tab()
+    expect(document.activeElement).toBe(controls[0])
+    await tab(true)
+    expect(document.activeElement).toBe(controls.at(-1)!)
+  },
+)
 
 test('sidebar pages open unique mixed tabs and page closing never calls session lifecycle', async () => {
   const { lifecycleCalls, tree, click } = await mountAccountsApp()

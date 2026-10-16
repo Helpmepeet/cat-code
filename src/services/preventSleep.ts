@@ -28,6 +28,14 @@ let caffeinateProcess: ChildProcess | null = null
 let restartInterval: ReturnType<typeof setInterval> | null = null
 let refCount = 0
 let cleanupRegistered = false
+let suppressed = false
+
+export function setPreventSleepSuppressed(value: boolean): void {
+  if (suppressed === value) return
+  suppressed = value
+  if (value) { stopRestartInterval(); killCaffeinate() }
+  else if (refCount > 0) { spawnCaffeinate(); startRestartInterval() }
+}
 
 /**
  * Increment the reference count and start preventing sleep if needed.
@@ -68,6 +76,7 @@ export function forceStopPreventSleep(): void {
 }
 
 function startRestartInterval(): void {
+  if (suppressed) return
   // Only run on macOS
   if (process.platform !== 'darwin') {
     return
@@ -99,6 +108,7 @@ function stopRestartInterval(): void {
 }
 
 function spawnCaffeinate(): void {
+  if (suppressed) return
   // Only run on macOS
   if (process.platform !== 'darwin') {
     return

@@ -78,14 +78,14 @@ describe('worker session state', () => {
         worker => worker.status === 'running',
       ),
     ).toBe(false)
-    // A terminal worker holds no active slot, so nothing keeps it addressable
-    // as a live target after it ended.
-    expect(state?.activeWorkers).toEqual({})
-
+    expect(state?.knownWorkers[workerAgentId]?.handle).toBe('Ada')
     const durableState = (await readDurableState()) as {
-      activeWorkers: Record<string, { role: string; agentId: string }>
+      knownWorkers: Record<string, { handle: string; status: string }>
     }
-    expect(durableState.activeWorkers).toEqual({})
+    expect(durableState.knownWorkers[workerAgentId]).toMatchObject({
+      handle: 'Ada',
+      status: 'killed',
+    })
   })
 
   test('reads legacy state only for coordinator records', async () => {
@@ -96,12 +96,25 @@ describe('worker session state', () => {
     const legacyState = {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
-      knownWorkers: {},
+      activeWorkers: { Ada: { role: 'explorer', agentId: 'legacy-worker' } },
+      knownWorkers: {
+        'legacy-worker': {
+          agentId: 'legacy-worker',
+          handle: 'Ada',
+          role: 'explorer',
+          description: 'Retained worker history',
+          status: 'completed' as const,
+          worktreePath: null,
+        },
+      },
     }
 
     await writeFile(legacyPath, JSON.stringify(legacyState))
-    expect((await readSessionState(sessionId))?.mode).toBe('coordinator')
+    expect(await readSessionState(sessionId)).toEqual({
+      sessionId,
+      mode: 'coordinator',
+      knownWorkers: legacyState.knownWorkers,
+    })
 
     await writeFile(legacyPath, JSON.stringify({ ...legacyState, mode: 'agent' }))
     expect(await readSessionState(sessionId)).toBeNull()

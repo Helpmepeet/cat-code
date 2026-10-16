@@ -25,6 +25,7 @@ export const MENU_ITEM_SELECTOR = [
   // reach it like any other row; without this it is Tab-reachable but skipped by
   // the arrows, which reads as a dead row to anyone driving the menu by keyboard.
   'button[role="menuitemcheckbox"]:not([disabled])',
+  'button[role="switch"]:not([disabled])',
   '[role="menuitem"][tabindex]:not([tabindex="-1"])',
   '[role="menuitemradio"][tabindex]:not([tabindex="-1"])',
   '[role="menuitemcheckbox"][tabindex]:not([tabindex="-1"])',
@@ -326,6 +327,7 @@ export function useModalFocus({
   escapeEnabled = true,
   initialFocus = 'first',
   restoreOnClose = true,
+  getAdditionalFocusElements,
 }: {
   open: boolean
   containerRef: RefObject<HTMLElement | null>
@@ -333,6 +335,7 @@ export function useModalFocus({
   escapeEnabled?: boolean
   initialFocus?: 'first' | 'container'
   restoreOnClose?: boolean
+  getAdditionalFocusElements?: () => HTMLElement[]
 }): { isKeyboardOwner: () => boolean } {
   const ownerRef = useRef<ModalFocusOwner>(Symbol('modal-focus-owner'))
   const isKeyboardOwner = useCallback(
@@ -341,8 +344,10 @@ export function useModalFocus({
   )
   const initialFocusRef = useRef(initialFocus)
   const restoreOnCloseRef = useRef(restoreOnClose)
+  const additionalFocusRef = useRef(getAdditionalFocusElements)
   initialFocusRef.current = initialFocus
   restoreOnCloseRef.current = restoreOnClose
+  additionalFocusRef.current = getAdditionalFocusElements
 
   useEffect(() => {
     if (!open) return
@@ -383,13 +388,25 @@ export function useModalFocus({
       if (action !== 'tab') return
       const container = containerRef.current
       if (!container) return
-      const focusable = selectFocusableElements(container)
+      const additional = additionalFocusRef.current?.().filter(isFocusableElement) ?? []
+      const focusable = [...selectFocusableElements(container), ...additional]
       if (focusable.length === 0) {
         event.preventDefault()
         container.focus()
         return
       }
       const current = activeHtmlElement()
+      // Native Tab order can cross ordinary app controls between the modal and
+      // an explicitly included action. Keep the whole extended loop bounded.
+      if (additional.length > 0) {
+        const currentIndex = current ? focusable.indexOf(current) : -1
+        const target = currentIndex < 0
+          ? event.shiftKey ? focusable.length - 1 : 0
+          : (currentIndex + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length
+        event.preventDefault()
+        focusable[target]?.focus()
+        return
+      }
       const target = nextTabStopIndex(
         event.key,
         event.shiftKey,

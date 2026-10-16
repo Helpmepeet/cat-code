@@ -50,6 +50,7 @@ import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js
  * (`app/scripts/package-app.ts`), which is why both read this one array.
  */
 export const SIDECAR_RUNTIME_ARGS = [
+  '--feature=LID_CLOSED',
   '--feature=TRANSCRIPT_CLASSIFIER',
   '--feature=REACTIVE_COMPACT',
   '--feature=COMPACT_TASK_RESTORE',
@@ -92,6 +93,8 @@ export const SIDECAR_MODE_ENTRIES = {
   'settings-inventory': { file: 'settingsInventoryWorker.ts', runtimeFlags: false },
   'settings-write': { file: 'settingsWriteWorker.ts', runtimeFlags: false },
   'workspace-listing': { file: 'workspaceListingWorker.ts', runtimeFlags: false },
+  'workspace-observation': { file: 'workspaceObservationWorker.ts', runtimeFlags: false },
+  'scheduled-options': { file: 'scheduledTaskOptionsWorker.ts', runtimeFlags: false },
   relocation: { file: 'sessionRelocationWorker.ts', runtimeFlags: false },
   'usage-stats': { file: 'usageStatsWorker.ts', runtimeFlags: false },
   'debug-cleanup': { file: 'debugCleanupWorker.ts', runtimeFlags: true },
@@ -552,6 +555,26 @@ export function stampHistoryViewAnchor<T extends { type: string }>(
 }
 
 /**
+ * Is this frame a message the USER sent into a session?
+ *
+ * The peer plane restarts a pair's hop budget on one (`onUserMessage`), so the
+ * answer must be something no agent can produce. `peer.deliver` is a different
+ * message type, and the scheduler and the plane's own sends use the internal
+ * audience, so only a renderer-origin `app.submit` qualifies. `isMeta` marks the
+ * renderer's synthetic submits, which are not the user speaking.
+ */
+export function isUserTurnSubmit(
+  message: { type: string; options?: { isMeta?: boolean } },
+  audience: 'renderer' | 'internal',
+): boolean {
+  return (
+    audience === 'renderer' &&
+    message.type === 'app.submit' &&
+    message.options?.isMeta !== true
+  )
+}
+
+/**
  * Is a supervisor record a LIVE engine, or a tombstone?
  *
  * `SidecarSupervisor.listSessions()` returns every record it holds with its
@@ -677,9 +700,8 @@ export function supervisorEventToServerFrame(
  * verbs answer `ok` without touching the pool — `account.login`, whose ack means
  * only that the browser handoff started, plus the three sub-protocol steps
  * `oauthPasteCode` / `oauthAlias` / `oauthCancel`. Each false trigger costs a
- * ~189 MB worker boot and a live authenticated usage fetch, and `oauthAlias` is
- * the worst of them: it emits the `success` progress below BEFORE returning its
- * own ok, so a denylist bought two spawns for one sign-in.
+ * worker boot and authenticated usage fetch. App-wide account control owns
+ * publication after a completed login.
  *
  * Closed by construction: a verb added later refreshes nothing until it is
  * listed here, which is the safe direction to be wrong in.
@@ -693,16 +715,11 @@ const POOL_MUTATING_VERBS: ReadonlySet<string> = new Set([
 ])
 
 export function frameMutatedAccountsPool(frame: ServerFrame): boolean {
-  // Optional chaining, not a bare read: main's frame handler runs inside the
-  // supervisor's socket data loop, which has no try/catch, so a malformed frame
-  // must not throw the whole loop out on a nested property.
-  if (frame.kind === 'oauth.login.progress') {
-    return frame.progress?.state === 'success'
-  }
-  if (frame.kind === 'account.result') {
-    return frame.ok && POOL_MUTATING_VERBS.has(frame.verb)
-  }
-  return false
+  return (
+    frame.kind === 'account.result' &&
+    frame.ok === true &&
+    POOL_MUTATING_VERBS.has(frame.verb)
+  )
 }
 
 /** A frame after which the session has no live process left to talk to. */
@@ -766,6 +783,7 @@ export type AttachmentFileTokenStore = {
   mint(sessionId: SessionId, realpath: string): AttachmentFileTokenSelection
   /** Resolve only in the session that owns the selection. */
   resolve(sessionId: SessionId, token: string): string | undefined
+  transfer(from: SessionId, to: SessionId): void
 }
 
 export function detectAttachmentImageMediaType(
@@ -853,6 +871,11 @@ export function createAttachmentFileTokenStore(
         return undefined
       }
       return entry.sessionId === sessionId ? entry.realpath : undefined
+    },
+    transfer(from, to) {
+      for (const entry of tokens.values()) {
+        if (entry.sessionId === from) entry.sessionId = to
+      }
     },
   }
 }

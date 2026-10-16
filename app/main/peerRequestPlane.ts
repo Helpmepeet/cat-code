@@ -24,7 +24,8 @@
  *  - HR4 spawning stays bounded by HC4 and by the registry churn rule, both of
  *    which live in the host — this module opts into the churn rule and
  *    reimplements neither.
- *  - HR6 no file contents and no path cross the plane in either direction.
+ *  - HR6 no file contents cross the plane. Internal transition finish reports
+ *    only the engine's settled cwd (HOST-REQUEST-PLANE coordination amendment).
  *  - HR7 is the sidecar's `send` (secretGuard on every outbound frame).
  *
  * Every store here is IN-MEMORY and dies with the window (SESSION-LIFETIME L1),
@@ -88,6 +89,10 @@ export type PeerRegistryRow = {
 type NamedRow = PeerRegistryRow & { name: string }
 
 export type PeerRequestPlaneDeps = {
+  workspaceTransitions?: {
+    begin(appSessionId: SessionId, operationId: string): boolean
+    finish(appSessionId: SessionId, operationId: string, cwd: string): boolean
+  }
   /** Agent-directed jump verbs have separate authority from peer operations. */
   workspaceRequests?: {
     handleRequest: (appSessionId: string, request: WorkspaceHostRequest) => Promise<
@@ -224,6 +229,8 @@ const VERB_ARG_KEYS: Record<
   'workspace.jump': { required: ['operationId', 'destinationHandle'], optional: [] },
   'workspace.ready': { required: ['operationId', 'tipUuid', 'toolUseId'], optional: [] },
   'workspace.cancel': { required: ['operationId'], optional: [] },
+  'workspace.transition.begin': { required: ['operationId'], optional: [] },
+  'workspace.transition.finish': { required: ['operationId', 'cwd'], optional: [] },
 }
 
 const FRAME_KEYS = new Set([
@@ -288,6 +295,8 @@ export type ValidatedHostRequest =
   | { verb: 'workspace.jump'; operationId: string; destinationHandle: string }
   | { verb: 'workspace.ready'; operationId: string; tipUuid: string; toolUseId: string }
   | { verb: 'workspace.cancel'; operationId: string }
+  | { verb: 'workspace.transition.begin'; operationId: string }
+  | { verb: 'workspace.transition.finish'; operationId: string; cwd: string }
 
 export type WorkspaceHostRequest = Extract<ValidatedHostRequest, { verb: 'workspaces.list' | 'workspace.jump' | 'workspace.ready' | 'workspace.cancel' }>
 
@@ -383,7 +392,7 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
       if (utf8Bytes(value) > MAX_PEER_TEXT_BYTES) {
         return { ok: false, requestId, error: fail('too_large', `${key} is too long`) }
       }
-    } else if (value.length > MAX_HOST_REQUEST_ARG_CHARS) {
+    } else if (value.length > (key === 'cwd' ? 4096 : MAX_HOST_REQUEST_ARG_CHARS)) {
       return { ok: false, requestId, error: fail('bad_request', `${key} is too long`) }
     }
   }
@@ -428,6 +437,18 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
     case 'workspace.ready':
       return { ok: true, requestId, request: { verb, operationId: strings.operationId!, tipUuid: strings.tipUuid!, toolUseId: strings.toolUseId! } }
     case 'workspace.cancel':
+      return { ok: true, requestId, request: { verb, operationId: strings.operationId! } }
+    case 'workspace.transition.begin':
+    case 'workspace.transition.finish':
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(strings.operationId!)) {
+        return { ok: false, requestId, error: fail('bad_request', 'operationId must be a UUID') }
+      }
+      if (verb === 'workspace.transition.finish') {
+        if (!strings.cwd!.startsWith('/') || strings.cwd!.includes('\0')) {
+          return { ok: false, requestId, error: fail('bad_request', 'cwd must be an absolute path') }
+        }
+        return { ok: true, requestId, request: { verb, operationId: strings.operationId!, cwd: strings.cwd! } }
+      }
       return { ok: true, requestId, request: { verb, operationId: strings.operationId! } }
     default:
       return { ok: false, requestId, error: fail('unknown_verb', `unknown verb ${verb}`) }
@@ -545,6 +566,11 @@ export type PeerRequestPlane = {
   reservationsFor: (sessionId: SessionId) => number
   /** Retry ready recipients after a host move has finished changing its scope. */
   onMoveSettled: (sessionId: SessionId) => void
+  /**
+   * The user sent this session a message. Gives every pair this session is in a
+   * fresh hop budget; see `resetPairHops`.
+   */
+  onUserMessage: (sessionId: SessionId) => void
   /** The presence main last heard from a row, for `peers.list` and for tests. */
   presenceOf: (sessionId: SessionId) => ActivityPresence | undefined
 }
@@ -873,6 +899,25 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       return { refusal }
     }
     return { hops, pairHops }
+  }
+
+  /**
+   * A user message in either session of a pair restarts that pair's budget.
+   *
+   * `MAX_PEER_HOPS` cannot tell a long interview the user asked for from two
+   * agents chattering at each other, because both are one counter ticking up.
+   * A user turn can: nothing an agent does produces one. So the refusal asks the
+   * sender to put the question to the user, and the user's answer arrives here.
+   *
+   * Only `pairHops` is zeroed. The route in each record is ring evidence for
+   * `hop_loop` and stays, and so do the window, rate and queue bounds, so a
+   * user message cannot be used to launder a ring.
+   */
+  function resetPairHops(sessionId: SessionId): void {
+    for (const [key, record] of chains) {
+      const [recipient, sender] = key.split('|')
+      if (recipient === sessionId || sender === sessionId) record.pairHops = 0
+    }
   }
 
   /** Record a hop main actually delivered toward `to` from `from`. */
@@ -1428,6 +1473,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       validated.request.verb !== 'peer.ack' &&
       validated.request.verb !== 'workspace.ready' &&
       validated.request.verb !== 'workspace.cancel' &&
+      validated.request.verb !== 'workspace.transition.begin' &&
+      validated.request.verb !== 'workspace.transition.finish' &&
       !charge(verbWindow, sessionId, MAX_HOST_REQUESTS_PER_WINDOW)
     ) {
       answer(sessionId, validated.requestId, {
@@ -1448,6 +1495,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       return
     }
     const request = validated.request
+    if (request.verb === 'workspace.transition.begin' || request.verb === 'workspace.transition.finish') {
+      const transitions = deps.workspaceTransitions
+      const admitted = transitions && (request.verb === 'workspace.transition.begin'
+        ? transitions.begin(sessionId, request.operationId)
+        : transitions.finish(sessionId, request.operationId, request.cwd))
+      answer(sessionId, validated.requestId, admitted
+        ? { ok: true, value: { operationId: request.operationId } }
+        : { ok: false, error: fail('unavailable', 'The working folder cannot change while a branch switch or another folder change is pending.') })
+      return
+    }
     if (request.verb === 'workspaces.list' || request.verb === 'workspace.jump' ||
         request.verb === 'workspace.ready' || request.verb === 'workspace.cancel') {
       const handler = deps.workspaceRequests
@@ -1619,6 +1676,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       runControls.set(sessionId, controls)
     },
     onReady,
+    onUserMessage: resetPairHops,
     onMoveSettled: movedSessionId => {
       for (const recipientId of pending.keys()) {
         const held = pending.get(recipientId) ?? []

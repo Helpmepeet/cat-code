@@ -25,26 +25,26 @@
  * (`BgTasksDialog`), rebuilt on the P0-2 tokens, zero ported code.
  *
  * P4-32b adds the prototype's `TasksPanel` tab structure as ruled on 2026-07-30:
- * inspection **D1** puts a READ-ONLY worker drilldown here and nowhere else, and
- * lease option **L1** adds the
- * session-scoped Codex lease roster. Consequences that shape this file:
+ * inspection D1 puts a read-only worker drilldown here, and lease option L1
+ * adds the session-scoped Codex lease roster. The 2026-10-16 amendment in
+ * ORCHESTRATOR-IN-SESSION §11 also permits the dock's inline live-step panel.
+ * Consequences that shape this file:
  *
- *  - **D1 waives `WorkerFocusView` entirely.** There is no main-column focus swap,
- *    no "Open thread" control and no worker composer: the user stays in the
- *    current session. The waiver is recorded in
- *    `PARITY-LEDGER.md` §20 rather than left as a silent omission.
- *  - **Result policy Q2** puts a worker's real conclusion HERE and never in the
- *    transcript or a focus column (`selectWorkerResult`, `workerInspection.ts`).
+ *  - There is still no main-column focus swap, "Open thread" control here, or
+ *    worker composer. SubagentWorkspace owns the separate dock entry point;
+ *    the user stays in the current session.
+ *  - Worker snapshot conclusions remain here (`selectWorkerResult`,
+ *    `workerInspection.ts`). The side panel renders transcript-owned steps,
+ *    including the worker's own prose, rather than borrowing snapshot output.
  *  - The tab row is three items, not the prototype's two (🔁 adapted): this dialog
  *    is the real `/tasks` manager, whose list is a SUPERSET of worker tasks
  *    (background bash, dreams, monitors, remote agents). Folding workers into that
  *    list would either hide those tasks or drop the prototype's role grouping, so
  *    Tasks keeps the built list and Workers is the role-grouped worker view.
  *
- * The three panel components are exported because this package's renderer suite is
- * SSR-only (no DOM harness — see `AccountsPage.test.tsx`'s header), so a tab click
- * cannot be simulated; rendering a panel directly is how its real fields are
- * asserted. They are React components, so the Fast Refresh boundary still holds.
+ * The three panel components are exported so the SSR suites can assert their
+ * real fields directly. They are React components, so the Fast Refresh
+ * boundary still holds.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {

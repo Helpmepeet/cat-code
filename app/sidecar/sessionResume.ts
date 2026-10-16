@@ -25,6 +25,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { existsSync } from 'node:fs'
+import type { UUID } from 'node:crypto'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
@@ -35,6 +36,7 @@ import {
 } from '../../src/utils/transcriptLease.js'
 import {
   getSessionQueueOperations,
+  getLastSessionLog,
   getTranscriptPathForSession,
   type SessionQueueOperation,
 } from '../../src/utils/sessionStorage.js'
@@ -70,6 +72,7 @@ type ResumeConversationLoader = typeof loadConversationForResume
 export async function loadOwnedConversationForResume(
   resumeEngineSessionId: string,
   loadConversation: ResumeConversationLoader = loadConversationForResume,
+  beforeLoad?: () => Promise<void>,
 ): Promise<Awaited<ReturnType<ResumeConversationLoader>>> {
   try {
     await activateTranscriptLease(resumeEngineSessionId)
@@ -80,6 +83,7 @@ export async function loadOwnedConversationForResume(
     throw error
   }
   try {
+    await beforeLoad?.()
     const loaded = await loadConversation(resumeEngineSessionId, undefined)
     if (!loaded) await releaseActiveTranscriptLease()
     return loaded
@@ -143,6 +147,7 @@ export type SidecarResumeResult = {
   undeliveredPrompts: UndeliveredPrompt[]
   /** See `UndeliveredPromptSelection.droppedRecords`. */
   droppedQueueRecords: number
+  lastWorkingBranch?: string | null
 }
 
 /**
@@ -272,7 +277,17 @@ export async function resumeEngineSession(
       'no conversation found (transcript missing or unreadable)',
     )
   }
-  const loaded = await loadOwnedConversationForResume(resumeEngineSessionId)
+  let lastWorkingBranch: string | null | undefined
+  const loaded = await loadOwnedConversationForResume(resumeEngineSessionId, loadConversationForResume, async () => {
+    // Capture provenance before resume hooks can append messages on today's
+    // checkout. Reading a reopened chat must not advance its working branch.
+    try {
+      const recorded = (await getLastSessionLog(resumeEngineSessionId as UUID))?.gitBranch
+      lastWorkingBranch = recorded === 'HEAD' ? null : recorded
+    } catch (error) {
+      process.stderr.write(`[sidecar] could not read recorded workspace branch: ${String(error)}\n`)
+    }
+  })
   if (!loaded) {
     // Missing/corrupt transcript — never fall through to a fresh session.
     throw new SidecarResumeError(
@@ -332,5 +347,6 @@ export async function resumeEngineSession(
     turnInterrupted: loaded.turnInterruptionState.kind === 'interrupted_prompt',
     undeliveredPrompts: undelivered.prompts,
     droppedQueueRecords: undelivered.droppedRecords,
+    ...(lastWorkingBranch !== undefined ? { lastWorkingBranch } : {}),
   }
 }

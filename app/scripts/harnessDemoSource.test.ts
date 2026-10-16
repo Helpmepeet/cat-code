@@ -1,22 +1,6 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
-test('harness demo cleanup is reachable on every exit path', () => {
-  const source = readFileSync(new URL('./harness-demo.ts', import.meta.url), 'utf8')
-
-  expect(source).toContain('async function cleanup(): Promise<void>')
-  expect(source).toContain('await cleanup()')
-  expect(source).toContain('process.exitCode =')
-  expect(source).toContain('await main()\nprocess.exit(process.exitCode ?? 0)')
-  expect(source.match(/\bprocess\.exit\(/g) ?? []).toHaveLength(1)
-  expect(source).toContain('...(vite ? [terminateChild(vite)] : [])')
-  expect(source).toContain('await terminateSupervisedChild({')
-  expect(source).toContain('let electronProcess')
-  expect(source).toContain('electronProcess = electron')
-  expect(source).toContain('terminateChild(electron)')
-  expect(source).toContain('void terminateChild(child).then')
-})
-
 test('harness demo driver requests Electron shutdown before its forced-exit backstop', () => {
   const source = readFileSync(new URL('./harness-demo-driver.ts', import.meta.url), 'utf8')
 

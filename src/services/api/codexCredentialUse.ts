@@ -571,32 +571,6 @@ function mapLifecycleError(error: unknown): CodexCredentialUseError {
 }
 
 /**
- * Validate a handle while holding the account lifecycle lock. Legacy handles
- * are atomically tagged and returned as a new generation-one handle.
- */
-export async function authorizeCodexCredentialUse(
-  handle: CodexCredentialHandle,
-  options: CodexCredentialUseOptions = {},
-): Promise<CodexCredentialHandle> {
-  assertHandle(handle)
-  const lifecycle = lifecycleForOptions(options)
-  const storage = resolveStorage(options)
-  try {
-    return await lifecycle.withTransaction(
-      handle.accountId,
-      {
-        operationKind: 'refresh',
-        operationId: randomUUID(),
-      },
-      permit => authorizeUnderPermit(handle, lifecycle, permit, storage),
-    )
-  } catch (error) {
-    if (error instanceof CodexCredentialUseError) throw error
-    throw mapLifecycleError(error)
-  }
-}
-
-/**
  * Start one network operation under the credential lock.
  *
  * The callback is invoked synchronously inside the transaction. Its returned

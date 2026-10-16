@@ -35,11 +35,6 @@ const SID: SessionId = 'sess-1'
  * the buffer's own table so a reordering or a demotion to the evictable ring is
  * a test failure, not a silently agreeing constant.
  *
- * This is CALL order, not arrival order: the two `void`-invoked async sends
- * (`stats.usage`) awaits before its first send, so that frame
- * land after the synchronous burst. The buffer keys on arrival, and this suite
- * supplies arrival itself, so call order is what the list can honestly mirror.
- *
  * `queued-prompts.snapshot` is the one entry that is NOT sent every time:
  * `addConnection` skips it when nothing is waiting for a running response, which
  * is the ordinary case. It belongs in the list all the same, because what the
@@ -52,16 +47,13 @@ const ATTACH_BURST_KINDS = [
   'settings.snapshot',
   'agent-config.snapshot',
   'thread-goal.snapshot',
-  'memory.snapshot',
   'tasks.snapshot',
   'workers.snapshot',
   'lease.snapshot',
   'run-controls.snapshot',
   'accounts.snapshot',
-  'stats.usage.snapshot',
   'workspace-trust.snapshot',
   'diagnostics.snapshot',
-  'extensions.snapshot',
   'remoteSettings.snapshot',
   'slash-catalog.snapshot',
   'queued-prompts.snapshot',
@@ -74,7 +66,7 @@ const ATTACH_BURST_KINDS = [
 
 /**
  * Retention keys on `kind` alone, so a snapshot's payload is irrelevant here.
- * One cast beats reconstructing fourteen unrelated engine snapshot shapes;
+ * One cast beats reconstructing unrelated engine snapshot shapes;
  * `marker` stands in for "which generation of this snapshot is this".
  */
 function attachSnapshotFrame(

@@ -23,8 +23,8 @@ export type RawSocketLike = {
  * mark (~8 KiB) is silently truncated: `socket.write()`'s short return is
  * discarded, the length-prefixed FrameDecoder on the reader keeps consuming
  * unrelated bytes to satisfy the frame's declared length, and the whole stream
- * desyncs until it drops on invalid UTF-8. A >8 KiB `memory.snapshot` (fired on
- * every connect), a long assistant turn, or history replay all hit this.
+ * desyncs until it drops on invalid UTF-8. Large metadata snapshots, long
+ * assistant turns, and history replay all hit this.
  *
  * Bytes the socket can't accept yet are queued IN ORDER (a length-prefixed
  * stream desyncs if any byte is reordered or dropped) and flushed from the

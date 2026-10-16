@@ -13,7 +13,7 @@
  * parsed tree stay in JavaScript state at full fidelity.
  */
 import type { Element, ElementContent, Root, RootContent } from 'hast'
-import type { Root as MdastRoot } from 'mdast'
+import type { Root as MdastRoot, Nodes as MdastNodes, Link } from 'mdast'
 import type { Position } from 'unist'
 import type { ReactNode } from 'react'
 import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
@@ -219,6 +219,7 @@ export function planMarkdownLeaves(
     cache?: MarkdownPlanCache
     recognizeCallouts?: boolean
     math?: boolean
+    streamingLinks?: boolean
   },
 ): MarkdownRenderLeaf[] {
   const math = options?.math ?? false
@@ -381,6 +382,10 @@ export function planMarkdownLeaves(
     }
   }
 
+  // Presentation-only nodes must never enter the settled-prefix cache.
+  if (options?.streamingLinks && tailOffset === null && markdownSource.includes('[')) {
+    tree = pendingLinkTree(processor, markdownSource, source, math, recognizeCallouts, tree) ?? tree
+  }
   const state: PlanState = { sourceId, leaves: [] }
   const roots: ElementContent[] = []
   for (const child of tree.children) {
@@ -393,6 +398,240 @@ export function planMarkdownLeaves(
   }
 
   return state.leaves
+}
+
+function pendingLinkTree(
+  processor: ReturnType<typeof markdownProcessor>,
+  source: string,
+  originalSource: string,
+  math: boolean,
+  recognizeCallouts: boolean,
+  settled: Root,
+): Root | null {
+  // These suffixes are probes only. Remark decides whether a candidate is a
+  // link rather than escaped text, an image, inline code, or fenced code.
+  // Descend through the final containers, not through inline formatting. A
+  // large list can have a tiny final paragraph that is still cheap to probe.
+  const containers = ['ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr']
+  let block = [...settled.children].reverse().find(child => child.type === 'element')
+  while (block?.type === 'element' && containers.includes(block.tagName)) {
+    const last = [...block.children].reverse().find(child =>
+      child.type === 'element' && (child.position || child.children.length > 0) ||
+      child.type === 'text' && child.value.trim() !== '')
+    if (last?.type !== 'element' || ![...containers, 'p', 'td', 'th'].includes(last.tagName)) break
+    block = last
+  }
+  if (block?.type !== 'element' || !['p', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(block.tagName)) return null
+  const first = block.children.find(child => child.position)?.position?.start
+  if (first?.offset === undefined) return null
+  const offset = first.offset
+  if (source.length - offset > MAX_MARKDOWN_LEAF_CHARACTERS) return null
+  const wholeSource = source
+  // Probe inline content as a standalone paragraph. Remove only container
+  // indentation on continuation lines, keeping an exact source-offset map.
+  const offsets: number[] = []
+  const characters: string[] = []
+  let atLineStart = false
+  for (let index = offset; index < wholeSource.length; index++) {
+    if (atLineStart) {
+      let removed = 0
+      while (removed < first.column - 1 && /[ \t>]/.test(wholeSource[index] ?? '') && index < wholeSource.length) {
+        index++
+        removed++
+      }
+      atLineStart = false
+      if (index === wholeSource.length) break
+    }
+    characters.push(wholeSource[index]!)
+    offsets.push(index)
+    atLineStart = wholeSource[index] === '\n'
+  }
+  offsets.push(wholeSource.length)
+  source = characters.join('')
+  const localOffsets = new Map(offsets.map((absolute, local) => [absolute, local]))
+  const candidates: number[] = []
+  function collect(node: Root | RootContent | ElementContent): void {
+    if (node.type === 'element' && ['a', 'code', 'pre', 'img', 'math'].includes(node.tagName)) return
+    if (node.type === 'text' && node.position?.start.offset !== undefined && node.position.end.offset !== undefined) {
+      const from = node.position.start.offset
+      const raw = wholeSource.slice(from, node.position.end.offset)
+      for (let index = raw.indexOf('['); index >= 0; index = raw.indexOf('[', index + 1)) {
+        const local = localOffsets.get(from + index)
+        if (local !== undefined) candidates.push(local)
+      }
+    }
+    if ('children' in node) for (const child of node.children) collect(child)
+  }
+  collect(block)
+  // Pathological bracket runs must not multiply parser work per token.
+  let probes = 0
+  for (const start of candidates.slice(-8)) {
+    const delimiter = source.indexOf('](', start)
+    const destination = delimiter < 0 ? null : source.slice(delimiter + 2)
+    let destinationStart = delimiter + 2
+    while (/\s/.test(source[destinationStart] ?? '') && destinationStart < source.length) destinationStart++
+    let destinationEnd = destinationStart
+    const angleDestination = source[destinationStart] === '<'
+    let parentheses = 0
+    // Remark validates the grammar. This scan only keeps the raw URL separate
+    // from its optional title, so presentation never includes title syntax.
+    while (destinationEnd < source.length) {
+      const char = source[destinationEnd]!
+      if (char === '\\') {
+        destinationEnd = Math.min(source.length, destinationEnd + 2)
+        continue
+      }
+      if (angleDestination) {
+        destinationEnd++
+        if (char === '>') break
+        continue
+      }
+      if (/\s/.test(char) || char === ')' && parentheses === 0) break
+      if (char === '(') parentheses++
+      if (char === ')') parentheses--
+      destinationEnd++
+    }
+    const suffixes = destination === null
+      ? Array.from(
+        { length: Math.min(32, source.slice(start).match(/\[/g)?.length ?? 1) },
+        (_, index) => `${']'.repeat(index + 1)}(cat-code-pending-label)`,
+      )
+      : Array.from(
+        { length: Math.min(32, (destination.match(/\(/g)?.length ?? 0) + 1) },
+        (_, index) => ')'.repeat(index + 1),
+      )
+    if (destination !== null && angleDestination) suffixes.unshift('>)')
+    const titleDelimiter = source.slice(destinationEnd).trimStart()[0]
+    if (destination !== null && (titleDelimiter === '"' || titleDelimiter === "'")) suffixes.push(`${titleDelimiter})`)
+    const incompleteEscape = ((source.match(/\\+$/)?.[0].length ?? 0) % 2) === 1
+    for (const closing of suffixes) {
+      const suffix = incompleteEscape ? `\\${closing}` : closing
+      if (++probes > 32) return null
+      const mdast = processor.parse(source + suffix)
+      let pending: Link | undefined
+      function find(node: MdastNodes): void {
+        if (
+          node.type === 'link' && node.position?.start.offset === start &&
+          node.position.end.offset === source.length + suffix.length
+        ) pending = node
+        if ('children' in node) for (const child of node.children) find(child)
+      }
+      find(mdast)
+      if (!pending) continue
+      if (destination !== null) {
+        const labelEnd = pending.children.at(-1)?.position?.end.offset ?? start + 1
+        if (labelEnd > delimiter || source.slice(labelEnd, delimiter).includes(']')) continue
+        pending.data = {
+          ...pending.data,
+          hProperties: {
+            // A separator proves that an otherwise ambiguous URL cannot grow into a scheme.
+            dataPendingDestination: wholeSource.slice(
+              offsets[destinationStart]!,
+              offsets[destinationEnd + (/\s/.test(source[destinationEnd] ?? '') ? 1 : 0)]!,
+            ),
+          },
+        }
+      } else {
+        // Preserve literal label syntax and shield it from bare-path plugins.
+        Object.assign(pending, {
+          type: 'emphasis',
+          children: [{
+            type: 'text',
+            value: source.slice(start),
+            position: pending.position && {
+              start: { ...pending.position.start },
+              end: { ...pending.position.end },
+            },
+          }],
+          data: { hName: 'span', hProperties: { dataPendingLabel: true } },
+        })
+      }
+      const lines = source.split('\n')
+      const end = { offset: source.length, line: lines.length, column: lines.at(-1)!.length + 1 }
+      function clip(node: MdastNodes): void {
+        if (node.position && (node.position.end.offset ?? 0) > source.length) node.position.end = { ...end }
+        if ('children' in node) for (const child of node.children) clip(child)
+      }
+      clip(mdast)
+      const lineStarts = [offset - first.column + 1]
+      for (let index = offset; index < wholeSource.length; index++) {
+        if (wholeSource[index] === '\n') lineStarts.push(index + 1)
+      }
+      function restore(node: MdastNodes): void {
+        if (node.position) {
+          for (const point of [node.position.start, node.position.end]) {
+            const absolute = offsets[point.offset ?? 0] ?? wholeSource.length
+            let line = lineStarts.length - 1
+            while (line > 0 && lineStarts[line]! > absolute) line--
+            point.offset = absolute
+            point.line = first!.line + line
+            point.column = absolute - lineStarts[line]! + 1
+          }
+        }
+        if ('children' in node) for (const child of node.children) restore(child)
+      }
+      restore(mdast)
+      if (math) markBracketDisplayMath(mdast, originalSource)
+      const tree = processor.runSync(mdast)
+      normalizeTree(tree, recognizeCallouts)
+      let replacement: Element | undefined
+      let prefix: ElementContent | undefined
+      function locate(node: Root | Element): void {
+        for (let index = 0; index < node.children.length; index++) {
+          const child = node.children[index]
+          if (child?.type !== 'element') continue
+          if (child.position?.start.offset === offsets[start] &&
+            (child.properties.dataPendingDestination !== undefined || child.properties.dataPendingLabel)) {
+            replacement = child
+            const previous = node.children[index - 1]
+            if (previous?.type === 'text') prefix = previous
+          } else locate(child)
+        }
+      }
+      locate(tree)
+      if (!replacement) return null
+      const pendingNode = replacement
+      function graft<T extends Root | Element>(node: T): T {
+        const target = offsets[start]!
+        if (node.position && (
+          (node.position.start.offset ?? 0) > target ||
+          (node.position.end.offset ?? wholeSource.length) <= target
+        )) return node
+        const children = []
+        for (const child of node.children) {
+          const from = child.position?.start.offset
+          const to = child.position?.end.offset
+          if (child.type === 'text' && from !== undefined && to !== undefined &&
+            from <= offsets[start]! && to > offsets[start]!) {
+            if (prefix?.type === 'text' && prefix.position) {
+              if (prefix.position.start.offset === from) children.push(prefix)
+              else {
+                // A reference resolved in the original document may be plain
+                // text in the isolated probe. Preserve only the original text
+                // node's suffix of that probe prefix.
+                for (let length = child.value.length; length > 0; length--) {
+                  if (prefix.value.endsWith(child.value.slice(0, length))) {
+                    children.push({
+                      ...child,
+                      value: child.value.slice(0, length),
+                      position: { start: child.position!.start, end: prefix.position.end },
+                    })
+                    break
+                  }
+                }
+              }
+            }
+            children.push(pendingNode)
+            return { ...node, children } as T
+          }
+          children.push(child.type === 'element' ? graft(child) : child)
+        }
+        return { ...node, children } as T
+      }
+      return graft(settled)
+    }
+  }
+  return null
 }
 
 type PendingLatexDelimiter = {

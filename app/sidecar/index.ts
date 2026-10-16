@@ -64,6 +64,9 @@ import {
   SidecarResumeError,
 } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
+import { createWorkspaceObserver } from './workspaceObservation.js'
+import { createWorkspaceTransitionCoordinator } from './workspaceTransition.js'
+import { setWorkspaceTransitionCoordinator } from '../../src/utils/workspaceTransition.js'
 import { setPeerHostRequester } from './peerHostRequester.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
 import { createSidecarMcpLifecycleStartGate } from './mcpLifecycleStartGate.js'
@@ -438,17 +441,16 @@ async function main(): Promise<void> {
     settings,
     agentConfig,
     goals,
-    memory,
     tasks,
     accounts,
     workspaceTrust,
     diagnostics,
-    extensions,
     remoteSettings,
     workers,
     leases,
     taskControl,
     panelTaskReaper,
+    lidWork,
     runControls,
     sessionActions,
     contextBreakdown,
@@ -542,6 +544,7 @@ async function main(): Promise<void> {
   const exitCleanly = sidecarCleanup.exit
 
   const server = new SidecarServer({
+    workspaceObserver: args.probeOnAttach ? undefined : await createWorkspaceObserver(resumed),
     sessionId: args.sessionId,
     engineSessionId,
     generation: args.generation,
@@ -550,7 +553,6 @@ async function main(): Promise<void> {
     ...(settings ? { settings } : {}),
     ...(agentConfig ? { agentConfig } : {}),
     ...(goals ? { goals } : {}),
-    ...(memory ? { memory } : {}),
     ...(tasks ? { tasks } : {}),
     ...(accounts ? { accounts } : {}),
     ...(workspaceTrust ? { workspaceTrust } : {}),
@@ -558,12 +560,12 @@ async function main(): Promise<void> {
       ? { onWorkspaceTrusted: mcpLifecycleStartGate.onWorkspaceTrusted }
       : {}),
     ...(diagnostics ? { diagnostics } : {}),
-    ...(extensions ? { extensions } : {}),
     ...(remoteSettings ? { remoteSettings } : {}),
     ...(workers ? { workers } : {}),
     ...(leases ? { leases } : {}),
     ...(taskControl ? { taskControl } : {}),
     ...(panelTaskReaper ? { panelTaskReaper } : {}),
+    ...(lidWork ? { lidWork } : {}),
     ...(runControls ? { runControls } : {}),
     ...(sessionActions ? { sessionActions } : {}),
     ...(contextBreakdown ? { contextBreakdown } : {}),
@@ -679,6 +681,7 @@ async function main(): Promise<void> {
   setPeerHostRequester((verb, args, options) =>
     server.requestHost(verb, args, options),
   )
+  setWorkspaceTransitionCoordinator(createWorkspaceTransitionCoordinator())
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a
   // socket FILE, not a listening TCP port — no network surface added).

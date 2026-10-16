@@ -42,6 +42,7 @@ import {
   type ComposerGhostSnapshot,
 } from './composerSendMotion.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
+import { useWorkspaceBranch } from './useWorkspaceBranch.js'
 import { ProjectRoutingBar } from './ProjectRoutingBar.js'
 import type { ProjectRouteChoice, ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
@@ -150,7 +151,7 @@ import {
   AgentFaceRegistryContext,
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
-import { SubagentDock } from './SubagentDock.js'
+import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -222,7 +223,9 @@ export function SessionPane({
   activeDescriptor,
   branch,
   branchSwitchPending: checkoutSwitchPending = false,
+  branchSwitchTarget = null,
   onSwitchBranch,
+  onFocusBranchChat,
   sandboxed,
   activeLog,
   activeSessionId,
@@ -238,6 +241,7 @@ export function SessionPane({
   model,
   modelLabel = null,
   reasoningEffort,
+  readOnlyRunControls,
   fastMode,
   contextWindow = null,
   cacheExpiresAt = null,
@@ -253,8 +257,8 @@ export function SessionPane({
   copyForLlm,
   denyPermission,
   history,
-  historyNav: controlledHistoryNav,
-  onHistoryNavChange,
+  historyNav,
+  onHistoryNavChange: setHistoryNav,
   images = [],
   mentionItems,
   onApprovePlan,
@@ -306,6 +310,10 @@ export function SessionPane({
 }: SessionPaneProps) {
   const listBranches = useCallback(
     () => getBridge().listWorkspaceBranches(activeSessionId ?? ''),
+    [activeSessionId],
+  )
+  const readBranch = useCallback(
+    () => getBridge().listWorkspaceBranches(activeSessionId ?? '', 'readout'),
     [activeSessionId],
   )
   const toast = useToast()
@@ -533,18 +541,6 @@ export function SessionPane({
     composerRef.current?.focus()
   }
 
-  // App retains navigation with the session so its saved draft survives pane
-  // remounts. Standalone consumers keep the local fallback.
-  const [localHistoryNav, setLocalHistoryNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
-  const historyNav = controlledHistoryNav ?? localHistoryNav
-  const setHistoryNav = (nav: HistoryNav): void => {
-    if (controlledHistoryNav === undefined) setLocalHistoryNav(nav)
-    onHistoryNavChange?.(nav)
-  }
-  useEffect(() => {
-    setLocalHistoryNav(EMPTY_HISTORY_NAV)
-  }, [activeSessionId])
-
   // P4-24 multi-line composer. `composerRef` gives the keydown/paste handlers the
   // live caret (for at-caret paste, whole-token Backspace, and edge-gated ↑/↓
   // history); `isComposingRef` guards Enter/arrows during IME composition
@@ -736,10 +732,9 @@ export function SessionPane({
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
-  const routeMoving = projectRoute?.phase === 'moving'
   const routeCancellable = projectRoute !== null &&
-    ['checking', 'ask', 'failed', 'unsent'].includes(projectRoute.phase)
-  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true || routeMoving
+    projectRoute.phase !== 'recovery'
+  const branchSwitchPending = checkoutSwitchPending || activeDescriptor?.moving === true
   const canExecuteDesktopCommand = canExecuteDesktopNewChat({
     hasOrigin: activeSessionId !== null && activeDescriptor?.appSessionId === activeSessionId,
     hasQueuedPrompt: pendingSubmit !== null || queuedPrompts.length > 0,
@@ -756,7 +751,7 @@ export function SessionPane({
   // peers use for it too. A row with no name (one that predates the field and
   // has not been spawned since) keeps the original prompt verbatim. The
   // connection copy is untouched either way.
-  const workspaceMoving = activeDescriptor?.moving === true || activeDescriptor?.workspaceMove?.phase === 'moving' || routeMoving
+  const workspaceMoving = activeDescriptor?.moving === true || activeDescriptor?.workspaceMove?.phase === 'moving'
   const composerPlaceholder = workspaceMoving ? composerPromptPlaceholder(activeDescriptor?.name ?? null) : managedFolderUnavailable
     ? 'Recreate the chat folder to continue'
     : composerGate.editable
@@ -770,6 +765,11 @@ export function SessionPane({
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const workspaceBranch = useWorkspaceBranch(
+    activeSessionId !== null && activeDescriptor !== undefined && !isManagedChat && nestedRows.length > 0 && !activeDescriptor.moving,
+    readBranch,
+    branch,
+  )
   const [dockCollapsed, setDockCollapsed] = useSubagentDockCollapsedPreference()
   const { dock, clearFinished, setDetailsVisible } = useSubagentDock(activeSessionId, activeDescriptor?.engineSessionId ?? null, {
     workers, tasks: tasksSnapshot, transcriptRows: nestedRows, leases, parentModel: model,
@@ -1695,9 +1695,11 @@ export function SessionPane({
     /* Wrapped without re-indenting the pane below, the same way the composer
      * dock's own column wrapper is. */
     <AgentFaceRegistryContext.Provider value={paneFaces}>
+    <SubagentWorkspace key={activeSessionId} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
+      onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
+      onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
+      onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}>
     <main className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
-      <SubagentDock state={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
-        onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onOpenWorker={openDockWorker} onOpenWorkers={() => onOpenTasks?.(undefined, true)} />
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the
        * P4-6b `SessionActionsMenu`, a separate surface). The cwd/status debug
@@ -1794,7 +1796,9 @@ export function SessionPane({
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
             managedChat={activeDescriptor?.binding?.kind === 'managed'}
-            branch={branch}
+            branch={branchSwitchTarget ?? branch}
+            branchPending={checkoutSwitchPending || branchSwitchTarget !== null}
+            onFocusBranchChat={onFocusBranchChat}
             onListBranches={onSwitchBranch && !activeDescriptor?.moving ? listBranches : undefined}
             onSwitchBranch={onSwitchBranch && !activeDescriptor?.moving ? branchName => {
               if (preparingImage || pickingFile) return Promise.resolve('Wait for the attachment to finish before switching branches.')
@@ -2419,6 +2423,7 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
+          workspaceBranch={workspaceBranch}
           attachDisabled={
             !composerGate.editable ||
             managedFolderUnavailable ||
@@ -2429,6 +2434,7 @@ export function SessionPane({
           model={railModel}
           modelLabel={railModelLabel}
           reasoningEffort={railEffort}
+          readOnlyRunControls={preview ? null : readOnlyRunControls}
           permissionModeReadOnly={railPermissionMode}
           fastMode={fastMode}
           runControls={runControls}
@@ -2482,6 +2488,7 @@ export function SessionPane({
         </section>
       ) : null}
     </main>
+    </SubagentWorkspace>
     </AgentFaceRegistryContext.Provider>
   )
 }
@@ -2741,7 +2748,9 @@ type SessionPaneProps = {
   branch: string | null
   /** Freeze unsent input while main changes this session's checkout. */
   branchSwitchPending?: boolean
+  branchSwitchTarget?: string | null
   onSwitchBranch?: (branch: string) => Promise<string | null>
+  onFocusBranchChat?: (sessionId: string) => void
   /** Whether this session's tools run sandboxed (`diagnostics.snapshot`), read by
    * the empty-state meta strip's "Start in" column. */
   sandboxed?: boolean
@@ -2779,6 +2788,8 @@ type SessionPaneProps = {
    * `model` above stays the resolved id, which is what `selectContextUsage`
    * matches `modelUsage` on. */
   modelLabel?: string | null
+  /** Last snapshot is display-only once the live run-control seam disappears. */
+  readOnlyRunControls?: RunControlsSnapshot | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
   /** Fast state for the read-only face: true/false when known, null when nothing
@@ -2919,8 +2930,8 @@ type SessionPaneProps = {
   /** Prior submitted prompts for ↑/↓ recall (per session, newest last). */
   history: string[]
   /** App-owned per-session navigation, including the draft saved by ↑ recall. */
-  historyNav?: HistoryNav
-  onHistoryNavChange?: (nav: HistoryNav) => void
+  historyNav: HistoryNav
+  onHistoryNavChange: (nav: HistoryNav) => void
   /** Store a large paste as a collapsed chip and splice its token in at the
    * composer caret (`selectionStart`/`selectionEnd`); absent selection appends. */
   onPaste: (

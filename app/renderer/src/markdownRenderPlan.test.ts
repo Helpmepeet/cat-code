@@ -37,6 +37,120 @@ function mount(leaves: readonly MarkdownRenderLeaf[], start: number, end: number
     .join('')
 }
 
+describe('streaming inline links', () => {
+  const html = (source: string, streamingLinks = true, cache?: MarkdownPlanCache) => {
+    const leaves = planMarkdownLeaves('pending', source, { streamingLinks, cache })
+    return mount(leaves, 0, leaves.length)
+  }
+
+  test('hides raw destinations and preserves parsed label formatting', () => {
+    expect(html('[**report**](./src/a')).toContain('<a href="./src/a" data-pending-destination="./src/a"><strong>report</strong></a>')
+    expect(html('[report](')).toContain('data-pending-destination=""')
+    expect(html('[report](javascript:alert(')).toContain('href=""')
+    expect(html('- [*report*](./a(b')).toContain('<em>report</em></a>')
+    expect(html('[report](<./some path')).toContain('data-pending-destination="&lt;./some path"')
+  })
+
+  test('shields unfinished labels without interpreting their formatting', () => {
+    expect(html('[**src/a.ts')).toContain('<span data-pending-label="true">[**src/a.ts</span>')
+  })
+
+  test('does not promote code, escaped openers, images, or completed links', () => {
+    for (const source of ['`[report](./a`', '\\[report](./a', '![report](./a', '```\n[report](./a']) {
+      expect(html(source)).toBe(html(source, false))
+    }
+    expect(html('[**report**](./a)')).toBe(html('[**report**](./a)', false))
+    expect(html('[report](./a', false)).toContain('[report](./a')
+  })
+
+  test('cached streaming, completion, and mode switches match fresh plans', () => {
+    const cache = createMarkdownPlanCache()
+    for (const source of ['Settled.\n\n[rep', 'Settled.\n\n[report](', 'Settled.\n\n[report](./a(', 'Settled.\n\n[report](./a(b))']) {
+      expect(planMarkdownLeaves('pending', source, { ...TRANSCRIPT_OPTIONS, streamingLinks: true, cache }))
+        .toEqual(planMarkdownLeaves('pending', source, { ...TRANSCRIPT_OPTIONS, streamingLinks: true }))
+      expect(planMarkdownLeaves('pending', source, { ...TRANSCRIPT_OPTIONS, cache }))
+        .toEqual(planMarkdownLeaves('pending', source, TRANSCRIPT_OPTIONS))
+      expect(html(source, true, cache)).toBe(html(source))
+      expect(html(source, false, cache)).toBe(html(source, false))
+    }
+  })
+
+  test('completion retains anchor and label positions and sibling shape', () => {
+    const nodes = (source: string) => mergeMountedMarkdownLeaves(
+      planMarkdownLeaves('pending', source, { streamingLinks: true }), 0, 100,
+    )[0]!.tree
+    const pending = nodes('See [**report**](./a')
+    const complete = nodes('See [**report**](./a)')
+    const paragraph = (tree: typeof pending) => tree.children[0] as import('hast').Element
+    const anchor = (tree: typeof pending) => paragraph(tree).children[1] as import('hast').Element
+    expect(anchor(pending).tagName).toBe('a')
+    expect(anchor(pending).children).toEqual(anchor(complete).children)
+    expect(anchor(pending).position?.start).toEqual(anchor(complete).position?.start)
+    expect(paragraph(pending).children.length).toBe(paragraph(complete).children.length)
+  })
+
+  test('pending probes transform only the unstable tail, not the cached prefix', () => {
+    const sizes: number[] = []
+    const plugins: PluggableList = [() => (tree: import('hast').Root) => {
+      sizes.push((tree.position?.end.offset ?? 0) - (tree.position?.start.offset ?? 0))
+    }]
+    const cache = createMarkdownPlanCache()
+    const prefix = 'A settled paragraph.\n\n'.repeat(1_000)
+    planMarkdownLeaves('perf', prefix + '[report', { cache, rehypePlugins: plugins, streamingLinks: true })
+    sizes.length = 0
+    planMarkdownLeaves('perf', prefix + '[report](./a', { cache, rehypePlugins: plugins, streamingLinks: true })
+    expect(sizes.length).toBe(2)
+    expect(sizes.every(size => size < 100)).toBe(true)
+  })
+
+  test('grafting preserves resolved references and completed links in the same block', () => {
+    expect(html('[ref]: ./resolved\n\nSee [ref] and [pending](./p'))
+      .toContain('See <a href="./resolved">ref</a> and <a href="./p"')
+    expect(html('[ref]: ./resolved\n\nSee [ref] and [done](./done) and [*pending*](./p'))
+      .toContain('See <a href="./resolved">ref</a> and <a href="./done">done</a> and <a href="./p" data-pending-destination="./p"><em>pending</em></a>')
+  })
+
+  test('oversized unstable blocks fall back to ordinary parsing', () => {
+    const source = '[' + 'x'.repeat(MAX_MARKDOWN_LEAF_CHARACTERS)
+    expect(html(source)).toBe(html(source, false))
+  })
+
+  test('long lists probe the final item, including nested and quoted items', () => {
+    const prefix = '- An ordinary settled list item.\n'.repeat(600)
+    for (const tail of [
+      '- See [**report**](./src/a',
+      '- Parent\n  - Child\n    - Grandchild\n      - See [**report**](./src/a',
+      '- Parent\n  > Quoted paragraph\n  >\n  > See [**report**](./src/a',
+      '- Parent\n  - Child\n    - See [**report**\n      continued](./src/a',
+    ]) {
+      const source = prefix + tail
+      expect(source.length).toBeGreaterThan(MAX_MARKDOWN_LEAF_CHARACTERS)
+      const cache = createMarkdownPlanCache()
+      planMarkdownLeaves('pending', prefix, { streamingLinks: true, cache })
+      expect(html(source, true, cache)).toBe(html(source))
+      expect(html(source)).toContain('data-pending-destination="./src/a"')
+      expect(html(source)).not.toContain('](./src/a')
+      expect(html(source + ')')).toBe(html(source + ')', false))
+    }
+  })
+
+  test('pending literal label positions start at the actual opener after nested indentation', () => {
+    const source = 'Settled.\n\n- Parent\n  - Child\n    - See [**src/a.ts'
+    const leaves = planMarkdownLeaves('positions', source, { streamingLinks: true })
+    let span: import('hast').Element | undefined
+    function visit(node: import('hast').Root | ElementContent): void {
+      if (node.type === 'element' && node.properties.dataPendingLabel) span = node
+      if ('children' in node) for (const child of node.children) visit(child as ElementContent)
+    }
+    for (const unit of mergeMountedMarkdownLeaves(leaves, 0, leaves.length)) visit(unit.tree)
+    const start = source.indexOf('[')
+    expect(span?.position?.start).toEqual({ offset: start, line: 5, column: 11 })
+    expect(span?.children[0]?.position?.start).toEqual(span?.position?.start)
+    expect(span?.children[0]?.position?.end.offset).toBe(source.length)
+    expect(span?.children[0]).toMatchObject({ type: 'text', value: '[**src/a.ts' })
+  })
+})
+
 function count(html: string, needle: RegExp): number {
   return html.match(needle)?.length ?? 0
 }

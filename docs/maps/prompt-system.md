@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-10-09
+Last refreshed: 2026-10-16
 
 ## Purpose
 
@@ -38,7 +38,7 @@ Read in this order for most prompt or instruction work:
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
 | Change subagent prompt behavior | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/loadAgentsDir.ts` | `runAgent.ts` builds the agent prompt, adds env details, and may trim inherited context. |
 | Change output styles | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts`, `src/utils/plugins/loadPluginOutputStyles.ts`, `.claude/output-styles/*.md`, `~/.cat-code/output-styles/*.md` | Output style text is injected by `src/constants/prompts.ts`. |
-| Change tool descriptions | `src/tools/*/prompt.ts` | `src/constants/promptStyles/gpt.ts`, `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. GPT's prompt style derives read/search guidance from the actual tool pool: bounded whole-file reads favor FileRead; targeted shell reads name Bash only when it is exposed; and local mutations require the provider-appropriate dedicated edit tool plus a diff check for command-driven mutation. WebSearch research guidance (when to search instead of answering from memory) is emitted only when WebSearch is in the pool. `src/tools/FilePatchTool/prompt.ts` defines the complete-envelope patch grammar and its unique-plan, independent-operation contract. `src/tools/BashTool/prompt.ts` owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
+| Change tool descriptions | `src/tools/*/prompt.ts` | `src/constants/{prompts.ts,promptStyles/gpt.ts}`, `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. Current prompt guidance names available tools by capability and leaves read/search selection flexible; when Grep is available it retains its default result cap, and command-driven mutations still require diff inspection. WebSearch research guidance (when to search instead of answering from memory) is emitted only when WebSearch is in the pool. `src/tools/FilePatchTool/prompt.ts` defines the complete-envelope patch grammar and its unique-plan, independent-operation contract. `src/tools/BashTool/prompt.ts` owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
 | Change skill-loading guidance | `src/tools/SkillTool/prompt.ts` | `src/tools/SkillTool/SkillTool.ts`, `src/tools.ts`, `src/constants/prompts.ts` | Explicit skill invocations require loading; optional selection uses the advertised purpose and trigger conditions. Selected skills are read before use, without inferring unseen contents or reinjecting instructions already visible in the conversation. |
 | Change desktop-only prompt text (file-reference addendum, peer doctrine, peer tool prompts) | `app/sidecar/desktopSystemPrompt.ts` | `app/sidecar/{createPeer,sendToPeer,listPeers,readPeer}Tool.ts`, `app/sidecar/sessionController.ts` | Desktop-only. The addendum and doctrine are appended last via `appendSystemPrompt`; the four peer tool prompts are appended after `getTools`, and the terminal never sees any of it. `docs/migration/decisions/PEER-SESSIONS.md` §5 and §8 quote this text verbatim and are amended with it. |
 | Change auto-mode permission-decision prompts | `src/utils/permissions/yolo-classifier-prompts/` | `src/utils/permissions/`, `src/constants/corePolicy.ts` | The auto-mode classifier's own prompt. Its rule 8 keys on the `<cross-session-message>` tag and is the only engine-side rule about peer authority. |
@@ -92,7 +92,7 @@ src/services/api/claude.ts
 | Output style | `src/constants/prompts.ts` | dynamic system-prompt section | Loaded from built-in, user/project, or plugin output-style sources. |
 | Scratchpad instructions | `src/constants/prompts.ts` | dynamic system-prompt section | Present only when scratchpad support is enabled. |
 | Tracked-work reminders | `src/utils/attachments.ts` | `src/utils/messages.ts`, `src/tools/{TaskCreateTool,TodoWriteTool}/prompt.ts` | Reminder attachments appear only for unfinished work after the turn thresholds; unchanged lists and lists with no unfinished items are omitted. The model-facing text asks for a relevant status update and does not request new tasks just because a reminder appeared. |
-| Injected-origin framing (`wrapCommandText`) | `src/utils/messages.ts` | mid-turn attachment text | The model-facing framing of every injected origin: peer, teammate, channel, coordinator, task-notification. Applied only when a queued command becomes a mid-turn attachment; an idle recipient's turn is started with the raw value, so the peer creation-prompt arm is read by no model today. |
+| Injected-origin framing (`wrapCommandText`) | `src/utils/messages.ts` | `src/query.ts`, `src/utils/messages.test.ts` | Model-facing text is added only when a queued command becomes a mid-turn attachment. Human corrections, redirects, and stops should affect the next step; additive requests should follow the current task. Peer, teammate, channel, coordinator, and task-notification origins keep separate authority wording. Idle turns start with the raw prompt. This framing does not control delivery, cancellation, or admission. |
 
 ## Instruction And Recalled-Memory Discovery
 
@@ -152,6 +152,7 @@ Use focused checks first, then the documented build:
 | Optional Git context timeout and fallback | `bun test src/context.gitStatus.test.ts src/utils/execFileNoThrow.test.ts` |
 | Tracked-work reminder attachments | `bun test src/utils/attachments.test.ts` |
 | Main query behavior | `bun test src/query.test.ts` |
+| Mid-turn injected-origin framing | `bun test src/utils/messages.test.ts` |
 | Agent tool prompt/resume behavior | `bun test src/tools/AgentTool/prompt.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/AgentTool.test.ts` |
 | Skill-loading prompt policy | `bun test src/tools/SkillTool/` |
 | Compaction behavior | `bun test src/services/compact/compact.test.ts` |
@@ -165,6 +166,9 @@ For emitted-prompt inspection, use prompt dumps when available:
 
 ## Traps And Stale Assumptions
 
+- `HUMAN_INTERRUPT_WRAPPER` is model-facing guidance, not an engine interrupt.
+  Query and task owners still decide when queued input is delivered and whether
+  work is cancelled or admitted.
 - Do not assume `src/constants/prompts.ts` always wins. Coordinator mode, main-thread agent prompts, custom prompts, and override prompts can replace it.
 - Do not assume `appendSystemPrompt` replaces the prompt. It appends to the winning branch, except when `overrideSystemPrompt` is set.
 - Do not assume custom prompts still get `gitStatus`. `fetchSystemPromptParts()` skips `getSystemContext()` when `customSystemPrompt` is present.

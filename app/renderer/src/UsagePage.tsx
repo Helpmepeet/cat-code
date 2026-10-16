@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { UsageWindow } from '../../shared/usageDashboard.js';
-import { type UsageDashboardState, initialUsageSelection, type UsageSelection, usageCompact, usageFailureMessage, usageNumber, usageTotal } from './usageDashboardState.js';
+import { type UsageDashboardState, type UsageSelection, usageCompact, usageFailureMessage, usageNumber, usageTotal } from './usageDashboardState.js';
 import { UsageTokenFlow } from './UsageDashboardCharts.js';
 import { UsageHeatmap } from './UsageActivityCharts.js';
 import { UsageCacheSummary, UsageModelDonut, UsageToolBreakdown } from './UsageOverviewDetails.js';
@@ -40,29 +40,26 @@ function UsagePanel({ title, children, wide = false, className = '' }: {
 }
 export function UsagePage({ state, selection, onSelectionChange, sessionRows = [], onOpenSession, onRefresh }: {
     state: UsageDashboardState;
-    selection?: UsageSelection;
-    onSelectionChange?: (selection: UsageSelection) => void;
+    selection: UsageSelection;
+    onSelectionChange: (selection: UsageSelection) => void;
     sessionRows?: readonly MergedSessionRow[];
     onOpenSession?: (row: MergedSessionRow) => void;
     onRefresh?: () => void;
 }) {
-    const [localSelection, setLocalSelection] = useState(initialUsageSelection);
     const [scrolled, setScrolled] = useState(false);
     const [hoverDate, setHoverDate] = useState('');
     const [hoverModel, setHoverModel] = useState('');
-    const currentSelection = selection ?? localSelection;
-    const { range, date: selectedDate } = currentSelection;
+    const { range, date: selectedDate } = selection;
     const detailHeading = useRef<HTMLHeadingElement>(null);
     useEffect(() => { if (selectedDate) detailHeading.current?.focus(); }, [selectedDate]);
-    const updateSelection = (next: UsageSelection) => { setLocalSelection(next); onSelectionChange?.(next); };
-    const setRange = (next: UsageWindow) => updateSelection({ range: next, date: '' });
+    const setRange = (next: UsageWindow) => onSelectionChange({ range: next, date: '' });
     const setSelectedDate = (date: string) => {
         const summary = state.snapshot?.ranges[range];
         const bucket = range === 'all' && date && summary ? summary.days.find(day => {
             const offset = (Date.parse(`${date}T00:00:00.000Z`) - Date.parse(`${day.date}T00:00:00.000Z`)) / 86400000;
             return offset >= 0 && offset < usageBucketDays(summary);
         }) : null;
-        updateSelection({ range, date: bucket?.date ?? date });
+        onSelectionChange({ range, date: bucket?.date ?? date });
     };
     const snapshot = state.snapshot, summary = snapshot?.ranges[range];
     const linkedDate = range === 'all' && hoverDate && summary ? summary.days.find(day => {

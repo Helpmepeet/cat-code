@@ -1,6 +1,6 @@
 # Plugins, Skills, and Commands Map
 
-Last refreshed: 2026-10-09
+Last refreshed: 2026-10-15
 
 ## Purpose
 
@@ -17,8 +17,10 @@ memoized and several surfaces load lazily or only under feature flags.
 
 - `src/commands.ts` for command aggregation and exposure.
 - `src/skills/loadSkillsDir.ts` for filesystem skill discovery and caches.
-- `src/utils/plugins/pluginLoader.ts` for installed plugin components.
+- `src/utils/plugins/pluginLoader.ts` and `src/utils/plugins/pluginComponents.ts`
+  for plugin assembly and component discovery.
 - `src/utils/plugins/loadPluginCommands.ts` for plugin commands and skills.
+- `src/utils/hooks/registerSkillHooks.ts` for hooks declared by invoked skills.
 - `src/utils/plugins/marketplaceManager.ts` for marketplace state.
 
 ## Slash Command Exposure
@@ -108,13 +110,17 @@ plugins for features that should appear in `/plugin` and be user-toggleable.
 | Question | Inspect first | Then inspect |
 |---|---|---|
 | How are enabled/disabled plugins discovered? | `src/utils/plugins/pluginLoader.ts` | `src/utils/plugins/installedPluginsManager.ts`, `src/utils/plugins/pluginStartupCheck.ts` |
+| How are component declarations resolved and combined? | `src/utils/plugins/pluginComponents.ts` | `src/utils/plugins/pluginLoader.ts`, `src/types/plugin.ts` |
 | What does `plugin.json` allow? | `src/utils/plugins/schemas.ts` `PluginManifestSchema` | `src/utils/plugins/pluginLoader.ts` |
 | How are plugin cache paths/version paths chosen? | `src/utils/plugins/pluginLoader.ts`, `src/utils/plugins/pluginVersioning.ts` | `src/utils/plugins/zipCache.ts`, `src/utils/plugins/cacheUtils.ts` |
 | How are plugin settings/options stored? | `src/utils/plugins/pluginOptionsStorage.ts` | `src/utils/plugins/mcpbHandler.ts`, `src/services/plugins/pluginOperations.ts` |
 | What happens on `/reload-plugins`? | `src/utils/plugins/refresh.ts` | `src/commands/reload-plugins/`, `src/screens/REPL.tsx` |
 
-`createPluginFromPath()` in `pluginLoader.ts` owns component detection for a
-loaded plugin. Standard component directories are auto-detected only when the
+`createPluginFromPath()` in `pluginLoader.ts` assembles a loaded plugin;
+`loadPluginComponents()` in `pluginComponents.ts` owns discovery and declaration
+resolution for commands, agents, skills, and output styles. The same resolver
+handles local manifests, manifest-free marketplace fallback, and marketplace
+supplements. Local standard directories are auto-detected only when the local
 manifest does not specify that component:
 
 | Component | Standard path | Manifest field | Loaded into `LoadedPlugin` |
@@ -131,6 +137,13 @@ Manifest component paths must be plugin-relative and are checked before being
 stored. Missing files produce plugin errors but do not necessarily prevent the
 plugin object from loading.
 
+Marketplace fallback retains the initial standard-directory discovery and
+replaces explicit component paths; supplements append paths in declaration order.
+Both preserve duplicates. Local command maps accept inline content, while
+marketplace command maps retain only existing source files. The loader keeps
+manifest-conflict policy and hooks/settings assembly outside the component
+resolver.
+
 ## Plugin-Provided Commands and Skills
 
 | Surface | Owner | Behavior |
@@ -138,7 +151,8 @@ plugin object from loading.
 | Plugin commands | `src/utils/plugins/loadPluginCommands.ts` `getPluginCommands` | Loads enabled plugin `commandsPath`, `commandsPaths`, and inline `commandsMetadata`. Names are `plugin:namespace:file`. |
 | Plugin skills | `src/utils/plugins/loadPluginCommands.ts` `getPluginSkills` | Loads enabled plugin `skillsPath` and `skillsPaths`. Names are `plugin:skill`. Direct skill dirs and child `SKILL.md` dirs are both supported. |
 | Plugin command markdown walk | `src/utils/plugins/walkPluginMarkdown.ts` | Used by command/output-style loaders; commands stop at skill dirs. |
-| Plugin command frontmatter | `src/utils/plugins/loadPluginCommands.ts` `createPluginCommand` | Supports descriptions, allowed tools, arguments, `when_to_use`, model, effort, shell, `user-invocable`, and plugin/user-config substitutions. |
+| Plugin command and skill frontmatter | `src/utils/plugins/loadPluginCommands.ts` `createPluginCommand` | Uses the shared skill-frontmatter parser for `context: fork`, `agent`, `hooks`, and `paths`, alongside descriptions, allowed tools, arguments, `when_to_use`, model, effort, shell, `user-invocable`, and plugin/user-config substitutions. |
+| Skill invocation hooks | `src/tools/SkillTool/SkillTool.ts` | `src/utils/hooks/registerSkillHooks.ts`, `src/utils/hooks/sessionHooks.ts`, `src/utils/settings/pluginOnlyPolicy.ts` | Forked skill execution registers its declared hooks with the invoking worker identity while retaining the root hook store. The plugin-only hooks policy still checks whether the command source is admin-trusted. |
 
 Plugin commands and skills are prompt commands with `source: 'plugin'`.
 Plugin skills set `loadedFrom: 'plugin'`, get progress message `loading`, and
@@ -250,6 +264,11 @@ usually set `needsRefresh` or require restart depending on the path.
 
 ## Tests And Validation
 
+`bun test src/utils/plugins/pluginComponents.integration.test.ts` exercises
+component assembly through the local and marketplace loaders, including
+downstream component exposure. Run plugin suites in separate processes when
+they install module mocks or isolated configuration state.
+
 | Validation target | Owner | Notes |
 |---|---|---|
 | Runtime schema | `src/utils/plugins/schemas.ts` | Runtime load path is generally lenient and strips unknown manifest keys. |
@@ -257,6 +276,7 @@ usually set `needsRefresh` or require restart depending on the path.
 | CLI `plugin validate` | `src/main.tsx`, `src/cli/handlers/plugins.ts` | Also validates plugin content files when validating a plugin manifest in `.claude-plugin`. |
 | Manifest validation | `src/utils/plugins/validatePlugin.ts` | Strict schemas for author feedback, path traversal checks, marketplace-only field warnings. |
 | Component validation | `src/utils/plugins/validatePlugin.ts` `validatePluginContents` | Checks skills, agents, commands, and hooks frontmatter/content warnings. |
+| Plugin command frontmatter | `src/utils/plugins/loadPluginCommands.test.ts` | Covers shared frontmatter parsing and loaded plugin command/skill fields. |
 | Marketplace cache recovery and update identity | `src/utils/plugins/{marketplaceManager,officialMarketplaceGcs,pluginAutoupdate}.ts` | Run `bun test src/utils/plugins/marketplaceCacheSafety.test.ts src/utils/plugins/officialMarketplaceGcsPolicy.test.ts src/utils/plugins/pluginAutoupdate.test.ts` for cache paths, GCS policy, and duplicate-name/source checks. |
 
 Use `validateManifest()` for a file or directory. Directory validation prefers

@@ -21,6 +21,26 @@ function view(state: SubagentDockState, patch: Partial<SubagentDockInput> = {}) 
   return { state: next, ...selectSubagentDock(next, facts) }
 }
 
+test('dock reuses top-level agent candidates while live worker facts still refresh', () => {
+  let visits = 0
+  const rows = Array.from({ length: 256 }, (_, index) => {
+    const row = agentRow({ kind: 'tool-use', toolName: 'Bash', toolFamily: 'bash', toolUseId: `bash-${index}` })
+    Object.defineProperty(row, 'kind', { get: () => { visits++; return 'tool-use' } })
+    return row
+  })
+  rows.push(agentRow())
+  const first = view(createSubagentDockState(), { transcriptRows: rows, workers: [worker()] })
+  const afterFirst = visits
+  expect(first.active[0]?.state).toBe('running')
+  expect(afterFirst).toBeGreaterThan(0)
+  const changedWorker = view(first.state, { transcriptRows: rows, workers: [worker({ status: 'completed' })], nowMs: 2000 })
+  expect(changedWorker.active[0]?.state).toBe('completed')
+  expect(visits).toBe(afterFirst)
+  const changedRows = view(changedWorker.state, { transcriptRows: [...rows, agentRow({ toolUseId: 'launch-b', result: { isError: false, content: 'done', diff: null, agentId: 'b' } })], workers: [worker({ agentId: 'b' })], nowMs: 3000 })
+  expect(changedRows.active.some(row => row.agentId === 'b')).toBe(true)
+  expect(visits).toBeGreaterThan(afterFirst)
+})
+
 // This is the lifecycle owner: snapshots can evict records before parent results
 // arrive, and transcript launch acknowledgements must never imply completion.
 test('blocked completed workers stay waiting, ordered ahead of live work and unnamed rows lead with their task', () => {
@@ -58,10 +78,51 @@ for (const [status, delay, state] of [['failed', 1500, 'failed'], ['killed', 700
     const running = view(createSubagentDockState(), { workers: [worker()] })
     const terminal = view(running.state, { workers: [worker({ status })], nowMs: 2000 })
     expect(terminal.active[0]).toMatchObject({ state, settling: true })
+    expect(terminal.chipFaces.map(row => row.state)).toEqual(state === 'failed' ? ['failed'] : [])
     expect(view(terminal.state, { workers: [worker({ status })], nowMs: 2000 + delay - 1 }).active).toHaveLength(1)
     const finished = view(terminal.state, { workers: [worker({ status })], nowMs: 2000 + delay })
     expect(finished.finished[0]?.state).toBe(state)
-    expect(view(createSubagentDockState(Object.values(terminal.state.entries)), { workers: [worker({ status })], nowMs: 2001 }).finished[0]?.state).toBe(state)
+    expect(finished.chipFaces.map(row => row.state)).toEqual(state === 'failed' ? ['failed'] : [])
+    const restored = view(createSubagentDockState(Object.values(terminal.state.entries)), { workers: [worker({ status })], nowMs: 2001 })
+    expect(restored.finished[0]?.state).toBe(state)
+    expect(restored.chipFaces.map(row => row.state)).toEqual(state === 'failed' ? ['failed'] : [])
+  })
+}
+
+test('all-finished chip excludes done and stopped history, retains only failures until cleared, and keeps stored entries', () => {
+  const history = view(createSubagentDockState(), { workers: [
+    worker({ agentId: 'done', status: 'completed' }),
+    worker({ agentId: 'failed', status: 'failed' }),
+    worker({ agentId: 'stopped', status: 'killed' }),
+  ] })
+  expect(history.finished).toHaveLength(3)
+  expect(history.chipFaces.map(row => row.agentId)).toEqual(['failed'])
+  const clearMarkers = [{ agentId: 'failed', runKey: history.chipFaces[0]!.runKey }]
+  const cleared = view(history.state, { clearMarkers })
+  expect(cleared.chipFaces).toEqual([])
+  expect(cleared.finished.map(row => row.state).sort()).toEqual(['completed', 'stopped'])
+  expect(Object.values(cleared.state.entries)).toHaveLength(3)
+  const restored = view(createSubagentDockState(Object.values(cleared.state.entries)), { clearMarkers })
+  expect(restored.chipFaces).toEqual([])
+  expect(restored.finished).toHaveLength(2)
+})
+
+for (const liveState of ['running', 'waiting', 'background', 'resumed'] as const) {
+  test(`${liveState} chip keeps its current ordered active faces, including settling terminal rows`, () => {
+    const prior = view(createSubagentDockState(), { workers: [worker({ agentId: 'finishing' }), worker()] })
+    const facts: Partial<SubagentDockInput> = { nowMs: 2000, workers: [
+      worker({ agentId: 'finishing', status: 'completed' }),
+      worker({
+        isBackgrounded: liveState === 'background' || liveState === 'resumed',
+        ...(liveState === 'waiting' ? { status: 'completed', handoffStatus: 'blocked' } : {}),
+      }),
+    ], tasks: { items: [task({ resumedAt: liveState === 'resumed' ? 1500 : undefined })], subagents: [] } }
+    const live = view(prior.state, facts)
+    expect(live.active.find(row => row.agentId === 'a')?.state).toBe(liveState)
+    expect(live.chipFaces).toEqual(live.active)
+    expect(live.chipFaces).toHaveLength(2)
+    const settled = view(live.state, { ...facts, nowMs: 2700 })
+    expect(settled.chipFaces.map(row => row.state)).toEqual([liveState])
   })
 }
 

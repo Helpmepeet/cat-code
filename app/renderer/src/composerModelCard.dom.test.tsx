@@ -1,16 +1,4 @@
-/**
- * The composer's model card, driven for real.
- *
- * `ComposerActionsBar.test.tsx` is a `renderToStaticMarkup` suite and the card's
- * panel only mounts on client open-state, so every fact below was previously
- * unreachable: the card is TWO faces now, and which face you are on is the
- * outcome of a click. Mounted here instead, where the popover can actually be
- * opened and a row can actually be picked.
- *
- * What this protects, in one sentence: picking a model must apply it AND land
- * you on that model's effort ladder, except for a model that has no ladder, where
- * the pick is the whole interaction and the card dismisses.
- */
+/** Mounted regressions for the unified composer run controls. */
 
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
@@ -182,7 +170,7 @@ async function click(element: Element | null | undefined): Promise<void> {
 // Each test owns one mounted bar; its actual popup may be portalled to body.
 function menu(_tree: MountedTree): HTMLElement | null {
   return document.querySelector<HTMLElement>(
-    '[role="menu"][aria-label="Model"], [role="menu"][aria-label="Reasoning effort"], [role="menu"][aria-label="Accounts"]',
+    '[role="menu"][aria-label="Run controls"], [role="menu"][aria-label="Model"], [role="menu"][aria-label="Permission mode"], [role="menu"][aria-label="Accounts"]',
   )
 }
 
@@ -197,11 +185,12 @@ function rowNamed(tree: MountedTree, label: string): HTMLElement | undefined {
 }
 
 async function openCard(tree: MountedTree): Promise<void> {
-  await click(tree.container.querySelector('[data-composer-face="model"]'))
+  await openEffort(tree)
+  await click(menu(tree)?.querySelector('[role="menuitem"][aria-label^="Model: "]'))
 }
 
 async function openEffort(tree: MountedTree): Promise<void> {
-  await click(tree.container.querySelector('[data-composer-face="effort"]'))
+  await click(tree.container.querySelector('[data-composer-face="run-controls"]'))
 }
 
 async function openAccount(tree: MountedTree): Promise<void> {
@@ -228,9 +217,15 @@ function rungs(tree: MountedTree): HTMLElement[] {
   return rows(tree).filter(row => row.getAttribute('aria-label') !== null)
 }
 
-async function openLadder(tree: MountedTree, model = 'Opus 5'): Promise<void> {
-  await openCard(tree)
-  await click(rowNamed(tree, model))
+async function openLadder(tree: MountedTree): Promise<void> {
+  await openEffort(tree)
+  await harness.nextFrame()
+  const selected = menu(tree)?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')
+  expect(focused()?.getAttribute('aria-label')).toBe('Model: GPT-5.6 Sol')
+  for (let index = 0; index <= rows(tree).length && focused() !== selected; index++) {
+    await press(focused()!, 'ArrowDown')
+  }
+  expect(focused() === selected).toBe(true)
 }
 
 test('the card opens on a provider-grouped model list, one row per option', async () => {
@@ -251,34 +246,78 @@ test('the card opens on a provider-grouped model list, one row per option', asyn
   )
 })
 
-test("picking a model applies it and lands on that model's own effort ladder", async () => {
+test('picking a model returns main and waits for the authoritative effort snapshot', async () => {
   const recorded = recorder()
   const tree = await mountBar(recorded)
   await openCard(tree)
   await click(rowNamed(tree, 'Opus 5'))
-
   expect(recorded.models).toEqual(['opus'])
-  const panel = menu(tree)
-  expect(panel?.getAttribute('aria-label')).toBe('Reasoning effort')
-  // The ladder is the PICKED row's, not the session's: Opus has four levels
-  // where the current model has six, and the face is correct in this frame —
-  // before the sidecar's re-broadcast could have arrived.
-  const rungs = rows(tree).filter(row => row.getAttribute('aria-label') !== null)
-  expect(rungs.map(rung => rung.getAttribute('aria-label'))).toEqual([
-    'Low',
-    'Medium',
-    'High',
-    'Max',
-  ])
-  expect(panel?.textContent).toContain('Opus 5')
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
+  expect(rungs(tree)).toHaveLength(6)
+  expect(menu(tree)?.querySelector('[aria-label="Model: GPT-5.6 Sol"]')).toBeTruthy()
+  await act(async () => tree.render(bar(recorded, {
+    runControls: {
+      ...runControls({ current: 'opus', currentLabel: 'Opus 5', selected: 'opus', provider: 'anthropic' }),
+      effort: { current: 'high', selected: 'high', supported: true, options: OPUS_LEVELS },
+    },
+  })))
+  expect(rungs(tree).map(row => row.getAttribute('aria-label'))).toEqual(['Low', 'Medium', 'High', 'Max'])
+  expect(menu(tree)?.querySelector('[aria-label="Model: Opus 5"]')).toBeTruthy()
+})
+
+for (const interaction of ['focus', 'hover', 'drag'] as const) {
+  test(`a shorter model snapshot discards the old effort ${interaction} without losing panel focus`, async () => {
+    const recorded = recorder()
+    const tree = await mountBar(recorded)
+    await openCard(tree)
+    await click(rowNamed(tree, 'Opus 5'))
+    const ultra = menu(tree)!.querySelector<HTMLButtonElement>('[aria-label="Ultra"]')!
+    const rail = ultra.closest<HTMLElement>('.touch-none')!
+    if (interaction === 'focus') {
+      await act(async () => ultra.focus())
+    } else if (interaction === 'hover') {
+      await act(async () => ultra.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })))
+    } else {
+      sizeRail(rail, 240)
+      await pointer(rail, 'pointerdown', 226)
+    }
+    expect(menu(tree)?.textContent).toContain('Ultra')
+    await act(async () => tree.render(bar(recorded, {
+      runControls: {
+        ...runControls({ current: 'opus', currentLabel: 'Opus 5', selected: 'opus', provider: 'anthropic' }),
+        effort: { current: 'high', selected: 'high', supported: true, options: OPUS_LEVELS },
+      },
+    })))
+    expect(rungs(tree)).toHaveLength(4)
+    expect(menu(tree)?.textContent).toContain('High')
+    expect(menu(tree)?.textContent).not.toContain('Ultra')
+    expect(focused()?.getAttribute('aria-label')).toBe('Model: Opus 5')
+    const newRail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
+    await pointer(newRail, 'pointerup', 226)
+    expect(recorded.efforts).toEqual([])
+  })
+}
+
+test('a model change cancels an effort drag even when both models have the same levels', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openLadder(tree)
+  const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
+  sizeRail(rail, 240)
+  await pointer(rail, 'pointerdown', 226)
+  await act(async () => tree.render(bar(recorded, {
+    runControls: runControls({ current: 'gpt-6-sol', currentLabel: 'GPT-6 Sol', selected: 'gpt-6-sol' }),
+  })))
+  await pointer(rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!, 'pointerup', 226)
+  expect(recorded.efforts).toEqual([])
+  expect(menu(tree)?.textContent).toContain('High')
 })
 
 test('the rail fills up to the chosen level, not just at it', async () => {
   const tree = await mountBar(recorder())
-  await openCard(tree)
-  await click(rowNamed(tree, 'Opus 5'))
+  await openLadder(tree)
 
-  // Session effort is `high`, the third of Opus's four rungs: three rungs sit
+  // Session effort is `high`, the third rung: three rungs sit
   // under the fill, and exactly one rung is the checked radio. A fill that stopped
   // marking the lower rungs would read as a position marker instead of a level.
   const filled = rungs(tree).filter(
@@ -299,8 +338,7 @@ test('the rail fills up to the chosen level, not just at it', async () => {
 test('a rung writes the effort verb and leaves the card open to show the change', async () => {
   const recorded = recorder()
   const tree = await mountBar(recorded)
-  await openCard(tree)
-  await click(rowNamed(tree, 'Opus 5'))
+  await openLadder(tree)
   const max = rows(tree).find(row => row.getAttribute('aria-label') === 'Max')
   await click(max)
 
@@ -313,8 +351,7 @@ test('a rung writes the effort verb and leaves the card open to show the change'
 test('Auto is a control of its own, not the bottom rung', async () => {
   const recorded = recorder()
   const tree = await mountBar(recorded)
-  await openCard(tree)
-  await click(rowNamed(tree, 'Opus 5'))
+  await openLadder(tree)
   const auto = rows(tree).find(row => row.textContent === 'Auto')
   await click(auto)
 
@@ -322,35 +359,39 @@ test('Auto is a control of its own, not the bottom rung', async () => {
   expect(auto?.getAttribute('aria-label')).toBeNull()
 })
 
-test('a model with no effort levels applies and dismisses, with no second face', async () => {
+test('a model with no effort levels applies and returns to the main controls', async () => {
   const recorded = recorder()
   const tree = await mountBar(recorded)
   await openCard(tree)
   await click(rowNamed(tree, 'Haiku 4.5'))
 
   expect(recorded.models).toEqual(['haiku'])
-  // Haiku takes no effort parameter at all, so there is nothing to advance to.
-  expect(menu(tree)).toBeNull()
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
+  await act(async () => tree.render(bar(recorded, {
+    runControls: {
+      ...runControls({ current: 'haiku', currentLabel: 'Haiku 4.5', selected: 'haiku', provider: 'anthropic' }),
+      effort: { current: null, selected: null, supported: false, options: [] },
+    },
+  })))
+  expect(rungs(tree)).toHaveLength(0)
+  expect(menu(tree)?.querySelector('[role="switch"]')).toBeNull()
+  expect(menu(tree)?.querySelector('[aria-label="Model: Haiku 4.5"]')).toBeTruthy()
 })
 
-test('the back control returns to the model list', async () => {
+test('the model back control restores the main model row', async () => {
   const tree = await mountBar(recorder())
   await openCard(tree)
-  await click(rowNamed(tree, 'Opus 5'))
-  await click(menu(tree)?.querySelector('[role="menuitem"]'))
-
-  expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
-  expect(rows(tree)).toHaveLength(4)
+  await click(menu(tree)?.querySelector('[role="menuitem"][aria-label="Back to run controls"]'))
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
+  expect(focused()?.getAttribute('aria-label')).toBe('Model: GPT-5.6 Sol')
 })
 
-test('reopening the card lands on the model list, never on the last ladder', async () => {
+test('reopening the controls always lands on main', async () => {
   const tree = await mountBar(recorder())
   await openCard(tree)
-  await click(rowNamed(tree, 'Opus 5'))
-  await openCard(tree)
-  await openCard(tree)
-
-  expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
+  await openEffort(tree)
+  await openEffort(tree)
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
 })
 
 test('a locked cross-provider group is inert and reads as one dimmed block', async () => {
@@ -409,14 +450,15 @@ test('left and right walk the rail, and stop at its ends', async () => {
   expect(focused()?.getAttribute('aria-label')).toBe('Medium')
   await press(focused()!, 'ArrowRight')
   await press(focused()!, 'ArrowRight')
-  expect(focused()?.getAttribute('aria-label')).toBe('Max')
+  expect(focused()?.getAttribute('aria-label')).toBe('Extra high')
   // A scale has ends: arrowing off the top must not wrap round to the bottom
   // the way the menu's own roving does.
+  await press(focused()!, 'End')
   await press(focused()!, 'ArrowRight')
-  expect(focused()).toBe(rail[rail.length - 1]!)
+  expect(focused() === rail[rail.length - 1]!).toBe(true)
   await press(focused()!, 'Home')
   await press(focused()!, 'ArrowLeft')
-  expect(focused()).toBe(rail[0]!)
+  expect(focused() === rail[0]!).toBe(true)
 })
 
 test('Home and End mean the ends of the scale while focus is in the rail', async () => {
@@ -424,7 +466,7 @@ test('Home and End mean the ends of the scale while focus is in the rail', async
   await openLadder(tree)
 
   await press(focused()!, 'End')
-  expect(focused()?.getAttribute('aria-label')).toBe('Max')
+  expect(focused()?.getAttribute('aria-label')).toBe('Ultra')
   await press(focused()!, 'Home')
   expect(focused()?.getAttribute('aria-label')).toBe('Low')
 })
@@ -444,26 +486,15 @@ test('up and down still walk the whole face, rail included', async () => {
   expect(focused()?.getAttribute('role')).toBe('menuitem')
 })
 
-test('going back returns focus to the row that was picked', async () => {
-  const recorded = recorder()
-  const tree = await mountBar(recorded)
-  await openLadder(tree)
-  // The sidecar's re-broadcast, which is what makes the picked row the checked
-  // one. Without it the fixture still names the old selection, and the row this
-  // face was opened from would not be the row focus goes back to.
-  await act(async () => {
-    await tree.render(
-      bar(recorded, {
-        runControls: { ...runControls({ selected: 'opus' }) },
-      }),
-    )
-  })
-  await click(menu(tree)?.querySelector('[role="menuitem"]'))
-
-  // Leaving the face unmounts the focused button; dropping focus on <body>
-  // would strand a keyboard user in a menu that is still open.
-  expect(focused()?.textContent).toContain('Opus 5')
-  expect(focused()?.getAttribute('aria-checked')).toBe('true')
+test('Escape unwinds Model to main and restores its owning row', async () => {
+  const tree = await mountBar(recorder())
+  await openCard(tree)
+  await press(focused()!, 'Escape')
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
+  expect(focused()?.getAttribute('aria-label')).toBe('Model: GPT-5.6 Sol')
+  await press(focused()!, 'Escape')
+  expect(menu(tree)).toBeNull()
+  expect(focused() === tree.container.querySelector('[data-composer-face="run-controls"]')).toBe(true)
 })
 
 test('a rung is activated by the keyboard, not by arrowing onto it', async () => {
@@ -476,28 +507,24 @@ test('a rung is activated by the keyboard, not by arrowing onto it', async () =>
   // rail that set effort per keypress would fire a verb per rung crossed.
   expect(recorded.efforts).toEqual([])
   await click(focused())
-  expect(recorded.efforts).toEqual(['max'])
+  expect(recorded.efforts).toEqual(['xhigh'])
 })
 
-test('clicking the already-selected ladder rung closes the model card', async () => {
+test('clicking the already-selected rung keeps the run controls open', async () => {
   const tree = await mountBar(recorder())
   await openLadder(tree)
 
   await click(menu(tree)?.querySelector('[aria-label="High"]'))
 
-  expect(menu(tree)).toBeNull()
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
 })
 
-test('Escape leaves the ladder first, and only then the card', async () => {
+test('Escape from the main effort rail closes and restores the trigger', async () => {
   const tree = await mountBar(recorder())
   await openLadder(tree)
-
   await press(focused()!, 'Escape')
-  // One level at a time, the way a submenu unwinds — stepping into a ladder and
-  // changing your mind should not cost the card.
-  expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
-  await press(focused() ?? tree.container, 'Escape')
   expect(menu(tree)).toBeNull()
+  expect(focused() === tree.container.querySelector('[data-composer-face="run-controls"]')).toBe(true)
 })
 
 test('Shift+Tab from a picker row returns focus to the composer', async () => {
@@ -513,7 +540,7 @@ test('Shift+Tab from a picker row returns focus to the composer', async () => {
   await harness.nextFrame()
 
   expect(menu(tree)).toBeNull()
-  expect(focused()).toBe(composer)
+  expect(focused() === composer).toBe(true)
 })
 
 test('opening the model picker focuses the selected model row', async () => {
@@ -525,10 +552,10 @@ test('opening the model picker focuses the selected model row', async () => {
     '[role="menuitemradio"][aria-checked="true"]',
   ) ?? null
   expect(selected?.textContent).toContain('GPT-5.6 Sol')
-  expect(focused()).toBe(selected)
+  expect(focused() === selected).toBe(true)
 })
 
-test('opening the effort picker focuses the selected effort instead of Auto', async () => {
+test('vertical roving reaches the selected effort instead of treating it as Auto', async () => {
   const tree = await mountBar(recorder(), {
     reasoningEffort: 'max',
     runControls: {
@@ -541,21 +568,20 @@ test('opening the effort picker focuses the selected effort instead of Auto', as
       },
     },
   })
-  await openEffort(tree)
-  await harness.nextFrame()
+  await openLadder(tree)
 
   const selected = menu(tree)?.querySelector(
     '[role="menuitemradio"][aria-checked="true"]',
   ) ?? null
   expect(selected?.getAttribute('aria-label')).toBe('Max')
-  expect(focused()).toBe(selected)
+  expect(focused() === selected).toBe(true)
 })
 
-test('the rail effort picker is the same slider as the model card', async () => {
+test('the main face keeps the full effort scale and its separate Auto control', async () => {
   const tree = await mountBar(recorder())
   await openEffort(tree)
 
-  expect(menu(tree)?.getAttribute('aria-label')).toBe('Reasoning effort')
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
   expect(rungs(tree).map(rung => rung.getAttribute('aria-label'))).toEqual([
     'Low',
     'Medium',
@@ -624,7 +650,7 @@ test('the effort slider flow pass gets shorter at a higher level', async () => {
   expect(duration()).toBeGreaterThan(highDuration)
 })
 
-test('the rail effort picker stays open on a change and closes on a re-pick', async () => {
+test('the main effort rail stays open on changes and re-picks', async () => {
   const recorded = recorder()
   const tree = await mountBar(recorded)
   await openEffort(tree)
@@ -635,7 +661,7 @@ test('the rail effort picker stays open on a change and closes on a re-pick', as
 
   await click(menu(tree)?.querySelector('[aria-label="High"]'))
   expect(recorded.efforts).toEqual(['max', 'high'])
-  expect(menu(tree)).toBeNull()
+  expect(menu(tree)).toBeTruthy()
 })
 
 /** Give the rail a real width so pointer positions map to rungs. */
@@ -657,7 +683,7 @@ test('dragging along the slider commits once, at the rung it is released on', as
   const tree = await mountBar(recorded)
   await openLadder(tree)
   const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
-  // 240px wide: the ticks run from 14px to 226px, a rung about every 71px.
+  // 240px wide: the ticks run from 14px to 226px, six rungs in total.
   sizeRail(rail, 240)
 
   await pointer(rail, 'pointerdown', 14)
@@ -667,10 +693,10 @@ test('dragging along the slider commits once, at the rung it is released on', as
   expect(recorded.efforts).toEqual([])
   expect(
     rungs(tree).filter(rung => rung.getAttribute('data-filled') === 'true'),
-  ).toHaveLength(4)
+  ).toHaveLength(6)
   await pointer(rail, 'pointerup', 226)
 
-  expect(recorded.efforts).toEqual(['max'])
+  expect(recorded.efforts).toEqual(['ultra'])
 })
 
 test('a drag that returns to the current level writes nothing and keeps the card', async () => {
@@ -680,11 +706,11 @@ test('a drag that returns to the current level writes nothing and keeps the card
   const rail = rungs(tree)[0]!.closest<HTMLElement>('.touch-none')!
   sizeRail(rail, 240)
 
-  // `high` is the third rung, at 155px.
-  await pointer(rail, 'pointerdown', 155)
+  // `high` is the third rung, near 99px.
+  await pointer(rail, 'pointerdown', 99)
   await pointer(rail, 'pointermove', 14)
-  await pointer(rail, 'pointermove', 155)
-  await pointer(rail, 'pointerup', 155)
+  await pointer(rail, 'pointermove', 99)
+  await pointer(rail, 'pointerup', 99)
 
   expect(recorded.efforts).toEqual([])
   expect(menu(tree)).toBeTruthy()
@@ -712,5 +738,87 @@ test('opening the account picker focuses the active account row', async () => {
     '[role="menuitem"][aria-current="true"]',
   ) ?? null
   expect(selected?.textContent).toContain('active')
-  expect(focused()).toBe(selected)
+  expect(focused() === selected).toBe(true)
+})
+
+test('the main fast switch participates in roving and writes without closing', async () => {
+  const fast: boolean[] = []
+  const tree = await mountBar(recorder(), {
+    runControls: {
+      ...runControls(),
+      fast: { active: false, supportedByModel: true, available: true, unavailableReason: null },
+    },
+    onSetFast: value => fast.push(value),
+  })
+  await openEffort(tree)
+  expect(focused()?.getAttribute('aria-label')).toBe('Model: GPT-5.6 Sol')
+  const toggle = menu(tree)?.querySelector<HTMLElement>('[role="switch"][aria-label="Fast mode"]')
+  expect(toggle?.getAttribute('aria-checked')).toBe('false')
+  const visited = new Set<Element | null>()
+  for (let index = 0; index < 12; index++) {
+    visited.add(focused())
+    await press(focused()!, 'ArrowDown')
+  }
+  expect(visited.has(toggle ?? null)).toBe(true)
+  await click(toggle)
+  expect(fast).toEqual([true])
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Run controls')
+})
+
+test('unavailable fast remains a disabled switch with the actual reason on its row', async () => {
+  const fast: boolean[] = []
+  const tree = await mountBar(recorder(), {
+    runControls: {
+      ...runControls(),
+      fast: {
+        active: false,
+        supportedByModel: true,
+        available: false,
+        unavailableReason: 'Fast mode requires a paid subscription',
+      },
+    },
+    onSetFast: value => fast.push(value),
+  })
+  await openEffort(tree)
+  const toggle = menu(tree)?.querySelector('[role="switch"][aria-label="Fast mode"]')
+  expect(toggle?.hasAttribute('disabled')).toBe(true)
+  expect(toggle?.closest('[title]')?.getAttribute('title')).toBe('Fast mode requires a paid subscription')
+  await click(toggle)
+  expect(fast).toEqual([])
+})
+
+test('an active but unavailable fast switch can still be turned off', async () => {
+  const fast: boolean[] = []
+  const tree = await mountBar(recorder(), {
+    runControls: {
+      ...runControls(),
+      fast: {
+        active: true, supportedByModel: true, available: false,
+        unavailableReason: 'Fast mode requires a paid subscription',
+      },
+    },
+    onSetFast: value => fast.push(value),
+  })
+  await openEffort(tree)
+  const toggle = menu(tree)?.querySelector('[role="switch"][aria-label="Fast mode"]')
+  expect(toggle?.getAttribute('aria-checked')).toBe('true')
+  expect(toggle?.hasAttribute('disabled')).toBe(false)
+  await click(toggle)
+  expect(fast).toEqual([false])
+})
+
+test('losing the live control seam closes an open subface and leaves only retained values', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openCard(tree)
+  await act(async () => tree.render(bar(recorded, {
+    runControls: null,
+    permissionContext: null,
+    readOnlyRunControls: runControls(),
+    permissionModeReadOnly: 'auto',
+  })))
+  expect(menu(tree)).toBeNull()
+  expect(tree.container.querySelector('[data-composer-face="run-controls"]')).toBeNull()
+  expect(tree.container.querySelector('.composer-run-face')?.getAttribute('aria-label')).toContain('Model: GPT-5.6 Sol')
+  expect(recorded.models).toEqual([])
 })

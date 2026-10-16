@@ -235,7 +235,7 @@ export type RowReorderHandlers = {
 }
 
 type NavItem = {
-  id: 'goals' | 'accounts' | 'usage' | 'settings'
+  id: 'scheduled' | 'goals' | 'accounts' | 'usage' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -245,13 +245,14 @@ type NavItem = {
 // Chat is reached by opening a session from this roster, so repeating it as a
 // destination only spends vertical space and competes with the primary path.
 const NAV: NavItem[] = [
+  { id: 'scheduled', label: 'Scheduled', enabled: true, icon: <ScheduledIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'usage', label: 'Analytics', enabled: true, icon: <UsageBarsIcon className="size-4" strokeWidth="1.5" /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
+type SidebarView = 'chat' | 'sessions' | 'scheduled' | 'goals' | 'accounts' | 'usage' | 'settings'
 
 export function Sidebar({
   rows,
@@ -491,6 +492,8 @@ export function Sidebar({
       '--sidebar-expanded-width',
       `${sidebarWidth}px`,
     )
+    // App-wide safety notices must remain readable beside the overlay rail.
+    asideRef.current?.parentElement?.style.setProperty('--sidebar-expanded-width', `${sidebarWidth}px`)
   }, [sidebarWidth])
 
   /**
@@ -2193,6 +2196,24 @@ function PawLogo() {
       <ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
       <ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45" />
       <path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z" />
+    </svg>
+  )
+}
+
+function ScheduledIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
     </svg>
   )
 }

@@ -23,16 +23,31 @@ function bar(onSetMode: (mode: PermissionSetModeMode) => void, props: Partial<Pa
   return createElement(ComposerActionsBar, {
     attachDisabled: false, onAttach() {}, model: null, reasoningEffort: null,
     fastMode: null, permissionContext: context, onSetMode, account: null,
-    contextUsage: null, ...props,
+    contextUsage: null,
+    runControls: {
+      model: {
+        current: 'gpt-5.6-sol', currentLabel: 'GPT-5.6 Sol', selected: 'gpt-5.6-sol',
+        contextWindow: 200_000, provider: 'openai', providerSwitchLocked: false,
+        options: [],
+      },
+      effort: { current: null, selected: null, supported: false, options: [] },
+      fast: { active: false, supportedByModel: false, available: false, unavailableReason: null },
+      autoCompact: { enabled: true, threshold: null, warningThreshold: null },
+    },
+    onSetModel: () => {}, onSetEffort: () => {}, onSetFast: () => {},
+    ...props,
   })
 }
 
 function modeFace(container: HTMLElement): HTMLButtonElement {
-  return container.querySelector<HTMLButtonElement>('[data-composer-face="mode"]')!
+  return container.querySelector<HTMLButtonElement>('[data-composer-face="run-controls"]')!
 }
 
 async function open(trigger: HTMLButtonElement) {
   await act(async () => { trigger.focus(); trigger.click() })
+  await act(async () => { await harness.nextFrame() })
+  const mode = document.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label^="Permission mode: "]')!
+  await act(async () => mode.click())
   await act(async () => { await harness.nextFrame() })
   return document.querySelector<HTMLElement>('[role="menu"][aria-label="Permission mode"]')!
 }
@@ -56,6 +71,9 @@ test('menu pointer selection and Escape restore the owning face, while outside c
   menu = await open(trigger)
   await act(async () => menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })))
   expect(document.activeElement?.textContent).toContain('Bypass permissions')
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  expect(document.querySelector('[role="menu"]')?.getAttribute('aria-label')).toBe('Run controls')
+  expect(document.activeElement?.getAttribute('aria-label')).toBe('Permission mode: Ask')
   await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
   expect(document.querySelector('[role="menu"]')).toBeNull()
   expect(document.activeElement === trigger).toBe(true)
@@ -84,7 +102,9 @@ test('switching between pane menus sends the selection only to its owner', async
   await act(async () => { secondTrigger.focus(); secondTrigger.click() })
   await act(async () => { await harness.nextFrame() })
   expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1)
-  const menu = document.querySelector<HTMLElement>('[role="menu"]')!
+  const mode = document.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label^="Permission mode: "]')!
+  await act(async () => mode.click())
+  const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Permission mode"]')!
   const plan = menu.querySelector<HTMLButtonElement>('[role="menuitemradio"]')!
   await act(async () => { plan.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); plan.click() })
   expect(firstModes).toEqual([])
@@ -92,6 +112,63 @@ test('switching between pane menus sends the selection only to its owner', async
   expect(document.activeElement === secondTrigger).toBe(true)
 })
 
+test('the merged mode list preserves classifier availability and applies a mode before closing', async () => {
+  const modes: PermissionSetModeMode[] = []
+  const tree = await harness.mount(bar(mode => modes.push(mode), {
+    permissionContext: { ...context, permissionClassifierEnabled: false },
+  }))
+  const trigger = modeFace(tree.container)
+  const menu = await open(trigger)
+  const choices = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
+  expect(choices).toHaveLength(6)
+  const auto = choices.find(choice => choice.textContent?.includes('Auto mode'))!
+  expect(auto.disabled).toBe(true)
+  expect(auto.title).toBe('Auto mode is unavailable for this model or has been disabled in settings.')
+  await act(async () => auto.click())
+  expect(modes).toEqual([])
+  expect(document.querySelector('[role="menu"]') === menu).toBe(true)
+  await act(async () => choices.find(choice => choice.textContent?.includes('Accept edits'))!.click())
+  expect(modes).toEqual(['acceptEdits'])
+  expect(document.querySelector('[role="menu"]')).toBeNull()
+  expect(document.activeElement === trigger).toBe(true)
+})
+
+
+test('toolbar arrows and Tab cross one run face between attachment and the right cluster', async () => {
+  let composerFocusRequests = 0
+  const tree = await harness.mount(bar(() => {}, {
+    contextUsage: { usedTokens: 42_000, contextWindow: 200_000, percentUsed: 21 },
+    onFocusComposer: () => { composerFocusRequests++ },
+  }))
+  const attach = tree.container.querySelector<HTMLButtonElement>('[data-composer-face="attach"]')!
+  const run = modeFace(tree.container)
+  const usage = tree.container.querySelector<HTMLButtonElement>('[data-composer-face="context"]')!
+  const press = async (key: string, shiftKey = false) => {
+    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', {
+      key, shiftKey, bubbles: true, cancelable: true,
+    })))
+  }
+  await act(async () => attach.focus())
+  await press('ArrowRight')
+  expect(document.activeElement === run).toBe(true)
+  expect(run.tabIndex).toBe(0)
+  expect(attach.tabIndex).toBe(-1)
+  await press('Tab')
+  expect(document.activeElement === usage).toBe(true)
+  await press('Tab', true)
+  expect(document.activeElement === run).toBe(true)
+  await press('End')
+  expect(document.activeElement === usage).toBe(true)
+  await press('ArrowRight')
+  expect(document.activeElement === attach).toBe(true)
+  await press('ArrowLeft')
+  expect(document.activeElement === usage).toBe(true)
+  await press('Home')
+  expect(document.activeElement === attach).toBe(true)
+  await press('Tab', true)
+  expect(composerFocusRequests).toBe(1)
+  expect(tree.container.querySelectorAll('[data-composer-face]')).toHaveLength(3)
+})
 
 test('Escape dismisses an informational dialog before leaving the toolbar', async () => {
   let composerFocusRequests = 0

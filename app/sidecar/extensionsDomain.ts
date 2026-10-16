@@ -1,9 +1,8 @@
 /**
- * Settings extensions domain capability — the sidecar-side read-seam over the
- * engine's real MCP / Plugins / Skills / Hooks config (P4-12; the read-only W4
- * domain-recipe shape, like `settingsDomain.ts` / `agentConfigDomain.ts`).
+ * Settings inventory metadata over the
+ * engine's real MCP / Plugins / Skills / Hooks config.
  *
- * Like settings, all four slices freeze at construction (no live subscription):
+ * Each inventory read collects four independent slices:
  * MCP projects the lifecycle's already-prepared explicit-only configuration,
  * plugins are an async disk read, and skills mirror the ALREADY-LOADED command
  * catalog the session runs (the anti-stub-context rule §8.1 — same source as
@@ -51,21 +50,6 @@ type PendingUpdate = {
   scope: string
   oldVersion: string
   newVersion: string
-}
-
-export type SidecarExtensionsDomain = {
-  /** The spawn-time extensions snapshot (null only if EVERY slice failed). */
-  getSnapshot(): ExtensionsSnapshot | null
-}
-
-export function createSidecarExtensionsDomain(
-  snapshot: ExtensionsSnapshot | null,
-): SidecarExtensionsDomain {
-  return {
-    getSnapshot() {
-      return snapshot
-    },
-  }
 }
 
 /**

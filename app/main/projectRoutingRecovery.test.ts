@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ProjectRoutingController, type ProjectRoutingControllerOptions, type PendingRoute } from './projectRoutingController.js'
-import { FileProjectRoutingStore } from './projectRoutingStore.js'
+import { ProjectRoutingController, type ProjectRoutingControllerOptions } from './projectRoutingController.js'
+import { FileProjectRoutingStore, type RouteRecord } from './projectRoutingStore.js'
 
 const session = '93ad8a93-bc68-4954-8c3e-92115798fcce'
 const id = '5b48eb57-5dc5-45ed-af3a-248863d962f2'
@@ -15,7 +15,7 @@ async function isolated(run: (path: string) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), 'catcode-routing-journal-'))
   try { await run(join(root, 'journal.json')) } finally { rmSync(root, { recursive: true, force: true }) }
 }
-function saved(phase: PendingRoute['phase'] = 'checking', outcome: PendingRoute['outcome'] = 'unsent'): PendingRoute {
+function saved(phase: RouteRecord['phase'] = 'checking', outcome: RouteRecord['outcome'] = 'unsent'): RouteRecord {
   return { sessionId: session, submitId: id, message: payload, routingText: 'Fix alpha', sourceCwd: '/chat', phase,
     decision: { kind: 'auto', cwd: '/project', name: 'project', explicit: true }, messageText: null, outcome }
 }
@@ -88,4 +88,19 @@ test('unreadable legacy journal retains rows and refuses new input without repla
   expect(state.controller.hasPending(session)).toBe(true)
   expect(state.controller.acceptsNewSubmit(session, id)).toBe(false)
   expect(readFileSync(path, 'utf8')).toBe('{broken')
+}))
+
+
+test('recovery preserves input and refuses changed context until the original or saved target folder is restored', async () => isolated(async path => {
+  new FileProjectRoutingStore(path).save([saved()])
+  let cwd = '/other-project'
+  const state = setup(path, { currentCwd: () => cwd })
+  await state.controller.resolve({ appSessionId: session, submitId: id, choice: 'resend' })
+  expect(state.sent).toEqual([])
+  expect(state.controller.snapshots()[0]).toMatchObject({ phase: 'failed', message: 'Project folder changed before sending.' })
+  expect(state.store.load()[0]?.message).toEqual(payload)
+  cwd = '/project'
+  await state.controller.resolve({ appSessionId: session, submitId: id, choice: 'resend' })
+  expect(state.sent).toEqual([payload])
+  state.controller.onSubmitResult(session, id, true)
 }))

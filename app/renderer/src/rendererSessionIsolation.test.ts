@@ -42,7 +42,7 @@ function ready(
 ): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -60,7 +60,7 @@ function ready(
 function messageFrame(sessionId: string, message: SDKMessage): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 3,
+    protocolVersion: 4,
     sessionId,
     event: { type: 'message', message },
   }
@@ -175,7 +175,7 @@ test('a permission request for B while A is active queues under B only', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId: SESSION_B,
       event: { type: 'permission.requested', request: REQUEST_B },
     },

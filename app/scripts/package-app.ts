@@ -1,3 +1,5 @@
+import { createPackage, getRawHeader } from '@electron/asar'
+import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses'
 /**
  * Build the double-clickable Cat Code application (P5-1).
  *
@@ -301,6 +303,11 @@ function copyPayload(): void {
 
   mkdirSync(join(APP_PAYLOAD, 'main'), { recursive: true })
   cpSync(join(appRoot, 'main', 'main.js'), join(APP_PAYLOAD, 'main', 'main.js'))
+  const lidAssets = join(RESOURCES, 'lid-closed')
+  mkdirSync(lidAssets, { recursive: true })
+  for (const name of ['helper', 'install.sh', 'uninstall.sh']) {
+    cpSync(join(appRoot, 'native', 'lid-closed', 'dist', name), join(lidAssets, name))
+  }
 
   // The PRODUCTION preload only. preload.dev.cjs carries the dev harness and has
   // no business in a bundle; the scan below fails the build if it appears.
@@ -316,6 +323,27 @@ function copyPayload(): void {
   cpSync(join(appRoot, 'resources', 'icon.png'), join(APP_PAYLOAD, 'resources', 'icon.png'))
 }
 
+async function sealApplication(): Promise<void> {
+  const archive = join(RESOURCES, 'app.asar')
+  await createPackage(APP_PAYLOAD, archive)
+  const hash = createHash('sha256').update(getRawHeader(archive).headerString).digest('hex')
+  const plist = join(CONTENTS, 'Info.plist')
+  spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Delete :ElectronAsarIntegrity', plist], { stdio: 'ignore' })
+  run('/usr/libexec/PlistBuddy', ['-c', 'Add :ElectronAsarIntegrity dict', plist])
+  run('/usr/libexec/PlistBuddy', ['-c', 'Add :ElectronAsarIntegrity:Resources/app.asar dict', plist])
+  run('/usr/libexec/PlistBuddy', ['-c', 'Add :ElectronAsarIntegrity:Resources/app.asar:algorithm string SHA256', plist])
+  run('/usr/libexec/PlistBuddy', ['-c', `Add :ElectronAsarIntegrity:Resources/app.asar:hash string ${hash}`, plist])
+  await flipFuses(APP_BUNDLE, {
+    version: FuseVersion.V1,
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,
+    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+    [FuseV1Options.OnlyLoadAppFromAsar]: true,
+  })
+  rmSync(APP_PAYLOAD, { recursive: true })
+}
+
 function sign(): void {
   console.log('[package] ad-hoc signing')
   // LOCAL-USE-CONTRACT §5: nested executables first, then the bundle. Editing
@@ -325,6 +353,12 @@ function sign(): void {
   run('codesign', ['--sign', '-', '--force', PACKAGED_RIPGREP])
   run('codesign', ['--sign', '-', '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
   run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
+  // The root helper validates its own narrow bridge; app rebuilds do not
+  // require a different account-wide power grant.
+  run('codesign', ['--sign', '-', '--force', '--options', 'runtime', join(RESOURCES, 'lid-closed', 'helper')])
+  run('codesign', ['--sign', '-', '--force', APP_BUNDLE])
+  run('codesign', ['--verify', '--deep', '--strict', APP_BUNDLE])
+  run(join(RESOURCES, 'lid-closed', 'helper'), ['--check-native'])
 }
 
 function scan(): void {
@@ -337,7 +371,7 @@ function scan(): void {
   console.log('[package]   clean')
 }
 
-function main(): void {
+async function main(): Promise<void> {
   if (process.platform !== 'darwin') {
     throw new Error('the local-use contract targets macOS only')
   }
@@ -358,6 +392,8 @@ function main(): void {
   copyPayload()
   buildSidecar()
   copyRipgrep()
+  scan()
+  await sealApplication()
   sign()
   scan()
 
@@ -367,4 +403,4 @@ function main(): void {
   }
 }
 
-main()
+await main()

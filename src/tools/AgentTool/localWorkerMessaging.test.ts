@@ -436,7 +436,7 @@ describe('local worker message delivery', () => {
       'request preparation failed',
       setAppState,
     )
-    expect(appState.tasks.worker.pendingMessages).toMatchObject([
+    expect(getUnresolvedAgentMessageDeliveries(appState.tasks.worker as never)).toMatchObject([
       {
         id: preparedNewer!.id,
         status: 'undelivered',

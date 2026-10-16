@@ -1489,7 +1489,7 @@ async function* queryModel(
   })
 
   queryCheckpoint('query_message_normalization_start')
-  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools)
+  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools, requestProvider)
   queryCheckpoint('query_message_normalization_end')
 
   // Model-specific post-processing: strip tool-search-specific fields if the
@@ -1803,6 +1803,7 @@ async function* queryModel(
                 normalizeMessagesForAPI(
                   openAIInstructionAssembly.inputMessages,
                   filteredTools,
+                  requestProvider,
                 ),
               ),
               developerContext: openAIInstructionAssembly.developerContext,
@@ -2862,7 +2863,7 @@ async function* queryModel(
         })
       }
 
-      if (streamingError instanceof APIUserAbortError) {
+      if (streamingError instanceof APIUserAbortError || signal.aborted) {
         // Check if the abort signal was triggered by the user (ESC key)
         // If the signal is aborted, it's a user-initiated abort
         // If not, it's likely a timeout from the SDK
@@ -2879,7 +2880,7 @@ async function* queryModel(
                 'unknown') as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
             })
           }
-          throw streamingError
+          throw streamingError instanceof APIUserAbortError ? streamingError : new APIUserAbortError()
         } else {
           // The SDK threw APIUserAbortError but our signal wasn't aborted
           // This means it's a timeout from the SDK's internal timeout

@@ -137,7 +137,9 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
     expect(requests).toHaveLength(2)
     expect(requests[1]).toContain(fact)
     expect(state.tasks[agentId].status).toBe('completed')
-    expect(state.tasks[agentId].pendingMessages).toHaveLength(0)
+    expect(state.tasks[agentId].pendingMessages).toMatchObject([
+      { message: fact, status: 'delivered' },
+    ])
 
     const firstTranscript = await storage.getAgentTranscript(asAgentId(agentId))
     const second = await ResumeAgentTool.call(
@@ -152,7 +154,7 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
     console.log(JSON.stringify({
       sendAccepted,
       followupReachedFirstRun: requests[1]?.includes(fact),
-      deliveredRecordRemoved: state.tasks[agentId].pendingMessages.length === 0,
+      retainedReceiptCount: state.tasks[agentId].pendingMessages.length,
       savedTranscriptHasFact: JSON.stringify(firstTranscript).includes(fact),
       savedTranscriptHasStartupOutcome: JSON.stringify(firstTranscript).includes(priorOutcome),
       nextResumeHasFact: requests[2]?.includes(fact),

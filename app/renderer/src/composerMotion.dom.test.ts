@@ -108,7 +108,15 @@ function rail(
     attachDisabled: false, onAttach: () => {}, model: null, reasoningEffort: null,
     fastMode: null, permissionContext: null, onSetMode: () => {}, account: null,
     contextUsage: { usedTokens, contextWindow: 200_000, percentUsed: Math.round(usedTokens / 2_000) },
-    runControls: { autoCompact, cacheExpired, cacheExpiresAt } as RunControlsSnapshot,
+    runControls: {
+      model: {
+        current: 'gpt-5.6-sol', currentLabel: 'GPT-5.6 Sol', selected: 'gpt-5.6-sol',
+        contextWindow: 200_000, provider: 'openai', providerSwitchLocked: false, options: [],
+      },
+      effort: { current: null, selected: null, supported: false, options: [] },
+      fast: { active: false, supportedByModel: false, available: false, unavailableReason: null },
+      autoCompact, cacheExpired, cacheExpiresAt,
+    },
   })
 }
 
@@ -378,14 +386,14 @@ const SEND_SESSION_ID = 'session-1'
 const READY = { status: 'ready' as const, inputEnabled: true }
 const CONNECTING = { status: 'connecting' as const, inputEnabled: false }
 const readyFrame: ServerFrame = {
-  kind: 'ready', protocolVersion: 3, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
+  kind: 'ready', protocolVersion: 4, sessionId: SEND_SESSION_ID, engineSessionId: 'engine-send',
   payload: {
     type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
     abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   },
 }
 const messageFrame = (message: SDKMessage): ServerFrame => ({
-  kind: 'event', protocolVersion: 3, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
+  kind: 'event', protocolVersion: 4, sessionId: SEND_SESSION_ID, event: { type: 'message', message },
 })
 const userText = (uuid: string, text: string): SDKMessage => ({
   type: 'user', uuid: uuid as never, parent_tool_use_id: null,

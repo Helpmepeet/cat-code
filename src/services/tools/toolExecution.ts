@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { assertLidWorkAdmission } from '../lidClosedWork.js'
 import { isHandoffExecutionFenced } from '../../app-runtime/handoff.js'
 import { createHandoffSkippedResult } from './handoffExecution.js'
 import type { UUID } from 'crypto'
@@ -1563,6 +1564,8 @@ async function checkPermissionsAndCallTool(
     return [{ message: createHandoffSkippedResult(toolUseID, assistantMessage) }]
   }
 
+  try { assertLidWorkAdmission() }
+  catch (error) { await preparation.dispose(); throw error }
   startSessionActivity('tool_exec')
   toolUseContext.onToolExecutionStart?.()
   callInput = processedInput

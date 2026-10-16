@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { installLidWorkRuntime } from '../../src/services/lidClosedWork.js'
 /**
  * SidecarServer security-boundary unit tests (SECURITY-MINIMUM T4/T5a/T6/T6b/T7).
  *
@@ -82,7 +84,6 @@ import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.
 import {
   createSidecarAccountsDomain,
   type AccountsCommandExecutor,
-  type OAuthLoginRunner,
   type SidecarAccountsDomain,
 } from './accountsDomain.js'
 import {
@@ -110,7 +111,6 @@ import type {
   WorkspaceTrustAcceptResult,
 } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
-import { createSidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { createSidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { AgentDefinition } from '../../src/tools/AgentTool/loadAgentsDir.js'
@@ -129,6 +129,7 @@ import {
 } from '../../src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
 import { asAgentId } from '../../src/types/ids.js'
+import { createWorkspaceObserver } from './workspaceObservation.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -328,6 +329,54 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
       pendingPermissionRequests: [],
     },
   })
+})
+
+test('workspace observation is outbound on attach and follows engine cwd on live events', async () => {
+  let cwd = '/opening-checkout'
+  let continued = 0
+  const controller = new AppSessionController(probeAdapter())
+  const { received } = connect(controller, {
+    workspaceObserver: {
+      getSnapshot: () => ({ cwd, lastWorkingBranch: 'recorded' }),
+      conversationContinued: async () => { continued++ },
+    },
+  })
+  const ready = received.find(frame => frame.kind === 'ready')
+  expect(ready?.kind === 'ready' && ready.workspace).toEqual({ cwd, lastWorkingBranch: 'recorded' })
+  expect(continued).toBe(0)
+  cwd = '/entered-worktree'
+  await controller.submit('go')
+  const events = received.filter(frame => frame.kind === 'event' && !frame.replay)
+  expect(events.length).toBeGreaterThan(0)
+  for (const frame of events) {
+    expect(frame.kind === 'event' && frame.workspace).toEqual({ cwd, lastWorkingBranch: 'recorded' })
+  }
+})
+
+test('live accepted conversation advances recorded branch, but attach and checkout observations do not', async () => {
+  let branch = 'external'
+  const observer = await createWorkspaceObserver({ lastWorkingBranch: 'recorded' }, {
+    cwd: () => '/restored-worktree',
+    branch: async () => branch,
+  })
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'user',
+        session_id: ENGINE_SESSION,
+        parent_tool_use_id: null,
+        uuid: randomUUID(),
+        message: { role: 'user', content: 'continue on this checkout' },
+      }
+    },
+  })
+  const { server, received, conn } = connect(controller, { workspaceObserver: observer })
+  expect(observer.getSnapshot().lastWorkingBranch).toBe('recorded')
+  branch = 'external-again'
+  expect(observer.getSnapshot().lastWorkingBranch).toBe('recorded')
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'continue', prompt: 'continue on this checkout' }))
+  await waitFor(() => received.some(frame => frame.kind === 'activity' && frame.workspace?.lastWorkingBranch === branch))
+  expect(observer.getSnapshot()).toEqual({ cwd: '/restored-worktree', lastWorkingBranch: 'external-again' })
 })
 
 test('production delivery envelope adds metadata beside, never inside, the raw ServerFrame', () => {
@@ -713,9 +762,10 @@ test('T7 — rejects an app.abort reason over the text cap (no abort)', () => {
  * scans key names, not values).
  */
 test('F6 — an error frame carrying raw engine text has its filesystem paths stripped and its length bounded', async () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'acct-1' })], activeAccountId: 'acct-1' })
   const accounts = makeAccountsDomain({
     executor: fakeExecutor({
-      logout: () => {
+      switch: async () => {
         throw new Error(
           `EACCES: permission denied, unlink '/Users/someone/.cat-code/vault/accounts/acct-1.json'`,
         )
@@ -727,10 +777,9 @@ test('F6 — an error frame carrying raw engine text has its filesystem paths st
   server.handleData(
     conn,
     accountFrame({
-      type: 'account.logout',
+      type: 'account.switch',
       requestId: 'lo1',
       accountId: 'acct-1',
-      expectedCredentialGeneration: 0,
     }),
   )
   await flush()
@@ -745,9 +794,10 @@ test('F6 — an error frame carrying raw engine text has its filesystem paths st
 })
 
 test('F6 — an over-long error message is truncated before it leaves', async () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'acct-1' })], activeAccountId: 'acct-1' })
   const accounts = makeAccountsDomain({
     executor: fakeExecutor({
-      logout: () => {
+      switch: async () => {
         throw new Error('z'.repeat(50_000))
       },
     }),
@@ -757,10 +807,9 @@ test('F6 — an over-long error message is truncated before it leaves', async ()
   server.handleData(
     conn,
     accountFrame({
-      type: 'account.logout',
+      type: 'account.switch',
       requestId: 'lo2',
       accountId: 'acct-1',
-      expectedCredentialGeneration: 0,
     }),
   )
   await flush()
@@ -1060,11 +1109,12 @@ function hangingAccountsDomain(): {
   const gate = new Promise<void>(resolve => {
     settle = resolve
   })
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'park-account' })], activeAccountId: 'park-account' })
   const domain = makeAccountsDomain({
     executor: fakeExecutor({
-      touchAll: async () => {
+      switch: async () => {
         await gate
-        return { ok: true, message: 'Refresh complete.' }
+        return { ok: true, message: 'Switched.' }
       },
     }),
   })
@@ -1079,7 +1129,7 @@ test('IDLE-PARK gate — app.park is DECLINED while an account verb is still wri
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
-  server.handleData(conn, clientFrame({ type: 'account.touchAll', requestId: 'a1' }))
+  server.handleData(conn, clientFrame({ type: 'account.switch', requestId: 'a1', accountId: 'park-account' }))
   await flush()
   // No turn, no permission, no task: the in-flight vault write is the ONLY blocker.
   server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
@@ -1096,7 +1146,7 @@ test('IDLE-PARK gate — the park gate reopens once the account verb settles', a
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
-  server.handleData(conn, clientFrame({ type: 'account.touchAll', requestId: 'a1' }))
+  server.handleData(conn, clientFrame({ type: 'account.switch', requestId: 'a1', accountId: 'park-account' }))
   await flush()
   settle()
   await flush()
@@ -1160,29 +1210,6 @@ test('IDLE-PARK gate — app.park is declined while a targeted branch is still w
 
   expect(parkCount()).toBe(0)
   settle()
-})
-
-test('IDLE-PARK gate — app.park is DECLINED while an OAuth sign-in is under way (no exit)', async () => {
-  // `account.login` acks immediately and the real flow keeps running in the
-  // background, so the in-flight counter above cannot see it. The runner here
-  // never resolves, standing in for a browser the user has not finished with.
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: {
-      begin: () => new Promise(() => {}),
-    },
-  })
-  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
-    accounts,
-  })
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(conn, clientFrame({ type: 'account.login', requestId: 'l1' }))
-  await flush()
-  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
-
-  expect(parkCount()).toBe(0)
 })
 
 test('IDLE-PARK R2-F2 — submit dispatched BEFORE park: the turn runs, park is declined, no exit', () => {
@@ -3117,46 +3144,6 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
   expect(
     received.filter(frame => frame.kind === 'thread-goal.snapshot'),
   ).toHaveLength(2)
-})
-
-test('P4-12 — attach emits an extensions.snapshot after the goal snapshot, secretGuard-clean through send()', () => {
-  const store = createStore(getDefaultAppState())
-  const goals = createSidecarGoalDomain(store)
-  // A snapshot carrying only config METADATA (the domain's secret posture) —
-  // if a secret-KEYED field ever leaked in, send()'s secretGuard would drop the
-  // whole frame, so its arrival is itself the proof.
-  const extensions = createSidecarExtensionsDomain({
-    mcp: [{ name: 'linear', transport: 'http', scope: 'user', url: 'https://mcp.linear/rpc' }],
-    plugins: [],
-    skills: [
-      {
-        name: 'deep-research',
-        source: 'userSettings',
-        context: 'inline',
-        disableModelInvocation: false,
-        userInvocable: true,
-        description: 'research a topic',
-      },
-    ],
-    hooks: [],
-  })
-  const { received } = connect(new AppSessionController(probeAdapter()), { goals, extensions })
-
-  const readyIdx = received.findIndex(f => f.kind === 'ready')
-  const goalIdx = received.findIndex(f => f.kind === 'thread-goal.snapshot')
-  const extIdx = received.findIndex(f => f.kind === 'extensions.snapshot')
-  // Attach order: ready → … → thread-goal.snapshot → … → extensions.snapshot.
-  expect(readyIdx).toBe(0)
-  expect(goalIdx).toBeGreaterThan(readyIdx)
-  expect(extIdx).toBeGreaterThan(goalIdx)
-
-  const snap = received.find(
-    (frame): frame is Extract<ServerFrame, { kind: 'extensions.snapshot' }> =>
-      frame.kind === 'extensions.snapshot',
-  )
-  expect(snap?.extensions.mcp?.[0]?.name).toBe('linear')
-  expect(snap?.extensions.skills?.[0]?.name).toBe('deep-research')
-  expect(snap && scanForSecrets(snap).ok).toBe(true)
 })
 
 test('agent config rebroadcasts to every connection only when live MCP availability changes', () => {
@@ -5910,30 +5897,6 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
   }
 }
 
-/**
- * A FAKE OAuth runner for the boundary tests — never opens a browser / writes the
- * vault. `begin` emits `waiting_for_login` then (unless a manual code is required)
- * resolves to a pending login the alias verb persists. Deterministic + headless.
- */
-function fakeOAuthRunner(
-  opts: { requireManualCode?: boolean; onPasteReceived?: (code: string) => void } = {},
-): OAuthLoginRunner {
-  return {
-    async begin({ onWaitingForLogin, waitForManualCode }) {
-      onWaitingForLogin('https://auth.example/authorize?code_challenge=abc&state=xyz')
-      if (opts.requireManualCode) {
-        const code = await waitForManualCode()
-        opts.onPasteReceived?.(code)
-      }
-      return {
-        isExistingAccount: false,
-        validateAlias: () => ({ ok: true }),
-        persist: () => {},
-      }
-    },
-  }
-}
-
 afterEach(() => {
   resetCodexAccountPoolForTest()
 })
@@ -5951,46 +5914,33 @@ test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-cle
   expect(serialized).not.toContain('/Users/secret')
 })
 
-test('stats — ordinary attach does not start a per-sidecar usage scan', async () => {
-  const { received } = connect(new AppSessionController(probeAdapter()))
-  await Promise.resolve()
-  expect(received.some(f => f.kind === 'stats.usage.snapshot')).toBe(false)
-})
-
-test('stats — stats.query with range: 30d dispatches and responds with 30d stats.usage.snapshot', async () => {
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
-
-  server.handleData(
-    conn,
-    clientFrame({ type: 'stats.query', requestId: 'sq-1', range: '30d' }),
-  )
-  await waitFor(
-    () =>
-      received.some(
-        f => f.kind === 'stats.usage.snapshot' && f.stats.range === '30d',
-      ),
-    4000,
-  )
-
-  const thirtyDaySnaps = received.filter(
-    f => f.kind === 'stats.usage.snapshot' && f.stats.range === '30d',
-  )
-  expect(thirtyDaySnaps.length).toBeGreaterThan(0)
-})
-
-test('stats — stats.query with invalid range fails closed (bad_request)', async () => {
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
-
-  server.handleData(
-    conn,
-    clientFrame({ type: 'stats.query', requestId: 'sq-bad', range: 'invalid' as any }),
-  )
+test.each([
+  ['account.rename', { accountId: 'a', alias: 'new-name' }],
+  ['account.touchAll', {}],
+  ['account.login', {}],
+  ['account.oauthPasteCode', { code: 'manual-code' }],
+  ['account.oauthAlias', { alias: 'new-name' }],
+  ['account.oauthCancel', {}],
+  ['account.delete', { accountId: 'a', expectedCredentialGeneration: 0, confirm: true }],
+  ['account.logout', { accountId: 'a', expectedCredentialGeneration: 0 }],
+  ['stats.query', { range: '7d' }],
+] as const)('host-owned %s is rejected by the session receiver before dispatch', async (type, fields) => {
+  let calls = 0
+  const base = makeAccountsDomain({ executor: fakeExecutor() })
+  const accounts: SidecarAccountsDomain = {
+    ...base,
+    async runVerb(verb) {
+      calls++
+      return base.runVerb(verb)
+    },
+  }
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
+  server.handleData(conn, rawFrame({ type, requestId: 'retired-command', ...fields }))
   await flush()
-
-  const error = received.find(
-    f => f.kind === 'error' && (f as any).requestId === 'sq-bad',
-  )
-  expect(error?.kind).toBe('error')
+  expect(calls).toBe(0)
+  expect(received.filter(frame => frame.kind === 'error')).toEqual([
+    expect.objectContaining({ requestId: 'retired-command', code: 'bad_request' }),
+  ])
 })
 
 test('P4-5 — a valid account.switch produces an ok account.result and re-broadcasts the snapshot', async () => {
@@ -6116,151 +6066,6 @@ test('P4-5 — rejects account.switch with a missing accountId (schema)', () => 
     rawFrame({ type: 'account.switch', requestId: 'r' }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-})
-
-test('targeted account.logout accepts the exact account and generation shape', async () => {
-  const calls: Array<{ accountId: string; expectedCredentialGeneration: number }> = []
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor({
-      logout: async (accountId, expectedCredentialGeneration) => {
-        calls.push({ accountId, expectedCredentialGeneration })
-        return { ok: true, message: 'signed out' }
-      },
-    }),
-  })
-  const { server, received, conn } = connect(
-    new AppSessionController(probeAdapter()),
-    { accounts },
-  )
-
-  server.handleData(
-    conn,
-    accountFrame({
-      type: 'account.logout',
-      requestId: 'logout-1',
-      accountId: 'target-account',
-      expectedCredentialGeneration: 7,
-    }),
-  )
-  await flush()
-
-  expect(calls).toEqual([
-    { accountId: 'target-account', expectedCredentialGeneration: 7 },
-  ])
-  expect(
-    received.some(
-      frame =>
-        frame.kind === 'account.result' &&
-        frame.requestId === 'logout-1' &&
-        frame.ok,
-    ),
-  ).toBe(true)
-})
-
-test('targeted account.logout rejects missing, unsafe, and extra fields at the boundary', () => {
-  let calls = 0
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor({
-      logout: () => {
-        calls += 1
-        return { ok: true, message: 'signed out' }
-      },
-    }),
-  })
-  const { server, received, conn } = connect(
-    new AppSessionController(probeAdapter()),
-    { accounts },
-  )
-  const valid = {
-    type: 'account.logout',
-    requestId: 'logout-invalid',
-    accountId: 'target-account',
-    expectedCredentialGeneration: 7,
-  }
-  const invalidMessages: unknown[] = [
-    {
-      type: valid.type,
-      requestId: valid.requestId,
-      expectedCredentialGeneration: valid.expectedCredentialGeneration,
-    },
-    {
-      type: valid.type,
-      requestId: valid.requestId,
-      accountId: valid.accountId,
-    },
-    { ...valid, expectedCredentialGeneration: -1 },
-    { ...valid, expectedCredentialGeneration: 1.5 },
-    { ...valid, accessToken: 'secret' },
-    { ...valid, vaultFilePath: '/secret/profile.json' },
-  ]
-
-  for (const message of invalidMessages) {
-    server.handleData(conn, rawFrame(message))
-  }
-
-  expect(calls).toBe(0)
-  expect(
-    received.filter(frame => frame.kind === 'error' && frame.code === 'bad_request'),
-  ).toHaveLength(invalidMessages.length)
-})
-
-test('P4-5 — a valid account.rename passes the boundary and dispatches with its correlated result', async () => {
-  seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
-  const renames: { accountId: string; alias: string }[] = []
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor({
-      rename: (accountId, alias) => {
-        renames.push({ accountId, alias })
-        return { ok: true, message: 'renamed' }
-      },
-    }),
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(
-    conn,
-    accountFrame({ type: 'account.rename', requestId: 'rename-1', accountId: 'acct-aaaa', alias: 'renamed' }),
-  )
-  await flush()
-
-  expect(renames).toEqual([{ accountId: 'acct-aaaa', alias: 'renamed' }])
-  expect(
-    received.some(
-      f => f.kind === 'account.result' && f.requestId === 'rename-1' && f.ok,
-    ),
-  ).toBe(true)
-})
-
-test('P4-5 — rejects account.delete without confirm:true (destructive fail-closed)', () => {
-  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
-  let deleted = false
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor({ delete: () => { deleted = true; return { ok: true, message: 'x' } } }),
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-  // confirm omitted
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'account.delete',
-      requestId: 'r',
-      accountId: 'a',
-      expectedCredentialGeneration: 1,
-    }),
-  )
-  // confirm:false
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'account.delete',
-      requestId: 'r2',
-      accountId: 'a',
-      expectedCredentialGeneration: 1,
-      confirm: false,
-    }),
-  )
-  expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBeGreaterThanOrEqual(2)
-  expect(deleted).toBe(false)
 })
 
 test('host deletion notice reconciles a live sidecar pool without rerunning deletion', async () => {
@@ -6510,191 +6315,12 @@ test('P4-5 — an account verb with no accounts domain fails closed (internal_er
   server.handleData(
     conn,
     accountFrame({
-      type: 'account.logout',
+      type: 'account.switch',
       requestId: 'r',
       accountId: 'a',
-      expectedCredentialGeneration: 0,
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
-})
-
-/* ------------------------------------------------------------------------- *
- * P4-15 — OAuth login sub-protocol boundary tests (progress frame + verbs)
- * ------------------------------------------------------------------------- */
-
-test('P4-15 — account.login emits an oauth.login.progress waiting_for_login carrying the url (secretGuard-clean through send)', async () => {
-  const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
-  await flush()
-
-  const ack = received.find(f => f.kind === 'account.result')
-  expect(ack && ack.kind === 'account.result' && ack.ok).toBe(true)
-  const progress = received.filter(f => f.kind === 'oauth.login.progress')
-  const waiting = progress.find(
-    f => f.kind === 'oauth.login.progress' && f.progress.state === 'waiting_for_login',
-  )
-  // Its arrival is itself the proof it passed send()'s secretGuard (a token-keyed
-  // field would have dropped the whole frame).
-  expect(waiting?.kind).toBe('oauth.login.progress')
-  expect(
-    waiting?.kind === 'oauth.login.progress' &&
-      waiting.progress.state === 'waiting_for_login' &&
-      waiting.progress.url,
-  ).toBe('https://auth.example/authorize?code_challenge=abc&state=xyz')
-  expect(JSON.stringify(progress)).not.toContain('SECRET')
-})
-
-test('CC-17 — account.login provider:anthropic passes the strict boundary and reaches only the Anthropic runner', async () => {
-  let codexBegins = 0
-  let anthropicBegins = 0
-  const activated: string[] = []
-  const codexRunner = fakeOAuthRunner()
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: {
-      ...codexRunner,
-      async begin(callbacks) {
-        codexBegins++
-        return codexRunner.begin(callbacks)
-      },
-    },
-    anthropicOAuthRunner: {
-      async begin({ onWaitingForLogin }) {
-        anthropicBegins++
-        onWaitingForLogin('https://claude.ai/oauth/authorize')
-        return {
-          isExistingAccount: true,
-          validateAlias: () => ({ ok: true }),
-          persist: () => {},
-        }
-      },
-    },
-    onProviderActivated(provider) {
-      activated.push(provider)
-    },
-    isFirstRunEligible: () => true,
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(
-    conn,
-    accountFrame({
-      type: 'account.login',
-      requestId: 'anthropic-login',
-      provider: 'anthropic',
-    }),
-  )
-  await flush()
-
-  expect(codexBegins).toBe(0)
-  expect(anthropicBegins).toBe(1)
-  expect(activated).toEqual(['anthropic'])
-  expect(
-    received.some(
-      frame =>
-        frame.kind === 'oauth.login.progress' &&
-        frame.progress.state === 'waiting_for_login' &&
-        frame.progress.url === 'https://claude.ai/oauth/authorize',
-    ),
-  ).toBe(true)
-})
-
-test('CC-17 — account.login rejects renderer-authored provider activation authority', () => {
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: fakeOAuthRunner(),
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'account.login',
-      requestId: 'forged-activation',
-      provider: 'anthropic',
-      activateProvider: true,
-    }),
-  )
-
-  expect(
-    received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
-  ).toBe(true)
-})
-
-test('CC-17 — account.login rejects an unknown provider at the strict boundary', () => {
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: fakeOAuthRunner(),
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'account.login',
-      requestId: 'bad-provider',
-      provider: 'other',
-    }),
-  )
-
-  expect(
-    received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
-  ).toBe(true)
-})
-
-/*
- * CLAUDE.md §6 requires every inbound frame kind to carry a boundary test in
- * BOTH directions. These five close the gaps: `account.oauthCancel` (new, had
- * only a domain-level test that never touches the strict-key check or Zod),
- * `account.switch`'s `provider` key (the Anthropic arm crossed untested),
- * `session.branch`'s reject direction, and `app.abort`/`app.ping`, whose caps
- * had no coverage at all.
- */
-
-test('boundary — account.oauthCancel is accepted and reaches the domain', async () => {
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: fakeOAuthRunner(),
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'l1' } as never))
-  await flush()
-  server.handleData(conn, accountFrame({ type: 'account.oauthCancel', requestId: 'c1' } as never))
-  await flush()
-
-  const result = received.find(
-    f => f.kind === 'account.result' && f.requestId === 'c1',
-  )
-  expect(result?.kind).toBe('account.result')
-  expect(result && result.kind === 'account.result' && result.verb).toBe(
-    'account.oauthCancel',
-  )
-  expect(result && result.kind === 'account.result' && result.ok).toBe(true)
-  expect(received.some(f => f.kind === 'error')).toBe(false)
-})
-
-test('boundary — account.oauthCancel with an unexpected key is rejected (checkStrictKeys)', () => {
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: fakeOAuthRunner(),
-  })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-
-  server.handleData(
-    conn,
-    accountFrame({
-      type: 'account.oauthCancel',
-      requestId: 'c1',
-      accountId: 'a',
-    } as never),
-  )
-
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-  expect(received.some(f => f.kind === 'account.result')).toBe(false)
 })
 
 test('boundary — account.switch carrying provider:"anthropic" crosses and routes to the Anthropic arm', async () => {
@@ -6757,71 +6383,6 @@ test('boundary — account.switch with an unknown provider is rejected fail-clos
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
   expect(received.some(f => f.kind === 'account.result')).toBe(false)
-})
-
-test('P4-15 — paste-code then alias completes the flow (success) and re-broadcasts the accounts snapshot', async () => {
-  const received_codes: string[] = []
-  const accounts = makeAccountsDomain({
-    executor: fakeExecutor(),
-    oauthRunner: fakeOAuthRunner({ requireManualCode: true, onPasteReceived: c => received_codes.push(c) }),
-  })
-  const { domain: runControls } = fakeRunControlsDomain()
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
-    accounts,
-    runControls,
-  })
-
-  server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
-  await flush()
-  const beforeSnapshots = received.filter(f => f.kind === 'accounts.snapshot').length
-  const beforeRunControls = received.filter(
-    f => f.kind === 'run-controls.snapshot',
-  ).length
-
-  server.handleData(
-    conn,
-    accountFrame({ type: 'account.oauthPasteCode', requestId: 'r2', code: 'AUTH-CODE-XYZ' }),
-  )
-  await flush()
-  expect(received_codes).toEqual(['AUTH-CODE-XYZ'])
-
-  server.handleData(conn, accountFrame({ type: 'account.oauthAlias', requestId: 'r3', alias: 'work' }))
-  await flush()
-
-  const success = received.find(
-    f => f.kind === 'oauth.login.progress' && f.progress.state === 'success',
-  )
-  expect(success?.kind).toBe('oauth.login.progress')
-  // success drives an accounts re-broadcast (clears the first-run surface / banner).
-  expect(received.filter(f => f.kind === 'accounts.snapshot').length).toBeGreaterThan(beforeSnapshots)
-  expect(
-    received.filter(f => f.kind === 'run-controls.snapshot').length,
-  ).toBeGreaterThan(beforeRunControls)
-})
-
-test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStrictKeys)', () => {
-  const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-  server.handleData(
-    conn,
-    rawFrame({
-      type: 'account.oauthAlias',
-      requestId: 'r',
-      alias: 'work',
-      updatedPermissions: [],
-    }),
-  )
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-})
-
-test('P4-15 — rejects account.oauthPasteCode with a missing code (schema)', () => {
-  const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
-  server.handleData(
-    conn,
-    rawFrame({ type: 'account.oauthPasteCode', requestId: 'r' }),
-  )
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
 /* ------------------------------------------------------------------------- *
@@ -9796,6 +9357,21 @@ test('a worker result on the same drain still titles nothing', async () => {
   expect(received.some(f => f.kind === 'session-title')).toBe(false)
 })
 
+test('internal cwd transition results accept only their bounded operation shape', async () => {
+  const operationId = 'aaaaaaaa-0000-4000-8000-000000000001'
+  for (const verb of ['workspace.transition.begin', 'workspace.transition.finish'] as const) {
+    for (const value of [{ operationId }, { operationId: 7 }, { operationId, cwd: '/extra' }]) {
+      const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+      const pending = verb === 'workspace.transition.begin'
+        ? server.requestHost(verb, { operationId })
+        : server.requestHost(verb, { operationId, cwd: '/actual' })
+      const request = received.find(f => f.kind === 'host.request') as { requestId: string }
+      server.handleData(conn, hostPlaneFrame({ type: 'host.result', requestId: request.requestId, ok: true, value }))
+      expect((await pending).ok).toBe(typeof value.operationId === 'string' && !('cwd' in value))
+    }
+  }
+})
+
 test('HR5/F6 — a host.result whose value does not match its verb is refused, not handed on', async () => {
   // `value` was the one inbound field on this plane with no schema behind it:
   // `z.unknown()` plus a cast, with every tool told to narrow defensively. A
@@ -9967,4 +9543,35 @@ test('HR5/F6 — an unrecognised host error code degrades to the closed union', 
   const outcome = await pending
   expect(outcome.ok ? null : outcome.error.code).toBe('internal_error')
   expect(outcome.ok ? null : outcome.error.message).toBe('from a future main')
+})
+
+
+test('lid work control validates received windows and reports current controller runs', async () => {
+  const runtime = installLidWorkRuntime(() => ({}))
+  let finish!: () => void
+  const waiting = new Promise<void>(resolve => { finish = resolve })
+  const controller = new AppSessionController({ async *runTurn() {
+    await waiting
+  } })
+  const { server, conn, received } = connect(controller, { lidWork: runtime })
+  const turn = controller.submit('Work')
+  try {
+    await Promise.resolve()
+    const root = runtime.snapshot().runs[0]!.id
+    const identity = randomUUID()
+    const window = { identity, roots: [root], active: true, deadline: Date.now() + 60_000, lidClosed: false, block: false, suppressIdleSleep: false }
+    const requestId = randomUUID()
+    server.handleData(conn, rawFrame({ type: 'lid.work', requestId, window }))
+    const result = received.find(frame => frame.kind === 'lid.work' && frame.requestId === requestId)
+    expect(result?.kind).toBe('lid.work')
+    if (result?.kind !== 'lid.work') throw new Error('Missing work result')
+    expect(result.work.available).toBe(true); expect(result.work.runs.map(run => run.id)).toContain(root)
+    const before = received.filter(frame => frame.kind === 'lid.work').length
+    for (const invalid of [ { ...window, roots: ['not-a-run'] }, { ...window, deadline: Number.MAX_SAFE_INTEGER }, { ...window, permissions: 'allow' } ]) {
+      server.handleData(conn, rawFrame({ type: 'lid.work', requestId: randomUUID(), window: invalid }))
+    }
+    expect(received.filter(frame => frame.kind === 'lid.work')).toHaveLength(before)
+    server.handleData(conn, rawFrame({ type: 'lid.work', requestId: randomUUID(), window: { ...window, active: false } }))
+    expect(received.filter(frame => frame.kind === 'lid.work')).toHaveLength(before + 1)
+  } finally { finish(); await turn; runtime.dispose() }
 })

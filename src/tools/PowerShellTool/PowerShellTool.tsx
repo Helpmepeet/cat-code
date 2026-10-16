@@ -521,7 +521,7 @@ export const PowerShellTool = buildTool({
       let stderrForShellReset = '';
       if (isMainThread) {
         const appState = toolUseContext.getAppState();
-        if (resetCwdIfOutsideProject(appState.toolPermissionContext)) {
+        if (await resetCwdIfOutsideProject(appState.toolPermissionContext)) {
           stderrForShellReset = stdErrAppendShellResetMessage('');
         }
       }

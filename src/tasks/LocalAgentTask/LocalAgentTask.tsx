@@ -68,7 +68,11 @@ export type LocalAgentMessageDelivery = {
   requestId?: string
   outcome?: string
   reported?: boolean
+  urgent?: boolean
+  retryAfterCut?: boolean
 }
+export const MAX_LOCAL_AGENT_MESSAGE_RECEIPTS = 20
+export const URGENT_MESSAGE_ABORT_REASON = 'urgent-worker-message'
 export type ProgressTracker = {
   toolUseCount: number;
   // Track input and output separately to avoid double-counting.
@@ -176,6 +180,7 @@ export type LocalAgentTaskState = TaskStateBase & {
   agentType: string;
   model?: string;
   abortController?: AbortController;
+  modelRequest?: { id: string; controller: AbortController };
   unregisterCleanup?: () => void;
   error?: string;
   result?: AgentToolResult;
@@ -285,6 +290,41 @@ function taskRunMatches(
   return runId === undefined || task.runId === runId
 }
 
+const TERMINAL_MESSAGE_OUTCOMES = {
+  completed: {
+    undelivered: 'Worker completed before the instruction was submitted.',
+    uncertain: 'Worker completed while the instruction was in flight.',
+  },
+  failed: {
+    undelivered: 'Worker failed before the instruction was submitted.',
+    uncertain: 'Worker failed while the instruction was in flight.',
+  },
+  killed: {
+    undelivered: 'Worker was stopped before the instruction was submitted.',
+    uncertain: 'Worker was stopped while the instruction was in flight.',
+  },
+}
+
+function settleTerminalMessageDeliveries(
+  messages: LocalAgentMessageDelivery[],
+  outcomes: Record<'undelivered' | 'uncertain', string>,
+  // Foreground cleanup preserves each record's run; other callers stamp theirs,
+  // including an explicitly undefined runId.
+  run: Pick<LocalAgentMessageDelivery, 'runId'> = {},
+): LocalAgentMessageDelivery[] {
+  return messages.map(message => {
+    let status: 'undelivered' | 'uncertain'
+    if (message.status === 'pending' || message.status === 'prepared') {
+      status = 'undelivered'
+    } else if (message.status === 'submitted') {
+      status = 'uncertain'
+    } else {
+      return message
+    }
+    return { ...message, status, outcome: outcomes[status], ...run }
+  })
+}
+
 function isUnresolvedDelivery(record: LocalAgentMessageDelivery): boolean {
   return (
     record.status === 'pending' ||
@@ -301,6 +341,14 @@ export function getUnresolvedAgentMessageDeliveries(
   return normalizePendingMessages(task.pendingMessages).filter(
     isUnresolvedDelivery,
   )
+}
+
+export function getCurrentRunParentMessageDeliveries(
+  task: LocalAgentTaskState,
+): LocalAgentMessageDelivery[] {
+  return normalizePendingMessages(task.pendingMessages)
+    .filter(message => message.runId === task.runId && !message.originAgentId)
+    .slice(-MAX_LOCAL_AGENT_MESSAGE_RECEIPTS)
 }
 
 export function formatAgentMessageDeliveryRecords(
@@ -348,8 +396,10 @@ export function queuePendingMessageIfRunning(
   message: string,
   setAppState: SetAppState,
   originAgentId?: AgentId,
+  urgent = false,
 ): boolean {
   let queued = false;
+  let requestToCut: AbortController | undefined
   setAppState(prev => {
     const task = prev.tasks[taskId];
     if (
@@ -360,6 +410,7 @@ export function queuePendingMessageIfRunning(
       return prev;
     }
     queued = true;
+    if (urgent) requestToCut = task.modelRequest?.controller
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
     return {
       ...prev,
@@ -373,7 +424,9 @@ export function queuePendingMessageIfRunning(
               id: randomUUID(),
               message,
               ...(originAgentId ? { originAgentId } : {}),
+              ...(urgent ? { urgent: true } : {}),
               status: 'pending',
+              runId: task.runId,
               acceptedAt: Date.now(),
               reported: false,
             },
@@ -382,7 +435,66 @@ export function queuePendingMessageIfRunning(
       }
     };
   });
+  requestToCut?.abort(URGENT_MESSAGE_ABORT_REASON)
   return queued;
+}
+
+/** Registration and claim share the synchronous task-store update with sends. */
+export function admitAgentModelRequest(
+  taskId: string,
+  runId: string | undefined,
+  requestId: string,
+  controller: AbortController,
+  setAppState: SetAppState,
+): LocalAgentMessageDelivery[] {
+  let admitted: LocalAgentMessageDelivery[] = []
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (task.status !== 'running' || !taskRunMatches(task, runId) || task.acceptingMessages === false) return task
+    const pendingMessages = normalizePendingMessages(task.pendingMessages).map(message =>
+      message.status === 'pending' && message.urgent
+        ? { ...message, status: 'prepared' as const, runId: runId ?? task.runId }
+        : message,
+    )
+    admitted = pendingMessages.filter(message =>
+      (message.runId === undefined || message.runId === runId) &&
+      (message.status === 'prepared' || (message.status === 'uncertain' && message.retryAfterCut)),
+    )
+    return { ...task, modelRequest: { id: requestId, controller }, pendingMessages }
+  })
+  return admitted
+}
+
+export function clearAgentModelRequest(
+  taskId: string,
+  runId: string | undefined,
+  requestId: string,
+  setAppState: SetAppState,
+): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task =>
+    taskRunMatches(task, runId) && task.modelRequest?.id === requestId
+      ? { ...task, modelRequest: undefined }
+      : task,
+  )
+}
+
+export function markAgentModelRequestCut(
+  taskId: string,
+  runId: string | undefined,
+  requestId: string,
+  setAppState: SetAppState,
+): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (task.status !== 'running' || !taskRunMatches(task, runId)) return task
+    return {
+      ...task,
+      pendingMessages: normalizePendingMessages(task.pendingMessages).map(message =>
+        message.requestId === requestId && message.runId === runId &&
+        (message.status === 'submitted' || (message.status === 'uncertain' && message.retryAfterCut))
+          ? { ...message, status: 'uncertain', retryAfterCut: true, outcome: 'The request carrying this instruction was cut.' }
+          : message,
+      ),
+    }
+  })
 }
 
 export type AgentMessageClaim =
@@ -405,7 +517,7 @@ export function claimPendingMessagesForRequest(
       return prev
     }
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    claimed = pendingMessages.filter(message => message.status === 'pending')
+    claimed = pendingMessages.filter(message => message.status === 'pending' && !message.urgent)
     if (claimed.length === 0) return prev
     const claimedIds = new Set(claimed.map(message => message.id))
     return {
@@ -454,15 +566,16 @@ export function claimPendingMessagesOrClose(
       message => message.status === 'pending',
     )
     if (claimable.length > 0) {
+      const ordinaryMessages = claimable.filter(message => !message.urgent)
       result = {
         kind: 'claimed',
-        messages: claimable.map(message => ({
+        messages: ordinaryMessages.map(message => ({
           ...message,
           status: 'prepared',
           runId: runId ?? task.runId,
         })),
       }
-      const claimableIds = new Set(claimable.map(message => message.id))
+      const claimableIds = new Set(ordinaryMessages.map(message => message.id))
       return {
         ...prev,
         tasks: {
@@ -519,7 +632,7 @@ export function submitPreparedAgentMessages(
     submitted = pendingMessages
       .filter(
         message =>
-          message.status === 'prepared' &&
+          (message.status === 'prepared' || (message.status === 'uncertain' && message.retryAfterCut)) &&
           (message.runId === undefined || message.runId === runId),
       )
       .map(message => message.id)
@@ -535,7 +648,7 @@ export function submitPreparedAgentMessages(
             submittedIds.has(message.id)
               ? {
                   ...message,
-                  status: 'submitted',
+                  status: message.status === 'uncertain' ? 'uncertain' : 'submitted',
                   runId: runId ?? task.runId,
                   requestId,
                 }
@@ -561,20 +674,26 @@ export function settleAgentMessageDeliveries(
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (!taskRunMatches(task, runId)) return task
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const nextMessages = pendingMessages.flatMap(message => {
+    const nextMessages = pendingMessages.map(message => {
       if (
         !ids.has(message.id) ||
         (message.runId !== undefined && message.runId !== runId) ||
-        (message.status !== 'prepared' && message.status !== 'submitted')
+        (message.status !== 'prepared' && message.status !== 'submitted' &&
+          !(message.status === 'uncertain' && message.retryAfterCut))
       ) {
-        return [message]
+        return message
       }
-      if (status === 'delivered') return []
-      return [{ ...message, status, outcome, runId }]
+      return { ...message, status, outcome, runId, retryAfterCut: undefined }
     })
+    const recentDeliveredIds = new Set(
+      nextMessages.filter(message => message.status === 'delivered')
+        .slice(-MAX_LOCAL_AGENT_MESSAGE_RECEIPTS).map(message => message.id),
+    )
     return {
       ...task,
-      pendingMessages: nextMessages,
+      pendingMessages: nextMessages.filter(message =>
+        message.status !== 'delivered' || recentDeliveredIds.has(message.id),
+      ),
     }
   })
 }
@@ -588,28 +707,11 @@ export function settleAgentMessagesForTerminal(
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (!taskRunMatches(task, runId)) return task
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const nextMessages = pendingMessages.map(message => {
-      if (
-        message.status === 'pending' ||
-        message.status === 'prepared'
-      ) {
-        return {
-          ...message,
-          status: 'undelivered' as const,
-          outcome,
-          runId,
-        }
-      }
-      if (message.status === 'submitted') {
-        return {
-          ...message,
-          status: 'uncertain' as const,
-          outcome,
-          runId,
-        }
-      }
-      return message
-    })
+    const nextMessages = settleTerminalMessageDeliveries(
+      pendingMessages,
+      { undelivered: outcome, uncertain: outcome },
+      { runId },
+    )
     return {
       ...task,
       acceptingMessages: false,
@@ -947,25 +1049,11 @@ export function killAsyncAgent(
       ...task,
       status: 'killed',
       acceptingMessages: false,
-      pendingMessages: pendingMessages.map(message => {
-        if (message.status === 'pending' || message.status === 'prepared') {
-          return {
-            ...message,
-            status: 'undelivered' as const,
-            outcome: 'Worker was stopped before the instruction was submitted.',
-            runId,
-          }
-        }
-        if (message.status === 'submitted') {
-          return {
-            ...message,
-            status: 'uncertain' as const,
-            outcome: 'Worker was stopped while the instruction was in flight.',
-            runId,
-          }
-        }
-        return message
-      }),
+      pendingMessages: settleTerminalMessageDeliveries(
+        pendingMessages,
+        TERMINAL_MESSAGE_OUTCOMES.killed,
+        { runId },
+      ),
       endTime: Date.now(),
       evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
       abortController: undefined,
@@ -1143,25 +1231,11 @@ export function completeAgentTask(
     task.unregisterCleanup?.();
     const isBlocked = resultMetadata.handoffStatus === 'blocked';
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const terminalMessages = pendingMessages.map(message => {
-      if (message.status === 'pending' || message.status === 'prepared') {
-        return {
-          ...message,
-          status: 'undelivered' as const,
-          outcome: 'Worker completed before the instruction was submitted.',
-          runId,
-        }
-      }
-      if (message.status === 'submitted') {
-        return {
-          ...message,
-          status: 'uncertain' as const,
-          outcome: 'Worker completed while the instruction was in flight.',
-          runId,
-        }
-      }
-      return message
-    })
+    const terminalMessages = settleTerminalMessageDeliveries(
+      pendingMessages,
+      TERMINAL_MESSAGE_OUTCOMES.completed,
+      { runId },
+    )
     const deliveryReport = formatAgentMessageDeliveryRecords(
       terminalMessages.filter(message => !message.originAgentId),
     )
@@ -1217,25 +1291,11 @@ export function failAgentTask(
       ...task,
       status: 'failed',
       acceptingMessages: false,
-      pendingMessages: pendingMessages.map(message => {
-        if (message.status === 'pending' || message.status === 'prepared') {
-          return {
-            ...message,
-            status: 'undelivered' as const,
-            outcome: 'Worker failed before the instruction was submitted.',
-            runId,
-          }
-        }
-        if (message.status === 'submitted') {
-          return {
-            ...message,
-            status: 'uncertain' as const,
-            outcome: 'Worker failed while the instruction was in flight.',
-            runId,
-          }
-        }
-        return message
-      }),
+      pendingMessages: settleTerminalMessageDeliveries(
+        pendingMessages,
+        TERMINAL_MESSAGE_OUTCOMES.failed,
+        { runId },
+      ),
       error,
       endTime: Date.now(),
       evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
@@ -1497,37 +1557,9 @@ export function unregisterAgentForeground(
     shouldReleaseLease = true;
     const unresolved = getUnresolvedAgentMessageDeliveries(task);
     if (unresolved.length > 0) {
-      const pendingMessages = normalizePendingMessages(task.pendingMessages).map(
-        message => {
-          if (
-            message.status === 'pending' ||
-            message.status === 'prepared'
-          ) {
-            return {
-              ...message,
-              status: 'undelivered' as const,
-              outcome:
-                terminalStatus === 'killed'
-                  ? 'Worker was stopped before the instruction was submitted.'
-                  : terminalStatus === 'failed'
-                    ? 'Worker failed before the instruction was submitted.'
-                    : 'Worker completed before the instruction was submitted.',
-            };
-          }
-          if (message.status === 'submitted') {
-            return {
-              ...message,
-              status: 'uncertain' as const,
-              outcome:
-                terminalStatus === 'killed'
-                  ? 'Worker was stopped while the instruction was in flight.'
-                  : terminalStatus === 'failed'
-                    ? 'Worker failed while the instruction was in flight.'
-                    : 'Worker completed while the instruction was in flight.',
-            };
-          }
-          return message;
-        },
+      const pendingMessages = settleTerminalMessageDeliveries(
+        normalizePendingMessages(task.pendingMessages),
+        TERMINAL_MESSAGE_OUTCOMES[terminalStatus],
       );
       return {
         ...prev,

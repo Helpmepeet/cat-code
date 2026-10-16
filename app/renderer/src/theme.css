@@ -155,6 +155,8 @@
    * so `text-text-subtle` — the app's most-used text colour — carries the same
    * legibility in both, and neither ramp is an arithmetic inversion of the other. */
   --text-primary: #f4f4f5;
+  --provider-claude: #d97757;
+  --provider-openai: var(--text-primary);
   --text-muted: #a1a1aa;
   --text-subtle: #98989f;
   --text-faint: #838389;
@@ -318,6 +320,8 @@ html[data-appearance='light'] {
   /* Contrast-matched to the dark ramp step for step, not inverted; the ratios
    * are in the `:root` note. */
   --text-primary: #18181b;
+  --provider-claude: #d97757;
+  --provider-openai: var(--text-primary);
   --text-muted: #52525b;
   --text-subtle: #575761;
   --text-faint: #6a6a74;
@@ -959,6 +963,46 @@ html[data-glass='on'] [data-window-overlay] {
 
 .prose-arrive-flowing {
   animation: catcode-prose-arrive 160ms linear both;
+}
+
+.file-link-pending {
+  position: relative;
+  cursor: default;
+}
+
+.file-link-pending:hover {
+  color: var(--color-accent);
+}
+
+.file-link-ticker {
+  position: absolute;
+  left: calc(100% + 3px);
+  top: 0;
+  height: 100%;
+  max-width: var(--file-link-ticker-room, 0px);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: .9em;
+  font-weight: 400;
+  color: var(--color-text-ghost);
+  pointer-events: none;
+  user-select: none;
+}
+
+.file-link-ticker > span {
+  flex: none;
+}
+
+.file-link-ticker[data-clipped] {
+  mask-image: linear-gradient(to right, transparent, black 18px);
+}
+
+.file-link-ticker[data-no-room] {
+  visibility: hidden;
 }
 
 /*
@@ -2132,14 +2176,14 @@ html[data-glass='on'] [data-window-overlay] {
 .subagent-dock-word-completed { color:var(--tone-good); }
 .subagent-dock-word-failed { color:var(--tone-danger); }
 .subagent-dock-word-stopped { color:var(--tone-warn); }
-.subagent-dock-row-finished .subagent-dock-name, .subagent-dock-row-finished .subagent-dock-task, .subagent-dock-row-finished svg, .subagent-dock-all-finished svg { opacity:.55; }
+.subagent-dock-row-finished .subagent-dock-name, .subagent-dock-row-finished .subagent-dock-task, .subagent-dock-row-finished svg { opacity:.55; }
 .subagent-dock-finished-header { display:flex; align-items:center; justify-content:space-between; height:26px; margin-top:4px; padding:0 4px; border-top:1px solid var(--shell-seam); color:var(--text-faint); }
 .subagent-dock-finished-header button { display:flex; align-items:center; gap:5px; padding:2px 5px; border-radius:5px; font-size:11px; }
 .subagent-dock-finished-row { display:grid; grid-template-rows:1fr; transition:grid-template-rows 260ms var(--ease-enter), opacity 260ms var(--ease-enter); }
 .subagent-dock-finished-row > button { min-height:0; overflow:hidden; }
 .subagent-dock-finished-closed { grid-template-rows:0fr; opacity:0; }
 .subagent-dock-finished-closed > button { padding-top:0; padding-bottom:0; border-top-width:0; border-bottom-width:0; }
-.subagent-dock-tip { overflow:hidden; position:absolute; z-index:40; max-width:300px; padding:6px 11px; border:1px solid var(--shell-seam); border-radius:7px; background:var(--surface-raised); box-shadow:var(--elev-popover); animation:subagent-tip-in 190ms var(--ease-enter); }
+.subagent-dock-tip { overflow:hidden; position:absolute; z-index:40; width:max-content; max-width:300px; padding:6px 11px; border:1px solid var(--shell-seam); border-radius:7px; background:var(--surface-raised); box-shadow:var(--elev-popover); animation:subagent-tip-in 190ms var(--ease-enter); }
 .subagent-dock-tip-attached { background:var(--subagent-row-attached); border-right:0; border-radius:7px 0 0 7px; }
 .subagent-dock-tip-who { display:flex; gap:7px; min-width:0; font:600 11px var(--font-mono); color:var(--peer); }
 .subagent-dock-tip-who > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2164,3 +2208,13 @@ html[data-glass='on'] [data-window-overlay] {
 .subagent-dock-arrival .subagent-dock-badge { animation:subagent-badge-pop 260ms var(--ease-enter); }
 
 .subagent-dock-row-tipped, .subagent-dock-row-tipped:hover { background:var(--subagent-row-attached); border-color:var(--shell-seam); border-left-color:transparent; border-top-left-radius:0; border-bottom-left-radius:0; }
+
+/* Lid control roles preserve legible thin strokes in both appearances. */
+:root {
+  --color-lid-off: light-dark(#66666d, #75757b);
+  --color-lid-open: light-dark(#66666d, #838389);
+  --color-lid-active: light-dark(#85552f, #d4a274);
+  --color-lid-number: light-dark(#75451f, #f1dcc3);
+  --color-lid-coffee: light-dark(#8a5a33, #a8703f);
+  --color-lid-crema: light-dark(#c08a5a, #f1dcc3);
+}

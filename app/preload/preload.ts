@@ -1,3 +1,5 @@
+import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
+import type { LidModeView } from '../shared/lidClosed.js'
 /**
  * Electron preload — the default-deny IPC allowlist bridge (SECURITY-MINIMUM
  * §2 R1, §3 "Preload surface").
@@ -20,7 +22,7 @@ import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projec
 import type {
   AccountDeleteMessage,
   AccountLogoutMessage,
-  AccountVerbMessage,
+  AccountSwitchMessage,
   AccountResultFrame,
   AskUserQuestionAnswer,
   CatCodeBridge,
@@ -42,7 +44,6 @@ import type {
   SubmitOptions,
   TaskControlVerbMessage,
   TranscriptCache,
-  UsageStatsRange,
   WorkspaceTrustMessage,
 } from '../shared/protocol.js'
 import type {
@@ -64,6 +65,9 @@ import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
 // themselves live in `../shared/ipcChannels.ts` so main listens on the same
 // literals by construction rather than by hand-copying them.
 import {
+  CH_SCHEDULED_TASKS_READ,
+  CH_SCHEDULED_TASK_OPTIONS_READ,
+  CH_SCHEDULED_TASKS_COMMAND,
   CH_SUBMIT,
   CH_ABORT,
   CH_PERMISSION,
@@ -81,7 +85,6 @@ import {
   CH_SESSION_ACTION_VERB,
   CH_REMOTE_SETTINGS_VERB,
   CH_SETTINGS_VERB,
-  CH_STATS_QUERY,
   CH_PING,
   CH_RESTART,
   CH_SERVER_FRAME,
@@ -117,6 +120,7 @@ import {
   CH_HOST_SET_PEER_WAKE_BLOCKED,
   CH_HOST_LIST,
   CH_HOST_PICK_DIR,
+  CH_HOST_PICK_SCHEDULED_TASK_DIR,
   CH_HOST_PICK_ATTACHMENT_FILE,
   CH_HOST_PREVIEW,
   CH_HOST_SESSIONS_CATALOG,
@@ -253,6 +257,27 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
 })
 
 const bridge: CatCodeBridge = {
+  lidClosed: {
+    read: () => ipcRenderer.invoke(CH_LID_READ),
+    command: command => ipcRenderer.invoke(CH_LID_COMMAND, command),
+    subscribe: listener => {
+      const handle = (_event: unknown, view: LidModeView) => listener(view)
+      ipcRenderer.on(CH_LID_CHANGED, handle)
+      return () => { ipcRenderer.removeListener(CH_LID_CHANGED, handle) }
+    },
+  },
+  readScheduledTasks() {
+    sendGuard.assertAllowed({ readScheduledTasks: true })
+    return ipcRenderer.invoke(CH_SCHEDULED_TASKS_READ)
+  },
+  readScheduledTaskOptions(request) {
+    sendGuard.assertAllowed({ readScheduledTaskOptions: true, request })
+    return ipcRenderer.invoke(CH_SCHEDULED_TASK_OPTIONS_READ, request)
+  },
+  scheduledTask(command) {
+    sendGuard.assertAllowed(command)
+    return ipcRenderer.invoke(CH_SCHEDULED_TASKS_COMMAND, command)
+  },
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {
     const payload = { sessionId, prompt, options }
     sendGuard.assertAllowed(payload)
@@ -290,11 +315,11 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ANSWER_QUESTIONS, payload)
   },
-  accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void {
+  accountVerb(sessionId: SessionId, verb: AccountSwitchMessage): void {
     // P4-5 — HC3 fixed sender. The renderer supplies only a decided verb payload;
     // main light-coerces the type and the sidecar is the trust boundary (schema +
     // pool-resolved re-validation). No token ever crosses in either direction.
-    if (verb.type === 'account.delete' || verb.type === 'account.logout') return
+    if (verb.type !== 'account.switch') return
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
@@ -418,14 +443,6 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SETTINGS_VERB, payload)
-  },
-  queryStats(sessionId: SessionId, range: UsageStatsRange): void {
-    const payload = {
-      sessionId,
-      verb: { type: 'stats.query', range, requestId: crypto.randomUUID() },
-    }
-    sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_STATS_QUERY, payload)
   },
   ping(sessionId: SessionId, nonce: string): void {
     const payload = { sessionId, nonce }
@@ -585,6 +602,10 @@ const bridge: CatCodeBridge = {
     // Returns a one-time cwdToken (or null), NOT the chosen path.
     return ipcRenderer.invoke(CH_HOST_PICK_DIR, activeSessionId) as Promise<string | null>
   },
+  pickScheduledTaskDirectory(): Promise<string | null> {
+    sendGuard.assertAllowed({ pickScheduledTaskDirectory: true })
+    return ipcRenderer.invoke(CH_HOST_PICK_SCHEDULED_TASK_DIR) as Promise<string | null>
+  },
   createSession(
     input: CreateSessionInput,
   ): Promise<HostResult<SessionDescriptor>> {
@@ -647,9 +668,9 @@ const bridge: CatCodeBridge = {
       HostResult<SessionDescriptor>
     >
   },
-  listWorkspaceBranches(appSessionId: SessionId): Promise<HostResult<WorkspaceBranches>> {
-    sendGuard.assertAllowed({ appSessionId })
-    return ipcRenderer.invoke(CH_HOST_LIST_BRANCHES, appSessionId) as Promise<HostResult<WorkspaceBranches>>
+  listWorkspaceBranches(appSessionId: SessionId, purpose?: 'readout'): Promise<HostResult<WorkspaceBranches>> {
+    sendGuard.assertAllowed({ appSessionId, purpose })
+    return ipcRenderer.invoke(CH_HOST_LIST_BRANCHES, appSessionId, purpose) as Promise<HostResult<WorkspaceBranches>>
   },
   switchWorkspaceBranch(appSessionId: SessionId, branch: string): Promise<SwitchWorkspaceBranchResult> {
     sendGuard.assertAllowed({ appSessionId, branch })

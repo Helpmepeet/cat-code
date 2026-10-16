@@ -38,6 +38,8 @@ import { ImageResizeError } from './utils/imageResizer.js'
 import { findToolByName, type ToolUseContext } from './Tool.js'
 import { getAcceptedHandoff, isHandoffExecutionFenced } from './app-runtime/handoff.js'
 import type { SystemPrompt } from './utils/systemPromptType.js'
+import { asSystemPrompt } from './utils/systemPromptType.js'
+import { assertLidWorkAdmission, lidWorkContext } from './services/lidClosedWork.js'
 import type {
   AssistantMessage,
   AttachmentMessage,
@@ -80,15 +82,21 @@ import {
   filterDuplicateMemoryAttachments,
   getAttachmentMessages,
   startRelevantMemoryPrefetch,
+  type Attachment,
 } from './utils/attachments.js'
 import {
+  admitAgentModelRequest,
+  clearAgentModelRequest,
   claimPendingMessagesOrClose,
   claimPendingMessagesForRequest,
   settleAgentMessagesForTerminal,
   settleAgentMessagesForRun,
   settleAgentMessageDeliveries,
   submitPreparedAgentMessages,
+  markAgentModelRequestCut,
+  URGENT_MESSAGE_ABORT_REASON,
 } from './tasks/LocalAgentTask/LocalAgentTask.js'
+import { createAbortController } from './utils/abortController.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
 const skillPrefetch = feature('EXPERIMENTAL_SKILL_SEARCH')
   ? (require('./services/skillSearch/prefetch.js') as typeof import('./services/skillSearch/prefetch.js'))
@@ -387,7 +395,7 @@ async function* queryLoop(
 > {
   // Immutable params — never reassigned during the query loop.
   const {
-    systemPrompt,
+    systemPrompt: baseSystemPrompt,
     userContext,
     systemContext,
     canUseTool,
@@ -461,6 +469,10 @@ async function* queryLoop(
   try {
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      assertLidWorkAdmission()
+      const temporaryWorkContext = lidWorkContext()
+      const systemPrompt = temporaryWorkContext
+        ? asSystemPrompt([...baseSystemPrompt, temporaryWorkContext]) : baseSystemPrompt
       // Destructure state at the top of each iteration. toolUseContext alone
     // is reassigned within an iteration (queryTracking, messages updates);
     // the rest are read-only between continue sites.
@@ -858,9 +870,10 @@ async function* queryLoop(
       | undefined
 
     let attemptWithFallback = true
-    const localAgentRequestId = toolUseContext.agentId
-      ? deps.uuid()
-      : undefined
+    let localAgentRequestId: string | undefined
+    let requestController: AbortController | undefined
+    let urgentRequestCut = false
+    let finishModelRequest = () => {}
     let submittedLocalAgentMessageIds: string[] = []
     let confirmedLocalAgentMessageIds = false
 
@@ -869,6 +882,46 @@ async function* queryLoop(
       while (attemptWithFallback) {
         attemptWithFallback = false
         try {
+          if (toolUseContext.agentId) {
+            const agentId = toolUseContext.agentId
+            const runId = toolUseContext.agentRunId
+            const requestId = deps.uuid()
+            localAgentRequestId = requestId
+            const controller = createAbortController()
+            requestController = controller
+            const runSignal = toolUseContext.abortController.signal
+            const setTaskState = toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
+            const forwardAbort = () => controller.abort(runSignal.reason)
+            const onRequestAbort = () => {
+              if (controller.signal.reason !== URGENT_MESSAGE_ABORT_REASON) return
+              urgentRequestCut = true
+              streamingToolExecutor?.stopUnstartedTools()
+              markAgentModelRequestCut(agentId, runId, requestId, setTaskState)
+            }
+            controller.signal.addEventListener('abort', onRequestAbort, { once: true })
+            runSignal.addEventListener('abort', forwardAbort, { once: true })
+            if (runSignal.aborted) forwardAbort()
+            finishModelRequest = () => {
+              clearAgentModelRequest(agentId, runId, requestId, setTaskState)
+              runSignal.removeEventListener('abort', forwardAbort)
+              controller.signal.removeEventListener('abort', onRequestAbort)
+            }
+            const admitted = admitAgentModelRequest(agentId, runId, requestId, controller, setTaskState)
+            const presentIds = new Set<string>(messagesForQuery.flatMap(message => {
+              if (message.type === 'attachment') {
+                const attachment = message.attachment as Attachment
+                if (attachment.type === 'queued_command') return [attachment.source_uuid]
+              }
+              return message.type === 'user' ? [message.uuid] : []
+            }))
+            for (const message of admitted) {
+              if (presentIds.has(message.id)) continue
+              const attachment = createAttachmentMessage(createAgentPendingMessageAttachment(message))
+              messagesForQuery.push(attachment)
+              presentIds.add(message.id)
+              yield attachment
+            }
+          }
           instructionAssembly = buildProviderInstructionAssembly({
             provider: currentProvider,
             messages: messagesForQuery,
@@ -876,7 +929,7 @@ async function* queryLoop(
             userContext,
             systemContext,
           })
-          if (toolUseContext.agentId && localAgentRequestId) {
+          if (toolUseContext.agentId && localAgentRequestId && !requestController?.signal.aborted) {
             submittedLocalAgentMessageIds = submitPreparedAgentMessages(
               toolUseContext.agentId,
               toolUseContext.agentRunId,
@@ -887,13 +940,13 @@ async function* queryLoop(
 
           let streamingFallbackOccured = false
           queryCheckpoint('query_api_streaming_start')
-          for await (const message of deps.callModel({
+          for await (const message of (requestController?.signal ?? toolUseContext.abortController.signal).aborted ? [] : deps.callModel({
             messages: instructionAssembly.messages,
             systemPrompt: instructionAssembly.systemPrompt,
             openAIInstructionAssembly: instructionAssembly.openAIInstructionAssembly,
             thinkingConfig: toolUseContext.options.thinkingConfig,
             tools: toolUseContext.options.tools,
-            signal: toolUseContext.abortController.signal,
+            signal: requestController?.signal ?? toolUseContext.abortController.signal,
             options: {
               async getToolPermissionContext() {
                 const appState = toolUseContext.getAppState()
@@ -1109,6 +1162,7 @@ async function* queryLoop(
               }
             }
           }
+          finishModelRequest()
           queryCheckpoint('query_api_streaming_end')
           const completedAssistantMessage = assistantMessages.at(-1)
           if (
@@ -1117,6 +1171,7 @@ async function* queryLoop(
             !confirmedLocalAgentMessageIds &&
             completedAssistantMessage &&
             !completedAssistantMessage.isApiErrorMessage &&
+            !urgentRequestCut &&
             !streamingFallbackOccured &&
             !toolUseContext.abortController.signal.aborted
           ) {
@@ -1163,6 +1218,7 @@ async function* queryLoop(
             }
           }
         } catch (innerError) {
+          if (urgentRequestCut) break
           if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
             toolUseContext.turnHandoff.invalidate()
             throw innerError
@@ -1230,6 +1286,8 @@ async function* queryLoop(
             continue
           }
           throw innerError
+        } finally {
+          finishModelRequest()
         }
       }
     } catch (error) {
@@ -1294,6 +1352,40 @@ async function* queryLoop(
       // To help track down bugs, log loudly for ants
       logAntError('Query error', error)
       return { reason: 'model_error', error }
+    }
+
+    if (urgentRequestCut) {
+      let continuedContext = toolUseContext
+      if (streamingToolExecutor) {
+        streamingToolExecutor.stopUnstartedTools()
+        for await (const update of streamingToolExecutor.getRemainingResults()) {
+          if (update.message) {
+            yield update.message
+            toolResults.push(...normalizeMessagesForAPI(
+              [update.message], toolUseContext.options.tools, currentProvider,
+            ).filter(message => message.type === 'user'))
+          }
+          if (update.newContext) continuedContext = update.newContext
+        }
+      } else {
+        for (const result of yieldMissingToolResultBlocks(
+          assistantMessages, 'Not run: an urgent message changed the next step.',
+        )) {
+          yield result
+          toolResults.push(result)
+        }
+      }
+      // TaskStop owns the run signal even when its abort follows the request cut.
+      if (!toolUseContext.abortController.signal.aborted) {
+        state = {
+          ...state,
+          messages: [...messagesForQuery, ...assistantMessages, ...toolResults],
+          toolUseContext: continuedContext,
+          autoCompactTracking: tracking,
+          transition: { reason: 'urgent_message' },
+        }
+        continue
+      }
     }
 
     // Execute post-sampling hooks after model response is complete

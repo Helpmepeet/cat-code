@@ -14,6 +14,8 @@ import { readSessionState } from '../../utils/workerState.js'
 import { asSessionId } from '../../types/ids.js'
 import {
   allocateWorkerName,
+  releaseWorkerName,
+  tryReserveWorkerName,
   resetWorkerNamesForTests,
 } from '../../utils/workerNames.js'
 import { render, ThemeProvider } from '../../ink.js'
@@ -86,6 +88,15 @@ mock.module('../../utils/sleep.js', () => ({
     }
     await realSleepModule.sleep(...args)
   },
+}))
+
+const realTeamHelpers = await import('../../utils/swarm/teamHelpers.js')
+const realAllocateTeamRecipient = realTeamHelpers.allocateTeamRecipient
+let allocateTeamRecipientOverride: typeof realAllocateTeamRecipient | undefined
+mock.module('../../utils/swarm/teamHelpers.js', () => ({
+  ...realTeamHelpers,
+  allocateTeamRecipient: (args: Parameters<typeof realAllocateTeamRecipient>[0]) =>
+    (allocateTeamRecipientOverride ?? realAllocateTeamRecipient)(args),
 }))
 
 const {
@@ -244,6 +255,7 @@ afterEach(() => {
   useRealRunAgent = false
   queryScript = async function* () {}
   resolvePendingMcpPoll = undefined
+  allocateTeamRecipientOverride = undefined
   resetWorkerNamesForTests()
   if (originalCoordinatorMode === undefined) {
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
@@ -849,17 +861,100 @@ describe('getBuiltInAgents in normal mode', () => {
 })
 
 describe('resolveSystemSubagentName', () => {
+  test.each([undefined, 'Ada'])('holds its process reservation while team allocation is pending (explicit=%s)', async explicitName => {
+    Math.random = () => 0
+    let allocationStarted!: () => void
+    const started = new Promise<void>(resolve => { allocationStarted = resolve })
+    let finishAllocation!: () => void
+    const pending = new Promise<void>(resolve => { finishAllocation = resolve })
+    allocateTeamRecipientOverride = async args => {
+      allocationStarted()
+      await pending
+      return { name: args.requestedName, allocationId: 'owned-allocation' } as never
+    }
+    const sessionId = randomUUID()
+    const appState = { agentNameRegistry: new Map() } as never
+    const allocation = resolveSystemSubagentName({
+      explicitName,
+      appState,
+      sessionId,
+      teamName: 'test-team',
+    })
+    await started
+    const competing = await resolveSystemSubagentName({
+      explicitName: 'ada',
+      appState,
+      sessionId,
+    }).then(() => null, (error: Error) => error.message)
+    finishAllocation()
+    const allocated = await allocation
+
+    expect(competing).toBe('Subagent name "ada" is already in use')
+    expect(allocated).toEqual({
+      agentName: 'Ada',
+      processReservationName: 'Ada',
+      teamAllocation: { teamName: 'test-team', allocationId: 'owned-allocation' },
+    })
+    releaseWorkerName(allocated.processReservationName)
+    expect(tryReserveWorkerName('Ada')).toBe(true)
+  })
+
+  test.each([undefined, 'Ada'])('releases only its own reservation when team allocation fails (explicit=%s)', async explicitName => {
+    Math.random = () => 0
+    expect(tryReserveWorkerName('Katherine')).toBe(true)
+    allocateTeamRecipientOverride = async () => {
+      throw new Error('team store unavailable')
+    }
+
+    await expect(
+      resolveSystemSubagentName({
+        explicitName,
+        appState: { agentNameRegistry: new Map() } as never,
+        sessionId: randomUUID(),
+        teamName: 'test-team',
+      }),
+    ).rejects.toThrow('team store unavailable')
+
+    expect(tryReserveWorkerName('Ada')).toBe(true)
+    expect(tryReserveWorkerName('katherine')).toBe(false)
+  })
+
+  test('retries a team collision and releases the rejected process reservation', async () => {
+    Math.random = () => 0
+    const requestedNames: string[] = []
+    allocateTeamRecipientOverride = async args => {
+      requestedNames.push(args.requestedName)
+      if (requestedNames.length === 1) {
+        throw new realTeamHelpers.RecipientConflictError('ada')
+      }
+      return { name: args.requestedName, allocationId: 'second-allocation' } as never
+    }
+
+    const allocated = await resolveSystemSubagentName({
+      appState: { agentNameRegistry: new Map() } as never,
+      sessionId: randomUUID(),
+      teamName: 'test-team',
+    })
+
+    expect(requestedNames).toEqual(['Ada', 'Katherine'])
+    expect(allocated).toEqual({
+      agentName: 'Katherine',
+      processReservationName: 'Katherine',
+      teamAllocation: { teamName: 'test-team', allocationId: 'second-allocation' },
+    })
+    expect(tryReserveWorkerName('Ada')).toBe(true)
+    expect(tryReserveWorkerName('katherine')).toBe(false)
+  })
+
   test('allocates a friendly name for unnamed ordinary subagents', async () => {
     Math.random = () => 0
 
     await expect(
       resolveSystemSubagentName({
-        agentType: 'general-purpose',
         appState: {
           agentNameRegistry: new Map(),
         } as never,
         sessionId: randomUUID(),
-        agentId: 'agent-123',
       }),
     ).resolves.toEqual({
       agentName: 'Ada',
@@ -873,12 +968,10 @@ describe('resolveSystemSubagentName', () => {
     await expect(
       resolveSystemSubagentName({
         explicitName: 'custom-worker',
-        agentType: 'general-purpose',
         appState: {
           agentNameRegistry: new Map(),
         } as never,
         sessionId: randomUUID(),
-        agentId: 'agent-123',
       }),
     ).resolves.toEqual({
       agentName: 'custom-worker',
@@ -890,12 +983,10 @@ describe('resolveSystemSubagentName', () => {
     await expect(
       resolveSystemSubagentName({
         explicitName: '  custom-worker  ',
-        agentType: 'general-purpose',
         appState: {
           agentNameRegistry: new Map(),
         } as never,
         sessionId: randomUUID(),
-        agentId: 'agent-123',
       }),
     ).resolves.toEqual({
       agentName: 'custom-worker',
@@ -907,12 +998,10 @@ describe('resolveSystemSubagentName', () => {
     await expect(
       resolveSystemSubagentName({
         explicitName: 'worker-one',
-        agentType: 'general-purpose',
         appState: {
           agentNameRegistry: new Map([['worker-one', 'agent-existing']]),
         } as never,
         sessionId: randomUUID(),
-        agentId: 'agent-123',
       }),
     ).rejects.toThrow('Subagent name "worker-one" is already in use')
   })
@@ -921,24 +1010,20 @@ describe('resolveSystemSubagentName', () => {
     await expect(
       resolveSystemSubagentName({
         explicitName: '@worker-one',
-        agentType: 'general-purpose',
         appState: {
           agentNameRegistry: new Map(),
         } as never,
         sessionId: randomUUID(),
-        agentId: 'agent-123',
       }),
     ).rejects.toThrow('Subagent name must not include @')
   })
 
   test('rejects explicit names that conflict with SendMessage address syntax', async () => {
     const baseInput = {
-      agentType: 'general-purpose',
       appState: {
         agentNameRegistry: new Map(),
       } as never,
       sessionId: randomUUID(),
-      agentId: 'agent-123',
     }
 
     await expect(
@@ -1354,7 +1439,7 @@ describe('finalizeFailedAgentLaunch', () => {
 
       expect(failedWorker?.handle).toBe('Ada')
       expect(failedWorker?.handle).not.toBe('agent-123')
-      expect(allocateWorkerName('Explore')).toBe('Katherine')
+      expect(allocateWorkerName()).toBe('Katherine')
     } finally {
       await rm(tempProjectDir, { recursive: true, force: true })
     }

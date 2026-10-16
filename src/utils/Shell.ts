@@ -40,6 +40,7 @@ import { getCachedPowerShellPath } from './shell/powershellDetection.js'
 import { createPowerShellProvider } from './shell/powershellProvider.js'
 import type { ShellProvider, ShellType } from './shell/shellProvider.js'
 import { subprocessEnv } from './subprocessEnv.js'
+import { withWorkspaceTransition } from './workspaceTransition.js'
 import { posixPathToWindowsPath } from './windowsPaths.js'
 import {
   applyWorkerEnvAllowlist,
@@ -253,7 +254,7 @@ export async function exec(
     )
     try {
       await realpath(fallback)
-      setCwdState(fallback)
+      await withWorkspaceTransition(() => setCwdState(fallback))
       cwd = fallback
     } catch {
       return createFailedCommand(
@@ -397,12 +398,7 @@ export async function exec(
       })
     }
 
-    // Attach cleanup to the command result
-    // NOTE: readFileSync/unlinkSync are intentional here — these must complete
-    // synchronously within the .then() microtask so that callers who
-    // `await shellCommand.result` see the updated cwd immediately after.
-    // Using async readFile would introduce a microtask boundary, causing
-    // a race where cwd hasn't been updated yet when the caller continues.
+    // Callers must await cwd coordination as well as process completion.
 
     // On Windows, cwdFilePath is a POSIX path (for bash's `pwd -P >| $path`),
     // but Node.js needs a native Windows path for readFileSync/unlinkSync.
@@ -412,7 +408,7 @@ export async function exec(
         ? posixPathToWindowsPath(cwdFilePath)
         : cwdFilePath
 
-    void shellCommand.result.then(async result => {
+    const settledResult = shellCommand.result.then(async result => {
       // On Linux, bwrap creates 0-byte mount-point files on the host to deny
       // writes to non-existent paths (.bashrc, HEAD, etc.). These persist after
       // bwrap exits as ghost dotfiles in cwd. Cleanup is synchronous and a no-op
@@ -442,6 +438,7 @@ export async function exec(
       }
       // Only foreground tasks update the cwd
       if (result && !preventCwdChanges && !result.backgroundTaskId) {
+        let changingCwd = false
         try {
           let newCwd = readFileSync(nativeCwdFilePath, {
             encoding: 'utf8',
@@ -453,12 +450,14 @@ export async function exec(
           // NFD on macOS APFS. Normalize before comparing so Unicode paths
           // don't false-positive as "changed" on every command.
           if (newCwd.normalize('NFC') !== cwd) {
-            setCwd(newCwd, cwd)
+            changingCwd = true
+            await withWorkspaceTransition(() => setCwd(newCwd, cwd))
             invalidateSessionEnvCache()
             void onCwdChangedForHooks(cwd, newCwd)
           }
-        } catch {
+        } catch (error) {
           logEvent('tengu_shell_set_cwd', { success: false })
+          if (changingCwd) result.stdout += `\nCould not update the shell working folder: ${errorMessage(error)}`
         }
       }
       // Clean up the temp file used for cwd tracking
@@ -467,7 +466,9 @@ export async function exec(
       } catch {
         // File may not exist if command failed before pwd -P ran
       }
+      return result
     })
+    shellCommand.result = settledResult
 
     return shellCommand
   } catch (error) {

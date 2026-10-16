@@ -23,7 +23,7 @@ const ALLOWED_TOOLS = [
   'mcp__claude_ai_Slack__slack_send_message',
 ]
 
-function getPromptContent(
+export function getPromptContent(
   defaultBranch: string,
   prAttribution?: string,
 ): string {
@@ -33,6 +33,12 @@ function getPromptContent(
   const effectivePrAttribution = prAttribution ?? defaultPrAttribution
   const safeUser = process.env.SAFEUSER || ''
   const username = process.env.USER || ''
+  // Octal encoding keeps Git-valid quotes/backticks out of both the shell
+  // syntax and executeShellCommandsInPrompt's inline backtick delimiter.
+  const encodedRevision = Array.from(Buffer.from(`${defaultBranch}...HEAD`))
+    .map(byte => `\\${byte.toString(8).padStart(3, '0')}`)
+    .join('')
+  const diffCommand = `git diff "$(printf '%b' '${encodedRevision}')" --`
 
   let prefix = ''
   let reviewerArg = ' and `--reviewer anthropics/claude-code`'
@@ -61,7 +67,7 @@ function getPromptContent(
 - \`git status\`: !\`git status\`
 - \`git diff HEAD\`: !\`git diff HEAD\`
 - \`git branch --show-current\`: !\`git branch --show-current\`
-- \`git diff ${defaultBranch}...HEAD\`: !\`git diff ${defaultBranch}...HEAD\`
+- Changes against the default branch: !\`${diffCommand}\`
 - \`gh pr view --json number 2>/dev/null || true\`: !\`gh pr view --json number 2>/dev/null || true\`
 
 ## Git Safety Protocol
@@ -75,10 +81,10 @@ function getPromptContent(
 
 ## Your task
 
-Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request from the git diff ${defaultBranch}...HEAD output above).
+Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits included in the default-branch diff above).
 
 Based on the above changes:
-1. Create a new branch if on ${defaultBranch} (use SAFEUSER from context above for the branch name prefix, falling back to whoami if SAFEUSER is empty, e.g., \`username/feature-name\`)
+1. Create a new branch if on the default branch (use SAFEUSER from context above for the branch name prefix, falling back to whoami if SAFEUSER is empty, e.g., \`username/feature-name\`)
 2. Create a single commit with an appropriate message using heredoc syntax${commitAttribution ? `, ending with the attribution text shown in the example below` : ''}:
 \`\`\`
 git commit -m "$(cat <<'EOF'

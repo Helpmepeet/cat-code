@@ -93,6 +93,7 @@ function harness(
     forwardFails?: Set<string>
     moving?: Set<string>
     workspaceRequests?: PeerRequestPlaneDeps['workspaceRequests']
+    workspaceTransitions?: PeerRequestPlaneDeps['workspaceTransitions']
   } = {},
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
@@ -112,6 +113,7 @@ function harness(
     canResume: id => options.unresumable?.has(id) !== true,
     isMoving: id => options.moving?.has(id) === true,
     workspaceRequests: options.workspaceRequests,
+    workspaceTransitions: options.workspaceTransitions,
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),
@@ -194,6 +196,28 @@ function request(
     args,
   }
 }
+
+test('internal cwd transitions validate closed shapes and use connection identity', async () => {
+  const calls: unknown[][] = []
+  const h = harness({ workspaceTransitions: {
+    begin: (...args) => { calls.push(args); return true },
+    finish: (...args) => { calls.push(args); return false },
+  } })
+  const begin = request('workspace.transition.begin', { operationId: CORAL })
+  expect(validateHostRequest(begin).ok).toBe(true)
+  expect(validateHostRequest(request('workspace.transition.begin', { operationId: 'not-uuid' })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.begin', { operationId: CORAL, cwd: '/injected' })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: '/actual' })).ok).toBe(true)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: '../relative' })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: `/${'x'.repeat(4096)}` })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: '/bad\0path' })).ok).toBe(false)
+  await h.plane.handleRequest(BEAR, begin)
+  expect(calls).toEqual([[BEAR, CORAL]])
+  expect(h.lastResult()).toMatchObject({ ok: true, value: { operationId: CORAL } })
+  await h.plane.handleRequest(BEAR, request('workspace.transition.finish', { operationId: CORAL, cwd: '/actual' }))
+  expect(calls.at(-1)).toEqual([BEAR, CORAL, '/actual'])
+  expect(h.lastResult()).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+})
 
 test('managed workspace verbs retain connection authority and do not grant peer privileges', async () => {
   const handled: string[] = []
@@ -912,6 +936,65 @@ describe('loop and channel guards', () => {
     expect(outcomes.slice(MAX_PEER_HOPS)).toEqual(
       outcomes.slice(MAX_PEER_HOPS).map(() => 'refused:hop_runaway'),
     )
+  })
+
+  describe('a user message restarts the pair hop budget', () => {
+    /** Alex and Bear alternate until `count` sends have been made; returns each outcome. */
+    async function converse(h: ReturnType<typeof harness>, count: number, turn: { n: number }) {
+      const outcomes: string[] = []
+      for (let i = 0; i < count; i++) {
+        const fromAlex = turn.n % 2 === 0
+        h.advance(3_000)
+        await h.plane.handleRequest(
+          fromAlex ? ALEX : BEAR,
+          request(
+            'peer.deliver',
+            { to: fromAlex ? 'Bear' : 'Alex', text: `turn ${turn.n}` },
+            `req-${turn.n}`,
+          ),
+        )
+        outcomes.push((h.lastResult()?.value as { outcome: string }).outcome)
+        turn.n += 1
+      }
+      return outcomes
+    }
+
+    async function atTheLimit() {
+      const h = harness()
+      const turn = { n: 0 }
+      const first = await converse(h, MAX_PEER_HOPS, turn)
+      expect(first.every(outcome => outcome === 'queued_live')).toBe(true)
+      expect(await converse(h, 1, turn)).toEqual(['refused:hop_runaway'])
+      return { h, turn }
+    }
+
+    test.each([
+      ['the sender', ALEX],
+      ['the recipient', BEAR],
+    ])('a user message to %s lets the exchange continue', async (_who, userSession) => {
+      const { h, turn } = await atTheLimit()
+      h.plane.onUserMessage(userSession)
+      const after = await converse(h, 4, turn)
+      expect(after).toEqual(['queued_live', 'queued_live', 'queued_live', 'queued_live'])
+    })
+
+    test('without a user message the pair stays refused, and a stranger\'s message does not count', async () => {
+      const { h, turn } = await atTheLimit()
+      h.plane.onUserMessage(CORAL)
+      expect(await converse(h, 3, turn)).toEqual([
+        'refused:hop_runaway',
+        'refused:hop_runaway',
+        'refused:hop_runaway',
+      ])
+    })
+
+    test('the restarted budget is a full one, and it ends again at the same cap', async () => {
+      const { h, turn } = await atTheLimit()
+      h.plane.onUserMessage(ALEX)
+      const second = await converse(h, MAX_PEER_HOPS + 1, turn)
+      expect(second.slice(0, MAX_PEER_HOPS).every(outcome => outcome === 'queued_live')).toBe(true)
+      expect(second[MAX_PEER_HOPS]).toBe('refused:hop_runaway')
+    })
   })
 
   test('a three-way cycle may close but is stopped when its active route exceeds the hop cap', async () => {

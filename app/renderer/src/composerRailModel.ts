@@ -66,17 +66,15 @@ export type ComposerRailModel = {
    * Carried separately from `model` because they are consumed differently: the
    * face shows the label, `selectContextUsage` matches `modelUsage` on the id.
    * Without it the read-only face printed `claude-sonnet-4-5-20250929` the
-   * moment a session parked, which is the defect `be6522a` and `ModelChip`
-   * already fixed once each.
+   * moment a session parked.
    */
   modelLabel: string | null
   reasoningEffort: string | null
   /**
    * Fast state, or null when nothing knows: no snapshot yet, or a model that
    * cannot do fast at all (the live chip renders nothing in that case, so the
-   * read-only one must not either). False is a real answer and DOES render —
-   * parking a session with fast off used to drop the face while every sibling
-   * stayed.
+   * read-only one must not either). False remains known for accessibility but
+   * contributes no visible bolt to the merged face.
    */
   fastMode: boolean | null
   /** The engine-resolved window, so a parked donut keeps its real denominator. */
@@ -87,6 +85,8 @@ export type ComposerRailModel = {
   provider: RunControlProvider | null
   /** Idle-time estimate is display data and survives a parked engine. */
   cacheExpiresAt: number | null
+  /** Retained snapshot supplies provider and raw effort for the read-only face. */
+  readOnlyRunControls: RunControlsSnapshot | null
 
   /* ---- capability: dies with the engine ---- */
   /** Non-null only while a sidecar can take a run-control verb. */
@@ -157,6 +157,7 @@ export function selectComposerRail(
     provider: last?.model.provider ?? null,
     cacheExpiresAt: last?.cacheExpiresAt ?? null,
     liveRunControls: live,
+    readOnlyRunControls: last,
     canSwitchAccount: ready && last?.model.provider === 'openai',
   }
 }

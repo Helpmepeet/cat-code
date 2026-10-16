@@ -86,6 +86,7 @@ function getVersionChangelog(): string {
 }
 
 const defaultFeatures = [
+  'LID_CLOSED',
   'AUTO_MODE_UPSTREAM_PORT',
   'TRANSCRIPT_CLASSIFIER',
   'VOICE_MODE',

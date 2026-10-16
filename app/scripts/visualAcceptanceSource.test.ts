@@ -57,20 +57,6 @@ test('the capture run drives an isolated state directory, never the operator rea
   expect(source).toContain("CATCODE_HEADLESS_CAPTURE: '1'")
 })
 
-test('capture cleanup is reachable on every exit path', () => {
-  const source = readFileSync(new URL('./visual-acceptance.ts', import.meta.url), 'utf8')
-
-  expect(source).toContain('async function cleanup(): Promise<void>')
-  expect(source).toContain('await cleanup()')
-  expect(source).toContain('await main()\nprocess.exit(process.exitCode ?? 0)')
-  expect(source.match(/\bprocess\.exit\(/g) ?? []).toHaveLength(1)
-  expect(source).toContain('...(vite ? [terminateChild(vite)] : [])')
-  expect(source).toContain('...(electron ? [terminateChild(electron)] : [])')
-  // The temp dirs are the harness's own; leaving them behind on a failed run
-  // fills /tmp across a long day of runs.
-  expect(source).toContain('rmSync(dir, { recursive: true, force: true })')
-})
-
 test('a blank frame fails the run instead of being written', () => {
   const driver = code(new URL('./visual-acceptance-driver.ts', import.meta.url))
 

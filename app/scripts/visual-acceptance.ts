@@ -48,30 +48,31 @@ async function main(): Promise<void> {
     return
   }
 
-  // Never the operator's real state. A run that reads ~/.cat-code is a separate,
-  // opt-in decision and should read a copy, not the live directory.
-  scratch = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-visual-cwd-')))
-  configHome = mkdtempSync(join(tmpdir(), 'catcode-visual-config-'))
-
-  if (process.env.CATCODE_CAPTURE_SCENE === 'usage') {
-    const project = join(configHome, 'projects', 'usage-fixture')
-    mkdirSync(project, { recursive: true })
-    mkdirSync(join(configHome, 'fixture-home'), { recursive: true })
-    const rows = []
-    const cutoff = new Date()
-    for (let day = 0; day < 30; day++) for (let model = 0; model < 4; model++) for (let hour = 0; hour < 24; hour++) {
-      const timestamp = new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), cutoff.getUTCDate() - day, hour))
-      if (timestamp > cutoff || hour < 5 || hour > 21 || (day + hour + model) % 5 === 0) continue
-      const copies = hour >= 10 && hour <= 17 ? 3 : 1
-      for (let n = 0; n < copies; n++) {
-        const id = `${day}-${model}-${hour}-${n}`
-        rows.push({ type: 'assistant', sessionId: 'fixture', uuid: id, timestamp: timestamp.toISOString(), message: { id, model: ['Claude Sonnet', 'GPT Codex', 'Claude Haiku', 'Other'][model], usage: { input_tokens: (31-day)*(model+1)*120, cache_read_input_tokens: (31-day)*180, cache_creation_input_tokens: 240, output_tokens: (31-day)*30 }, content: [{ type: 'tool_use', id, name: ['Bash','Read','Edit','Search'][model] }] } })
-        if ((day + hour + n) % 7 !== 0) rows.push({ type: 'user', sessionId: 'fixture', uuid: `result-${id}`, timestamp: timestamp.toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: (day + hour + model + n) % (model + 9) === 0 }] } })
-      }
-    }
-    writeFileSync(join(project, 'fixture.jsonl'), rows.map(row => JSON.stringify(row)).join('\n'))
-  }
   try {
+    // Never the operator's real state. A run that reads ~/.cat-code is a separate,
+    // opt-in decision and should read a copy, not the live directory.
+    scratch = mkdtempSync(join(tmpdir(), 'catcode-visual-cwd-'))
+    scratch = realpathSync(scratch)
+    configHome = mkdtempSync(join(tmpdir(), 'catcode-visual-config-'))
+
+    if (process.env.CATCODE_CAPTURE_SCENE === 'usage') {
+      const project = join(configHome, 'projects', 'usage-fixture')
+      mkdirSync(project, { recursive: true })
+      mkdirSync(join(configHome, 'fixture-home'), { recursive: true })
+      const rows = []
+      const cutoff = new Date()
+      for (let day = 0; day < 30; day++) for (let model = 0; model < 4; model++) for (let hour = 0; hour < 24; hour++) {
+        const timestamp = new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), cutoff.getUTCDate() - day, hour))
+        if (timestamp > cutoff || hour < 5 || hour > 21 || (day + hour + model) % 5 === 0) continue
+        const copies = hour >= 10 && hour <= 17 ? 3 : 1
+        for (let n = 0; n < copies; n++) {
+          const id = `${day}-${model}-${hour}-${n}`
+          rows.push({ type: 'assistant', sessionId: 'fixture', uuid: id, timestamp: timestamp.toISOString(), message: { id, model: ['Claude Sonnet', 'GPT Codex', 'Claude Haiku', 'Other'][model], usage: { input_tokens: (31-day)*(model+1)*120, cache_read_input_tokens: (31-day)*180, cache_creation_input_tokens: 240, output_tokens: (31-day)*30 }, content: [{ type: 'tool_use', id, name: ['Bash','Read','Edit','Search'][model] }] } })
+          if ((day + hour + n) % 7 !== 0) rows.push({ type: 'user', sessionId: 'fixture', uuid: `result-${id}`, timestamp: timestamp.toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: (day + hour + model + n) % (model + 9) === 0 }] } })
+        }
+      }
+      writeFileSync(join(project, 'fixture.jsonl'), rows.map(row => JSON.stringify(row)).join('\n'))
+    }
     const build = spawnSync('bun', ['run', join(here, 'build-electron.ts')], {
       stdio: 'inherit',
     })

@@ -123,67 +123,82 @@ export function PermissionModeChip({
           <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
             Mode
           </div>
-          {MODE_DISPLAY_ORDER.map(mode => {
-            const meta = PERMISSION_MODE_META[mode]
-            const active = context.mode === mode
-            const unavailable =
-              mode === 'auto' && !context.permissionClassifierEnabled
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                disabled={unavailable}
-                title={
-                  mode === 'auto' && unavailable
-                    ? 'Auto mode is unavailable for this model or has been disabled in settings.'
-                    : undefined
-                }
-                onClick={() => {
-                  onSetMode(mode)
-                  close()
-                }}
-                className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors ${
-                  unavailable
-                    ? 'cursor-not-allowed opacity-40'
-                    : 'hover:bg-white/[0.02]'
-                } ${active ? 'bg-white/[0.04]' : ''}`}
-              >
-                {/* Radio indicator (Surfaces.jsx:284-290): a tinted ring with a
-                 * filled dot when active; the ring rides `currentColor`. */}
-                <span
-                  className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-[1.5px] border-current ${
-                    active ? meta.toneText : 'text-text-ghost'
-                  }`}
-                  aria-hidden
-                >
-                  {active ? (
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${meta.toneDot}`}
-                    />
-                  ) : null}
-                </span>
-                <span className="min-w-0">
-                  <span
-                    className={`block text-[12.5px] ${
-                      active
-                        ? 'font-semibold text-text-primary'
-                        : 'font-medium text-[light-dark(#27272a,#e4e4e7)]'
-                    }`}
-                  >
-                    {meta.title}
-                  </span>
-                  <span className="block text-[10.5px] text-text-subtle">
-                    {meta.desc}
-                  </span>
-                </span>
-              </button>
-            )
-          })}
+          <PermissionModeOptions
+            context={context}
+            onSelect={mode => {
+              onSetMode(mode)
+              close()
+            }}
+          />
         </div>
         </ComposerPopoverPanel>
       ) : null}
     </div>
+  )
+}
+
+/** Shared mode choices keep the standalone picker and merged run panel aligned. */
+export function PermissionModeOptions({
+  context,
+  onSelect,
+}: {
+  context: PermissionContextSnapshot
+  onSelect: (mode: PermissionSetModeMode) => void
+}) {
+  return (
+    <>
+      {MODE_DISPLAY_ORDER.map(mode => {
+        const meta = PERMISSION_MODE_META[mode]
+        const active = context.mode === mode
+        const unavailable =
+          mode === 'auto' && !context.permissionClassifierEnabled
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="menuitemradio"
+            aria-checked={active}
+            disabled={unavailable}
+            title={
+              mode === 'auto' && unavailable
+                ? 'Auto mode is unavailable for this model or has been disabled in settings.'
+                : undefined
+            }
+            onClick={() => onSelect(mode)}
+            className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors ${
+              unavailable
+                ? 'cursor-not-allowed opacity-40'
+                : 'hover:bg-white/[0.02]'
+            } ${active ? 'bg-white/[0.04]' : ''}`}
+          >
+            {/* The ring rides currentColor; the filled dot marks the active mode. */}
+            <span
+              className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-[1.5px] border-current ${
+                active ? meta.toneText : 'text-text-ghost'
+              }`}
+              aria-hidden
+            >
+              {active ? (
+                <span className={`h-1.5 w-1.5 rounded-full ${meta.toneDot}`} />
+              ) : null}
+            </span>
+            <span className="min-w-0">
+              <span
+                className={`block text-[12.5px] ${
+                  active
+                    ? 'font-semibold text-text-primary'
+                    : 'font-medium text-[light-dark(#27272a,#e4e4e7)]'
+                }`}
+              >
+                {meta.title}
+              </span>
+              <span className="block text-[10.5px] text-text-subtle">
+                {meta.desc}
+              </span>
+            </span>
+          </button>
+        )
+      })}
+    </>
   )
 }

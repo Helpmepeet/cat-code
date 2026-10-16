@@ -22,6 +22,8 @@ import {
   registerTrustedSedEditApproval,
 } from '../../tools/BashTool/sedEditCapability.js'
 import { createPermissionContext } from '../../hooks/toolPermission/PermissionContext.js'
+import { createAppRuntimeCanUseTool } from '../../app-runtime/appRuntimeCanUseTool.js'
+import { AskUserQuestionTool } from '../../tools/AskUserQuestionTool/AskUserQuestionTool.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
 // mock.module is installed during the import phase of every file in the
@@ -276,6 +278,59 @@ afterEach(() => {
   injectedContext = null
   injectedPreToolResult = null
   postToolUseHooksThrow = false
+})
+
+test('desktop question answers execute after one prompt without losing the answer', async () => {
+  const question = 'Can you confirm the Read policy?'
+  const input = {
+    questions: [{
+      question,
+      header: 'Read policy',
+      options: [
+        { label: 'Confirm', description: 'No extra restrictions' },
+        { label: 'Restrictions', description: 'Restrictions apply' },
+      ],
+      multiSelect: false,
+    }],
+  }
+  let prompts = 0
+  const canUseTool = createAppRuntimeCanUseTool({
+    getPermissionRequestHandler: () => async request => {
+      prompts++
+      return {
+        behavior: 'allow',
+        updatedInput: {
+          ...request.request.input,
+          answers: { [question]: prompts === 1 ? 'Confirm' : 'Restrictions' },
+        },
+      }
+    },
+  })
+  const updates: MessageUpdateLazy[] = []
+  for await (const update of runToolUse(
+    {
+      type: 'tool_use',
+      id: 'toolu_desktop_question',
+      name: AskUserQuestionTool.name,
+      input,
+      caller: { type: 'direct' },
+    },
+    createAssistantMessage(),
+    canUseTool,
+    createToolUseContext([AskUserQuestionTool]),
+  )) {
+    updates.push(update)
+  }
+
+  expect(prompts).toBe(1)
+  const results = updates.flatMap(update => {
+    const message = update.message
+    if (message?.type !== 'user' || !Array.isArray(message.message.content)) return []
+    return message.message.content.filter(block => block.type === 'tool_result')
+  })
+  expect(results).toHaveLength(1)
+  expect(results[0]?.is_error).not.toBe(true)
+  expect(results[0]?.content).toContain(`"${question}"="Confirm"`)
 })
 
 describe('runToolUse PreToolUse additionalContext', () => {

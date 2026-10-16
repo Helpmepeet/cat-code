@@ -94,8 +94,6 @@ export async function applyThreadGoalTransition<
   reason,
   actor,
   expectedRevision,
-  objective: _objective,
-  resetWorkers: _resetWorkers = false,
   nowMs,
 }: {
   context: ThreadGoalActionContext<TState>
@@ -105,8 +103,6 @@ export async function applyThreadGoalTransition<
   actor: ThreadGoalActor
   /** Omit only for a control action the user just issued against live state. */
   expectedRevision?: number
-  objective?: string
-  resetWorkers?: boolean
   nowMs?: number
 }): Promise<ThreadGoalTransitionResult> {
   const current = readCurrentGoal(context, goalId)
@@ -140,13 +136,11 @@ export async function createThreadGoalAction<
   context,
   objective,
   tokenBudget,
-  resetWorkers: _resetWorkers = true,
   nowMs,
 }: {
   context: ThreadGoalActionContext<TState>
   objective: string
   tokenBudget?: number
-  resetWorkers?: boolean
   nowMs?: number
 }): Promise<ThreadGoal> {
   const nextGoal = createThreadGoal(
@@ -190,16 +184,12 @@ export async function updateThreadGoalStatusAction<
   status,
   reason,
   actor,
-  objective: _objective,
-  resetWorkers: _resetWorkers = false,
 }: {
   context: ThreadGoalActionContext<TState>
   goal: ThreadGoal
   status: ThreadGoalStatus
   reason: ThreadGoalStatusReason
   actor: ThreadGoalActor
-  objective: string
-  resetWorkers?: boolean
 }): Promise<ThreadGoalTransitionResult> {
   const check = checkThreadGoalTransition({
     from: goal.status,
@@ -249,27 +239,4 @@ export async function setThreadGoalContractAction<
   saveThreadGoal(nextGoal)
   context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
   return nextGoal
-}
-
-export async function completeThreadGoalAction<
-  TState extends ThreadGoalState = ThreadGoalState,
->({
-  context,
-  goal,
-  expectedRevision,
-}: {
-  context: ThreadGoalActionContext<TState>
-  goal: ThreadGoal
-  expectedRevision?: number
-}): Promise<ThreadGoalTransitionResult> {
-  return applyThreadGoalTransition({
-    context,
-    goalId: goal.goalId,
-    to: 'complete',
-    reason: 'agent_reported_complete',
-    actor: 'agent',
-    expectedRevision: expectedRevision ?? goal.revision,
-    objective: '',
-    resetWorkers: true,
-  })
 }

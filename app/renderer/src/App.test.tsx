@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ComponentProps } from 'react'
 import { App } from './App.js'
+import { EMPTY_HISTORY_NAV } from './composerState.js'
 import { ConnectionRecovery, SessionPane } from './SessionPane.js'
 import {
   buildDebugExport,
@@ -743,6 +744,8 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
+      historyNav={EMPTY_HISTORY_NAV}
+      onHistoryNavChange={() => {}}
       mentionItems={[]}
       onApprovePlan={() => {}}
       onPaste={() => {}}
@@ -870,6 +873,8 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
+      historyNav={EMPTY_HISTORY_NAV}
+      onHistoryNavChange={() => {}}
       mentionItems={[]}
       onApprovePlan={() => {}}
       onPaste={() => {}}
@@ -943,6 +948,8 @@ test('CC-16: a connecting session accepts typing and can arm the send arrow', ()
     copyForLlm: () => {},
     denyPermission: () => {},
     history: [],
+    historyNav: EMPTY_HISTORY_NAV,
+    onHistoryNavChange: () => {},
     mentionItems: [],
     onApprovePlan: () => {},
     onPaste: () => {},
@@ -1018,6 +1025,8 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
     copyForLlm: () => {},
     denyPermission: () => {},
     history: [],
+    historyNav: EMPTY_HISTORY_NAV,
+    onHistoryNavChange: () => {},
     mentionItems: [],
     onApprovePlan: () => {},
     onPaste: () => {},
@@ -1346,6 +1355,8 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
     copyForLlm: () => {},
     denyPermission: () => {},
     history: [],
+    historyNav: EMPTY_HISTORY_NAV,
+    onHistoryNavChange: () => {},
     mentionItems: [],
     onApprovePlan: () => {},
     onPaste: () => {},
@@ -1600,6 +1611,8 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
+      historyNav={EMPTY_HISTORY_NAV}
+      onHistoryNavChange={() => {}}
       mentionItems={[]}
       onApprovePlan={() => {}}
       onPaste={() => {}}
@@ -1671,6 +1684,8 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
+      historyNav={EMPTY_HISTORY_NAV}
+      onHistoryNavChange={() => {}}
       mentionItems={[]}
       onApprovePlan={() => {}}
       onPaste={() => {}}
@@ -1960,6 +1975,8 @@ test('composer form owns the ↑/↓ history key scope', () => {
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={['first prompt', 'second prompt']}
+      historyNav={EMPTY_HISTORY_NAV}
+      onHistoryNavChange={() => {}}
       mentionItems={[]}
       onApprovePlan={() => {}}
       onPaste={() => {}}
@@ -2031,6 +2048,8 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
+      historyNav={EMPTY_HISTORY_NAV}
+      onHistoryNavChange={() => {}}
       mentionItems={[]}
       onApprovePlan={() => {}}
       onPaste={() => {}}
@@ -2243,6 +2262,8 @@ test('a previewed pane shows what the cached session really ran on', () => {
     copyForLlm: () => {},
     denyPermission: () => {},
     history: [],
+    historyNav: EMPTY_HISTORY_NAV,
+    onHistoryNavChange: () => {},
     mentionItems: [],
     onApprovePlan: () => {},
     onPaste: () => {},
@@ -2309,6 +2330,8 @@ test('a previewed pane with an empty cache claims nothing', () => {
     copyForLlm: () => {},
     denyPermission: () => {},
     history: [],
+    historyNav: EMPTY_HISTORY_NAV,
+    onHistoryNavChange: () => {},
     mentionItems: [],
     onApprovePlan: () => {},
     onPaste: () => {},

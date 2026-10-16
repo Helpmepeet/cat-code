@@ -35,7 +35,7 @@ const conflicts: Array<[string, Partial<PaneProps>]> = [
   ['missing session', { activeSessionId: null }],
   ['held prompt', { pendingSubmit: { text: 'waiting', images: [], file: null, showQueuedRow: true } }],
   ['engine queue', { queuedPrompts: [{ id: 'queued', text: 'waiting' }] }],
-  ['project route', { projectRoute: { appSessionId: 'session-1', submitId: 'pending', phase: 'checking', text: 'waiting', projectName: null, message: null } }],
+  ['project route', { projectRoute: { appSessionId: 'session-1', submitId: 'pending', phase: 'unsent', text: 'waiting', message: null } }],
   ['branch switch', { branchSwitchPending: true }],
   ['moving descriptor', { activeDescriptor: { ...origin, moving: true } }],
   ['workspace movement', { activeDescriptor: { ...origin, workspaceMove: { id: 'move', phase: 'moving', target: { kind: 'project', name: 'target', path: '/tmp/target' } } } }],

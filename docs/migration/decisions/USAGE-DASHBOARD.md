@@ -35,6 +35,18 @@ Usage is Unavailable. Account workers and session frames are not authoritative
 publishers for this overview. Rollback never restores old misleading totals or
 changes retained transcripts. No persisted usage migration.
 
+## First-use collection, 2026-10-15
+
+Main starts the Analytics driver when the renderer first opens Analytics, using
+the existing refresh channel. It does not schedule a usage worker at app launch.
+The first driver `start()` restores the saved snapshot, then collects fresh data;
+the initial request does not also call `refreshNow()`. The renderer sends this
+activation once per document, so repeat visits and StrictMode effect replay do
+not enqueue extra collections. A true renderer reload may request one refresh
+from a surviving driver. Manual refresh, visibility gating, the five-minute
+cadence after activation, last-good retention, the off switch, and teardown keep
+their prior behavior. Retained transcripts remain the source for later collection.
+
 ## Manual refresh, 2026-09-22
 
 The Analytics page exposes an icon-only refresh button beside its period controls.
@@ -61,9 +73,10 @@ text, response text and tool inputs are excluded. Legacy stats and source
 transcripts remain untouched. This derived cache needs no engine-state migration;
 the index filename versions the projection and accounting implementation.
 
-At startup main restores the saved snapshot through `usage-stats --cached` before
-refreshing. The cached path skips engine bootstrap and transcript discovery. Its
-result passes the same size, schema and secret checks as fresh results. The UI
+On first Analytics activation main restores the saved snapshot through
+`usage-stats --cached` before refreshing. The cached path skips engine bootstrap
+and transcript discovery. Its result passes the same size, schema and secret
+checks as fresh results. The UI
 keeps the saved cutoff until a successful refresh and retains values on failure.
 
 Background refresh discovers/stat-checks sources. Matching device, inode, size,
@@ -453,3 +466,11 @@ Counting version 21 invalidates version-20 summaries that had already grouped
 recent tool names, then rebuilds summaries from the existing redacted
 index-v11 records. The raw index projection, transcripts, sessions, and
 accounts are unchanged; no persisted engine migration is required.
+
+## Legacy session stats retirement, 2026-10-15
+
+[Session protocol v4](SESSION-PROTOCOL-V4.md) removes `stats.query`,
+`stats.usage.snapshot`, their fixed preload sender, and the unused per-session
+renderer cache. The independent usage worker, host event, retained-history
+collector, and terminal stats are unchanged by this retirement. No usage cache
+or transcript migration is required.

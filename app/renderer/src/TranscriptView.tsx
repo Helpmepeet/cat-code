@@ -22,7 +22,6 @@
 
 import {
   Component,
-  cloneElement,
   createContext,
   Fragment,
   isValidElement,
@@ -51,9 +50,11 @@ import {
   readWorkspaceMoveDisplay,
   useWorkspaceMoveView,
 } from './workspaceMoveView.js'
-import type { SessionDescriptor, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
+import type { HostResult, SessionDescriptor, WorkspaceBranches, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { FileLinkTicker } from './FileLinkTicker.js'
+import { isInlineFilePath, linkifyFilePathTree, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   PEER_BUBBLE_CLASS,
@@ -131,7 +132,7 @@ import {
   ProseArrivalContext,
 } from './proseArrival.js'
 import { markArrivedText } from './proseArrivalMark.js'
-import type { Root as HastRoot } from 'hast'
+import type { Element as HastElement, Root as HastRoot } from 'hast'
 import {
   groupReasoningRuns,
   ReasoningLayoutContext,
@@ -370,6 +371,8 @@ export const TranscriptView = memo(function TranscriptView({
   branch,
   onListBranches,
   onSwitchBranch,
+  onFocusBranchChat,
+  branchPending,
   sandboxed,
   restorePhase,
   revealHidden,
@@ -405,8 +408,10 @@ export const TranscriptView = memo(function TranscriptView({
   cwd?: string | null
   managedChat?: boolean
   branch?: string | null
-  onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
+  onListBranches?: () => Promise<HostResult<WorkspaceBranches>>
   onSwitchBranch?: (branch: string) => Promise<string | null>
+  onFocusBranchChat?: (sessionId: string) => void
+  branchPending?: boolean
   /** Whether this session's tools run sandboxed, read by the empty state's
    * "Start in" column. */
   sandboxed?: boolean
@@ -480,6 +485,8 @@ export const TranscriptView = memo(function TranscriptView({
       branch={branch ?? null}
       onListBranches={onListBranches}
       onSwitchBranch={onSwitchBranch}
+      onFocusBranchChat={onFocusBranchChat}
+      branchPending={branchPending}
       sandboxed={sandboxed ?? false}
       restorePhase={restorePhase ?? null}
       loadEarlierPending={loadEarlierPending ?? false}
@@ -596,6 +603,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   branch = null,
   onListBranches,
   onSwitchBranch,
+  onFocusBranchChat,
+  branchPending,
   sandboxed = false,
   restorePhase = null,
   loadEarlierPending = false,
@@ -631,8 +640,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   cwd?: string | null
   managedChat?: boolean
   branch?: string | null
-  onListBranches?: () => ReturnType<CatCodeBridge['listWorkspaceBranches']>
+  onListBranches?: () => Promise<HostResult<WorkspaceBranches>>
   onSwitchBranch?: (branch: string) => Promise<string | null>
+  onFocusBranchChat?: (sessionId: string) => void
+  branchPending?: boolean
   sandboxed?: boolean
   restorePhase?: RestorePhase | null
   loadEarlierPending?: boolean
@@ -823,6 +834,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             branch={branch}
             onListBranches={onListBranches}
             onSwitchBranch={onSwitchBranch}
+            onFocusBranchChat={onFocusBranchChat}
+            branchPending={branchPending}
             sandboxed={sandboxed}
             accounts={accounts}
             accountsUsagePending={accountsUsagePending}
@@ -907,6 +920,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             branch={branch}
             onListBranches={onListBranches}
             onSwitchBranch={onSwitchBranch}
+            onFocusBranchChat={onFocusBranchChat}
+            branchPending={branchPending}
             sandboxed={sandboxed}
             accounts={accounts}
             accountsUsagePending={accountsUsagePending}
@@ -1906,8 +1921,6 @@ function AssistantProse({
     () => ({
       ...MARKDOWN_COMPONENTS,
       a: createPathAwareAnchor(openFile, onContextMenu),
-      p: createPathAwareParagraph(openFile, onContextMenu),
-      li: createPathAwareListItem(openFile, onContextMenu),
       code: createPathAwareCode(openFile, onContextMenu),
     }),
     [openFile, onContextMenu],
@@ -1944,9 +1957,10 @@ function AssistantProse({
   })
   const markArrival = useCallback(
     (tree: HastRoot): HastRoot => {
+      const linked = linkifyFilePathTree(tree)
       const className = PROSE_ARRIVAL_WORD_CLASS[arrival]
-      if (className === null || arrivalFrom < 0) return tree
-      return markArrivedText(tree, {
+      if (className === null || arrivalFrom < 0) return linked
+      return markArrivedText(linked, {
         fromOffset: arrivalFrom,
         className,
         staggerMs: PROSE_ARRIVAL_WORD_STAGGER_MS[arrival],
@@ -1967,6 +1981,7 @@ function AssistantProse({
         rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
         math
         recognizeCallouts
+        streamingLinks={streaming}
         renderLeaf={leaf =>
           // A fence too long to mount whole arrives as one merged code leaf:
           // the card and its copy action own the WHOLE fence, while only the
@@ -2000,170 +2015,7 @@ function AssistantProse({
   )
 }
 
-const FILE_PATH_RE =
-  /(?:(?:\/|(?:\.{1,2}\/)|(?:[A-Za-z0-9_@.+-]+\/))(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+|[A-Za-z_@.][A-Za-z0-9_@.+-]*)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/g
-const WEB_PATH_RE =
-  /^(?:www\.|(?:[A-Za-z0-9-]+\.)+(?:(?:com|org|net|io|dev|app|ai|co|edu|gov|me|xyz)(?:[/:]|$)|[A-Za-z]{2,}\/))/i
-
-function isWebPath(path: string): boolean {
-  return WEB_PATH_RE.test(path)
-}
-
-/**
- * A version string ("2.1.238", "v1.2.3") ends in a digits-only trailing segment,
- * so the path shapes below would otherwise linkify it. Every real extension
- * carries at least one letter.
- */
-function hasLetteredExtension(path: string): boolean {
-  return /[A-Za-z]/.test(path.slice(path.lastIndexOf('.') + 1))
-}
-
-function isInlineFilePath(path: string): boolean {
-  return (
-    path.length > 0 &&
-    path.length <= 4_096 &&
-    path === path.trim() &&
-    !path.includes('\n') &&
-    !path.includes('\0') &&
-    !isWebPath(path) &&
-    hasLetteredExtension(path) &&
-    /(?:^|\/)[^/]+\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(path)
-  )
-}
-
-function linkifyFilePathText(
-  text: string,
-  openFile: (path: string) => void,
-  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
-): ReactNode {
-  const parts: ReactNode[] = []
-  let cursor = 0
-  for (const match of text.matchAll(FILE_PATH_RE)) {
-    const path = match[0]
-    const index = match.index
-    if (
-      text.slice(0, index).endsWith(':/') ||
-      path.startsWith('//') ||
-      isWebPath(path) ||
-      !hasLetteredExtension(path)
-    ) {
-      continue
-    }
-    if (index > cursor) parts.push(text.slice(cursor, index))
-    parts.push(
-      <button
-        className="inline-flex items-center gap-0.5 rounded-sm align-baseline font-mono text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-        key={`${index}:${path}`}
-        type="button"
-        aria-label={`Open ${path}`}
-        onClick={() => openFile(path)}
-        onContextMenu={event => {
-          if (!onContextMenu) return
-          event.preventDefault()
-          event.stopPropagation()
-          onContextMenu(
-            { type: 'pointer', x: event.clientX, y: event.clientY },
-            path,
-          )
-        }}
-      >
-        <ActionFileIcon />
-        {path}
-      </button>,
-    )
-    cursor = index + path.length
-  }
-  if (cursor === 0) return text
-  if (cursor < text.length) parts.push(text.slice(cursor))
-  return parts.map((part, index) => <Fragment key={index}>{part}</Fragment>)
-}
-
-function linkifyFilePathChildren(
-  children: ReactNode,
-  openFile: (path: string) => void,
-  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
-): ReactNode {
-  if (typeof children === 'string') {
-    return linkifyFilePathText(children, openFile, onContextMenu)
-  }
-  if (isValidElement<{ children?: ReactNode }>(children)) {
-    if (
-      typeof children.type !== 'string' ||
-      children.type === 'a' ||
-      children.type === 'button' ||
-      children.type === 'code'
-    ) {
-      return children
-    }
-    return cloneElement(
-      children,
-      undefined,
-      linkifyFilePathChildren(children.props.children, openFile, onContextMenu),
-    )
-  }
-  if (!Array.isArray(children)) return children
-  return children.map((child, index) => {
-    const linked = linkifyFilePathChildren(child, openFile, onContextMenu)
-    // Keep an element's own key and parent when a single arriving word becomes
-    // a list of siblings. Adding a Fragment here would restart its animation.
-    return isValidElement(child) ? linked : <Fragment key={index}>{linked}</Fragment>
-  })
-}
-
-function createPathAwareParagraph(
-  openFile: (path: string) => void,
-  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
-) {
-  return function PathAwareParagraph({
-    children,
-    node: _node,
-    ...props
-  }: ComponentPropsWithoutRef<'p'> & { node?: unknown }) {
-    void _node
-    return <p {...props}>{linkifyFilePathChildren(children, openFile, onContextMenu)}</p>
-  }
-}
-
-function createPathAwareListItem(
-  openFile: (path: string) => void,
-  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
-) {
-  return function PathAwareListItem({
-    children,
-    node: _node,
-    ...props
-  }: ComponentPropsWithoutRef<'li'> & { node?: unknown }) {
-    void _node
-    return <li {...props}>{linkifyFilePathChildren(children, openFile, onContextMenu)}</li>
-  }
-}
-
-/**
- * A markdown link is the ONE unambiguous file reference in assistant prose.
- * Desktop sessions ask the model for `[foo.ts](src/foo.ts)`, optionally with a
- * `:line` suffix, through the sidecar's own prompt addendum
- * (`app/sidecar/desktopSystemPrompt.ts`) — the engine's tone section teaches
- * the terminal's bare `file_path:line_number` instead, which only the regex
- * below can (approximately) resolve.
- * Returns the path to open, or null for anything addressed elsewhere
- * (a scheme, a protocol-relative host, a bare fragment). Containment inside the
- * session workspace is main's call, not the renderer's
- * (`app/main/openWorkspaceFile.ts`).
- */
-function workspaceFileHref(href: string | undefined): string | null {
-  if (href === undefined || href.length === 0) return null
-  if (href.startsWith('#') || href.startsWith('//')) return null
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)) return null
-  const path = href.replace(/[?#].*$/, '')
-  if (path.length === 0) return null
-  // Markdown URLs encode filenames. Decode once, then let main prefer a real
-  // literal :number filename before considering a source-location suffix.
-  try {
-    return decodeURIComponent(path.replace(/%(?![\da-f]{2})/gi, '%25'))
-  } catch {
-    return path
-  }
-}
+const FileLinkLabelContext = createContext(false)
 
 function createPathAwareAnchor(
   openFile: (path: string) => void,
@@ -2172,11 +2024,21 @@ function createPathAwareAnchor(
   return function PathAwareAnchor({
     children,
     href,
-    node: _node,
+    node,
+    'data-pending-destination': _pendingDestination,
+    'data-bare-file-path': _bareFilePath,
     ...props
-  }: ComponentPropsWithoutRef<'a'> & { node?: unknown }) {
-    void _node
-    const path = workspaceFileHref(href)
+  }: ComponentPropsWithoutRef<'a'> & {
+    node?: HastElement
+    'data-pending-destination'?: string
+    'data-bare-file-path'?: boolean
+  }) {
+    const destination = node?.properties.dataPendingDestination
+    const pending = typeof destination === 'string'
+    const path = pending ? pendingFileHref(destination, href) : workspaceFileHref(href)
+    const bare = node?.properties.dataBareFilePath === true
+    const label = <FileLinkLabelContext.Provider value>{children}</FileLinkLabelContext.Provider>
+    if (path === undefined) return label
     // Everything else is an outside address. A same-window navigation is
     // refused by the navigation lockdown (T3), so an in-place <a> is a dead
     // control; `target="_blank"` reaches the window-open policy instead, which
@@ -2184,20 +2046,21 @@ function createPathAwareAnchor(
     // (`app/main/navigationPolicy.ts`).
     if (path === null) {
       return (
-        <a {...props} href={href} target="_blank" rel="noreferrer">
-          {children}
+        <a {...props} href={pending ? undefined : href} target="_blank" rel="noreferrer">
+          {label}
         </a>
       )
     }
     const rawPath = path
     return (
       <button
-        className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        className={`inline-flex items-center gap-0.5 rounded-sm align-baseline ${bare ? 'font-mono ' : ''}text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent${pending ? ' file-link-pending' : ''}`}
         type="button"
-        aria-label={`Open ${path}`}
-        onClick={() => openFile(path)}
+        aria-label={pending ? undefined : `Open ${path}`}
+        disabled={pending || undefined}
+        onClick={() => { if (!pending) openFile(path) }}
         onContextMenu={event => {
-          if (!onContextMenu) return
+          if (pending || !onContextMenu) return
           event.preventDefault()
           event.stopPropagation()
           onContextMenu(
@@ -2207,7 +2070,8 @@ function createPathAwareAnchor(
         }}
       >
         <ActionFileIcon />
-        {children}
+        {label}
+        {pending ? <FileLinkTicker destination={destination} /> : null}
       </button>
     )
   }
@@ -2221,8 +2085,9 @@ function createPathAwareCode(
     className,
     children,
   }: ComponentPropsWithoutRef<'code'>) {
+    const inLabel = useContext(FileLinkLabelContext)
     const text = childrenToText(children)
-    if (!className && isInlineFilePath(text)) {
+    if (!inLabel && !className && isInlineFilePath(text)) {
       return (
         <button
           className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
@@ -3201,7 +3066,8 @@ function AskUserQuestionAnswerRow({
  * What became of a send, read from the tool's OWN result rather than from the
  * row status.
  *
- * THREE VALUES, NOT TWO. The tool reports confirmed delivery, confirmed
+ * THREE VALUES, NOT TWO. The tool reports a queued message (`delivered` in
+ * rows recorded before the 2026-10-16 amendment of ruling 13), confirmed
  * non-delivery and unconfirmed delivery as distinct facts: a request that timed
  * out may still be delivered once the peer finishes starting, so `unconfirmed`
  * is neither a success nor a failure and must not be drawn as either.
@@ -3229,7 +3095,7 @@ function AskUserQuestionAnswerRow({
  */
 function peerSendDelivery(
   row: ToolUseNestedRow,
-): 'delivered' | 'not_delivered' | 'unconfirmed' | null {
+): 'queued' | 'delivered' | 'not_delivered' | 'unconfirmed' | null {
   const content = row.result?.content
   if (typeof content !== 'string' || content.length === 0) return null
   try {
@@ -3238,6 +3104,7 @@ function peerSendDelivery(
     const fields = parsed as Record<string, unknown>
     const value = fields['delivery']
     if (
+      value === 'queued' ||
       value === 'delivered' ||
       value === 'not_delivered' ||
       value === 'unconfirmed'

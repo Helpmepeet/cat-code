@@ -368,17 +368,21 @@ export function ToggleSwitch({
   onChange,
   disabled,
   label,
+  showValue = true,
 }: {
   value: boolean
   onChange: (next: boolean) => void
   disabled?: boolean
   label: string
+  showValue?: boolean
 }) {
   return (
     <div className="flex items-center justify-end gap-2.5">
-      <span aria-hidden="true" className="min-w-[18px] text-[11px] text-text-subtle">
-        {value ? 'On' : 'Off'}
-      </span>
+      {showValue ? (
+        <span aria-hidden="true" className="min-w-[18px] text-[11px] text-text-subtle">
+          {value ? 'On' : 'Off'}
+        </span>
+      ) : null}
       <button
         aria-checked={value}
         aria-label={label}

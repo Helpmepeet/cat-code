@@ -10,7 +10,6 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import {
-  authorizeCodexCredentialUse,
   createCodexCredentialHandle,
   startCodexCredentialSend,
   type CodexCredentialHandle,
@@ -297,7 +296,11 @@ describe('Codex credential use authorization', () => {
     const legacy = createHandle(directory, 0)
     writeVault(legacy.credentialPath)
 
-    const authorized = await authorizeCodexCredentialUse(legacy, { lifecycle })
+    const authorized = await startCodexCredentialSend(
+      legacy,
+      authorized => authorized,
+      { lifecycle },
+    )
 
     expect(authorized).not.toBe(legacy)
     expect(authorized).toEqual({
@@ -340,9 +343,11 @@ describe('Codex credential use authorization', () => {
     const tagged = createHandle(directory, 1)
     writeVault(tagged.credentialPath, 1)
 
+    let sends = 0
     await expect(
-      authorizeCodexCredentialUse(tagged, { lifecycle }),
+      startCodexCredentialSend(tagged, () => { sends++ }, { lifecycle }),
     ).rejects.toMatchObject({ code: 'missing' })
+    expect(sends).toBe(0)
     expect(readVault(tagged.credentialPath).tokens.credential_generation).toBe(1)
   })
 
@@ -377,12 +382,14 @@ describe('Codex credential use authorization', () => {
     writeVault(retained.credentialPath, undefined, 'replacement-access')
 
     let thrown: unknown
+    let sends = 0
     try {
-      await authorizeCodexCredentialUse(retained, { lifecycle })
+      await startCodexCredentialSend(retained, () => { sends++ }, { lifecycle })
     } catch (error) {
       thrown = error
     }
 
+    expect(sends).toBe(0)
     expect(thrown).toMatchObject({ code: 'profile_mismatch' })
     expect(String(thrown)).not.toContain(ACCESS_TOKEN)
     expect(String(thrown)).not.toContain(REFRESH_TOKEN)

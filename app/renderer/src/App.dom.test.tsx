@@ -28,6 +28,7 @@ import { useState } from 'react'
 import type { ComponentProps } from 'react'
 
 import { SessionPane } from './SessionPane.js'
+import { ProjectRoutingBar } from './ProjectRoutingBar.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import { TasksDialog } from './TasksDialog.js'
 import { PERMISSION_KEY_HOST_ATTR } from './permissionPromptModel.js'
@@ -35,7 +36,7 @@ import type { PermissionRequest } from './permissionState.js'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness, MountedTree } from './domTestHarness.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
-import { formatPasteRef, type PasteEntry } from './composerState.js'
+import { EMPTY_HISTORY_NAV, formatPasteRef, type HistoryNav, type PasteEntry } from './composerState.js'
 import { AttachmentGate } from '../../main/attachmentGate.js'
 import {
   PROTOCOL_VERSION,
@@ -315,9 +316,12 @@ function ControlledPane({
   over?: Partial<ComponentProps<typeof SessionPane>>
 }) {
   const [prompt, setPrompt] = useState(initialPrompt)
+  const [historyNav, setHistoryNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
   return (
     <SessionPane
       {...idleSessionPaneProps()}
+      historyNav={historyNav}
+      onHistoryNavChange={setHistoryNav}
       {...over}
       prompt={prompt}
       setPrompt={next => {
@@ -656,4 +660,16 @@ test('moving an empty Chat keeps its existing Welcome mounted through reconnect'
   await tree.render(pane(false))
   expect(tree.container.contains(welcome)).toBe(true)
   expect(tree.container.textContent).toContain('first message draft')
+})
+
+
+test.each(['unsent', 'uncertain', 'failed'] as const)('held %s message recovery offers explicit resend and dismissal', async phase => {
+  const choices: string[] = []
+  const tree = await harness.mount(<ProjectRoutingBar route={{
+    appSessionId: 'session-1', submitId: 'held-message', phase, text: 'Held input', message: null,
+  }} onChoice={choice => choices.push(choice)} />)
+  const [resend, cancel] = tree.container.querySelectorAll<HTMLButtonElement>('button')
+  await act(async () => resend!.click())
+  await act(async () => cancel!.click())
+  expect(choices).toEqual(['resend', 'cancel'])
 })

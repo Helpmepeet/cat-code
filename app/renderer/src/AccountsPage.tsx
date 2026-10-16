@@ -85,6 +85,7 @@ import { useToast } from './toastContext.js'
 import { toneClasses, type Tone } from './tone.js'
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { getBridge } from './bridge.js'
+import { ProviderLogo } from './ProviderLogo.js'
 
 /* ── pure helpers (unit-tested without a DOM, like tone.ts / toastReducer) ── */
 
@@ -1071,7 +1072,8 @@ export function AccountsPage({
           <section className="mb-[22px]">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-baseline gap-2.5">
-                <h2 className="text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+                <h2 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+                  <ProviderLogo provider="anthropic" size={14} />
                   Anthropic Pool
                 </h2>
                 <span className="text-[12px] tabular-nums text-text-faint">
@@ -1081,8 +1083,9 @@ export function AccountsPage({
               <button
                 type="button"
                 onClick={() => beginSignIn('anthropic')}
-                className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
+                className="inline-flex items-center gap-1.5 rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
               >
+                <ProviderLogo provider="anthropic" size={12} />
                 + Add Anthropic
               </button>
             </div>
@@ -1148,7 +1151,8 @@ export function AccountsPage({
           <section className="mb-[22px]">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-baseline gap-2.5">
-                <h2 className="text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+                <h2 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
+                  <ProviderLogo provider="openai" size={14} />
                   Codex Pool
                 </h2>
                 <span className="text-[12px] tabular-nums text-text-faint">
@@ -1166,8 +1170,9 @@ export function AccountsPage({
                 <button
                   type="button"
                   onClick={() => beginSignIn('openai')}
-                  className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
+                  className="inline-flex items-center gap-1.5 rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
                 >
+                  <ProviderLogo provider="openai" size={12} />
                   + Add account
                 </button>
               </div>

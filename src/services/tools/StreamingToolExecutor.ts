@@ -11,6 +11,7 @@ import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { createChildAbortController } from '../../utils/abortController.js'
+import type { UUID } from 'crypto'
 import {
   createPtcloveToolStatusTracker,
   type PtcloveToolStatusTracker,
@@ -54,6 +55,7 @@ export class StreamingToolExecutor {
   // Aborting this does NOT abort the parent — query.ts won't end the turn.
   private siblingAbortController: AbortController
   private discarded = false
+  private stoppedForUrgentMessage = false
   private terminalHandoffSettled = false
   private terminalHandoffSettlement?: Promise<void>
   // Signal to wake up getRemainingResults when progress is available
@@ -84,6 +86,15 @@ export class StreamingToolExecutor {
     }
     this.discarded = true
     this.ptcloveToolStatus.clear()
+  }
+
+  stopUnstartedTools(): void {
+    this.stoppedForUrgentMessage = true
+    for (const tool of this.tools) {
+      if (tool.status !== 'queued') continue
+      tool.results = [this.createSyntheticErrorMessage(tool.id, 'urgent_message', tool.assistantMessage)]
+      tool.status = 'completed'
+    }
   }
 
   /**
@@ -154,6 +165,10 @@ export class StreamingToolExecutor {
    * Process the queue, starting tools when concurrency conditions allow
    */
   private async processQueue(): Promise<void> {
+    if (this.stoppedForUrgentMessage) {
+      this.stopUnstartedTools()
+      return
+    }
     for (const tool of this.tools) {
       if (tool.status !== 'queued') continue
 
@@ -168,9 +183,20 @@ export class StreamingToolExecutor {
 
   private createSyntheticErrorMessage(
     toolUseId: string,
-    reason: 'sibling_error' | 'user_interrupted' | 'streaming_fallback',
+    reason: 'sibling_error' | 'user_interrupted' | 'streaming_fallback' | 'urgent_message',
     assistantMessage: AssistantMessage,
   ): Message {
+    if (reason === 'urgent_message') {
+      return createUserMessage({
+        content: [{
+          type: 'tool_result',
+          content: 'Not run: an urgent message changed the next step.',
+          is_error: true,
+          tool_use_id: toolUseId,
+        }],
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+      })
+    }
     // For user interruptions (ESC to reject), use REJECT_MESSAGE so the UI shows
     // "User rejected edit" instead of "Error editing file"
     if (reason === 'user_interrupted') {

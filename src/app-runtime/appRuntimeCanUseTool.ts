@@ -12,6 +12,7 @@ import {
   hasPermissionsToUseTool,
 } from '../utils/permissions/permissions.js'
 import { resolveInitialPermissionOccurrence } from '../utils/permissions/autoModeObservation.js'
+import { issueUserApprovalReceipt } from '../services/tools/toolInputSecurity.js'
 import type {
   AppPermissionRequest,
   AppPermissionResponse,
@@ -90,12 +91,17 @@ export function createAppRuntimeCanUseTool({
       },
     })
 
-    return permissionPromptToolResultToPermissionDecision(
+    const decision = permissionPromptToolResultToPermissionDecision(
       normalizePermissionResponse(result, updatedInput, toolUseID),
       tool,
       input,
       toolUseContext,
     )
+    if (decision.behavior === 'allow' && decision.updatedInput !== undefined) {
+      // The receipt must bind the normalized object returned to tool execution.
+      issueUserApprovalReceipt(tool.name, decision.updatedInput, toolUseID)
+    }
+    return decision
   }
 }
 

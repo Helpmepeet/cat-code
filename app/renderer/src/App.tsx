@@ -1,3 +1,5 @@
+import { LidClosedProvider, LidClosedNotice } from './LidClosedMode.js'
+import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { UsagePage } from './UsagePage.js'
 import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js'
 import {
@@ -231,11 +233,6 @@ import {
   selectAgentConfigSnapshot,
 } from './agentConfigState.js'
 import {
-  createExtensionsState,
-  reduceExtensionsState,
-  selectExtensionsSnapshot,
-} from './extensionsState.js'
-import {
   createGoalMemoryState,
   reduceGoalMemoryState,
   selectThreadGoalRows,
@@ -447,7 +444,6 @@ const reducePermissionStateBatched = withBatch(reducePermissionState)
 const reduceConnectionStateBatched = withBatch(reduceConnectionState)
 const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
-const reduceExtensionsStateBatched = withBatch(reduceExtensionsState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceTasksStateBatched = withBatch(reduceTasksState)
 const reduceWorkersStateBatched = withBatch(reduceWorkersState)
@@ -614,6 +610,12 @@ export function App() {
   const [fileAttachmentState, setFileAttachmentState] =
     useState<FileAttachmentState>(createFileAttachmentState)
   const [branchSwitchPendingSessions, setBranchSwitchPendingSessions] = useState<ReadonlySet<SessionId>>(() => new Set())
+  // Host close events can precede the switch reply. Keep the source's spatial
+  // slot until the reply can replace it, rather than letting roster repair
+  // choose another tab or collapse its split pane in between.
+  const branchSwitchSourcesRef = useRef(new Map<SessionId, SessionDescriptor>())
+  const [branchSwitchTargets, setBranchSwitchTargets] = useState<Partial<Record<SessionId, string>>>({})
+  const [branchSeeds, setBranchSeeds] = useState<Partial<Record<SessionId, string>>>({})
   const [composerFocusRequests, setComposerFocusRequests] = useState<
     Partial<Record<SessionId, number>>
   >({})
@@ -839,11 +841,6 @@ export function App() {
     undefined,
     createAgentConfigState,
   )
-  const [extensions, dispatchExtensions] = useReducer(
-    reduceExtensionsStateBatched,
-    undefined,
-    createExtensionsState,
-  )
   const [goalMemory, dispatchGoalMemory] = useReducer(
     reduceGoalMemoryStateBatched,
     undefined,
@@ -954,12 +951,7 @@ export function App() {
   // renderer lifetime. No disk store: the prompt explicitly forbids inventing
   // persistence for this convenience list.
   const [recentPaletteItemIds, setRecentPaletteItemIds] = useState<string[]>([])
-  // P4-15 OAuth flow-local state. The sub-states themselves are DRIVEN by the
-  // `oauth.login.progress` back-channel (`accountsState.oauthProgress`); these two
-  // are the renderer-local framing: `oauthContext` distinguishes the first-run
-  // full-screen surface from the add-account overlay (both begin the SAME
-  // `account.login` flow), and `oauthStarting` is the optimistic gap between the
-  // begin click and the first progress frame.
+  // Host-owned OAuth progress is shared by first-run and account-management views.
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
   const [oauthStarting, setOauthStarting] = useState(false)
   const [appOAuthProgress, setAppOAuthProgress] = useState<import('../../shared/protocol.js').OAuthLoginProgress | null>(null)
@@ -978,6 +970,7 @@ export function App() {
     createTabNavigation,
   )
   const activeView = selectedPage(tabNavigation)
+  const usageActivatedRef = useRef(false)
   const selectedNavigationSessionId = selectedSessionId(tabNavigation)
   const tabNavigationRef = useRef(tabNavigation)
   tabNavigationRef.current = tabNavigation
@@ -1167,7 +1160,6 @@ export function App() {
               dispatchConnection,
               dispatchSettings,
               dispatchAgentConfig,
-              dispatchExtensions,
               dispatchGoalMemory,
               dispatchTasks,
               dispatchWorkers,
@@ -1521,6 +1513,13 @@ export function App() {
     }
   }, [hydrateHostRoster, queueTranscriptPreload])
 
+  // The host listener above is installed before activation can publish results.
+  useEffect(() => {
+    if (activeView !== 'usage' || usageActivatedRef.current) return
+    usageActivatedRef.current = true
+    getBridge().refreshUsageDashboard()
+  }, [activeView])
+
   // F2 — fold the cold-launch sessions-catalog baseline (the global engine-history
   // enumeration a sidecar last persisted to disk) as the lowest-precedence catalog
   // source, so the Sessions page shows the operator's real terminal history at
@@ -1617,7 +1616,12 @@ export function App() {
   const tabs: TabModel[] = useMemo(
     () =>
       filterInteractiveSessionDescriptors(
-        selectPaneSessions(shell),
+        [
+          ...selectPaneSessions(shell),
+          ...[...branchSwitchSourcesRef.current.values()].filter(
+            descriptor => !selectPaneSessions(shell).some(row => row.appSessionId === descriptor.appSessionId),
+          ),
+        ],
         sessionCatalogSnapshot,
       ).map(rawDescriptor => {
         // A terminal `/rename` writes only the engine transcript, so the registry
@@ -1649,7 +1653,7 @@ export function App() {
               }),
         }
       }),
-    [shell, connection, permissions, tabNavigation, sessionCatalogSnapshot],
+    [shell, connection, permissions, tabNavigation, sessionCatalogSnapshot, branchSwitchPendingSessions],
   )
   const tabBarEntries: TabBarEntry[] = useMemo(() => {
     const sessionEntries = new Map(
@@ -2896,14 +2900,15 @@ export function App() {
     if (selectPendingSubmit(pendingSubmitsRef.current, sessionId) !== null) {
       return 'This chat has a pending prompt. Start a new chat to choose another branch.'
     }
-    if (
-      selectPromptDraft(promptDraftsRef.current, sessionId).length > 0 ||
-      selectSessionPasteList(pasteState, sessionId).length > 0 ||
-      selectImageAttachments(imageAttachmentState, sessionId).length > 0 ||
-      selectFileAttachment(fileAttachmentState, sessionId)
-    ) {
-      return 'Remove your draft and attachments before switching branches.'
-    }
+    if (branchSwitchSourcesRef.current.has(sessionId)) return null
+    const source = shellRef.current.byId[sessionId]
+    if (!source) return 'This chat is no longer available.'
+    const draft = selectPromptDraft(promptDraftsRef.current, sessionId)
+    const pastes = selectSessionPasteState(pasteStateRef.current, sessionId)
+    const images = selectImageAttachments(imageAttachmentState, sessionId)
+    const file = selectFileAttachment(fileAttachmentState, sessionId)
+    branchSwitchSourcesRef.current.set(sessionId, source)
+    setBranchSwitchTargets(current => ({ ...current, [sessionId]: branch }))
     setBranchSwitchPendingSessions(current => new Set(current).add(sessionId))
     try {
       const result = await getBridge().switchWorkspaceBranch(sessionId, branch)
@@ -2916,18 +2921,49 @@ export function App() {
       }
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
-      focusCreatedSession(result.value.appSessionId, selectionClaim)
+      const replacementId = result.value.appSessionId
+      dispatchShell({ type: 'event', event: { type: 'session-added', session: result.value } })
+      updatePromptDrafts(current =>
+        reducePromptDrafts(reducePromptDrafts(current, sessionId, ''), replacementId, draft),
+      )
+      setPasteState(current => ({
+        ...reduceSessionPastesCleared(current, sessionId), [replacementId]: pastes,
+      }))
+      setImageAttachmentState(current =>
+        reduceSessionImagesReplaced(reduceSessionImagesReplaced(current, sessionId, []), replacementId, images),
+      )
+      setFileAttachmentState(current =>
+        reduceSessionFileAttachmentRestored(reduceFileAttachmentRemoved(current, sessionId), replacementId, file),
+      )
+      setBranchSeeds(current => ({ ...current, [replacementId]: branch }))
+      setWorkspaceLayoutState(current => ({
+        ...current,
+        panels: current.panels.map(panel =>
+          panel.sessionId === sessionId ? { sessionId: replacementId } : panel,
+        ),
+      }))
+      dispatchTabNavigation({ type: 'replace-session', sessionId, replacementId })
+      applyForegroundSelectionIfCurrent(foregroundSelectionClaimRef.current, selectionClaim, () => {
+        pendingExplicitSessionRef.current = replacementId
+        setActiveSessionId(replacementId)
+      })
       return null
     } catch (error) {
       return errorMessage(error)
     } finally {
+      branchSwitchSourcesRef.current.delete(sessionId)
+      setBranchSwitchTargets(current => {
+        const next = { ...current }
+        delete next[sessionId]
+        return next
+      })
       setBranchSwitchPendingSessions(current => {
         const next = new Set(current)
         next.delete(sessionId)
         return next
       })
     }
-  }, [focusCreatedSession, pasteState, imageAttachmentState, fileAttachmentState])
+  }, [imageAttachmentState, fileAttachmentState])
 
   const setPeerWakeBlocked = useCallback(
     async (sessionId: SessionId, blocked: boolean) => {
@@ -3583,6 +3619,7 @@ export function App() {
       value: string,
       reason: DraftWriteReason = 'edit',
     ) => {
+      if (branchSwitchSourcesRef.current.has(sessionId)) return
       updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
       // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
       // drop a live, uncommitted paste that ↓ is about to restore.
@@ -3862,6 +3899,7 @@ export function App() {
 	      const panelDiagnostics = selectDiagnosticsSnapshot(diagnostics, sessionId)
 	      const panelBranch =
 	        panelDiagnostics?.gitBranch ??
+	        branchSeeds[sessionId] ??
 	        sessionCatalogRows.find(r => r.appSessionId === sessionId)?.gitBranch ??
 	        null
 	      // Where this session's tools actually run. "Locally" is not a constant:
@@ -3960,6 +3998,8 @@ export function App() {
                 previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
 	            branchSwitchPending={branchSwitchPendingSessions.has(sessionId)}
+	            branchSwitchTarget={branchSwitchTargets[sessionId] ?? (panelDiagnostics ? null : branchSeeds[sessionId] ?? null)}
+	            onFocusBranchChat={selectTab}
 	            onSwitchBranch={descriptor?.status === 'ready' ? branch => switchBranchForSession(sessionId, branch) : undefined}
 	            sandboxed={panelSandboxed}
 	            model={rail.model}
@@ -3970,6 +4010,7 @@ export function App() {
 	            cacheExpiresAt={rail.cacheExpiresAt}
 	            lastPermissionMode={rail.lastPermissionMode}
 	            runControls={panelRunControls}
+	            readOnlyRunControls={rail.readOnlyRunControls}
 	            contextBreakdown={panelContextBreakdown}
 	            // Only a pane with an engine behind it can be asked. The donut is
 	            // the one composer face that renders without one: it reads cached
@@ -4503,6 +4544,7 @@ export function App() {
   }, [oauthContext, oauthProgress])
 
   return (
+    <LidClosedProvider>
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
     <AgentFaceRegistryContext.Provider value={faceRegistry}>
       {/* `data-window-ground`: this frame repeats the page ground that `html`
@@ -4595,7 +4637,10 @@ export function App() {
           )}
         />
 
-        <div className="relative flex min-w-0 flex-1 flex-col">
+        <div className="lid-content relative flex min-w-0 flex-1 flex-col">
+          <LidClosedNotice />
+          {/* Startup overlays must not cover machine-wide recovery actions. */}
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
            * inline rename editor. The menu resolves and acts against the row it was
            * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
@@ -4896,7 +4941,12 @@ export function App() {
 
           {/* Settings reads durable configuration through the host inventory;
            * session views below continue reading their own session slices. */}
-          {activeView === 'settings' ? (
+          {activeView === 'scheduled' ? (
+            <ScheduledTasksPage
+              // A run's chat is an ordinary registry session: focus, restore, or report it gone.
+              onOpenChat={createdPeerNavigation.open}
+            />
+          ) : activeView === 'settings' ? (
             <SettingsShell
               cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
               onRemoteVerb={sendRemoteSettingsVerb}
@@ -5027,9 +5077,8 @@ export function App() {
           ) : showFirstRunOAuthSurface ? (
             // First-run: no credentialed Codex account exists. Surface the OAuth
             // flow — its sub-states (waiting/paste-code/alias/success/error) are
-            // DRIVEN by the real `oauth.login.progress` back-channel; the engine
-            // owns the token. Unmounts after the success dwell once the pool gains
-            // the account (the snapshot re-broadcast on `success`).
+            // driven by the host-owned account-control worker; the engine owns
+            // the token. Unmounts after success once the global pool gains it.
             <div className="relative flex min-h-0 flex-1">
               <StartupOAuth
                 view={firstRunOAuthView}
@@ -5091,6 +5140,7 @@ export function App() {
               />
             </div>
           )}
+          </div>
         </div>
         </div>
 
@@ -5127,6 +5177,7 @@ export function App() {
       </div>
     </AgentFaceRegistryContext.Provider>
     </AgentFaceRegistryStoreContext.Provider>
+    </LidClosedProvider>
   )
 }
 

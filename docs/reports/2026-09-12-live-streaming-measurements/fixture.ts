@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { ServerFrame, EventFrame } from '../../../app/shared/protocol.js'
+import { PROTOCOL_VERSION, type ServerFrame, type EventFrame } from '../../../app/shared/protocol.js'
 
 // Synthetic inputs only. These intervals are declared workload assumptions,
 // not rates observed from the user's provider or private sessions.
@@ -50,7 +50,7 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
     } }
   }
   const event = (sessionId: string, value: EventFrame['event']): ServerFrame => trace({
-    kind: 'event', protocolVersion: 3, sessionId, event: value,
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId, event: value,
   })
   const stream = (sessionId: string, value: unknown): ServerFrame => event(sessionId, {
     type: 'message',
@@ -59,7 +59,7 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
   })
   for (let s = 0; s < workload.sessions; s++) {
     const sessionId = `benchmark-session-${s}`
-    initial.push(trace({ kind: 'ready', protocolVersion: 3, sessionId,
+    initial.push(trace({ kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId,
       engineSessionId: `benchmark-engine-${s}`, payload: {
         type: 'app.ready', protocolVersion: 1, inputEnabled: false,
         activeTurn: true, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],

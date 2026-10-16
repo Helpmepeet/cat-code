@@ -27,14 +27,14 @@ afterAll(async () => {
 })
 
 type Sources = Omit<SubagentDockInput, 'nowMs' | 'clearMarkers' | 'reducedMotion'>
-function Pane({ appId, sources }: { appId: string; sources: Sources }) {
+function Pane({ appId, sources, collapsed = false }: { appId: string; sources: Sources; collapsed?: boolean }) {
   const { dock, clearFinished } = useSubagentDock(appId, 'engine-history', sources)
   return createElement('section', {
     ref: (element: HTMLElement | null) => {
       if (element) element.getBoundingClientRect = () => new DOMRect(0, 0, 1600, 600)
     },
   }, createElement(SubagentDock, {
-    state: dock, collapsed: false, onCollapsedChange() {}, onClearFinished: clearFinished,
+    state: dock, collapsed, onCollapsedChange() {}, onClearFinished: clearFinished,
     onOpenWorker() {}, onOpenWorkers() {},
   }))
 }
@@ -69,6 +69,7 @@ test('finished background history persists by engine identity through eviction, 
     appId: 'app-before-restart', sources: sources([worker({ status: 'completed' })], [task({ status: 'completed' })]),
   }))
   expect(tree.container.querySelector('[aria-label="Ada, completed"]')).not.toBeNull()
+  expect(tree.container.querySelector('.subagent-dock-chip')).toBeNull()
   const saved = readSubagentDockSessionsFromStorage(window.localStorage)!
   expect(saved['engine-history'].finished).toHaveLength(1)
   expect(saved['app-before-restart']).toBeUndefined()
@@ -82,6 +83,7 @@ test('finished background history persists by engine identity through eviction, 
   expect(toggle.getAttribute('aria-expanded')).toBe('false')
   await act(async () => { toggle.click() })
   expect(restored.container.querySelector('[aria-label="Ada, completed"]')?.parentElement?.hasAttribute('inert')).toBe(false)
+  expect(restored.container.querySelector('.subagent-dock-chip')).toBeNull()
   const clear = [...restored.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Clear')!
   await act(async () => { clear.click() })
   expect(restored.container.querySelector('.subagent-dock')).toBeNull()
@@ -103,4 +105,44 @@ test('finished background history persists by engine identity through eviction, 
   expect(latest.finished).toHaveLength(1)
   expect(latest.finished[0]?.runKey).not.toBe(firstRun.runKey)
   expect(latest.cleared).toEqual([{ agentId: 'agent-a', runKey: firstRun.runKey }])
+})
+
+test('collapsed failure survives eviction and reload, then Clear hides the chip without deleting finished history', async () => {
+  window.localStorage.clear()
+  const tree = await harness.mount(createElement(Pane, {
+    appId: 'failure-before-restart', collapsed: true, sources: sources([worker()], [task()]),
+  }))
+  expect(tree.container.querySelector('.subagent-dock-chip')?.getAttribute('aria-label')).toBe('Subagents: Ada, background')
+  await tree.render(createElement(Pane, {
+    appId: 'failure-before-restart', collapsed: true, sources: sources([
+      worker({ status: 'failed' }),
+      worker({ agentId: 'agent-b', handle: '@Grace', status: 'completed' }),
+    ], [task({ status: 'failed' })]),
+  }))
+  const chip = tree.container.querySelector('.subagent-dock-chip')!
+  expect(chip.getAttribute('aria-label')).toBe('Subagents: Ada, failed')
+  expect(chip.querySelectorAll('[data-dock-face]')).toHaveLength(1)
+  expect(chip.querySelector('.subagent-dock-badge-failed')).not.toBeNull()
+  await tree.unmount()
+
+  const restored = await harness.mount(createElement(Pane, {
+    appId: 'failure-after-restart', collapsed: true, sources: sources([], []),
+  }))
+  expect(restored.container.querySelector('.subagent-dock-chip')?.getAttribute('aria-label')).toBe('Subagents: Ada, failed')
+  expect(readSubagentDockSessionsFromStorage(window.localStorage)?.['engine-history'].finished).toHaveLength(2)
+  await restored.render(createElement(Pane, {
+    appId: 'failure-after-restart', sources: sources([], []),
+  }))
+  const clear = [...restored.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Clear')!
+  await act(async () => clear.click())
+  expect(restored.container.querySelector('.subagent-dock')).toBeNull()
+  const saved = readSubagentDockSessionsFromStorage(window.localStorage)!['engine-history']
+  expect(saved.finished).toHaveLength(2)
+  expect(saved.cleared).toHaveLength(2)
+  await restored.unmount()
+
+  const cleared = await harness.mount(createElement(Pane, {
+    appId: 'failure-cleared-restart', collapsed: true, sources: sources([], []),
+  }))
+  expect(cleared.container.querySelector('.subagent-dock-chip')).toBeNull()
 })

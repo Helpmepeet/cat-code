@@ -1,3 +1,17 @@
+import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
+import { lidClosedMenu } from './lidClosedMenu.js'
+import { LidNativeClient, inspectLidHardware, installLidHelper } from './lidClosedNative.js'
+import { isLidModeCommand } from '../shared/lidClosed.js'
+import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
+import { ScheduledTasks } from '../host/scheduledTasks.js'
+import { parseScheduledTaskCommand, type ScheduledTasksSnapshot, type ScheduledTasksResult } from '../shared/scheduledTasks.js'
+import { launchScheduledSession } from './scheduledTaskRunner.js'
+import { workspaceMapSchedule } from './workspaceMapSchedule.js'
+import { CH_SCHEDULED_TASKS_READ, CH_SCHEDULED_TASKS_COMMAND, CH_SCHEDULED_TASK_OPTIONS_READ } from '../shared/ipcChannels.js'
+import { validScheduledTaskOptionsPayload } from '../shared/scheduledTaskOptions.js'
+import { runScheduledTaskOptionsWorker } from './scheduledTaskOptionsRunner.js'
+import { ScheduledTaskOptionsService } from './scheduledTaskOptionsService.js'
+import { createDirectoryPickerHandlers } from './directoryPicker.js'
 import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
@@ -85,12 +99,15 @@ import {
   type SessionDescriptor,
   type SwitchWorkspaceBranchResult,
   type WorkspaceBranches,
+  type WorkspaceBranchObservation,
 } from '../shared/hostApi.js'
 import {
   gitRoot,
   listWorkspaceBranches,
-  switchWorkspaceBranch,
+  createWorkspaceBranchSwitcher,
+  createSessionBranchReader,
 } from './workspaceBranches.js'
+import { createSavedWorkspaceObservationReader, runWorkspaceObservationWorker } from './workspaceObservationRunner.js'
 import {
   DEBUG_SHELL_STATE_CHANNEL,
   DEBUG_STATE_VERSION,
@@ -117,7 +134,6 @@ import {
   CH_SESSION_ACTION_VERB,
   CH_REMOTE_SETTINGS_VERB,
   CH_SETTINGS_VERB,
-  CH_STATS_QUERY,
   CH_PING,
   CH_RESTART,
   CH_SERVER_FRAME,
@@ -155,6 +171,7 @@ import {
   CH_HOST_SET_PEER_WAKE_BLOCKED,
   CH_HOST_LIST,
   CH_HOST_PICK_DIR,
+  CH_HOST_PICK_SCHEDULED_TASK_DIR,
   CH_HOST_PICK_ATTACHMENT_FILE,
   CH_HOST_PREVIEW,
   CH_HOST_SESSIONS_CATALOG,
@@ -203,6 +220,7 @@ import {
   supervisorEventToServerFrame,
   isSessionLive,
   isSessionReadyForFrames,
+  isUserTurnSubmit,
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
@@ -284,7 +302,6 @@ import {
   createReadinessLatch,
   parseDebugSnapshot,
   resolveDevHarnessConfig,
-  resolvePickerDefaultPath,
 } from './devHarness.js'
 import {
   decideWindowOpen,
@@ -299,7 +316,7 @@ import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryT
 import { saveDiagnosticsBundle } from './saveDiagnosticsBundle.js'
 import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, type DeliveryStage } from '../shared/deliveryTrace.js'
 import {
-  ACCOUNT_VERB_TYPES,
+  SESSION_ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
   PROMPT_FORCE_VERB_TYPES,
   PROMPT_RECALL_VERB_TYPES,
@@ -323,7 +340,6 @@ import {
   type SubmitPrompt,
   type SessionsCatalogSnapshot,
   type SidecarClientMessage,
-  type StatsQueryMessage,
   type TranscriptCache,
 } from '../shared/protocol.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -651,6 +667,8 @@ logOperational('process.started', 'info', { role: 'electron-main', pid: process.
 // registry into the typed control plane (P3-3); main is a CALLER of that host.
 let supervisor: SidecarSupervisor | null = null
 let host: Host | null = null
+let scheduledTasks: ScheduledTasks | null = null
+let scheduledTasksError: string | undefined
 let projectRouting: ProjectRoutingController | null = null
 let workspaceJump: WorkspaceJumpCoordinator | null = null
 const observedWorkspaceHandoffs = new Map<string, { generation: string; operationId: string; tipUuid: string; toolUseId: string }>()
@@ -763,6 +781,7 @@ const usageEnabled = isUsageDashboardEnabled()
 let accountsPoolDriver: SingleFlightDriver | null = null
 let accountsPoolActivityGate: ReturnType<typeof createVisibilityGatedRefresh> | null = null
 let accountControl: ReturnType<typeof createAccountControlRunner> | null = null
+let scheduledOptions: ScheduledTaskOptionsService | null = null
 let accountProfileMutationInFlight = false
 let accountProfileMutationAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
@@ -1190,6 +1209,10 @@ function refreshAccountsPoolNow(): void {
 }
 
 function refreshUsageDashboardNow(): void {
+  if (!usageDriver) {
+    startUsageRefresh()
+    return
+  }
   usageActivityGate?.allowNextRun()
   usageDriver?.refreshNow()
 }
@@ -1209,6 +1232,7 @@ function notifySidecarsOfAccountDeletion(
   accountId: string,
   requestId: string,
 ): void {
+  scheduledOptions?.invalidate()
   accountInvalidation.notifyDeletion(
     accountId,
     requestId,
@@ -1219,6 +1243,7 @@ function notifySidecarsOfAccountDeletion(
 function notifySidecarsOfAccountSignOut(
   notice: AccountProfileSignedOutMessage,
 ): void {
+  scheduledOptions?.invalidate()
   accountInvalidation.notifySignOut(
     notice,
     supervisor?.listSessions() ?? [],
@@ -1600,6 +1625,7 @@ function createWindow(): void {
     icon: APP_ICON_PATH,
     webPreferences: {
       // SECURITY-MINIMUM §3 BrowserWindow/webPreferences — every box checked.
+      devTools: IS_DEV,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -1825,6 +1851,7 @@ function createWindow(): void {
   })
 
   window.once('ready-to-show', () => {
+    updateLidMenu(lidMode?.read())
     // Capture-run hook (verification only), sibling to CATCODE_SMOKE_EXIT_MS below.
     // A headless acceptance run photographs this window with `capturePage` and
     // drives it with `sendInputEvent`; both work on a window that is never shown,
@@ -1848,7 +1875,6 @@ function createWindow(): void {
     // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): arm the pool refresh the
     // same way, so the Accounts page has live data with no session open.
     startupTimers.schedule(startAccountsPoolRefresh)
-    startupTimers.schedule(startUsageRefresh)
     // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
     // here too, off the launch critical path; it self-reschedules its TTL sweep
     // and re-evaluates the cap on host events.
@@ -2057,6 +2083,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
   sup.subscribe(event => {
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
+    scheduledTasks?.receive(event.sessionId, frame)
     // P4-6 title-rider: the sidecar's one-shot AI title is a sidecar→host signal,
     // not a renderer frame. Relay it to the durable registry (host is engine-free,
     // so it cannot pull the engine's title) and DO NOT forward it — the title
@@ -2084,6 +2111,10 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // `event.sessionId` is the supervisor's routing key, i.e. the identity read
     // off the connection. That, and nothing inside the frame, is the requester
     // (HR2).
+    if (frame.kind === 'lid.work') {
+      // Retired job observations remain host-only for older sidecars.
+      return
+    }
     if (frame.kind === 'host.request') {
       const received = traceFrame(frame, 'supervisor.socket.received')
       traceFrame(received, 'host.received')
@@ -2156,6 +2187,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // session snapshot being promoted to drive these surfaces. The predicate is
     // Electron-free so it can be unit-driven; nothing here can execute in a test.
     if (frameMutatedAccountsPool(frame)) {
+      scheduledOptions?.invalidate()
       refreshAccountsPoolNow()
     }
     const traced = traceFrame(frame, 'supervisor.socket.received')
@@ -2195,6 +2227,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
  */
 function wireHostEvents(h: Host): void {
   h.subscribe(event => {
+    scheduledTasks?.receiveHostEvent(event)
     sendHostEvent(event)
     // The durable row now carries the completed turn; the in-memory pre-result
     // marker is needed only while that row still reads null.
@@ -2246,20 +2279,16 @@ function sendHostEvent(event: HostEvent): void {
  *
  * Handlers that do more than relay stay hand-written below: CH_SUBMIT resolves
  * attachment tokens, CH_SET_MODE mints the requestId in
- * main, CH_STATS_QUERY checks a second field, CH_PERMISSION and
+ * main, CH_PERMISSION and
  * CH_ANSWER_QUESTIONS carry engine-minted ids.
  */
-const RELAYED_ACCOUNT_VERB_TYPES = ACCOUNT_VERB_TYPES.filter(
-  type => type !== 'account.delete' && type !== 'account.logout',
-)
-
 const RELAYED_VERB_CHANNELS: ReadonlyArray<
   readonly [channel: string, verbTypes: readonly string[]]
 > = [
   // Session-local account verbs still use the sidecar's pool-resolved business
   // rules. Global profile mutations have dedicated host handlers below and
   // never enter this session relay.
-  [CH_ACCOUNT_VERB, RELAYED_ACCOUNT_VERB_TYPES],
+  [CH_ACCOUNT_VERB, SESSION_ACCOUNT_VERB_TYPES],
   // P4-15 — sidecar re-validates schema + the engine's trust persist for its OWN
   // cwd. HC1: no path crosses, the verb carries only a `requestId`.
   [CH_WORKSPACE_TRUST_VERB, WORKSPACE_TRUST_VERB_TYPES],
@@ -2424,21 +2453,6 @@ function registerIpcHandlers(): void {
     })
   }
 
-  ipcMain.on(
-    CH_STATS_QUERY,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      const verb = arg.verb as { type?: unknown; range?: unknown } | null | undefined
-      if (
-        verb?.type !== 'stats.query' ||
-        (verb.range !== '7d' && verb.range !== '30d')
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as StatsQueryMessage)
-    },
-  )
-
   ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
@@ -2463,7 +2477,10 @@ function registerIpcHandlers(): void {
     // SF5 — route through the host so the registry's advisory fields (pid /
     // socketPath) are refreshed from the fresh child; the host also evicts replay.
       if (workspaceJump?.isReserved(sessionId)) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Wait for the workspace change to settle.' } })
-      return host.restartSession(sessionId)
+      return host.restartSession(sessionId).then(result => {
+        if (result.ok) scheduledTasks?.interrupt(sessionId)
+        return result
+      })
     },
   )
 
@@ -2881,6 +2898,7 @@ function registerIpcHandlers(): void {
             log: line => process.stderr.write(`${line}\n`),
           })
           if (abort.signal.aborted) return unavailable()
+          if (result.ok && request.verb.key === 'model') scheduledOptions?.invalidate()
           return result.ok
             ? { ok: true, message: result.message }
             : { ok: false, error: { code: 'unavailable', message: result.message } }
@@ -2951,7 +2969,81 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * Handlers read the module-level `host`, so they survive a host rebuild (F5)
  * without re-registering listeners.
  */
+let lidMode: LidClosedMode | undefined
+let lidReady: Promise<void> = Promise.resolve()
+const updateLidMenu = lidClosedMenu(() => lidMode?.read(), command => { void lidReady.then(() => lidMode?.command(command)).catch(() => {}) })
+function ensureLidMode(): void {
+  if (lidMode) return
+  const previous = lidReady
+  const assets = app.isPackaged ? join(process.resourcesPath, 'lid-closed') : join(__dirname, '../native/lid-closed/dist')
+  const mode = new LidClosedMode({
+    native: new LidNativeClient(),
+    marker: join(defaultRegistryDir(), 'lid-closed-recovery.json'),
+    installed: lidHelperInstalled,
+    hardware: () => inspectLidHardware(assets),
+    install: recoveryOnly => installLidHelper(assets, recoveryOnly),
+    changed: view => {
+      if (lidMode !== mode) return
+      updateLidMenu(view)
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH_LID_CHANGED, view)
+    },
+  })
+  lidMode = mode
+  // A window reopened during old-owner cleanup must wait for restoration,
+  // and old-owner notifications must never overwrite its new global state.
+  lidReady = previous.catch(() => {}).then(async () => { if (lidMode === mode) await mode.initialize() }).catch(() => {})
+}
 function registerHostControlPlane(): void {
+  ipcMain.handle(CH_LID_READ, async event => {
+    if (!isMainWindowSender(event)) throw new Error('Unavailable')
+    await lidReady
+    return lidMode?.read()
+  })
+  ipcMain.handle(CH_LID_COMMAND, async (event, raw: unknown) => {
+    if (!isMainWindowSender(event) || !isLidModeCommand(raw)) throw new Error('Invalid lid-closed command')
+    await lidReady
+    return lidMode?.command(raw)
+  })
+  const optionsService = new ScheduledTaskOptionsService(
+    () => runScheduledTaskOptionsWorker({ command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('scheduled-options'), cwd: process.cwd() }),
+    validateCwd,
+  )
+  scheduledOptions = optionsService
+  ipcMain.handle(CH_SCHEDULED_TASK_OPTIONS_READ, (event, payload: unknown) => {
+    if (!isMainWindowSender(event) || !validScheduledTaskOptionsPayload(payload)) {
+      return { models: [], defaultEffortOptions: [], projects: [], error: 'Scheduled task options are unavailable' }
+    }
+    return optionsService.read(payload)
+  })
+  ipcMain.handle(CH_SCHEDULED_TASKS_READ, (event): ScheduledTasksSnapshot => {
+    if (!isMainWindowSender(event)) return { tasks: [], runs: [], error: 'Scheduled tasks are unavailable' }
+    return scheduledTasks?.snapshot() ?? { tasks: [], runs: [], error: scheduledTasksError ?? 'Scheduled tasks are starting' }
+  })
+  ipcMain.handle(CH_SCHEDULED_TASKS_COMMAND, (event, payload: unknown): ScheduledTasksResult => {
+    if (!isMainWindowSender(event)) return { ok: false, error: 'Scheduled tasks are unavailable' }
+    const command = parseScheduledTaskCommand(payload)
+    if (!command) return { ok: false, error: 'Invalid scheduled task' }
+    if (!host || !scheduledTasks) return { ok: false, error: scheduledTasksError ?? 'Scheduled tasks are starting' }
+    try {
+      if (command.type === 'save' || command.type === 'workspace-maps') {
+        const input = command.type === 'save' ? command.task : null
+        const workspaceId = command.type === 'workspace-maps' ? command.workspaceId : input?.workspaceId
+        const cwdToken = command.type === 'workspace-maps' ? command.cwdToken : input?.cwdToken
+        const previous = input?.id ? scheduledTasks.snapshot().tasks.find(task => task.id === input.id) : undefined
+        const cwd = cwdToken ? cwdTokens.consume(cwdToken) : workspaceId ? optionsService.resolve(workspaceId) : previous?.cwd
+        if (!cwd) return { ok: false, error: 'Choose a project folder for this task' }
+        const checked = validateCwd(cwd)
+        if (!checked.ok) return { ok: false, error: 'The project folder is unavailable' }
+        if (command.type === 'workspace-maps') {
+          if (scheduledTasks.snapshot().tasks.some(task => task.cwd === checked.realpath && task.name === 'Refresh workspace maps')) return { ok: false, error: 'This project already has a workspace-map task' }
+          scheduledTasks.save(workspaceMapSchedule(checked.realpath, defaultRegistryDir()), checked.realpath)
+        } else scheduledTasks.save(command.task, checked.realpath)
+      } else if (command.type === 'run') scheduledTasks.run(command.id)
+      else scheduledTasks.change(command.type, command.id)
+      return { ok: true, snapshot: scheduledTasks.snapshot() }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'The scheduled task could not be saved' } }
+  })
   const noHost = <T>(): HostResult<T> => ({
     ok: false,
     error: { code: 'spawn_failed', message: 'host is not running' },
@@ -2961,32 +3053,38 @@ function registerHostControlPlane(): void {
   // renderer may REQUEST it, never answer it. Returns a one-time TOKEN bound to
   // the realpath the user chose (never the path itself), or null (cancelled). The
   // renderer feeds the token to createSession; it can never author a path.
+  const pickDirectory = async (defaultPath?: string): Promise<string | null> => {
+    if (devPickerBypass.enabled) {
+      const bypassed = devPickerBypass.pick()
+      return bypassed ? cwdTokens.mint(bypassed) : null
+    }
+    const parent = mainWindow ?? undefined
+    const result = parent
+      ? await dialog.showOpenDialog(parent, {
+          properties: ['openDirectory', 'createDirectory'],
+          ...(defaultPath ? { defaultPath } : {}),
+        })
+      : await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory'],
+          ...(defaultPath ? { defaultPath } : {}),
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const chosen = validateCwd(result.filePaths[0])
+    if (!chosen.ok) return null
+    return cwdTokens.mint(chosen.realpath)
+  }
+  const directoryPickers = createDirectoryPickerHandlers({
+    isAuthorized: isMainWindowSender,
+    sessions: () => host?.listSessions() ?? [],
+    pick: pickDirectory,
+  })
   ipcMain.handle(
     CH_HOST_PICK_DIR,
-    async (_event, activeSessionId?: unknown): Promise<string | null> => {
-      if (devPickerBypass.enabled) {
-        const bypassed = devPickerBypass.pick()
-        return bypassed ? cwdTokens.mint(bypassed) : null
-      }
-      const defaultPath = resolvePickerDefaultPath(
-        host?.listSessions() ?? [],
-        activeSessionId,
-      )
-      const parent = mainWindow ?? undefined
-      const result = parent
-        ? await dialog.showOpenDialog(parent, {
-            properties: ['openDirectory', 'createDirectory'],
-            ...(defaultPath ? { defaultPath } : {}),
-          })
-        : await dialog.showOpenDialog({
-            properties: ['openDirectory', 'createDirectory'],
-            ...(defaultPath ? { defaultPath } : {}),
-          })
-      if (result.canceled || result.filePaths.length === 0) return null
-      const chosen = validateCwd(result.filePaths[0])
-      if (!chosen.ok) return null
-      return cwdTokens.mint(chosen.realpath)
-    },
+    directoryPickers.legacy,
+  )
+  ipcMain.handle(
+    CH_HOST_PICK_SCHEDULED_TASK_DIR,
+    directoryPickers.scheduled,
   )
 
   ipcMain.handle(
@@ -3308,92 +3406,64 @@ function registerHostControlPlane(): void {
     },
   )
 
-  const switchingGitRoots = new Set<string>()
+  const readSavedWorkspace = createSavedWorkspaceObservationReader((cwd, engineSessionId) =>
+    runWorkspaceObservationWorker({
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('workspace-observation', ['--bare']),
+      cwd, engineSessionId,
+    }),
+  )
+  const readSessionBranch = createSessionBranchReader({
+    host: () => host,
+    isLive: id => isSessionLive(supervisor?.listSessions() ?? [], id),
+    readSaved: descriptor => {
+      if (!descriptor.engineSessionId) throw new Error('Conversation identity is unavailable')
+      return readSavedWorkspace(descriptor.cwd, descriptor.engineSessionId,
+        defaultTranscriptPath(descriptor.cwd, descriptor.engineSessionId))
+    },
+  })
   ipcMain.handle(
     CH_HOST_LIST_BRANCHES,
-    (_e, appSessionId: unknown): Promise<HostResult<WorkspaceBranches>> => {
-      const descriptor = host?.listSessions().find(row => row.appSessionId === appSessionId)
-      if (!descriptor) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Session not found.' } })
-      return listWorkspaceBranches(descriptor.cwd)
-    },
-  )
-
-  ipcMain.handle(
-    CH_HOST_SWITCH_BRANCH,
-    async (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> => {
+    async (_e, appSessionId: unknown, purpose: unknown): Promise<HostResult<WorkspaceBranches | WorkspaceBranchObservation>> => {
+      if (purpose === 'readout') return readSessionBranch(appSessionId)
+      if (purpose !== undefined) return { ok: false, error: { code: 'branch_unavailable', message: 'Invalid branch request.' } }
       const h = host
       const descriptor = h?.listSessions().find(row => row.appSessionId === appSessionId)
       if (!h || !descriptor) return { ok: false, error: { code: 'session_not_found', message: 'Session not found.' } }
-      if (workspaceJump?.isReserved(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for the workspace change to settle.' } }
-      if (switchingSessionIds.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
-      if (descriptor.status !== 'ready') return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this session to connect before switching branches.' } }
-      if (descriptor.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new chat to choose another branch.' } }
-      if (typeof branch !== 'string' || branch.length === 0 || branch.length > 255) {
-        return { ok: false, error: { code: 'branch_unavailable', message: 'Choose a local branch from the list.' } }
-      }
-      switchingSessionIds.add(descriptor.appSessionId)
-      try {
-        const root = await gitRoot(descriptor.cwd)
-        if (!root) return { ok: false, error: { code: 'branch_unavailable', message: 'This project is not a Git repository.' } }
-        if (switchingGitRoots.has(root)) return { ok: false, error: { code: 'branch_unavailable', message: 'A branch switch is already in progress.' } }
-        switchingGitRoots.add(root)
-        let checkoutMoved = false
-        try {
-          // This gate is synchronous with Host.reserveSpawn. A spawn admitted
-          // before it is visible through pendingSpawns; one after it waits.
-          if (!h.beginBranchSwitch()) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for the other chat to finish opening, then try again.' } }
-          let switched: Awaited<ReturnType<typeof switchWorkspaceBranch>>
-          try {
-            const fresh = h.listSessions().find(row => row.appSessionId === descriptor.appSessionId)
-            if (fresh?.status !== 'ready' || fresh.lastMessageSentAt !== null || sessionsWithSubmit.has(descriptor.appSessionId)) {
-              return { ok: false, error: { code: 'branch_unavailable', message: 'Start a new empty chat to choose another branch.' } }
-            }
-            const liveRecords = supervisor?.listSessions() ?? []
-            const otherLiveCwds = h.listSessions()
-              .filter(row => row.appSessionId !== descriptor.appSessionId && isSessionLive(liveRecords, row.appSessionId))
-              .map(row => row.cwd)
-            switched = await switchWorkspaceBranch(descriptor.cwd, branch, otherLiveCwds)
-            checkoutMoved = switched.ok || 'branchChanged' in switched
-          } finally {
-            h.endBranchSwitch()
-          }
-          if (!switched.ok) {
-            if ('branchChanged' in switched) await h.closeSession(descriptor.appSessionId)
-            return switched
-          }
-          // A checkout can remove the tracked subdirectory this session used.
-          // Main owns the validated Git root, so a fresh chat can still open.
-          const replacementCwd = validateCwd(descriptor.cwd).ok ? descriptor.cwd : root
-          const created = replacementCwd === descriptor.cwd
-            ? await h.createSessionInWorkspace(descriptor.appSessionId)
-            : await h.createSession({ cwd: root })
-          const closed = await h.closeSession(descriptor.appSessionId)
-          if (!created.ok) {
-            return {
-              ok: false, branchChanged: true,
-              error: { ...created.error, message: `Branch switched to ${branch}, but a new chat could not start. Open a new chat in this project. ${created.error.message}` },
-            }
-          }
-          if (!closed.ok) {
-            return { ok: false, branchChanged: true, error: { ...closed.error, message: `Branch switched to ${branch} and a new chat opened, but the previous chat could not close. ${closed.error.message}` } }
-          }
-          return created
-        } catch (error) {
-          logLegacyDiagnostic(`branch switch handoff failed: ${errText(error)}`, 'host', 'main')
-          if (checkoutMoved) {
-            // Never leave the old branch-cached engine running after HEAD moved,
-            // even if a registry write or replacement spawn throws.
-            await h.closeSession(descriptor.appSessionId).catch(() => undefined)
-            return { ok: false, branchChanged: true, error: { code: 'branch_unavailable', message: `Branch switched to ${branch}, but the chat handoff failed. Check open chats before continuing.` } }
-          }
-          return { ok: false, error: { code: 'branch_unavailable', message: 'Could not switch branches. Try again.' } }
-        } finally {
-          switchingGitRoots.delete(root)
+      const observation = h.getWorkspaceObservation(descriptor.appSessionId)
+      if (!observation) return { ok: false, error: { code: 'branch_unavailable', message: 'Wait for this chat to connect.' } }
+      const listed = await listWorkspaceBranches(observation.cwd)
+      if (!listed.ok) return listed
+      const root = await gitRoot(observation.cwd)
+      const liveRecords = supervisor?.listSessions() ?? []
+      const otherChats: NonNullable<WorkspaceBranches['otherChats']> = []
+      for (const row of h.listSessions()) {
+        if (row.appSessionId === descriptor.appSessionId || !isSessionLive(liveRecords, row.appSessionId)) continue
+        const other = h.getWorkspaceObservation(row.appSessionId)
+        if (other && await gitRoot(other.cwd) === root) {
+          otherChats.push({ appSessionId: row.appSessionId, title: row.title ?? basename(row.cwd) })
         }
-      } finally {
-        switchingSessionIds.delete(descriptor.appSessionId)
       }
+      return { ok: true, value: {
+        ...listed.value, otherChats,
+        ...(observation.lastWorkingBranch !== undefined ? { recordedBranch: observation.lastWorkingBranch } : {}),
+      } }
     },
+  )
+
+  const switchBranch = createWorkspaceBranchSwitcher({
+    host: () => host,
+    switchingSessionIds,
+    sessionsWithSubmit,
+    isWorkspaceReserved: id => workspaceJump?.isReserved(id) ?? false,
+    isLive: id => isSessionLive(supervisor?.listSessions() ?? [], id),
+    validateCwd,
+    transferFiles: (from, to) => attachmentFileTokens.transfer(from, to),
+    log: message => logLegacyDiagnostic(message, 'host', 'main'),
+  })
+  ipcMain.handle(CH_HOST_SWITCH_BRANCH,
+    (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> =>
+      switchBranch(appSessionId, branch),
   )
 
   // SESSIONS-UNIFICATION: coalesce concurrent open-history spawns of the SAME
@@ -3635,6 +3705,7 @@ function registerHostControlPlane(): void {
       }),
       onProgress: update => sendHostEvent({ type: 'account-oauth', provider: update.provider, progress: update.progress }),
       onPoolChanged: () => {
+        scheduledOptions?.invalidate()
         accountsPoolPublicationGate.invalidate()
         refreshAccountsPoolNow()
       },
@@ -4116,6 +4187,7 @@ function handOff(
     }
     supervisor.send(sessionId, message)
     if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
+    if (isUserTurnSubmit(message, audience)) peerPlane?.onUserMessage(sessionId)
     return null
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error)
@@ -4280,6 +4352,7 @@ function generateRequestId(): string {
 function ensureHost(): Host {
   if (host) return host
   supervisor = createSupervisor()
+  ensureLidMode()
   wireRendererBridge(supervisor)
 
   // The registry lives beside the supervisor in the host plane. Default storage
@@ -4444,6 +4517,10 @@ function ensureHost(): Host {
   const liveHost = host
   const liveRegistry = registry
   peerPlane = createPeerRequestPlane({
+    workspaceTransitions: {
+      begin: (id, operationId) => liveHost.beginWorkspaceTransition(id, operationId),
+      finish: (id, operationId, cwd) => liveHost.finishWorkspaceTransition(id, operationId, cwd),
+    },
     workspaceRequests: {
       handleRequest: (appSessionId, request) => workspaceJump!.handleRequest(appSessionId, request),
       afterResponse: (appSessionId, request, answered) => workspaceJump!.afterResponse(appSessionId, request, answered),
@@ -4484,6 +4561,24 @@ function ensureHost(): Host {
     logRouted: (appSessionId, fields) =>
       logOperational('peer.message.routed', 'info', fields, appSessionId),
     log: line => logLegacyDiagnostic(line, 'host', 'main'),
+  })
+
+  // Scheduled tasks share the real host and transport. The single-instance app owns their atomic store.
+  void launched.then(() => {
+    if (host !== liveHost || !supervisor) return
+    try {
+      const liveSupervisor = supervisor
+      scheduledTasks = new ScheduledTasks(join(defaultRegistryDir(), 'scheduled-tasks.json'), {
+        launch: (task, id) => launchScheduledSession(liveHost, liveSupervisor, task, id, registry),
+        submit: (id, prompt, submitId) => {
+          sessionsWithSubmit.add(id)
+          const options = { submitId } as import('../shared/protocol.js').SubmitOptions
+          return forwardInternal(id, { type: 'app.submit', requestId: generateRequestId(), prompt, options }) === null
+        },
+      })
+      scheduledTasksError = undefined
+      scheduledTasks.start()
+    } catch { scheduledTasksError = 'Scheduled tasks could not be opened. Close any other Cat Code app and check their saved storage before restarting.' }
   })
 
   // IS-A startup GC: after the launch sweep settles (its reaps predate the
@@ -4577,6 +4672,12 @@ if (!gotSingleInstanceLock) {
  * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
  */
 function shutdownRuntime(): void {
+  const endingLidMode = lidMode
+  lidMode = undefined
+  updateLidMenu()
+  if (endingLidMode) lidReady = endingLidMode.shutdown().catch(() => {})
+  scheduledTasks?.stop()
+  scheduledTasks = null
   if (host) {
     host.shutdownAll()
   } else {
@@ -4631,11 +4732,11 @@ function stopBackgroundDrivers(): void {
 }
 
 /**
- * Ctrl-C in the dev launcher — and any other SIGTERM — kills Electron outright:
- * neither `window-all-closed` nor `before-quit` runs, so `host.shutdownAll()`
- * never marks live rows clean and the NEXT launch's orphan sweep
- * (`host/registry.ts` sweepOrphans) reports every session of this run as
- * `crashed`. Marking is synchronous, so it completes before the exit below.
+ * Fallback when Node receives a signal directly, including Ctrl-C in the dev
+ * launcher. Electron installs native shutdown signal handlers after startup
+ * that call Browser::Quit, so a running packaged app normally enters
+ * `before-quit` instead. Marking is synchronous on this direct-exit route too,
+ * so the next launch does not mistake live rows for crashed sessions.
  *
  * `app.exit` rather than `app.quit`: the teardown has already run here, and
  * `quit` would re-enter it through `before-quit`.
@@ -4711,7 +4812,19 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+let lidQuitFinished = false
+app.on('before-quit', event => {
+  if (!lidQuitFinished && lidMode) {
+    event.preventDefault()
+    const ending = lidMode; lidMode = undefined
+    void ending.shutdown().finally(() => {
+      // Electron drains microtasks before its native before-quit emission
+      // returns. Re-entering quit there lets the canceled outer quit overwrite
+      // the nested quit's flag, so macOS parks after the windows close.
+      setImmediate(() => { lidQuitFinished = true; app.quit() })
+    })
+    return
+  }
   logOperational('app.shutdown.started', 'info', { reason: 'before-quit' })
   // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
   // (no live rows left to mark).

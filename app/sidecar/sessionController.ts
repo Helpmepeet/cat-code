@@ -1,4 +1,6 @@
 import { createWorkspaceJumpTools } from './workspaceJumpTools.js'
+import { feature } from 'bun:bundle'
+import { installLidWorkRuntime, type LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { hasVerifiedSourceCompensation, readWorkspaceJump, workspaceJumpRequiresRetention, upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate } from '../../src/utils/workspaceJumpState.js'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtime/createQueryEngineAppSessionConfigFromSetup.js'
@@ -91,10 +93,6 @@ import {
   type SidecarGoalDomain,
 } from './goalDomain.js'
 import {
-  createSidecarMemoryDomain,
-  type SidecarMemoryDomain,
-} from './memoryDomain.js'
-import {
   createSidecarTasksDomain,
   type SidecarTasksDomain,
 } from './tasksDomain.js'
@@ -134,11 +132,6 @@ import {
   createSidecarDiagnosticsDomain,
   type SidecarDiagnosticsDomain,
 } from './diagnosticsDomain.js'
-import {
-  createSidecarExtensionsDomain,
-  loadExtensionsSnapshot,
-  type SidecarExtensionsDomain,
-} from './extensionsDomain.js'
 import {
   createSidecarRemoteSettingsDomain,
   type SidecarRemoteSettingsDomain,
@@ -495,17 +488,6 @@ export async function createNormalSidecarQueryEngineConfig(
   onMcpLifecycleCreated?.(mcpLifecycle.dispose)
   await mcpLifecycle.prepare()
 
-  // P4-12 settings-extensions read-seam: build the spawn-time MCP/plugins/skills/
-  // hooks snapshot from the SAME loaded catalogs the runtime uses (skills ⊂
-  // `commands`, plugin provides ⊂ `agentDefinitions`) plus the live app-state
-  // (hooks). Never throws — a per-slice failure degrades to null inside the loader.
-  const extensionsSnapshot = await loadExtensionsSnapshot({
-    commands,
-    agentDefinitions: agentDefinitions.allAgents,
-    appState: appStateStore.getState(),
-    preparedMcpConfiguration: mcpLifecycle.getPreparedConfiguration(),
-  })
-
   // The composer SlashCommandPicker renders name + arg-hint + description columns
   // (prototype parity). The engine's `system/init.slash_commands` is NAMES ONLY
   // (the locked SDK shape, `systemInit.ts:69`), so the P3-7 picker shipped
@@ -538,7 +520,6 @@ export async function createNormalSidecarQueryEngineConfig(
   return {
     appStateStore,
     agentDefinitions,
-    extensionsSnapshot,
     mcpLifecycle,
     slashCatalog,
     /**
@@ -604,6 +585,7 @@ export async function createNormalSidecarQueryEngineConfig(
 }
 
 export type SidecarSession = {
+  lidWork?: LidWorkRuntime
   controller: AppSessionController
   /**
    * Permissions domain over the SAME store the runtime enforces (so C2 mode
@@ -628,11 +610,6 @@ export type SidecarSession = {
    */
   goals: SidecarGoalDomain | null
   /**
-   * Memory read-seam (P4-10) — metadata over the real CLAUDE.md hierarchy and
-   * auto-memory memdir. Read-only; null in probe mode.
-   */
-  memory: SidecarMemoryDomain | null
-  /**
    * Tasks read-seam (P4-9) — live background-task state from the same
    * app-state store the runtime mutates. Read-only; null in probe mode.
    */
@@ -654,11 +631,6 @@ export type SidecarSession = {
    * Read-only; null in probe mode (no cwd-configured engine).
    */
   diagnostics: SidecarDiagnosticsDomain | null
-  /**
-   * Settings extensions read-seam (P4-12) — the spawn-time MCP/plugins/skills/
-   * hooks config snapshot. Read-only; null in probe mode (no cwd-configured engine).
-   */
-  extensions: SidecarExtensionsDomain | null
   /**
    * RemoteSettings domain (P4-13, D3 cut scope) — bridge toggle/status +
    * command-filter truth + direct-connect verb over the engine's own bridge
@@ -787,12 +759,10 @@ export async function createSidecarSessionController({
       settings: null,
       agentConfig: null,
       goals: null,
-      memory: null,
       tasks: null,
       accounts: null,
       workspaceTrust: null,
       diagnostics: null,
-      extensions: null,
       remoteSettings: null,
       workers: null,
       leases: null,
@@ -815,7 +785,6 @@ export async function createSidecarSessionController({
   const {
     appStateStore,
     agentDefinitions,
-    extensionsSnapshot,
     mcpLifecycle,
     commands,
     queryEngineConfig,
@@ -868,6 +837,7 @@ export async function createSidecarSessionController({
   await controller.waitForInitialization()
   return {
     controller,
+    ...(feature('LID_CLOSED') ? { lidWork: installLidWorkRuntime(() => appStateStore.getState().tasks) } : {}),
     permissions: createSidecarPermissionDomain(appStateStore),
     settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd), {
       reloadAvailableOptions: () => loadAvailableSettingOptions(cwd),
@@ -877,10 +847,6 @@ export async function createSidecarSessionController({
       appStateStore,
     }),
     goals: createSidecarGoalDomain(appStateStore),
-    // P4-34 — the SAME active-agent list the query engine receives above
-    // (`agents: agentDefinitions.activeAgents`), so the memory page reports the
-    // agents this session actually runs, never a re-derived catalog.
-    memory: createSidecarMemoryDomain(agentDefinitions.activeAgents),
     tasks: createSidecarTasksDomain(appStateStore),
     accounts: createSidecarAccountsDomain({
       onProviderActivated: provider => {
@@ -892,7 +858,6 @@ export async function createSidecarSessionController({
       managed: binding.kind === 'managed',
     }),
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
-    extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
     workers: createSidecarWorkersDomain(appStateStore),
     // P4-32b — the session-scoped Codex lease read seam (L1). Same store as

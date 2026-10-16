@@ -38,6 +38,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { OAuthSubmitStatus } from './appModel.js'
 import { useModalFocus } from './overlayFocus.js'
+import { ProviderLogo } from './ProviderLogo.js'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── shared chrome ─────────────────────────────────────────────────────────── */
@@ -130,6 +131,12 @@ export function StartupShell({
     containerRef: shellRef,
     onEscape: onEscape ?? (() => {}),
     escapeEnabled: onEscape !== undefined,
+    // The machine-wide recovery action stays reachable without opening the
+    // modal's keyboard loop to the rest of the app.
+    getAdditionalFocusElements: () => Array.from(
+      shellRef.current?.closest('.lid-content')
+        ?.querySelectorAll<HTMLButtonElement>(':scope > .lid-notice button:not([disabled])') ?? [],
+    ),
   })
   return (
     <div
@@ -138,7 +145,7 @@ export function StartupShell({
       aria-modal="true"
       aria-label={step === 'trust' ? 'Workspace trust' : 'Sign in'}
       tabIndex={-1}
-      className={`absolute inset-0 z-40 flex items-center justify-center overflow-auto p-6 ${
+      className={`absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 overflow-auto p-6 ${
         presentation === 'modal'
           ? 'animate-scrim-in bg-scrim backdrop-blur-sm'
           : 'bg-app-bg/95'
@@ -249,8 +256,8 @@ export function WorkspaceTrustGate({
 
 /**
  * The renderer-visible OAuth sub-states — a projection of the engine's real
- * `OAuthStatus` flow delivered on the `oauth.login.progress` back-channel
- * (`accountsDomain.ts`). `waiting` covers `starting`+`waiting_for_login` (`url`
+ * `OAuthStatus` flow delivered through the host's `account-oauth` event
+ * (`accountsDomain.ts` and the account-control worker). `waiting` covers `starting`+`waiting_for_login` (`url`
  * is null until the engine mints it); the live run is the operator's step.
  */
 export type StartupOAuthView =
@@ -278,20 +285,17 @@ const PROVIDER_COPY: Record<
   {
     name: string
     detail: string
-    initial: string
     pastePlaceholder: string
   }
 > = {
   anthropic: {
     name: 'Claude',
     detail: 'Claude subscription',
-    initial: 'C',
     pastePlaceholder: 'Paste the code from the sign-in page',
   },
   openai: {
     name: 'ChatGPT',
     detail: 'ChatGPT subscription for Codex models',
-    initial: 'G',
     pastePlaceholder: 'Paste the page address',
   },
 }
@@ -312,7 +316,7 @@ function ProviderMark({ provider }: { provider: OAuthProvider }): ReactNode {
           : 'border-tone-info/25 bg-tone-info/10 text-tone-info'
       }`}
     >
-      {PROVIDER_COPY[provider].initial}
+      <ProviderLogo provider={provider} size={18} />
     </span>
   )
 }

@@ -71,7 +71,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
     writeSessionState(sessionId, {
       sessionId,
       mode: 'coordinator',
-      activeWorkers: {},
       knownWorkers: {
         'agent-persistent': {
           agentId: 'agent-persistent',
@@ -691,6 +690,22 @@ describe('SendMessageTool deterministic routing and truthful delivery', () => {
     })
     const idle = await callSendMessage('alice', idleHarness)
     expect(idle.data).toMatchObject({ success: true })
+  })
+
+  test('refuses urgent teammate and broadcast sends without writing a mailbox', async () => {
+    const harness = createTeamHarness({ members: [makeMember('alice')] })
+    const append = spyOn(teammateMailbox, 'writeToMailbox')
+    try {
+      for (const to of ['alice', '*']) {
+        const result = await SendMessageTool.call(
+          { to, message: 'stop and report', urgent: true },
+          harness.context, undefined as never, undefined as never,
+        )
+        expect(result.data.success).toBe(false)
+      }
+      expect(append).not.toHaveBeenCalled()
+      expect(existsSync(getInboxPath('alice', 'review-team'))).toBe(false)
+    } finally { append.mockRestore() }
   })
 
   test('reports partial broadcast delivery truthfully', async () => {

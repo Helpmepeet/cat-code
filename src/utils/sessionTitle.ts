@@ -145,7 +145,7 @@ export async function generateSessionTitle(
     })
 
     const result = await queryModelWithoutStreaming({
-      messages: normalizeMessagesForAPI(instructionAssembly.messages),
+      messages: normalizeMessagesForAPI(instructionAssembly.messages, [], provider),
       systemPrompt: instructionAssembly.systemPrompt,
       openAIInstructionAssembly: instructionAssembly.openAIInstructionAssembly,
       thinkingConfig: { type: 'disabled' },

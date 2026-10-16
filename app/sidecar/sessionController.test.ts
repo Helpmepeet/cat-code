@@ -595,7 +595,6 @@ test('normal startup constructs a real runtime-backed controller without startin
     disposeMcpLifecycle,
     permissions,
     goals,
-    memory,
     tasks,
   } =
     await createSidecarSessionController({
@@ -606,7 +605,6 @@ test('normal startup constructs a real runtime-backed controller without startin
   expect(controller).toBeInstanceOf(AppSessionController)
   expect(permissions).not.toBeNull()
   expect(goals?.getSnapshot()).toBeNull()
-  expect(memory).not.toBeNull()
   expect(tasks?.getSnapshot()).toEqual({
     items: [],
     subagents: [],
@@ -625,7 +623,6 @@ test('probe startup has no read domains (no engine app-state store)', async () =
     settings,
     agentConfig,
     goals,
-    memory,
     tasks,
   } =
     await createSidecarSessionController({
@@ -636,7 +633,6 @@ test('probe startup has no read domains (no engine app-state store)', async () =
   expect(settings).toBeNull()
   expect(agentConfig).toBeNull()
   expect(goals).toBeNull()
-  expect(memory).toBeNull()
   expect(tasks).toBeNull()
   expect(disposeMcpLifecycle).toBeNull()
 })

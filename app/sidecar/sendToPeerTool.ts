@@ -71,8 +71,8 @@ type Input = z.infer<InputSchema>
  * the result, and the transcript row needs to be readable.
  */
 export type SendToPeerOutcome =
-  | 'delivered'
-  | 'delivered_on_start'
+  | 'queued'
+  | 'queued_on_start'
   | 'blocked_by_user'
   | 'loop_stopped'
   | 'chain_too_long'
@@ -94,8 +94,16 @@ export type SendToPeerOutcome =
  * the sender a message had not arrived when nobody knew, and reporting it as
  * `true` would be worse. `unconfirmed` is the honest third value, and the wire
  * outcomes (`PeerDeliverOutcome`) are untouched by it.
+ *
+ * The first value is `queued`, not `delivered` (ruling 13, amended 2026-10-16).
+ * `queued_live` and `queued_wake` both mean the recipient's process holds the
+ * message in its command queue, which says nothing about whether its model has
+ * taken it. A real transcript told a sender "delivered" for a message the
+ * recipient took 35 minutes later. The ack at consumption is main's alone, and
+ * nothing carries it back to the sender, so the sender is told what is true at
+ * the moment of the send.
  */
-export type SendToPeerDelivery = 'delivered' | 'not_delivered' | 'unconfirmed'
+export type SendToPeerDelivery = 'queued' | 'not_delivered' | 'unconfirmed'
 
 export type SendToPeerResult = {
   to: string
@@ -133,16 +141,16 @@ function describeOutcome(
     case 'queued_live':
       return {
         to,
-        delivery: 'delivered',
-        outcome: 'delivered',
-        summary: `Delivered to ${to}. It is already working, so it reads this at its next step.`,
+        delivery: 'queued',
+        outcome: 'queued',
+        summary: `Queued for ${to}. It is already working and reads this at its next step, which may be a while if that step is long. It has not read it yet.`,
       }
     case 'queued_wake':
       return {
         to,
-        delivery: 'delivered',
-        outcome: 'delivered_on_start',
-        summary: `Delivered to ${to}. It was not open, so it is starting up and reads this once it is running.`,
+        delivery: 'queued',
+        outcome: 'queued_on_start',
+        summary: `Queued for ${to}. It was not open, so it is starting up and reads this once it is running. It has not read it yet.`,
       }
     case 'refused:user_stopped':
       return {
@@ -167,7 +175,11 @@ function describeOutcome(
         to,
         delivery: 'not_delivered',
         outcome: 'chain_too_long',
-        summary: `Not delivered. The back and forth with ${to} has run too long. Finish the work yourself, or write the user what is still open.`,
+        // The budget restarts when the user next writes to either session, so
+        // the way forward is to put the question to them, not to give up on
+        // ${to}. A long exchange the user asked for and a runaway one look the
+        // same from here; only the user can say which this is.
+        summary: `Not delivered. You and ${to} have exchanged as many messages as are allowed without the user. Ask the user whether to continue, and say what is still open. Once they reply you can message ${to} again.`,
       }
     case 'refused:rate':
       return {
@@ -408,10 +420,12 @@ export function createSendToPeerTool(
         'and, with Agent Teams on, teammates, never a peer.',
         '',
         'The result says what actually happened, and it separates three things.',
-        'If it says the message was not delivered, it was not delivered: do not',
-        'carry on as if they have it. If it says the message is not confirmed,',
-        'nobody knows either way and it may still arrive, so ask them whether it',
-        'reached them rather than sending the same text again.',
+        'If it says the message is queued, it is waiting for them and they have',
+        'not read it yet; a busy peer reads it at its next step, so do not expect',
+        'an answer at once. If it says the message was not delivered, it was not',
+        'delivered: do not carry on as if they have it. If it says the message is',
+        'not confirmed, nobody knows either way and it may still arrive, so ask',
+        'them whether it reached them rather than sending the same text again.',
       ].join('\n')
     },
 

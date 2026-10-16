@@ -343,7 +343,7 @@ await collect(60_000)
  * happened to print.
  */
 const logsDir = join(configHome, 'desktop', 'logs')
-function workerRecords(): Array<Record<string, unknown>> {
+function processRecords(role: 'main' | 'worker'): Array<Record<string, unknown>> {
   if (!existsSync(logsDir)) return []
   return readdirSync(logsDir)
     .filter(name => name.endsWith('.jsonl'))
@@ -359,18 +359,18 @@ function workerRecords(): Array<Record<string, unknown>> {
           }
         }),
     )
-    .filter(record => record.process === 'worker')
+    .filter(record => record.process === role)
 }
 
 const workerDeadline = Date.now() + 45_000
-let workers = workerRecords()
+let workers = processRecords('worker')
 while (
   Date.now() < workerDeadline &&
   !workers.some(r => r.event === 'process.exited') &&
   app.exitCode === null
 ) {
   await Bun.sleep(500)
-  workers = workerRecords()
+  workers = processRecords('worker')
 }
 
 // Own the process by the exact pid recorded above; never sweep.
@@ -396,6 +396,13 @@ assert(
   exitedAfterTerm,
   'packaged app exited within 15s of SIGTERM',
   `pid ${app.pid} did not exit from SIGTERM; escalated to SIGKILL`,
+)
+// A canceled before-quit can re-enter app.quit during Electron's microtask
+// checkpoint, then leave macOS parked after main already logged process.exited.
+// Check the real lifecycle records as well as the OS process above.
+assert(
+  !processRecords('main').some(record => record.event === 'app.parked.windowless'),
+  'SIGTERM quit did not fall through to macOS windowless parking',
 )
 
 // B1 — the renderer actually loaded and attached its bridge. Main prints this

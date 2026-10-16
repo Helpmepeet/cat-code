@@ -1,9 +1,27 @@
 import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { PendingRoute } from './projectRoutingController.js'
+import type { SidecarClientMessage } from '../shared/protocol.js'
+import type { ProjectRouteSnapshot } from '../shared/projectRouting.js'
 
-export type RouteRecord = PendingRoute & { outcome: 'unsent' | 'unknown' | 'accepted' }
+type RoutedSubmit = Extract<SidecarClientMessage, { type: 'app.submit' }> & {
+  options?: NonNullable<Extract<SidecarClientMessage, { type: 'app.submit' }>['options']> & {
+    submitId?: string
+  }
+}
+
+/** Legacy classifier fields remain readable so saved input can be recovered. */
+export type RouteRecord = {
+  sessionId: string
+  submitId: string
+  message: RoutedSubmit
+  routingText: string
+  sourceCwd: string
+  phase: ProjectRouteSnapshot['phase'] | 'checking' | 'ask' | 'moving'
+  decision: { kind: 'auto' | 'ask'; cwd: string; name: string; explicit: boolean } | null
+  messageText: string | null
+  outcome: 'unsent' | 'unknown' | 'accepted'
+}
 export interface ProjectRoutingStore {
   load(): RouteRecord[]
   save(records: RouteRecord[]): void

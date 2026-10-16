@@ -5492,8 +5492,7 @@ export function REPL({
                 goal: currentGoal,
                 status: 'active',
                 reason: 'user_resumed',
-                actor: 'user',
-                objective: currentGoal.objective
+                actor: 'user'
               });
             }} />
                 </Dialog>}

@@ -2,10 +2,11 @@ import { expect, spyOn, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mintDeliveryTrace } from '../shared/deliveryTrace.js'
+import { mintDeliveryTrace, replayDeliveryTrace } from '../shared/deliveryTrace.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
 import * as retention from './jsonlRetention.js'
+import { AttachmentGate } from './attachmentGate.js'
 import {
   createDeliveryTraceSink, deliveryMessageKindOfFrame,
   MAX_DELIVERY_TRACE_RECORD_BYTES,
@@ -345,6 +346,11 @@ test('a frame evicted from the in-memory ring is written before its stages are d
   expect(kinds(root, 'delivery.trace')).toMatchObject([
     { sequence: 1, complete: false, flushReason: 'evicted' },
   ])
+  // Late FD 3 evidence is written, but cannot revive an evicted sequence as
+  // an acknowledgement candidate or grow its in-memory stage set again.
+  sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(1, 'stream'), stage: 'sidecar.socket.sent' })
+  expect(sink.accepts('session', 'stream', 1, 'doc', 1)).toBe(false)
+  expect(kinds(root, 'delivery.trace').at(-1)).toMatchObject({ sequence: 1, flushReason: 'evicted', stages: { 'sidecar.socket.sent': 0 } })
   sink.close()
 })
 
@@ -406,6 +412,86 @@ function messageFrame(message: (typeof SDK_MESSAGE_FIXTURE)['assistant'][number]
 
 const ASSISTANT_FRAME = messageFrame(SDK_MESSAGE_FIXTURE.assistant[0]!.message)
 const RESULT_FRAME = messageFrame(SDK_MESSAGE_FIXTURE.result[0]!.message)
+
+test('production attachment replay preserves dispatch ordering and current acknowledgement identity', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-replay-order-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  const gate = new AttachmentGate()
+  const sessionId = 'session'
+  gate.onRendererReady()
+  const sticky = (marker: string) => ({
+    kind: 'settings.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, marker,
+  }) as unknown as ServerFrame
+  const live: ServerFrame[] = [
+    { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId, engineSessionId: 'engine-session', payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } },
+    sticky('old'),
+    ASSISTANT_FRAME,
+    sticky('new'),
+    RESULT_FRAME,
+  ]
+  const source = live.map((frame, index) => ({ ...frame, deliveryTrace: mintDeliveryTrace(index + 1, 'stream') }))
+  const dispatch = (frame: ServerFrame, documentId: string, subscriptionEpoch: number) => {
+    const trace = frame.deliveryTrace!
+    sink.mark({ sessionId, trace, stage: 'main.ipc.sent', documentId, subscriptionEpoch, frameKind: frame.kind })
+    for (const stage of ['preload.received', 'renderer.subscription.received', 'renderer.state.applied'] as const) {
+      sink.mark({ sessionId, trace, stage, documentId, subscriptionEpoch })
+    }
+  }
+  try {
+    for (const frame of source) {
+      const trace = frame.deliveryTrace!
+      sink.mark({ sessionId, trace, stage: 'supervisor.socket.received', frameKind: frame.kind })
+      sink.mark({ sessionId, trace, stage: 'host.received' })
+      for (const forwarded of gate.onFrame(sessionId, frame)) dispatch(forwarded, 'doc-1', 1)
+    }
+    for (let epoch = 2; epoch <= 34; epoch++) {
+      const documentId = `doc-${epoch}`
+      gate.onNavigationStart()
+      const replay = gate.onRendererReady()
+      expect(replay.map(frame => frame.deliveryTrace?.sequence)).toEqual([1, 4, 3, 5])
+      for (const frame of replay) {
+        const trace = replayDeliveryTrace(frame.deliveryTrace!)
+        sink.mark({ sessionId, trace, stage: 'attachment.replayed', documentId, subscriptionEpoch: epoch })
+        dispatch({ ...frame, deliveryTrace: trace }, documentId, epoch)
+      }
+    }
+    sink.mark({ sessionId, trace: source[2]!.deliveryTrace!, stage: 'engine.produced' })
+    expect(sink.traceFor(sessionId, 'stream', 3)?.deliveryAttempt).toBe(2)
+    const next = mintDeliveryTrace(6, 'stream')
+    sink.mark({ sessionId, trace: next, stage: 'supervisor.socket.received' })
+    sink.mark({ sessionId, trace: next, stage: 'host.received' })
+    dispatch({ ...ASSISTANT_FRAME, deliveryTrace: next }, 'doc-34', 34)
+  } finally {
+    sink.close()
+  }
+  expect(kinds(root, 'trace.sequence.out_of_order')).toEqual([])
+  expect(kinds(root, 'trace.sequence.duplicate')).toEqual([])
+  expect(kinds(root, 'delivery.trace').some(record => record.documentId === 'doc-34' &&
+    record.sequence === 3 && 'attachment.replayed' in (record.stages as Record<string, number>) &&
+    'renderer.state.applied' in (record.stages as Record<string, number>))).toBe(true)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('renderer receipt inversion is diagnosed against dispatch order within a document', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-dispatch-inversion-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  try {
+    const traces = [1, 2, 3].map(sequence => mintDeliveryTrace(sequence, 'stream'))
+    for (const trace of traces) {
+      sink.mark({ sessionId: 'session', trace, stage: 'supervisor.socket.received' })
+      sink.mark({ sessionId: 'session', trace, stage: 'main.ipc.sent', documentId: 'doc', subscriptionEpoch: 1 })
+    }
+    for (const index of [0, 2, 1]) {
+      sink.mark({ sessionId: 'session', trace: traces[index]!, stage: 'preload.received', documentId: 'doc', subscriptionEpoch: 1 })
+    }
+  } finally {
+    sink.close()
+  }
+  expect(kinds(root, 'trace.sequence.out_of_order')).toMatchObject([
+    { sequence: 2, stage: 'preload.received', anomalyScope: 'stage_sequence' },
+  ])
+  rmSync(root, { recursive: true, force: true })
+})
 
 /** Trace one frame through the stages main marks for it, as `traceFrame` does. */
 function traceThroughMain(sink: ReturnType<typeof createDeliveryTraceSink>, sequence: number, frame: ServerFrame): void {

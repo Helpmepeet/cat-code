@@ -45,7 +45,7 @@ import {
   splitSysPromptPrefix,
   toolToAPISchema,
 } from './api.js'
-import { createUserMessage, normalizeMessagesForAPI } from './messages.js'
+import { createAssistantMessage, createUserMessage, normalizeMessagesForAPI } from './messages.js'
 import {
   OPENAI_PROPERTY_RENAMES,
   renameOpenAIInputKeysToOriginal,
@@ -376,6 +376,34 @@ describe('provider and prompt regressions', () => {
       { type: 'text', text: 'I am about to call a tool.' },
       { type: 'thinking', thinking: '', signature: 'opaque-replay-signature' },
     ])
+  })
+
+  test('an Anthropic worker repairs thinking fragments under a Codex main session', () => {
+    setSessionProvider('openai')
+    const thinking = { type: 'thinking' as const, thinking: 'partial reasoning', signature: 'signed-reasoning' }
+    const fragment = createAssistantMessage({ content: [thinking] })
+    expect(normalizeMessagesForAPI([fragment], [], 'firstParty')).toEqual([])
+
+    const withText = createAssistantMessage({
+      content: [{ type: 'text', text: 'Completed text', citations: null }, thinking],
+    })
+    expect(normalizeMessagesForAPI([withText], [], 'firstParty')[0]?.message.content).toEqual([
+      { type: 'text', text: 'Completed text', citations: null },
+    ])
+    expect(fragment.message.content).toEqual([thinking])
+  })
+
+  test('a Codex worker preserves reasoning fragments under an Anthropic main session', () => {
+    setSessionProvider('firstParty')
+    const thinking = { type: 'thinking' as const, thinking: '', signature: 'encrypted-reasoning' }
+    const fragment = createAssistantMessage({ content: [thinking] })
+    expect(normalizeMessagesForAPI([fragment], [], 'openai')[0]?.message.content).toEqual([thinking])
+
+    const withText = createAssistantMessage({
+      content: [{ type: 'text', text: 'Completed text', citations: null }, thinking],
+    })
+    expect(normalizeMessagesForAPI([withText], [], 'openai')[0]?.message.content).toEqual(withText.message.content)
+    expect(normalizeMessagesForAPI([fragment])).toEqual([])
   })
 
   test('tool registry switches Edit vs apply_patch by provider, including simple mode', () => {

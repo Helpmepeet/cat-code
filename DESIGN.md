@@ -135,17 +135,46 @@ large pill treatments within one control group.
   the pane cannot contain the panel. Collapse is an app-wide preference.
   Waiting workers lead the active list; terminal workers settle into a Finished
   group, closed on load. Finished history and Clear survive reload and restart
-  for the session. Each agent occupies one row across resume. Resumed runs use
-  a background ring, the word “resumed”, and a brief `--source-project` arrival
-  wash. Hover or keyboard focus reveals only additional details in a two-line
-  strip attached to the row, with a clamped popover when left space is tight.
+  for the session. With no live work, the collapsed chip shows only uncleared
+  failures with red badges; done and stopped history never keeps it visible,
+  even while those rows settle in the panel. Each agent occupies one row across
+  resume. Resumed runs use a background ring, the word “resumed”, and a brief
+  `--source-project` arrival wash. Hover or keyboard focus reveals only additional
+  details in a two-line strip attached to the row, with a clamped popover when
+  left space is tight.
   Foreground workers alone show live activity. Background tasks remain available
   through ⌘K “Background tasks”. See `SubagentDock.tsx`,
   `subagentDockState.ts`, and `subagentDockPersistence.ts`.
-- **Composer:** Keep the input visually connected to the transcript. Put model,
-  reasoning, permission, and account controls in a compact action row. Reuse
-  the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)
-  before adding a new control style. Context pressure belongs on the ring, not
+  Clicking an inspectable worker opens its read-only live steps in a 480px
+  inline right panel when its workspace pane is at least 840px wide. In narrower
+  panes, the parent conversation and panel share the height, with the panel below
+  the transcript and composer. This follows pane resizing, not window width.
+  The panel uses `surface-panel` and a separating seam, without overlay elevation.
+  Header faces replace the hidden dock and switch among active and finished
+  workers; the open face is marked. Its two-line Agent identity header omits
+  running activity, shows waiting with the assistant baton, and shows settled
+  usage on finish. Steps reuse the main transcript and reasoning layout, follow
+  new work until the reader scrolls up, and resume at the bottom. Live
+  background/resumed workers and streamless finished launches keep the existing
+  reveal/Workers fallback. An open panel does not follow identity into a different
+  run; an evicted finished selection retains its last observed state.
+  See `SubagentWorkspace.tsx` and
+  `SubagentSidePanel.tsx`.
+- **Composer:** Keep the input visually connected to the transcript. Run settings
+  share one borderless 12.5px medium trigger: provider mark, cyan model name,
+  accent effort word (with “(Auto)” for an implicit tier), a filled amber bolt
+  only when fast is on, and the permission label in its tone only outside Auto.
+  Keep 6px gaps, with no internal dot separators. Auto is always the usual mode,
+  independent of the saved default. Claude's mark uses `--provider-claude`;
+  OpenAI's uses `--provider-openai` (primary text), independently of model cyan.
+  The stacked panel shows the current model row, its effort slider when supported,
+  a seam, the supported fast switch, and mode. Model and mode rows open subfaces
+  with Back controls. Model picks return to the stacked face with the engine's
+  updated effort; mode picks close the panel. Escape goes back one level before
+  closing. Read-only panes use the same value composition without a trigger.
+  Account, branch, lid cup, and context controls stay in the right cluster.
+  Reuse the existing composer controls before adding a new control style.
+  Context pressure belongs on the ring, not
   a separate triangle. Estimated cache expiry uses a display-only amber clock
   before the account face, with a small raised-surface hover label reading
   “Cache expired”. Unknown expiry shows nothing.

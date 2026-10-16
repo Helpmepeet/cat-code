@@ -188,6 +188,30 @@ expiry; a timeout never proves execution failure. These frames are consumed by
 main and never replayed to the renderer. The engine remains the permission and
 durability owner; main remains the sole authorization/ledger writer.
 
+### Internal cwd-transition coordination, 2026-10-16
+
+The [approved branch-switch safety requirements](../../reports/2026-10-16-git-branch-ux-review.md)
+require mutual exclusion between checkout mutation and an existing engine
+returning into that checkout. Two internal, non-model-facing verbs use the
+existing request/result transport: `workspace.transition.begin {operationId}`
+and `workspace.transition.finish {operationId,cwd}`. Both return the operation
+id. Operation ids are UUIDs; finish carries only the engine's current cwd,
+bounded to 4,096 characters and canonicalized by the host. This is an
+observation of already-owned engine state, not a spawn, move, destination
+selection, peer-scope change or renderer-authored path.
+
+The host admits a transition synchronously against the branch reservation and
+retains one hold per live process generation. Branch admission refuses while
+any transition is unsettled; a branch reservation briefly refuses new
+transitions without preventing ordinary operation in independent worktrees.
+Finish first publishes the settled cwd and then releases the matching hold.
+Unknown operations cannot release another hold. A lost reply has no expiry:
+the engine may already have changed folders. Reconnect-ready frames retain
+the same-generation hold; process replacement or death retires it. Existing
+size/frame-rate bounds, connection-derived identity, strict receiving schemas,
+correlated result validation, secret guards and renderer authority are unchanged.
+These additive verbs introduce no new inbound frame kind or wire-version break.
+
 ### Initial discovery amendment, 2026-10-01
 
 Eligible managed conversations may observe the existing `workspaces.list` verb
