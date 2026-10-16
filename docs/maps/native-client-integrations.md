@@ -1,7 +1,7 @@
 # Native Client Integrations Map
 
-Last refreshed: 2026-10-16 against the integrated desktop mode, native helper,
-and read-only inspector.
+Last refreshed: 2026-10-17 against idle-sleep recovery, passive power
+observations, the integrated desktop mode, and the read-only inspector.
 
 ## Purpose
 
@@ -26,6 +26,7 @@ feature-gated, platform-gated, or package-backed.
 | Native install/update | [`../../src/utils/nativeInstaller/installer.ts`](../../src/utils/nativeInstaller/installer.ts) | [`../../src/utils/nativeInstaller/download.ts`](../../src/utils/nativeInstaller/download.ts), [`../../src/utils/nativeInstaller/pidLock.ts`](../../src/utils/nativeInstaller/pidLock.ts) |
 | Voice runtime | [`../../src/commands/voice/voice.ts`](../../src/commands/voice/voice.ts) | [`../../src/services/voice.ts`](../../src/services/voice.ts), [`../../src/services/voiceStreamSTT.ts`](../../src/services/voiceStreamSTT.ts) |
 | macOS lid-closed desktop mode and helper | [`../../app/main/lidClosedMode.ts`](../../app/main/lidClosedMode.ts) | [`../../app/main/lidClosedNative.ts`](../../app/main/lidClosedNative.ts), [`../../app/shared/lidClosed.ts`](../../app/shared/lidClosed.ts), [`../../src/services/lidClosedWork.ts`](../../src/services/lidClosedWork.ts), [`../../app/native/lid-closed/`](../../app/native/lid-closed/), [`../../app/renderer/src/LidClosedMode.tsx`](../../app/renderer/src/LidClosedMode.tsx), [`../../app/renderer/src/LidClosedCup.tsx`](../../app/renderer/src/LidClosedCup.tsx), [`../../scripts/lid-closed/inspect.ts`](../../scripts/lid-closed/inspect.ts), [`../../app/scripts/build-lid-helper.ts`](../../app/scripts/build-lid-helper.ts), [`../../docs/research/2026-10-15-lid-closed-integration-results.md`](../../docs/research/2026-10-15-lid-closed-integration-results.md), [`../../docs/research/2026-10-15-lid-closed-sleep-results.md`](../../docs/research/2026-10-15-lid-closed-sleep-results.md) |
+| Ordinary idle-sleep prevention and passive hardware diagnostics | [`../../app/shared/sleepAssertion.ts`](../../app/shared/sleepAssertion.ts) | [`../../src/services/preventSleep.ts`](../../src/services/preventSleep.ts), [`../../app/main/desktopPower.ts`](../../app/main/desktopPower.ts), [`../../app/main/powerObservation.ts`](../../app/main/powerObservation.ts), [`../../app/native/lid-closed/PowerObservation.swift`](../../app/native/lid-closed/PowerObservation.swift), [`../../app/main/diagnosticsBundle.ts`](../../app/main/diagnosticsBundle.ts) |
 
 ## Routing Table
 
@@ -155,6 +156,25 @@ Routing note: `src/commands.ts` conditionally registers `/voice` behind
   battery-powered closed-lid work; a separate AC-powered trial records
   Software Sleep after restoration, followed by user-input wake and DarkWake.
   It does not show uninterrupted CPU suspension or general platform support.
+- Ordinary idle-sleep prevention uses only `caffeinate -i`, with five-minute
+  expiration, parent monitoring, bounded retries, and overlapping renewal. The
+  desktop shares one owner across sessions; terminal references share the same
+  lifecycle implementation. It does not override lid-close sleep.
+- Desktop hardware observation uses the bundled helper's unprivileged
+  `--observe-power` mode only while operational work holds the idle assertion.
+  IOKit root-domain and Foundation thermal notifications drive changes; a
+  60-second heartbeat also reconciles missed changes. EOF and a native heartbeat
+  deadline bound observer lifetime independently of cleanup. Terminal-only runs
+  have assertion lifecycle diagnostics, not this desktop hardware observer.
+- Internal-display CoreGraphics reads and callbacks are enabled only for a
+  confirmed closed lid. An absent/offline internal display is unknown, not proof
+  of physical backlight power. Logical awake/asleep, system thermal pressure,
+  and assertion-process health are not physical safety measurements. Keyboard,
+  hinge, chassis and panel surface temperatures, heat transfer, and cooling
+  differences require physical testing. No observations throttle or stop work.
+- Save diagnostics includes a closed current power snapshot. State changes and
+  observer/assertion failures use bounded local operational records; raw native
+  objects and error strings are not exported.
 
 ## Tests And Validation
 
@@ -232,5 +252,6 @@ For code changes, scale verification by owner:
 | Lid-closed read-only inspection | `bun test scripts/lid-closed/inspect.test.ts` and, when a current-machine observation is needed, `bun run scripts/lid-closed/inspect.ts`. Do not use `--probe-authority` as a test. |
 | Lid-closed app supervision and admission | `bun test app/main/lidClosedMode.test.ts src/services/lidClosedWork.test.ts` exercises owner transitions and query admission with test dependencies; it does not qualify signed helper authentication or physical power behavior. |
 | Lid-closed helper core | `bun test app/native/lid-closed/native.test.ts` exercises durable native transition and recovery state; it does not qualify helper installation, packaged app authentication, or physical behavior. |
+| Idle assertion recovery and passive power observations | `bun test src/services/preventSleep.test.ts app/main/desktopPower.test.ts app/main/powerObservation.test.ts app/native/lid-closed/powerObservation.test.ts` exercises concurrency, recovery, bounded cleanup, closed-only display reads, native read/heartbeat/EOF, and diagnostic uncertainty. It does not qualify real lid-transition notification delivery or physical backlight/cooling safety. |
 
 Docs-only map refreshes do not need `bun run build:dev:full`.

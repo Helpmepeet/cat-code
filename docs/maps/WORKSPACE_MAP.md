@@ -1,6 +1,6 @@
 # Workspace Map
 
-Last refreshed: 2026-10-16
+Last refreshed: 2026-10-17
 
 ## Purpose
 
@@ -35,7 +35,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/bridge-remote-cli.md`](bridge-remote-cli.md) | Bridge, remote control, direct-connect, structured CLI/SDK transport, CCR, and upstream proxy. | 2026-09-21 |
 | [`docs/maps/web-app-runtime.md`](web-app-runtime.md) | Electron app runtime, app-session controller, lid-closed supervision, local transports, renderer state, and startup seams. | 2026-10-16 |
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-09-29 |
-| [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, voice, and integrated macOS lid-closed mode and helper. | 2026-10-16 |
+| [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, voice, macOS idle-sleep observations, and lid-closed mode and helper. | 2026-10-17 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-09-29 |
 | [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, evaluation harnesses, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-10-16 |
 | [`docs/maps/harness-design-eval.md`](harness-design-eval.md) | Offline log audit and fixed-case task-restoration evaluation harness. | 2026-10-12 |

@@ -14,7 +14,7 @@ function run(command: string, args: string[], timeout = 60_000): string {
 }
 const helper = join(output, 'helper')
 run('/usr/bin/swiftc', ['-module-cache-path', join(output, 'cache'),
-  join(source, 'LidCore.swift'), join(source, 'LidSecurity.swift'), join(source, 'LidPlatform.swift'), join(source, 'main.swift'), '-o', helper])
+  join(source, 'LidCore.swift'), join(source, 'LidSecurity.swift'), join(source, 'LidPlatform.swift'), join(source, 'PowerObservation.swift'), join(source, 'main.swift'), '-o', helper])
 run('/usr/bin/codesign', ['--force', '--sign', '-', '--options', 'runtime', helper])
 const signature = run('/usr/bin/codesign', ['-d', '--verbose=4', helper])
 const cdhash = signature.match(/^CDHash=([a-f0-9]+)$/m)?.[1]
