@@ -6,6 +6,7 @@ import { ScheduledTasks, nextTaskOccurrence, type ScheduledTasksPorts } from './
 import type { ScheduledTaskInput } from '../shared/scheduledTasks.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { ServerFrame } from '../shared/protocol.js'
+import type { HostEvent } from '../shared/hostApi.js'
 
 const dirs: string[] = []
 const managers: ScheduledTasks[] = []
@@ -117,6 +118,62 @@ test('failed launch and refused submit are terminal, without automatic redeliver
   expect(accepted.manager.snapshot().runs[0]?.status).toBe('failed')
   expect(accepted.submitted).toHaveLength(1)
 })
+
+for (const loss of ['session-status', 'lifecycle', 'error'] as const) {
+  test(`${loss} transport loss blocks automatic and manual duplicates until the child exits`, async () => {
+    const children: ReturnType<typeof Bun.spawn>[] = []
+    const launches: Promise<void>[] = []
+    const h = setup({ launch: (_task, id) => {
+      const ready = (async () => {
+        const child = Bun.spawn([process.execPath, '-e', "setInterval(() => {}, 1000); console.log('ready')"], { stdout: 'pipe', stderr: 'pipe' })
+        children.push(child)
+        const reader = child.stdout.getReader()
+        try { expect(new TextDecoder().decode((await reader.read()).value)).toContain('ready') } finally { reader.releaseLock() }
+        h.launched.push(id)
+      })()
+      launches.push(ready)
+      return ready
+    } })
+    try {
+      const task = h.manager.save({ ...input, schedule: { kind: 'interval', minutes: 1 } }, '/project', 0)
+      h.manager.run(task.id, true, 0)
+      // Wait for the launch promise and real child readiness, not just process creation.
+      await launches[0]; await flush()
+      expect(h.submitted).toHaveLength(1)
+      const run = h.manager.snapshot().runs[0]!
+      const status = (value: 'disconnected' | 'exited') => h.manager.receiveHostEvent({
+        type: 'session-status', session: { appSessionId: run.appSessionId, status: value },
+      } as HostEvent)
+      if (loss === 'session-status') status('disconnected')
+      else h.manager.receive(run.appSessionId, loss === 'lifecycle'
+        ? { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: run.appSessionId, status: 'disconnected' }
+        : { kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: run.appSessionId, code: 'session_disconnected', message: 'Socket closed', retryable: true })
+      expect(children[0]!.exitCode).toBeNull()
+      expect(h.manager.snapshot().runs[0]).toEqual(run)
+      expect(JSON.parse(readFileSync(h.file, 'utf8')).runs[0].endedAt).toBeNull()
+      h.manager.tick(task.nextRunAt)
+      await flush()
+      expect(() => h.manager.run(task.id)).toThrow('unfinished run')
+      expect(children).toHaveLength(1)
+      expect(h.launched).toEqual([run.appSessionId])
+      expect(h.submitted).toHaveLength(1)
+
+      children[0]!.kill()
+      await children[0]!.exited
+      if (loss === 'session-status') status('exited')
+      else h.manager.receive(run.appSessionId, { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: run.appSessionId, status: 'exited' })
+      expect(h.manager.snapshot().runs[0]?.status).toBe('interrupted')
+      expect(h.manager.snapshot().runs[0]?.endedAt).not.toBeNull()
+      if (loss === 'session-status') h.manager.tick(task.nextRunAt)
+      else h.manager.run(task.id)
+      await launches[1]; await flush()
+      expect(h.submitted).toHaveLength(2)
+      expect(children).toHaveLength(2)
+    } finally {
+      for (const child of children) { if (child.exitCode === null) child.kill(); await child.exited }
+    }
+  })
+}
 
 test('weekly and weekday rules use the saved zone; DST gaps skip and repeated local minutes fire once', () => {
   expect(nextTaskOccurrence({ kind: 'weekdays', time: '09:00', timeZone: 'Asia/Bangkok', day: 0 }, Date.parse('2026-10-16T03:00:00Z'))).toBe(Date.parse('2026-10-19T02:00:00Z'))

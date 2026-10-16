@@ -188,7 +188,7 @@ export class ScheduledTasks {
   }
   receiveHostEvent(event: HostEvent): void {
     if (event.type === 'session-removed') this.interrupt(event.appSessionId)
-    if (event.type === 'session-status' && ['exited', 'disconnected'].includes(event.session.status)) this.interrupt(event.session.appSessionId)
+    if (event.type === 'session-status' && event.session.status === 'exited') this.interrupt(event.session.appSessionId)
   }
   private ready(sessionId: string, prompt: string): void {
     const run = this.doc.runs.find(entry => entry.appSessionId === sessionId && entry.status === 'starting')
@@ -207,7 +207,8 @@ export class ScheduledTasks {
       if (run.id !== frame.submitId) return
       run.status = 'failed'; run.endedAt = Date.now(); run.summary = 'The scheduled prompt was refused. Open the chat to check workspace trust or permissions.'
     })
-    if (frame.kind === 'lifecycle' || frame.kind === 'error' && frame.code === 'session_disconnected') {
+    // Transport loss does not prove the child stopped executing the claimed run.
+    if (frame.kind === 'lifecycle' && frame.status === 'exited') {
       this.interrupt(sessionId)
     }
     if (frame.kind !== 'event' || frame.replay) return
