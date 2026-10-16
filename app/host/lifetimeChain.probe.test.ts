@@ -70,7 +70,7 @@ async function mintTranscript(opts: {
   cwd: string
   engineSessionId: string
   marker: string
-}): Promise<void> {
+}): Promise<string> {
   const proc = Bun.spawn(
     ['bun', 'run', minter, opts.engineSessionId, opts.marker],
     {
@@ -84,12 +84,15 @@ async function mintTranscript(opts: {
       stderr: 'pipe',
     },
   )
-  const [code, , stderr] = await Promise.all([
+  const [code, stdout, stderr] = await Promise.all([
     proc.exited,
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ])
   if (code !== 0) throw new Error(`mint failed (exit ${code}): ${stderr}`)
+  const path = /^MINTED_TRANSCRIPT_PATH=(.+)$/m.exec(stdout)?.[1]
+  if (!path || !existsSync(path)) throw new Error(`mint did not produce its transcript: ${stdout}`)
+  return path
 }
 
 function waitForFrame(
@@ -112,20 +115,6 @@ function waitForFrame(
   })
 }
 
-/**
- * The engine derives the transcript project dir from `process.cwd()`, so the
- * registry's transcriptPathFor must resolve the SAME path the mint wrote to. The
- * mint prints the path but we compute it identically here (join under a
- * transcripts/ dir keyed by engineSessionId) — the registry only needs a
- * predicate "does the transcript exist" for reap, and the SIDECAR (rooted in the
- * same cwd + config home) is what actually resolves + reads it on resume. So we
- * point transcriptPathFor at a location we can assert existence on: the config
- * home's project catalog. Simpler + faithful: ask the same fixture path the mint
- * used by re-deriving via the engine is overkill here — instead we make the
- * registry's reap a no-op-safe check by pointing it at a path we KNOW exists once
- * mint succeeded. We assert the real resume through the sidecar regardless.
- */
-
 test('LR-7 chain: one real registry file → upsert → fill → markClean → fresh registry launch/sweep/restorable → real resume', async () => {
   const configHome = tmp('catcode-lr7-cfg-')
   const cwd = tmp('catcode-lr7-cwd-')
@@ -135,20 +124,13 @@ test('LR-7 chain: one real registry file → upsert → fill → markClean → f
   const marker = `lr7-nonce-${randomUUID().slice(0, 8)}`
 
   // ── Hop 0: mint a REAL transcript for the engine session (engine persistence).
-  await mintTranscript({ configHome, cwd, engineSessionId, marker })
+  const mintedPath = await mintTranscript({ configHome, cwd, engineSessionId, marker })
 
-  // The registry reap drops rows whose transcript is gone; point transcriptPathFor
-  // at a path that exists iff the mint succeeded. We use a sentinel file under the
-  // registry dir keyed by engineSessionId (the sidecar, rooted in `cwd` +
-  // `configHome`, is what resolves the ENGINE's real transcript on resume — the
-  // registry only needs an existence predicate, D1 §4.3).
-  const transcriptSentinel = join(registryDir, 'transcripts')
-  const { mkdirSync, writeFileSync } = await import('node:fs')
-  mkdirSync(transcriptSentinel, { recursive: true })
-  writeFileSync(join(transcriptSentinel, `${engineSessionId}.jsonl`), '{"type":"summary"}\n')
-
+  // Inspect the actual minted conversation, not an existence-only sentinel:
+  // cleanup now distinguishes saved messages from metadata-only transcripts.
   const transcriptPathFor = (_cwd: string, id: string) =>
-    join(transcriptSentinel, `${id}.jsonl`)
+    join(dirname(mintedPath), `${id}.jsonl`)
+  expect(existsSync(transcriptPathFor(cwd, engineSessionId))).toBe(true)
 
   // ── Hops 1-3: session A "runs" — write the registry file through the real API.
   const writer = new SessionRegistry({

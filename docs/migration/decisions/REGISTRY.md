@@ -361,3 +361,25 @@ HC1–HC4) and summarized here for locality:
   sweep's kill-branch (§4.2) is the single place whose policy flips.
 - **Registry UI naming** (`title`): app-owned now; if the engine's AI-generated titles
   (sessionStorage metadata) should seed it, wire read-only at Phase-3 shell time.
+
+## Unused-chat cleanup, 2026-10-17
+
+Closing an unused Chat discards its registry address rather than archiving a
+blank “New chat” restore offer. Clean quit applies the same rule to the live and
+parked rows it settles; launch also removes unused rows left by older versions
+or an interrupted app run. An open or parked blank Chat remains addressable
+until it is closed or the app exits.
+
+Managed ownership and a completed empty relocation establish how to reopen an
+open Chat, not a permanent cleanup exemption. Pending routing/jump recovery and
+unresolved or unreadable relocation state still retain their rows. Accepted
+input, a completed turn, a fork, or any user/assistant transcript entry prevents
+empty-chat removal, including an interrupted first turn with no result. Unknown
+or unreadable transcript evidence is preserved rather than guessed empty.
+
+The registry rechecks cleanup eligibility against the freshly merged document
+under its existing write lock, so another writer's accepted-input evidence
+cannot be erased by a stale cleanup snapshot. Removal emits the existing
+`session-removed` event, which clears renderer roster/tab membership and main's
+preview-cache and peer-plane state. No transcript, managed folder, ownership
+record, or user file is deleted.

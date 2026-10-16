@@ -59,11 +59,12 @@ for (const { established, refusal } of [
     const original = registry.findSession(id)!
     const engineId = original.engineSessionId!
     if (established) {
-      await host.closeSession(id)
+      supervisor.send(id, { type: 'app.park', requestId: randomUUID() })
+      await until(() => registry.findSession(id)?.shutdown === 'parked')
       const child = Bun.spawn(['bun', `--preload=${blocker}`, 'run', resolve('app/sidecar/mintTranscript.fixture.ts'), engineId, 'earlier-user-message'], { cwd: original.cwd, env: { ...process.env, ...env, TEST_ENABLE_SESSION_PERSISTENCE: '1' }, stdout: 'pipe', stderr: 'pipe' })
       const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text(), new Response(child.stdout).text()])
       if (code !== 0) throw new Error(stderr)
-      await registry.markParked(id)
+      await host.closeSession(id)
     }
     if (refusal) writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: {} }))
     const moveStarted = performance.now()
