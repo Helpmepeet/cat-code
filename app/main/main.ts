@@ -2,6 +2,9 @@ import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
 import { LidNativeClient, inspectLidHardware, installLidHelper } from './lidClosedNative.js'
 import { isLidModeCommand } from '../shared/lidClosed.js'
+import { DesktopPower } from './desktopPower.js'
+import { NativePowerObservation } from './powerObservation.js'
+import { SleepAssertionOwner } from '../shared/sleepAssertion.js'
 import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
 import { ScheduledTasks } from '../host/scheduledTasks.js'
 import { parseScheduledTaskCommand, type ScheduledTasksSnapshot, type ScheduledTasksResult } from '../shared/scheduledTasks.js'
@@ -2080,9 +2083,11 @@ function navigationConfig(): NavigationConfig {
  * for the next replay so nothing is lost to a fire-and-forget send.
  */
 function wireRendererBridge(sup: SidecarSupervisor): void {
+  const power = ensureDesktopPower()
   sup.subscribe(event => {
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
+    power?.receive(event.sessionId, frame)
     scheduledTasks?.receive(event.sessionId, frame)
     // P4-6 title-rider: the sidecar's one-shot AI title is a sidecar→host signal,
     // not a renderer frame. Relay it to the durable registry (host is engine-free,
@@ -2226,7 +2231,9 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
  * (no filesystem contents, HC3) — the same trust posture as server frames.
  */
 function wireHostEvents(h: Host): void {
+  const power = desktopPower
   h.subscribe(event => {
+    power?.receiveHostEvent(event)
     scheduledTasks?.receiveHostEvent(event)
     sendHostEvent(event)
     // The durable row now carries the completed turn; the in-memory pre-result
@@ -2932,6 +2939,7 @@ function registerIpcHandlers(): void {
         currentLaunchId: operationalLog.launchId,
         buildId: process.env.CATCODE_BUILD_ID,
         commitId: process.env.CATCODE_COMMIT_ID,
+        power: () => desktopPower?.read(),
       },
       onFailure: error => logOperational('diagnostic', 'error', {
         source: 'diagnosticsExport', reason: classifyFailure(error),
@@ -2970,12 +2978,43 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * without re-registering listeners.
  */
 let lidMode: LidClosedMode | undefined
+let desktopPower: DesktopPower | undefined
+function lidAssetsDirectory(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'lid-closed') : join(__dirname, '../native/lid-closed/dist')
+}
+function ensureDesktopPower(): DesktopPower | undefined {
+  if (process.platform !== 'darwin') return
+  if (!desktopPower) {
+    const assertion = new SleepAssertionOwner({
+      enabled: true,
+      spawn: () => spawn('/usr/bin/caffeinate', ['-i', '-t', '300', '-w', String(process.pid)], { stdio: 'ignore' }),
+      setTimeout, clearTimeout,
+      log: message => logOperational('diagnostic', message === 'caffeinate recovered' ? 'info' : 'warn', {
+        source: 'main', category: 'idle-sleep',
+        reason: message === 'caffeinate recovered' ? 'assertion-process-recovered' :
+          message.startsWith('caffeinate spawn failed') ? 'spawn-failed' :
+          message.startsWith('caffeinate process error') ? 'process-error' :
+          message.startsWith('caffeinate termination') ? 'termination-failed' :
+          message === 'caffeinate spawn confirmation timed out' ? 'spawn-confirmation-timeout' : 'unexpected-exit' }),
+    })
+    const observation = new NativePowerObservation(join(lidAssetsDirectory(), 'helper'), reason => {
+      const state = desktopPower?.read().hardware.observation
+      const unusual = state && (state.lid === 'closed' && state.display === 'software-awake' ||
+        state.thermal === 'serious' || state.thermal === 'critical')
+      logOperational('diagnostic', unusual || reason === 'hardware-observer-unavailable' ? 'warn' : 'info', { source: 'main', category: 'power-observation',
+        reason: state && reason === 'hardware-state' ? `${state.lid}:${state.display}:${state.thermal}` : reason })
+    })
+    desktopPower = new DesktopPower(assertion, observation, reason =>
+      logOperational('diagnostic', 'info', { source: 'main', category: 'idle-sleep', reason }))
+  }
+  return desktopPower
+}
 let lidReady: Promise<void> = Promise.resolve()
 const updateLidMenu = lidClosedMenu(() => lidMode?.read(), command => { void lidReady.then(() => lidMode?.command(command)).catch(() => {}) })
 function ensureLidMode(): void {
   if (lidMode) return
   const previous = lidReady
-  const assets = app.isPackaged ? join(process.resourcesPath, 'lid-closed') : join(__dirname, '../native/lid-closed/dist')
+  const assets = lidAssetsDirectory()
   const mode = new LidClosedMode({
     native: new LidNativeClient(),
     marker: join(defaultRegistryDir(), 'lid-closed-recovery.json'),
@@ -4672,6 +4711,8 @@ if (!gotSingleInstanceLock) {
  * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
  */
 function shutdownRuntime(): void {
+  desktopPower?.dispose()
+  desktopPower = undefined
   const endingLidMode = lidMode
   lidMode = undefined
   updateLidMenu()

@@ -165,6 +165,9 @@ let args = CommandLine.arguments
  do {
     guard args.count >= 2 else { throw LidFailure("operation-required") }
     switch args[1] {
+    case "--observe-power":
+        guard args.count == 2 || args.count == 3 && args[2] == "--once" else { throw LidFailure("invalid-operation") }
+        PowerObserver().run(once: args.count == 3)
     case "--hardware":
         guard args.count == 2 else { throw LidFailure("invalid-operation") }
         let info: [String: Any] = ["qualified": lidHardwareQualified(), "evidence": lidQualificationEvidence,
