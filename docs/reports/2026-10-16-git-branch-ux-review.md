@@ -180,10 +180,11 @@ Principles, in priority order:
 
 ### Branch readout during a conversation (D, 14, N3)
 
-Decision 1 below must be answered before building this; it adds a surface the
-prototype does not have.
+Placement (decision 1, decided): in the composer action row, immediately left
+of the lid-closed cup, in the right-hand group with the account. Not inside the
+prompt line, and not in the cup's own slot.
 
-Behavior once placed:
+Behavior:
 
 - Read-only. Shows the checkout's current branch in mono with the branch glyph.
   No menu: switching remains an empty-chat action.
@@ -219,15 +220,14 @@ desktop map row if behavior changes.
 
 ## Decisions needed from the operator
 
-These are blocking for the slices that depend on them. None has a prototype
-counterpart except where noted.
+Open decisions block the slices that depend on them. None has a prototype
+counterpart.
 
-1. **Where the in-conversation branch readout lives.** Options: the composer
-   action row (next to the model and account controls, where other session
-   context sits), the transcript header area, or only the tab tooltip (not
-   enough for 14 and N3, since tooltips are hover-only). Recommendation: the
-   composer action row, as a compact read-only item. This is a new visible
-   element and must be approved before it is built.
+1. **Where the in-conversation branch readout lives.** Decided 2026-10-16:
+   composer action row, immediately left of the lid-closed cup. Rejected:
+   inside the prompt line beside the send arrow, and the cup's own slot.
+   Placements above the composer, below it, in the right gutter, and in the
+   tab strip were shown and not chosen.
 2. **Mismatch signal.** Warning tone on the readout with a tooltip only, or
    also a one-time transcript notice at the point the change was noticed
    (similar in weight to the workspace-move divider). Recommendation: readout
@@ -255,7 +255,7 @@ between slices 1 to 3 and slice 4.
    decision 4 only for ordering.
 2. **Switch flow** (6, N1, N5). Main and host handoff ordering, capacity
    reservation, guard scope, draft transfer. Needs decision 3.
-3. **In-conversation readout and mismatch** (D, 14, N3). Needs decisions 1 and 2.
+3. **In-conversation readout and mismatch** (D, 14, N3). Needs decision 2.
 4. **Engine recorded branch** (N2, N4). Engine Git reader only; affects the
    terminal as well, so check the terminal surfaces that print the branch.
 5. **Decision record amendment** (13). Documentation only; can land any time.
