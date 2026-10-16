@@ -76,7 +76,8 @@ test('dock opens an inline read-only panel, hides the dock, switches faces inclu
   const tree = await harness.mount(workspace())
   await click(tree.container, '[data-dock-row="a"]')
   const panel = tree.container.querySelector('aside')!
-  expect(panel.parentElement?.className).toBe('subagent-workspace')
+  expect(panel.parentElement?.className).toBe('subagent-workspace-layout')
+  expect(panel.parentElement?.parentElement?.className).toBe('subagent-workspace')
   expect(panel.previousElementSibling?.contains(tree.container.querySelector('main')!)).toBe(true)
   expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(true)
   expect(tree.container.querySelector('.subagent-dock')?.hasAttribute('inert')).toBe(true)

@@ -1,4 +1,5 @@
-.subagent-workspace { display:flex; flex:1; min-width:0; min-height:0; overflow:hidden; }
+.subagent-workspace { display:flex; flex:1; min-width:0; min-height:0; overflow:hidden; container:subagent-workspace / inline-size; }
+.subagent-workspace-layout { display:flex; flex:1; min-width:0; min-height:0; }
 .subagent-parent { position:relative; display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; }
 .subagent-parent > .session-pane { min-width:0; }
 .subagent-dock[hidden] { display:none; }
@@ -24,6 +25,11 @@
 .subagent-side-body > .transcript-virtual-column { max-width:none; padding:16px 20px 24px; }
 .subagent-side-body .transcript-virtual-column > [data-transcript-entry] { margin-block-end:8px; }
 .subagent-side-availability { padding:16px 20px 0; margin:0; color:var(--text-muted); font-size:13px; }
+/* Keep a full parent-pane width beside the 480px panel, otherwise share height. */
+@container subagent-workspace (width < 840px) {
+  .subagent-workspace-layout { flex-direction:column; }
+  .subagent-side-panel { flex:1; width:auto; min-width:0; border-left:0; border-top:1px solid var(--shell-seam); }
+}
 @media (prefers-reduced-motion:reduce) {
   .subagent-side-panel .animate-face-pulse, .subagent-side-panel .subagent-dock-badge { animation:none; }
 }

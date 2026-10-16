@@ -146,8 +146,10 @@ large pill treatments within one control group.
   through ⌘K “Background tasks”. See `SubagentDock.tsx`,
   `subagentDockState.ts`, and `subagentDockPersistence.ts`.
   Clicking an inspectable worker opens its read-only live steps in a 480px
-  inline right panel. The parent transcript and composer shrink beside it.
-  The panel uses `surface-panel` and a left seam, without overlay elevation.
+  inline right panel when its workspace pane is at least 840px wide. In narrower
+  panes, the parent conversation and panel share the height, with the panel below
+  the transcript and composer. This follows pane resizing, not window width.
+  The panel uses `surface-panel` and a separating seam, without overlay elevation.
   Header faces replace the hidden dock and switch among active and finished
   workers; the open face is marked. Its two-line Agent identity header omits
   running activity, shows waiting with the assistant baton, and shows settled

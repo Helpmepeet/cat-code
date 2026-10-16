@@ -46,23 +46,25 @@ export function SubagentWorkspace({ dock, collapsed, onCollapsedChange, onClearF
       candidate.kind === 'orphaned-agent' && candidate.missingToolUseId === row.toolUseId)) onLoadMissingHistory?.()
   }
   return <div className="subagent-workspace">
-    <div ref={parent} className="subagent-parent">
-      <SubagentDock state={dock} collapsed={collapsed} hidden={worker !== null} onCollapsedChange={onCollapsedChange}
-        onClearFinished={onClearFinished} onDetailsVisibleChange={onDetailsVisibleChange}
-        onOpenWorker={open} onOpenWorkers={onOpenWorkers} />
-      {children}
+    <div className="subagent-workspace-layout">
+      <div ref={parent} className="subagent-parent">
+        <SubagentDock state={dock} collapsed={collapsed} hidden={worker !== null} onCollapsedChange={onCollapsedChange}
+          onClearFinished={onClearFinished} onDetailsVisibleChange={onDetailsVisibleChange}
+          onOpenWorker={open} onOpenWorkers={onOpenWorkers} />
+        {children}
+      </div>
+      {worker ? <SubagentSidePanel key={`${worker.agentId}:${worker.runKey}`} worker={worker}
+        workers={workers.some(row => row.agentId === worker.agentId) ? workers : [...workers, worker]}
+        {...branch} cwd={cwd} onSwitch={open} onClose={() => {
+          setSelected(null)
+          requestAnimationFrame(() => {
+            const dock = parent.current
+            const row = [...dock?.querySelectorAll<HTMLButtonElement>('[data-dock-row]') ?? []]
+              .find(element => element.dataset.dockRow === worker.agentId && !element.closest('[inert]'))
+            const target = row ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]), [data-finished-toggle]')
+            target?.focus({ preventScroll: true })
+          })
+        }} /> : null}
     </div>
-    {worker ? <SubagentSidePanel key={`${worker.agentId}:${worker.runKey}`} worker={worker}
-      workers={workers.some(row => row.agentId === worker.agentId) ? workers : [...workers, worker]}
-      {...branch} cwd={cwd} onSwitch={open} onClose={() => {
-        setSelected(null)
-        requestAnimationFrame(() => {
-          const dock = parent.current
-          const row = [...dock?.querySelectorAll<HTMLButtonElement>('[data-dock-row]') ?? []]
-            .find(element => element.dataset.dockRow === worker.agentId && !element.closest('[inert]'))
-          const target = row ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]), [data-finished-toggle]')
-          target?.focus({ preventScroll: true })
-        })
-      }} /> : null}
   </div>
 }
