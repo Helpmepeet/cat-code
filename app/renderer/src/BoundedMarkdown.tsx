@@ -34,6 +34,7 @@ export function BoundedMarkdown({
   rehypePlugins,
   math = false,
   recognizeCallouts = false,
+  streamingLinks = false,
   plainText = false,
   plainTextClasses,
   renderLeaf,
@@ -43,6 +44,7 @@ export function BoundedMarkdown({
   rehypePlugins?: PluggableList
   math?: boolean
   recognizeCallouts?: boolean
+  streamingLinks?: boolean
   plainText?: boolean
   plainTextClasses?: string[]
   renderLeaf: (leaf: MountedMarkdownLeaf) => ReactNode
@@ -57,6 +59,7 @@ export function BoundedMarkdown({
           rehypePlugins === REHYPE_PLUGINS || rehypePlugins === TRANSCRIPT_REHYPE_PLUGINS,
         math,
         recognizeCallouts,
+        streamingLinks,
         cache: cacheRef.current,
       })
     } catch {
@@ -64,7 +67,7 @@ export function BoundedMarkdown({
       // author's text rather than taking the transcript down with it.
       return planPlainTextLeaves(sourceId, source)
     }
-  }, [sourceId, source, rehypePlugins, math, recognizeCallouts, plainText, plainTextClasses])
+  }, [sourceId, source, rehypePlugins, math, recognizeCallouts, streamingLinks, plainText, plainTextClasses])
 
   const [unitHeights, setUnitHeights] = useState<ReadonlyMap<string, number>>(new Map())
   const measurement = useMemo(

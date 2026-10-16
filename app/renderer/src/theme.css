@@ -961,6 +961,46 @@ html[data-glass='on'] [data-window-overlay] {
   animation: catcode-prose-arrive 160ms linear both;
 }
 
+.file-link-pending {
+  position: relative;
+  cursor: default;
+}
+
+.file-link-pending:hover {
+  color: var(--color-accent);
+}
+
+.file-link-ticker {
+  position: absolute;
+  left: calc(100% + 3px);
+  top: 0;
+  height: 100%;
+  max-width: var(--file-link-ticker-room, 0px);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: .9em;
+  font-weight: 400;
+  color: var(--color-text-ghost);
+  pointer-events: none;
+  user-select: none;
+}
+
+.file-link-ticker > span {
+  flex: none;
+}
+
+.file-link-ticker[data-clipped] {
+  mask-image: linear-gradient(to right, transparent, black 18px);
+}
+
+.file-link-ticker[data-no-room] {
+  visibility: hidden;
+}
+
 /*
  * Tool-call density under the `lines` card style (`toolCardStyle.ts`).
  *
