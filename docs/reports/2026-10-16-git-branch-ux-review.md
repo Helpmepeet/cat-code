@@ -141,7 +141,7 @@ Principles, in priority order:
 2. **Filter field** when there are more than about eight branches. Typing
    filters; arrow keys move; Enter selects. Focus starts in the field.
 3. **Current branch first**, with the existing check mark.
-4. **Other branches**, alphabetical (see decision 4 for recency).
+4. **Other branches**, most recently committed first (decision 4).
 5. **Consequence note**, one short line, shown only when a switch is possible:
    switching replaces this empty chat. It sits above the list, not after 27 rows.
 
@@ -218,32 +218,24 @@ switches the real checkout, replaces the empty chat, refuses dirty trees and
 other live desktop chats, and does not protect terminal sessions. Update the
 desktop map row if behavior changes.
 
-## Decisions needed from the operator
+## Operator decisions
 
-Open decisions block the slices that depend on them. None has a prototype
-counterpart.
+All decided 2026-10-16, after review of a before/after mock of the picker
+states and the composer readout. None has a prototype counterpart.
 
-1. **Where the in-conversation branch readout lives.** Decided 2026-10-16:
-   composer action row, immediately left of the lid-closed cup. Rejected:
-   inside the prompt line beside the send arrow, and the cup's own slot.
-   Placements above the composer, below it, in the right gutter, and in the
-   tab strip were shown and not chosen.
-2. **Mismatch signal.** Warning tone on the readout with a tooltip only, or
-   also a one-time transcript notice at the point the change was noticed
-   (similar in weight to the workspace-move divider). Recommendation: readout
-   only, to keep the transcript free of status rows.
-3. **Draft on switch.** Carry the draft to the replacement chat (recommended),
-   or keep refusing and only show the blocker before the click.
-4. **Branch order after the current one.** Alphabetical (today), or most
-   recently committed first. Recommendation: recency, since long branch lists
-   are mostly stale worktree branches.
-5. **State the checkout-wide effect in the menu?** For example a short line that
-   switching changes the folder for every tool using it. Recommendation: no
-   extra line; the decision record amendment covers it, and the dirty-tree and
-   live-chat guards already stop the common harm.
-6. **Keep the switcher at all.** The original decision preferred a worktree
-   start over switching a shared checkout. Recommendation: keep the switcher
-   with the fixes above; a worktree start is a separate feature.
+1. **Readout placement.** Composer action row, immediately left of the
+   lid-closed cup. Rejected: inside the prompt line beside the send arrow, and
+   the cup's own slot. Placements above the composer, below it, in the right
+   gutter, and in the tab strip were shown and not chosen.
+2. **Mismatch signal.** Warning tone on the readout and its hover label only.
+   No transcript notice.
+3. **Draft on switch.** Carry the draft and attachments to the replacement
+   chat. On a failed handoff they stay in the original.
+4. **Branch order.** Current branch first, then most recently committed first.
+5. **Checkout-wide effect.** No extra line in the menu. The decision record
+   amendment covers it.
+6. **Keep the switcher.** Yes, with the fixes in this report. A worktree start
+   is a separate feature.
 
 ## Suggested slices
 
@@ -251,11 +243,11 @@ Independent slices, each one coherent change. File ownership is separate
 between slices 1 to 3 and slice 4.
 
 1. **Picker polish** (2, 3, 4, 5, 7, 8, 9, 10). Renderer picker plus the main
-   list response carrying blockers and per-branch worktree occupancy. Needs
-   decision 4 only for ordering.
+   list response carrying blockers, per-branch worktree occupancy, and commit
+   recency for ordering.
 2. **Switch flow** (6, N1, N5). Main and host handoff ordering, capacity
-   reservation, guard scope, draft transfer. Needs decision 3.
-3. **In-conversation readout and mismatch** (D, 14, N3). Needs decision 2.
+   reservation, guard scope, draft transfer.
+3. **In-conversation readout and mismatch** (D, 14, N3).
 4. **Engine recorded branch** (N2, N4). Engine Git reader only; affects the
    terminal as well, so check the terminal surfaces that print the branch.
 5. **Decision record amendment** (13). Documentation only; can land any time.
