@@ -62,7 +62,7 @@ export function SubagentSidePanel({ worker, workers, agent, steps, incomplete, c
     <header className="subagent-side-header">
       <div className="subagent-side-identity">
         <div className="subagent-side-line">
-          <AgentFace axes={face.axes} fill={face.fill} pulse={!terminal && worker.state === 'running'} />
+          <AgentFace axes={face.axes} fill={face.fill} pulse={!terminal && worker.state !== 'waiting'} />
           <span className="subagent-side-name">{worker.name ?? 'AGENT'}</span>
           {typeWord ? <span className="subagent-side-type">{typeWord}</span> : null}
           {worker.state === 'waiting' ? <span className="subagent-side-lead"><span className="subagent-dock-word-waiting">waiting</span><Baton owner="assistant" /></span>

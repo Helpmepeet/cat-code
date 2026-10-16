@@ -198,6 +198,7 @@ export type QueryEngineConfig = {
   handleElicitation?: ToolUseContext['handleElicitation']
   includePartialMessages?: boolean
   setSDKStatus?: (status: SDKStatus) => void
+  publishSubagentFrame?: ToolUseContext['publishSubagentFrame']
   getPostCompactRuntimeAttachments?: ToolUseContext['getPostCompactRuntimeAttachments']
   abortController?: AbortController
   orphanedPermission?: OrphanedPermission
@@ -374,6 +375,7 @@ export class QueryEngine {
       includePartialMessages = false,
       agents = [],
       setSDKStatus,
+      publishSubagentFrame,
       getPostCompactRuntimeAttachments,
       orphanedPermission,
       deferredAttemptUuid,
@@ -566,6 +568,7 @@ export class QueryEngine {
         })
       },
       setSDKStatus,
+      publishSubagentFrame,
       getPostCompactRuntimeAttachments,
     }
 
@@ -835,6 +838,7 @@ export class QueryEngine {
       updateFileHistoryState: processUserInputContext.updateFileHistoryState,
       updateAttributionState: processUserInputContext.updateAttributionState,
       setSDKStatus,
+      publishSubagentFrame,
       getPostCompactRuntimeAttachments,
     }
 

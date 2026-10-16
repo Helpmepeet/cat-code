@@ -325,3 +325,36 @@ test('every turn record the sidecar writes is admitted by the closed vocabulary'
     context,
   )).toThrow()
 })
+
+test('steps from a worker launched by an earlier turn do not keep a stuck turn looking alive', async () => {
+  const held: { release: (() => void) | null } = { release: null }
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield assistantMessage() as never
+      await new Promise<void>(resolve => { held.release = resolve })
+    },
+  })
+  const events: SidecarTurnLifecycleEvent[] = []
+  const server = new SidecarServer({
+    sessionId: SESSION, engineSessionId: ENGINE_SESSION, controller,
+    onTurnLifecycle: event => events.push(event), turnStallMs: STALL_MS, log: () => {},
+  })
+  servers.push(server)
+  submit(server, server.addConnection({ write() {}, end() {} }))
+
+  // The old worker keeps publishing out of turn faster than the stall window.
+  let sequence = 0
+  const worker = setInterval(() => controller.emitMessage({
+    type: 'assistant', parent_tool_use_id: 'tu-earlier-turn', session_id: ENGINE_SESSION,
+    uuid: `00000000-0000-4000-8000-1${String(++sequence).padStart(11, '0')}`,
+    message: { ...assistantMessage().message, content: [{ type: 'text', text: 'still going' }] },
+  } as never), STALL_MS / 4)
+  try {
+    await sleep(STALL_MS * 4)
+  } finally {
+    clearInterval(worker)
+  }
+
+  expect(events.filter(event => event.kind === 'stalled')).toHaveLength(1)
+  held.release?.()
+})

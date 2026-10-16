@@ -156,32 +156,43 @@ test('delayed row measurements use the shared bottom lock without pulling a scro
   expect(body.scrollTop).toBe(100)
 })
 
-test('Finished dock entries open and background or unbound rows keep the existing fallback', async () => {
+test('Finished, background, resumed and waiting runs open; only an unbound row keeps the fallback', async () => {
   const calls: string[] = []
+  const launch = (id: string): NestedToolUseRow => ({
+    ...agent(id, []), status: 'success', input: { description: `Task ${id}`, run_in_background: true },
+    result: { isError: false, content: 'Started', diff: null, agentId: id },
+  })
   const background = worker('bg', { state: 'background' })
   const resumed = worker('resumed', { state: 'resumed' })
   const waiting = worker('waiting', { state: 'waiting' })
   const unbound = worker('unbound', { toolUseId: null })
+  const rows = [agent(), launch('bg'), launch('resumed'), agent('waiting', []), agent('c', [prose('answer-c', 'Finished answer')])]
   const tree = await harness.mount(workspace({
+    active: [a, background, resumed, waiting, unbound], rows, fallback: row => calls.push(row.agentId),
+  }))
+  await click(tree.container, '[data-dock-row="unbound"]')
+  expect(calls).toEqual(['unbound'])
+  expect(tree.container.querySelector('aside')).toBeNull()
+  // A background run opens before its first step, with nothing claimed missing.
+  await click(tree.container, '[data-dock-row="bg"]')
+  expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-bg, background')
+  expect(tree.container.querySelector('.subagent-side-availability')).toBeNull()
+  await tree.render(workspace({
     active: [a, background, resumed, waiting, unbound],
-    rows: [agent(), agent('waiting', []), agent('c', [prose('answer-c', 'Finished answer')])],
+    rows: [agent(), { ...launch('bg'), children: [prose('bg-step', 'Background step')] }, launch('resumed'), agent('waiting', []), agent('c', [prose('answer-c', 'Finished answer')])],
     fallback: row => calls.push(row.agentId),
   }))
-  await click(tree.container, '[data-dock-row="bg"]')
-  await click(tree.container, '[data-dock-row="resumed"]')
-  await click(tree.container, '[data-dock-row="waiting"]')
-  await click(tree.container, '[data-dock-row="unbound"]')
-  expect(calls).toEqual(['bg', 'resumed', 'waiting', 'unbound'])
-  expect(tree.container.querySelector('aside')).toBeNull()
-  await click(tree.container, '[data-dock-row="a"]')
-  await click(tree.container, '.subagent-side-switch[aria-label="worker-bg, background"]')
-  expect(calls.at(-1)).toBe('bg')
-  expect(tree.container.querySelector('aside')).toBeNull()
-  await click(tree.container, '[data-finished-toggle]')
-  await click(tree.container, '[data-dock-row="c"]')
+  expect(tree.container.querySelector('aside')?.textContent).toContain('Background step')
+  for (const id of ['resumed', 'waiting']) {
+    await click(tree.container, `.subagent-side-switch[aria-label="worker-${id}, ${id}"]`)
+    expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe(`worker-${id}, ${id}`)
+  }
+  await click(tree.container, '.subagent-side-switch[aria-label="worker-c, completed"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Finished answer')
+  expect(calls).toEqual(['unbound'])
   await click(tree.container, '[aria-label="Close subagent panel"]')
-  expect(tree.container.querySelector('[data-finished-toggle]')?.getAttribute('aria-expanded')).toBe('true')
+  expect(tree.container.querySelector('aside')).toBeNull()
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
 })
 
 test('missing, orphaned and partially restored steps stay truthful and refresh when history arrives', async () => {
@@ -236,20 +247,44 @@ test('real SessionPane opens projected child reasoning and keeps parent Agent ex
   expect(tree.container.querySelector('aside')).not.toBeNull()
 })
 
-test('an open panel revalidates the run before showing resumed or background work', async () => {
-  for (const next of [
-    worker('a', { state: 'resumed', runKey: 'resume:2000', resumedAt: 2000 }),
-    worker('a', { state: 'background' }),
-  ]) {
-    const calls: SubagentDockRow[] = []
-    const fallback = (row: SubagentDockRow) => { calls.push(row) }
-    const tree = await harness.mount(workspace({ fallback }))
-    await click(tree.container, '[data-dock-row="a"]')
-    await tree.render(workspace({ active: [next, b], finished: [], fallback }))
-    expect(tree.container.querySelector('aside') === null).toBe(true)
-    expect(calls).toEqual([next])
-    await tree.unmount()
-  }
+test('an open panel follows its run into the background but not into a resume without a run of its own', async () => {
+  const calls: SubagentDockRow[] = []
+  const fallback = (row: SubagentDockRow) => { calls.push(row) }
+  const tree = await harness.mount(workspace({ fallback }))
+  await click(tree.container, '[data-dock-row="a"]')
+  // Sent to the background mid-run: same run, so the panel stays on it.
+  const backgrounded = worker('a', { state: 'background' })
+  await tree.render(workspace({ active: [backgrounded, b], finished: [], fallback }))
+  expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, background')
+  expect(calls).toEqual([])
+  const resumed = worker('a', { state: 'resumed', runKey: 'resume:2000', resumedAt: 2000 })
+  await tree.render(workspace({ active: [resumed, b], finished: [], fallback }))
+  expect(tree.container.querySelector('aside') === null).toBe(true)
+  expect(calls).toEqual([resumed])
+})
+
+test('out-of-turn steps, errors and interruptions nest under the background run that produced them', () => {
+  let transcript = createTranscriptState()
+  const message = (uuid: string, parent: string | null, role: 'assistant' | 'user', content: unknown[], extra = {}) => ({
+    kind: 'event', protocolVersion: 4, sessionId: 'session-1',
+    event: { type: 'message', message: { type: role, uuid, session_id: 'session-1', parent_tool_use_id: parent, message: { id: uuid, role, content }, ...extra } },
+  } as unknown as ServerFrame)
+  for (const frame of [
+    { kind: 'ready', protocolVersion: 4, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
+      type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+      abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
+    } } as ServerFrame,
+    message('parent', null, 'assistant', [{ type: 'tool_use', id: 'bg-agent', name: 'Agent', input: { description: 'Audit', run_in_background: true } }]),
+    message('ack', null, 'user', [{ type: 'tool_result', tool_use_id: 'bg-agent', content: 'Started' }], {
+      tool_use_result: { isAsync: true, status: 'async_launched', agentId: 'bg-id', agentName: 'bg-reader' },
+    }),
+    message('step', 'bg-agent', 'assistant', [{ type: 'thinking', thinking: 'Background reasoning', signature: '' }, { type: 'text', text: 'Background reply' }], { agent_name: 'bg-reader' }),
+    message('failure', 'bg-agent', 'assistant', [{ type: 'text', text: 'Provider unavailable' }], { agent_name: 'bg-reader', error: 'server_error' }),
+    message('stop', 'bg-agent', 'user', [{ type: 'text', text: '[Request interrupted by user]' }], { origin: { kind: 'interruption' } }),
+  ]) transcript = projectServerFrame(transcript, frame)
+  const rows = selectNestedTranscriptRows(transcript, 'session-1')
+  expect(rows.map(row => row.kind)).toEqual(['tool-use'])
+  expect(rows[0]!.children.map(row => row.kind)).toEqual(['thinking', 'assistant-text', 'system-notice', 'turn-stopped'])
 })
 
 test('terminal eviction retains the latest observed completion, not the opening snapshot', async () => {
@@ -263,7 +298,7 @@ test('terminal eviction retains the latest observed completion, not the opening 
   expect(tree.container.querySelector('.subagent-side-switch[aria-current="true"]')?.getAttribute('aria-label')).toBe('worker-a, completed')
 })
 
-test('finished streamless launches keep fallback, while restored steps remain openable', async () => {
+test('finished launches recorded before steps were published keep fallback, while restored steps remain openable', async () => {
   const calls: string[] = []
   const launch: NestedToolUseRow = {
     ...agent('async', []), status: 'success', input: { description: 'Async work', run_in_background: true },

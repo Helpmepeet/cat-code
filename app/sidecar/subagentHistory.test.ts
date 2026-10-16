@@ -15,10 +15,12 @@ import {
   createCompactBoundaryMessage,
 } from '../../src/utils/messages.js'
 
+import { stampSubagentFrames, toSDKMessages } from '../../src/utils/messages/mappers.js'
 import {
   loadBranchesWithinBudget,
   projectBranchFrames,
   spliceSubagentBranches,
+  splitAgentRuns,
   withRestoredSubagentHistory,
 } from './subagentHistory.js'
 
@@ -379,5 +381,111 @@ describe('restored subagent history availability', () => {
     const restored = await withRestoredSubagentHistory(sessionId, history)
     expect(restored.unavailableParentToolUseIds).toEqual([])
     expect(restored.history).toEqual(history)
+  })
+})
+
+describe('subagent run ownership on restore', () => {
+  const step = (uuid: string) => ({ uuid }) as never
+
+  test('cuts one sidechain into the original run and each resume', () => {
+    const segments = splitAgentRuns(
+      ['p1', 'a1', 'p2', 'a2', 'p3', 'a3'].map(step),
+      [
+        { parentToolUseId: 'tu-original', firstMessageUuid: 'p1' },
+        { parentToolUseId: 'tu-resume-a', firstMessageUuid: 'p2' },
+        { parentToolUseId: 'tu-resume-b', firstMessageUuid: 'p3' },
+      ],
+      'tu-resume-b',
+    )
+    expect(segments.map(segment => [segment.parentToolUseId, segment.messages.map(m => (m as { uuid: string }).uuid)]))
+      .toEqual([['tu-original', ['p1', 'a1']], ['tu-resume-a', ['p2', 'a2']], ['tu-resume-b', ['p3', 'a3']]])
+  })
+
+  test('a file without run records keeps every step under its one recorded card', () => {
+    const segments = splitAgentRuns(['a', 'b'].map(step), undefined, 'tu-latest')
+    expect(segments).toEqual([{ parentToolUseId: 'tu-latest', messages: ['a', 'b'].map(step) }])
+  })
+
+  test('a legacy first run owns the steps before the first recorded start', () => {
+    const segments = splitAgentRuns(
+      ['old', 'old-answer', 'p2', 'a2'].map(step),
+      [{ parentToolUseId: 'tu-legacy' }, { parentToolUseId: 'tu-resume', firstMessageUuid: 'p2' }],
+      'tu-resume',
+    )
+    expect(segments.map(segment => [segment.parentToolUseId, segment.messages.length]))
+      .toEqual([['tu-legacy', 2], ['tu-resume', 2]])
+  })
+
+  test('live publication and restore give one stored message the same frame', () => {
+    const stored = createAssistantMessage({
+      content: [
+        { type: 'thinking', thinking: 'weighing it', signature: 'sig' },
+        { type: 'text', text: 'checking the file' },
+        { type: 'tool_use', id: 'tu-read', name: 'Read', input: { file_path: '/tmp/a' } },
+      ] as never,
+    })
+    const live = stampSubagentFrames(toSDKMessages([stored]), 'tu-agent', 'Ada')
+    const restored = projectBranchFrames([stored], 'tu-agent', 'Ada')
+    expect(live as SDKMessage[]).toEqual(restored)
+    expect(live).toHaveLength(1)
+    expect(live[0]!.uuid).toBe(stored.uuid)
+  })
+})
+
+describe('restored resumed runs through the real reader', () => {
+  const originalId = getSessionId()
+  const originalProject = getSessionProjectDir()
+  let directory: string
+  let sessionId: string
+
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'cc-subagent-runs-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), directory)
+  })
+  afterEach(() => {
+    switchSession(originalId, originalProject)
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  test('each run returns under its own card after a restore', async () => {
+    const agentId = asAgentId('resumed-twice')
+    const texts = ['original prompt', 'original work', 'resume A prompt', 'resume A work', 'resume B prompt', 'resume B work']
+    const uuids = texts.map(() => randomUUID())
+    await writeAgentMetadata(agentId, {
+      agentType: 'Explore', parentSessionId: sessionId, parentToolUseId: 'tu-resume-b',
+      spawnedAt: '2026-10-17T00:00:00.000Z', agentName: 'Ada',
+      runs: [
+        { parentToolUseId: 'tu-original', firstMessageUuid: uuids[0]! },
+        { parentToolUseId: 'tu-resume-a', firstMessageUuid: uuids[2]! },
+        { parentToolUseId: 'tu-resume-b', firstMessageUuid: uuids[4]! },
+      ],
+    })
+    const path = getAgentTranscriptPathForSession(sessionId, agentId)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, texts.map((text, index) => JSON.stringify({
+      type: 'assistant', agentId, sessionId, isSidechain: true,
+      uuid: uuids[index], parentUuid: index === 0 ? null : uuids[index - 1],
+      timestamp: '2026-10-17T00:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    })).join('\n') + '\n')
+    const history = [
+      spawnFrame('tu-original', 'spawn-original'),
+      spawnFrame('tu-resume-a', 'spawn-resume-a'),
+      spawnFrame('tu-resume-b', 'spawn-resume-b'),
+    ]
+
+    const restored = await withRestoredSubagentHistory(sessionId, history)
+
+    expect(restored.history.map(frame => [frame.uuid, 'parent_tool_use_id' in frame ? frame.parent_tool_use_id ?? null : null]))
+      .toEqual([
+        ['spawn-original', null],
+        [uuids[0], 'tu-original'], [uuids[1], 'tu-original'],
+        ['spawn-resume-a', null],
+        [uuids[2], 'tu-resume-a'], [uuids[3], 'tu-resume-a'],
+        ['spawn-resume-b', null],
+        [uuids[4], 'tu-resume-b'], [uuids[5], 'tu-resume-b'],
+      ])
+    expect(restored.unavailableParentToolUseIds).toEqual([])
   })
 })

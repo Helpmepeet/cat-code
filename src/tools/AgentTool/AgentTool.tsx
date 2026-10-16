@@ -1165,6 +1165,7 @@ export const AgentTool = buildTool({
       agentDefinition: selectedAgent,
       promptMessages,
       toolUseContext,
+      publishDisplaySteps: true,
       canUseTool,
       isAsync: shouldRunAsync,
       querySource: toolUseContext.options.querySource ?? getQuerySourceForAgent(selectedAgent.agentType, isBuiltInAgent(selectedAgent)),
@@ -1469,7 +1470,10 @@ export const AgentTool = buildTool({
         if (promptMessages.length > 0) {
           const normalizedPromptMessages = normalizeMessages(promptMessages);
           const normalizedFirstMessage = normalizedPromptMessages.find((m): m is NormalizedUserMessage => m.type === 'user');
-          if (normalizedFirstMessage && normalizedFirstMessage.type === 'user' && onProgress) {
+          // A desktop run publishes every step itself (`runAgent`
+          // `publishDisplaySteps`); a progress copy would be a second
+          // delivery path with its own ordering.
+          if (normalizedFirstMessage && normalizedFirstMessage.type === 'user' && onProgress && !toolUseContext.publishSubagentFrame) {
             onProgress({
               toolUseID: `agent_${assistantMessage.message.id}`,
               data: {
@@ -1972,8 +1976,9 @@ export const AgentTool = buildTool({
                   continue;
                 }
 
-                // Forward progress updates
-                if (onProgress) {
+                // Forward progress updates, unless the run publishes its own
+                // steps (see the prompt progress above).
+                if (onProgress && !toolUseContext.publishSubagentFrame) {
                   onProgress({
                     toolUseID: `agent_${assistantMessage.message.id}`,
                     data: {

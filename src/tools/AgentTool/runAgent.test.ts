@@ -1483,3 +1483,162 @@ describe('runAgent MCP generation handed to the subagent', () => {
     expect(context.options.mcpResources).toBe(parentResources as never)
   })
 })
+
+describe('runAgent display step publication', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    resetStateForTests()
+    resetWorkerNamesForTests()
+    tempDir = mkdtempSync(join(tmpdir(), 'run-agent-publish-'))
+    switchSession(asSessionId('session-run-agent-publish'), tempDir)
+  })
+
+  afterEach(() => {
+    resetWorkerNamesForTests()
+    resetStateForTests()
+  })
+
+  function publishingContext(
+    harness: ReturnType<typeof createAppStateHarness>,
+    publish: (frame: unknown) => void,
+    toolUseId = 'tu-agent-card',
+  ) {
+    return {
+      ...createParentContext(harness),
+      toolUseId,
+      publishSubagentFrame: publish,
+    } as unknown as ToolUseContext
+  }
+
+  test('publishes the prompt and every stored step whole, under the run that owns it', async () => {
+    const harness = createAppStateHarness()
+    const published: Array<Record<string, unknown>> = []
+    const prompt = createUserMessage({ content: 'audit the launcher' })
+    const step = createAssistantMessage({
+      content: [
+        { type: 'thinking', thinking: 'weighing it', signature: 'sig' },
+        { type: 'text', text: 'reading the file' },
+        { type: 'tool_use', id: 'tu-read', name: 'Read', input: { file_path: '/tmp/a' } },
+      ] as never,
+    })
+    queryScript = async function* () {
+      yield step
+    }
+
+    const yielded: Message[] = []
+    for await (const message of startAgent(harness, {
+      parentContext: publishingContext(harness, frame => published.push(frame as Record<string, unknown>)),
+      promptMessages: [prompt],
+      publishDisplaySteps: true,
+      agentName: 'Ada',
+    })) yielded.push(message)
+
+    expect(yielded).toEqual([step])
+    expect(published.map(frame => [frame.type, frame.uuid, frame.parent_tool_use_id, frame.agent_name])).toEqual([
+      ['user', prompt.uuid, 'tu-agent-card', 'Ada'],
+      ['assistant', step.uuid, 'tu-agent-card', 'Ada'],
+    ])
+    // Whole, not split per block: restore reproduces exactly this frame.
+    expect((published[1]!.message as { content: unknown[] }).content).toHaveLength(3)
+  })
+
+  test('a run that did not opt in publishes nothing', async () => {
+    const harness = createAppStateHarness()
+    const published: unknown[] = []
+    queryScript = async function* () {
+      yield createAssistantMessage({ content: 'working' })
+    }
+    for await (const _message of startAgent(harness, {
+      parentContext: publishingContext(harness, frame => published.push(frame)),
+      promptMessages: [createUserMessage({ content: 'skill body' })],
+    })) {
+      // drain
+    }
+    expect(published).toEqual([])
+  })
+
+  test('a failing display subscriber does not change the run', async () => {
+    const harness = createAppStateHarness()
+    const step = createAssistantMessage({ content: 'working' })
+    queryScript = async function* () {
+      yield step
+    }
+    const yielded: Message[] = []
+    for await (const message of startAgent(harness, {
+      parentContext: publishingContext(harness, () => {
+        throw new Error('renderer gone')
+      }),
+      promptMessages: [createUserMessage({ content: 'go' })],
+      publishDisplaySteps: true,
+    })) yielded.push(message)
+    expect(yielded).toEqual([step])
+  })
+
+  test('records where each run starts so a restore can split resumes apart', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'run-agent-runs-cfg-'))
+    const sessionDir = mkdtempSync(join(tmpdir(), 'run-agent-runs-session-'))
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    const agentId = createAgentId('runs-recorded')
+    const first = createUserMessage({ content: 'original prompt' })
+    const firstAnswer = createAssistantMessage({ content: 'original work' })
+    const resumePrompt = createUserMessage({ content: 'resume prompt' })
+    const resumeAnswer = createAssistantMessage({ content: 'resumed work' })
+    const { readAgentMetadata } = realSessionStorageModule
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+      resetProjectForTesting()
+      switchSession(asSessionId(randomUUID()), sessionDir)
+      clearSessionMessagesCache()
+
+      const run = async (toolUseId: string, promptMessages: Message[], answer: Message, seeded?: Message[]) => {
+        queryScript = async function* () {
+          yield answer
+        }
+        const harness = createAppStateHarness()
+        for await (const _message of startAgent(harness, {
+          parentContext: { ...createParentContext(harness), toolUseId },
+          promptMessages,
+          ...(seeded ? { seededMessagesForPersistence: seeded } : {}),
+          override: {
+            systemPrompt: ['fixture prompt'] as never,
+            userContext: {},
+            systemContext: {},
+            agentId,
+          },
+        })) {
+          // drain
+        }
+        await flushSessionStorage()
+        // The metadata write is fire-and-forget after a read.
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const runs = (await readAgentMetadata(agentId))?.runs
+          if (runs?.at(-1)?.parentToolUseId === toolUseId) return
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      }
+
+      await run('tu-original', [first], firstAnswer)
+      await run('tu-resume', [first, firstAnswer, resumePrompt], resumeAnswer, [first, firstAnswer])
+
+      const metadata = await readAgentMetadata(agentId)
+      expect(metadata?.parentToolUseId).toBe('tu-resume')
+      expect(metadata?.runs).toEqual([
+        { parentToolUseId: 'tu-original', firstMessageUuid: first.uuid },
+        { parentToolUseId: 'tu-resume', firstMessageUuid: resumePrompt.uuid },
+      ])
+    } finally {
+      clearSessionMessagesCache()
+      resetProjectForTesting()
+      switchSession(asSessionId('session-run-agent-publish'), tempDir)
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousPersistence === undefined) delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      else process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousPersistence
+      await rm(configDir, { recursive: true, force: true }).catch(() => {})
+      await rm(sessionDir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+})
