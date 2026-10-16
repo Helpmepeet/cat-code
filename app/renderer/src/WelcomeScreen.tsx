@@ -1,6 +1,6 @@
 /**
  * WelcomeScreen (P4-17) — the first-run / empty-session launcher (`Welcome.jsx`),
- * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a neon-cat
+ * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a cat mascot
  * hero + wordmark, an interactive meta strip (Project · Start-in),
  * and the read-only Codex pool table. It replaces the minimal `EmptyShell`.
  *
@@ -50,15 +50,12 @@ import {
   handleMenuRovingKeyDown,
   usePopover,
 } from './composerPopover.js'
-import sleepingCat from './assets/sleeping-cat.png'
-import catCoding from './assets/welcome-cat-coding.png'
-import catEating from './assets/welcome-cat-eating.png'
-import catHunting from './assets/welcome-cat-hunting.png'
-import catScratching from './assets/welcome-cat-scratching.png'
-import catStretching from './assets/welcome-cat-stretching.png'
-import catThinking from './assets/welcome-cat-thinking.png'
-import catYarning from './assets/welcome-cat-yarn.png'
-import catYawning from './assets/welcome-cat-yawning.png'
+import catBase from './assets/mascot-100/base.png'
+import catCoding from './assets/mascot-100/coding.png'
+import sleepingCat from './assets/mascot-100/sleeping.png'
+import catStretching from './assets/mascot-100/stretching.png'
+import catThinking from './assets/mascot-100/thinking.png'
+import catWaving from './assets/mascot-100/waving.png'
 import { basename } from './pathUtils.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
@@ -68,15 +65,12 @@ import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 import type { HostResult, WorkspaceBranches } from '../../shared/hostApi.js'
 
 const welcomeCats = [
+  catBase,
   sleepingCat,
   catCoding,
-  catEating,
-  catHunting,
-  catScratching,
   catStretching,
   catThinking,
-  catYarning,
-  catYawning,
+  catWaving,
 ] as const
 
 // Pick once per renderer load so every Welcome surface in the window shares its cat.
@@ -170,6 +164,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
           <div className="flex justify-center">
             <img
               src={welcomeCat}
+              className="h-[211px] w-[248px] max-w-full object-contain"
               alt=""
               width={248}
               height={211}
