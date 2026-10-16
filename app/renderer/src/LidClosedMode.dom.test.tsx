@@ -55,7 +55,7 @@ test('focus does not activate; active keyboard adjustment sends only fixed prese
   const cup = tree.container.querySelector<HTMLButtonElement>('.lid-cup')!
   await act(async () => { cup.focus() })
   expect(commands).toEqual([])
-  expect(tree.container.querySelector('.lid-number')?.textContent).toBe('0min')
+  expect(tree.container.querySelector('.lid-digits')).toBeNull()
   await act(async () => { receive(initial()) })
   await act(async () => { cup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })) })
   expect(commands).toEqual([{ action: 'adjust', minutes: 30 }])
@@ -89,4 +89,48 @@ test('the cup tooltip explains endings the user did not choose and refused start
   expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
   await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
   expect(title()).toBe('Charge above 20% before starting.')
+})
+
+test('the numeral shows remaining minutes, the allowance while adjusting or starting, and warns at five minutes', async () => {
+  let receive!: (view: LidModeView) => void
+  const view = initial(60)
+  window.catcode = { lidClosed: { read: async () => view, command: async () => view,
+    subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
+  const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /></LidClosedProvider>)
+  const digits = () => tree.container.querySelector('.lid-digits')
+  const shown = () => tree.container.querySelector('.lid-digit-in, .lid-digit:not(.lid-digit-out)')?.textContent
+  expect(shown()).toBe('60')
+  expect(digits()!.classList.contains('warn')).toBe(false)
+  await act(async () => { receive({ ...view, remainingSeconds: 5 * 60 - 10 }) })
+  expect(shown()).toBe('5')
+  expect(digits()!.classList.contains('warn')).toBe(true)
+  await act(async () => { receive({ ...view, remainingSeconds: 6 * 60 - 10 }) })
+  expect(digits()!.classList.contains('warn')).toBe(false)
+  await act(async () => { receive({ ...view, phase: 'starting', allowance: 30, remainingSeconds: 0 }) })
+  expect(shown()).toBe('30')
+  expect(digits()!.classList.contains('starting')).toBe(true)
+  const cup = tree.container.querySelector<HTMLButtonElement>('.lid-cup')!
+  await act(async () => { receive(view) })
+  await act(async () => { cup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })) })
+  await act(async () => { receive({ ...view, allowance: 120, remainingSeconds: 55 * 60 }) })
+  expect(shown()).toBe('120')
+  for (const phase of ['off', 'ended', 'restoring', 'unresolved', 'unavailable'] as const)
+    await act(async () => { receive({ ...view, phase, reason: 'expired' }) }), expect(digits()).toBeNull()
+})
+
+test('a stop the user chose looks exactly like off; unexpected endings keep the amber mark', async () => {
+  let receive!: (view: LidModeView) => void
+  const view = initial()
+  window.catcode = { lidClosed: { read: async () => view, command: async () => view,
+    subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
+  const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /></LidClosedProvider>)
+  const face = () => tree.container.querySelector('.lid-cup-slot')!.outerHTML.replaceAll(/id="[^"]*"|url\(#[^)]*\)/g, '')
+  await act(async () => { receive({ ...view, phase: 'off', remainingSeconds: 0 }) })
+  const off = face()
+  await act(async () => { receive({ ...view, phase: 'ended', reason: 'stopped', remainingSeconds: 0 }) })
+  expect(face()).toBe(off)
+  expect(tree.container.querySelector('.lid-cup-slot')!.classList.contains('lid-ended')).toBe(false)
+  await act(async () => { receive({ ...view, phase: 'ended', reason: 'thermal', remainingSeconds: 0 }) })
+  expect(tree.container.querySelector('.lid-cup-slot')!.classList.contains('lid-ended')).toBe(true)
+  expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
 })

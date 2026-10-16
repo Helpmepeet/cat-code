@@ -2215,4 +2215,6 @@ html[data-glass='on'] [data-window-overlay] {
   --color-lid-open: light-dark(#66666d, #838389);
   --color-lid-active: light-dark(#85552f, #d4a274);
   --color-lid-number: light-dark(#75451f, #f1dcc3);
+  --color-lid-coffee: light-dark(#8a5a33, #a8703f);
+  --color-lid-crema: light-dark(#c08a5a, #f1dcc3);
 }
