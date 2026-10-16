@@ -469,3 +469,52 @@ Consequences that follow, and are therefore also ruled:
   toggle moves to the TabBar and must be reachable on a non-empty transcript.
 
 Phase-2 dispatch: **P4-32a** and **P4-32b** per the §8 split, which stands unchanged.
+
+## 11. Live subagent side-panel amendment (2026-10-16)
+
+The operator explicitly reverses inspection D1's TasksDialog-only limit and its
+blanket waiver of read-only worker focus. This supersedes §10's waiver 10 for
+the panel below, not the bans on worker messaging or a main-column replacement.
+The approved local reference is the untracked
+`docs/design-html/2026-10-16-subagent-live-side-panel.html`; renderer tokens and
+existing components remain authoritative for exact visual values.
+
+`SessionPane` mounts `SubagentWorkspace`: a dock click opens a read-only,
+480px right-hand panel beside the parent transcript and composer. It uses
+`surface-panel` and a left seam, with no overlay, scrim, shadow, resize handle,
+composer, or Stop control. The parent column shrinks to make room. Parent
+Agent-card clicks keep their existing expand behavior.
+
+The header retains the Agent card's two-line identity/task/model structure.
+Running activity text is absent only in this header. Waiting shows the dock's
+waiting word and →assistant baton; finished runs show settled tool-call/token
+usage. Dock faces and their state badges switch agents in one click, including
+Finished entries, and expose the open face as current. The dock is hidden while
+the panel is open; closing restores ordinary dock behavior. Selecting the same
+face does nothing.
+
+The body reuses `TranscriptRowsView`, including the current reasoning layout,
+over `selectNestedTranscriptRows` children. Each opening/switch starts at the
+latest step and follows until the reader scrolls up; reaching the bottom resumes
+following. No jump-to-latest button is added. Missing/partial history is identified
+without inventing steps; retained orphan branches remain readable. A missing
+parent can use the existing parent-history recovery action when available.
+
+This also narrows Q2: transcript-owned worker prose may appear in this read-only
+panel as it already does inside Agent cards. Worker-snapshot result/verdict
+drilldown remains in TasksDialog; no snapshot is passed off as transcript prose.
+
+Source inspection confirms that async launches return before the foreground
+`onProgress` loop (`src/tools/AgentTool/AgentTool.tsx`), and backgrounded/resumed
+runs do not forward live steps. Those live dock rows, including waiting async
+workers without steps, retain their existing Agent-card reveal or Workers-dialog
+fallback. Finished rows with retained history
+remain openable. Foreground reasoning arrives as completed blocks through
+`src/utils/queryHelpers.ts`; token-by-token subagent reasoning is not added.
+No protocol, sidecar, engine, or permission-state change is authorized here.
+Permission-waiting still has no distinct dock state.
+
+Headless panel interaction and SessionPane integration checks live in
+`app/renderer/src/SubagentSidePanel.dom.test.ts`. Native visual acceptance,
+real wheel/layout behavior, light/dark/narrow appearance and keyboard operation
+remain operator checks until an authorized Cat Code Dev run.

@@ -151,7 +151,7 @@ import {
   AgentFaceRegistryContext,
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
-import { SubagentDock } from './SubagentDock.js'
+import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -1690,9 +1690,11 @@ export function SessionPane({
     /* Wrapped without re-indenting the pane below, the same way the composer
      * dock's own column wrapper is. */
     <AgentFaceRegistryContext.Provider value={paneFaces}>
+    <SubagentWorkspace key={activeSessionId} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
+      onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
+      onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
+      onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}>
     <main className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
-      <SubagentDock state={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
-        onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onOpenWorker={openDockWorker} onOpenWorkers={() => onOpenTasks?.(undefined, true)} />
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the
        * P4-6b `SessionActionsMenu`, a separate surface). The cwd/status debug
@@ -2480,6 +2482,7 @@ export function SessionPane({
         </section>
       ) : null}
     </main>
+    </SubagentWorkspace>
     </AgentFaceRegistryContext.Provider>
   )
 }

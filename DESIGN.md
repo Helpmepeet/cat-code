@@ -145,6 +145,17 @@ large pill treatments within one control group.
   Foreground workers alone show live activity. Background tasks remain available
   through ⌘K “Background tasks”. See `SubagentDock.tsx`,
   `subagentDockState.ts`, and `subagentDockPersistence.ts`.
+  Clicking an inspectable worker opens its read-only live steps in a 480px
+  inline right panel. The parent transcript and composer shrink beside it.
+  The panel uses `surface-panel` and a left seam, without overlay elevation.
+  Header faces replace the hidden dock and switch among active and finished
+  workers; the open face is marked. Its two-line Agent identity header omits
+  running activity, shows waiting with the assistant baton, and shows settled
+  usage on finish. Steps reuse the main transcript and reasoning layout, follow
+  new work until the reader scrolls up, and resume at the bottom. Live
+  background/resumed workers keep the existing reveal/Workers fallback because
+  their steps are not forwarded. See `SubagentWorkspace.tsx` and
+  `SubagentSidePanel.tsx`.
 - **Composer:** Keep the input visually connected to the transcript. Put model,
   reasoning, permission, and account controls in a compact action row. Reuse
   the existing composer controls and [`Chip.tsx`](app/renderer/src/Chip.tsx)

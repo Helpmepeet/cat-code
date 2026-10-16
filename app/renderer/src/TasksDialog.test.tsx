@@ -577,7 +577,7 @@ test('worker detail fabricates no WMeta field when there is no lease (waiver 7)'
   expect(html).not.toContain('$')
 })
 
-test('worker detail offers no focus/open-thread affordance (D1 waives WorkerFocusView)', () => {
+test('worker detail keeps thread navigation in the dock rather than adding an open-thread control', () => {
   const html = renderToStaticMarkup(
     <WorkerDetailPanel
       lease={null}
