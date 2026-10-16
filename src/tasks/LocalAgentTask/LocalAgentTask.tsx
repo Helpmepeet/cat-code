@@ -69,6 +69,7 @@ export type LocalAgentMessageDelivery = {
   outcome?: string
   reported?: boolean
 }
+export const MAX_LOCAL_AGENT_MESSAGE_RECEIPTS = 20
 export type ProgressTracker = {
   toolUseCount: number;
   // Track input and output separately to avoid double-counting.
@@ -338,6 +339,14 @@ export function getUnresolvedAgentMessageDeliveries(
   )
 }
 
+export function getCurrentRunParentMessageDeliveries(
+  task: LocalAgentTaskState,
+): LocalAgentMessageDelivery[] {
+  return normalizePendingMessages(task.pendingMessages)
+    .filter(message => message.runId === task.runId && !message.originAgentId)
+    .slice(-MAX_LOCAL_AGENT_MESSAGE_RECEIPTS)
+}
+
 export function formatAgentMessageDeliveryRecords(
   records: readonly LocalAgentMessageDelivery[],
 ): string | undefined {
@@ -409,6 +418,7 @@ export function queuePendingMessageIfRunning(
               message,
               ...(originAgentId ? { originAgentId } : {}),
               status: 'pending',
+              runId: task.runId,
               acceptedAt: Date.now(),
               reported: false,
             },
@@ -596,20 +606,25 @@ export function settleAgentMessageDeliveries(
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (!taskRunMatches(task, runId)) return task
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const nextMessages = pendingMessages.flatMap(message => {
+    const nextMessages = pendingMessages.map(message => {
       if (
         !ids.has(message.id) ||
         (message.runId !== undefined && message.runId !== runId) ||
         (message.status !== 'prepared' && message.status !== 'submitted')
       ) {
-        return [message]
+        return message
       }
-      if (status === 'delivered') return []
-      return [{ ...message, status, outcome, runId }]
+      return { ...message, status, outcome, runId }
     })
+    const recentDeliveredIds = new Set(
+      nextMessages.filter(message => message.status === 'delivered')
+        .slice(-MAX_LOCAL_AGENT_MESSAGE_RECEIPTS).map(message => message.id),
+    )
     return {
       ...task,
-      pendingMessages: nextMessages,
+      pendingMessages: nextMessages.filter(message =>
+        message.status !== 'delivered' || recentDeliveredIds.has(message.id),
+      ),
     }
   })
 }

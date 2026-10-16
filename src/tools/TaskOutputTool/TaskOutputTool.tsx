@@ -9,7 +9,7 @@ import { useShortcutDisplay } from '../../keybindings/useShortcutDisplay.js';
 import type { TaskType } from '../../Task.js';
 import type { Tool } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
-import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { getCurrentRunParentMessageDeliveries, type LocalAgentMessageDeliveryStatus, type LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import type { LocalShellTaskState } from '../../tasks/LocalShellTask/guards.js';
 import type { RemoteAgentTaskState } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
 import type { TaskState } from '../../tasks/types.js';
@@ -55,6 +55,27 @@ type TaskOutputToolOutput = {
 
 const LOCAL_AGENT_PENDING_OUTPUT =
   'Final answer is not available yet. Use block=true to wait for completion.';
+const MESSAGE_RECEIPT_DESCRIPTION =
+  "Seen: the worker's model received the message. Not seen yet: it is waiting for the worker's next step. Not confirmed: the request carrying it was cut or failed, so the worker may or may not have read it.";
+const MESSAGE_RECEIPT_LABELS: Record<LocalAgentMessageDeliveryStatus, string> = {
+  pending: 'not seen yet',
+  prepared: 'not seen yet',
+  submitted: 'not seen yet',
+  delivered: 'seen',
+  uncertain: 'not confirmed',
+  undelivered: 'not delivered',
+};
+
+function pendingAgentOutput(task: LocalAgentTaskState): string {
+  const receipts = getCurrentRunParentMessageDeliveries(task).map(message => {
+    const text = message.message.replace(/\s+/g, ' ').trim();
+    const excerpt = text.length > 160 ? `${text.slice(0, 159)}…` : text;
+    return `- ${MESSAGE_RECEIPT_LABELS[message.status]}: ${JSON.stringify(excerpt)}`;
+  });
+  return receipts.length === 0
+    ? LOCAL_AGENT_PENDING_OUTPUT
+    : `${LOCAL_AGENT_PENDING_OUTPUT}\n\nMessages to worker:\n${receipts.join('\n')}`;
+}
 
 // Re-export Progress from centralized types to break import cycles
 export type { TaskOutputProgress as Progress } from '../../types/tools.js';
@@ -72,7 +93,7 @@ async function getTaskOutputData(task: TaskState): Promise<TaskOutput> {
     const output =
       cleanResult ??
       (task.status === 'running' || task.status === 'pending'
-        ? LOCAL_AGENT_PENDING_OUTPUT
+        ? pendingAgentOutput(agentTask)
         : await getTaskOutput(task.id));
     return {
       task_id: task.id,
@@ -167,7 +188,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     return inputSchema();
   },
   async description() {
-    return 'Read structured output from a background task';
+    return `Read structured output from a background task. ${MESSAGE_RECEIPT_DESCRIPTION}`;
   },
   isConcurrencySafe(_input) {
     return this.isReadOnly?.(_input) ?? false;
@@ -190,6 +211,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
 - Returns task status, output, and type-specific fields.
 - Use block=true (default) to wait for task completion when your next step depends on the result.
 - Use block=false for a non-blocking status check; running local agents do not return transcript content.
+- ${MESSAGE_RECEIPT_DESCRIPTION}
 - Task IDs are shown in background task launch results and task notifications.
 - Works with background shell tasks, local agents, and remote agent sessions.`;
   },

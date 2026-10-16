@@ -2,7 +2,13 @@ import { describe, expect, test } from 'bun:test'
 
 import type { AppState } from '../../state/AppStateStore.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
-import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import {
+  claimPendingMessagesForRequest,
+  queuePendingMessageIfRunning,
+  settleAgentMessageDeliveries,
+  submitPreparedAgentMessages,
+  type LocalAgentTaskState,
+} from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import {
   appendTaskOutput,
   cleanupTaskOutput,
@@ -70,7 +76,7 @@ function makeRunningLocalAgentTask(): LocalAgentTaskState {
 
 describe('TaskOutputTool', () => {
   test('prompt advertises TaskOutput as the safe structured path', async () => {
-    await expect(TaskOutputTool.description()).resolves.toBe(
+    await expect(TaskOutputTool.description()).resolves.toContain(
       'Read structured output from a background task',
     )
 
@@ -211,5 +217,74 @@ describe('TaskOutputTool', () => {
     } finally {
       await cleanupTaskOutput(taskId)
     }
+  })
+
+  test('running output reports parent messages from acceptance through completed receipt', async () => {
+    const task = { ...makeRunningLocalAgentTask(), runId: 'current-run' }
+    const state = { current: { ...getDefaultAppState(), tasks: { [task.id]: task } } }
+    const context = makeContext(state)
+    const output = async (block = false) => (await TaskOutputTool.call(
+      { task_id: task.id, block, timeout: 0 },
+      context as never, undefined as never, undefined as never,
+    )).data.task!.output
+
+    queuePendingMessageIfRunning(task.id, 'Report the current result.', context.setAppState)
+    expect(await output()).toContain('not seen yet: "Report the current result."')
+    claimPendingMessagesForRequest(task.id, task.runId, context.setAppState)
+    expect(await output()).toContain('not seen yet: "Report the current result."')
+    const ids = submitPreparedAgentMessages(task.id, task.runId, 'request-1', context.setAppState)
+    expect(await output()).toContain('not seen yet: "Report the current result."')
+    settleAgentMessageDeliveries(task.id, ids, task.runId, 'delivered', 'completed response', context.setAppState)
+    const seen = await output(true)
+    expect(seen).toContain('Final answer is not available yet.')
+    expect(seen).toContain('seen: "Report the current result."')
+    expect(seen).not.toContain('not seen yet')
+    expect(state.current.tasks[task.id].notified).toBe(false)
+
+    for (let i = 0; i < 25; i++) {
+      queuePendingMessageIfRunning(task.id, `Completed message ${i}`, context.setAppState)
+      claimPendingMessagesForRequest(task.id, task.runId, context.setAppState)
+      const submitted = submitPreparedAgentMessages(task.id, task.runId, `request-${i + 2}`, context.setAppState)
+      settleAgentMessageDeliveries(task.id, submitted, task.runId, 'delivered', 'completed response', context.setAppState)
+    }
+    queuePendingMessageIfRunning(task.id, 'Unresolved message', context.setAppState)
+    const records = state.current.tasks[task.id].pendingMessages
+    expect(records.filter(message => message.status === 'delivered')).toHaveLength(20)
+    expect(records.find(message => message.message === 'Unresolved message')?.status).toBe('pending')
+    expect(await output()).toContain('not seen yet: "Unresolved message"')
+  })
+
+  test('message receipts are bounded, excerpted, and exclude other runs and worker senders', async () => {
+    const task: LocalAgentTaskState = {
+      ...makeRunningLocalAgentTask(),
+      runId: 'current-run',
+      pendingMessages: [
+        ...Array.from({ length: 25 }, (_, i) => ({
+          id: `old-${i}`, message: `older message ${i}`, acceptedAt: i,
+          runId: 'current-run', status: 'delivered' as const,
+        })),
+        { id: 'previous', message: 'previous run hidden', runId: 'previous-run', acceptedAt: 30, status: 'uncertain' },
+        { id: 'sibling', message: 'sibling hidden', originAgentId: 'sibling' as never, runId: 'current-run', acceptedAt: 31, status: 'submitted' },
+        { id: 'uncertain', message: 'Possibly received\n' + 'x'.repeat(1000), runId: 'current-run', acceptedAt: 32, status: 'uncertain' },
+        { id: 'undelivered', message: 'Could not deliver', runId: 'current-run', acceptedAt: 33, status: 'undelivered' },
+      ],
+    }
+    const state = { current: { ...getDefaultAppState(), tasks: { [task.id]: task } } }
+    const result = await TaskOutputTool.call(
+      { task_id: task.id, block: false, timeout: 0 },
+      makeContext(state) as never, undefined as never, undefined as never,
+    )
+    const output = result.data.task!.output
+    expect(output).toContain('not confirmed: "Possibly received ')
+    expect(output).toContain('not delivered: "Could not deliver"')
+    expect(output).not.toContain('previous run hidden')
+    expect(output).not.toContain('sibling hidden')
+    expect(output).not.toContain('older message 0"')
+    expect(output.match(/^- /gm)).toHaveLength(20)
+    expect(output.length).toBeLessThan(4000)
+    expect(output).not.toContain('x'.repeat(200))
+    expect(await TaskOutputTool.prompt(undefined as never)).toContain(
+      "Seen: the worker's model received the message. Not seen yet: it is waiting for the worker's next step. Not confirmed: the request carrying it was cut or failed, so the worker may or may not have read it.",
+    )
   })
 })
