@@ -214,8 +214,17 @@ or Touch ID approval is required, so the approval is attributed to someone at
 this Mac, not confirmed. The helper was left in place. With a permanent
 helper, any agent-started lease would not be independently capped at 60 seconds,
 so the live packaged repeat-start check (no second administrator prompt) was
-not run. It remains unverified on hardware; source routes an installed helper
-directly to `start` without `install`.
+not run by the agent. Instead the user clicked the cup in the dev window under
+a read-only watcher (`repeat-start.jsonl`). The user reported no password dialog;
+the watcher found no administrator-prompt process (its two matches were its own
+and a later agent shell command). The helper went active at once, and further
+clicks cycled the original lease to 30, 60 and 120 minutes with the start time
+unchanged. The user pressed Stop after about 49 seconds: root record
+`ended`/`stopped`, kernel `SleepDisabled=No`. Repeat start without a second
+administrator prompt is therefore observed on hardware.
+
+Final state: `SleepDisabled=No`, lid open, permanent helper and its launchd
+jobs installed and idle, no test app or watcher running.
 
 ## Cleanup
 
