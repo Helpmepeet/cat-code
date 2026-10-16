@@ -4757,11 +4757,11 @@ function stopBackgroundDrivers(): void {
 }
 
 /**
- * Ctrl-C in the dev launcher — and any other SIGTERM — kills Electron outright:
- * neither `window-all-closed` nor `before-quit` runs, so `host.shutdownAll()`
- * never marks live rows clean and the NEXT launch's orphan sweep
- * (`host/registry.ts` sweepOrphans) reports every session of this run as
- * `crashed`. Marking is synchronous, so it completes before the exit below.
+ * Fallback when Node receives a signal directly, including Ctrl-C in the dev
+ * launcher. Electron installs native shutdown signal handlers after startup
+ * that call Browser::Quit, so a running packaged app normally enters
+ * `before-quit` instead. Marking is synchronous on this direct-exit route too,
+ * so the next launch does not mistake live rows for crashed sessions.
  *
  * `app.exit` rather than `app.quit`: the teardown has already run here, and
  * `quit` would re-enter it through `before-quit`.
@@ -4842,7 +4842,12 @@ app.on('before-quit', event => {
   if (!lidQuitFinished && lidMode) {
     event.preventDefault()
     const ending = lidMode; lidMode = undefined
-    void ending.shutdown().finally(() => { lidQuitFinished = true; app.quit() })
+    void ending.shutdown().finally(() => {
+      // Electron drains microtasks before its native before-quit emission
+      // returns. Re-entering quit there lets the canceled outer quit overwrite
+      // the nested quit's flag, so macOS parks after the windows close.
+      setImmediate(() => { lidQuitFinished = true; app.quit() })
+    })
     return
   }
   logOperational('app.shutdown.started', 'info', { reason: 'before-quit' })
