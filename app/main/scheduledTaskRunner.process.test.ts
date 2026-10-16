@@ -10,6 +10,7 @@ import { SidecarSupervisor } from '../supervisor/supervisor.js'
 import { launchScheduledSession } from './scheduledTaskRunner.js'
 import { supervisorEventToServerFrame } from './mainDecisions.js'
 import type { ScheduledTaskInput } from '../shared/scheduledTasks.js'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 
 const dirs: string[] = []
 const supervisors: SidecarSupervisor[] = []
@@ -17,12 +18,49 @@ const managers: ScheduledTasks[] = []
 afterEach(() => { for (const manager of managers.splice(0)) manager.stop(); for (const supervisor of supervisors.splice(0)) supervisor.shutdown(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 async function waitFor(predicate: () => boolean) { const deadline = Date.now() + 20_000; while (!predicate()) { if (Date.now() > deadline) throw new Error('Scheduled process did not settle'); await Bun.sleep(10) } }
 
-function setup(trusted: boolean, options: { now?: () => number; registryFailure?: boolean } = {}) {
+function setup(trusted: boolean, options: { now?: () => number; registryFailure?: boolean; socketLossRoute?: 'host' | 'lifecycle' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ccsched-')); dirs.push(dir)
   const project = join(dir, 'project'); mkdirSync(project)
   const sockets = join(dir, 's'); mkdirSync(sockets)
   const fixture = join(dirname(fileURLToPath(import.meta.url)), '../sidecar/scheduledTask.fixture.ts')
-  const supervisor = new SidecarSupervisor({ sidecarCommand: process.execPath, sidecarArgs: ['run', fixture], sidecarCwd: project, socketDir: sockets,
+  const socketLossFixture = `
+    const { writeFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const sessionId = process.env.CATCODE_SIDECAR_SESSION_ID
+    function send(socket, frame) {
+      const body = Buffer.from(JSON.stringify(frame))
+      const prefix = Buffer.alloc(4)
+      prefix.writeUInt32BE(body.length)
+      socket.write(Buffer.concat([prefix, body]))
+    }
+    let executing = false
+    let ticks = 0
+    let pending = Buffer.alloc(0)
+    Bun.listen({
+      unix: process.env.CATCODE_SIDECAR_SOCKET,
+      socket: {
+        open(socket) {
+          send(socket, { kind: 'ready', protocolVersion: ${PROTOCOL_VERSION}, sessionId,
+            engineSessionId: 'synthetic-' + sessionId,
+            payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true } })
+        },
+        data(socket, chunk) {
+          pending = Buffer.concat([pending, chunk])
+          while (pending.length >= 4 && pending.length >= 4 + pending.readUInt32BE(0)) {
+            const length = pending.readUInt32BE(0)
+            const command = JSON.parse(pending.subarray(4, 4 + length).toString())
+            pending = pending.subarray(4 + length)
+            if (command.message?.type !== 'app.submit' || executing) continue
+            executing = true
+            setInterval(() => writeFileSync(join(process.cwd(), sessionId + '.heartbeat'), String(++ticks)), 10)
+            socket.end()
+          }
+        }
+      }
+    })
+    setInterval(() => {}, 1000)
+  `
+  const supervisor = new SidecarSupervisor({ sidecarCommand: process.execPath, sidecarArgs: options.socketLossRoute ? ['-e', socketLossFixture] : ['run', fixture], sidecarCwd: project, socketDir: sockets,
     sidecarEnv: { CLAUDE_CONFIG_DIR: join(dir, 'config'), SCHEDULED_FIXTURE_TRUSTED: trusted ? '1' : '0' }, log: () => {} }); supervisors.push(supervisor)
   const registry = new SessionRegistry({ storageDir: join(dir, 'registry'), log: () => {}, transcriptPathFor: (_cwd, id) => join(dir, `${id}.jsonl`),
     ...(options.registryFailure ? { acquireLock: async () => { throw new Error('Fixture storage unavailable') } } : {}) })
@@ -35,12 +73,13 @@ function setup(trusted: boolean, options: { now?: () => number; registryFailure?
     supervisor.send(id, { type: 'app.submit', requestId: submitId, prompt, options })
     return true
   } }); managers.push(manager)
-  host.subscribe(event => manager.receiveHostEvent(event))
+  host.subscribe(event => { if (options.socketLossRoute !== 'lifecycle') manager.receiveHostEvent(event) })
   const permissionIds: string[] = []
   const resolvedIds: string[] = []
   supervisor.subscribe(event => {
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
+    if (options.socketLossRoute === 'host' && frame.kind === 'lifecycle' && frame.status === 'disconnected') return
     manager.receive(event.sessionId, frame)
     if (frame.kind === 'event' && frame.event.type === 'permission.requested') permissionIds.push(frame.event.request.requestId)
     if (frame.kind === 'event' && frame.event.type === 'permission.resolved') resolvedIds.push(frame.event.request.requestId)
@@ -48,6 +87,37 @@ function setup(trusted: boolean, options: { now?: () => number; registryFailure?
   return { dir, project, file, supervisor, registry, host, manager, submitted, permissionIds, resolvedIds }
 }
 const input: ScheduledTaskInput = { name: 'Native scheduled task', prompt: 'A unique scheduled prompt', enabled: true, schedule: { kind: 'interval', minutes: 1 }, model: 'gpt-6-luna', effort: 'max', permissionMode: 'auto' }
+for (const route of ['host', 'lifecycle'] as const) test(`a real socket disconnect retains overlap protection through the ${route} path until process exit`, async () => {
+  const h = setup(true, { socketLossRoute: route })
+  const task = h.manager.save(input, h.project)
+  h.manager.run(task.id)
+  await waitFor(() => h.host.listSessions().some(row => row.status === 'disconnected'))
+  const run = h.manager.snapshot().runs[0]!
+  const pid = h.supervisor.getSessionProcessId(run.appSessionId)!
+  const heartbeat = join(h.project, `${run.appSessionId}.heartbeat`)
+  await waitFor(() => { try { return Number(readFileSync(heartbeat, 'utf8')) > 0 } catch { return false } })
+  const before = Number(readFileSync(heartbeat, 'utf8'))
+  await waitFor(() => Number(readFileSync(heartbeat, 'utf8')) > before)
+  expect(() => process.kill(pid, 0)).not.toThrow()
+  expect(run.endedAt).toBeNull()
+  expect(run.status).toBe('submitted')
+  h.manager.tick(task.nextRunAt)
+  expect(() => h.manager.run(task.id)).toThrow('unfinished run')
+  expect(h.host.listSessions()).toHaveLength(1)
+  expect(h.submitted).toEqual([run.appSessionId])
+  expect(JSON.parse(readFileSync(h.file, 'utf8')).runs[0].endedAt).toBeNull()
+
+  // Signal only this fixture PID; the production supervisor must observe its exit.
+  process.kill(pid, 'SIGTERM')
+  await waitFor(() => h.supervisor.listSessions().some(row => row.sessionId === run.appSessionId && row.status === 'exited'))
+  await waitFor(() => h.manager.snapshot().runs[0]?.status === 'interrupted')
+  expect(h.manager.snapshot().runs[0]?.endedAt).not.toBeNull()
+  if (route === 'host') h.manager.tick(task.nextRunAt)
+  else h.manager.run(task.id)
+  await waitFor(() => h.submitted.length === 2)
+  expect(h.manager.snapshot().runs).toHaveLength(2)
+}, 30_000)
+
 for (const trusted of [true, false]) test(`scheduled dispatch uses the host, socket, and real permission boundary (${trusted ? 'trusted' : 'untrusted'})`, async () => {
   const { manager, project, host, permissionIds, resolvedIds, supervisor, file } = setup(trusted)
   const task = manager.save(input, project)
