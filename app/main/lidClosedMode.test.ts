@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -60,6 +60,7 @@ function fixture() {
     failRestore(value: boolean) { failRestore = value },
     failAfterPublishingAuthority() { partialInstallFailure = true },
     cancelAdministratorDialog() { cancelInstall = true },
+    leftoverNote(sleepDisabled: boolean) { writeFileSync(marker, JSON.stringify({ pending: true }) + '\n'); snapshot = { ...snapshot, safety: { ...snapshot.safety, sleepDisabled } } },
     interrupted(kind: 'journal' | 'signature') {
       installed = true
       if (kind === 'journal') snapshot = { ...snapshot, error: 'journal-unreadable' }
@@ -175,4 +176,17 @@ test('cancelling the administrator dialog returns to off without an error', asyn
     expect(f.mode.read().phase).toBe('off')
     expect(f.mode.read().error).toBeUndefined()
   } finally { await f.cleanup() }
+})
+
+test('a leftover note without a helper clears only when normal sleep is observed', async () => {
+  for (const sleepDisabled of [false, true]) {
+    const f = fixture()
+    try {
+      f.leftoverNote(sleepDisabled)
+      await f.mode.initialize()
+      expect(f.mode.read().phase).toBe(sleepDisabled ? 'unresolved' : 'off')
+      expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(sleepDisabled)
+      expect(f.calls).toEqual([])
+    } finally { await f.cleanup() }
+  }
 })

@@ -39,6 +39,12 @@ export class LidClosedMode {
       }
     } catch { this.needsRecovery = true }
     this.view.installed = this.deps.installed()
+    // Without a helper nothing can still hold the override, so a leftover
+    // note is cleared once normal sleep is observed. Any other reading stays red.
+    if (this.needsRecovery && !this.view.installed) {
+      const sleepDisabled = await this.deps.hardware().then(h => h.safety.sleepDisabled).catch(() => undefined)
+      if (sleepDisabled === false) try { this.mark(false) } catch { /* Unwritable intent remains unresolved. */ }
+    }
     if (this.needsRecovery) this.set({ phase: 'unresolved' })
     if (this.view.installed) {
       try {

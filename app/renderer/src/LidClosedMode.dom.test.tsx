@@ -22,7 +22,8 @@ test('all presets have direct Stop for the whole Mac and one shared recovery not
   </LidClosedProvider>
   const tree = await harness.mount(shell())
   const button = (label: string) => [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === label)!
-  expect(tree.container.textContent).toContain('Keeps your Mac awake for all apps.')
+  expect(tree.container.textContent).toContain('Keeping your Mac awake. 15 minutes left.')
+  expect(button('End mode and sleep')).toBeUndefined()
   for (const allowance of [15,30,60,120]) {
     await act(async () => { view = initial(allowance); receive(view) })
     await act(async () => { button('Stop').click() })
@@ -64,4 +65,16 @@ test('sign-in and first-use setup show no lid banner', async () => {
   const notice = await harness.mount(<LidClosedProvider><LidClosedNotice /></LidClosedProvider>)
   await act(async () => { receive({ ...view, phase: 'setup', installed: false, error: undefined }) })
   expect(notice.container.querySelectorAll('.lid-notice')).toHaveLength(0)
+})
+
+test('only endings the user did not choose leave a banner', async () => {
+  let receive!: (view: LidModeView) => void
+  const view = initial()
+  window.catcode = { lidClosed: { read: async () => view, command: async () => view,
+    subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
+  const tree = await harness.mount(<LidClosedProvider><LidClosedNotice /></LidClosedProvider>)
+  await act(async () => { receive({ ...view, phase: 'ended', reason: 'stopped' }) })
+  expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(0)
+  await act(async () => { receive({ ...view, phase: 'ended', reason: 'expired' }) })
+  expect(tree.container.textContent).toContain('Lid-closed mode reached its time limit.')
 })

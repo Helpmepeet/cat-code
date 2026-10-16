@@ -21,10 +21,6 @@
 .lid-notice { flex-shrink: 0; }
 aside.sidebar-expanded + .lid-content > .lid-notice { margin-left: max(0px, calc(var(--sidebar-expanded-width, 18rem) - 48px)); }
 .lid-notice [role=status] { flex-wrap: wrap; }
-.lid-time-detail { display: none; margin-top: 6px; }
-.lid-shell[data-lid-inspecting] .lid-time-detail,
-.lid-notice:focus-within .lid-time-detail,
-.lid-notice[data-expanded] .lid-time-detail { display: block; }
 @keyframes lid-steam { 0%,100% { transform: translateY(0); opacity: .7; } 50% { transform: translateY(-1px); opacity: 1; } }
 @keyframes lid-pulse { 50% { opacity: .65; } }
 @media (prefers-reduced-motion: reduce) { .lid-steam, .lid-starting .lid-outline { animation: none; } .lid-liquid { transition: none; } }

@@ -19,7 +19,7 @@ export function lidReason(reason?: string): string {
     case 'battery-reserve': return 'Lid-closed mode ended to preserve battery.'
     case 'supervision-lost': case 'monitoring-unavailable': return 'Lid-closed mode ended because safety monitoring was lost.'
     case 'override-conflict': return 'Lid-closed mode ended because the sleep setting changed.'
-    case 'expired': return 'Lid-closed mode reached its time limit. Work may still be running.'
+    case 'expired': return 'Lid-closed mode reached its time limit.'
     case 'sleep-requested': return 'Normal sleep restored. Sleep was requested.'
     default: return 'Lid-closed mode ended. Normal sleep restored.'
   }

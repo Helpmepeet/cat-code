@@ -196,8 +196,14 @@ After reviewing the qualified run, the user removed the first-use setup banner
 and lid banners on the trust/sign-in surfaces. Choosing a duration now opens the
 macOS administrator dialog directly; cancelling it returns to Off with no
 error. This supersedes the MEDIUM startup-notice repair above. Owner and DOM
-regressions fail on the previous source and pass afterward. Not yet observed in
-a packaged app.
+regressions fail on the previous source and pass afterward.
+
+A second pass removed the false red banner seen in the qualified run: a leftover
+recovery note with no installed helper is now cleared once normal sleep is
+observed, while a disabled or unreadable reading stays unresolved. The active
+banner is reduced to the remaining minutes and Stop, a user Stop leaves no
+ended banner, and the expiry message no longer mentions work tracking. Each
+change has an owner or DOM regression that fails on the previous source.
 
 ## Cleanup
 

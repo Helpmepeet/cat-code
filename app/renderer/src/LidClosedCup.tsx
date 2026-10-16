@@ -32,7 +32,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
         <path className="lid-outline" d="M3 10h14v12a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5z M17 12h2a4 4 0 0 1 0 8h-2" />
         {LID_PRESETS.map((tick, i) => <path key={tick} className={v.allowance === tick && active ? 'lid-tick selected' : 'lid-tick'} d={`M4 ${23 - i * 4}h3`} />)}
         {active ? <path className="lid-steam" d="M7 7c-3-3 3-3 0-6 M12 7c-3-3 3-3 0-6" /> : null}
-        {['ended','unresolved'].includes(v.phase) ? <path className="lid-mark" d="M10 13v6 M10 22v1" /> : null}
+        {v.phase === 'unresolved' || (v.phase === 'ended' && (v.reason !== 'stopped' || v.error)) ? <path className="lid-mark" d="M10 13v6 M10 22v1" /> : null}
         {v.phase === 'unavailable' ? <path className="lid-mark" d="M3 26L17 11" /> : null}
         {v.phase === 'restoring' ? <path className="lid-mark" d="M13 22a4 4 0 1 1 1-5 M14 14v4h-4" /> : null}
       </svg>
@@ -61,6 +61,6 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
       {drawing(false)}
     </button>
     {open ? <span className="lid-number" aria-hidden="true">{drawing(true)}<span>{shown}<small>min</small></span></span> : null}
-    {open ? <span id={`${id}-time`} className="sr-only">{v.allowance} minutes total; {minute} minutes remaining. Ticks mark 15, 30, 60, and 120 minutes.</span> : null}
+    {open ? <span id={`${id}-time`} className="sr-only">{v.allowance} minutes total; {minute} minutes remaining.</span> : null}
   </span>
 }

@@ -32,28 +32,25 @@ export function LidClosedNotice() {
   const { view: v, command } = lid
   const notice: BannerNotice = { id: 'lid-closed', tone: 'info', title: 'Keep working with lid closed', dismissable: false, live: 'off' }
   const action = (key: string, label: string) => ({ key, label })
-  const time = `${v.allowance} minutes total; ${Math.ceil(v.remainingSeconds / 60)} minutes remaining.`
   switch (v.phase) {
     // The macOS administrator dialog is the whole first-use surface.
     case 'off': case 'setup': return null
     case 'starting': notice.title = 'Starting lid-closed mode.'; notice.actions = [action('cancel','Cancel')]; break
     case 'active':
-      notice.title = 'Keeps your Mac awake for all apps.'
-      notice.detail = 'Ordinary Sleep may be blocked.'
-      notice.actions = [action('stop','Stop'), action('sleep','End mode and sleep')]; break
+      notice.title = `Keeping your Mac awake. ${Math.ceil(v.remainingSeconds / 60)} minutes left.`
+      notice.actions = [action('stop','Stop')]; break
     case 'restoring': notice.title = 'Restoring normal sleep.'; notice.tone = 'warn'; break
     case 'unresolved': notice.title = "Couldn't restore normal sleep. Keep your Mac open and on your desk."; notice.detail = v.error; notice.tone = 'danger'; notice.actions = [{ ...action('retry', v.repairRequired ? 'Repair and retry' : 'Retry'), disabled: v.recovering }]; break
     case 'unavailable':
       if (!v.error) return null
       notice.title = v.error; notice.tone = 'warn'; notice.actions = [...(v.repairRequired ? [action('setup','Repair setup')] : []), action('dismiss','Dismiss')]; break
     case 'ended':
+      // Stopping is the user's own action; only report endings they did not choose.
+      if (v.reason === 'stopped' && !v.error) return null
       notice.title = lidReason(v.reason); notice.detail = v.error ? 'Sleep could not be confirmed. Check your Mac.' : undefined
       notice.tone = ['thermal','battery-reserve','monitoring-unavailable','supervision-lost'].includes(v.reason ?? '') ? 'warn' : 'info'
       notice.actions = [action('dismiss','Dismiss')]; break
   }
-  notice.content = <>
-    {v.phase === 'active' ? <p className="lid-time-detail">{time} Ticks mark 15, 30, 60, and 120 minutes.</p> : null}
-  </>
   return <div className="lid-notice"><BannerStack banners={[notice]} onAction={(_banner, selected) => {
     command({ action: selected.key } as LidModeCommand)
   }} /></div>
