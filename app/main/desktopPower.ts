@@ -4,7 +4,8 @@ import { SleepAssertionOwner } from '../shared/sleepAssertion.js'
 import type { NativePowerObservation } from './powerObservation.js'
 import { POWER_OBSERVATION_LIMITATIONS } from './powerObservation.js'
 
-type Work = { turn: boolean; tasks: boolean }
+type Work = { turn: boolean; tasks: boolean; operational?: boolean }
+const computing = (work: Work) => work.operational ?? (work.turn || work.tasks)
 
 function taskComputing(task: TaskSnapshotItem): boolean {
   if (task.status !== 'running' && task.status !== 'pending') return false
@@ -34,13 +35,14 @@ export class DesktopPower {
     let tasks: boolean | undefined
     if (frame.kind === 'ready') turn = frame.payload.activeTurn && frame.payload.pendingPermissionRequests.length === 0
     else if (frame.kind === 'activity') turn = frame.presence === 'running'
-    else if (frame.kind === 'tasks.snapshot') tasks = !!frame.tasks.hasForegroundTask || frame.tasks.items.some(taskComputing)
+    else if (frame.kind === 'tasks.snapshot') tasks = frame.tasks.items.some(taskComputing)
     else if (frame.kind === 'event' && !frame.replay && frame.event.type === 'turn.status') turn = frame.event.activeTurn
     else return
-    const current = this.sessions.get(sessionId) ?? { turn: false, tasks: false }
+    const current: Work = this.sessions.get(sessionId) ?? { turn: false, tasks: false }
+    if (frame.kind === 'tasks.snapshot' && typeof frame.tasks.hasOperationalWork === 'boolean') current.operational = frame.tasks.hasOperationalWork
     if (turn !== undefined) current.turn = turn
     if (tasks !== undefined) current.tasks = tasks
-    if (current.turn || current.tasks) this.sessions.set(sessionId, current)
+    if (computing(current) || current.operational !== undefined) this.sessions.set(sessionId, current)
     else this.sessions.delete(sessionId)
     this.reconcile()
   }
@@ -58,11 +60,11 @@ export class DesktopPower {
     this.assertion.forceStop(); this.observation.setActive(false)
   }
   read() {
-    return { sessions: this.sessions.size, assertion: this.assertion.read(), hardware: this.observation.read(),
+    return { sessions: this.workCount(), assertion: this.assertion.read(), hardware: this.observation.read(),
       limitations: { ...POWER_OBSERVATION_LIMITATIONS } }
   }
   private reconcile(): void {
-    const active = this.sessions.size > 0
+    const active = this.workCount() > 0
     if (active === this.active) return
     this.active = active
     if (active) this.assertion.start()
@@ -70,4 +72,5 @@ export class DesktopPower {
     this.observation.setActive(active)
     this.changed(active ? 'work-started' : 'work-stopped')
   }
+  private workCount(): number { return [...this.sessions.values()].filter(computing).length }
 }

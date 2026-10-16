@@ -160,6 +160,13 @@ Routing note: `src/commands.ts` conditionally registers `/voice` behind
   expiration, parent monitoring, bounded retries, and overlapping renewal. The
   desktop shares one owner across sessions; terminal references share the same
   lifecycle implementation. It does not override lid-close sleep.
+- Desktop sleep demand uses the engine-owned `TasksSnapshot.hasOperationalWork`,
+  derived from raw live tasks, turn state, and permission actor ids. The existing
+  `hasForegroundTask` flag is a UI capability, not proof of computation: retained
+  completed workers and permission-blocked workers must not hold the assertion.
+  Another runnable worker, shell, or parent turn still does. This additive
+  outbound boolean changes no inbound vocabulary or protocol version, and task
+  snapshots are not persisted in transcript caches.
 - Desktop hardware observation uses the bundled helper's unprivileged
   `--observe-power` mode only while operational work holds the idle assertion.
   IOKit root-domain and Foundation thermal notifications drive changes; a

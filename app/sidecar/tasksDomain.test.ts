@@ -11,6 +11,15 @@ import type { TasksSnapshotFrame } from '../shared/protocol.js'
 import { createSidecarTasksDomain, tasksSnapshot } from './tasksDomain.js'
 import { createStore } from '../../src/state/store.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { AppSessionController, type AppSessionControllerAdapter } from '../../src/app-runtime/AppSessionController.js'
+import type { AppPermissionRequest, AppPermissionResponse } from '../../src/app-runtime/sessionEvents.js'
+import { unregisterAgentForeground } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
+import { EventEmitter } from 'node:events'
+import type { ChildProcess } from 'node:child_process'
+import { SleepAssertionOwner } from '../shared/sleepAssertion.js'
+import { DesktopPower } from '../main/desktopPower.js'
+import { unknownPowerObservation } from '../main/powerObservation.js'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 
 function bashTask(over: Partial<LocalShellTaskState> = {}): LocalShellTaskState {
   return {
@@ -377,4 +386,124 @@ test('task subscription ignores engine progress outside the display projection',
   }))
   expect(notifications).toBe(1)
   stop()
+})
+
+function powerDomain(
+  tasks: Record<string, TaskState>,
+  foregroundedTaskId?: string,
+  adapter: AppSessionControllerAdapter = { async *runTurn() {} },
+) {
+  const store = storeWith(tasks, foregroundedTaskId)
+  const controller = new AppSessionController(adapter)
+  const domain = createSidecarTasksDomain(store, controller)
+  const children: EventEmitter[] = []
+  const assertion = new SleepAssertionOwner({ enabled: true, setTimeout, clearTimeout, log() {},
+    spawn() {
+      const child = Object.assign(new EventEmitter(), { unref() {}, kill() { return true } })
+      children.push(child)
+      queueMicrotask(() => child.emit('spawn'))
+      return child as unknown as ChildProcess
+    } })
+  const power = new DesktopPower(assertion, { setActive() {},
+    read: () => ({ status: 'inactive', observation: unknownPowerObservation(), observedAt: null, failures: 0 }) })
+  const stopEvents = controller.subscribe(event => power.receive('session', {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session', event,
+  }))
+  const publish = () => power.receive('session', {
+    kind: 'tasks.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'session', tasks: domain.getSnapshot(),
+  })
+  const stopDomain = domain.subscribe(publish)
+  publish()
+  return { store, controller, domain, power,
+    dispose() { stopEvents(); stopDomain(); power.dispose(); for (const child of children) child.emit('exit') } }
+}
+
+const workerPermission = (): AppPermissionRequest => ({ requestId: 'worker-permission', request: {
+  subtype: 'can_use_tool', tool_name: 'Read', tool_use_id: 'tu-read', input: {}, agent_id: 'agent-1',
+} })
+
+test('real retained foreground completion releases power without changing its UI capability', async () => {
+  const worker = agentTask({ isBackgrounded: false,
+    pendingMessages: [{ id: 'follow-up', message: 'follow-up', status: 'pending', acceptedAt: 1 }], retain: true })
+  const h = powerDomain({ a1: worker }, 'a1')
+  try {
+    await Promise.resolve()
+    expect(h.power.read().assertion.desired).toBe(true)
+    unregisterAgentForeground('a1', h.store.setState)
+    expect(h.store.getState().tasks.a1?.status).toBe('completed')
+    expect(h.domain.getSnapshot()).toMatchObject({ hasForegroundTask: true, hasOperationalWork: false })
+    expect(h.power.read().assertion.desired).toBe(false)
+  } finally { h.dispose() }
+})
+
+test('foreground permission wait releases only blocked work and re-acquires on resolution', async () => {
+  let requested!: () => void
+  const waiting = new Promise<void>(resolve => { requested = resolve })
+  const h = powerDomain({ a1: agentTask({ isBackgrounded: false }) }, 'a1', {
+    async *runTurn({ onPermissionRequest }) {
+      const response = onPermissionRequest(workerPermission())
+      requested()
+      await response
+    },
+  })
+  const turn = h.controller.submit('run worker')
+  try {
+    await waiting
+    expect(h.controller.isTurnActive()).toBe(true)
+    expect(h.store.getState().tasks.a1?.status).toBe('running')
+    expect(h.domain.getSnapshot().hasOperationalWork).toBe(false)
+    expect(h.power.read().assertion.desired).toBe(false)
+    h.store.setState(state => ({ ...state, tasks: { ...state.tasks, b1: bashTask() } }))
+    expect(h.power.read().assertion.desired).toBe(true)
+    h.store.setState(state => ({ ...state, tasks: { a1: state.tasks.a1! } }))
+    expect(h.power.read().assertion.desired).toBe(false)
+    h.controller.respondToPermissionRequest('worker-permission', { behavior: 'deny', message: 'test resolution' })
+    expect(h.domain.getSnapshot().hasOperationalWork).toBe(true)
+    expect(h.power.read().assertion.desired).toBe(true)
+    await turn
+  } finally {
+    h.controller.respondToPermissionRequest('worker-permission', { behavior: 'deny', message: 'test cleanup' })
+    await turn; h.dispose()
+  }
+})
+
+test('background permission after parent turn ends releases power but keeps independent work protected', async () => {
+  let requestPermission!: (request: AppPermissionRequest) => Promise<AppPermissionResponse>
+  const h = powerDomain({ a1: agentTask() }, undefined, {
+    async *runTurn({ onPermissionRequest }) { requestPermission = onPermissionRequest },
+  })
+  await h.controller.submit('launch worker')
+  const response = requestPermission(workerPermission())
+  try {
+    expect(h.controller.isTurnActive()).toBe(false)
+    expect(h.power.read().assertion.desired).toBe(false)
+    h.store.setState(state => ({ ...state, tasks: { ...state.tasks, a2: agentTask({ id: 'a2', agentId: 'agent-2' }) } }))
+    expect(h.power.read().assertion.desired).toBe(true)
+    h.store.setState(state => ({ ...state, tasks: { a1: state.tasks.a1! } }))
+    expect(h.power.read().assertion.desired).toBe(false)
+  } finally {
+    h.controller.respondToPermissionRequest('worker-permission', { behavior: 'deny', message: 'test cleanup' })
+    await response; h.dispose()
+  }
+})
+
+test('a background permission does not suppress the runnable parent turn', async () => {
+  let requested!: () => void
+  const waiting = new Promise<void>(resolve => { requested = resolve })
+  const h = powerDomain({ a1: agentTask() }, undefined, {
+    async *runTurn({ onPermissionRequest }) {
+      const response = onPermissionRequest(workerPermission())
+      requested()
+      await response
+    },
+  })
+  const turn = h.controller.submit('parent work')
+  try {
+    await waiting
+    expect(h.domain.getSnapshot().hasOperationalWork).toBe(true)
+    expect(h.power.read().assertion.desired).toBe(true)
+  } finally {
+    h.controller.respondToPermissionRequest('worker-permission', { behavior: 'deny', message: 'test cleanup' })
+    await turn; h.dispose()
+  }
 })

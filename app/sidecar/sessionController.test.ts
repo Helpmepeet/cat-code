@@ -609,6 +609,7 @@ test('normal startup constructs a real runtime-backed controller without startin
     items: [],
     subagents: [],
     hasForegroundTask: false,
+    hasOperationalWork: false,
   })
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()

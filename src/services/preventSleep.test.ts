@@ -51,6 +51,31 @@ function harness() {
 }
 
 describe('idle sleep process lifecycle', () => {
+  test('late failed spawns release retired slots across stop and suppression', () => {
+    const h = harness()
+    h.owner.start()
+    h.children[0]!.pid = undefined
+    h.owner.stop()
+    h.children[0]!.emit('error', new Error('EAGAIN'))
+    h.children[0]!.emit('close', -1)
+    expect(h.owner.snapshot().tracked).toBe(0)
+
+    h.owner.start()
+    h.children[1]!.pid = undefined
+    h.owner.setSuppressed(true)
+    h.children[1]!.emit('error', new Error('EAGAIN'))
+    h.children[1]!.emit('close', -1)
+    expect(h.owner.snapshot().tracked).toBe(0)
+    h.owner.setSuppressed(false)
+    h.children[2]!.emit('spawn')
+    expect(h.owner.snapshot()).toMatchObject({ desired: true, active: 1, tracked: 1 })
+    h.owner.forceStop()
+    h.children[2]!.emit('exit', null, 'SIGKILL')
+    h.children[2]!.emit('close', null, 'SIGKILL')
+    expect(h.owner.snapshot().tracked).toBe(0)
+    expect(h.timers.size).toBe(0)
+  })
+
   test('synchronous kill errors do not recursively retire the same child', () => {
     const h = harness()
     h.owner.start(); h.children[0]!.emit('spawn')
