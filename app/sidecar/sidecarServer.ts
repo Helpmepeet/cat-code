@@ -6466,6 +6466,8 @@ const HOST_RESULT_VALUE_SCHEMAS = {
   'workspace.jump': z.object({ operationId: z.string().uuid(), status: z.literal('accepted') }).strict(),
   'workspace.ready': z.object({ operationId: z.string().uuid(), status: z.enum(['ready', 'cancelled', 'settled']) }).strict(),
   'workspace.cancel': z.object({ operationId: z.string().uuid(), status: z.enum(['cancelled', 'not_accepted']) }).strict(),
+  'workspace.transition.begin': z.object({ operationId: z.string().uuid() }).strict(),
+  'workspace.transition.finish': z.object({ operationId: z.string().uuid() }).strict(),
 } as const satisfies Record<HostRequestVerb, z.ZodType>
 
 /**

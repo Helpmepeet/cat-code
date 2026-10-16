@@ -9357,6 +9357,21 @@ test('a worker result on the same drain still titles nothing', async () => {
   expect(received.some(f => f.kind === 'session-title')).toBe(false)
 })
 
+test('internal cwd transition results accept only their bounded operation shape', async () => {
+  const operationId = 'aaaaaaaa-0000-4000-8000-000000000001'
+  for (const verb of ['workspace.transition.begin', 'workspace.transition.finish'] as const) {
+    for (const value of [{ operationId }, { operationId: 7 }, { operationId, cwd: '/extra' }]) {
+      const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+      const pending = verb === 'workspace.transition.begin'
+        ? server.requestHost(verb, { operationId })
+        : server.requestHost(verb, { operationId, cwd: '/actual' })
+      const request = received.find(f => f.kind === 'host.request') as { requestId: string }
+      server.handleData(conn, hostPlaneFrame({ type: 'host.result', requestId: request.requestId, ok: true, value }))
+      expect((await pending).ok).toBe(typeof value.operationId === 'string' && !('cwd' in value))
+    }
+  }
+})
+
 test('HR5/F6 — a host.result whose value does not match its verb is refused, not handed on', async () => {
   // `value` was the one inbound field on this plane with no schema behind it:
   // `z.unknown()` plus a cast, with every tool told to narrow defensively. A

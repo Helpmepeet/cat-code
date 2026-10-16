@@ -36,9 +36,12 @@ import {
   resetProjectForTesting,
 } from '../../utils/sessionStorage.js'
 import { setCwd } from '../../utils/Shell.js'
+import { getCwd } from '../../utils/cwd.js'
+import { setWorkspaceTransitionCoordinator } from '../../utils/workspaceTransition.js'
 import { releaseActiveTranscriptLease } from '../../utils/transcriptLease.js'
 import { restoreWorktreeSession } from '../../utils/worktree.js'
 import { EnterWorktreeTool } from './EnterWorktreeTool.js'
+import { ExitWorktreeTool } from '../ExitWorktreeTool/ExitWorktreeTool.js'
 
 /**
  * EnterWorktree used to call `setOriginalCwd(getCwd())` after chdir'ing into
@@ -100,6 +103,7 @@ describe('EnterWorktreeTool transcript path', () => {
   })
 
   afterEach(async () => {
+    setWorkspaceTransitionCoordinator(null)
     restoreWorktreeSession(null)
     await flushSessionStorage()
     clearSessionMessagesCache()
@@ -128,6 +132,39 @@ describe('EnterWorktreeTool transcript path', () => {
     }
     rmSync(repoDir, { recursive: true, force: true })
     rmSync(configDir, { recursive: true, force: true })
+  })
+
+  test('ExitWorktree cannot restore cwd or remove work before host admission', async () => {
+    await (EnterWorktreeTool.call as (input: { name: string }) => Promise<unknown>)({ name: 'transition-test' })
+    const worktree = getCwd()
+    const exit = ExitWorktreeTool.call as (input: { action: 'keep' | 'remove'; discard_changes?: boolean }) => Promise<unknown>
+    let finishes = 0
+    setWorkspaceTransitionCoordinator({
+      begin: async () => { throw new Error('branch switch reserved') },
+      finish: async () => { finishes++ },
+    })
+    for (const action of ['keep', 'remove'] as const) {
+      await expect(exit({ action, discard_changes: true })).rejects.toThrow('branch switch reserved')
+      expect(getCwd()).toBe(worktree)
+      expect(getOriginalCwd()).toBe(worktree)
+      expect(process.cwd()).toBe(worktree)
+      expect(existsSync(worktree)).toBe(true)
+    }
+    expect(finishes).toBe(0)
+    let entered = ''
+    setWorkspaceTransitionCoordinator({
+      begin: async operationId => { entered = operationId },
+      finish: async (operationId, cwd) => {
+        expect(operationId).toBe(entered)
+        expect(cwd).toBe(repoDir)
+        expect(getOriginalCwd()).toBe(repoDir)
+        expect(process.cwd()).toBe(repoDir)
+        finishes++
+      },
+    })
+    await exit({ action: 'keep' })
+    expect(finishes).toBe(1)
+    expect(existsSync(worktree)).toBe(true)
   })
 
   test('entering a worktree keeps the transcript path on the real file', async () => {

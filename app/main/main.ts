@@ -4517,6 +4517,10 @@ function ensureHost(): Host {
   const liveHost = host
   const liveRegistry = registry
   peerPlane = createPeerRequestPlane({
+    workspaceTransitions: {
+      begin: (id, operationId) => liveHost.beginWorkspaceTransition(id, operationId),
+      finish: (id, operationId, cwd) => liveHost.finishWorkspaceTransition(id, operationId, cwd),
+    },
     workspaceRequests: {
       handleRequest: (appSessionId, request) => workspaceJump!.handleRequest(appSessionId, request),
       afterResponse: (appSessionId, request, answered) => workspaceJump!.afterResponse(appSessionId, request, answered),

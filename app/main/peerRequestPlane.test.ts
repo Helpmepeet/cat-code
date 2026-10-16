@@ -93,6 +93,7 @@ function harness(
     forwardFails?: Set<string>
     moving?: Set<string>
     workspaceRequests?: PeerRequestPlaneDeps['workspaceRequests']
+    workspaceTransitions?: PeerRequestPlaneDeps['workspaceTransitions']
   } = {},
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
@@ -112,6 +113,7 @@ function harness(
     canResume: id => options.unresumable?.has(id) !== true,
     isMoving: id => options.moving?.has(id) === true,
     workspaceRequests: options.workspaceRequests,
+    workspaceTransitions: options.workspaceTransitions,
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),
@@ -194,6 +196,28 @@ function request(
     args,
   }
 }
+
+test('internal cwd transitions validate closed shapes and use connection identity', async () => {
+  const calls: unknown[][] = []
+  const h = harness({ workspaceTransitions: {
+    begin: (...args) => { calls.push(args); return true },
+    finish: (...args) => { calls.push(args); return false },
+  } })
+  const begin = request('workspace.transition.begin', { operationId: CORAL })
+  expect(validateHostRequest(begin).ok).toBe(true)
+  expect(validateHostRequest(request('workspace.transition.begin', { operationId: 'not-uuid' })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.begin', { operationId: CORAL, cwd: '/injected' })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: '/actual' })).ok).toBe(true)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: '../relative' })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: `/${'x'.repeat(4096)}` })).ok).toBe(false)
+  expect(validateHostRequest(request('workspace.transition.finish', { operationId: CORAL, cwd: '/bad\0path' })).ok).toBe(false)
+  await h.plane.handleRequest(BEAR, begin)
+  expect(calls).toEqual([[BEAR, CORAL]])
+  expect(h.lastResult()).toMatchObject({ ok: true, value: { operationId: CORAL } })
+  await h.plane.handleRequest(BEAR, request('workspace.transition.finish', { operationId: CORAL, cwd: '/actual' }))
+  expect(calls.at(-1)).toEqual([BEAR, CORAL, '/actual'])
+  expect(h.lastResult()).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+})
 
 test('managed workspace verbs retain connection authority and do not grant peer privileges', async () => {
   const handled: string[] = []

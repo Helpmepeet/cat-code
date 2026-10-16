@@ -626,6 +626,8 @@ export const HOST_REQUEST_VERBS = [
   'workspace.jump',
   'workspace.ready',
   'workspace.cancel',
+  'workspace.transition.begin',
+  'workspace.transition.finish',
 ] as const
 
 export type HostRequestVerb = (typeof HOST_REQUEST_VERBS)[number]
@@ -790,16 +792,15 @@ export type PeerDeliverOutcome =
   | `refused:${PeerDeliverRefusalReason}`
 
 /**
- * Per-verb ARGS. Model-authored (HRP §8 A1), so every one of these is validated
- * at main under a per-verb Zod schema before anything is done with it. Note what
- * is absent by decision: no path anywhere (HC1/HR3 — main sources the cwd from
- * the requester's own registry row), no account field (R10), no permission mode
- * (§0a), and no `from` (HR2 — identity is the connection).
+ * Per-verb args, strictly validated at main before use. Model-facing verbs
+ * cannot author an execution cwd (HC1/HR3), account (R10), permission mode
+ * (§0a), or sender (`from`, HR2). Internal transition finish reports only the
+ * engine's settled cwd observation; it grants no execution destination.
  *
- * `expectCreatorId` is the one id on this plane, and it does not weaken that
- * list. It is not the SENDER's identity, which is still the connection and
- * nothing else; it is not model-authored, since the sidecar reads it from its
- * own spawn env (`CATCODE_SIDECAR_CREATED_BY`, host-owned like the cwd) and no
+ * `expectCreatorId` does not weaken that list. It is not the SENDER's identity,
+ * which is still the connection and nothing else; it is not model-authored,
+ * since the sidecar reads its own spawn env (`CATCODE_SIDECAR_CREATED_BY`,
+ * host-owned like the cwd) and no
  * tool argument reaches it; and it can only ever NARROW a delivery, never widen
  * one, because main resolves the name first and the id is compared against the
  * row that name already produced. See the field's own comment below.
@@ -810,6 +811,9 @@ export type HostRequestArgs = {
   /** Engine-authored readiness; the connection supplies process identity. */
   'workspace.ready': { operationId: string; tipUuid: string; toolUseId: string }
   'workspace.cancel': { operationId: string }
+  /** Internal cwd coordination only, never a model-authored destination. See HOST-REQUEST-PLANE. */
+  'workspace.transition.begin': { operationId: string }
+  'workspace.transition.finish': { operationId: string; cwd: string }
   'peers.list': Record<string, never>
   'peer.create': { prompt: string; model?: string; effort?: string }
   'peer.deliver': {
@@ -837,6 +841,8 @@ export type HostRequestValues = {
   'workspace.jump': { operationId: string; status: 'accepted' }
   'workspace.ready': { operationId: string; status: 'ready' }
   'workspace.cancel': { operationId: string; status: 'cancelled' | 'not_accepted' }
+  'workspace.transition.begin': { operationId: string }
+  'workspace.transition.finish': { operationId: string }
   'peers.list': { peers: PeerDescriptor[] }
   'peer.create': {
     name: string

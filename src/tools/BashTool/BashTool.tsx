@@ -785,7 +785,7 @@ export const BashTool = buildTool({
       }
       if (!preventCwdChanges) {
         const appState = getAppState();
-        if (resetCwdIfOutsideProject(appState.toolPermissionContext)) {
+        if (await resetCwdIfOutsideProject(appState.toolPermissionContext)) {
           stderrForShellReset = stdErrAppendShellResetMessage('');
         }
       }

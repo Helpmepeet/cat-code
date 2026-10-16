@@ -17,6 +17,7 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import { getPlansDirectory } from '../../utils/plans.js'
 import { setCwd } from '../../utils/Shell.js'
 import { saveWorktreeState } from '../../utils/sessionStorage.js'
+import { withWorkspaceTransition } from '../../utils/workspaceTransition.js'
 import {
   cleanupWorktree,
   getCurrentWorktreeSession,
@@ -258,66 +259,68 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
       originalHeadCommit,
     )) ?? { changedFiles: 0, commits: 0 }
 
-    if (input.action === 'keep') {
-      await keepWorktree()
+    return withWorkspaceTransition(async () => {
+      if (input.action === 'keep') {
+        await keepWorktree()
+        restoreSessionToOriginalCwd(originalCwd, projectRootIsWorktree)
+
+        logEvent('tengu_worktree_kept', {
+          mid_session: true,
+          commits,
+          changed_files: changedFiles,
+        })
+
+        const tmuxNote = tmuxSessionName
+          ? ` Tmux session ${tmuxSessionName} is still running; reattach with: tmux attach -t ${tmuxSessionName}`
+          : ''
+        return {
+          data: {
+            action: 'keep' as const,
+            originalCwd,
+            worktreePath,
+            worktreeBranch,
+            tmuxSessionName,
+            message: `Exited worktree. Your work is preserved at ${worktreePath}${worktreeBranch ? ` on branch ${worktreeBranch}` : ''}. Session is now back in ${originalCwd}.${tmuxNote}`,
+          },
+        }
+      }
+
+      // action === 'remove'
+      if (tmuxSessionName) {
+        await killTmuxSession(tmuxSessionName)
+      }
+      await cleanupWorktree()
       restoreSessionToOriginalCwd(originalCwd, projectRootIsWorktree)
 
-      logEvent('tengu_worktree_kept', {
+      logEvent('tengu_worktree_removed', {
         mid_session: true,
         commits,
         changed_files: changedFiles,
       })
 
-      const tmuxNote = tmuxSessionName
-        ? ` Tmux session ${tmuxSessionName} is still running; reattach with: tmux attach -t ${tmuxSessionName}`
-        : ''
+      const discardParts: string[] = []
+      if (commits > 0) {
+        discardParts.push(`${commits} ${commits === 1 ? 'commit' : 'commits'}`)
+      }
+      if (changedFiles > 0) {
+        discardParts.push(
+          `${changedFiles} uncommitted ${changedFiles === 1 ? 'file' : 'files'}`,
+        )
+      }
+      const discardNote =
+        discardParts.length > 0 ? ` Discarded ${discardParts.join(' and ')}.` : ''
       return {
         data: {
-          action: 'keep' as const,
+          action: 'remove' as const,
           originalCwd,
           worktreePath,
           worktreeBranch,
-          tmuxSessionName,
-          message: `Exited worktree. Your work is preserved at ${worktreePath}${worktreeBranch ? ` on branch ${worktreeBranch}` : ''}. Session is now back in ${originalCwd}.${tmuxNote}`,
+          discardedFiles: changedFiles,
+          discardedCommits: commits,
+          message: `Exited and removed worktree at ${worktreePath}.${discardNote} Session is now back in ${originalCwd}.`,
         },
       }
-    }
-
-    // action === 'remove'
-    if (tmuxSessionName) {
-      await killTmuxSession(tmuxSessionName)
-    }
-    await cleanupWorktree()
-    restoreSessionToOriginalCwd(originalCwd, projectRootIsWorktree)
-
-    logEvent('tengu_worktree_removed', {
-      mid_session: true,
-      commits,
-      changed_files: changedFiles,
     })
-
-    const discardParts: string[] = []
-    if (commits > 0) {
-      discardParts.push(`${commits} ${commits === 1 ? 'commit' : 'commits'}`)
-    }
-    if (changedFiles > 0) {
-      discardParts.push(
-        `${changedFiles} uncommitted ${changedFiles === 1 ? 'file' : 'files'}`,
-      )
-    }
-    const discardNote =
-      discardParts.length > 0 ? ` Discarded ${discardParts.join(' and ')}.` : ''
-    return {
-      data: {
-        action: 'remove' as const,
-        originalCwd,
-        worktreePath,
-        worktreeBranch,
-        discardedFiles: changedFiles,
-        discardedCommits: commits,
-        message: `Exited and removed worktree at ${worktreePath}.${discardNote} Session is now back in ${originalCwd}.`,
-      },
-    }
   },
   mapToolResultToToolResultBlockParam({ message }, toolUseID) {
     return {

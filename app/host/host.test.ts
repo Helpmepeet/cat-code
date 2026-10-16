@@ -1325,6 +1325,83 @@ test('main branch transaction uses entered worktree cwd and reserves before Git 
   }
 })
 
+test('a worktree return during async Git preflight is refused until branch handoff settles', async () => {
+  const h = makeHost({ validateCwd: cwd => ({ ok: true, realpath: cwd }) })
+  initializeBranchRepo(h.cwd)
+  const worktree = join(h.storageDir, 'independent-worktree')
+  branchGit(h.cwd, 'worktree', 'add', '-b', 'independent', worktree)
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, h.cwd, worktree)
+  const observe = h.host.getWorkspaceObservation.bind(h.host)
+  let transitionAttempted = false
+  let attempted!: () => void
+  const attemptedTransition = new Promise<void>(resolve => { attempted = resolve })
+  h.host.getWorkspaceObservation = id => {
+    const snapshot = observe(id)
+    if (id === other && !transitionAttempted) {
+      transitionAttempted = true
+      // Schedule after the observation is captured, during real subprocess
+      // preflight, rather than relying on another last-moment observation.
+      setImmediate(() => {
+        expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+        expect(h.host.beginWorkspaceTransition(other, 'return-during-preflight')).toBe(false)
+        attempted()
+      })
+    }
+    return snapshot
+  }
+  const switching = branchCoordinator(h)(source, 'target')
+  await attemptedTransition
+  const result = await switching
+  expect(transitionAttempted).toBe(true)
+  expect(result.ok).toBe(true)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  expect(branchGit(worktree, 'symbolic-ref', '--short', 'HEAD')).toBe('independent')
+  expect(observe(other)?.cwd).toBe(worktree)
+  expect(h.host.beginWorkspaceTransition(other, 'return-after-handoff')).toBe(true)
+  expect(h.host.finishWorkspaceTransition(other, 'return-after-handoff', h.cwd)).toBe(true)
+})
+
+test('an admitted worktree return excludes branch mutation until its fresh observation is published', async () => {
+  const h = makeHost({ validateCwd: cwd => ({ ok: true, realpath: cwd }) })
+  initializeBranchRepo(h.cwd)
+  const worktree = join(h.storageDir, 'independent-worktree')
+  branchGit(h.cwd, 'worktree', 'add', '-b', 'independent', worktree)
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, h.cwd, worktree)
+  expect(h.host.beginWorkspaceTransition(other, 'return-first')).toBe(true)
+  expect((await branchCoordinator(h)(source, 'target')).ok).toBe(false)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+  expect(h.host.finishWorkspaceTransition(other, 'wrong-operation', h.cwd)).toBe(false)
+  expect(h.host.beginBranchReplacement(source).ok).toBe(false)
+  expect(h.host.finishWorkspaceTransition(other, 'return-first', h.cwd)).toBe(true)
+  expect(h.host.getWorkspaceObservation(other)?.cwd).toBe(h.cwd)
+  const refused = await branchCoordinator(h)(source, 'target')
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.message).toContain('other live sessions')
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
+})
+
+test('uncertain transition holds do not expire, but closing or restarting the owner releases them', async () => {
+  const h = makeHost()
+  const source = await readyBranchChat(h, h.cwd)
+  const other = await readyBranchChat(h, h.cwd)
+  expect(h.host.beginWorkspaceTransition(other, 'lost-reply')).toBe(true)
+  h.setNow(h.now() + 1_000_000)
+  expect(h.host.beginBranchReplacement(source).ok).toBe(false)
+  // A ready frame may come from a reconnect, not a new process.
+  h.supervisor.emitReady(other, randomUUID())
+  expect(h.host.beginBranchReplacement(source).ok).toBe(false)
+  h.supervisor.restartSession(other, { cwd: h.cwd })
+  h.supervisor.emitReady(other, randomUUID())
+  expect(h.host.beginBranchReplacement(source).ok).toBe(true)
+  h.host.endBranchSwitch()
+  expect(h.host.beginWorkspaceTransition(other, 'close-before-finish')).toBe(true)
+  await h.host.closeSession(other)
+  expect(h.host.beginBranchReplacement(source).ok).toBe(true)
+  h.host.endBranchSwitch()
+})
+
 test('main branch transaction refuses the rate limit before Git moves', async () => {
   const h = makeHost()
   initializeBranchRepo(h.cwd)

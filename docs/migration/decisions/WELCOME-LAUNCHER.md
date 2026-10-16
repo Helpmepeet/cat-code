@@ -160,9 +160,14 @@ hooks or advancing conversation provenance. Main derives the request from its
 session row; the renderer supplies only that row's id. Metadata is reused until
 the owned transcript changes, with one worker admitted at a time.
 
-**Review gap, 2026-10-16:** receiving-side cwd observations do not atomically fence
-an existing engine's worktree entry/exit. Another chat can return to the target
-checkout while Git preflight is awaiting subprocesses. Coordinating those engine
-transitions with the host reservation remains open; the current implementation
-must not be described as closing that race. Independent worktrees have not been
-silently added to the checkout-wide blocker.
+**Concurrency follow-up, 2026-10-16:** observations alone did not fence an
+existing engine returning from a worktree during asynchronous Git preflight.
+Desktop engines now acquire an internal host transition hold before worktree
+entry/exit or shell cwd restoration. Branch admission and transition admission
+are mutually exclusive in the host, before either can mutate the checkout or
+engine cwd. A transition publishes its canonical settled cwd before releasing
+the hold; an uncertain reply never expires a live process's hold. Holds are
+process-generation-bound and survive socket reconnects, but not process death.
+This short operation fence does not treat chats remaining in independent
+worktrees as checkout-wide blockers. No picker, draft, attachment or readout
+decision changes.

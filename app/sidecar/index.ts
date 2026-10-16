@@ -65,6 +65,8 @@ import {
 } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
 import { createWorkspaceObserver } from './workspaceObservation.js'
+import { createWorkspaceTransitionCoordinator } from './workspaceTransition.js'
+import { setWorkspaceTransitionCoordinator } from '../../src/utils/workspaceTransition.js'
 import { setPeerHostRequester } from './peerHostRequester.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
 import { createSidecarMcpLifecycleStartGate } from './mcpLifecycleStartGate.js'
@@ -679,6 +681,7 @@ async function main(): Promise<void> {
   setPeerHostRequester((verb, args, options) =>
     server.requestHost(verb, args, options),
   )
+  setWorkspaceTransitionCoordinator(createWorkspaceTransitionCoordinator())
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a
   // socket FILE, not a listening TCP port — no network surface added).

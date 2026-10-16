@@ -10,6 +10,7 @@ import { findCanonicalGitRoot } from '../../utils/git.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { getPlanSlug, getPlansDirectory } from '../../utils/plans.js'
 import { setCwd } from '../../utils/Shell.js'
+import { withWorkspaceTransition } from '../../utils/workspaceTransition.js'
 import {
   pinSessionProjectDir,
   saveWorktreeState,
@@ -83,48 +84,50 @@ export const EnterWorktreeTool: Tool<InputSchema, Output> = buildTool({
       throw new Error('Already in a worktree session')
     }
 
-    // Resolve to main repo root so worktree creation works from within a worktree
-    const mainRepoRoot = findCanonicalGitRoot(getCwd())
-    if (mainRepoRoot && mainRepoRoot !== getCwd()) {
-      process.chdir(mainRepoRoot)
-      setCwd(mainRepoRoot)
-    }
+    return withWorkspaceTransition(async () => {
+      // Resolve to main repo root so worktree creation works from within a worktree
+      const mainRepoRoot = findCanonicalGitRoot(getCwd())
+      if (mainRepoRoot && mainRepoRoot !== getCwd()) {
+        process.chdir(mainRepoRoot)
+        setCwd(mainRepoRoot)
+      }
 
-    const slug = input.name ?? getPlanSlug()
+      const slug = input.name ?? getPlanSlug()
 
-    const worktreeSession = await createWorktreeForSession(getSessionId(), slug)
+      const worktreeSession = await createWorktreeForSession(getSessionId(), slug)
 
-    // Must run BEFORE setOriginalCwd: the transcript file was materialized
-    // under the pre-worktree project dir and the writer keeps that path, so
-    // letting originalCwd move would repoint getTranscriptPath() (and every
-    // hook's transcript_path) at a file nobody writes.
-    pinSessionProjectDir()
+      // Must run BEFORE setOriginalCwd: the transcript file was materialized
+      // under the pre-worktree project dir and the writer keeps that path, so
+      // letting originalCwd move would repoint getTranscriptPath() (and every
+      // hook's transcript_path) at a file nobody writes.
+      pinSessionProjectDir()
 
-    process.chdir(worktreeSession.worktreePath)
-    setCwd(worktreeSession.worktreePath)
-    setOriginalCwd(getCwd())
-    saveWorktreeState(worktreeSession)
-    // Clear cached system prompt sections so env_info_simple recomputes with worktree context
-    clearSystemPromptSections()
-    // Clear memoized caches that depend on CWD
-    clearMemoryFileCaches()
-    getPlansDirectory.cache.clear?.()
+      process.chdir(worktreeSession.worktreePath)
+      setCwd(worktreeSession.worktreePath)
+      setOriginalCwd(getCwd())
+      saveWorktreeState(worktreeSession)
+      // Clear cached system prompt sections so env_info_simple recomputes with worktree context
+      clearSystemPromptSections()
+      // Clear memoized caches that depend on CWD
+      clearMemoryFileCaches()
+      getPlansDirectory.cache.clear?.()
 
-    logEvent('tengu_worktree_created', {
-      mid_session: true,
+      logEvent('tengu_worktree_created', {
+        mid_session: true,
+      })
+
+      const branchInfo = worktreeSession.worktreeBranch
+        ? ` on branch ${worktreeSession.worktreeBranch}`
+        : ''
+
+      return {
+        data: {
+          worktreePath: worktreeSession.worktreePath,
+          worktreeBranch: worktreeSession.worktreeBranch,
+          message: `Created worktree at ${worktreeSession.worktreePath}${branchInfo}. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.`,
+        },
+      }
     })
-
-    const branchInfo = worktreeSession.worktreeBranch
-      ? ` on branch ${worktreeSession.worktreeBranch}`
-      : ''
-
-    return {
-      data: {
-        worktreePath: worktreeSession.worktreePath,
-        worktreeBranch: worktreeSession.worktreeBranch,
-        message: `Created worktree at ${worktreeSession.worktreePath}${branchInfo}. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.`,
-      },
-    }
   },
   mapToolResultToToolResultBlockParam({ message }, toolUseID) {
     return {

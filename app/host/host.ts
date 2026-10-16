@@ -220,6 +220,7 @@ export class Host implements HostApi {
   /** All unfinished spawn reservations, including restarts that reuse a slot. */
   private pendingSpawns = 0
   private branchSwitching = false
+  private readonly workspaceTransitions = new Map<SessionId, { operationId: string; generation: string }>()
   private readonly workspaceObservations = new Map<SessionId, import('../shared/protocol.js').WorkspaceObservation>()
   private branchReplacement: { appSessionId: SessionId; reservation: SpawnReservation } | null = null
   /** One restore owns a registry id from validation through child registration. */
@@ -397,6 +398,7 @@ export class Host implements HostApi {
     }
 
     if (event.type === 'exit') {
+      this.workspaceTransitions.delete(appSessionId)
       // A graceful close already marked the row clean + emitted removed; don't
       // re-report the async exit that killSession triggers.
       if (!this.closing.has(appSessionId)) {
@@ -444,6 +446,7 @@ export class Host implements HostApi {
     // status change. `failed` (spawn error / invalid ready) is a death with no
     // exit event behind it in the spawn-error case — same F3 treatment.
     if (event.status === 'failed' && !this.closing.has(appSessionId)) {
+      this.workspaceTransitions.delete(appSessionId)
       await this.registry.markCrashed(appSessionId)
     }
     this.emitStatus(appSessionId)
@@ -1224,6 +1227,7 @@ export class Host implements HostApi {
     this.supervisor.killSession(appSessionId)
     // Evict replay so a reload never replays a dead session's frames (P3-0 carry
     // — the named eviction requirement; AttachmentGate.clearSession in main).
+    this.workspaceTransitions.delete(appSessionId)
     this.evictReplay(appSessionId)
     // Row is KEPT (restorable): mark clean, clear advisory runtime fields.
     await this.registry.markClean(appSessionId)
@@ -2035,7 +2039,7 @@ export class Host implements HostApi {
 
   /** Hold all new spawns while a checkout moves the files under live sessions. */
   beginBranchSwitch(): boolean {
-    if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) return false
+    if (this.branchSwitching || this.hasWorkspaceTransitions() || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) return false
     this.branchSwitching = true
     return true
   }
@@ -2049,7 +2053,7 @@ export class Host implements HostApi {
   }
 
   beginBranchReplacement(appSessionId: SessionId): HostResult<void> {
-    if (this.branchSwitching || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) {
+    if (this.branchSwitching || this.hasWorkspaceTransitions() || this.pendingSpawns > 0 || this.moving.size > 0 || this.workspaceJumpReservations.size > 0) {
       return hostError('branch_unavailable', 'Wait for the other chat to finish opening, then try again.')
     }
     if (!this.isLive(appSessionId)) return hostError('session_not_found', 'Session not found.')
@@ -2058,6 +2062,37 @@ export class Host implements HostApi {
     this.branchReplacement = { appSessionId, reservation }
     this.branchSwitching = true
     return { ok: true, value: undefined }
+  }
+
+  beginWorkspaceTransition(appSessionId: SessionId, operationId: string): boolean {
+    const generation = this.supervisor.getSessionGeneration(appSessionId)
+    if (!generation || this.branchSwitching || this.workspaceTransitions.get(appSessionId)?.generation === generation ||
+        !this.supervisor.listSessions().some(row => row.sessionId === appSessionId && row.status === 'ready')) return false
+    this.workspaceTransitions.set(appSessionId, { operationId, generation })
+    return true
+  }
+
+  finishWorkspaceTransition(appSessionId: SessionId, operationId: string, cwd: string): boolean {
+    const transition = this.workspaceTransitions.get(appSessionId)
+    if (transition?.operationId !== operationId || transition.generation !== this.supervisor.getSessionGeneration(appSessionId)) return false
+    const validated = this.validateCwd(cwd)
+    if (!validated.ok) return false
+    this.workspaceObservations.set(appSessionId, {
+      ...this.workspaceObservations.get(appSessionId),
+      cwd: validated.realpath,
+    })
+    this.workspaceTransitions.delete(appSessionId)
+    return true
+  }
+
+  private hasWorkspaceTransitions(): boolean {
+    // A lost reply never expires a live engine's hold. Closed/crashed engines
+    // cannot transition anymore; killSession need not emit an exit event.
+    const live = new Set(this.supervisor.listSessions().filter(row => !isTerminalStatus(row.status)).map(row => row.sessionId))
+    for (const [id, transition] of this.workspaceTransitions) {
+      if (!live.has(id) || transition.generation !== this.supervisor.getSessionGeneration(id)) this.workspaceTransitions.delete(id)
+    }
+    return this.workspaceTransitions.size > 0
   }
 
   async completeBranchReplacement(cwd: string): Promise<HostResult<SessionDescriptor>> {

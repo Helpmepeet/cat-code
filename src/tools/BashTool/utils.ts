@@ -14,6 +14,7 @@ import { shouldMaintainProjectWorkingDir } from '../../utils/envUtils.js'
 import { maybeResizeAndDownsampleImageBuffer } from '../../utils/imageResizer.js'
 import { getMaxOutputLength } from '../../utils/shell/outputLimits.js'
 import { countCharInString, plural } from '../../utils/stringUtils.js'
+import { withWorkspaceTransition } from '../../utils/workspaceTransition.js'
 /**
  * Strips leading and trailing lines that contain only whitespace/newlines.
  * Unlike trim(), this preserves whitespace within content lines and only removes
@@ -167,9 +168,9 @@ export function formatOutput(content: string): {
 export const stdErrAppendShellResetMessage = (stderr: string): string =>
   `${stderr.trim()}\nShell cwd was reset to ${getOriginalCwd()}`
 
-export function resetCwdIfOutsideProject(
+export async function resetCwdIfOutsideProject(
   toolPermissionContext: ToolPermissionContext,
-): boolean {
+): Promise<boolean> {
   const cwd = getCwd()
   const originalCwd = getOriginalCwd()
   const shouldMaintain = shouldMaintainProjectWorkingDir()
@@ -182,7 +183,7 @@ export function resetCwdIfOutsideProject(
       !pathInAllowedWorkingPath(cwd, toolPermissionContext))
   ) {
     // Reset to original directory if maintaining project dir OR outside allowed working directory
-    setCwd(originalCwd)
+    if (cwd !== originalCwd) await withWorkspaceTransition(() => setCwd(originalCwd))
     if (!shouldMaintain) {
       logEvent('tengu_bash_tool_reset_to_original_dir', {})
       return true
