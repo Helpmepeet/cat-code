@@ -1759,6 +1759,8 @@ export type TasksSnapshot = {
   foregroundedTaskId?: string
   /** The engine currently owns a foreground Bash or local-agent task that Ctrl+B could background. */
   hasForegroundTask?: boolean
+  /** Engine-owned runnable work, including permission-aware foreground tasks. See native-client-integrations map. */
+  hasOperationalWork?: boolean
 }
 
 export type TasksSnapshotFrame = {

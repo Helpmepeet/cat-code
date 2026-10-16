@@ -71,6 +71,8 @@ test('replayed turn events and noncomputing retained tasks do not keep awake', (
     h.activity('a', 'needs_user')
     expect(h.children).toHaveLength(0)
     h.receive('a', { kind: 'tasks.snapshot', tasks: { hasForegroundTask: true, items: [] } })
+    expect(h.children).toHaveLength(0)
+    h.receive('a', { kind: 'tasks.snapshot', tasks: { hasOperationalWork: true, items: [] } })
     expect(h.children).toHaveLength(1)
   } finally { h.power.dispose(); for (const child of h.children) child.emit('exit') }
 })
@@ -95,6 +97,25 @@ test('runtime teardown rejects late callbacks from old supervisor generations', 
   expect(h.power.read().assertion.desired).toBe(false)
   expect(h.power.read().sessions).toBe(0)
   expect(h.children).toHaveLength(1)
+})
+
+test('engine work truth outranks UI capability and coarse turn/activity frames', () => {
+  const h = harness()
+  try {
+    h.receive('a', { kind: 'tasks.snapshot', tasks: {
+      hasOperationalWork: false, hasForegroundTask: true, items: [{ status: 'running' }],
+    } })
+    h.activity('a', 'running')
+    h.receive('a', { kind: 'event', event: { type: 'turn.status', activeTurn: true } })
+    expect(h.power.read().assertion.desired).toBe(false)
+    expect(h.power.read().sessions).toBe(0)
+    h.receive('a', { kind: 'tasks.snapshot', tasks: { hasOperationalWork: true, items: [] } })
+    h.activity('a', 'needs_user')
+    h.receive('a', { kind: 'event', event: { type: 'turn.status', activeTurn: false } })
+    expect(h.power.read().assertion.desired).toBe(true)
+    h.receive('a', { kind: 'tasks.snapshot', tasks: { hasOperationalWork: false, items: [] } })
+    expect(h.power.read().assertion.desired).toBe(false)
+  } finally { h.power.dispose(); for (const child of h.children) child.emit('exit') }
 })
 
 test('local diagnostics exports power state through a closed metadata projection', () => {

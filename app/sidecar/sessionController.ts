@@ -847,7 +847,7 @@ export async function createSidecarSessionController({
       appStateStore,
     }),
     goals: createSidecarGoalDomain(appStateStore),
-    tasks: createSidecarTasksDomain(appStateStore),
+    tasks: createSidecarTasksDomain(appStateStore, controller),
     accounts: createSidecarAccountsDomain({
       onProviderActivated: provider => {
         const result = runControls.activateProvider(provider)

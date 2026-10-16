@@ -119,19 +119,21 @@ export function createPreventSleepOwner(deps: PreventSleepDependencies) {
     })
     child.on('error', error => {
       failure(`caffeinate process error: ${error.message}`)
-      if (entry.state === 'starting' && child.pid === undefined) {
+      if (child.pid === undefined) {
         if (entry.timer) deps.clearTimeout(entry.timer)
         children.delete(entry)
       } else if (entry.state !== 'retiring') retire(entry)
       scheduleRetry()
     })
-    child.once('exit', () => {
+    const finished = () => {
+      if (!children.delete(entry)) return
       if (entry.timer) deps.clearTimeout(entry.timer)
       const unexpected = entry.state !== 'retiring'
-      children.delete(entry)
       if (unexpected && desired()) failure('caffeinate exited unexpectedly')
       if (desired()) scheduleRetry()
-    })
+    }
+    child.once('exit', finished)
+    child.once('close', finished)
     entry.timer = later(() => {
       entry.timer = undefined
       failure('caffeinate spawn confirmation timed out')

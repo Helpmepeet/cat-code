@@ -7,9 +7,12 @@
  * `src/commands/tasks/tasks.tsx`); no new inbound vocabulary is added here.
  */
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
+import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { hasForegroundTasks } from '../../src/tasks/LocalShellTask/LocalShellTask.js'
+import { isMainSessionTask } from '../../src/tasks/LocalMainSessionTask.js'
 import { isBackgroundTask, type TaskState } from '../../src/tasks/types.js'
 import { isEnvTruthy } from '../../src/utils/envUtils.js'
+import { deriveHasUnblockedDelegatedWork } from '../../src/utils/tuiSessionStatus.js'
 import type {
   TaskSnapshotItem,
   TasksSnapshot,
@@ -35,17 +38,20 @@ export type SidecarTasksDomain = {
 
 export function createSidecarTasksDomain(
   appStateStore: AppStateStore,
+  controller?: Pick<AppSessionController, 'isTurnActive' | 'getPendingPermissionRequests' | 'subscribe'>,
 ): SidecarTasksDomain {
+  const getSnapshot = (): TasksSnapshot => {
+    const state = appStateStore.getState()
+    return {
+      ...tasksSnapshot(state.tasks, state.foregroundedTaskId),
+      hasForegroundTask:
+        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS) &&
+        hasForegroundTasks(state),
+      ...(controller ? { hasOperationalWork: hasOperationalWork(state.tasks, controller) } : {}),
+    }
+  }
   return {
-    getSnapshot() {
-      const state = appStateStore.getState()
-      return {
-        ...tasksSnapshot(state.tasks, state.foregroundedTaskId),
-        hasForegroundTask:
-          !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS) &&
-          hasForegroundTasks(state),
-      }
-    },
+    getSnapshot,
     hasLiveWork() {
       // Explicit type (the same `tasksSnapshot` accepts) so `Object.values`
       // infers `TaskState`, not `unknown`, under the sidecar's engine graph.
@@ -58,20 +64,39 @@ export function createSidecarTasksDomain(
     },
     subscribe(listener) {
       return subscribeToProjection(
-        appStateStore.subscribe,
-        () => {
-          const state = appStateStore.getState()
-          return {
-            ...tasksSnapshot(state.tasks, state.foregroundedTaskId),
-            hasForegroundTask:
-              !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS) &&
-              hasForegroundTasks(state),
-          }
+        changed => {
+          const stopState = appStateStore.subscribe(changed)
+          const stopController = controller?.subscribe(event => {
+            if (event.type === 'turn.status' || event.type === 'permission.requested' || event.type === 'permission.resolved') changed()
+          })
+          return () => { stopState(); stopController?.() }
         },
+        getSnapshot,
         listener,
       )
     },
   }
+}
+
+function hasOperationalWork(
+  tasks: Record<string, TaskState>,
+  controller: Pick<AppSessionController, 'isTurnActive' | 'getPendingPermissionRequests'>,
+): boolean {
+  const pending = controller.getPendingPermissionRequests()
+  const blockedActors = new Set(pending.flatMap(({ request }) => request.agent_id ? [request.agent_id] : []))
+  const live = Object.entries(tasks).filter(([, task]) =>
+    (task.status === 'running' || task.status === 'pending') && !isMainSessionTask(task))
+  const delegated = Object.fromEntries(live.filter(([, task]) =>
+    task.type !== 'local_agent' || !blockedActors.has(task.agentId)))
+  const standalone = live.some(([, task]) =>
+    task.type === 'local_bash' && task.kind !== 'monitor' || task.type === 'dream')
+  // A foreground tool owns the parent turn until it settles. Count that tool,
+  // not the parent's still-active flag, while its worker awaits permission.
+  const foreground = live.some(([, task]) =>
+    (task.type === 'local_agent' || task.type === 'local_bash') && task.isBackgrounded === false)
+  const mainBlocked = pending.some(({ request }) => !request.agent_id)
+  return standalone || deriveHasUnblockedDelegatedWork(delegated, blockedActors) ||
+    (controller.isTurnActive() && !mainBlocked && !foreground)
 }
 
 /**

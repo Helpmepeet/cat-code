@@ -80,6 +80,7 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
     }
   })
 
+  const taskState = waitForFrame(supervisor, frame => frame.kind === 'tasks.snapshot')
   const ready = await waitForFrame(supervisor, frame => frame.kind === 'ready')
   expect(ready).toMatchObject({
     kind: 'ready',
@@ -100,6 +101,7 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
     expect(typeof ready.engineSessionId).toBe('string')
     expect(ready.engineSessionId.length).toBeGreaterThan(0)
   }
+  expect(await taskState).toMatchObject({ kind: 'tasks.snapshot', tasks: { hasOperationalWork: false } })
 
   await Bun.sleep(200)
   unsubscribe()
