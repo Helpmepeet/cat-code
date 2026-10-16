@@ -385,10 +385,10 @@ describe('provider and prompt regressions', () => {
     expect(normalizeMessagesForAPI([fragment], [], 'firstParty')).toEqual([])
 
     const withText = createAssistantMessage({
-      content: [{ type: 'text', text: 'Completed text' }, thinking],
+      content: [{ type: 'text', text: 'Completed text', citations: null }, thinking],
     })
     expect(normalizeMessagesForAPI([withText], [], 'firstParty')[0]?.message.content).toEqual([
-      { type: 'text', text: 'Completed text' },
+      { type: 'text', text: 'Completed text', citations: null },
     ])
     expect(fragment.message.content).toEqual([thinking])
   })
@@ -400,7 +400,7 @@ describe('provider and prompt regressions', () => {
     expect(normalizeMessagesForAPI([fragment], [], 'openai')[0]?.message.content).toEqual([thinking])
 
     const withText = createAssistantMessage({
-      content: [{ type: 'text', text: 'Completed text' }, thinking],
+      content: [{ type: 'text', text: 'Completed text', citations: null }, thinking],
     })
     expect(normalizeMessagesForAPI([withText], [], 'openai')[0]?.message.content).toEqual(withText.message.content)
     expect(normalizeMessagesForAPI([fragment])).toEqual([])
