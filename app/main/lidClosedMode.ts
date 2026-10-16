@@ -212,7 +212,9 @@ export class LidClosedMode {
       this.set({ phase: 'unresolved', ...(this.ending ? { error: 'Normal sleep has not been restored. Retry recovery.' } : {}) }); return
     }
     this.mark(false)
-    const reason = this.ending?.reason ?? snapshot.record.reason
+    let reason = this.ending?.reason ?? snapshot.record.reason
+    // Restoring the override does not prove the separate Sleep call completed.
+    if (reason === 'sleep-requested' && (!snapshot.record.sleepRequestAttempted || snapshot.record.sleepRequestSucceeded !== true)) reason = 'sleep-unconfirmed'
     this.ending = undefined
     this.view.sleepRequested = snapshot.record.sleepRequested
     this.set({ phase: snapshot.record.phase === 'off' ? 'off' : 'ended',
@@ -227,7 +229,6 @@ export class LidClosedMode {
       const op = sleep && this.identity ? 'sleep' : this.identity && this.snapshot?.record.phase === 'active' ? 'stop' : 'retry'
       const reply = await this.deps.native.command({ op, ...(['stop','sleep'].includes(op) ? { identity: this.identity } : {}) })
       this.accept(reply.snapshot)
-      if (!this.needsRecovery) this.set({ reason })
     } catch { this.set({ phase: 'unresolved', repairRequired: true }) }
   }
   private async tick(): Promise<void> {

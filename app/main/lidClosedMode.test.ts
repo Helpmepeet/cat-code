@@ -15,6 +15,7 @@ function fixture() {
   let startGate: ReturnType<typeof deferred> | undefined
   let failRestore = false
   let transitionPending = false
+  let sleepResult: Partial<LidNativeSnapshot['record']> = {}
   let pulseGate: ReturnType<typeof deferred> | undefined
   let helperUnavailable = false
   let failInstall = false
@@ -45,12 +46,15 @@ function fixture() {
       if (input.op === 'start') {
         expect(JSON.parse(readFileSync(marker, 'utf8')).pending).toBe(true)
         await startGate?.promise
-        snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'active', identity: input.identity, began: 100, deadline: 100 + input.allowance!, allowance: input.allowance!, needsRestore: true }, safety: { ...snapshot.safety, sleepDisabled: true }, remainingSeconds: input.allowance! }
+        snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'active', identity: input.identity, began: 100, deadline: 100 + input.allowance!, allowance: input.allowance!, needsRestore: true, sleepRequested: false, sleepRequestAttempted: false, sleepRequestSucceeded: undefined }, safety: { ...snapshot.safety, sleepDisabled: true }, remainingSeconds: input.allowance! }
       }
       if (['stop','retry','sleep'].includes(input.op)) {
         if (transitionPending) return { ok: false, error: 'transition-pending', snapshot: structuredClone(snapshot) }
         if (failRestore) return { ok: false, snapshot: { ...snapshot, record: { ...snapshot.record, phase: 'unresolved' } } }
-        snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'stopped' }, safety: { ...snapshot.safety, sleepDisabled: false } }
+        const sleepRequested = input.op === 'sleep' || snapshot.record.sleepRequested
+        snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: input.op === 'sleep' ? 'sleep-requested' : 'stopped',
+          sleepRequested, sleepRequestAttempted: sleepRequested, sleepRequestSucceeded: sleepRequested ? true : undefined,
+          ...(sleepRequested ? sleepResult : {}) }, safety: { ...snapshot.safety, sleepDisabled: false } }
       }
       return { ok: true, snapshot: structuredClone(snapshot) }
     } },
@@ -63,6 +67,11 @@ function fixture() {
     nativeStartGate() { startGate = deferred(); return startGate },
     failRestore(value: boolean) { failRestore = value },
     transitionPending(value: boolean) { transitionPending = value },
+    sleepResult(record: Partial<LidNativeSnapshot['record']>) { sleepResult = record },
+    watchdogRestored(record: Partial<LidNativeSnapshot['record']>) {
+      snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'supervision-lost', ...record },
+        safety: { ...snapshot.safety, sleepDisabled: false } }
+    },
     nativePulseGate() { pulseGate = deferred(); return pulseGate },
     failAfterPublishingAuthority() { partialInstallFailure = true },
     cancelAdministratorDialog() { cancelInstall = true },
@@ -185,6 +194,57 @@ test('stop intent prevents an in-flight pulse reply from readmitting active work
     expect(f.mode.read().phase).toBe('unresolved')
     await until(() => f.calls.includes('status'))
     expect(f.calls.filter(call => call === 'pulse')).toHaveLength(1)
+  } finally { await f.cleanup() }
+})
+
+for (const outcome of [
+  { name: 'never admitted', sleepRequested: false, sleepRequestAttempted: false },
+  { name: 'recorded but never attempted', sleepRequested: true, sleepRequestAttempted: false },
+  { name: 'attempted without a receipt', sleepRequested: true, sleepRequestAttempted: true },
+  { name: 'failed', sleepRequested: true, sleepRequestAttempted: true, sleepRequestSucceeded: false, error: 'sleep-request-failed' },
+  { name: 'confirmed', sleepRequested: true, sleepRequestAttempted: true, sleepRequestSucceeded: true },
+]) {
+  test(`watchdog restoration preserves the ${outcome.name} Sleep outcome without sending another request`, async () => {
+    const f = fixture()
+    try {
+      await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
+      f.transitionPending(true)
+      await f.mode.command({ action: 'sleep' })
+      const { name: _name, ...record } = outcome
+      f.watchdogRestored(record)
+      await until(() => f.mode.read().phase === 'ended')
+      expect(f.mode.read()).toMatchObject({
+        reason: outcome.sleepRequestSucceeded === true ? 'sleep-requested' : 'sleep-unconfirmed',
+        sleepRequested: outcome.sleepRequested,
+      })
+      expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+      expect(f.calls.filter(call => call === 'sleep')).toHaveLength(1)
+      expect(f.calls).not.toContain('pulse')
+      const settledCalls = f.calls.length
+      await f.mode.command({ action: 'retry' })
+      expect(f.calls).toHaveLength(settledCalls)
+    } finally { await f.cleanup() }
+  })
+}
+
+test('a direct Sleep failure does not overwrite its unconfirmed outcome after restoration', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
+    f.sleepResult({ sleepRequestSucceeded: false, error: 'sleep-request-failed' })
+    await f.mode.command({ action: 'sleep' })
+    expect(f.mode.read()).toMatchObject({ phase: 'ended', reason: 'sleep-unconfirmed', error: 'sleep-request-failed' })
+    expect(f.calls.filter(call => call === 'sleep')).toHaveLength(1)
+    expect(f.calls).not.toContain('pulse')
+  } finally { await f.cleanup() }
+})
+
+test('a confirmed direct Sleep request retains its native outcome', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize(); await f.mode.command({ action: 'start', minutes: 15 })
+    await f.mode.command({ action: 'sleep' })
+    expect(f.mode.read()).toMatchObject({ phase: 'ended', reason: 'sleep-requested', sleepRequested: true })
   } finally { await f.cleanup() }
 })
 

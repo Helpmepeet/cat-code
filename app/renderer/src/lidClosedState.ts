@@ -21,6 +21,7 @@ export function lidReason(reason?: string): string {
     case 'override-conflict': return 'Lid-closed mode ended because the sleep setting changed.'
     case 'expired': return 'Lid-closed mode reached its time limit.'
     case 'sleep-requested': return 'Normal sleep restored. Sleep was requested.'
+    case 'sleep-unconfirmed': return 'Normal sleep restored. Sleep could not be confirmed. Check your Mac.'
     default: return 'Lid-closed mode ended. Normal sleep restored.'
   }
 }
