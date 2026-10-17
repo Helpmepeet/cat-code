@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Host } from '../host/host.js'
@@ -35,7 +35,13 @@ function sse(toolHandle?: string) {
   return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
 }
 const samples = Number(process.env.CATCODE_JUMP_BASELINE_SAMPLES ?? 1)
-for (const fixture of ['short', 'many_rows', 'retained']) for (let sample = 0; sample < samples; sample++) test(`isolated real workspace jump baseline ${fixture} sample ${sample + 1}`, async () => {
+// An undefined overlay removes inherited launch keys even from runners that
+// merge process.env. Supervisor-authored identity keys are installed afterward.
+function withoutInheritedLaunchKeys() {
+  return Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('CATCODE_')).map(key => [key, undefined])) as unknown as Record<string, string>
+}
+for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installation']) for (let sample = 0; sample < samples; sample++) test(`isolated real workspace jump baseline ${fixture} sample ${sample + 1}`, async () => {
+  const unresolved = fixture === 'unresolved_installation'
   const retained = fixture === 'retained'
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'jump-baseline-')))
   const config = join(root, 'config'), cwd = join(root, 'project')
@@ -49,6 +55,17 @@ for (const fixture of ['short', 'many_rows', 'retained']) for (let sample = 0; s
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: Object.fromEntries(roots.map(path => [path, { hasTrustDialogAccepted: true }])) }))
   writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpWorkspace'] } }))
   writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n')
+  const hookLog = join(root, 'instructions.jsonl')
+  const probeLog = join(root, 'probes.txt')
+  const include = join(cwd, 'included.md')
+  if (unresolved) {
+    writeFileSync(include, 'DESTINATION_INCLUDED_INSTRUCTIONS\n')
+    writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n@included.md\n')
+    const hook = join(root, 'instruction-hook.ts')
+    writeFileSync(hook, `const input = await new Response(Bun.stdin.stream()).text(); require('node:fs').appendFileSync(${JSON.stringify(hookLog)}, input.trim() + '\\n')`)
+    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpWorkspace'] },
+      hooks: { InstructionsLoaded: [{ hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
+  }
   let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     if (!new URL(request.url).pathname.endsWith('/messages')) return new Response('{}', { status: 503 })
@@ -56,6 +73,10 @@ for (const fixture of ['short', 'many_rows', 'retained']) for (let sample = 0; s
     if (JSON.parse(body).stream !== true) return Response.json({ id: 'baseline-auxiliary', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
       content: [{ type: 'text', text: 'Fixture' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } })
     const destination = body.includes('BASELINE_DESTINATION_INSTRUCTIONS')
+    if (unresolved && destination) {
+      expect(body).toContain('DESTINATION_INCLUDED_INSTRUCTIONS')
+      expect(existsSync(probeLog) && readFileSync(probeLog, 'utf8').split('\n').includes(cwd)).toBe(false)
+    }
     const handle = body.match(/\\"handle\\":\\"([a-f0-9-]+)\\"/)?.[1] ?? body.match(/"handle":"([a-f0-9-]+)"/)?.[1]
     if (destination) destinationRequests++; else if (handle) sourceRequests++
     await Bun.sleep(30)
@@ -63,7 +84,8 @@ for (const fixture of ['short', 'many_rows', 'retained']) for (let sample = 0; s
   } })
   const blocker = join(root, 'network.ts')
   writeFileSync(blocker, `const original = globalThis.fetch; globalThis.fetch = (async (input, init) => { const url = String(input instanceof Request ? input.url : input); if (new URL(url).origin !== ${JSON.stringify(server.url.origin)}) throw new Error('External network disabled'); return original(input, init) }) as typeof fetch\n`)
-  const env = { CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-isolated-baseline', ANTHROPIC_BASE_URL: server.url.origin,
+  const env = { ...withoutInheritedLaunchKeys(), CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-isolated-baseline', ANTHROPIC_BASE_URL: server.url.origin,
+    OPTIONAL_PROBE_LOG: probeLog,
     HOME: join(root, 'home'), ANTHROPIC_MODEL: 'claude-sonnet-4-6', CAT_CODE_MODEL: 'claude-sonnet-4-6',
     CATCODE_SIDECAR_MODEL: '', CATCODE_SIDECAR_PREFER_SPAWN_MODEL: '', CATCODE_SIDECAR_FRESH_SESSION_ID: '',
     CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_AUTH_TOKEN: '', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '',
@@ -75,7 +97,7 @@ for (const fixture of ['short', 'many_rows', 'retained']) for (let sample = 0; s
   let control: WorkspaceHandoffControl | undefined
   const diagnostics: string[] = []
   const observations: unknown[] = []
-  const supervisor = new SidecarSupervisor({ sidecarCommand: 'bun', sidecarArgs: [`--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/index.ts')], sidecarEnv: env,
+  const supervisor = new SidecarSupervisor({ sidecarCommand: 'bun', sidecarArgs: [`--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve(unresolved ? 'app/sidecar/optionalInstallation.fixture.ts' : 'app/sidecar/index.ts')], sidecarEnv: env,
     log: line => { diagnostics.push(line) }, onOperationalRecord: record => {
       if (record.event !== 'workspace.jump.timing') return
       timings.push(record)
@@ -145,6 +167,16 @@ for (const fixture of ['short', 'many_rows', 'retained']) for (let sample = 0; s
     await until(() => coordinator!.snapshot(id)?.continuation.outcome === 'success')
     await Promise.all(pending)
     await coordinator.waitForSettlement(id)
+    if (unresolved) {
+      await until(() => existsSync(probeLog) && readFileSync(probeLog, 'utf8').split('\n').includes(cwd))
+      expect(readFileSync(probeLog, 'utf8').split('\n').filter(path => path === cwd)).toHaveLength(1)
+      await until(() => existsSync(hookLog) && readFileSync(hookLog, 'utf8').split('\n').filter(Boolean).length >= 2)
+      const hooks = readFileSync(hookLog, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+        .filter(input => [join(cwd, 'CLAUDE.md'), include].includes(input.file_path))
+      expect(hooks).toHaveLength(2)
+      expect(hooks.find(input => input.file_path === join(cwd, 'CLAUDE.md'))).toMatchObject({ load_reason: 'session_start', memory_type: 'Project' })
+      expect(hooks.find(input => input.file_path === include)).toMatchObject({ load_reason: 'include', parent_file_path: join(cwd, 'CLAUDE.md') })
+    }
     expect(sourceRequests).toBe(1)
     expect(destinationRequests).toBe(1)
     if (retained) expect(retainedReplayCount).toBeGreaterThanOrEqual(100)
@@ -180,13 +212,13 @@ for (const delay of [200, -1]) test(`normal controller installation baseline ${d
   const blocker = join(root, 'network.ts')
   writeFileSync(blocker, 'globalThis.fetch = (async () => new Response("Network disabled", { status: 503 })) as typeof fetch')
   const child = Bun.spawn(['bun', `--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/workspaceJumpBaseline.fixture.ts'), 'diagnostics', String(delay)], {
-    cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: config, HOME: home, ANTHROPIC_API_KEY: 'sk-ant-isolated-baseline',
+    cwd, env: { ...process.env, ...withoutInheritedLaunchKeys(), CLAUDE_CONFIG_DIR: config, HOME: home, ANTHROPIC_API_KEY: 'sk-ant-isolated-baseline',
       CATCODE_SIDECAR_MODEL: '', CATCODE_SIDECAR_PREFER_SPAWN_MODEL: '', CATCODE_SIDECAR_FRESH_SESSION_ID: '',
       CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_AUTH_TOKEN: '', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '',
       CAT_CODE_MODEL: 'claude-sonnet-4-6', CLAUDE_CODE_USE_OPENAI: '', CLAUDE_CODE_SIMPLE: '', DISABLE_TELEMETRY: '1' },
     stdout: 'pipe', stderr: 'pipe',
   })
-  const observations: Array<{ fields?: { phase?: string; outcome?: string; durationMs?: number }; controllerCompletedMs?: number }> = []
+  const observations: Array<{ fields?: { phase?: string; outcome?: string; durationMs?: number }; controllerCompletedMs?: number; installationCalls?: number }> = []
   const output = (async () => {
     let pending = ''
     const decoder = new TextDecoder()
@@ -198,27 +230,14 @@ for (const delay of [200, -1]) test(`normal controller installation baseline ${d
   })()
   const stderr = new Response(child.stderr).text()
   try {
-    await until(() => {
-      if (child.exitCode !== null) throw new Error(`Diagnostics fixture exited before construction: ${child.exitCode}`)
-      return observations.some(record => record.fields?.phase === 'diagnostics' && record.fields.outcome === 'started')
-    })
-    if (delay < 0) {
-      // Deliberate observation window, not a production deadline or cancellation.
-      await Bun.sleep(250)
-      expect(observations.some(record => record.controllerCompletedMs !== undefined)).toBe(false)
-      expect(observations.some(record => record.fields?.phase === 'diagnostics' && record.fields.outcome === 'completed')).toBe(false)
-      child.kill()
-    }
     const code = await child.exited
     await output
-    if (delay >= 0) {
-      expect(code, await stderr).toBe(0)
-      const diagnostic = observations.find(record => record.fields?.phase === 'diagnostics' && record.fields.outcome === 'completed')
-      expect(diagnostic?.fields?.durationMs).toBeGreaterThanOrEqual(190)
-      expect(observations.some(record => record.controllerCompletedMs !== undefined)).toBe(true)
-    }
+    expect(code, await stderr).toBe(0)
+    expect(observations.some(record => record.fields?.phase === 'diagnostics' && record.fields.outcome === 'completed')).toBe(true)
+    expect(observations.some(record => record.controllerCompletedMs !== undefined)).toBe(true)
+    expect(observations.find(record => record.controllerCompletedMs !== undefined)?.installationCalls).toBe(0)
     process.stdout.write(JSON.stringify({ fixture: delay < 0 ? 'installation_never' : 'installation_delayed_200ms', sample: 1,
-      observationWindowMs: delay < 0 ? 250 : null, observations: observations.map(record => record.fields ?? record) }) + '\n')
+      observations: observations.map(record => record.fields ?? record) }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await child.exited

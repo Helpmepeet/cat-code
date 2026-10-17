@@ -3,6 +3,71 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileNoThrowWithCwd } from './execFileNoThrow.js'
+import { createOwnedCommandBudget } from './ownedCommandBudget.js'
+
+test('owned cancellation before spawn does not execute the command', async () => {
+  const budget = createOwnedCommandBudget(1000)
+  budget.dispose()
+  const result = await execFileNoThrowWithCwd(process.execPath, ['-e', 'process.exit(0)'], budget.commandOptions())
+  expect(result).toMatchObject({ code: 1, error: 'Command aborted' })
+})
+
+test('owned cancellation kills descendants holding captured pipes', async () => {
+  if (process.platform === 'win32') return
+  const root = mkdtempSync(join(tmpdir(), 'exec-file-abort-'))
+  const pidFile = join(root, 'child.pid')
+  const budget = createOwnedCommandBudget(5000)
+  // Do not inherit desktop launch identifiers, operational descriptors or auth.
+  const env = { PATH: process.env.PATH, HOME: root, TMPDIR: root }
+  const command = execFileNoThrowWithCwd(process.execPath, ['-e', `
+    const child = Bun.spawn([process.execPath, '-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdout: 'inherit', stderr: 'inherit' });
+    require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+    setInterval(() => {}, 1000);
+  `], { ...budget.commandOptions(), cwd: root, env })
+  try {
+    const readyDeadline = performance.now() + 2000
+    while (!existsSync(pidFile) && performance.now() < readyDeadline) await Bun.sleep(10)
+    expect(existsSync(pidFile)).toBe(true)
+    budget.dispose()
+    expect(await command).toMatchObject({ code: 1, error: 'Command aborted' })
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    const state = Bun.spawnSync(['ps', '-o', 'stat=', '-p', String(pid)]).stdout.toString().trim()
+    expect(state === '' || state.startsWith('Z')).toBe(true)
+  } finally {
+    budget.dispose()
+    await command
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 6000)
+
+test('owned budget shares remaining time and can dispose after completion', async () => {
+  const budget = createOwnedCommandBudget(2000)
+  try {
+    const first = budget.commandOptions().timeout
+    const result = await execFileNoThrowWithCwd(process.execPath, ['-e', 'process.exit(0)'], {
+      ...budget.commandOptions(), env: { PATH: process.env.PATH },
+    })
+    expect(result.code).toBe(0)
+    expect(budget.commandOptions().timeout).toBeLessThan(first)
+  } finally {
+    budget.dispose()
+  }
+})
+
+test('total budget aborts running work and refuses subsequent spawns', async () => {
+  const budget = createOwnedCommandBudget(100)
+  try {
+    const result = await execFileNoThrowWithCwd(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      ...budget.commandOptions(), env: { PATH: process.env.PATH },
+    })
+    expect(result.code).not.toBe(0)
+    expect(budget.signal.aborted).toBe(true)
+    expect(await execFileNoThrowWithCwd(process.execPath, ['-e', 'process.exit(0)'], budget.commandOptions()))
+      .toMatchObject({ code: 1, error: 'Command aborted' })
+  } finally {
+    budget.dispose()
+  }
+})
 
 test('opt-in hard timeout kills a descendant holding captured output open', async () => {
   if (process.platform === 'win32') return
@@ -30,6 +95,7 @@ test('opt-in hard timeout kills a descendant holding captured output open', asyn
         killSignal: 'SIGTERM',
         killProcessGroupOnTimeout: true,
         cwd: root,
+        env: { PATH: process.env.PATH, HOME: root },
       },
     )
     const elapsed = performance.now() - started
@@ -77,7 +143,7 @@ test('default timeout leaves a finite descendant outside process-group cleanup',
     const result = await execFileNoThrowWithCwd(
       process.execPath,
       ['-e', childScript],
-      { timeout: 100, killSignal: 'SIGTERM', cwd: root },
+      { timeout: 100, killSignal: 'SIGTERM', cwd: root, env: { PATH: process.env.PATH, HOME: root } },
     )
 
     expect(result.code).toBe(0)
@@ -125,6 +191,7 @@ test('opt-in timeout settles when a descendant has detached from its process gro
         killSignal: 'SIGTERM',
         killProcessGroupOnTimeout: true,
         cwd: root,
+        env: { PATH: process.env.PATH, HOME: root },
       },
     )
 

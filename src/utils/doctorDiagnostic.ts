@@ -42,6 +42,7 @@ import {
 } from './shellConfig.js'
 import { jsonParse } from './slowOperations.js'
 import { which } from './which.js'
+import type { OwnedCommandBudget } from './ownedCommandBudget.js'
 
 export type InstallationType =
   | 'npm-global'
@@ -83,7 +84,8 @@ function getNormalizedPaths(): [invokedPath: string, execPath: string] {
   return [invokedPath, execPath]
 }
 
-export async function getCurrentInstallationType(): Promise<InstallationType> {
+export async function getCurrentInstallationType(budget?: OwnedCommandBudget): Promise<InstallationType> {
+  budget?.throwIfExpired()
   if (process.env.NODE_ENV === 'development') {
     return 'development'
   }
@@ -98,10 +100,10 @@ export async function getCurrentInstallationType(): Promise<InstallationType> {
       detectWinget() ||
       detectMise() ||
       detectAsdf() ||
-      (await detectPacman()) ||
-      (await detectDeb()) ||
-      (await detectRpm()) ||
-      (await detectApk())
+      (await detectPacman(budget)) ||
+      (await detectDeb(budget)) ||
+      (await detectRpm(budget)) ||
+      (await detectApk(budget))
     ) {
       return 'package-manager'
     }
@@ -132,6 +134,12 @@ export async function getCurrentInstallationType(): Promise<InstallationType> {
     return 'npm-global'
   }
 
+  if (budget) {
+    const result = await execFileNoThrow('npm', ['config', 'get', 'prefix'], budget.commandOptions())
+    budget.throwIfExpired()
+    if (result.error) throw new Error(`Could not check npm installation prefix (code ${result.code}): ${result.error}`)
+    return result.code === 0 && result.stdout.trim() && invokedPath.startsWith(result.stdout.trim()) ? 'npm-global' : 'unknown'
+  }
   const npmConfigResult = await execa('npm config get prefix', {
     shell: true,
     reject: false,
@@ -147,7 +155,16 @@ export async function getCurrentInstallationType(): Promise<InstallationType> {
   return 'unknown'
 }
 
-async function getInstallationPath(): Promise<string> {
+async function diagnosticWhich(command: string, budget?: OwnedCommandBudget): Promise<string | null> {
+  budget?.throwIfExpired()
+  if (!budget || typeof Bun !== 'undefined') return which(command)
+  const result = await execFileNoThrow(getPlatform() === 'windows' ? 'where.exe' : 'which', [command], budget.commandOptions())
+  budget.throwIfExpired()
+  if (result.error) throw new Error(`Could not locate installation executable (code ${result.code}): ${result.error}`)
+  return result.code === 0 ? result.stdout.trim().split(/\r?\n/)[0] || null : null
+}
+
+async function getInstallationPath(budget?: OwnedCommandBudget): Promise<string> {
   if (process.env.NODE_ENV === 'development') {
     return getCwd()
   }
@@ -162,7 +179,7 @@ async function getInstallationPath(): Promise<string> {
     }
 
     try {
-      const path = await which('cat-code')
+      const path = await diagnosticWhich('cat-code', budget)
       if (path) {
         return path
       }
@@ -202,7 +219,7 @@ export function getInvokedBinary(): string {
   }
 }
 
-async function detectMultipleInstallations(): Promise<
+async function detectMultipleInstallations(budget?: OwnedCommandBudget): Promise<
   Array<{ type: string; path: string }>
 > {
   const fs = getFsImplementation()
@@ -224,7 +241,9 @@ async function detectMultipleInstallations(): Promise<
     'config',
     'get',
     'prefix',
-  ])
+  ], budget?.commandOptions())
+  budget?.throwIfExpired()
+  if (budget && npmResult.error) throw new Error(`Could not check duplicate npm installations (code ${npmResult.code}): ${npmResult.error}`)
   if (npmResult.code === 0 && npmResult.stdout) {
     const npmPrefix = npmResult.stdout.trim()
     const isWindows = getPlatform() === 'windows'
@@ -316,6 +335,7 @@ async function detectMultipleInstallations(): Promise<
 
 async function detectConfigurationIssues(
   type: InstallationType,
+  budget?: OwnedCommandBudget,
 ): Promise<Array<{ issue: string; fix: string }>> {
   const warnings: Array<{ issue: string; fix: string }> = []
 
@@ -460,7 +480,7 @@ async function detectConfigurationIssues(
   // Check if running local installation but it's not in PATH
   if (type === 'npm-local') {
     // Check if claude is already accessible via PATH
-    const whichResult = await which('cat-code')
+    const whichResult = await diagnosticWhich('cat-code', budget)
     const claudeInPath = !!whichResult
 
     // Only show warning if claude is NOT in PATH AND no valid alias exists
@@ -511,14 +531,14 @@ export function detectLinuxGlobPatternWarnings(): Array<{
   return warnings
 }
 
-export async function getDoctorDiagnostic(): Promise<DiagnosticInfo> {
-  const installationType = await getCurrentInstallationType()
+export async function getDoctorDiagnostic(budget?: OwnedCommandBudget): Promise<DiagnosticInfo> {
+  const installationType = await getCurrentInstallationType(budget)
   const version =
     typeof MACRO !== 'undefined' && MACRO.VERSION ? MACRO.VERSION : 'unknown'
-  const installationPath = await getInstallationPath()
+  const installationPath = await getInstallationPath(budget)
   const invokedBinary = getInvokedBinary()
-  const multipleInstallations = await detectMultipleInstallations()
-  const warnings = await detectConfigurationIssues(installationType)
+  const multipleInstallations = await detectMultipleInstallations(budget)
+  const warnings = await detectConfigurationIssues(installationType, budget)
 
   // Add glob pattern warnings for Linux sandboxing
   warnings.push(...detectLinuxGlobPatternWarnings())
@@ -573,7 +593,7 @@ export async function getDoctorDiagnostic(): Promise<DiagnosticInfo> {
   // Check permissions for global installations
   let hasUpdatePermissions: boolean | null = null
   if (installationType === 'npm-global') {
-    const permCheck = await checkGlobalInstallPermissions()
+    const permCheck = await checkGlobalInstallPermissions(budget)
     hasUpdatePermissions = permCheck.hasPermissions
 
     // Add warning if no permissions
@@ -599,7 +619,7 @@ export async function getDoctorDiagnostic(): Promise<DiagnosticInfo> {
   // Get package manager info if running from package manager
   const packageManager =
     installationType === 'package-manager'
-      ? await getPackageManager()
+      ? await getPackageManager(budget)
       : undefined
 
   const diagnostic: DiagnosticInfo = {
@@ -621,5 +641,6 @@ export async function getDoctorDiagnostic(): Promise<DiagnosticInfo> {
     ripgrepStatus,
   }
 
+  budget?.throwIfExpired()
   return diagnostic
 }

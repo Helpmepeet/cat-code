@@ -344,10 +344,11 @@ async function main(): Promise<void> {
     fields: { role: 'sidecar', pid: process.pid },
   })
   let closeSocket = () => {}
+  let disposeDiagnostics = () => {}
   let disposeMcpLifecycle: (() => Promise<void>) | null = null
   const sidecarCleanup = createSidecarCleanup({
     disposeMcpLifecycle: () => disposeMcpLifecycle?.() ?? Promise.resolve(),
-    closeSocket: () => closeSocket(),
+    closeSocket: () => { disposeDiagnostics(); closeSocket() },
     releaseTranscriptLease: releaseActiveTranscriptLease,
     onDiagnostic: diagnostic => {
       operational.write({
@@ -522,6 +523,7 @@ async function main(): Promise<void> {
     timing: input => operational.write(input),
     timingIdentity,
   }))
+  disposeDiagnostics = () => diagnostics?.dispose()
   const spawnPermissionMode = readSpawnPermissionMode()
   const spawnPrePlanMode = readSpawnPrePlanMode()
   if (spawnPrePlanMode && spawnPermissionMode !== 'plan') {

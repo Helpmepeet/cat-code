@@ -113,8 +113,8 @@ export function buildMcpProperties(clients: MCPServerConnection[] = [], theme: T
     value: `${parts.join(', ')} ${color('inactive', theme)('· /mcp')}`
   }];
 }
-export async function buildMemoryDiagnostics(): Promise<Diagnostic[]> {
-  const files = await getMemoryFiles();
+export async function buildMemoryDiagnostics(preparedFiles?: Awaited<ReturnType<typeof getMemoryFiles>>): Promise<Diagnostic[]> {
+  const files = preparedFiles ?? await getMemoryFiles();
   const largeFiles = getLargeMemoryFiles(files);
   const diagnostics: Diagnostic[] = [];
   largeFiles.forEach(file => {
@@ -172,12 +172,12 @@ export function buildSettingSourcesProperties(): Property[] {
     value: sourceNames
   }];
 }
-export async function buildInstallationDiagnostics(): Promise<Diagnostic[]> {
-  const installWarnings = await checkInstall();
+export async function buildInstallationDiagnostics(budget?: import('./ownedCommandBudget.js').OwnedCommandBudget): Promise<Diagnostic[]> {
+  const installWarnings = await checkInstall(false, budget);
   return installWarnings.map(warning => warning.message);
 }
-export async function buildInstallationHealthDiagnostics(): Promise<Diagnostic[]> {
-  const diagnostic = await getDoctorDiagnostic();
+export async function buildInstallationHealthDiagnostics(budget?: import('./ownedCommandBudget.js').OwnedCommandBudget): Promise<Diagnostic[]> {
+  const diagnostic = await getDoctorDiagnostic(budget);
   const items: Diagnostic[] = [];
   const {
     errors: validationErrors

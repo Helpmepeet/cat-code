@@ -545,8 +545,15 @@ test("'Start in' reports the one thing about a session's start that varies", () 
   const plain = renderToStaticMarkup(
     <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} />,
   )
-  expect(plain).toContain('Locally')
+  expect(plain).toContain('Unknown')
+  expect(plain).not.toContain('Locally')
   expect(plain).not.toContain('Sandboxed')
+
+  const disabled = renderToStaticMarkup(
+    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} sandboxed={false} />,
+  )
+  expect(disabled).toContain('Locally')
+  expect(disabled).not.toContain('Unknown')
 
   const sandboxed = renderToStaticMarkup(
     <WelcomeScreen
