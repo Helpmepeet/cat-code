@@ -338,6 +338,47 @@ describe('P4-5 read-seam — projection semantics', () => {
     expect(serialized).not.toContain('/Users/secret')
   })
 
+  test('Anthropic rows carry supplied usage readings and omit the fields otherwise', () => {
+    const claudeAccount = (accountUuid: string): ClaudePoolAccount => ({
+      accountUuid,
+      emailAddress: `${accountUuid}@example.com`,
+      accessToken: 'SECRET-claude-access',
+      refreshToken: 'SECRET-claude-refresh',
+      expiresAt: 9_999_999_999,
+      status: 'healthy',
+    })
+    const snapshot = buildAccountsSnapshot(
+      { accounts: [], activeIndex: -1, initialized: true },
+      Date.now(),
+      {
+        accounts: [claudeAccount('read'), claudeAccount('unread')],
+        activeIndex: 0,
+        initialized: true,
+      },
+      true,
+      true,
+      undefined,
+      new Map([
+        [
+          'read',
+          {
+            fiveHour: { percent: 42, resetAt: 1_792_300_000 },
+            weekly: null,
+          },
+        ],
+      ]),
+    )
+    const [read, unread] = snapshot.anthropicAccounts
+    expect(read).toMatchObject({
+      usageFiveHour: 42,
+      usageFiveHourResetAt: 1_792_300_000,
+      usageWeekly: null,
+      usageWeeklyResetAt: null,
+    })
+    expect(unread).not.toHaveProperty('usageFiveHour')
+    expect(JSON.stringify(snapshot)).not.toContain('SECRET-claude')
+  })
+
   test('snapshot derives readyCount / activeAccountId / switchable', () => {
     const snapshot = buildAccountsSnapshot({
       accounts: [

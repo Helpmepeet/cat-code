@@ -510,15 +510,25 @@ function claude(over: Partial<AnthropicAccountStatus> & { id: string }): Anthrop
   }
 }
 
-test('the Anthropic table lists usable Claude accounts above Codex, with the active one marked', () => {
+test('the Anthropic table lists usable Claude accounts above Codex with usage bars', () => {
+  const now = Math.floor(Date.now() / 1000)
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
       accounts={{
         ...pool([account({ id: 'main', alias: 'main', isDefault: true })]),
         anthropicAccounts: [
-          claude({ id: 'work', alias: 'work', isDefault: true, subscriptionType: 'max' }),
-          claude({ id: 'personal', subscriptionType: 'pro' }),
+          claude({
+            id: 'work',
+            alias: 'work',
+            isDefault: true,
+            usageFiveHour: 23,
+            usageFiveHourResetAt: now + 2 * 3600,
+            usageWeekly: 61,
+            usageWeeklyResetAt: now + 3 * 86400,
+          }),
+          claude({ id: 'personal', usageFiveHour: 100, usageFiveHourResetAt: now + 600 }),
+          claude({ id: 'idle' }),
           claude({ id: 'expired', alias: 'expired-claude', status: 'dead' }),
         ],
       }}
@@ -531,13 +541,21 @@ test('the Anthropic table lists usable Claude accounts above Codex, with the act
   expect(anthropicAt).toBeGreaterThan(-1)
   expect(codexAt).toBeGreaterThan(anthropicAt)
   const anthropic = html.slice(anthropicAt, codexAt)
-  expect(anthropic).toContain('>2</span> accounts')
+  expect(anthropic).toContain('>3</span> accounts')
   expect(anthropic).not.toContain('healthy')
-  expect(anthropic).toContain('work')
-  expect(anthropic).toContain('personal@example.com')
-  expect(anthropic).toContain('>max<')
-  expect(anthropic).toContain('>pro<')
   expect(anthropic).not.toContain('expired-claude')
+  // The same usage tracks as a Codex row.
+  expect(anthropic).toContain('aria-label="5-hour usage: 23%"')
+  expect(anthropic).toContain('aria-label="Weekly usage: 61%"')
+  expect(anthropic).toContain('aria-label="5-hour reset: 2h"')
+  expect(anthropic).toContain('aria-label="Weekly reset: 3d"')
+  // A spent window reads as capped, and a weekly-less row spans one track.
+  expect(anthropic).toContain('personal@example.com')
+  expect(anthropic).toContain('>capped<')
+  expect(anthropic).toContain('aria-label="5-hour usage: 100%"')
+  // An account with no reading shows no fabricated bar.
+  expect(anthropic).toContain('idle@example.com')
+  expect(anthropic.split('role="progressbar"').length).toBe(4)
   // Exactly one active radio dot: the default Claude account.
   expect(anthropic.split('h-[7px] w-[7px] rounded-full bg-accent').length).toBe(2)
 })

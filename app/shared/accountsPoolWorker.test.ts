@@ -518,6 +518,33 @@ describe('parseAccountsPoolWorkerResult — fails closed', () => {
     }
   })
 
+  test('Anthropic usage fields are optional, and malformed values fail the snapshot', () => {
+    const base = pool().anthropicAccounts[0]!
+    const withUsage = {
+      ...base,
+      usageFiveHour: 42,
+      usageFiveHourResetAt: 1_792_300_000,
+      usageWeekly: null,
+      usageWeeklyResetAt: null,
+    }
+    expect(
+      parseAccountsSnapshot(pool({ anthropicAccounts: [withUsage] }))
+        ?.anthropicAccounts[0],
+    ).toEqual(withUsage)
+    for (const bad of ['42', -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        parseAccountsSnapshot(
+          pool({ anthropicAccounts: [{ ...base, usageFiveHour: bad as never }] }),
+        ),
+      ).toBeNull()
+    }
+    expect(
+      parseAccountsSnapshot(
+        pool({ anthropicAccounts: [{ ...base, usageMonthly: 1 } as never] }),
+      ),
+    ).toBeNull()
+  })
+
   test('a malformed Anthropic row fails the whole snapshot', () => {
     expect(
       parseAccountsSnapshot(

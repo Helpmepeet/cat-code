@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   // ~189 MB engine import is paid only here, per run.
   const [
     { getCodexProfileInventory, getPoolStatus, loadPoolForObservation },
-    { loadClaudePoolForObservation },
+    { getClaudePoolStatus, loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
     { recoverCodexAccountSignOut, signOutCodexAccount },
   ] = await Promise.all([
@@ -195,6 +195,20 @@ async function main(): Promise<void> {
     )
   }
 
+  // Claude usage, read with each account's own stored token. Like the Codex read
+  // above it never refreshes a credential; see `claudePoolUsage.ts`.
+  let anthropicUsage
+  try {
+    const { fetchClaudePoolUsage } = await import(
+      '../../src/services/api/claudePoolUsage.js'
+    )
+    anthropicUsage = await fetchClaudePoolUsage(getClaudePoolStatus().accounts)
+  } catch (error) {
+    process.stderr.write(
+      `[accounts-worker] anthropic usage skipped: ${errorText(error)}\n`,
+    )
+  }
+
   // `CLAUDE_CODE_SIMPLE` above buys "skip hooks and the live-session machinery",
   // but the same switch ALSO means "hermetic auth" to the engine: under it
   // `getAuthTokenSource` and `getAnthropicApiKeyWithSource` return early
@@ -215,6 +229,7 @@ async function main(): Promise<void> {
       anthropic.routeAvailable,
       anthropic.subscriptionActive,
       getCodexProfileInventory(),
+      anthropicUsage,
     )
   } catch (error) {
     // A read failure degrades to "no pool" — main keeps its last good snapshot
