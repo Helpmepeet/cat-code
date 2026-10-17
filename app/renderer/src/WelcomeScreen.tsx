@@ -247,7 +247,10 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
           </div>
         </div>
 
-        <AnthropicTable accounts={accounts} />
+        <AnthropicTable
+          accounts={accounts}
+          accountsUsagePending={props.accountsUsagePending ?? false}
+        />
 
         {/* Codex account table — read-only pool status (P4-5) */}
         <CodexTable
@@ -775,10 +778,16 @@ function PoolHeader({
 /**
  * Claude subscription accounts from the same pool snapshot. Dead accounts are
  * hidden like Codex re-login rows, which leaves every listed row healthy, so
- * the header carries the count alone. The snapshot has no Claude usage
- * windows, so rows show the plan instead of meters.
+ * the header carries the count alone. Usage arrives only on the global pool
+ * snapshot, and an idle account keeps its last reading until that window resets.
  */
-function AnthropicTable({ accounts }: { accounts: AccountsSnapshot | null }) {
+function AnthropicTable({
+  accounts,
+  accountsUsagePending,
+}: {
+  accounts: AccountsSnapshot | null
+  accountsUsagePending: boolean
+}) {
   const rows = (accounts?.anthropicAccounts ?? []).filter(
     account => account.status === 'healthy',
   )
@@ -799,25 +808,41 @@ function AnthropicTable({ accounts }: { accounts: AccountsSnapshot | null }) {
               : 'No usable Anthropic accounts.'}
         </div>
       ) : (
-        rows.map(account => (
-          <div
-            key={account.id}
-            className="flex min-w-0 items-center gap-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]"
-          >
-            <Radio on={account.isDefault} />
-            <span className="truncate font-medium text-text-primary">
-              {account.alias ?? account.email}
-            </span>
-            {account.subscriptionType ? (
-              <span className="shrink-0 text-[12px] capitalize text-text-subtle">
-                {account.subscriptionType}
-              </span>
-            ) : null}
-          </div>
-        ))
+        rows.map(account => {
+          const fiveHour = anthropicWindow(
+            account.usageFiveHour,
+            account.usageFiveHourResetAt,
+          )
+          const weekly = anthropicWindow(
+            account.usageWeekly,
+            account.usageWeeklyResetAt,
+          )
+          return (
+            <AccountUsageRow
+              key={account.id}
+              name={account.alias ?? account.email}
+              isDefault={account.isDefault}
+              capped={
+                (fiveHour?.percent ?? 0) >= 100 || (weekly?.percent ?? 0) >= 100
+              }
+              fiveHour={fiveHour}
+              weekly={weekly}
+              accountsUsagePending={accountsUsagePending}
+            />
+          )
+        })
       )}
     </div>
   )
+}
+
+function anthropicWindow(
+  percent: number | null | undefined,
+  resetAt: number | null | undefined,
+): UsageWindow | null {
+  return percent == null && resetAt == null
+    ? null
+    : { percent: percent ?? null, resetAt: resetAt ?? null }
 }
 
 function CodexRow({
@@ -827,16 +852,44 @@ function CodexRow({
   account: AccountStatus
   accountsUsagePending: boolean
 }) {
-  const capped = account.status === 'capped' || account.usageLimitReached
   const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
+  return (
+    <AccountUsageRow
+      name={account.alias ?? account.id}
+      isDefault={account.isDefault}
+      capped={account.status === 'capped' || account.usageLimitReached}
+      fiveHour={fiveHour}
+      weekly={weekly}
+      accountsUsagePending={accountsUsagePending}
+    />
+  )
+}
+
+type UsageWindow = { percent: number | null; resetAt: number | null }
+
+function AccountUsageRow({
+  name,
+  isDefault,
+  capped,
+  fiveHour,
+  weekly,
+  accountsUsagePending,
+}: {
+  name: string
+  isDefault: boolean
+  capped: boolean
+  fiveHour: UsageWindow | null
+  weekly: UsageWindow | null
+  accountsUsagePending: boolean
+}) {
   const hasSupportedWindow = fiveHour !== null || weekly !== null
   const hasBothWindows = fiveHour !== null && weekly !== null
   return (
     <div className="grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
-        <Radio on={account.isDefault} />
+        <Radio on={isDefault} />
         <span className="truncate font-medium text-text-primary">
-          {account.alias ?? account.id}
+          {name}
         </span>
         {capped ? (
           <span className="shrink-0 rounded border border-accent/20 bg-accent/10 px-[7px] py-0.5 text-[9.5px] font-bold uppercase tracking-[0.08em] text-accent">

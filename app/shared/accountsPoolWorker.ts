@@ -354,6 +354,10 @@ function parseAnthropicAccountStatus(
     isDefault: isBoolean,
     hasVaultProfile: isBoolean,
     subscriptionType: isStringOrNull,
+    usageFiveHour: optional(isNonNegativeFiniteNumberOrNull),
+    usageFiveHourResetAt: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeekly: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeeklyResetAt: optional(isNonNegativeFiniteNumberOrNull),
   })
 }
 

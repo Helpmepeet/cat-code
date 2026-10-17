@@ -2612,6 +2612,16 @@ export type AnthropicAccountStatus = {
   isDefault: boolean
   hasVaultProfile: boolean
   subscriptionType: string | null
+  /**
+   * Five-hour and weekly used percentages (0 to 100) and their resets in Unix
+   * SECONDS. Absent when no current reading exists for this account, which
+   * includes every session sidecar snapshot: only the global accounts-pool
+   * worker reads Claude usage.
+   */
+  usageFiveHour?: number | null
+  usageFiveHourResetAt?: number | null
+  usageWeekly?: number | null
+  usageWeeklyResetAt?: number | null
 }
 
 /**

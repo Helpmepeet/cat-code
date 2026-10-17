@@ -74,6 +74,7 @@ import {
   syncClaudeAccountToStorage,
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
+import type { ClaudeAccountUsage } from '../../src/services/api/claudePoolUsage.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import {
   fetchPoolUsage,
@@ -499,6 +500,7 @@ export function buildSignedOutCodexProfileStatus(
 export function buildAnthropicAccountStatus(
   account: ClaudePoolAccount,
   isDefault: boolean,
+  usage?: ClaudeAccountUsage,
 ): AnthropicAccountStatus {
   return {
     id: account.accountUuid,
@@ -508,6 +510,14 @@ export function buildAnthropicAccountStatus(
     isDefault,
     hasVaultProfile: Boolean(account.vaultFilePath),
     subscriptionType: account.subscriptionType ?? null,
+    ...(usage
+      ? {
+          usageFiveHour: usage.fiveHour?.percent ?? null,
+          usageFiveHourResetAt: usage.fiveHour?.resetAt ?? null,
+          usageWeekly: usage.weekly?.percent ?? null,
+          usageWeeklyResetAt: usage.weekly?.resetAt ?? null,
+        }
+      : {}),
   }
 }
 
@@ -549,6 +559,7 @@ export function buildAccountsSnapshot(
   anthropicRouteAvailable = resolveAnthropicRouteAvailable(),
   anthropicSubscriptionActive = resolveAnthropicSubscriptionActive(),
   profileInventory?: CodexProfileInventory,
+  anthropicUsage?: ReadonlyMap<string, ClaudeAccountUsage>,
 ): AccountsSnapshot {
   const activeAccount = poolStatus.accounts[poolStatus.activeIndex]
   const activeAccountId = activeAccount?.accountId ?? null
@@ -565,6 +576,7 @@ export function buildAccountsSnapshot(
     buildAnthropicAccountStatus(
       account,
       index === anthropicPoolStatus.activeIndex,
+      anthropicUsage?.get(account.accountUuid),
     ),
   )
   return {
