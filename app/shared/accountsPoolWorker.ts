@@ -354,6 +354,7 @@ function parseAnthropicAccountStatus(
     isDefault: isBoolean,
     hasVaultProfile: isBoolean,
     subscriptionType: isStringOrNull,
+    loginStale: optional(isBoolean),
     usageFiveHour: optional(isNonNegativeFiniteNumberOrNull),
     usageFiveHourResetAt: optional(isNonNegativeFiniteNumberOrNull),
     usageWeekly: optional(isNonNegativeFiniteNumberOrNull),

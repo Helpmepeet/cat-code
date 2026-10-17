@@ -496,11 +496,19 @@ export function buildSignedOutCodexProfileStatus(
   }
 }
 
+/**
+ * Only the active Claude account's login is renewed by use, so an idle one
+ * expiring is normal. Past one weekly window without renewal, nothing shows
+ * the account still works.
+ */
+export const CLAUDE_LOGIN_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
+
 /** Project one Claude pool entry through an explicit redaction whitelist. */
 export function buildAnthropicAccountStatus(
   account: ClaudePoolAccount,
   isDefault: boolean,
   usage?: ClaudeAccountUsage,
+  now = Date.now(),
 ): AnthropicAccountStatus {
   return {
     id: account.accountUuid,
@@ -510,6 +518,8 @@ export function buildAnthropicAccountStatus(
     isDefault,
     hasVaultProfile: Boolean(account.vaultFilePath),
     subscriptionType: account.subscriptionType ?? null,
+    loginStale:
+      !isDefault && account.expiresAt + CLAUDE_LOGIN_STALE_AFTER_MS < now,
     ...(usage
       ? {
           usageFiveHour: usage.fiveHour?.percent ?? null,
@@ -577,6 +587,7 @@ export function buildAccountsSnapshot(
       account,
       index === anthropicPoolStatus.activeIndex,
       anthropicUsage?.get(account.accountUuid),
+      now,
     ),
   )
   return {

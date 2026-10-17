@@ -776,10 +776,11 @@ function PoolHeader({
 /* ── Anthropic account table (read-only) ────────────────────────────────── */
 
 /**
- * Claude subscription accounts from the same pool snapshot. Dead accounts are
- * hidden like Codex re-login rows, which leaves every listed row healthy, so
- * the header carries the count alone. Usage arrives only on the global pool
- * snapshot, and an idle account keeps its last reading until that window resets.
+ * Claude subscription accounts from the same pool snapshot. Dead accounts and
+ * idle ones whose login has gone stale are hidden like Codex re-login rows,
+ * which leaves every listed row usable, so the header carries the count alone.
+ * Usage arrives only on the global pool snapshot, and an idle account keeps its
+ * last reading until that window resets.
  */
 function AnthropicTable({
   accounts,
@@ -789,7 +790,7 @@ function AnthropicTable({
   accountsUsagePending: boolean
 }) {
   const rows = (accounts?.anthropicAccounts ?? []).filter(
-    account => account.status === 'healthy',
+    account => account.status === 'healthy' && account.loginStale !== true,
   )
   return (
     <div className="border-t border-shell-seam">

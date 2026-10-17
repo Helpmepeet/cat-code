@@ -2625,6 +2625,11 @@ export type AnthropicAccountStatus = {
   hasVaultProfile: boolean
   subscriptionType: string | null
   /**
+   * True for a non-active account whose stored login expired more than a week
+   * ago without renewal, so nothing shows it still works. Absent means false.
+   */
+  loginStale?: boolean
+  /**
    * Five-hour and weekly used percentages (0 to 100) and their resets in Unix
    * SECONDS. Absent when no current reading exists for this account, which
    * includes every session sidecar snapshot: only the global accounts-pool
