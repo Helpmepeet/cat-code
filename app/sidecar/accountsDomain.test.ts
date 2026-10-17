@@ -43,6 +43,7 @@ import {
 } from '../../src/services/api/codexAccountSignOut.js'
 import {
   buildAccountsSnapshot,
+  buildAnthropicAccountStatus,
   buildAccountStatus,
   createRealOAuthLoginRunner,
   createRealAnthropicOAuthLoginRunner,
@@ -331,11 +332,34 @@ describe('P4-5 read-seam — projection semantics', () => {
         isDefault: true,
         hasVaultProfile: true,
         subscriptionType: 'pro',
+        loginStale: false,
       },
     ])
     const serialized = JSON.stringify(snapshot)
     expect(serialized).not.toContain('SECRET-claude')
     expect(serialized).not.toContain('/Users/secret')
+  })
+
+  test('an idle Claude account is stale only after a week past login expiry', () => {
+    const now = Date.UTC(2026, 9, 17)
+    const day = 24 * 60 * 60 * 1000
+    const claude = (expiresAt: number): ClaudePoolAccount => ({
+      accountUuid: 'claude',
+      emailAddress: 'claude@example.com',
+      accessToken: 'SECRET-claude-access',
+      refreshToken: 'SECRET-claude-refresh',
+      expiresAt,
+      status: 'healthy',
+    })
+    const stale = (expiresAt: number, isDefault: boolean) =>
+      buildAnthropicAccountStatus(claude(expiresAt), isDefault, undefined, now)
+        .loginStale
+
+    expect(stale(now + day, false)).toBe(false)
+    expect(stale(now - 6 * day, false)).toBe(false)
+    expect(stale(now - 8 * day, false)).toBe(true)
+    // The active account renews on its next request, so it is never stale.
+    expect(stale(now - 160 * day, true)).toBe(false)
   })
 
   test('Anthropic rows carry supplied usage readings and omit the fields otherwise', () => {

@@ -530,6 +530,7 @@ test('the Anthropic table lists usable Claude accounts above Codex with usage ba
           claude({ id: 'personal', usageFiveHour: 100, usageFiveHourResetAt: now + 600 }),
           claude({ id: 'idle' }),
           claude({ id: 'expired', alias: 'expired-claude', status: 'dead' }),
+          claude({ id: 'lapsed', alias: 'lapsed-claude', loginStale: true }),
         ],
       }}
       onOpenRecent={noop}
@@ -544,6 +545,7 @@ test('the Anthropic table lists usable Claude accounts above Codex with usage ba
   expect(anthropic).toContain('>3</span> accounts')
   expect(anthropic).not.toContain('healthy')
   expect(anthropic).not.toContain('expired-claude')
+  expect(anthropic).not.toContain('lapsed-claude')
   // The same usage tracks as a Codex row.
   expect(anthropic).toContain('aria-label="5-hour usage: 23%"')
   expect(anthropic).toContain('aria-label="Weekly usage: 61%"')
