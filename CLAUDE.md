@@ -12,8 +12,7 @@ user requirement or security constraint. Flag meaningful documentation drift.
 
 - `src/`, `scripts/`: terminal engine and shared runtime, using the root package.
 - `app/`: desktop package with separate build and typecheck boundaries.
-- `DESIGN.md`: visual design guidance for desktop renderer work. Read it when
-  creating or changing UI; `app/renderer/src/theme.css` owns exact tokens.
+- `app/renderer/src/theme.css` owns exact UI tokens.
 - `docs/maps/`: navigation maintained against source. Dated plans and migration
   program records describe past work; decision records may contain later amendments.
 
@@ -28,12 +27,6 @@ those files or use the map to find the owner. Read only relevant focused maps
 and references, not the whole repository.
 
 - Prompt/instruction work: [prompt surfaces](docs/prompts/2026-04-30-prompt-surfaces.md).
-- Desktop runtime: [desktop map](docs/maps/web-app-runtime.md).
-- Peer behavior: [peer decisions](docs/migration/decisions/PEER-SESSIONS.md) and
-  [host requests](docs/migration/decisions/HOST-REQUEST-PLANE.md), including amendments.
-- GUI verification: [GUI process](docs/migration/process/GUI-VERIFICATION.md).
-- `~/catcode_prototype/cat-app/` is a read-only UX reference. Its code and mock
-  contracts are not implementation inputs; verify its source anchors in this repo.
 
 ## 3. Verification
 
@@ -102,15 +95,11 @@ sidecar running the real engine. The supervisor and host plane are Electron-free
 Preserve Unix-socket transport, one engine process per session, raw
 `AppSessionEvent` fidelity, the chosen window/session lifetime, and the separate
 `appSessionId` / `engineSessionId` identities unless the user requests redesign.
-Check [decision records](docs/migration/decisions/) and source for details.
 
 Security is enforced at the receiving boundary: closed inbound schemas,
 engine-owned permission requests, and bounded frames/rates. The renderer neither
 receives raw credentials nor authors permission rules. Preserve the
-separate session protocol and host control-plane contracts. Boundary work uses
-[security minimum](docs/migration/decisions/SECURITY-MINIMUM.md),
-[permission boundary](docs/migration/decisions/PERMISSION-BOUNDARY.md), and
-[host requests](docs/migration/decisions/HOST-REQUEST-PLANE.md).
+separate session protocol and host control-plane contracts.
 
 ## 6. Sensitive and generated code
 
@@ -178,9 +167,9 @@ probes, GUI launches/driving, destructive operations outside the requested edit,
 and changes to locked architecture or the security baseline need authorization
 covering that action. Honor authorization already given for this task.
 
-For GUI work, use **Cat Code Dev** and the linked GUI process. Do not steal
-focus or warp the cursor for hover-only checks; leave precise operator steps
-for checks you cannot perform. Stop only processes you started and tracked by
+For GUI work, use **Cat Code Dev**. Do not steal focus or warp the cursor for
+hover-only checks; leave precise operator steps for checks you cannot perform.
+Stop only processes you started and tracked by
 PID; no name-based or discovery-paired sweep kills.
 
 ## 11. Reporting
