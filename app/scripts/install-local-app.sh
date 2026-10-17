@@ -159,7 +159,6 @@ main() {
     built_app=$(cd "$built_app" && pwd -P)
     [[ $built_app != "$installed_app" ]] || fail 'The source bundle must differ from the installed app.'
   else
-    [[ -d "$repo_root/node_modules" && -d "$repo_root/app/node_modules" ]] || fail 'Install root and app dependencies first.'
     commit=$(git -C "$repo_root" rev-parse HEAD)
     scratch=$(mktemp -d "${TMPDIR:-/tmp}/cat-code-install.XXXXXX")
     trap 'rm -rf "$scratch"' EXIT
@@ -167,9 +166,10 @@ main() {
     echo "[install:local] Building committed revision ${commit:0:8}; uncommitted changes are excluded."
     git clone --shared --no-checkout --quiet "$repo_root" "$checkout"
     git -C "$checkout" checkout --detach --quiet "$commit"
-    ln -s "$repo_root/node_modules" "$checkout/node_modules"
-    ln -s "$repo_root/app/node_modules" "$checkout/app/node_modules"
-    printf 'node_modules\napp/node_modules\n' >> "$checkout/.git/info/exclude"
+    (cd "$checkout" && bun install --frozen-lockfile)
+    (cd "$checkout/app" && bun install --frozen-lockfile)
+    # Bundle verification must use the selected checkout's ASAR dependency too.
+    repo_root=$checkout
     [[ -z $(git -C "$checkout" status --porcelain) ]] || fail 'Temporary checkout is dirty.'
     (cd "$checkout" && bun run --cwd app package)
     built_app="$checkout/app/dist-app/Cat Code.app"
