@@ -29,6 +29,7 @@ export function useSubagentDock(sessionId: string | null, durableId: string | nu
     const history = key ? saved[key] ?? (sessionId ? saved[sessionId] : undefined) : undefined
     previous = { sessionId, key, state: createSubagentDockState(history?.finished), cleared: history?.cleared ?? [] }
   }
+  const persistencePreviousKey = previous.key !== null && previous.key !== key ? previous.key : sessionId
   const input: SubagentDockInput = { ...sources, nowMs: Date.now(), clearMarkers: previous.cleared, reducedMotion }
   const baseline = sessionId && key ? readSubagentDockObservation(sessionId, key, storage)
     ?? readSubagentDockObservation(sessionId, sessionId, storage) ?? previous.state : previous.state
@@ -40,8 +41,8 @@ export function useSubagentDock(sessionId: string | null, durableId: string | nu
   })
   useEffect(() => {
     if (!key) return
-    persistSubagentDockObservation(storage, key, observed.current?.state ?? state, previous.key)
-  }, [key, storage, state, previous])
+    persistSubagentDockObservation(storage, key, observed.current?.state ?? state, persistencePreviousKey)
+  }, [key, storage, state, persistencePreviousKey])
   useEffect(() => {
     if (dock.nextUpdateAt === null) return
     const timer = setTimeout(() => redraw(value => value + 1), Math.max(1, dock.nextUpdateAt - Date.now()))
