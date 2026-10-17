@@ -494,8 +494,8 @@ test('LIVE: the snapshot carries the engine display name and context window for 
     // name. The window comes from the same engine call, whatever it answers.
     setMainLoopModelOverride('haiku')
     const haiku = buildRunControlsSnapshot(getDefaultAppState()).model
-    expect(haiku.current).toContain('claude-haiku-4-5')
-    expect(haiku.currentLabel).toBe('Haiku 4.5')
+    expect(haiku.current).toContain('claude-haiku-5-5')
+    expect(haiku.currentLabel).toBe('Haiku 5.5')
     expect(haiku.contextWindow).toBe(
       getEffectiveContextWindowSize(haiku.current ?? ''),
     )
