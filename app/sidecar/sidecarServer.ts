@@ -88,6 +88,7 @@ import { scanForSecrets } from '../shared/secretGuard.js'
 import { parsePeerNotice } from '../shared/peerNotice.js'
 import {
   HOST_REQUEST_TIMEOUT_MS,
+  MAX_HOST_REQUEST_ARG_CHARS,
   HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
@@ -6463,8 +6464,12 @@ const peerDeliverOutcomeSchema = z.union([
 
 /** One schema per verb, keyed so the pending request selects its own. */
 const HOST_RESULT_VALUE_SCHEMAS = {
-  'peers.list': z.object({ peers: z.array(peerDescriptorSchema) }).strict(),
-  'peer.announce': z.object({ postedAt: z.number().int().safe().min(0).max(8.64e15) }).strict(),
+  'peers.list': z.object({
+    peers: z.array(peerDescriptorSchema),
+    nextCursor: z.string().min(1).max(MAX_HOST_REQUEST_ARG_CHARS).optional(),
+    remainingPeers: z.number().int().safe().positive().optional(),
+  }).strict(),
+  'peer.announce': z.object({ postedAt: z.number().int().safe().min(0).max(8.64e15), saved: z.literal(false).optional() }).strict(),
   'peer.create': z
     .object({
       name: peerNameSchema,

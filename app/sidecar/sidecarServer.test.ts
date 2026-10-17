@@ -9383,12 +9383,17 @@ test('Announce results and roster notices are validated at the receiving boundar
     return pending
   }
   expect((await answer('peer.announce', { postedAt: 10000 })).ok).toBe(true)
+  expect((await answer('peer.announce', { postedAt: 10000, saved: false })).ok).toBe(true)
+  expect((await answer('peer.announce', { postedAt: 10000, saved: true })).ok).toBe(false)
   for (const value of [{}, { postedAt: 'today' }, { postedAt: -1 }, { postedAt: 10000, from: 'forged' }]) {
     expect((await answer('peer.announce', value)).ok).toBe(false)
   }
   const notice = { doing: 'Editing scope', touches: ['app', '../opaque'], note: 'Context', postedAt: 10000 }
   expect((await answer('peers.list', { peers: [{ ...BEAR_DESCRIPTOR, notice }] })).ok).toBe(true)
   expect((await answer('peers.list', { peers: [{ ...BEAR_DESCRIPTOR, noticeOmitted: true }] })).ok).toBe(true)
+  expect((await answer('peers.list', { peers: [BEAR_DESCRIPTOR], nextCursor: 'next', remainingPeers: 500 })).ok).toBe(true)
+  expect((await answer('peers.list', { peers: [BEAR_DESCRIPTOR], nextCursor: 500, remainingPeers: 500 })).ok).toBe(false)
+  expect((await answer('peers.list', { peers: [BEAR_DESCRIPTOR], nextCursor: 'next', remainingPeers: -1 })).ok).toBe(false)
   for (const invalid of [
     { ...notice, doing: '' }, { ...notice, doing: 'two\nlines' },
     { ...notice, touches: [42] }, { ...notice, extra: 'unknown' },

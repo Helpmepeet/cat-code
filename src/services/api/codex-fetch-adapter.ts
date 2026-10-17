@@ -1091,6 +1091,8 @@ export function truncateCodexToolOutputText(text: string): string {
  *  - ToolSearch results (schema-bearing; truncating them can drop deferred-tool
  *    definitions mid-payload and break tool loading — codex likewise exempts its
  *    ToolSearchOutput variant),
+ *  - ListPeers results (whole-answer bounded by the host; cutting rows loses
+ *    peer addressability and the per-row notice omission markers),
  *  - results whose originating tool can't be identified (`toolName` undefined):
  *    the openai path doesn't run ensureToolResultPairing (unlike messagesForAPI
  *    in claude.ts), so a resumed/teleported transcript can carry an ORPHANED
@@ -1112,7 +1114,9 @@ function applyCodexToolOutputTruncation(
   output: string | Array<Record<string, unknown>>,
   toolName: string | undefined,
 ): string | Array<Record<string, unknown>> {
-  if (toolName === undefined || toolName === TOOL_SEARCH_TOOL_NAME) {
+  // ListPeers bounds its whole answer before transport. Cutting its middle
+  // would remove addressable peers without their explicit omission markers.
+  if (toolName === undefined || toolName === TOOL_SEARCH_TOOL_NAME || toolName === 'ListPeers') {
     return output
   }
   if (typeof output === 'string') {

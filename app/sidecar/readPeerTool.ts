@@ -72,6 +72,7 @@ import {
 } from '../shared/limits.js'
 import {
   requestPeerHost,
+  requestPeerRoster,
   type PeerHostRequester,
 } from './peerHostRequester.js'
 import { projectResumedHistory } from './historyProjection.js'
@@ -842,7 +843,7 @@ export function createReadPeerTool(
 
       // The ONLY thing asked of the app: which sessions exist and what their
       // transcript keys are. Read-only, and it starts nothing.
-      const listed = await requestHost('peers.list', {})
+      const listed = await requestPeerRoster(requestHost)
       if (!listed.ok) {
         return {
           data: {

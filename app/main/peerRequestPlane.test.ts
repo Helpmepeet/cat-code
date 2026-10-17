@@ -100,6 +100,7 @@ function harness(
     moving?: Set<string>
     workspaceRequests?: PeerRequestPlaneDeps['workspaceRequests']
     workspaceTransitions?: PeerRequestPlaneDeps['workspaceTransitions']
+    setPeerNotice?: PeerRequestPlaneDeps['setPeerNotice']
   } = {},
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
@@ -114,13 +115,13 @@ function harness(
 
   const plane = createPeerRequestPlane({
     rows: () => rows,
-    setPeerNotice: async (id, content) => {
+    setPeerNotice: options.setPeerNotice ?? (async (id, content) => {
       const target = rows.find(row => row.appSessionId === id)
       if (!target) return null
       const notice = { ...content, postedAt: clock }
       target.peerNotice = notice
       return notice
-    },
+    }),
     isLive: id => live.has(id),
     isReady: id => (ready ?? live).has(id),
     canResume: id => options.unresumable?.has(id) !== true,
@@ -298,6 +299,57 @@ test('when notices compete for space, the newest posted notice is included first
   expect(value.peers[0]?.noticeOmitted).toBe(true)
   expect(value.peers.some(peer => peer.notice)).toBe(true)
   expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+})
+
+test('an irreducible roster pages without losing live or parked peers as activity changes', async () => {
+  const rows = Array.from({ length: 900 }, (_, i) => row(
+    `eeeeeeee-0000-4000-8000-${String(i).padStart(12, '0')}`, `Peer-${i}`, {
+      engineSessionId: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      shutdown: i < 31 ? null : 'parked',
+      createdBy: ALEX,
+      peerNotice: { doing: 'Reading only', postedAt: 10000 },
+    }))
+  const h = harness({
+    rows: [row(ALEX, 'Alex'), ...rows],
+    live: new Set([ALEX, ...rows.slice(0, 31).map(row => row.appSessionId)]),
+  })
+  const seen: string[] = []
+  let cursor: string | undefined
+  let pages = 0
+  do {
+    await h.plane.handleRequest(ALEX, request('peers.list', cursor ? { cursor } : {}))
+    const result = h.lastResult()!
+    expect(result.ok).toBe(true)
+    const value = result.value as { peers: Array<{ appSessionId: string; status: string }>; nextCursor?: string; remainingPeers?: number }
+    expect(value.peers.every(peer => peer.status === 'live' || peer.status === 'parked')).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+    expect(Buffer.byteLength(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, sessionId: ALEX, ...result }))).toBeLessThan(MAX_FRAME_BYTES)
+    seen.push(...value.peers.map(peer => peer.appSessionId))
+    if (value.nextCursor) expect(value.remainingPeers).toBe(rows.length - seen.length)
+    cursor = value.nextCursor
+    pages++
+    for (const [index, row] of rows.entries()) {
+      row.lastMessageSentAt = 20000 + pages
+      if ((index + pages) % rows.length < 31) {
+        h.live.add(row.appSessionId)
+        row.shutdown = null
+      } else {
+        h.live.delete(row.appSessionId)
+        row.shutdown = 'parked'
+      }
+    }
+  } while (cursor)
+  expect(pages).toBeGreaterThan(1)
+  expect(seen.sort()).toEqual(rows.map(row => row.appSessionId).sort())
+  expect(new Set(seen).size).toBe(rows.length)
+  expect(validateHostRequest(request('peers.list', { cursor: 12 })).ok).toBe(false)
+  expect(validateHostRequest(request('peers.list', { cursor: 'x'.repeat(MAX_HOST_REQUEST_ARG_CHARS + 1) })).ok).toBe(false)
+})
+
+test('main preserves the notice persistence warning on its result', async () => {
+  const h = harness({ setPeerNotice: async (_id, content) => ({ ...content, postedAt: 10000, saved: false }) })
+  await h.plane.handleRequest(ALEX, request('peer.announce', { doing: 'Editing' }))
+  expect(h.lastResult()).toMatchObject({ ok: true, value: { postedAt: 10000, saved: false } })
 })
 
 test('internal cwd transitions validate closed shapes and use connection identity', async () => {
