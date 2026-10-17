@@ -1,6 +1,6 @@
 # Peer `Announce`: a standing scope notice on the roster
 
-**Status: BUILT 2026-10-17; headless behavior verified, live acceptance pending.** Desktop app only.
+**Status: BUILT 2026-10-17; headless behavior verified; live acceptance recorded in §11a.** Desktop app only.
 Extends [PEER-SESSIONS](../migration/decisions/PEER-SESSIONS.md) and replaces
 its deferred "file-overlap visibility" item (§12), which the operator withdrew
 the same day. Source anchors were checked on 2026-10-17; source wins on conflict.
@@ -440,3 +440,65 @@ The registry-ceiling overflow is covered synthetically at the main boundary;
 do not fill a real workspace with hundreds of sessions to repeat it. The
 Electron hardening check is also not run without authorization:
 `cd /Users/pt/cat-code && bun run --cwd app test:hardening`.
+
+### 11a. Live verification record, 2026-10-17
+
+Agent-driven run in **Cat Code Dev** (dev build at `e48862de` plus the shared
+working tree), launched with the command above plus
+`ANTHROPIC_MODEL=gpt-6-luna`; both sessions ran GPT-6 Luna at Low effort in
+Auto permission mode, driven with cua-driver. No earlier Cat Code Dev instance
+and no installed production Cat Code were running, so neither old code nor the
+older registry writer could affect the result. Scratch project:
+`/private/tmp/catcode-announce.59t0MO`. Writer **Sunstone**
+(`7d75fd89…`), reader **Moonstone** (`d4f606c7…`). Every claim below was read
+in the live window (tool card or assistant text, plus AX labels); the debug
+export, registry and session JSONL were used only to locate and cross-check.
+
+| Step | Result | Live evidence |
+|---|---|---|
+| 2. Post starts no turn, delivers nothing | PASS | Writer's Announce card: `{"ok":true,"postedAt":"2026-10-17T03:43:19.728Z"}`. Reader still showed its empty Welcome screen afterwards; it had no transcript file until its own first prompt. |
+| 3a. Reader sees all fields and an absolute time | PASS | Reader's `ListPeers all:true` card: Sunstone row with `"notice":{"doing":"Announce check. Read-only.","touches":["test-area"],"note":"Standing test notice.","postedAt":"2026-10-17T03:43:19.728Z"}` and the `noticeContext` quoted-data line. |
+| 3b. Re-post replaces whole | PASS | Second post `postedAt` 03:45:57.505Z with only `doing` (transcript input confirms no touches/note). Next listing: `"notice":{"doing":"Replacement scope. Read-only.","postedAt":"2026-10-17T03:45:57.505Z"}`, with touches and note absent. |
+| 4. Survives park | PASS | After three more sessions opened, reader listing showed Sunstone `"status":"parked"` (no presence field) with the same notice and posted time. Writer's engine PID 86427 was gone; its tab label read `idle` and its sidebar help read `Sunstone · … · restore`. |
+| 5a. Survives restore | PASS | Writer restored by a submit; reader listing at 03:53:33Z showed Sunstone `"status":"live"` with the same notice and `postedAt` 03:45:57.505Z. Raw tool result in the reader's JSONL matches. |
+| 5b. Close drops it | PASS | After the writer's tab was closed, the listing at 03:55:21Z showed `{"name":"Sunstone","status":"closed","title":…,"lastActivity":…}` with no notice and no `noticeOmitted`. Registry row: `peerNotice: null`, `shutdown: clean`. |
+| 5c. Reopen does not resurrect | PASS | Reopened by hand from the sidebar and restored by a submit; listing at 03:57:25Z showed Sunstone `live` with no notice. |
+| 6. Worker cannot replace the notice | PASS on outcome; refusal path not exercised | See below. The poster's notice was unchanged: listing at 04:02:41Z showed `"doing":"Drafting notes.md in this folder. Editing.","touches":["notes.md"],"postedAt":"2026-10-17T03:58:34.510Z"`, and the poster's transcript holds only its own Announce call. |
+
+Procedure differences found while running §11:
+
+- **Step 1 is stale.** The tab bar's `+` now calls `newChat` and creates a
+  project-less managed chat (its cwd was under `Chat Files/`), which has no peer
+  tools. The second project session was created with the sidebar project
+  group's **New session in this workspace** button instead.
+- **Selecting a parked tab does not restore it.** It shows the cached
+  transcript; the engine comes back on the next submit (`restoreParkedSession`
+  in `App.tsx`). Restores here used a no-tool "Reply with just OK" prompt.
+- **The park victim was not one of the filler sessions.** Restoring the writer
+  parked the reader, and restoring the reader re-parked the writer, while the
+  three never-prompted fillers stayed live. Inferred from source, not observed:
+  the idle-park candidate pool requires `canResume`, which empty sessions likely
+  fail. The fillers were closed so the writer could be listed while live.
+- **Step 6 ran with roles swapped.** A stale tab index sent the step 6 prompt to
+  Moonstone, so Moonstone posted the notice and spawned the worker, and
+  Sunstone did the follow-up listing. The check is symmetric.
+- **The worker never saw Announce.** Worker `Moser` (general-purpose) ran
+  `ToolSearch {"query":"Announce"}`, got `No matching deferred tools found`,
+  and reported "I couldn't call the Announce tool". Non-fork workers take a
+  fresh pool from `assembleToolPool` (`workerTools` in
+  `src/tools/AgentTool/AgentTool.tsx`), and the sidecar appends peer tools only
+  to the parent's list (`sessionController.ts`). §3's premise that workers
+  inherit the parent's tools holds only on the fork path, so the
+  `context.agentId` refusal remains headless-verified only.
+
+Observation, not a pass or fail: with Moonstone's notice claiming `notes.md`,
+Sunstone was asked to "Add a line saying hello to notes.md in this folder". In
+this single Luna/Low run it called neither ListPeers nor SendToPeer; it ran
+`ls`, then wrote `notes.md`. The doctrine asks agents to read notices before
+asking peers about scope, and does not require a roster check before editing.
+Separately, the writer's auto-title was "Unable to call announce tool" although
+its first call succeeded.
+
+Not covered: the hardening run, the registry-ceiling overflow (synthetic only),
+`noticeOmitted` rendering, and model compliance beyond the single observation.
+The scratch folder remains trusted in the shared trust setting.
