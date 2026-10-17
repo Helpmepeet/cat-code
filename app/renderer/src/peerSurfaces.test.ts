@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   PEER_BUBBLE_CLASS,
   PEER_TONE_CLASS,
+  announceCardView,
   isPeerSpeechCall,
   peerToolPresentation,
 } from './peerSurfaces.js'
@@ -87,5 +88,45 @@ describe('the peer colour is applied by whole literal class names', () => {
   test('the bubble carries the user bubble alphas, not louder ones', () => {
     expect(PEER_BUBBLE_CLASS).toContain('/20')
     expect(PEER_BUBBLE_CLASS).toContain('/10')
+  })
+})
+
+describe('Announce', () => {
+  test('keeps its own word, because it names no peer', () => {
+    expect(peerToolPresentation('Announce', { doing: 'x' })).toEqual({ mark: '⚑', word: 'Announce' })
+    expect(isPeerSpeechCall('Announce')).toBe(false)
+  })
+
+  test('shows the call input, not the result receipt', () => {
+    const view = announceCardView(
+      { doing: 'Composer redesign. Editing.', touches: ['app/renderer/src/composer/', '  ', 'peer tools in app/sidecar', 7], note: '  Owns it.  ' },
+      { isError: false, content: JSON.stringify({ ok: true, postedAt: '2026-10-17T10:12:19.753Z' }) },
+    )
+    expect(view).toEqual({
+      touches: ['app/renderer/src/composer/', 'peer tools in app/sidecar'],
+      note: 'Owns it.',
+      unsaved: false,
+      failure: null,
+    })
+  })
+
+  test('marks a notice that was posted but not saved', () => {
+    const view = announceCardView(
+      { doing: 'x' },
+      { isError: false, content: JSON.stringify({ ok: true, postedAt: '2026-10-17T10:12:19.753Z', saved: false, warning: 'w' }) },
+    )
+    expect(view.unsaved).toBe(true)
+    expect(view.failure).toBeNull()
+  })
+
+  test('surfaces the refusal message, or raw error text the tool did not shape', () => {
+    expect(announceCardView({}, { isError: true, content: JSON.stringify({ ok: false, message: 'Not posted.' }) }).failure)
+      .toBe('Not posted.')
+    expect(announceCardView({}, { isError: true, content: '<tool_use_error>bad input</tool_use_error>' }).failure)
+      .toBe('<tool_use_error>bad input</tool_use_error>')
+    expect(announceCardView({}, { isError: false, content: 'not json' })).toEqual({
+      touches: [], note: null, unsaved: false, failure: null,
+    })
+    expect(announceCardView({ doing: 'x' }, null).failure).toBeNull()
   })
 })

@@ -59,6 +59,7 @@ import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership
 import {
   PEER_BUBBLE_CLASS,
   PEER_TONE_CLASS,
+  announceCardView,
   isPeerSpeechCall,
   peerToolPresentation,
   type PeerToolPresentation,
@@ -2790,6 +2791,98 @@ function ListPeersCard({ row, peers }: { row: ToolUseNestedRow; peers: ListPeers
   )
 }
 
+const ANNOUNCE_FIELD_LABEL_CLASS =
+  'font-mono text-[9.5px] font-semibold uppercase tracking-[0.07em] text-text-subtle'
+
+/**
+ * This session's own scope notice. The header carries the `doing` line; the
+ * body labels the remaining fields, because touches and note are both free
+ * text and read as one paragraph without names. Touches are areas as often as
+ * paths, so they stay in the prose face.
+ */
+function AnnounceCard({ row }: { row: ToolUseNestedRow }) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const { style } = useContext(ToolCardStyleContext)
+  const motion = useContext(TranscriptMotionContext)
+  const presentation = peerToolPresentation(row.toolName, row.input) ?? undefined
+  const parts = derivePeerTargetParts(
+    row.toolName,
+    key => {
+      const value = row.input[key]
+      return typeof value === 'string' && value.length > 0 ? value : null
+    },
+    row.input,
+  )
+  const view = announceCardView(row.input, row.result)
+  const unsaved = view.unsaved ? (
+    <div className="text-[11.5px] leading-normal text-tone-warn">
+      Not saved. Lost if the app quits.
+    </div>
+  ) : null
+  const fields =
+    view.touches.length > 0 || view.note !== null ? (
+      <div className="grid grid-cols-[58px_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-[5px] pt-0.5">
+        {view.touches.length > 0 ? (
+          <>
+            <span className={ANNOUNCE_FIELD_LABEL_CLASS}>Touches</span>
+            <div>
+              {view.touches.map((touch, index) => (
+                <div
+                  key={`${index}:${touch}`}
+                  className="break-words text-[11.5px] leading-normal text-text-muted"
+                >
+                  {touch}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {view.note !== null ? (
+          <>
+            <span className={ANNOUNCE_FIELD_LABEL_CLASS}>Note</span>
+            <div className="whitespace-pre-wrap break-words text-[11.5px] leading-normal text-text-muted">
+              {view.note}
+            </div>
+          </>
+        ) : null}
+      </div>
+    ) : null
+  const body =
+    view.failure !== null ? (
+      <div className="whitespace-pre-wrap break-words text-[11.5px] leading-normal text-text-subtle">
+        {view.failure}
+      </div>
+    ) : unsaved !== null || fields !== null ? (
+      <div className="flex flex-col gap-1">
+        {unsaved}
+        {fields}
+      </div>
+    ) : null
+  return (
+    <div className="w-full">
+      <ToolCardShell
+        family={row.toolFamily}
+        presentation={presentation}
+        tone={PEER_TONE_CLASS}
+        target={deriveTarget(row)}
+        // Primary ink, not the muted detail of other peer headers: the scope
+        // line is the whole of what this call says.
+        targetNode={<span>{parts?.detail ?? deriveTarget(row)}</span>}
+        status={row.status}
+        expansionKey={row.toolUseId}
+        defaultExpanded={toolsExpanded || row.status === 'error'}
+        animateCollapsedExtra={motion.results.active.has(row.id)}
+        entranceKey={row.id}
+        collapsedExtra={
+          unsaved === null ? null : <div className={TOOL_CARD_BAND_CLASS[style]}>{unsaved}</div>
+        }
+      >
+        {body}
+      </ToolCardShell>
+    </div>
+  )
+}
+
 function createPeerPrompt(row: ToolUseNestedRow): string {
   const prompt = row.input['prompt']
   return typeof prompt === 'string' && prompt.length > 0
@@ -3042,6 +3135,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       return <CreatedPeerCard row={row} />
     }
   }
+  if (row.toolName === 'Announce') return <AnnounceCard row={row} />
   if (row.toolName === 'ListPeers' && row.status === 'success' && row.result && !row.result.isError) {
     const peers = parseListPeersResult(row.result.content)
     if (peers !== null) return <ListPeersCard row={row} peers={peers} />
