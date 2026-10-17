@@ -54,6 +54,16 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   TASK_STOP_TOOL_NAME,
   // Prevent recursive workflow execution inside subagents.
   ...(feature('WORKFLOW_SCRIPTS') ? [WORKFLOW_TOOL_NAME] : []),
+  // Desktop session tools, appended by the sidecar's session controller. They
+  // act for the whole session, so only its conversational agent holds them; it
+  // passes what a subagent needs to know in the subagent's prompt.
+  'ListPeers',
+  'Announce',
+  'CreatePeer',
+  'SendToPeer',
+  'ReadPeer',
+  'ListWorkspaces',
+  'JumpWorkspace',
 ])
 
 export const CUSTOM_AGENT_DISALLOWED_TOOLS = new Set([
