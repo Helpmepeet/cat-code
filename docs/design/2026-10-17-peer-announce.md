@@ -42,6 +42,7 @@ question is not sent.
 | A4 | Name the area (folder or system), not a required file list. | `touches` takes areas, and files where the agent knows them. |
 | A5 | The agent should not spend attention keeping it current. | Scope, not status: written once, rewritten only when scope changes. Transient states never go in it. |
 | A6 | File-overlap visibility is no longer needed. | Withdrawn from PEER-SESSIONS §12. No automatic edit tracking. |
+| A7 | Added after the live check: subagents cannot list sessions, announce, or use any other session tool. The main agent passes them what they need. | Peer and workspace jump tools are in `ALL_AGENT_DISALLOWED_TOOLS` (§3). |
 
 ## 3. Shape
 
@@ -49,15 +50,19 @@ One notice per session. A call replaces the previous notice whole; there is
 no history and no append.
 
 **One writer per session: the conversational agent.** It posts the aggregate
-notice, including the areas its subagents will edit. Workers can inherit the
-parent's tools and its desktop prompt addendum (`runAgent.ts` passes
-`appendSystemPrompt` through), and `Announce` is not in
-`ALL_AGENT_DISALLOWED_TOOLS`. Main attributes every write by connection, so it
-cannot tell a worker from its parent. A worker following the doctrine would
-therefore replace the parent's notice with its own narrow slice, and two
-workers would overwrite each other. The tool refuses any call with
-`context.agentId` set, before it reaches main, the way `ListWorkspaces` and
-`JumpWorkspace` do in `app/sidecar/workspaceJumpTools.ts`.
+notice, including the areas its subagents will edit. Main attributes every
+write by connection, so it cannot tell a subagent from its parent; a subagent
+posting would replace the parent's notice with its own narrow slice.
+
+Subagents therefore never hold `Announce` or any other peer or workspace jump
+tool (A7). Ordinary workers build a fresh engine pool (`assembleToolPool` in
+`AgentTool.tsx`) that never contains the sidecar-appended tools. Paths that
+inherit the parent's list (forked skills and commands, in-process teammates)
+resolve it through `resolveAgentTools`, which drops every name in
+`ALL_AGENT_DISALLOWED_TOOLS` (`src/constants/tools.ts`). The tool also refuses
+a call with `context.agentId` set, before it reaches main, for the exact-tools
+fork path, which desktop sessions do not run. The conversational agent passes
+any peer context a subagent needs in the subagent's prompt.
 
 | field | required | content |
 |---|---|---|
@@ -200,7 +205,8 @@ If a scope notice would help other peers and you know roughly what you will work
 on, especially before you edit files, post one with Announce: what you are doing,
 and the areas or shared files you expect to touch. Replace it only if your scope
 changes; it is not for progress or momentary state. Include work you hand to
-subagents; only the main conversational agent posts the notice. Before asking a
+subagents. Subagents have no peer tools; give them any peer context they need.
+Before asking a
 peer what it is doing or which files it is editing, read its notice in ListPeers.
 Ask about its scope only when your scope overlaps its notice, or its notice is
 unavailable and you are about to edit near its work. A notice marked noticeOmitted
@@ -412,8 +418,11 @@ cd /Users/pt/cat-code && CHECK_DIR="$(mktemp -d /tmp/catcode-announce.XXXXXX)" &
 ```
 
 1. Wait for `[main] renderer ready`. Use **Open folder** to open the allowlisted
-   scratch folder, then create a second project session with the tab bar's `+`.
-   These are the writer and reader. Note their peer names.
+   scratch folder, then create a second session in that project with the
+   sidebar project group's **New session in this workspace** button (pin the
+   sidebar open to reach it). The tab bar's `+` creates a project-less chat
+   with no peer tools. These are the writer and reader. Note their peer names
+   from the sidebar rows' help text.
 2. In the writer, ask it to call Announce with `doing: "Announce check.
    Read-only."`, `touches: ["test-area"]`, and `note: "Standing test notice."`,
    then stop without messaging any peer. No reader turn or message should be
@@ -433,8 +442,9 @@ cd /Users/pt/cat-code && CHECK_DIR="$(mktemp -d /tmp/catcode-announce.XXXXXX)" &
    with `all: true`: its closed/restorable row must have neither notice nor
    noticeOmitted. Reopen it by hand and confirm no notice resurrects.
 6. Optional live worker check: post another notice in the writer and ask it to
-   have a subagent attempt Announce. The worker must get an error; a subsequent
-   reader listing must show the writer's original notice unchanged.
+   have a subagent attempt Announce. The subagent must find no Announce tool;
+   a subsequent reader listing must show the writer's original notice
+   unchanged.
 
 The registry-ceiling overflow is covered synthetically at the main boundary;
 do not fill a real workspace with hundreds of sessions to repeat it. The
@@ -489,7 +499,8 @@ Procedure differences found while running §11:
   `src/tools/AgentTool/AgentTool.tsx`), and the sidecar appends peer tools only
   to the parent's list (`sessionController.ts`). §3's premise that workers
   inherit the parent's tools holds only on the fork path, so the
-  `context.agentId` refusal remains headless-verified only.
+  `context.agentId` refusal remains headless-verified only. Superseded the same
+  day by ruling A7: §3 now describes the subagent policy as built.
 
 Observation, not a pass or fail: with Moonstone's notice claiming `notes.md`,
 Sunstone was asked to "Add a line saying hello to notes.md in this folder". In
