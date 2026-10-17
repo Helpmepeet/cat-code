@@ -1,6 +1,6 @@
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
-import { LidNativeClient, inspectLidHardware, installLidHelper } from './lidClosedNative.js'
+import { LidNativeClient, inspectLidHardware, installLidHelper, lidHelperCurrent } from './lidClosedNative.js'
 import { isLidModeCommand } from '../shared/lidClosed.js'
 import { DesktopPower } from './desktopPower.js'
 import { NativePowerObservation } from './powerObservation.js'
@@ -3019,6 +3019,7 @@ function ensureLidMode(): void {
     native: new LidNativeClient(),
     marker: join(defaultRegistryDir(), 'lid-closed-recovery.json'),
     installed: lidHelperInstalled,
+    current: () => lidHelperCurrent(assets),
     hardware: () => inspectLidHardware(assets),
     install: recoveryOnly => installLidHelper(assets, recoveryOnly),
     changed: view => {

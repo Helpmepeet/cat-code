@@ -9,6 +9,7 @@ type Dependencies = {
   hardware(): Promise<LidHardware>
   install(recoveryOnly: boolean): Promise<void>
   installed(): boolean
+  current(): Promise<boolean>
   marker: string
   changed(view: LidModeView): void
 }
@@ -165,6 +166,9 @@ export class LidClosedMode {
     this.deps.native.close()
     try { await this.deps.install(recoveryOnly); this.view.installed = true }
     catch (error) {
+      // Cancellation occurs before the root installer runs, so an existing
+      // helper does not by itself turn a declined upgrade into recovery.
+      if (error instanceof LidSetupCancelled) throw error
       // An installer can fail after publishing authority. Do not turn that
       // partial result into a dismissible error merely because Start has not
       // written local intent yet. Normal sleep must be observed again.
@@ -183,8 +187,10 @@ export class LidClosedMode {
     this.checkHardware(await this.deps.hardware())
     if (epoch !== this.epoch || this.stopped) return
     this.view.allowance = minutes
-    // First use goes straight to the macOS administrator dialog.
-    if (!this.deps.installed()) {
+    // App replacement leaves the root-owned helper outside the bundle.
+    const current = await this.deps.current()
+    if (epoch !== this.epoch || this.stopped) return
+    if (!current) {
       this.set({ phase: 'setup', error: undefined }); await this.install(false)
     }
     if (epoch !== this.epoch || this.stopped) { this.set({ phase: 'off' }); return }

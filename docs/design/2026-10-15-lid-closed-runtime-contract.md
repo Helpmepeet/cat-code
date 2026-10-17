@@ -27,6 +27,10 @@ It does not grant arbitrary root commands. Other apps benefit from the global
 awake state and may use the fixed bridge. Removing the helper and launchd jobs
 revokes this persistent capability. Cat Code rebuilds do not require app identity
 reauthorization; replacing the native helper can require setup repair.
+Before a manual start, main compares the installed helper with the sealed bundled
+helper. A missing or different helper goes through administrator setup before
+admission; initialization alone never prompts for an upgrade. An unchanged helper
+does not prompt again, and declining an upgrade does not start a lease.
 
 The Electron app uses ordinary ad-hoc signing plus existing ASAR/fuses. The
 native helper uses hardened ad-hoc signing and system libraries. There is no
