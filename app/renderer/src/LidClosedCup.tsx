@@ -37,7 +37,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const showNumeral = active || v.phase === 'starting'
   const fill = active ? lidFill(v.remainingSeconds / 60) : 0
   const top = 27 - 17 * fill
-  const shortcut = v.phase === 'unresolved' ? 'Retry restoration' : active ? 'Adjust duration' : 'Start for 15 minutes'
+  const shortcut = v.phase === 'unresolved' ? 'Retry restoration' : active ? 'Adjust duration' : `Start for ${LID_PRESETS[0]} minutes`
   // Without banners, the tooltip explains a refused start or an ending the user did not choose.
   const title = v.phase === 'unavailable' && v.error ? v.error
     : unexpectedEnd ? `${lidReason(v.reason)}${v.error && v.reason !== 'sleep-unconfirmed' ? ' Sleep could not be confirmed. Check your Mac.' : ''}`
@@ -46,7 +46,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const adjust = (direction: number) => {
     // A refused start stays retryable; main rechecks the hardware on every start.
     if (pending || v.phase === 'unresolved') return
-    if (!active) { if (direction > 0) command({ action: 'start', minutes: 15 }); return }
+    if (!active) { if (direction > 0) command({ action: 'start', minutes: LID_PRESETS[0] }); return }
     const index = LID_PRESETS.indexOf(v.allowance as typeof LID_PRESETS[number]) + direction
     if (index < 0 || index >= LID_PRESETS.length) command({ action: 'stop' })
     else {
@@ -89,7 +89,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
           </svg>
         </g> : null}
         <path className="lid-outline" d="M3 10h14v12a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5z M17 12h2a4 4 0 0 1 0 8h-2" />
-        {LID_PRESETS.map((tick, i) => <path key={tick} className={v.allowance === tick && active ? 'lid-tick selected' : 'lid-tick'} d={`M4 ${23 - i * 4}h3`} />)}
+        {LID_PRESETS.map((tick, i) => <path key={tick} className={v.allowance === tick && active ? 'lid-tick selected' : 'lid-tick'} d={`M4 ${27 - 17 * (i + 1) / LID_PRESETS.length}h3`} />)}
         {active ? <><path className="lid-steam" d="M7 7c-3-3 3-3 0-6" /><path className="lid-steam lid-steam-late" d="M12 7c-3-3 3-3 0-6" /></> : null}
         {v.phase === 'unresolved' || unexpectedEnd ? <path className="lid-mark" d="M10 13v6 M10 22v1" /> : null}
         {v.phase === 'unavailable' ? <path className="lid-mark" d="M3 26L17 11" /> : null}

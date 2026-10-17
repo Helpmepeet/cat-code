@@ -22,7 +22,7 @@ test('every session cup shows the one shared state, and only a restore failure a
   </LidClosedProvider>
   const tree = await harness.mount(shell())
   const button = (label: string) => [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === label)!
-  for (const allowance of [15,30,60,120]) {
+  for (const allowance of [5,15,30,60,120]) {
     await act(async () => { view = initial(allowance); receive(view) })
     expect(tree.container.querySelectorAll('.lid-notice')).toHaveLength(0)
     const cups = [...tree.container.querySelectorAll('.lid-cup-slot')]
@@ -31,6 +31,12 @@ test('every session cup shows the one shared state, and only a restore failure a
     const [a, b] = cups.map(cup => cup.outerHTML.replaceAll(/id="[^"]*"|url\(#[^)]*\)|data-composer-face="[^"]*"/g, ''))
     expect(a).toBe(b!)
     expect(cups[0]!.querySelectorAll('.lid-tick.selected')).toHaveLength(1)
+    const ticks = [...cups[0]!.querySelectorAll('.lid-tick')]
+    expect(ticks).toHaveLength(5)
+    const selected = ticks.find(tick => tick.classList.contains('selected'))!
+    const tickY = Number(selected.getAttribute('d')!.split(' ')[1]!.replace('h3', ''))
+    await act(async () => { receive({ ...view, remainingSeconds: allowance * 60 }) })
+    expect(Number(cups[0]!.querySelector('.lid-liquid')!.getAttribute('y'))).toBeCloseTo(tickY)
   }
   for (const phase of ['starting', 'restoring', 'ended', 'unavailable'] as const) {
     await act(async () => { receive({ ...view, phase, reason: 'expired', error: phase === 'unavailable' ? 'Open the lid before starting.' : undefined }) })
@@ -56,9 +62,20 @@ test('focus does not activate; active keyboard adjustment sends only fixed prese
   await act(async () => { cup.focus() })
   expect(commands).toEqual([])
   expect(tree.container.querySelector('.lid-digits')).toBeNull()
+  expect(cup.getAttribute('aria-label')).toContain('Start for 5 minutes')
+  await act(async () => { cup.click() })
+  expect(commands.at(-1)).toEqual({ action: 'start', minutes: 5 })
+  await act(async () => { receive(initial(5)) })
+  await act(async () => { cup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })) })
+  expect(commands.at(-1)).toEqual({ action: 'adjust', minutes: 15 })
   await act(async () => { receive(initial()) })
   await act(async () => { cup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })) })
-  expect(commands).toEqual([{ action: 'adjust', minutes: 30 }])
+  expect(commands.at(-1)).toEqual({ action: 'adjust', minutes: 30 })
+  await act(async () => { cup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })) })
+  expect(commands.at(-1)).toEqual({ action: 'adjust', minutes: 5 })
+  await act(async () => { receive(initial(5)) })
+  await act(async () => { cup.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })) })
+  expect(commands.at(-1)).toEqual({ action: 'stop' })
 })
 
 
@@ -102,7 +119,7 @@ test('a refused start leaves the cup able to try again', async () => {
   await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
   expect(cup.getAttribute('aria-disabled')).toBe('false')
   await act(async () => { cup.click() })
-  expect(commands).toEqual([{ action: 'start', minutes: 15 }])
+  expect(commands).toEqual([{ action: 'start', minutes: 5 }])
 })
 
 test('restored power settings do not imply an unconfirmed Sleep request succeeded', async () => {
