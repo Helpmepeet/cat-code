@@ -99,6 +99,34 @@ export type AccountsPoolRunOptions = {
 
 export type AccountsPoolRunOutcome = 'delivered' | 'failure' | 'empty'
 
+/** Restore display readings without waiting on the provider, then refresh normally. */
+export async function runAccountsPoolRefresh(
+  options: AccountsPoolRunOptions,
+  restoreCached: boolean,
+): Promise<AccountsPoolRunOutcome> {
+  if (restoreCached) {
+    try {
+      await runAccountsPoolWorker({
+        ...options,
+        args: [...options.args, '--cached'],
+        onPool: pool => {
+          const hasUsage = pool.accounts.some(
+            account => account.usagePrimary !== null || account.usageWeekly !== null,
+          ) || pool.anthropicAccounts.some(
+            account => account.usageFiveHour != null || account.usageWeekly != null,
+          )
+          if (hasUsage) options.onPool?.(pool)
+        },
+      })
+    } catch (error) {
+      if (options.signal?.aborted) throw error
+      options.log?.(`[accounts-runner] Saved usage read failed: ${String(error)}`)
+    }
+  }
+  if (options.signal?.aborted) throw new Error('accounts worker aborted')
+  return runAccountsPoolWorker(options)
+}
+
 /**
  * Validate the correlation and semantic invariants that cannot be expressed by
  * the structural worker parser alone. A receipt with a successful outcome must

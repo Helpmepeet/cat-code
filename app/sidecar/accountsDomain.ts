@@ -75,6 +75,7 @@ import {
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
 import type { ClaudeAccountUsage } from '../../src/services/api/claudePoolUsage.js'
+import type { CodexAccountDisplayUsage } from '../../src/services/api/codexUsageDisplayCache.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import {
   fetchPoolUsage,
@@ -451,6 +452,7 @@ export function buildAccountStatus(
   account: PoolAccount,
   isDefault: boolean,
   now = Date.now(),
+  displayUsage?: CodexAccountDisplayUsage,
 ): AccountStatus {
   const availability = getCodexAccountAvailability(account, now).kind
   return {
@@ -465,13 +467,14 @@ export function buildAccountStatus(
     // Presence flag ONLY — never the path (`vaultFilePath` is secretGuard-blocked).
     hasVaultProfile: Boolean(account.vaultFilePath),
     source: account.source,
-    usagePrimary: account.usagePrimary ?? null,
-    usageWeekly: account.usageWeekly ?? null,
-    usagePrimaryWindowSeconds: account.usagePrimaryWindowSeconds ?? null,
-    usageSecondaryWindowSeconds: account.usageSecondaryWindowSeconds ?? null,
+    usagePrimary: displayUsage ? displayUsage.primaryWindow?.usedPercent ?? null : account.usagePrimary ?? null,
+    usageWeekly: displayUsage ? displayUsage.secondaryWindow?.usedPercent ?? null : account.usageWeekly ?? null,
+    usagePrimaryWindowSeconds: displayUsage ? displayUsage.primaryWindow?.limitWindowSeconds ?? null : account.usagePrimaryWindowSeconds ?? null,
+    usageSecondaryWindowSeconds: displayUsage ? displayUsage.secondaryWindow?.limitWindowSeconds ?? null : account.usageSecondaryWindowSeconds ?? null,
     usageLimitReached: account.usageLimitReached === true,
-    usageResetAt: account.usageResetAt ?? null,
-    usageWeeklyResetAt: account.usageWeeklyResetAt ?? null,
+    usageResetAt: displayUsage ? displayUsage.primaryWindow?.resetAt ?? null : account.usageResetAt ?? null,
+    usageWeeklyResetAt: displayUsage ? displayUsage.secondaryWindow?.resetAt ?? null : account.usageWeeklyResetAt ?? null,
+    ...(displayUsage ? { usageStale: displayUsage.stale } : {}),
     lastRefreshIso: account.lastRefreshIso ?? null,
     lastError: account.lastError ?? null,
     planType: account.planType ?? null,
@@ -570,12 +573,16 @@ export function buildAccountsSnapshot(
   anthropicSubscriptionActive = resolveAnthropicSubscriptionActive(),
   profileInventory?: CodexProfileInventory,
   anthropicUsage?: ReadonlyMap<string, ClaudeAccountUsage>,
+  codexDisplayUsage?: ReadonlyMap<string, CodexAccountDisplayUsage>,
 ): AccountsSnapshot {
   const activeAccount = poolStatus.accounts[poolStatus.activeIndex]
   const activeAccountId = activeAccount?.accountId ?? null
   const credentialedAccounts = profileInventory?.accounts ?? poolStatus.accounts
   const accounts = credentialedAccounts.map(account =>
-    buildAccountStatus(account, account.accountId === activeAccountId, now),
+    buildAccountStatus(
+      account, account.accountId === activeAccountId, now,
+      codexDisplayUsage?.get(account.accountId),
+    ),
   )
   const readyCount = credentialedAccounts.filter(
     a => a.status === 'healthy' && a.usageLimitReached !== true,

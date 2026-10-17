@@ -287,6 +287,33 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
 })
 
 describe('P4-5 read-seam — projection semantics', () => {
+  test('saved display readings never override availability, limits, or switchability', () => {
+    const account = poolAccount({
+      usagePrimary: undefined, usageWeekly: undefined,
+      usagePrimaryWindowSeconds: undefined, usageSecondaryWindowSeconds: undefined,
+      usageResetAt: undefined, usageWeeklyResetAt: undefined,
+    })
+    const before = structuredClone(account)
+    const now = Date.now()
+    const ordinary = buildAccountStatus(account, false, now)
+    const displayed = buildAccountStatus(account, false, now, {
+      primaryWindow: {
+        usedPercent: 100, limitWindowSeconds: 18_000,
+        resetAt: now / 1000 + 60, resetAfterSeconds: 60,
+      },
+      secondaryWindow: null, fetchedAt: now - 1_000, stale: true,
+    })
+    expect(displayed.usagePrimary).toBe(100)
+    expect(displayed.usageStale).toBe(true)
+    expect(displayed.usageWeekly).toBeNull()
+    expect(displayed.availability).toBe(ordinary.availability)
+    expect(displayed.availabilityLabel).toBe(ordinary.availabilityLabel)
+    expect(displayed.usageLimitReached).toBe(false)
+    expect(displayed.switchable).toBe(ordinary.switchable)
+    expect(account).toEqual(before)
+    expect(scanForSecrets(displayed).ok).toBe(true)
+  })
+
   test('projection carries the weekly reset independently of the 5h reset', () => {
     const status = buildAccountStatus(poolAccount({
       usageResetAt: 1_700_000_000,

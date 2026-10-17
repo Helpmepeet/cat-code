@@ -4,7 +4,7 @@
  * screen so it can observe the DOM branch that replaces the neutral rail.
  */
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import type { ReactElement } from 'react'
+import { act, type ReactElement } from 'react'
 
 import { createDomTestHarness, type DomTestHarness, type MountedTree } from './domTestHarness.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
@@ -167,4 +167,41 @@ test('recognized fallback usage never renders a loading rail', async () => {
   expect(usageState(tree)).toBe('real')
   expect(tree.container.querySelector('[data-welcome-usage-state="pending"]')).toBeNull()
   expect(tree.container.querySelector('[aria-label="Weekly usage: 18%"]')).toBeTruthy()
+})
+
+test('saved usage stays visible and labeled until a successful refresh replaces it', async () => {
+  const resetAt = Date.now() / 1000 + 60
+  const saved = pool([account({
+    usagePrimary: 38, usagePrimaryWindowSeconds: 604_800,
+    usageResetAt: resetAt, usageStale: true,
+  })])
+  const tree = await harness.mount(screen(saved, false))
+  expect(usageState(tree)).toBe('real')
+  expect(tree.container.querySelector('[aria-label="Weekly usage: 38%"]')).toBeTruthy()
+  expect(tree.container.textContent).toContain('Stale')
+
+  await tree.render(screen(saved, false))
+  expect(usageState(tree)).toBe('real')
+  expect(tree.container.querySelector('[data-welcome-usage-state="pending"]')).toBeNull()
+
+  await tree.render(screen(pool([account({
+    usagePrimary: 41, usagePrimaryWindowSeconds: 604_800,
+    usageResetAt: resetAt, usageStale: false,
+  })]), false))
+  expect(tree.container.querySelector('[aria-label="Weekly usage: 41%"]')).toBeTruthy()
+  expect(tree.container.textContent).not.toContain('Stale')
+})
+
+test('saved usage disappears at reset even without another snapshot arriving', async () => {
+  const resetAt = Date.now() / 1000 + 0.05
+  const tree = await harness.mount(screen(pool([account({
+    usagePrimary: 38, usagePrimaryWindowSeconds: 604_800,
+    usageResetAt: resetAt, usageStale: true,
+  })]), false))
+  expect(usageState(tree)).toBe('real')
+  await act(async () => {
+    await new Promise(resolve => setTimeout(resolve, 80))
+  })
+  expect(usageState(tree)).toBeNull()
+  expect(tree.container.textContent).not.toContain('Stale')
 })

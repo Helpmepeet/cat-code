@@ -129,6 +129,30 @@ test('a window past its reset time is dropped rather than shown as current', asy
   })
 })
 
+test('cached-only reads never use the network, including on a stale or missing cache', async () => {
+  const accounts = [account({ accountUuid: 'a' })]
+  let calls = 0
+  const fetchUsage = async () => {
+    calls++
+    return reading(25, 9)
+  }
+  const empty = await fetchClaudePoolUsage(accounts, {
+    now: NOW, cacheFile, cachedOnly: true, fetchUsage,
+  })
+  expect(empty.size).toBe(0)
+  expect(calls).toBe(0)
+
+  await fetchClaudePoolUsage(accounts, { now: NOW, cacheFile, fetchUsage })
+  const saved = await fetchClaudePoolUsage(accounts, {
+    now: NOW + 3 * HOUR, cacheFile, cachedOnly: true, fetchUsage,
+  })
+  expect(calls).toBe(1)
+  expect(saved.get('a')).toEqual({
+    fiveHour: null,
+    weekly: { percent: 9, resetAt: (NOW + 72 * HOUR) / 1000 },
+  })
+})
+
 test('removed accounts leave the cache and a corrupt cache is ignored', async () => {
   writeFileSync(join(dir, 'corrupt.json'), '{not json')
   const usage = await fetchClaudePoolUsage([account({ accountUuid: 'a' })], {

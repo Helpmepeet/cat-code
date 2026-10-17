@@ -60,7 +60,7 @@ import { basename } from './pathUtils.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
-import { selectWelcomeUsageWindows } from './welcomeUsage.js'
+import { useAccountUsageWindows } from './welcomeUsage.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 import type { HostResult, WorkspaceBranches } from '../../shared/hostApi.js'
 
@@ -853,7 +853,7 @@ function CodexRow({
   account: AccountStatus
   accountsUsagePending: boolean
 }) {
-  const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
+  const { fiveHour, weekly } = useAccountUsageWindows(account)
   return (
     <AccountUsageRow
       name={account.alias ?? account.id}
@@ -862,6 +862,7 @@ function CodexRow({
       fiveHour={fiveHour}
       weekly={weekly}
       accountsUsagePending={accountsUsagePending}
+      usageStale={account.usageStale}
     />
   )
 }
@@ -875,6 +876,7 @@ function AccountUsageRow({
   fiveHour,
   weekly,
   accountsUsagePending,
+  usageStale,
 }: {
   name: string
   isDefault: boolean
@@ -882,6 +884,7 @@ function AccountUsageRow({
   fiveHour: UsageWindow | null
   weekly: UsageWindow | null
   accountsUsagePending: boolean
+  usageStale?: boolean
 }) {
   const hasSupportedWindow = fiveHour !== null || weekly !== null
   const hasBothWindows = fiveHour !== null && weekly !== null
@@ -892,6 +895,14 @@ function AccountUsageRow({
         <span className="truncate font-medium text-text-primary">
           {name}
         </span>
+        {usageStale && hasSupportedWindow ? (
+          <span
+            title="Showing the last successful usage check."
+            className="shrink-0 text-[10px] text-text-faint"
+          >
+            Stale
+          </span>
+        ) : null}
         {capped ? (
           <span className="shrink-0 rounded border border-accent/20 bg-accent/10 px-[7px] py-0.5 text-[9.5px] font-bold uppercase tracking-[0.08em] text-accent">
             capped
