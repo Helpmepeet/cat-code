@@ -495,7 +495,7 @@ export const TranscriptView = memo(function TranscriptView({
       onSwitchBranch={onSwitchBranch}
       onFocusBranchChat={onFocusBranchChat}
       branchPending={branchPending}
-      sandboxed={sandboxed ?? false}
+      sandboxed={sandboxed}
       restorePhase={restorePhase ?? null}
       loadEarlierPending={loadEarlierPending ?? false}
       loadEarlierFailure={loadEarlierFailure ?? null}
@@ -613,7 +613,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onSwitchBranch,
   onFocusBranchChat,
   branchPending,
-  sandboxed = false,
+  sandboxed,
   restorePhase = null,
   loadEarlierPending = false,
   loadEarlierFailure = null,

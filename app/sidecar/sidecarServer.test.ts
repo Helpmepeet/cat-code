@@ -7071,8 +7071,101 @@ function fakeWorkspaceTrust(
 function fakeDiagnostics(
   snapshot: ReturnType<SidecarDiagnosticsDomain['getSnapshot']>,
 ): SidecarDiagnosticsDomain {
-  return { getSnapshot: () => snapshot }
+  return { getSnapshot: () => snapshot, start() {}, subscribe: () => () => {}, dispose() {} }
 }
+
+test('optional diagnostics starts only after attachment and an active turn finishes; reconnect retains completion', async () => {
+  let finish!: () => void
+  const held = new Promise<void>(resolve => { finish = resolve })
+  const controller = new AppSessionController({ async *runTurn() { await held } })
+  const snapshot = {
+    version: 'test', mainLoopModel: null, mainLoopModelForSession: null,
+    reasoningEffort: null, fastMode: false, sandboxEnabled: false, gitBranch: null,
+    installationWarnings: [], healthWarnings: [], memoryWarnings: [],
+  }
+  let starts = 0, disposed = false, complete = false
+  const listeners = new Set<() => void>()
+  const diagnostics: SidecarDiagnosticsDomain = {
+    getSnapshot: () => complete ? snapshot : null,
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
+    start() {
+      if (complete) return
+      starts++
+      complete = true
+      for (const listener of listeners) listener()
+    },
+    dispose() { disposed = true },
+  }
+  const server = makeServer(controller, { diagnostics })
+  await Bun.sleep(5)
+  expect(starts).toBe(0)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  server.handleData(connection, clientFrame({ type: 'app.submit', requestId: 'busy-diagnostics', prompt: 'fixture' }))
+  await Bun.sleep(5)
+  expect(starts).toBe(0)
+  finish()
+  await waitFor(() => starts === 1)
+  expect(received.filter(frame => frame.kind === 'diagnostics.snapshot')).toHaveLength(1)
+  server.removeConnection(connection)
+  const next = makeSocket()
+  server.addConnection(next.socket)
+  await Bun.sleep(5)
+  expect(next.received.filter(frame => frame.kind === 'diagnostics.snapshot')).toHaveLength(1)
+  expect(starts).toBe(1)
+  server.close()
+  expect(disposed).toBe(true)
+  expect(listeners.size).toBe(0)
+})
+
+test('destination diagnostics waits through pending admission and recovery, then starts after settled cancellation', async () => {
+  const controller = new AppSessionController(probeAdapter())
+  const identity = { appSessionId: SESSION, engineSessionId: ENGINE_SESSION, operationId: randomUUID(),
+    continuationId: randomUUID(), sourceGeneration: randomUUID(), admissionGeneration: randomUUID(), operationSha256: 'a'.repeat(64) }
+  let status: NonNullable<ReturnType<AppSessionController['getWorkspaceHandoffSnapshot']>> = {
+    ...identity, observerGeneration: randomUUID(), statusSeq: 1, execution: 'idle', record: { kind: 'absent' },
+    gate: { mode: 'held', reservationOperationId: identity.operationId, requiresUserReconciliation: false },
+  }
+  let changed = () => {}
+  controller.getWorkspaceHandoffSnapshot = () => status
+  controller.subscribeHandoffStatus = listener => { changed = listener; return () => { changed = () => {} } }
+  let starts = 0, disposed = 0
+  const diagnostics = { ...fakeDiagnostics(null), start() { starts++ }, dispose() { disposed++ } }
+  const { server } = connect(controller, { diagnostics })
+  await Bun.sleep(5)
+  expect(starts).toBe(0)
+  status = { ...status, execution: 'unconfirmed' }
+  changed()
+  await Bun.sleep(5)
+  expect(starts).toBe(0)
+  const checkpoint = { version: 1 as const, prefixBytes: 1, prefixSha256: 'a'.repeat(64), activeTipUuid: randomUUID(),
+    projectionSha256: 'b'.repeat(64), messageCount: 1 }
+  status = { ...status, execution: 'terminal', record: { kind: 'valid', record: {
+    ...identity, version: 1, origin: 'fresh', revision: 1, consumed: false, inputCommitted: false,
+    cancellation: { cancelId: randomUUID(), application: 'prevented_start', order: 1 },
+    terminal: { outcome: 'not_started', order: 2, checkpoint }, notice: null, reconciliation: null,
+  } } }
+  changed()
+  await Bun.sleep(5)
+  expect(starts).toBe(0)
+  status = { ...status, gate: { mode: 'open', reservationOperationId: null, requiresUserReconciliation: false } }
+  changed()
+  await waitFor(() => starts === 1)
+  server.close()
+  expect(disposed).toBe(1)
+})
+
+test('closing before the diagnostics task runs prevents start and releases subscription', async () => {
+  let starts = 0, disposed = 0, subscriptions = 0
+  const diagnostics = { ...fakeDiagnostics(null), start() { starts++ }, dispose() { disposed++ },
+    subscribe() { subscriptions++; return () => { subscriptions-- } } }
+  const { server } = connect(new AppSessionController(probeAdapter()), { diagnostics })
+  server.close()
+  await Bun.sleep(5)
+  expect(starts).toBe(0)
+  expect(disposed).toBe(1)
+  expect(subscriptions).toBe(0)
+})
 
 test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read', () => {
   const workspaceTrust = fakeWorkspaceTrust({

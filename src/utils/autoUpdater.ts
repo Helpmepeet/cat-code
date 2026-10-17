@@ -267,21 +267,24 @@ async function releaseLock(): Promise<void> {
   }
 }
 
-async function getInstallationPrefix(): Promise<string | null> {
+async function getInstallationPrefix(budget?: import('./ownedCommandBudget.js').OwnedCommandBudget): Promise<string | null> {
   // Run from home directory to avoid reading project-level .npmrc/.bunfig.toml
   const isBun = env.isRunningWithBun()
   let prefixResult = null
   if (isBun) {
     prefixResult = await execFileNoThrowWithCwd('bun', ['pm', 'bin', '-g'], {
       cwd: homedir(),
+      ...budget?.commandOptions(),
     })
   } else {
     prefixResult = await execFileNoThrowWithCwd(
       'npm',
       ['-g', 'config', 'get', 'prefix'],
-      { cwd: homedir() },
+      { cwd: homedir(), ...budget?.commandOptions() },
     )
   }
+  budget?.throwIfExpired()
+  if (budget && prefixResult.error) throw new Error(`Could not check global installation permissions (code ${prefixResult.code}): ${prefixResult.error}`)
   if (prefixResult.code !== 0) {
     logError(new Error(`Failed to check ${isBun ? 'bun' : 'npm'} permissions`))
     return null
@@ -289,12 +292,12 @@ async function getInstallationPrefix(): Promise<string | null> {
   return prefixResult.stdout.trim()
 }
 
-export async function checkGlobalInstallPermissions(): Promise<{
+export async function checkGlobalInstallPermissions(budget?: import('./ownedCommandBudget.js').OwnedCommandBudget): Promise<{
   hasPermissions: boolean
   npmPrefix: string | null
 }> {
   try {
-    const prefix = await getInstallationPrefix()
+    const prefix = await getInstallationPrefix(budget)
     if (!prefix) {
       return { hasPermissions: false, npmPrefix: null }
     }
@@ -311,6 +314,7 @@ export async function checkGlobalInstallPermissions(): Promise<{
       return { hasPermissions: false, npmPrefix: prefix }
     }
   } catch (error) {
+    if (budget) throw error
     logError(error as Error)
     return { hasPermissions: false, npmPrefix: null }
   }

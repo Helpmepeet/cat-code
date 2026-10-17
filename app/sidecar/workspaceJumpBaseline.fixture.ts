@@ -25,12 +25,17 @@ if (mode === 'mint') {
 } else {
   const status = await import('../../src/utils/status.js')
   const delay = Number(process.argv[3])
-  spyOn(status, 'buildInstallationDiagnostics').mockImplementation(() => delay < 0 ? new Promise(() => {}) : new Promise(resolve => setTimeout(() => resolve([]), delay)))
+  let installationCalls = 0
+  spyOn(status, 'buildInstallationDiagnostics').mockImplementation(() => {
+    installationCalls++
+    return delay < 0 ? new Promise(() => {}) : new Promise(resolve => setTimeout(() => resolve([]), delay))
+  })
   const { createSidecarSessionController } = await import('./sessionController.js')
   const started = performance.now()
   const session = await createSidecarSessionController({ probe: false, cwd: process.cwd(), appSessionId: randomUUID(), generation: randomUUID(),
     timing: input => process.stdout.write(JSON.stringify(input) + '\n') })
-  process.stdout.write(JSON.stringify({ controllerCompletedMs: performance.now() - started }) + '\n')
+  process.stdout.write(JSON.stringify({ controllerCompletedMs: performance.now() - started, installationCalls }) + '\n')
+  session.diagnostics?.dispose()
   await session.disposeMcpLifecycle?.()
 }
 const { releaseActiveTranscriptLease } = await import('../../src/utils/transcriptLease.js')

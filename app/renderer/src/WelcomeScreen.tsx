@@ -216,6 +216,8 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                     <span className="text-[13px] text-text-muted">
                       {props.variant === 'session' && props.sandboxed
                         ? 'Sandboxed'
+                        : props.variant === 'session' && props.sandboxed === undefined
+                          ? 'Unknown'
                         : 'Locally'}
                     </span>
                   </MetaCol>
