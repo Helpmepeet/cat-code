@@ -1,5 +1,5 @@
 import { afterEach, expect, test, spyOn } from 'bun:test';
-import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir, rename } from 'node:fs/promises';
+import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir, rename, readdir, stat, utimes } from 'node:fs/promises';
 import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -16,6 +16,139 @@ const row = (id: string, timestamp = cutoff, tokens = 10) => ({ type: 'assistant
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'usage-index-')); roots.push(root); return { path: join(root, 'cache.sqlite'), file: join(root, 's.jsonl') }; }
 const opts = (path: string) => ({ path, deadline: Date.now() + 60000 });
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+test('max_page_count belongs to each connection and can be raised without rebuilding an existing file', async () => {
+    const { path } = await fixture();
+    const first = new Database(path, { create: true });
+    try {
+        first.exec('PRAGMA page_size=4096; PRAGMA max_page_count=262144; CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES (\'keep\');');
+        expect(first.query('PRAGMA max_page_count').get()).toEqual({ max_page_count: 262144 });
+        const second = new Database(path);
+        try {
+            expect(second.query('PRAGMA max_page_count').get()).not.toEqual({ max_page_count: 262144 });
+            second.exec('PRAGMA max_page_count=67108864');
+            expect(second.query('PRAGMA max_page_count').get()).toEqual({ max_page_count: 67108864 });
+            expect(first.query('PRAGMA max_page_count').get()).toEqual({ max_page_count: 262144 });
+            expect(second.query('SELECT value FROM retained').get()).toEqual({ value: 'keep' });
+        } finally { second.close(); }
+    } finally { first.close(); }
+    const reopened = new Database(path);
+    try {
+        expect(reopened.query('PRAGMA max_page_count').get()).not.toEqual({ max_page_count: 67108864 });
+        expect(reopened.query('SELECT value FROM retained').get()).toEqual({ value: 'keep' });
+    } finally { reopened.close(); }
+});
+test('refresh removes older indexes, orphaned sidecars and stale locks but retains current, future, corrupt and unrelated files', async () => {
+    const fixtureFiles = await fixture();
+    const root = dirname(fixtureFiles.path), path = join(root, 'index-v11.sqlite'), file = fixtureFiles.file;
+    await writeFile(file, JSON.stringify(row('retained')));
+    await collectIndexedUsage([file], cutoff, opts(path));
+    const inode = (await stat(path)).ino;
+    const marker = new Database(path);
+    try { marker.exec('CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES (\'no rebuild\');'); }
+    finally { marker.close(); }
+    const removed: string[] = [];
+    for (let version = 1; version < 11; version++) {
+        if (version === 3) continue;
+        for (const part of ['', '-wal', '-shm']) {
+            // Cover orphaned sidecars without the database itself as well.
+            if (version === 2 && part === '') continue;
+            const name = `index-v${version}.sqlite${part}`;
+            await writeFile(join(root, name), 'obsolete');
+            removed.push(name);
+        }
+    }
+    const staleLock = join(root, 'index-v10.sqlite.lock');
+    await mkdir(staleLock);
+    const stale = new Date(Date.now() - 600000);
+    await utimes(staleLock, stale, stale);
+    removed.push('index-v10.sqlite.lock');
+    // Also reclaim a lock with no database or sidecars.
+    await mkdir(join(root, 'index-v3.sqlite.lock'));
+    await utimes(join(root, 'index-v3.sqlite.lock'), stale, stale);
+    removed.push('index-v3.sqlite.lock');
+    const kept = [
+        'index-v12.sqlite', 'index-v12.sqlite-wal', 'index-v12.sqlite-shm',
+        'index-v1.sqlite.corrupt-backup', 'index-v1.sqlite.corrupt-backup-wal', 'index-v1.sqlite.corrupt-backup-shm',
+        'index-v11.sqlite.corrupt-backup', 'notes.txt', 'other.sqlite', 'index-v10.sqlite.bak',
+    ];
+    for (const name of kept) await writeFile(join(root, name), 'keep');
+    await mkdir(join(root, 'index-v12.sqlite.lock'));
+    await mkdir(join(root, 'index-v1.sqlite.corrupt-backup.lock'));
+    kept.push('index-v12.sqlite.lock', 'index-v1.sqlite.corrupt-backup.lock');
+    let reads = 0;
+    const caps: number[] = [];
+    const exec = Database.prototype.exec;
+    const observe = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        if (this.filename === path && sql === 'BEGIN IMMEDIATE') {
+            caps.push(this.query<{ max_page_count: number }, []>('PRAGMA max_page_count').get()!.max_page_count);
+        }
+        return exec.call(this, sql);
+    });
+    try {
+        for (let refresh = 0; refresh < 2; refresh++) {
+            await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
+        }
+    } finally { observe.mockRestore(); }
+    expect(caps).toEqual([67108864, 67108864]);
+    expect(reads).toBe(0);
+    expect((await stat(path)).ino).toBe(inode);
+    const reader = new Database(path, { readonly: true });
+    try { expect(reader.query('SELECT value FROM retained').get()).toEqual({ value: 'no rebuild' }); }
+    finally { reader.close(); }
+    const remaining = await readdir(root);
+    for (const name of removed) expect(remaining).not.toContain(name);
+    for (const name of [...kept, 'index-v11.sqlite']) expect(remaining).toContain(name);
+});
+test('cleanup skips an older process mid-refresh and retries after its writer lock is released', async () => {
+    const { path: fixturePath } = await fixture();
+    const root = dirname(fixturePath), older = join(root, 'index-v10.sqlite'), path = join(root, 'index-v11.sqlite');
+    const seed = new Database(older, { create: true });
+    try { seed.exec('CREATE TABLE retained(value TEXT)'); } finally { seed.close(); }
+    const child = Bun.spawn([process.execPath, '-e', `
+        import { Database } from 'bun:sqlite';
+        import { lock } from ${JSON.stringify(new URL('./lockfile.ts', import.meta.url).href)};
+        const path = ${JSON.stringify(older)};
+        const release = await lock(path, { realpath: false, stale: 180000, update: 30000, retries: 0 });
+        const db = new Database(path);
+        try {
+            db.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE; INSERT INTO retained VALUES ('committed')");
+            console.log('ready');
+            await Bun.stdin.text();
+            db.exec('COMMIT');
+        } finally { db.close(); await release(); }
+    `], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+    try {
+        const output = child.stdout.getReader();
+        const ready = await output.read();
+        output.releaseLock();
+        expect(new TextDecoder().decode(ready.value)).toBe('ready\n');
+        const lockInode = (await stat(older + '.lock')).ino;
+        await collectIndexedUsage([], cutoff, opts(path));
+        for (const part of ['', '-wal', '-shm', '.lock']) expect(existsSync(older + part)).toBe(true);
+        expect((await stat(older + '.lock')).ino).toBe(lockInode);
+    } finally { child.stdin.end(); await child.exited; }
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stderr).text()).toBe('');
+    const reader = new Database(older, { readonly: true });
+    try { expect(reader.query('SELECT value FROM retained').get()).toEqual({ value: 'committed' }); }
+    finally { reader.close(); }
+    await collectIndexedUsage([], cutoff, opts(path));
+    for (const part of ['', '-wal', '-shm', '.lock']) expect(existsSync(older + part)).toBe(false);
+});
+test('cleanup leaves the current database WAL and SHM in place', async () => {
+    const { path: fixturePath } = await fixture();
+    const root = dirname(fixturePath), path = join(root, 'index-v11.sqlite');
+    const current = new Database(path, { create: true });
+    try {
+        current.exec('PRAGMA journal_mode=WAL; CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES (\'in WAL\');');
+        const inodes = await Promise.all(['', '-wal', '-shm'].map(part => stat(path + part).then(s => s.ino)));
+        await writeFile(join(root, 'index-v10.sqlite'), 'obsolete');
+        await collectIndexedUsage([], cutoff, opts(path));
+        expect(await Promise.all(['', '-wal', '-shm'].map(part => stat(path + part).then(s => s.ino)))).toEqual(inodes);
+        expect(current.query('SELECT value FROM retained').get()).toEqual({ value: 'in WAL' });
+        expect(existsSync(join(root, 'index-v10.sqlite'))).toBe(false);
+    } finally { current.close(); }
+});
 test('exhausted memory scratch spills in bounded persistent-journal batches without changing accounting or durable publication', async () => {
     const { path, file } = await fixture();
     await writeFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
@@ -30,11 +163,14 @@ test('exhausted memory scratch spills in bounded persistent-journal batches with
     let diskPath = '';
     let journalRetained = false;
     let transactionAtClose = false;
+    let memoryCap = 0;
+    let diskCap = 0;
     const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
         const wasInTransaction = this.inTransaction;
         const result = exec.call(this, sql);
         if (this.filename === ':memory:' && !bounded) {
             bounded = true;
+            memoryCap = this.query<{ max_page_count: number }, []>('PRAGMA max_page_count').get()!.max_page_count;
             exec.call(this, 'PRAGMA max_page_count=32');
         }
         if (this.filename.endsWith('/scratch.sqlite') && wasInTransaction && !this.inTransaction) {
@@ -47,6 +183,7 @@ test('exhausted memory scratch spills in bounded persistent-journal batches with
     const observe = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
         if (this.filename.endsWith('/scratch.sqlite')) {
             diskPath = this.filename;
+            diskCap = this.query<{ max_page_count: number }, []>('PRAGMA max_page_count').get()!.max_page_count;
             diskChanges = this.query<{ count: number }, []>('SELECT total_changes() AS count').get()!.count;
             writerRows = this.query<{ count: number }, []>('SELECT count(*) AS count FROM identities').get()!.count;
             journalRetained = existsSync(this.filename + '-journal');
@@ -64,6 +201,8 @@ test('exhausted memory scratch spills in bounded persistent-journal batches with
     try {
         const indexed = await collectIndexedUsage([file], cutoff, opts(path));
         expect(bounded).toBe(true);
+        expect(memoryCap).toBe(16384);
+        expect(diskCap).toBe(67108864);
         expect(indexed.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
         expect(readSavedUsage(path)).toEqual(indexed);
         expect(committedChanges).toBe(diskChanges);

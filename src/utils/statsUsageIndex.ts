@@ -1,8 +1,8 @@
 import { Database } from 'bun:sqlite';
-import { mkdir, stat, rename } from 'node:fs/promises';
+import { mkdir, stat, rename, readdir, unlink } from 'node:fs/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality, type StatsCheckpoint } from './statsReader.js';
@@ -11,9 +11,14 @@ import { localDateKey, shiftLocalCalendarDays } from './usageWindow.js';
 import { projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import { USAGE_EFFORT_LEVELS, type UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
+import { logForDebugging } from './debug.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
 export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v11.sqlite');
+// 256 GiB at SQLite's default 4 KiB pages, without preallocating disk space.
+// Applied on every connection, so changing this does not require a rebuild.
+const DISK_MAX_PAGE_COUNT = 67108864;
+const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
@@ -97,12 +102,48 @@ type UsageIndexOptions = {
     finalize?: (snapshot: UsageDashboardSnapshot) => UsageDashboardSnapshot;
     onReadSource?: (path: string) => void;
 };
+
+async function cleanupOlderUsageIndexes(path: string): Promise<void> {
+    const current = /^index-v([1-9]\d*)\.sqlite$/.exec(basename(path));
+    if (!current) return;
+    const { lock } = await import('./lockfile.js');
+    const versions = new Set<string>();
+    for (const entry of await readdir(dirname(path), { withFileTypes: true })) {
+        // Exact names deliberately exclude retained .corrupt-* backups,
+        // future versions, and unrelated files. Include orphaned WAL/SHM/locks.
+        const match = /^(index-v([1-9]\d*)\.sqlite)(-wal|-shm|\.lock)?$/.exec(entry.name);
+        if (match && Number(match[2]) < Number(current[1]) &&
+            (match[3] === '.lock' ? entry.isDirectory() : entry.isFile())) versions.add(match[1]!);
+    }
+    for (const name of versions) {
+        const olderPath = join(dirname(path), name);
+        try {
+            // Older sidecars may still refresh with their loaded code. Take
+            // their writer lock, not just a racy existence/staleness check.
+            // The shared lock protocol reclaims abandoned lock directories.
+            const release = await lock(olderPath, writerLockOptions);
+            try {
+                for (const part of ['-wal', '-shm', '']) {
+                    try { await unlink(olderPath + part); }
+                    catch (error) { if (!object(error) || error.code !== 'ENOENT') throw error; }
+                }
+            } finally { await release(); }
+        } catch (error) {
+            if (object(error) && error.code === 'ELOCKED') continue;
+            // Cleanup is retryable and must not hide a usable current snapshot.
+            logForDebugging(`Usage index cleanup failed for ${olderPath}: ${String(error)}`, { level: 'warn' });
+        }
+    }
+}
+
 export async function collectIndexedUsage(files: readonly string[], asOf: string, options: UsageIndexOptions): Promise<UsageDashboardSnapshot> {
     const path = options.path ?? usageIndexPath();
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const { lock } = await import('./lockfile.js');
-    const release = await lock(path, { realpath: false, stale: 180000, update: 30000, retries: 0 });
+    const release = await lock(path, writerLockOptions);
     try {
+        try { await cleanupOlderUsageIndexes(path); }
+        catch (error) { logForDebugging(`Usage index cleanup failed: ${String(error)}`, { level: 'warn' }); }
         try { return await collectIndexedUsageLocked(files, asOf, options); }
         catch (error) {
             const code = object(error) ? error.code : undefined;
@@ -131,7 +172,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
     try {
         // SQLite serializes writers, atomically publishes the index and snapshot,
         // and rolls back an interrupted refresh. Readers retain the last commit.
-        db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA cache_size=-4096; PRAGMA max_page_count=262144;');
+        db.exec(`PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA cache_size=-4096; PRAGMA max_page_count=${DISK_MAX_PAGE_COUNT};`);
         scratch.exec('PRAGMA max_page_count=16384; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;');
         db.exec('BEGIN IMMEDIATE');
         db.exec(`CREATE TABLE IF NOT EXISTS sources(path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, quality TEXT NOT NULL);
@@ -232,8 +273,8 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                 if (++scratchWrites === 256) commitScratchBatch(store);
             };
             const spillScratch = () => {
-                // Keep the old disk-backed capacity for very large histories,
-                // while bounding the additional heap used by ordinary scans.
+                // Identities also grow with retained history, so disk scratch
+                // uses the durable index's ceiling, not its memory spill limit.
                 // Scratch contains hashed identities and accounting fields only;
                 // it is never restart state and needs neither WAL nor durability.
                 // PERSIST reuses the disk journal. OFF is rejected by defensive
@@ -243,7 +284,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                 try {
                     const mode = disk.query<{ journal_mode: string }, []>('PRAGMA journal_mode=PERSIST').get();
                     if (mode?.journal_mode !== 'persist') throw new UsageResourceError('Usage scratch journal mode unavailable');
-                    disk.exec('PRAGMA synchronous=OFF; PRAGMA max_page_count=262144; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;');
+                    disk.exec(`PRAGMA synchronous=OFF; PRAGMA max_page_count=${DISK_MAX_PAGE_COUNT}; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;`);
                     const copy = disk.query('INSERT INTO identities VALUES (?,?,?)');
                     for (const row of scratch.query<{ kind: string; key: string; value: string }, []>('SELECT kind,key,value FROM identities').iterate()) {
                         beginScratchWrite(disk);
