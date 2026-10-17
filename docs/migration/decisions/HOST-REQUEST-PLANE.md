@@ -188,6 +188,13 @@ expiry; a timeout never proves execution failure. These frames are consumed by
 main and never replayed to the renderer. The engine remains the permission and
 durability owner; main remains the sole authorization/ledger writer.
 
+An arrived, actively running destination continuation may issue peer-tool
+requests without releasing its handoff reservation. Main requires authenticated
+current-generation evidence of consumed, committed continuation input, a matching
+project registry identity and destination, and no cancellation or review. Missing
+or uncertain evidence keeps access closed. This exception does not admit inbound
+peer messages or release turn, move, restart, or recovery protections.
+
 ### Internal cwd-transition coordination, 2026-10-16
 
 The [approved branch-switch safety requirements](../../reports/2026-10-16-git-branch-ux-review.md)

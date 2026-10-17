@@ -1862,9 +1862,8 @@ export class Host implements HostApi {
     }
   }
 
-  async restartSession(appSessionId: SessionId): Promise<HostResult<void>> {
+  async restartSession(appSessionId: SessionId, options: { workspaceJumpReserved?: boolean } = {}): Promise<HostResult<void>> {
     await this.launched
-    if (this.workspaceJumpReservations.has(appSessionId)) return hostError('session_unreachable', 'This Chat has a pending workspace change')
     if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
@@ -1875,9 +1874,18 @@ export class Host implements HostApi {
     if (!supervisorRecord) {
       return hostError('session_not_found', `session ${appSessionId} is not live`)
     }
+    const workspaceJumpReserved = this.workspaceJumpReservations.has(appSessionId) || options.workspaceJumpReserved === true
+    // A lost transport needs an explicit replacement to report saved handoff
+    // evidence. Keep its reservation; replacement never readmits continuation.
+    if (workspaceJumpReserved && !isTerminalStatus(supervisorRecord.status) && supervisorRecord.status !== 'disconnected') {
+      return hostError('session_unreachable', 'This Chat has a pending workspace change')
+    }
     const row = this.registry.findSession(appSessionId)
     if (!row) {
       return hostError('session_not_found', `session ${appSessionId} has no registry row`)
+    }
+    if (workspaceJumpReserved && this.moveRecordBlocked(row.engineSessionId)) {
+      return hostError('session_unreachable', 'This Chat has an unfinished or unreadable move. Restore its saved backup before reopening it')
     }
     // Re-validate the row's cwd BEFORE anything destructive (HC1 defense in
     // depth, same as `restoreSession`). The supervisor restart KILLS the live

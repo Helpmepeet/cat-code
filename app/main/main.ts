@@ -2483,8 +2483,7 @@ function registerIpcHandlers(): void {
       const sessionId = (arg as { sessionId: SessionId }).sessionId
     // SF5 — route through the host so the registry's advisory fields (pid /
     // socketPath) are refreshed from the fresh child; the host also evicts replay.
-      if (workspaceJump?.isReserved(sessionId)) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Wait for the workspace change to settle.' } })
-      return host.restartSession(sessionId).then(result => {
+      return host.restartSession(sessionId, { workspaceJumpReserved: workspaceJump?.isReserved(sessionId) ?? false }).then(result => {
         if (result.ok) scheduledTasks?.interrupt(sessionId)
         return result
       })
@@ -4564,7 +4563,7 @@ function ensureHost(): Host {
     workspaceRequests: {
       handleRequest: (appSessionId, request) => workspaceJump!.handleRequest(appSessionId, request),
       afterResponse: (appSessionId, request, answered) => workspaceJump!.afterResponse(appSessionId, request, answered),
-      isReserved: appSessionId => workspaceJump!.isReserved(appSessionId),
+      isPeerAccessBlocked: appSessionId => workspaceJump!.isPeerAccessBlocked(appSessionId),
     },
     rows: () => liveRegistry.sessions,
     setPeerNotice: (appSessionId, notice) => liveRegistry.setPeerNotice(appSessionId, notice),

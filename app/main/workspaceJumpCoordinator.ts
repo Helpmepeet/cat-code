@@ -11,7 +11,7 @@ import type { PeerRegistryRow, ValidatedHostRequest } from './peerRequestPlane.j
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 import {
   hasVerifiedSourceCompensation, loadWorkspaceJumpRetention, readWorkspaceJump, workspaceJumpDirectory, workspaceJumpRequiresRetention, writeWorkspaceJump,
-  upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate, type WorkspaceJumpBoundary, type WorkspaceJumpStateV2,
+  upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate, workspaceJumpAllowsQueuedInput, type WorkspaceJumpBoundary, type WorkspaceJumpStateV2,
 } from '../../src/utils/workspaceJumpState.js'
 
 export { loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
@@ -73,6 +73,22 @@ export class WorkspaceJumpCoordinator {
       if (!state) return false
       if (state.continuation.outcome === 'legacy_settled' && !state.review.required) return false
       return !workspaceJumpHasConfirmedGate(state)
+    } catch { return true }
+  }
+  /** Destination work may use project peers without releasing the recovery hold. */
+  isPeerAccessBlocked(appSessionId: string): boolean {
+    if (!this.isReserved(appSessionId)) return false
+    try {
+      const state = this.snapshot(appSessionId)
+      const row = this.deps.row(appSessionId)
+      const generation = this.deps.host.getSessionGeneration(appSessionId)
+      const live = this.observations.get(appSessionId)
+      return !state || row?.binding?.kind !== 'project' || row.cwd !== state.target.cwd ||
+        row.engineSessionId !== state.engineSessionId || state.continuation.outcome !== 'pending' ||
+        !live || live.observerGeneration !== generation || live.operationId !== state.operationId ||
+        live.continuationId !== state.continuation.id || live.record.kind !== 'valid' ||
+        !live.record.record.consumed || !live.record.record.inputCommitted ||
+        !workspaceJumpAllowsQueuedInput(state, live)
     } catch { return true }
   }
   requiresReview(appSessionId: string): boolean {

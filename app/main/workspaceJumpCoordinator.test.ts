@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto'
 import { WorkspaceJumpCoordinator, type WorkspaceJumpCoordinatorDeps } from './workspaceJumpCoordinator.js'
 import { WorkspaceHandoffControl } from './workspaceHandoffControl.js'
 import type { WorkspaceHandoffSnapshot, WorkspaceHandoffExecutionRecord } from '../shared/workspaceHandoff.js'
-import type { PeerRegistryRow } from './peerRequestPlane.js'
+import { createPeerRequestPlane, type PeerRegistryRow } from './peerRequestPlane.js'
+import { PROTOCOL_VERSION, type SidecarClientMessage } from '../shared/protocol.js'
 import { readWorkspaceJump, writeWorkspaceJump, workspaceJumpOperationSha256, upgradeWorkspaceJumpState, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
 import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
@@ -278,6 +279,88 @@ function snapshot(h: ReturnType<typeof harness>, sequence: number, record?: Part
 }
 const checkpoint = () => ({ version: 1 as const, prefixBytes: 10, prefixSha256: 'a'.repeat(64), projectionSha256: 'b'.repeat(64), activeTipUuid: randomUUID(), messageCount: 1 })
 async function arrive(h: ReturnType<typeof harness>) { await h.accept(); await h.coordinator.handleRequest(h.appSessionId, h.ready); h.coordinator.afterResponse(h.appSessionId, h.ready, true); await h.coordinator.waitForSettlement(h.appSessionId) }
+
+test('arrived continuation lists and announces project peers without releasing its handoff reservation', async () => {
+  const h = harness()
+  expect(h.coordinator.isPeerAccessBlocked(h.appSessionId)).toBe(false)
+  await arrive(h)
+  const state = h.coordinator.snapshot(h.appSessionId)!
+  h.row.cwd = state.target.cwd
+  h.row.binding = state.target.binding
+  h.row.name = 'Hermes'
+  const other = { ...h.row, appSessionId: randomUUID(), engineSessionId: randomUUID(), name: 'Nigredo' }
+  const outside = { ...other, appSessionId: randomUUID(), name: 'Elsewhere', cwd: '/other/project' }
+  const sent: SidecarClientMessage[] = []
+  let moving = false
+  const plane = createPeerRequestPlane({
+    rows: () => [h.row, other, outside],
+    isLive: () => true,
+    isReady: () => true,
+    canResume: () => true,
+    isMoving: () => moving,
+    setPeerNotice: async (_id, notice) => ({ ...notice, postedAt: 1 }),
+    createSessionInWorkspace: async () => { throw new Error('Unexpected spawn') },
+    restoreSession: async () => { throw new Error('Unexpected restore') },
+    forward: (_id, message) => { sent.push(message); return null },
+    logRouted: () => {},
+    workspaceRequests: {
+      handleRequest: (id, request) => h.coordinator.handleRequest(id, request),
+      isPeerAccessBlocked: id => h.coordinator.isPeerAccessBlocked(id),
+    },
+  })
+  const list = () => plane.handleRequest(h.appSessionId, {
+    kind: 'host.request', protocolVersion: PROTOCOL_VERSION, sessionId: h.appSessionId,
+    requestId: 'list', verb: 'peers.list', args: {},
+  })
+  await list()
+  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: false, error: { code: 'session_not_found' } })
+  const running = { ...snapshot(h, 1, {}), execution: 'running' as const }
+  expect(h.coordinator.observe(h.appSessionId, running)).toBe(true)
+  await list()
+  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: true, value: { peers: [{ name: 'Nigredo', status: 'live' }] } })
+  await plane.handleRequest(h.appSessionId, {
+    kind: 'host.request', protocolVersion: PROTOCOL_VERSION, sessionId: h.appSessionId,
+    requestId: 'announce', verb: 'peer.announce', args: { doing: 'Fixing workspace access' },
+  })
+  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: true, value: { postedAt: 1 } })
+  expect(h.coordinator.isReserved(h.appSessionId)).toBe(true)
+  expect(h.coordinator.retains(h.appSessionId)).toBe(true)
+  expect(h.held.get(h.appSessionId)).toBe(h.operationId)
+  expect(h.continuations()).toBe(1)
+  moving = true
+  await list()
+  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: false, error: { code: 'session_not_found' } })
+})
+
+test.each([
+  'no observation', 'idle', 'unconfirmed', 'absent record', 'uncommitted input',
+  'new generation', 'changed engine', 'changed folder', 'managed binding', 'source',
+  'cancellation', 'review', 'unknown outcome', 'unreadable ledger',
+] as const)('peer exception stays closed for %s', async condition => {
+  const h = harness()
+  await arrive(h)
+  const state = h.coordinator.snapshot(h.appSessionId)!
+  h.row.cwd = state.target.cwd
+  h.row.binding = state.target.binding
+  const live = { ...snapshot(h, 1, {}), execution: 'running' as WorkspaceHandoffSnapshot['execution'] }
+  if (condition === 'idle' || condition === 'unconfirmed') live.execution = condition
+  if (condition === 'absent record') live.record = { kind: 'absent' }
+  if (condition === 'uncommitted input' && live.record.kind === 'valid') live.record.record.inputCommitted = false
+  if (condition !== 'no observation') expect(h.coordinator.observe(h.appSessionId, live)).toBe(true)
+  if (condition === 'new generation') h.setGeneration()
+  if (condition === 'changed engine') h.row.engineSessionId = randomUUID()
+  if (condition === 'changed folder') h.row.cwd = '/different/project'
+  if (condition === 'managed binding') h.row.binding = state.source.binding
+  if (condition === 'source') writeWorkspaceJump({ ...state, location: 'source' }, h.directory)
+  if (condition === 'cancellation') await h.coordinator.cancel(h.appSessionId)
+  if (condition === 'review') writeWorkspaceJump({ ...state, review: { ...state.review, required: true } }, h.directory)
+  if (condition === 'unknown outcome') writeWorkspaceJump({ ...state, continuation: { ...state.continuation, outcome: 'unknown' } }, h.directory)
+  if (condition === 'unreadable ledger') writeFileSync(join(h.directory, `${h.appSessionId}.json`), '{broken')
+  expect(h.coordinator.isPeerAccessBlocked(h.appSessionId)).toBe(true)
+  expect(h.coordinator.isReserved(h.appSessionId)).toBe(true)
+  expect(h.held.get(h.appSessionId)).toBe(h.operationId)
+  await h.coordinator.waitForSettlement(h.appSessionId)
+})
 
 test('settlement and newer cumulative reconciliation merge while an acknowledgement is pending; stale settlement cannot re-arm review', async () => {
   const h = harness(); await arrive(h)
