@@ -96,6 +96,34 @@ function labelCount(options: { label: string }[], label: string): number {
   return options.filter(option => option.label === label).length
 }
 
+describe('Haiku 5.5', () => {
+  test('the haiku alias resolves to Haiku 5.5 and the picker offers it once', async () => {
+    const { getModelOptions } = await import('./modelOptions.js')
+    const { parseUserSpecifiedModel, getMarketingNameForModel } = await import(
+      './model.js'
+    )
+
+    expect(parseUserSpecifiedModel('haiku')).toBe('claude-haiku-5-5')
+    expect(getMarketingNameForModel('claude-haiku-5-5')).toBe('Haiku 5.5')
+
+    const options = getModelOptions(false)
+    expect(labelCount(options, 'Haiku 5.5')).toBe(1)
+    expect(labelCount(options, 'Haiku 4.5')).toBe(0)
+    expect(options.find(option => option.label === 'Haiku 5.5')?.value).toBe(
+      'haiku',
+    )
+  })
+
+  test('a session pinned to Haiku 4.5 keeps its own labelled row', async () => {
+    const { getModelOptions } = await import('./modelOptions.js')
+    setMainLoopModelOverride('claude-haiku-4-5-20251001')
+
+    const options = getModelOptions(false)
+    expect(labelCount(options, 'Haiku 4.5')).toBe(1)
+    expect(labelCount(options, 'Haiku 5.5')).toBe(1)
+  })
+})
+
 describe('getModelOptions duplicate-row fallback', () => {
   test('a canonical model id already offered under its alias does not add a second row', async () => {
     const { getModelOptions } = await import('./modelOptions.js')

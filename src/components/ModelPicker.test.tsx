@@ -198,6 +198,6 @@ describe('ModelPicker current-model fallback', () => {
       optionRows(frame).filter(row => row.description === 'Current model'),
     ).toHaveLength(1)
     expect(labelCount(frame, 'claude-3-5-haiku-20241022')).toBe(1)
-    expect(labelCount(frame, 'Haiku 4.5')).toBe(1)
+    expect(labelCount(frame, 'Haiku 5.5')).toBe(1)
   })
 })

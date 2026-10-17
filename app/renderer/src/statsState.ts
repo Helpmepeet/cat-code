@@ -31,6 +31,7 @@ export function formatModelDisplayName(modelName: string): string {
   if (modelName.includes('claude-sonnet-4-6')) return wide('Sonnet 4.6')
   if (modelName.includes('claude-sonnet-4-5')) return wide('Sonnet 4.5')
   if (modelName.includes('claude-sonnet-4')) return wide('Sonnet 4')
+  if (modelName.includes('claude-haiku-5-5')) return 'Haiku 5.5'
   if (modelName.includes('claude-haiku-4-5')) return 'Haiku 4.5'
   if (modelName.includes('gpt-5.6-sol')) return 'GPT-5.6 Sol'
   if (modelName.includes('gpt-5.6-terra')) return 'GPT-5.6 Terra'

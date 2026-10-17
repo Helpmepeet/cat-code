@@ -144,7 +144,7 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY =
 const LATEST_CLAUDE_MODEL_IDS = {
   opus: 'claude-opus-5-5',
   sonnet: 'claude-sonnet-5-5',
-  haiku: 'claude-haiku-4-5-20251001',
+  haiku: 'claude-haiku-5-5',
 }
 
 function getConversationCompressionInstruction(): string {
@@ -911,7 +911,7 @@ export async function computeSimpleEnvInfo(
     apiProvider === 'openai' ||
     (process.env.USER_TYPE === 'ant' && isUndercover())
       ? null
-      : `The most recent Claude models are the Claude 5 family and Haiku 4.5. Model IDs — Fable 5: 'claude-fable-5', Opus 5.5: '${LATEST_CLAUDE_MODEL_IDS.opus}', Sonnet 5.5: '${LATEST_CLAUDE_MODEL_IDS.sonnet}', Haiku 4.5: '${LATEST_CLAUDE_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
+      : `The most recent Claude models are the Claude 5 family. Model IDs — Fable 5: 'claude-fable-5', Opus 5.5: '${LATEST_CLAUDE_MODEL_IDS.opus}', Sonnet 5.5: '${LATEST_CLAUDE_MODEL_IDS.sonnet}', Haiku 5.5: '${LATEST_CLAUDE_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
     `This session is running through the ${apiProvider === 'openai' ? 'OpenAI Codex' : 'Anthropic'} provider.`,
     process.env.USER_TYPE === 'ant' && isUndercover()
       ? null
