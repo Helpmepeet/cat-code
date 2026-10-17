@@ -2765,21 +2765,19 @@ function ListPeersCard({ row, peers }: { row: ToolUseNestedRow; peers: ListPeers
                   )}
                 </div>
                 {peer.notice === null ? null : (
-                  <div className="mb-1 ml-3.5 text-[11.5px] leading-normal">
-                    <div className="text-text-subtle">
-                      {peer.notice.doing}{' '}
-                      <span className="font-mono text-[10.5px] text-text-ghost">
-                        {formatNoticePostedAt(peer.notice.postedAt, now)}
-                      </span>
-                    </div>
-                    {peer.notice.touches.length === 0 ? null : (
-                      <div className="font-mono text-[11px] text-text-faint">
-                        {peer.notice.touches.join(', ')}
-                      </div>
-                    )}
-                    {peer.notice.note === null ? null : (
-                      <div className="text-text-faint">{peer.notice.note}</div>
-                    )}
+                  <div className="mb-1 ml-3.5">
+                    <NoticeFields
+                      doing={
+                        <>
+                          {peer.notice.doing}{' '}
+                          <span className="font-mono text-[10.5px] text-text-ghost">
+                            {formatNoticePostedAt(peer.notice.postedAt, now)}
+                          </span>
+                        </>
+                      }
+                      touches={peer.notice.touches}
+                      note={peer.notice.note}
+                    />
                   </div>
                 )}
               </div>
@@ -2791,14 +2789,58 @@ function ListPeersCard({ row, peers }: { row: ToolUseNestedRow; peers: ListPeers
   )
 }
 
-const ANNOUNCE_FIELD_LABEL_CLASS =
+const NOTICE_FIELD_LABEL_CLASS =
   'font-mono text-[9.5px] font-semibold uppercase tracking-[0.07em] text-text-subtle'
+const NOTICE_FIELD_VALUE_CLASS =
+  'whitespace-pre-wrap break-words text-[11.5px] leading-normal text-text-muted'
 
 /**
- * This session's own scope notice. The header carries the `doing` line; the
- * body labels the remaining fields, because touches and note are both free
- * text and read as one paragraph without names. Touches are areas as often as
- * paths, so they stay in the prose face.
+ * A scope notice's fields, each named: unlabeled, doing, touches and note are
+ * free text that read as one paragraph. Touches are areas as often as paths,
+ * so they stay in the prose face, one per line.
+ */
+function NoticeFields({
+  doing,
+  touches,
+  note,
+}: {
+  doing?: ReactNode
+  touches: readonly string[]
+  note: string | null
+}) {
+  return (
+    <div className="grid grid-cols-[58px_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-[5px] pt-0.5">
+      {doing === undefined ? null : (
+        <>
+          <span className={NOTICE_FIELD_LABEL_CLASS}>Doing</span>
+          <div className={NOTICE_FIELD_VALUE_CLASS}>{doing}</div>
+        </>
+      )}
+      {touches.length === 0 ? null : (
+        <>
+          <span className={NOTICE_FIELD_LABEL_CLASS}>Touches</span>
+          <div>
+            {touches.map((touch, index) => (
+              <div key={`${index}:${touch}`} className={NOTICE_FIELD_VALUE_CLASS}>
+                {touch}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {note === null ? null : (
+        <>
+          <span className={NOTICE_FIELD_LABEL_CLASS}>Note</span>
+          <div className={NOTICE_FIELD_VALUE_CLASS}>{note}</div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * This session's own scope notice. The header carries the `doing` line, so
+ * the body names only the remaining fields.
  */
 function AnnounceCard({ row }: { row: ToolUseNestedRow }) {
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
@@ -2821,31 +2863,7 @@ function AnnounceCard({ row }: { row: ToolUseNestedRow }) {
   ) : null
   const fields =
     view.touches.length > 0 || view.note !== null ? (
-      <div className="grid grid-cols-[58px_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-[5px] pt-0.5">
-        {view.touches.length > 0 ? (
-          <>
-            <span className={ANNOUNCE_FIELD_LABEL_CLASS}>Touches</span>
-            <div>
-              {view.touches.map((touch, index) => (
-                <div
-                  key={`${index}:${touch}`}
-                  className="break-words text-[11.5px] leading-normal text-text-muted"
-                >
-                  {touch}
-                </div>
-              ))}
-            </div>
-          </>
-        ) : null}
-        {view.note !== null ? (
-          <>
-            <span className={ANNOUNCE_FIELD_LABEL_CLASS}>Note</span>
-            <div className="whitespace-pre-wrap break-words text-[11.5px] leading-normal text-text-muted">
-              {view.note}
-            </div>
-          </>
-        ) : null}
-      </div>
+      <NoticeFields touches={view.touches} note={view.note} />
     ) : null
   const body =
     view.failure !== null ? (
