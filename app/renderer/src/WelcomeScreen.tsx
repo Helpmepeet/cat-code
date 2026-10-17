@@ -2,7 +2,7 @@
  * WelcomeScreen (P4-17) — the first-run / empty-session launcher (`Welcome.jsx`),
  * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a cat mascot
  * hero + wordmark, an interactive meta strip (Project · Start-in),
- * and the read-only Codex pool table. It replaces the minimal `EmptyShell`.
+ * and the read-only Anthropic and Codex pool tables. It replaces the minimal `EmptyShell`.
  *
  * It is PURELY PRESENTATIONAL — it reads props App wires from the EXISTING domain
  * seams and grows no new feed (WELCOME-LAUNCHER §6):
@@ -246,6 +246,8 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
             </div>
           </div>
         </div>
+
+        <AnthropicTable accounts={accounts} />
 
         {/* Codex account table — read-only pool status (P4-5) */}
         <CodexTable
@@ -693,34 +695,11 @@ function CodexTable({
   const healthyCount = rows.filter(a => a.status === 'healthy').length
   return (
     <div className="border-t border-shell-seam">
-      <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
-        <div className="flex items-center gap-2.5">
-          <span className="flex text-accent">
-            <ProviderLogo provider="openai" size={16} />
-          </span>
-          <span className="text-[16px] font-semibold text-text-primary">
-            Codex
-          </span>
-        </div>
-        {accounts ? (
-          <div className="flex items-center gap-2 text-[12.5px] text-text-muted">
-            <span>
-              <span className="text-text-primary">{rows.length}</span>{' '}
-              account{rows.length === 1 ? '' : 's'}
-            </span>
-            <span className="text-text-subtle">·</span>
-            <span>
-              <span className="text-text-primary">{healthyCount}</span> healthy
-            </span>
-            <span
-              className={
-                'h-2 w-2 rounded-full ' +
-                (healthyCount > 0 ? 'bg-tone-good' : 'bg-tone-warn')
-              }
-            />
-          </div>
-        ) : null}
-      </div>
+      <PoolHeader
+        provider="openai"
+        title="Codex"
+        counts={accounts ? { total: rows.length, healthy: healthyCount } : null}
+      />
 
       {rows.length === 0 ? (
         <div className="border-t border-shell-seam px-1 py-6 text-[12.5px] text-text-subtle">
@@ -733,6 +712,108 @@ function CodexTable({
             account={account}
             accountsUsagePending={accountsUsagePending}
           />
+        ))
+      )}
+    </div>
+  )
+}
+
+/** Table title row: brand-colored provider mark, name, and pool counts. */
+function PoolHeader({
+  provider,
+  title,
+  counts,
+}: {
+  provider: 'anthropic' | 'openai'
+  title: string
+  /** `healthy` is null when every listed row is healthy by construction. */
+  counts: { total: number; healthy: number | null } | null
+}) {
+  const live = counts ? (counts.healthy ?? counts.total) : 0
+  return (
+    <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
+      <div className="flex items-center gap-2.5">
+        <span
+          className={
+            'flex ' +
+            (provider === 'anthropic' ? 'text-provider-claude' : 'text-provider-openai')
+          }
+        >
+          <ProviderLogo provider={provider} size={16} />
+        </span>
+        <span className="text-[16px] font-semibold text-text-primary">
+          {title}
+        </span>
+      </div>
+      {counts ? (
+        <div className="flex items-center gap-2 text-[12.5px] text-text-muted">
+          <span>
+            <span className="text-text-primary">{counts.total}</span>{' '}
+            account{counts.total === 1 ? '' : 's'}
+          </span>
+          {counts.healthy !== null ? (
+            <>
+              <span className="text-text-subtle">·</span>
+              <span>
+                <span className="text-text-primary">{counts.healthy}</span> healthy
+              </span>
+            </>
+          ) : null}
+          <span
+            className={
+              'h-2 w-2 rounded-full ' + (live > 0 ? 'bg-tone-good' : 'bg-tone-warn')
+            }
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/* ── Anthropic account table (read-only) ────────────────────────────────── */
+
+/**
+ * Claude subscription accounts from the same pool snapshot. Dead accounts are
+ * hidden like Codex re-login rows, which leaves every listed row healthy, so
+ * the header carries the count alone. The snapshot has no Claude usage
+ * windows, so rows show the plan instead of meters.
+ */
+function AnthropicTable({ accounts }: { accounts: AccountsSnapshot | null }) {
+  const rows = (accounts?.anthropicAccounts ?? []).filter(
+    account => account.status === 'healthy',
+  )
+  return (
+    <div className="border-t border-shell-seam">
+      <PoolHeader
+        provider="anthropic"
+        title="Anthropic"
+        counts={accounts ? { total: rows.length, healthy: null } : null}
+      />
+
+      {rows.length === 0 ? (
+        <div className="border-t border-shell-seam px-1 py-6 text-[12.5px] text-text-subtle">
+          {!accounts
+            ? 'No Anthropic account data for this view yet.'
+            : accounts.anthropicRouteAvailable
+              ? 'Using an API key or cloud provider.'
+              : 'No usable Anthropic accounts.'}
+        </div>
+      ) : (
+        rows.map(account => (
+          <div
+            key={account.id}
+            className="flex min-w-0 items-center gap-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]"
+          >
+            <Radio on={account.isDefault} />
+            <span className="truncate font-medium text-text-primary">
+              {account.alias ?? account.email}
+            </span>
+            {account.subscriptionType ? (
+              <span className="shrink-0 text-[12px] capitalize text-text-subtle">
+                {account.subscriptionType}
+              </span>
+            ) : null}
+          </div>
         ))
       )}
     </div>

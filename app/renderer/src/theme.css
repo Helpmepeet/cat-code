@@ -826,6 +826,10 @@ html[data-glass='on'] [data-window-overlay] {
   /* Peer surfaces: `text-peer`, `border-peer/20`, `bg-peer/10`. */
   --color-peer: var(--peer);
 
+  /* Provider marks in their own brand ink: `text-provider-claude`. */
+  --color-provider-claude: var(--provider-claude);
+  --color-provider-openai: var(--provider-openai);
+
   /* Settings source badges (P4-3): per-source hues from the prototype's
    * SETTING_SOURCES palette (Settings.jsx) so the badges read as the prototype.
    * user=muted, project=blue, local=purple, flag reuses warn, policy reuses
