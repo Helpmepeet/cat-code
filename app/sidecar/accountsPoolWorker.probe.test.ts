@@ -102,13 +102,13 @@ function assertHermeticHome(fakeHome: string): void {
 async function runWorker(
   env: Record<string, string | undefined>,
   extraArgs: string[] = [],
-  prepare?: (configDir: string) => string,
+  prepare?: (configDir: string, fakeHome: string) => string,
 ) {
   const cwd = temp('catcode-accounts-worker-cwd-')
   const fakeHome = temp('catcode-accounts-worker-home-')
   assertHermeticHome(fakeHome)
   const configDir = temp('catcode-accounts-worker-config-')
-  const preload = prepare?.(configDir)
+  const preload = prepare?.(configDir, fakeHome)
   const proc = Bun.spawn(['bun', 'run', ...(preload ? ['--preload', preload] : []), worker, '--bare', ...extraArgs], {
     cwd,
     env: {
@@ -149,6 +149,139 @@ async function runWorker(
     .filter(line => line.length > 0)
     .map(line => parseAccountsPoolWorkerResult(JSON.parse(line)))
   return { code, records, stderr }
+}
+
+function prepareDisplayCache(
+  mode: 'cached' | 'failed' | 'success' | 'generation',
+): (configDir: string, fakeHome: string) => string {
+  return (configDir, fakeHome) => {
+    const accountId = 'display-cache-probe'
+    const accountsDir = join(fakeHome, 'codex-vault', 'accounts')
+    const lifecycleDir = join(configDir, 'codex-credential-lifecycle')
+    mkdirSync(accountsDir, { recursive: true })
+    mkdirSync(lifecycleDir, { recursive: true })
+    const vaultFile = join(accountsDir, 'probe.json')
+    const lifecycleFile = join(lifecycleDir, `account-${Buffer.from(accountId).toString('base64url')}.json`)
+    const vault = {
+      tokens: {
+        credential_generation: 1,
+        access_token: 'probe-display-access',
+        refresh_token: 'probe-display-refresh',
+        account_id: accountId,
+      },
+      alias: 'display-probe',
+    }
+    const lifecycle = {
+      version: 1,
+      accountId,
+      credentialGeneration: 1,
+      state: 'credentialed',
+      operationId: 'probe-login',
+      operationKind: 'login',
+      changedAt: new Date().toISOString(),
+    }
+    writeFileSync(vaultFile, JSON.stringify(vault), { mode: 0o600 })
+    writeFileSync(lifecycleFile, JSON.stringify(lifecycle), { mode: 0o600 })
+    const preload = join(configDir, 'display-preload.ts')
+    writeFileSync(preload, `
+      import { strict as assert } from 'node:assert'
+      import { writeFileSync } from 'node:fs'
+      let requests = 0
+      let unexpected = 0
+      globalThis.fetch = async (input) => {
+        requests++
+        const url = input instanceof Request ? input.url : String(input)
+        if (url !== 'https://chatgpt.com/backend-api/wham/usage') {
+          unexpected++
+          return new Response('unexpected probe request', { status: 503 })
+        }
+        if (${JSON.stringify(mode)} !== 'success') {
+          return new Response('probe unavailable', { status: 503 })
+        }
+        const window = (used, seconds) => ({
+          used_percent: used, limit_window_seconds: seconds,
+          reset_after_seconds: seconds, reset_at: Math.floor(Date.now() / 1000) + seconds,
+        })
+        return Response.json({
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true, limit_reached: false,
+            primary_window: window(12, 18000),
+            secondary_window: window(34, 604800),
+          },
+        })
+      }
+      process.on('exit', () => process.stderr.write(
+        'display-probe-network=' + JSON.stringify({ requests, unexpected }) + '\\n',
+      ))
+      const { bootstrapWorkerEngine } = await import(${JSON.stringify(join(here, 'workerRuntime.ts'))})
+      await bootstrapWorkerEngine()
+      const { loadPoolForObservation, getPoolStatus } = await import(
+        ${JSON.stringify(join(here, '../../src/services/api/codexAccountPool.ts'))}
+      )
+      const { updateCodexUsageDisplayCache, readCodexUsageDisplayCache } = await import(
+        ${JSON.stringify(join(here, '../../src/services/api/codexUsageDisplayCache.ts'))}
+      )
+      await loadPoolForObservation()
+      assert.equal(getPoolStatus().accounts.length, 1)
+      assert.equal(getPoolStatus().accounts[0].credentialGeneration, 1)
+      const now = Date.now()
+      const window = (usedPercent, limitWindowSeconds) => ({
+        usedPercent, limitWindowSeconds, resetAfterSeconds: limitWindowSeconds,
+        resetAt: Math.floor(now / 1000) + limitWindowSeconds,
+      })
+      await updateCodexUsageDisplayCache(getPoolStatus().accounts, {
+        fetchedAt: now, errors: [],
+        accounts: [{
+          accountId: ${JSON.stringify(accountId)}, userId: '', email: '', planType: 'plus',
+          allowed: false, limitReached: true,
+          primaryWindow: window(100, 18000), secondaryWindow: window(98, 604800),
+          credits: { hasCredits: false, unlimited: false, balance: '0' }, fetchedAt: now,
+        }],
+      })
+      assert.equal(readCodexUsageDisplayCache(getPoolStatus().accounts).size, 1)
+      if (${JSON.stringify(mode)} === 'generation') {
+        writeFileSync(${JSON.stringify(vaultFile)}, JSON.stringify({
+          ...${JSON.stringify(vault)},
+          tokens: { ...${JSON.stringify(vault.tokens)}, credential_generation: 2 },
+        }), { mode: 0o600 })
+        writeFileSync(${JSON.stringify(lifecycleFile)}, JSON.stringify({
+          ...${JSON.stringify(lifecycle)}, credentialGeneration: 2,
+        }), { mode: 0o600 })
+      }
+    `, { mode: 0o600 })
+    return preload
+  }
+}
+
+for (const mode of ['cached', 'failed', 'success', 'generation'] as const) {
+  test(`the accounts worker projects isolated Codex display observations: ${mode}`, async () => {
+    const cachedOnly = mode === 'cached' || mode === 'generation'
+    const { code, records, stderr } = await runWorker(
+      { CLAUDE_CODE_OAUTH_TOKEN: 'probe-only-not-a-real-token' },
+      cachedOnly ? ['--cached'] : [],
+      prepareDisplayCache(mode),
+    )
+    expect(code, stderr).toBe(0)
+    expect(stderr).toContain(`display-probe-network={"requests":${cachedOnly ? 0 : 1},"unexpected":0}`)
+    expect(records).toHaveLength(1)
+    const record = records[0]
+    expect(record?.type).toBe('pool')
+    if (record?.type !== 'pool') throw new Error(`Missing pool record: ${stderr}`)
+    expect(record.pool.accounts).toHaveLength(1)
+    const account = record.pool.accounts[0]!
+    expect(account.credentialGeneration).toBe(mode === 'generation' ? 2 : 1)
+    expect(account.usagePrimary).toBe(mode === 'generation' ? null : mode === 'success' ? 12 : 100)
+    expect(account.usageWeekly).toBe(mode === 'generation' ? null : mode === 'success' ? 34 : 98)
+    expect(account.usageStale).toBe(mode === 'generation' ? undefined : mode !== 'success')
+    expect(account.usageLimitReached).toBe(false)
+    expect(account.availability).toBe('available')
+    expect(account.isDefault).toBe(true)
+    expect(account.switchable).toBe(false)
+    expect(record.pool.readyCount).toBe(1)
+    expect(JSON.stringify(record)).not.toContain('probe-display-access')
+    expect(JSON.stringify(record)).not.toContain('probe-display-refresh')
+  }, 180_000)
 }
 
 test('the accounts worker reports the Anthropic route it can actually see, not the hermetic-auth answer', async () => {

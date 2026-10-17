@@ -288,6 +288,7 @@ import {
 import {
   ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
   createAccountsPoolPublicationGate,
+  runAccountsPoolRefresh,
   runAccountsPoolWorker,
 } from './accountsPoolRunner.js'
 import { runSettingsInventoryWorker } from './settingsInventoryRunner.js'
@@ -1167,11 +1168,14 @@ function startAccountsPoolRefresh(): void {
   if (accountsPoolDriver) return
   const abort = new AbortController()
   accountsPoolAbort = abort
+  let restoreCached = true
   accountsPoolActivityGate = createVisibilityGatedRefresh(() => {
     if (accountProfileMutationInFlight) return Promise.resolve()
     const generation = accountsPoolPublicationGate.beginRead()
     const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
-    return runAccountsPoolWorker({
+    const restore = restoreCached
+    restoreCached = false
+    return runAccountsPoolRefresh({
       command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('accounts-pool', ['--bare']),
       cwd: process.cwd(), signal: abort.signal, onWorkerLifecycle,
@@ -1180,7 +1184,7 @@ function startAccountsPoolRefresh(): void {
         sendHostEvent({ type: 'accounts-pool', pool })
       },
       log: line => process.stderr.write(`${line}\n`),
-    })
+    }, restore)
   }, hasReadableWindow)
   accountsPoolDriver = createSingleFlightDriver({
     intervalMs: ACCOUNTS_POOL_REFRESH_INTERVAL_MS,

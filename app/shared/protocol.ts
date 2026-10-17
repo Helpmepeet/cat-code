@@ -2603,6 +2603,8 @@ export type AccountStatus = {
   usageResetAt: number | null
   /** Upstream secondary-position reset, Unix SECONDS, or null when omitted. */
   usageWeeklyResetAt?: number | null
+  /** Display-only fallback from a previous successful usage read. */
+  usageStale?: boolean
   lastRefreshIso: string | null
   /** Normalized block reason (no token content by construction), or null. */
   lastError: string | null

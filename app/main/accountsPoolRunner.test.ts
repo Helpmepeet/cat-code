@@ -8,11 +8,13 @@ import type {
 } from '../shared/protocol.js'
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+  parseAccountsSnapshot,
   type AccountsPoolWorkerSignOutRequest,
   type AccountsPoolWorkerSignOutResult,
 } from '../shared/accountsPoolWorker.js'
 import {
   createAccountsPoolPublicationGate,
+  runAccountsPoolRefresh,
   runAccountsPoolWorker,
 } from './accountsPoolRunner.js'
 
@@ -206,6 +208,98 @@ function signOutResult(
     },
   }
 }
+
+describe('cache-first account usage refresh', () => {
+  function sequence(
+    records: Array<{ pool?: AccountsSnapshot; exitCode?: number }>,
+    calls: unknown[][],
+  ): typeof spawn {
+    return ((...args: unknown[]) => {
+      calls.push(args)
+      const next = records.shift()
+      if (!next) throw new Error('unexpected worker spawn')
+      return Reflect.apply(fakeSpawn({
+        stdout: next.pool ? ndjson({
+          type: 'pool', version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION, pool: next.pool,
+        }) : undefined,
+        exitCode: next.exitCode,
+      }), undefined, args)
+    }) as typeof spawn
+  }
+
+  test('publishes saved usage before the fresh read and preserves the single-record boundary', async () => {
+    const saved = pool(['saved'])
+    saved.accounts[0]!.usageStale = true
+    const calls: unknown[][] = []
+    const delivered: string[] = []
+    await runAccountsPoolRefresh({
+      command: 'bun', args: ['accounts-pool', '--bare'], cwd: process.cwd(),
+      spawnWorker: sequence([{ pool: saved }, { pool: pool(['fresh']) }], calls),
+      onPool: snapshot => delivered.push(snapshot.accounts[0]!.alias!),
+    }, true)
+    expect(delivered).toEqual(['saved', 'fresh'])
+    expect(calls.map(call => call[1])).toEqual([
+      ['accounts-pool', '--bare', '--cached'],
+      ['accounts-pool', '--bare'],
+    ])
+  })
+
+  test('does not publish an empty cache as a finished usage load', async () => {
+    const empty = pool(['no-reading'])
+    empty.accounts[0]!.usagePrimary = null
+    empty.accounts[0]!.usageWeekly = null
+    const delivered: AccountsSnapshot[] = []
+    await runAccountsPoolRefresh({
+      command: 'bun', args: [], cwd: process.cwd(),
+      spawnWorker: sequence([{ pool: empty }, { pool: pool(['fresh']) }], []),
+      onPool: snapshot => delivered.push(snapshot),
+    }, true)
+    expect(delivered.map(snapshot => snapshot.accounts[0]!.alias)).toEqual(['fresh'])
+  })
+
+  test('a failed saved-cache worker does not prevent the live refresh', async () => {
+    const delivered: AccountsSnapshot[] = []
+    const logs: string[] = []
+    await runAccountsPoolRefresh({
+      command: 'bun', args: [], cwd: process.cwd(),
+      spawnWorker: sequence([{ exitCode: 1 }, { pool: pool(['fresh']) }], []),
+      onPool: snapshot => delivered.push(snapshot), log: line => logs.push(line),
+    }, true)
+    expect(delivered).toHaveLength(1)
+    expect(logs.some(line => line.includes('Saved usage read failed'))).toBe(true)
+  })
+
+  test('ordinary timer refreshes do not spawn the cache-only worker', async () => {
+    const calls: unknown[][] = []
+    await runAccountsPoolRefresh({
+      command: 'bun', args: [], cwd: process.cwd(),
+      spawnWorker: sequence([{ pool: pool(['fresh']) }], calls), onPool: () => {},
+    }, false)
+    expect(calls).toHaveLength(1)
+  })
+
+  test('cancellation after the saved reading prevents a fresh worker spawn', async () => {
+    const controller = new AbortController()
+    const calls: unknown[][] = []
+    await expect(runAccountsPoolRefresh({
+      command: 'bun', args: [], cwd: process.cwd(), signal: controller.signal,
+      spawnWorker: sequence([{ pool: pool(['saved']) }], calls),
+      onPool: () => controller.abort(),
+    }, true)).rejects.toThrow('aborted')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('stale usage is a closed optional boolean at the receiving boundary', () => {
+    const saved = pool(['saved'])
+    saved.accounts[0]!.usageStale = true
+    expect(parseAccountsSnapshot(saved)?.accounts[0]!.usageStale).toBe(true)
+    const invalid = {
+      ...saved,
+      accounts: [{ ...saved.accounts[0], usageStale: 'true' }],
+    }
+    expect(parseAccountsSnapshot(invalid)).toBeNull()
+  })
+})
 
 describe('runAccountsPoolWorker — accept + deliver', () => {
   test('delivers the single pool record to onPool', async () => {

@@ -129,6 +129,7 @@ export async function fetchClaudePoolUsage(
   options: {
     now?: number
     cacheFile?: string
+    cachedOnly?: boolean
     fetchUsage?: (accessToken: string) => Promise<Utilization>
   } = {},
 ): Promise<Map<string, ClaudeAccountUsage>> {
@@ -143,7 +144,7 @@ export async function fetchClaudePoolUsage(
     accounts.map(async account => {
       let entry = cached[account.accountUuid]
       const stale = !entry || now - entry.fetchedAt >= CLAUDE_USAGE_FRESH_MS
-      if (stale && canRead(account, now)) {
+      if (!options.cachedOnly && stale && canRead(account, now)) {
         try {
           const data = await fetchUsage(account.accessToken)
           entry = {
