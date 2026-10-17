@@ -14,26 +14,25 @@ user requirement or security constraint. Flag meaningful documentation drift.
 - `app/`: desktop package with separate build and typecheck boundaries.
 - `DESIGN.md`: visual design guidance for desktop renderer work. Read it when
   creating or changing UI; `app/renderer/src/theme.css` owns exact tokens.
-- `docs/maps/`: navigation maintained against source. Dated plans and migration
-  program records describe past work; decision records may contain later amendments.
+- `docs/`: local-only working documents, including maps, plans, reports,
+  and decisions. Git ignores the entire directory; it may be absent from a fresh
+  checkout. Do not stage, force-add, or publish files from `docs/`.
 
 There is no public compatibility or rollout obligation. Preserve the user's
 saved sessions, settings, credentials, and running work when changing formats.
 
 ## 2. Finding the owner
 
-For repository work, read [the workspace map](docs/maps/WORKSPACE_MAP.md)
-once at the start, even when files or an owner are supplied. Then start with
-those files or use the map to find the owner. Read only relevant focused maps
-and references, not the whole repository.
+Read local `docs/maps/WORKSPACE_MAP.md` once at the start when it exists,
+then consult only relevant focused maps. If it is absent, navigate using the
+supplied files, this document, package scripts, and source. Missing local docs
+must not block development, tests, or builds.
 
-- Prompt/instruction work: [prompt surfaces](docs/prompts/2026-04-30-prompt-surfaces.md).
-- Desktop runtime: [desktop map](docs/maps/web-app-runtime.md).
-- Peer behavior: [peer decisions](docs/migration/decisions/PEER-SESSIONS.md) and
-  [host requests](docs/migration/decisions/HOST-REQUEST-PLANE.md), including amendments.
-- GUI verification: [GUI process](docs/migration/process/GUI-VERIFICATION.md).
-- `~/catcode_prototype/cat-app/` is a read-only UX reference. Its code and mock
-  contracts are not implementation inputs; verify its source anchors in this repo.
+Other optional local references include `docs/prompts/`,
+`docs/migration/decisions/`, and `docs/migration/process/GUI-VERIFICATION.md`.
+They provide historical context; tracked instructions and source establish
+current behavior. `~/catcode_prototype/cat-app/` is a read-only UX reference;
+verify its claims against this repository's source.
 
 ## 3. Verification
 
@@ -53,12 +52,12 @@ need the broader affected package checks.
 | Desktop | `bun test app/`, `bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar` |
 | Renderer build inputs | `bun run --cwd app renderer:build` |
 | Desktop security/runtime integration | `bun run --cwd app test:hardening` (launches Electron; needs authorization for that run) |
-| Docs only | `git diff --check` and `bun run maps:lint`; check changed links |
+| Docs only (local, untracked) | Check changed links; run `bun run maps:lint` if the local maps exist. For tracked changes also run `git diff --check`. |
 
 - Use the dev build; `bun run build` and `./cli` require an explicit request.
   `cat-code exec` exercises the Claude harness only, not Codex or Cat Code.
 - Avoid bare `bun test`: some account suites require file-isolated runs.
-  [Test routing and build caveats](docs/maps/build-release-testing.md) give details.
+  Local `docs/maps/build-release-testing.md`, if present, has details.
 - Root typecheck has existing engine errors. Require no new diagnostics from
   the change; `build:dev:full` includes the separate undefined-name gate.
   The sidecar typecheck wrapper scopes errors to owned sidecar/shared files.
@@ -83,9 +82,15 @@ need the broader affected package checks.
 - Stage explicit paths and inspect the staged diff. If a file contains mixed
   ownership, stage only your hunks. Do not stash, sweep-clean, revert others'
   changes, or use broad staging (`git add -A`, `git add -u`, `git commit -a`).
-- Commit coherent, verified work to the current branch without asking, using
-  `type(scope): subject`. No branches, worktrees, or PRs unless requested.
-  Push only when asked: pushing this branch can publish others' commits too.
+- Commit coherent, verified work locally using `type(scope): subject`.
+  Routine local changes do not require a new branch or PR.
+- When asked to publish work to GitHub, isolate only the intended changes on
+  a purpose-specific branch and open a focused PR instead of pushing to `main`.
+  Do not include unrelated work or another session's commits.
+- PRs state scope, reasons, verification and material limitations. Split
+  unrelated changes into separate PRs, without arbitrary commit-count limits.
+  Review-only PRs must not be merged. Merge only when explicitly requested.
+  Publishing and merging are separate actions.
 - Avoid history rewrites on the shared branch. An authorized rewrite needs
   explicit SHAs and a fresh tip/ownership check. Do not bypass commit hooks.
 - Requested manual worktrees use `.worktrees/<slug>` with `worktree-<slug>`;
@@ -102,15 +107,15 @@ sidecar running the real engine. The supervisor and host plane are Electron-free
 Preserve Unix-socket transport, one engine process per session, raw
 `AppSessionEvent` fidelity, the chosen window/session lifetime, and the separate
 `appSessionId` / `engineSessionId` identities unless the user requests redesign.
-Check [decision records](docs/migration/decisions/) and source for details.
+Consult local `docs/migration/decisions/` if available, and source for details.
 
 Security is enforced at the receiving boundary: closed inbound schemas,
 engine-owned permission requests, and bounded frames/rates. The renderer neither
 receives raw credentials nor authors permission rules. Preserve the
-separate session protocol and host control-plane contracts. Boundary work uses
-[security minimum](docs/migration/decisions/SECURITY-MINIMUM.md),
-[permission boundary](docs/migration/decisions/PERMISSION-BOUNDARY.md), and
-[host requests](docs/migration/decisions/HOST-REQUEST-PLANE.md).
+separate session protocol and host control-plane contracts. Local decision
+records (`docs/migration/decisions/SECURITY-MINIMUM.md`,
+`PERMISSION-BOUNDARY.md`, and `HOST-REQUEST-PLANE.md`) may provide context;
+verify current contracts in source and tests, including when docs are absent.
 
 ## 6. Sensitive and generated code
 
@@ -166,9 +171,11 @@ from the session label.
 ## 9. Scope and documentation
 
 Make the changes needed to complete the request, including affected callers,
-tests, and docs. Follow references when renaming or removing a contract; avoid
-unrelated cleanup. New plans/reports belong under `docs/<topic>/YYYY-MM-DD-slug.md`;
-maintained maps and root entrypoints are updated in place.
+tests, and relevant local docs. Follow references when renaming or removing a
+contract; avoid unrelated cleanup. New plans/reports belong under the locally
+ignored `docs/<topic>/YYYY-MM-DD-slug.md`; maintain local maps when present.
+Never add `docs/` to a commit or PR. Requirements for clean clones belong in
+tracked instructions, source, or tests instead of local-only documents.
 
 ## 10. Live state and authorization
 
