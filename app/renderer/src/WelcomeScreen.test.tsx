@@ -85,8 +85,9 @@ test('renders the hero wordmark, greeting and meta strip labels', () => {
   expect(html).toContain('Locally')
   expect(html).toContain('<img')
   expect(html).toContain('alt=""')
-  // The picker trigger reflects the most-recent project name.
-  expect(html).toContain('cat-code')
+  // New Chat ignores recents, so the trigger never names one as if selected.
+  expect(html).toContain('Open a project')
+  expect(html).not.toContain('>cat-code<')
 })
 
 test('the projectless launcher has no branch choice or worktree option', () => {

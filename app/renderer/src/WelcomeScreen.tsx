@@ -530,8 +530,6 @@ function ProjectPicker({
     )
   }
 
-  const triggerLabel = recents.length > 0 ? recents[0]!.name : 'Open a project'
-
   return (
     <div ref={ref} className="relative inline-block">
       <button
@@ -542,8 +540,10 @@ function ProjectPicker({
         onClick={() => setOpen(value => !value)}
         className="inline-flex max-w-full items-center gap-1.5"
       >
+        {/* An action, not a selection: New Chat starts without a project, so
+            naming the latest recent here would claim a choice nothing uses. */}
         <span className="truncate font-mono text-[13px] text-text-muted">
-          {triggerLabel}
+          Open a project
         </span>
         <ChevronIcon open={open} />
       </button>
