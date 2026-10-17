@@ -3,7 +3,11 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RecentItem, WelcomeScreen } from './WelcomeScreen.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
-import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+import type {
+  AccountsSnapshot,
+  AccountStatus,
+  AnthropicAccountStatus,
+} from '../../shared/protocol.js'
 
 function recent(over: Partial<RecentWorkspace> & { cwd: string }): RecentWorkspace {
   return {
@@ -492,6 +496,73 @@ test('a genuine zero percent renders as zero usage', () => {
   expect(html).toContain('aria-label="5-hour usage: 0%"')
   expect(html).toContain('aria-valuenow="0"')
   expect(html).toContain('>0%<')
+})
+
+function claude(over: Partial<AnthropicAccountStatus> & { id: string }): AnthropicAccountStatus {
+  return {
+    alias: null,
+    email: `${over.id}@example.com`,
+    status: 'healthy',
+    isDefault: false,
+    hasVaultProfile: true,
+    subscriptionType: 'max',
+    ...over,
+  }
+}
+
+test('the Anthropic table lists usable Claude accounts above Codex, with the active one marked', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={{
+        ...pool([account({ id: 'main', alias: 'main', isDefault: true })]),
+        anthropicAccounts: [
+          claude({ id: 'work', alias: 'work', isDefault: true, subscriptionType: 'max' }),
+          claude({ id: 'personal', subscriptionType: 'pro' }),
+          claude({ id: 'expired', alias: 'expired-claude', status: 'dead' }),
+        ],
+      }}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+  const anthropicAt = html.indexOf('>Anthropic<')
+  const codexAt = html.indexOf('>Codex<')
+  expect(anthropicAt).toBeGreaterThan(-1)
+  expect(codexAt).toBeGreaterThan(anthropicAt)
+  const anthropic = html.slice(anthropicAt, codexAt)
+  expect(anthropic).toContain('>2</span> accounts')
+  expect(anthropic).not.toContain('healthy')
+  expect(anthropic).toContain('work')
+  expect(anthropic).toContain('personal@example.com')
+  expect(anthropic).toContain('>max<')
+  expect(anthropic).toContain('>pro<')
+  expect(anthropic).not.toContain('expired-claude')
+  // Exactly one active radio dot: the default Claude account.
+  expect(anthropic.split('h-[7px] w-[7px] rounded-full bg-accent').length).toBe(2)
+})
+
+test('the Anthropic table says why it is empty', () => {
+  const render = (accounts: AccountsSnapshot | null) =>
+    renderToStaticMarkup(
+      <WelcomeScreen recents={[]} accounts={accounts} onOpenRecent={noop} onOpenFolder={noop} />,
+    )
+  expect(render(pool([]))).toContain('No usable Anthropic accounts.')
+  expect(render({ ...pool([]), anthropicRouteAvailable: true })).toContain(
+    'Using an API key or cloud provider.',
+  )
+  expect(render(null)).toContain('No Anthropic account data for this view yet.')
+})
+
+test('provider marks use brand ink, not the accent', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen recents={[]} accounts={pool([])} onOpenRecent={noop} onOpenFolder={noop} />,
+  )
+  expect(html).toContain('class="flex text-provider-claude"')
+  expect(html).toContain('class="flex text-provider-openai"')
+  const css = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
+  expect(css).toContain('--color-provider-claude: var(--provider-claude);')
+  expect(css).toContain('--color-provider-openai: var(--provider-openai);')
 })
 
 test('the Codex table degrades honestly when no pool snapshot exists', () => {
