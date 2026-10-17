@@ -47,6 +47,7 @@ const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
   // here have no emitter in the tree at all. `stalled` is `warn` and was already
   // `anomaly`; it is named for symmetry so the three move together.
   'session.turn.started', 'session.turn.completed', 'session.turn.stalled',
+  'workspace.jump.timing',
   'worker.started', 'worker.completed', 'worker.failed',
   'log.suppressed', 'log.coverage.incomplete',
 ])

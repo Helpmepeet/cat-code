@@ -1,6 +1,7 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
+import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import type { WorkspaceObserver } from './workspaceObservation.js'
 import { isLidWorkControl } from '../shared/lidClosed.js'
 import type { LidWorkRuntime } from '../../src/services/lidClosedWork.js'
@@ -299,6 +300,7 @@ export type SidecarServerOptions = {
    * explains it (OBSERVABILITY-MINIMUM.md §3).
    */
   onTurnLifecycle?: (event: SidecarTurnLifecycleEvent) => void
+  onConnectionReady?: () => void
   /** Quiet interval before a running turn is reported stalled. */
   turnStallMs?: number
   /**
@@ -598,6 +600,7 @@ export class SidecarServer {
   private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
   private readonly onFrameDropped: ((reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void) | null
   private readonly onTurnLifecycle: ((event: SidecarTurnLifecycleEvent) => void) | null
+  private readonly onConnectionReady: (() => void) | undefined
   private readonly turnStallMs: number
   /** Turn-scoped stall state; all of it is reset by the next `startTurn`. */
   private turnStartedAtMs = 0
@@ -853,6 +856,7 @@ export class SidecarServer {
     this.onDeliveryStage = options.onDeliveryStage ?? null
     this.onFrameDropped = options.onFrameDropped ?? null
     this.onTurnLifecycle = options.onTurnLifecycle ?? null
+    this.onConnectionReady = options.onConnectionReady
     this.turnStallMs = options.turnStallMs ?? DEFAULT_TURN_STALL_MS
 
     // Subscribe once; broadcast every event to all connected clients as a raw
@@ -2939,6 +2943,7 @@ export class SidecarServer {
     message: AppSubmitMessage,
     submitId: string | undefined,
   ): void {
+    queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
     const refuseSubmit = (
       code: ErrorFrame['code'],
       text: string,
@@ -5656,6 +5661,7 @@ export class SidecarServer {
       if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.queued', frame.kind)
       connection.socket.write(encoded, () => {
         if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.sent', frame.kind)
+        if (frame.kind === 'ready') this.onConnectionReady?.()
       })
     } catch (error) {
       this.log(

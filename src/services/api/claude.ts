@@ -202,7 +202,7 @@ import { returnValue } from 'src/utils/generators.js'
 import { headlessProfilerCheckpoint } from 'src/utils/headlessProfiler.js'
 import { isMcpInstructionsDeltaEnabled } from 'src/utils/mcpInstructionsDelta.js'
 import { calculateUSDCost } from 'src/utils/modelCost.js'
-import { endQueryProfile, queryCheckpoint } from 'src/utils/queryProfiler.js'
+import { endQueryProfile, queryCheckpoint, queryTimingBoundary } from 'src/utils/queryProfiler.js'
 import {
   modelSupportsAdaptiveThinking,
   modelSupportsThinking,
@@ -2149,6 +2149,9 @@ async function* queryModel(
         // since we handle tool input accumulation ourselves
         // biome-ignore lint/plugin: main conversation loop handles attribution separately
         let result
+        const providerRequestStarted = performance.now()
+        const observeMainProvider = !options.agentId && (options.querySource === 'sdk' || options.querySource === 'repl_main_thread')
+        if (observeMainProvider) queryTimingBoundary({ stage: 'provider_request', engineSessionId: getSessionId() })
         try {
           result = await anthropic.beta.messages
             .create(
@@ -2162,6 +2165,7 @@ async function* queryModel(
             )
             .withResponse()
         } catch (error) {
+          if (observeMainProvider) queryTimingBoundary({ stage: 'provider_failed', engineSessionId: getSessionId(), durationMs: performance.now() - providerRequestStarted })
           recordedAttempt.end(
             error instanceof APIUserAbortError || signal.aborted
               ? 'cancelled'
@@ -2170,6 +2174,7 @@ async function* queryModel(
           throw error
         }
         queryCheckpoint('query_response_headers_received')
+        if (observeMainProvider) queryTimingBoundary({ stage: 'provider_response', engineSessionId: getSessionId(), durationMs: performance.now() - providerRequestStarted })
         streamRequestId = result.request_id
         streamResponse = result.response
         return result.data

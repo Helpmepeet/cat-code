@@ -1,3 +1,5 @@
+import { WORKSPACE_JUMP_STAGES } from './workspaceJumpTiming.js'
+
 /**
  * Privacy-safe desktop operational logging.
  *
@@ -76,6 +78,7 @@ export const OPERATIONAL_EVENTS = [
   'session.turn.started',
   'session.turn.completed',
   'session.turn.stalled',
+  'workspace.jump.timing',
   'session.restore.started',
   'session.restore.completed',
   'session.restore.failed',
@@ -109,6 +112,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
   'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'rendersCommitted', 'phase',
   'from', 'to', 'kind', 'messageId', 'outcome',
+  'operationId', 'generation',
 ])
 
 /**
@@ -118,6 +122,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
  * another event.
  */
 const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly string[]>> = {
+  'workspace.jump.timing': ['phase', 'outcome', 'durationMs', 'operationId', 'generation'],
   'app.start': ['version', 'packaged', 'platform', 'arch'],
   'app.ready': ['durationMs'],
   'app.shutdown.started': ['reason'],
@@ -270,6 +275,15 @@ export function sanitizeOperationalFields(
   event?: OperationalEvent,
 ): OperationalFields {
   if (!fields) return {}
+  if (event === 'workspace.jump.timing') {
+    if (!(WORKSPACE_JUMP_STAGES as readonly unknown[]).includes(fields.phase) ||
+        !['started', 'completed', 'failed', 'unavailable'].includes(String(fields.outcome)) ||
+        typeof fields.durationMs !== 'number' || !Number.isFinite(fields.durationMs) || fields.durationMs < 0 ||
+        (fields.operationId !== undefined && !isOpaqueIdentifier(fields.operationId)) ||
+        (fields.generation !== undefined && !isOpaqueIdentifier(fields.generation))) {
+      throw new Error('invalid workspace jump timing')
+    }
+  }
   const entries = Object.entries(fields)
   if (entries.length > MAX_OPERATIONAL_FIELDS) {
     throw new Error('operational record has too many fields')

@@ -1,4 +1,5 @@
 import { createWorkspaceJumpTools } from './workspaceJumpTools.js'
+import { createWorkspaceJumpTiming, type WorkspaceJumpTimingIdentity, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 import { feature } from 'bun:bundle'
 import { installLidWorkRuntime, type LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { hasVerifiedSourceCompensation, readWorkspaceJump, workspaceJumpRequiresRetention, upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate } from '../../src/utils/workspaceJumpState.js'
@@ -710,6 +711,8 @@ export async function createSidecarSessionController({
   agentDefinitions: suppliedAgentDefinitions,
   onMcpLifecycleCreated,
   resumedInitialState,
+  timing: timingSink,
+  timingIdentity: suppliedTimingIdentity,
 }: {
   probe: boolean
   /** Session root; the engine's QueryEngine is configured here. Ignored in probe mode. */
@@ -731,9 +734,13 @@ export async function createSidecarSessionController({
   agentDefinitions?: AgentDefinitionsResult
   /** Durable engine state returned during resume, omitted for a fresh session. */
   resumedInitialState?: AppState
+  timing?: WorkspaceJumpTimingSink
+  timingIdentity?: WorkspaceJumpTimingIdentity
   /** Registers MCP disposal before setup steps that can fail. */
   onMcpLifecycleCreated?: (dispose: () => Promise<void>) => void
 }): Promise<SidecarSession> {
+  const timing = createWorkspaceJumpTiming(timingSink)
+  const timingIdentity = suppliedTimingIdentity ?? { appSessionId: appSessionId ?? 'unknown', generation }
   if (probe) {
     return {
       controller: createQueryEngineSessionController({
@@ -792,14 +799,14 @@ export async function createSidecarSessionController({
     queryEngineConfig,
     slashCatalog,
     tools,
-  } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
+  } = await timing.span(timingIdentity, 'query_config', () => createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
     appSessionId,
     binding,
     recreatedFolderNotice,
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
-  })
+  }))
   const providerBoundHistory = initialMessages
     ? hasProviderBoundHistory(initialMessages)
     : false
@@ -841,7 +848,7 @@ export async function createSidecarSessionController({
     controller,
     ...(feature('LID_CLOSED') ? { lidWork: installLidWorkRuntime(() => appStateStore.getState().tasks) } : {}),
     permissions: createSidecarPermissionDomain(appStateStore),
-    settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd), {
+    settings: createSidecarSettingsDomain(await timing.span(timingIdentity, 'settings_options', () => loadAvailableSettingOptions(cwd)), {
       reloadAvailableOptions: () => loadAvailableSettingOptions(cwd),
     }),
     agentConfig: createSidecarAgentConfigDomain({
@@ -859,7 +866,7 @@ export async function createSidecarSessionController({
     workspaceTrust: await createSidecarWorkspaceTrustDomain(cwd, {
       managed: binding.kind === 'managed',
     }),
-    diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
+    diagnostics: await timing.span(timingIdentity, 'diagnostics', () => createSidecarDiagnosticsDomain(appStateStore)),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
     workers: createSidecarWorkersDomain(appStateStore),
     // P4-32b — the session-scoped Codex lease read seam (L1). Same store as

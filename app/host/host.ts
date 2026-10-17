@@ -2,6 +2,7 @@ import { isRelocationControls, readSessionRelocation, writeSessionRelocation, ty
 import type { RelocationRequest } from '../../src/utils/sessionRelocationState.js'
 import { hasVerifiedSourceCompensation, readWorkspaceJump, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
+import { createWorkspaceJumpTiming, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 /**
  * The host composition layer (D1 — `decisions/REGISTRY.md` §6/§6.1; trust zone —
  * `decisions/SECURITY-MINIMUM.md` Addendum, T8 / HC1–HC4).
@@ -160,6 +161,7 @@ export type HostOptions = {
   evictReplay?: (appSessionId: SessionId) => void
   /** Structured logger. Defaults to stderr. */
   log?: (line: string) => void
+  timing?: WorkspaceJumpTimingSink
   /** Clock (spawn rate window). Injected for deterministic HC4 tests. */
   now?: () => number
   /**
@@ -267,8 +269,11 @@ export class Host implements HostApi {
    * so a lost cursor costs nothing but a re-scan from a different offset.
    */
   private peerNameCursor = randomPeerNameCursor()
+  private readonly timing
+  private readonly moveReadyTimes = new Map<string, number>()
 
   constructor(options: HostOptions) {
+    this.timing = createWorkspaceJumpTiming(options.timing)
     this.hasPendingSubmit = options.hasPendingSubmit ?? (() => false)
     this.supervisor = options.supervisor
     this.registry = options.registry
@@ -310,6 +315,7 @@ export class Host implements HostApi {
 
   private async onSupervisorEvent(event: SupervisorEvent): Promise<void> {
     const appSessionId = event.sessionId
+    if (event.type === 'exit') this.moveReadyTimes.delete(appSessionId)
 
     if (event.type === 'frame') {
       if (event.frame.kind === 'ready') this.workspaceObservations.delete(appSessionId)
@@ -317,6 +323,7 @@ export class Host implements HostApi {
         this.workspaceObservations.set(appSessionId, event.frame.workspace)
       }
       if (event.frame.kind === 'ready') {
+        this.moveReadyTimes.set(appSessionId, performance.now())
         this.runControls.delete(appSessionId)
         this.permissionModes.delete(appSessionId)
         this.prePlanModes.delete(appSessionId)
@@ -1735,11 +1742,12 @@ export class Host implements HostApi {
     let reopenedOriginal = false
     try {
       // Reuse the existing idle gate. A declined park times out without killing work.
-      await this.parkForMove(appSessionId)
+      const timingIdentity = { appSessionId, engineSessionId: movingRow.engineSessionId, operationId: jump?.operationId, generation: this.supervisor.getSessionGeneration(appSessionId) ?? undefined }
+      await this.timing.span(timingIdentity, 'park_to_clean_exit', () => this.parkForMove(appSessionId))
       sourceParked = true
       if (hasPeerWork()) throw new Error('Finish active peer work and deliveries before moving this Chat')
       if (jump && !jump.beforeMutation()) throw new Error('The workspace change was cancelled')
-      await this.relocate({ appSessionId, engineSessionId: movingRow.engineSessionId, source, target, controls })
+      await this.timing.span(timingIdentity, 'relocation_worker', () => this.relocate!({ appSessionId, engineSessionId: movingRow.engineSessionId!, source, target, controls }))
       const destinationEmpty = readSessionRelocation(movingRow.engineSessionId)?.empty === true
       moveCommitted = true
       await this.registry.updateLocation(appSessionId, target.cwd, target.binding)
@@ -1751,6 +1759,7 @@ export class Host implements HostApi {
       this.runControls.delete(appSessionId)
       // spawn owns the reservation from here, including its failure release.
       moveReservation = null
+      const replacementEnd = this.timing.start(timingIdentity, 'replacement_to_controls')
       const result = await this.spawn({ appSessionId, cwd: target.cwd, binding: target.binding,
         ...(destinationEmpty ? { freshEngineSessionId: movingRow.engineSessionId } : { resumeEngineSessionId: movingRow.engineSessionId }),
         title: row.title, forked: row.forked,
@@ -1758,8 +1767,11 @@ export class Host implements HostApi {
         permissionMode: controls.mode,
         preferSpawnModel: true,
       }, reservation)
-      if (!result.ok) throw new Error(result.error.message)
-      await this.waitForReadyMode(appSessionId, controls)
+      if (!result.ok) { replacementEnd('failed'); throw new Error(result.error.message) }
+      try { await this.waitForReadyMode(appSessionId, controls); replacementEnd() }
+      catch (error) { replacementEnd('failed'); throw error }
+      const readyAt = this.moveReadyTimes.get(appSessionId)
+      if (readyAt !== undefined) this.timing.write({ ...timingIdentity, generation: this.supervisor.getSessionGeneration(appSessionId) ?? undefined }, 'ready_to_controls', 'completed', performance.now() - readyAt)
       destinationVerified = true
       if (sourceWasInactive) {
         await this.parkForMove(appSessionId)

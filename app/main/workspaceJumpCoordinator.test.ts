@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceJumpCoordinator, type WorkspaceJumpCoordinatorDeps } from './workspaceJumpCoordinator.js'
+import type { OperationalRecordInput } from '../shared/operationalLog.js'
 import { WorkspaceHandoffControl } from './workspaceHandoffControl.js'
 import type { WorkspaceHandoffSnapshot, WorkspaceHandoffExecutionRecord } from '../shared/workspaceHandoff.js'
 import { createPeerRequestPlane, type PeerRegistryRow } from './peerRequestPlane.js'
@@ -39,7 +40,9 @@ function harness() {
   let finalLocation: 'source' | 'destination' | 'unknown' = 'destination'
   let holdMove: (() => Promise<void>) | undefined
   const held = new Map<string, string>()
+  const timings: OperationalRecordInput[] = []
   const deps: WorkspaceJumpCoordinatorDeps = {
+    timing: input => { timings.push(input) },
     directory, row: id => id === appSessionId ? row : undefined,
     knownProjects: () => [{ path: '/projects/cat-code', lastUsedAt: 1 }],
     validateCwd: path => ({ ok: true, realpath: path }),
@@ -72,7 +75,7 @@ function harness() {
     const handle = list.value.workspaces[0]!.handle
     return coordinator.handleRequest(appSessionId, { verb: 'workspace.jump', operationId, destinationHandle: handle })
   }
-  return { coordinator, deps, row, appSessionId, directory, operationId, ready, held, accept, generation: () => generation,
+  return { coordinator, deps, row, appSessionId, directory, operationId, ready, held, accept, timings, generation: () => generation,
     moved: () => moved, continuations: () => continuationCalls, terminals: () => terminalCalls,
     setGeneration: () => { generation = randomUUID() }, setTrusted: (v: boolean) => { trusted = v },
     setIdle: (v: boolean) => { idle = v }, setTerminalDurable: (v: boolean) => { terminalDurable = v },
@@ -80,6 +83,23 @@ function harness() {
     holdMove: (v: () => Promise<void>) => { holdMove = v },
   }
 }
+
+test('jump timings require matching destination provider identity and do not alter dispatch', async () => {
+  const h = harness()
+  expect((await h.accept()).ok).toBe(true)
+  expect((await h.coordinator.handleRequest(h.appSessionId, h.ready)).ok).toBe(true)
+  h.coordinator.afterResponse(h.appSessionId, h.ready, true)
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  const completions = () => h.timings.filter(input => input.fields?.phase === 'accepted_to_provider_request_observed' && input.fields.outcome === 'completed')
+  h.coordinator.observeProviderRequest(h.appSessionId, h.row.engineSessionId!, h.operationId, randomUUID())
+  expect(completions()).toHaveLength(0)
+  h.coordinator.observeProviderRequest(h.appSessionId, h.row.engineSessionId!, h.operationId, h.generation())
+  h.coordinator.observeProviderRequest(h.appSessionId, h.row.engineSessionId!, h.operationId, h.generation())
+  expect(completions()).toHaveLength(1)
+  expect(h.timings.some(input => input.fields?.phase === 'accepted_to_source_boundary' && input.fields.outcome === 'completed')).toBe(true)
+  expect(h.timings.some(input => input.fields?.phase === 'admission_to_continuation' && input.fields.outcome === 'completed')).toBe(true)
+  expect(h.continuations()).toBe(1)
+})
 
 test('acceptance cannot move; durable readiness, response delivery, and one-use survive reopening', async () => {
   const h = harness()
