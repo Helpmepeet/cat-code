@@ -315,7 +315,12 @@ export function createListPeersTool(
       const outcome = await requestHost('peers.list', input.cursor ? { cursor: input.cursor } : {})
       if (!outcome.ok) {
         return {
-          data: { ok: false, message: describeHostRequestError(outcome.error) },
+          data: {
+            ok: false,
+            message: outcome.error.code === 'session_not_found'
+              ? 'Peer sessions are not available from this chat.'
+              : describeHostRequestError(outcome.error),
+          },
         }
       }
       // Read back through `unknown` and narrowed again here rather than
@@ -363,13 +368,11 @@ export function createListPeersTool(
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          // Empty means no other row at all, not "none currently open": a
-          // closed session still lists, so "no session is open" would read as
-          // an empty workspace when the answer is that there has never been
-          // another session here.
+          // Closed sessions still list, so this describes the whole roster,
+          // not just sessions that are currently running.
           content: data.cursor
             ? 'There are no more peers after this cursor. Omit cursor to start a fresh list.'
-            : 'This workspace has no other peer, live, parked or closed.',
+            : 'No other sessions in this workspace.',
         }
       }
       // The note is written only when rows were actually cut. A line saying

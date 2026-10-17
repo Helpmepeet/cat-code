@@ -6845,8 +6845,10 @@ test('a roster with only closed sessions says none are open', () => {
 })
 
 test('a ListPeers result that is not a roster keeps the raw text', () => {
-  const sentence = 'This workspace has no other peer, live, parked or closed.'
+  const sentence = 'No other sessions in this workspace.'
   expect(visibleText(renderExpanded(listPeersRow(sentence)))).toContain(sentence)
+  const unavailable = 'Peer sessions are not available from this chat.'
+  expect(visibleText(renderExpanded(listPeersRow(unavailable, true)))).toContain(unavailable)
   expect(visibleText(renderExpanded(listPeersRow('The list of peers came back unreadable.', true))))
     .toContain('The list of peers came back unreadable.')
 })

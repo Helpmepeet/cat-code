@@ -242,9 +242,26 @@ test('ListPeers reports a refusal instead of an empty roster', async () => {
   const content = String(block.content)
   expect(content.trim().length).toBeGreaterThan(0)
   expect(content).not.toBe(
-    'This workspace has no other peer, live, parked or closed.',
+    'No other sessions in this workspace.',
   )
   expect(content).not.toContain('rate_limited')
+})
+
+test('an unavailable listing does not claim a named session was searched for', async () => {
+  const requestHost: PeerHostRequester = async () => ({
+    ok: false,
+    error: { code: 'session_not_found', message: 'this session has no peer workspace' },
+  })
+  const tool = createListPeersTool(requestHost)
+  const result = await tool.call({})
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'unavailable-list')
+
+  expect(result.data).toEqual({
+    ok: false,
+    message: 'Peer sessions are not available from this chat.',
+  })
+  expect(block.is_error).toBe(true)
+  expect(block.content).toBe('Peer sessions are not available from this chat.')
 })
 
 test('an empty roster says no peer exists, not that none is open', async () => {
@@ -259,7 +276,7 @@ test('an empty roster says no peer exists, not that none is open', async () => {
 
   expect(block.is_error).toBeUndefined()
   expect(block.content).toBe(
-    'This workspace has no other peer, live, parked or closed.',
+    'No other sessions in this workspace.',
   )
 })
 

@@ -32,7 +32,8 @@ test('keeps open sessions only, with their state, title and notice', () => {
 })
 
 test('a result that is not a narrowable roster falls back to the raw text', () => {
-  expect(parseListPeersResult('This workspace has no other peer, live, parked or closed.')).toBeNull()
+  expect(parseListPeersResult('No other sessions in this workspace.')).toBeNull()
+  expect(parseListPeersResult('Peer sessions are not available from this chat.')).toBeNull()
   expect(parseListPeersResult(JSON.stringify({ peers: [{ name: 'A', status: 'sleeping' }] }))).toBeNull()
   expect(parseListPeersResult(JSON.stringify({ peers: [{ name: 'A', status: 'live', presence: 'dozing' }] }))).toBeNull()
   expect(parseListPeersResult(JSON.stringify({ peers: [{ name: 'A', status: 'live', presence: 'idle', notice: { doing: 'x' } }] }))).toBeNull()
