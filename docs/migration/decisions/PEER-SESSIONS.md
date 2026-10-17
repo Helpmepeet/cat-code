@@ -777,6 +777,12 @@ asked-for work (R6).
   as true of a peer's message as of the user's. It used to sit left among the
   tool cards. There is ONE peer colour for every peer (`--peer`), not a
   per-peer palette: the name says which peer, the colour marks the namespace.
+- **A ListPeers result is a roster card** (operator, 2026-10-17). The header
+  names the open sessions; the body lists live and parked rows only, each with
+  a state dot (running, waiting on the user, idle; none when parked), its title,
+  and any scope notice with its posted time. Closed rows, model, effort and the
+  model-facing notes stay in the tool result. A result that does not narrow
+  keeps the raw text (`listPeersCard.ts`, `ListPeersCard` in `TranscriptView.tsx`).
 - **Composer placeholder** names the session. 🔁 CORRECTED during the build: the
   "today" string quoted here was wrong, so the replacement drawn from it was too.
   `Message Cat Code` exists only in a test fixture; the real placeholder is
