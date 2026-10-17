@@ -151,6 +151,105 @@ test('recent listing deduplicates canonical workspaces before the bound and save
   ])
 })
 
+test('raw validation is deduplicated per enumeration, not across authorization boundaries', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => Array.from({ length: 200 }, (_, i) => ({ path: i % 2 ? '/projects/cat-code' : '/missing', lastUsedAt: i }))
+  const calls: string[] = []
+  h.deps.validateCwd = path => {
+    calls.push(path)
+    return path === '/missing' ? { ok: false } : { ok: true, realpath: path }
+  }
+  const list = async () => {
+    const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+    if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
+    return result.value.workspaces
+  }
+  const first = await list()
+  expect(calls).toEqual(['/missing', '/projects/cat-code'])
+  calls.length = 0
+  expect((await list())[0]!.handle).toBe(first[0]!.handle)
+  expect(calls).toEqual(['/missing', '/projects/cat-code'])
+  calls.length = 0
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.jump', operationId: h.operationId, destinationHandle: first[0]!.handle })).ok).toBe(true)
+  expect(calls).toEqual(['/missing', '/projects/cat-code', '/projects/cat-code'])
+  calls.length = 0
+  expect((await h.coordinator.handleRequest(h.appSessionId, h.ready)).ok).toBe(true)
+  expect(calls).toEqual(['/projects/cat-code', '/missing', '/projects/cat-code'])
+})
+
+test('stable canonical ordering matches the original row-by-row algorithm', async () => {
+  const h = harness()
+  const projects = [
+    { path: '/negative/z', lastUsedAt: -1 },
+    { path: '/negative/a', lastUsedAt: -100 },
+    ...Array.from({ length: 160 }, (_, i) => ({ path: `/raw/${i}`, lastUsedAt: [NaN, Infinity, -Infinity, -50, 0, 12][i % 6]! })),
+    ...Array.from({ length: 300 }, (_, i) => ({ path: `/raw/${i % 160}`, lastUsedAt: i % 11 - 5 })),
+    ...Array.from({ length: 150 }, (_, i) => ({ path: `/alias/${i}`, lastUsedAt: i })),
+    { path: '/missing', lastUsedAt: 9999 },
+  ]
+  const canonical = (path: string) => path === '/missing' ? null : path.startsWith('/alias/') ? '/canonical/alias' : path
+  const original = new Map<string, number>()
+  for (const project of projects) {
+    const path = canonical(project.path)
+    if (path === null) continue
+    const used = Number.isFinite(project.lastUsedAt) ? project.lastUsedAt : 0
+    original.set(path, Math.max(original.get(path) ?? 0, used))
+  }
+  const expected = [...original].sort(([a, at], [b, bt]) => bt - at || a.localeCompare(b)).slice(0, 128).map(([path]) => path)
+  h.deps.knownProjects = () => projects
+  h.deps.validateCwd = path => {
+    const realpath = canonical(path)
+    return realpath === null ? { ok: false } : { ok: true, realpath }
+  }
+  let trustedInput: string[] = []
+  h.deps.trustedProjectRoots = async roots => { trustedInput = [...roots]; return roots }
+  const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+  if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
+  expect(result.value.workspaces.map(row => row.path)).toEqual(expected)
+  expect(trustedInput).toEqual(expected)
+  expect(expected).toHaveLength(128)
+})
+
+test('negative recencies retain canonical max-with-zero and path tie ordering', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => [
+    { path: '/z', lastUsedAt: -1 }, { path: '/a', lastUsedAt: -100 },
+    { path: '/a', lastUsedAt: -10 }, { path: '/b', lastUsedAt: NaN },
+    { path: '/c', lastUsedAt: Infinity }, { path: '/d', lastUsedAt: -Infinity },
+  ]
+  const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+  if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
+  expect(result.value.workspaces.map(row => row.path)).toEqual(['/a', '/b', '/c', '/d', '/z'])
+})
+
+test.each(['acceptance', 'readiness'] as const)('disappearance and retargeting are freshly rejected at %s', async boundary => {
+  for (const change of ['missing', 'retarget'] as const) {
+    const h = harness()
+    if (boundary === 'readiness') expect((await h.accept()).ok).toBe(true)
+    const listed = boundary === 'acceptance' ? await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' }) : null
+    h.deps.validateCwd = path => change === 'missing' ? { ok: false } : { ok: true, realpath: `${path}-replaced` }
+    if (boundary === 'acceptance') {
+      if (!listed?.ok || !('workspaces' in listed.value)) throw new Error('listing failed')
+      expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.jump', operationId: h.operationId, destinationHandle: listed.value.workspaces[0]!.handle })).ok).toBe(false)
+    } else expect((await h.coordinator.handleRequest(h.appSessionId, h.ready)).ok).toBe(false)
+    expect(h.moved()).toBe(0)
+  }
+})
+
+test('changing paths receive one observation per enumeration and fresh authorization', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => [{ path: '/alias', lastUsedAt: 1 }, { path: '/alias', lastUsedAt: 2 }]
+  let observations = 0
+  h.deps.validateCwd = path => ({ ok: true, realpath: path === '/alias' ? (++observations === 1 ? '/first' : '/second') : path })
+  const listed = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+  if (!listed.ok || !('workspaces' in listed.value)) throw new Error('listing failed')
+  expect(listed.value.workspaces.map(row => row.path)).toEqual(['/first'])
+  expect(observations).toBe(1)
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.jump', operationId: h.operationId, destinationHandle: listed.value.workspaces[0]!.handle })).ok).toBe(false)
+  expect(observations).toBe(2)
+  expect(h.held.size).toBe(0)
+})
+
 test('initial handles survive later listings, while expired roots and process generations retire authority', async () => {
   const h = harness()
   async function list() {

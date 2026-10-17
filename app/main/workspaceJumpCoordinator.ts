@@ -163,11 +163,15 @@ export class WorkspaceJumpCoordinator {
     return record === null || hasVerifiedSourceCompensation(state, record, appSessionId, row.engineSessionId, row.cwd)
   }
   private roots(): string[] {
-    const recent = new Map<string, number>()
+    const candidates = new Map<string, number>()
     for (const project of this.deps.knownProjects()) {
-      const validated = this.deps.validateCwd(project.path)
-      if (!validated.ok) continue
       const used = Number.isFinite(project.lastUsedAt) ? project.lastUsedAt : 0
+      candidates.set(project.path, Math.max(candidates.get(project.path) ?? used, used))
+    }
+    const recent = new Map<string, number>()
+    for (const [path, used] of candidates) {
+      const validated = this.deps.validateCwd(path)
+      if (!validated.ok) continue
       recent.set(validated.realpath, Math.max(recent.get(validated.realpath) ?? 0, used))
     }
     // Conversation duplicates and aliases cannot consume the workspace bound.
