@@ -96,6 +96,16 @@ export function derivePeerTargetParts(
         detail: input['all'] === true ? 'every peer' : 'open peers',
         detailMono: false,
       }
+    case 'Announce': {
+      // `doing` is the notice's one required line (`announceTool.ts` schema);
+      // a call missing it still projects before the tool validates it.
+      const doing = str('doing')
+      return {
+        name: null,
+        detail: doing === null ? 'scope notice' : peerTargetFragment(doing),
+        detailMono: false,
+      }
+    }
     default:
       return null
   }

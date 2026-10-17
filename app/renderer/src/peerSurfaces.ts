@@ -41,6 +41,9 @@ export type PeerToolPresentation = {
  *   `⌕` search — the `grep` family's mark, when the read carries a query
  *   `+` create — the `write` family's mark, for a spawn
  *   `⋯` list   — the roster
+ *   `⚑` announce — this session's own scope notice. It alone keeps its own
+ *       word: it names no peer, so `Peer` before the scope line read as some
+ *       other session's status rather than this one posting it.
  *
  * KNOWN RISK, accepted with eyes open: a peer read and a file read differ by
  * HUE ALONE, and both can appear in one turn. The alternative was a fourteenth
@@ -70,8 +73,64 @@ export function peerToolPresentation(
       return { mark: '+', word: 'Peer' }
     case 'ListPeers':
       return { mark: '⋯', word: 'Peer' }
+    case 'Announce':
+      return { mark: '⚑', word: 'Announce' }
     default:
       return null
+  }
+}
+
+export type AnnounceCardView = {
+  touches: string[]
+  note: string | null
+  /** Main holds the notice for this run but could not persist it. */
+  unsaved: boolean
+  /** The tool's refusal, or the text of an error it did not shape. */
+  failure: string | null
+}
+
+/**
+ * What an `Announce` card shows. The fields are the call's own input, which is
+ * what the notice says; the result only reports whether it was posted and
+ * kept (`app/sidecar/announceTool.ts` output). Unknown result text degrades to
+ * no extra state on success and to the raw text on error.
+ */
+export function announceCardView(
+  input: Record<string, unknown>,
+  result: { isError: boolean; content: string } | null,
+): AnnounceCardView {
+  const rawTouches = input['touches']
+  const touches = Array.isArray(rawTouches)
+    ? rawTouches.flatMap(entry =>
+        typeof entry === 'string' && entry.trim().length > 0 ? [entry.trim()] : [],
+      )
+    : []
+  const rawNote = input['note']
+  const note = typeof rawNote === 'string' && rawNote.trim().length > 0 ? rawNote.trim() : null
+  if (result === null) return { touches, note, unsaved: false, failure: null }
+
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(result.content)
+  } catch {
+    parsed = null
+  }
+  const record =
+    typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  if (record?.['ok'] === true && !result.isError) {
+    return { touches, note, unsaved: record['saved'] === false, failure: null }
+  }
+  if (record?.['ok'] === false && typeof record['message'] === 'string') {
+    return { touches, note, unsaved: false, failure: record['message'] }
+  }
+  const text = result.content.trim()
+  return {
+    touches,
+    note,
+    unsaved: false,
+    failure: result.isError && text.length > 0 ? text : null,
   }
 }
 
