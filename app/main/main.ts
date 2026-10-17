@@ -4511,7 +4511,7 @@ function ensureHost(): Host {
     send: (id, message) => forwardInternal(id, message) === null,
     acceptsStatus: (id, status) => registry.sessions.find(row => row.appSessionId === id)?.engineSessionId === status.engineSessionId,
     observe: (id, status) => { try { workspaceJump?.observe(id, status) } catch { /* retain unreadable state */ } },
-    recover: (id, _operationId) => { try { workspaceJump?.queryStatus(id) } catch { /* retain unreadable state */ } },
+    recover: (id, _operationId) => { try { workspaceJump?.requestFreshEvidence(id) } catch { /* retain unreadable state */ } },
   })
   if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
   workspaceStatusTimer = setInterval(() => {
@@ -4520,6 +4520,7 @@ function ensureHost(): Host {
     }
   }, 30_000)
   workspaceStatusTimer.unref()
+  workspaceJump?.dispose()
   workspaceJump = new WorkspaceJumpCoordinator({
     timing: input => operationalLog.write({ ...input, process: 'main' }),
     host,
@@ -4545,6 +4546,8 @@ function ensureHost(): Host {
       return delivery.kind === 'result' && ['accepted','already_applied'].includes(delivery.result.disposition)
     },
     control: (state, action) => requestWorkspaceControl(state.appSessionId, state.operationId, action),
+    waitForControlSlot: (id, operationId, generation) => workspaceControl?.waitForSlot(id, operationId, generation) ?? Promise.resolve(false),
+    controlSlotOccupied: (id, operationId) => workspaceControl?.isSlotOccupied(id, operationId) ?? true,
     onStateChanged: state => { host?.publishWorkspaceJumpDisplay(state) },
   })
   // Reconcile durable operations before any restored sidecar can start turns.
@@ -4721,6 +4724,9 @@ if (!gotSingleInstanceLock) {
  * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
  */
 function shutdownRuntime(): void {
+  workspaceJump?.dispose()
+  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
+  workspaceStatusTimer = null
   desktopPower?.dispose()
   desktopPower = undefined
   const endingLidMode = lidMode
@@ -4843,8 +4849,6 @@ app.on('window-all-closed', () => {
   peerPlane = null
   observedWorkspaceHandoffs.clear()
   workspaceControl?.dispose()
-  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
-  workspaceStatusTimer = null
   registryForDebug = null
   scheduleDebugStateExport.cancel()
   // F2 — drop buffered frames from the closed window so a macOS reopen never

@@ -31,7 +31,8 @@ for (const historical of [false, true]) test(historical
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } }))
   const blocker = join(root, 'block-network.ts')
   writeFileSync(blocker, 'globalThis.fetch = async () => { throw new Error("Network disabled") }\n')
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-local-probe', NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1' }
+  const inheritedLaunchKeys = Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('CATCODE_')).map(key => [key, undefined]))
+  const env = { ...process.env, ...inheritedLaunchKeys, CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-local-probe', NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1' }
   const children: Array<ReturnType<typeof Bun.spawn>> = []
   let supervisor: SidecarSupervisor | undefined
   let control: WorkspaceHandoffControl | undefined
