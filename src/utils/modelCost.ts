@@ -16,10 +16,12 @@ import {
   COST_TIER_30_150,
   COST_TIER_5_25,
   MODEL_COSTS,
+  ratesForPrompt,
   type ModelCosts,
 } from './modelCostRates.js'
 export {
   COST_FABLE_10_50,
+  COST_HAIKU_55,
   COST_SONNET_55,
   COST_OPUS_55,
   COST_HAIKU_35,
@@ -49,7 +51,10 @@ export function getOpus46CostTier(fastMode: boolean): ModelCosts {
 /**
  * Calculates the USD cost based on token usage and model cost configuration
  */
-function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
+function tokensToUSDCost(
+  modelCosts: Omit<ModelCosts, 'longPrompt'>,
+  usage: Usage,
+): number {
   return (
     (usage.input_tokens / 1_000_000) * modelCosts.inputTokens +
     (usage.output_tokens / 1_000_000) * modelCosts.outputTokens +
@@ -103,7 +108,12 @@ export function getModelCosts(model: string, usage: Usage): ModelCosts {
       DEFAULT_UNKNOWN_MODEL_COST
     )
   }
-  return costs
+  return ratesForPrompt(
+    costs,
+    usage.input_tokens +
+      (usage.cache_read_input_tokens ?? 0) +
+      (usage.cache_creation_input_tokens ?? 0),
+  )
 }
 
 function trackUnknownModelCost(model: string, shortName: ModelShortName): void {

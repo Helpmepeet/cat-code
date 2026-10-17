@@ -22,6 +22,7 @@ import {
   COST_FABLE_10_50,
   COST_HAIKU_35,
   COST_HAIKU_45,
+  COST_HAIKU_55,
   formatModelPricing,
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
@@ -219,10 +220,11 @@ function getCustomHaikuOption(): ModelOption | undefined {
 }
 
 function getHaiku55Option(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
   return {
     value: 'haiku',
     label: 'Haiku 5.5',
-    description: 'Haiku 5.5 · Fast, low cost for quick answers',
+    description: `Haiku 5.5 · Fast, low cost for quick answers${is3P ? '' : ` · ${formatModelPricing(COST_HAIKU_55)}`}`,
     descriptionForModel:
       'Haiku 5.5 - fast, low-cost model for quick answers. Less capable than Sonnet 5.5.',
   }
