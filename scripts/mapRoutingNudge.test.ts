@@ -18,6 +18,8 @@ function fixture() {
   const stateRoot = join(root, 'state')
   mkdirSync(join(repoRoot, 'src', 'nested'), { recursive: true })
   mkdirSync(join(repoRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(repoRoot, 'docs/maps'), { recursive: true })
+  writeFileSync(join(repoRoot, 'docs/maps/WORKSPACE_MAP.md'), '# Workspace Map\n')
   mkdirSync(stateRoot)
   writeFileSync(join(repoRoot, 'src', 'owner.ts'), 'export {}\n')
   const transcriptPath = join(root, 'session.jsonl')
@@ -76,6 +78,17 @@ describe('map routing nudge classification', () => {
 })
 
 describe('map routing nudge lifecycle', () => {
+  test('a missing local map does not request an unavailable file', () => {
+    const options = fixture()
+    rmSync(join(options.repoRoot, 'docs'), { recursive: true, force: true })
+    expect(runMapRoutingNudge({
+      session_id: 'missing-map',
+      tool_name: 'Grep',
+      tool_input: { pattern: 'owner' },
+      transcript_path: options.transcriptPath,
+    }, { ...options, logFile: false })).toBeNull()
+  })
+
   test('fires on the first broad search and only once', () => {
     const options = fixture()
     const input = {

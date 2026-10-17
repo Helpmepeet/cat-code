@@ -5,7 +5,7 @@ description: Builds or installs the local Cat Code macOS desktop app when the us
 
 # Build and install Cat Code
 
-Use this for the operator's local desktop bundle in the Cat Code repository. Read the current `CLAUDE.md`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` §§4–8, and `app/scripts/package-app.ts` before acting; source and current repository instructions take precedence over this skill.
+Use this for the operator's local desktop bundle in the Cat Code repository. Read the current `CLAUDE.md` and `app/scripts/package-app.ts` before acting; also read local `docs/migration/decisions/LOCAL-USE-CONTRACT.md` §§4–8 when it exists. The whole `docs/` tree is local-only and absent from fresh clones. Source and current repository instructions take precedence over this skill.
 
 ## Select the source
 

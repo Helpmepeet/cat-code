@@ -7,6 +7,9 @@ openclaw/
 .worktrees/
 .cat-code/
 
+# Complete local-only documentation tree
+/docs/
+
 # Local secrets and env files
 .env
 .env.*
@@ -35,9 +38,6 @@ ds-bundle/
 # Local review and test evidence
 /tmp/
 /app/native/lid-closed/dist/
-/docs/design-html/2026-10-09-eli5-stuck-session.html
-/docs/design-html/2026-10-09-handoff-checkpoint-stuck-session.html
-/docs/design-html/2026-10-10-workspace-jump-quiet-gap.html
 
 # Local API replay recordings
 /.vcr/

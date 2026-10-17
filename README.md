@@ -102,7 +102,6 @@ to the configured provider.
 
 - [`app/`](app/): desktop application.
 - [`src/`](src/): coding-agent engine and shared runtime.
-- [Workspace map](docs/maps/WORKSPACE_MAP.md): guide to the codebase.
 - [Repository instructions](CLAUDE.md): development workflow and verification.
 
 Cat Code is a private fork of Claude Code. This repository does not

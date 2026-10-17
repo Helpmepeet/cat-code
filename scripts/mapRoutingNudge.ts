@@ -272,6 +272,8 @@ export function runMapRoutingNudge(
     stateRoot: string
   },
 ): string | null {
+  // Fresh clones omit the local-only workspace map; do not nudge for a missing file.
+  if (!existsSync(resolve(options.repoRoot, 'docs/maps/WORKSPACE_MAP.md'))) return null
   const classification = classifySearch(input, options.repoRoot)
   if (classification !== 'broad') return null
 

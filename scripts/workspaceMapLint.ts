@@ -241,6 +241,11 @@ export function validateWorkspaceMaps(
 
 if (import.meta.main) {
   const repoRoot = resolve(process.argv[2] ?? process.cwd())
+  // docs/ is local-only and may be absent in a fresh checkout.
+  if (!existsSync(join(repoRoot, 'docs'))) {
+    console.log('workspace map lint skipped: local-only docs/ is absent')
+    process.exit(0)
+  }
   const result = validateWorkspaceMaps(repoRoot)
   for (const warning of result.warnings) console.warn(`warning: ${warning}`)
   for (const error of result.errors) console.error(`error: ${error}`)
