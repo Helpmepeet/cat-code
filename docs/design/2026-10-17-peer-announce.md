@@ -111,12 +111,13 @@ A row without a notice renders as today. Absence means "nothing posted", not
   the main-stamped `postedAt`. `touches` has at most 16 non-empty strings.
 - **An aggregate budget for the roster's notices**, applied in main before
   serialization. The per-notice cap does not bound the answer: `peers.list`
-  returns every eligible row as one `host.result`
+  normally returns every eligible row as one `host.result`
   (`handlePeersList` in `app/main/peerRequestPlane.ts`), the closed-row bound
   is applied only after the answer reaches the sidecar
   (`boundClosedPeers` in `app/sidecar/listPeersTool.ts`), and the supervisor
   refuses a frame to the sidecar over `MAX_FRAME_BYTES` (128 KiB). Parked rows
-  keep their notices and are bounded only by `MAX_REGISTRY_SESSIONS` (256), so
+  keep their notices; the `MAX_REGISTRY_SESSIONS` reap target is 256, but manual
+  live/parked tabs can exceed it (the review correction in §9c), so
   128 rows with full notices already pass the frame limit. A fixed notice
   total is not safe either: measured 2026-10-17, 255 typical rows with no
   notices serialize to about 98 KB, so 32 KiB of notices on top passes the
@@ -124,7 +125,8 @@ A row without a notice renders as today. Absence means "nothing posted", not
   rows first, then adds notices newest-posted first while the answer stays
   under `MAX_PEER_ROSTER_BYTES` (120 KiB, leaving 8 KiB of envelope
   headroom), and marks each row whose notice did not fit `noticeOmitted`.
-  Every row is still listed; only notice text is dropped, and
+  Every row remains accessible, with explicit pagination when mandatory rows
+  alone cannot fit (§9c). Notice text may be dropped, and
   `ListPeers` says which peers' notices were left out, so a reader can message
   the peer rather than read silence as "no notice". The budget is also the
   roster-cost bound: every `ListPeers` call carries the notices into the
@@ -194,14 +196,15 @@ no em dashes). The build may adjust wording; the behavior is the contract.
 Doctrine addition, appended to the peer paragraph:
 
 ```text
-When you know roughly what you will work on, especially before you edit files,
-post a notice with Announce: what you are doing, and the areas or shared files
-you expect to touch. Replace it only if your scope changes; it is not for
-progress or momentary state. Include work you hand to subagents; only the main
-conversational agent posts the notice. Before asking a peer what it is doing or
-which files it is editing, read its notice in ListPeers. Ask about its scope only
-when your scope overlaps its notice, or it has no notice and you are about to
-edit near its work.
+If a scope notice would help other peers and you know roughly what you will work
+on, especially before you edit files, post one with Announce: what you are doing,
+and the areas or shared files you expect to touch. Replace it only if your scope
+changes; it is not for progress or momentary state. Include work you hand to
+subagents; only the main conversational agent posts the notice. Before asking a
+peer what it is doing or which files it is editing, read its notice in ListPeers.
+Ask about its scope only when your scope overlaps its notice, or its notice is
+unavailable and you are about to edit near its work. A notice marked noticeOmitted
+is unavailable, not an empty scope.
 ```
 
 The last sentence narrows scope questions only. It does not narrow the
@@ -214,7 +217,8 @@ or answers.
 `Announce` tool description:
 
 ```text
-Post or replace your notice on the peer roster. Other sessions in this
+Post or replace your notice on the peer roster when a standing scope notice would
+help other peers. Other sessions in this
 workspace see it when they call ListPeers; posting notifies no one. Describe
 your scope, not your progress: post it once you know what you will work on,
 and replace it only if that changes. Only the main conversational agent may
@@ -289,9 +293,10 @@ message the peer if you need its scope.
   Restoring or reloading a parked row retains its notice; reopening a closed
   row does not resurrect one.
 - ListPeers reuses ReadPeer's quoted-data escaping across its serialized result.
-  Notice timestamps render as absolute ISO instants. Its result-size allowance
-  accounts for escaping so the tool-result cap cannot silently cut roster rows.
-  This does not increase the transport limit.
+  Notice timestamps render as absolute ISO instants. The review in §9c replaced
+  the finite result allowance with a self-bounded opt-out from generic previews,
+  plus a Codex translation exemption, so downstream policies cannot cut rows.
+  This does not increase either transport limit.
 - The doctrine says “only the main conversational agent” rather than “only you,”
   since workers inherit it too. The tool prompt states the concrete limits;
   ListPeers names `noticeOmitted` and clarifies absence and data provenance.
@@ -324,9 +329,68 @@ across those three files). These unrelated sources, tests and archived files
 were not changed to force a passing suite. The all-checks-green acceptance gate
 therefore remains unmet.
 
-No `src/` changes were needed, so the engine dev build was not required or run.
+The initial build needed no `src/` changes. The review fixes below do touch the
+engine permission and Codex output paths and passed the engine dev build.
 No desktop GUI, hardening launch, live provider request or live app-session creation
 was performed. The operator procedure below remains unverified.
+
+### 9c. Implementation review follow-up, 2026-10-17
+
+Four distinct review lenses plus a sequential cross-tool scenario check found
+four substantive issues and two wording issues, all corrected:
+
+- Auto now reaches the classifier for the entire Announce input, including
+  through the acceptEdits shortcut check. Outside effective Auto, the tool
+  retains its no-prompt default. Announce joins the engine's existing Agent/REPL
+  exceptions to that shortcut; no new public tool flag is needed.
+- The host's bounded ListPeers result is no longer replaced with a generic
+  persisted excerpt or middle-truncated by Codex. Other tools retain their
+  existing output limits.
+- Registry write failure retains the in-memory notice but returns `saved: false`
+  and a clear warning. The notice itself never stores this delivery result.
+- The registry row count is not an unconditional ceiling: manual parked tabs
+  can exceed it. Mandatory-row overflow now returns explicit stable-ID pages
+  with `nextCursor` and `remainingPeers`. The ordinary roster still returns in
+  one answer when it fits. Every page, including notices and continuation
+  metadata, stays under the same whole-answer byte budget. Internal ReadPeer
+  and post-compaction readers follow pages under one total timeout.
+- Doctrine and tool text now explicitly leave posting discretionary and treat
+  an omitted notice as unavailable when deciding whether to ask about scope.
+  Historical ReadPeer collision questions remain permitted; the design only
+  required reading notices before asking peers.
+
+Focused review-fix checks passed **738/0**, including real permission routing
+with a local classifier stub, provider translation, a 900-row roster with
+activity/park changes between pages, receiving schemas and persistence failure.
+Both desktop typechecks and the engine dev-full build pass. Seven isolated
+production-source mutation controls reject regressions in both permission
+routes, both output policies, persistence reporting, main pagination and
+internal page following. The initial preload-based mutation harness exited
+before tests even for a no-op and is not evidence; the source-copy controls pass,
+fail on the intended assertions when mutated, and pass after restoration.
+A two-child Unix-socket harness was re-executed after the fixes (**1/0**):
+posting, replacement and reader listing cross the real transport, while the
+worker attempt sends no host request. This is not an Electron-main-startup or
+live-model check.
+
+The required full-suite rerun with short canonical TMPDIR was stopped after
+remaining CPU-running without a summary for over 43 minutes. Before the stall
+it reported the known relocation assertion and an assertion in the concurrent
+`subagentStepPublication.integration.test.ts` slice. No aggregate result or
+suite pass is claimed; the stall's cause was not determined in this review.
+The controller cold-start/registration suite passes independently (**29/0**,
+included above). Only the owned test task was stopped, and its tracked runner
+PIDs were confirmed gone.
+
+The installed `2896822bc87a5cb6271afcd1af6641e479c490b5` app's actual registry
+validator was extracted without launching it and exercised on a synthetic
+registry copy. It preserves the session row but strips `peerNotice` and unknown
+keys when rebuilding it. New notices are therefore not durable against that
+older installed writer. No installed binary or live registry was changed.
+
+Live Electron lifecycle orchestration, model-selected tool routing, doctrine
+compliance and reduced scope-question traffic remain unverified. Operator
+steps are in §11.
 
 ## 10. How to tell it worked
 

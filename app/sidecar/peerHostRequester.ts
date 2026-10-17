@@ -19,6 +19,7 @@ import type {
   HostRequestArgs,
   HostRequestError,
   HostRequestVerb,
+  PeerDescriptor,
 } from '../shared/protocol.js'
 // Type-only: erased at runtime, so this does not make an import cycle with the
 // server module that sets the requester below.
@@ -26,6 +27,7 @@ import type {
   HostRequestOptions,
   HostRequestOutcome,
 } from './sidecarServer.js'
+import { HOST_REQUEST_TIMEOUT_MS } from '../shared/limits.js'
 
 /**
  * Ask main to do one bounded thing. Mirrors `SidecarServer.requestHost`: it
@@ -66,6 +68,29 @@ export const requestPeerHost: PeerHostRequester = (verb, args, options) => {
     })
   }
   return liveRequester(verb, args, options)
+}
+
+/** Internal readers need the complete roster, not a model-facing page. */
+export async function requestPeerRoster(
+  requestHost: PeerHostRequester,
+  options?: HostRequestOptions,
+): Promise<HostRequestOutcome<'peers.list'>> {
+  const deadline = Date.now() + (options?.timeoutMs ?? HOST_REQUEST_TIMEOUT_MS)
+  const peers: PeerDescriptor[] = []
+  let cursor: string | undefined
+  for (;;) {
+    const timeoutMs = deadline - Date.now()
+    if (timeoutMs <= 0) return { ok: false, error: { code: 'timeout', message: 'Peer listing did not finish in time' } }
+    const outcome = await requestHost('peers.list', cursor ? { cursor } : {}, { ...options, timeoutMs })
+    if (!outcome.ok) return outcome
+    peers.push(...outcome.value.peers)
+    const next = outcome.value.nextCursor
+    if (!next) return { ok: true, value: { peers } }
+    if (cursor !== undefined && next <= cursor) {
+      return { ok: false, error: { code: 'internal_error', message: 'Peer listing cursor did not advance' } }
+    }
+    cursor = next
+  }
 }
 
 /**

@@ -1228,7 +1228,7 @@ export class SessionRegistry {
     })
   }
 
-  async setPeerNotice(appSessionId: string, input: PeerNoticeInput): Promise<PeerNotice | null> {
+  async setPeerNotice(appSessionId: string, input: PeerNoticeInput): Promise<(PeerNotice & { saved?: false }) | null> {
     const content = parsePeerNoticeInput(input)
     const row = this.find(appSessionId)
     if (!content || !row || row.shutdown !== null) return null
@@ -1236,7 +1236,7 @@ export class SessionRegistry {
     await this.mutate('setPeerNotice', appSessionId, current => {
       current.peerNotice = notice
     })
-    return notice
+    return this.lastWriteFailed ? { ...notice, saved: false } : notice
   }
 
   async markInputAccepted(appSessionId: string): Promise<void> {

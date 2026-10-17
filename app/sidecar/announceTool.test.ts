@@ -1,4 +1,6 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
+import { feature } from 'bun:bundle'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +8,9 @@ import type { ToolUseContext } from '../../src/Tool.js'
 import { SessionRegistry } from '../host/registry.js'
 import { MAX_PEER_NOTICE_BYTES } from '../shared/limits.js'
 import { parsePeerNoticeInput } from '../shared/peerNotice.js'
+import { hasPermissionsToUseTool } from '../../src/utils/permissions/permissions.js'
+import * as classifier from '../../src/utils/permissions/yoloClassifier.js'
+import { buildPeerDoctrine } from './desktopSystemPrompt.js'
 import { createAnnounceTool } from './announceTool.js'
 import type { PeerHostRequester } from './peerHostRequester.js'
 
@@ -60,4 +65,57 @@ test('a refused host write is reported as an error, not a posted notice', async 
   const result = await tool.call({ doing: 'Read-only analysis' }, {} as ToolUseContext)
   expect(result.data.ok).toBe(false)
   expect(tool.mapToolResultToToolResultBlockParam(result.data, 'tu').is_error).toBe(true)
+})
+
+test('a memory-only post is explicit rather than promising saved scope', async () => {
+  const tool = createAnnounceTool((async () => ({ ok: true, value: { postedAt: 10000, saved: false } })) as PeerHostRequester)
+  const result = await tool.call({ doing: 'Editing' }, {} as ToolUseContext)
+  expect(result.data).toMatchObject({ ok: true, saved: false })
+  expect(JSON.stringify(result.data)).toContain('could not be saved')
+})
+
+test('scope guidance keeps posting optional and treats omitted notices as unavailable', async () => {
+  const doctrine = buildPeerDoctrine({ name: 'Bear', createdByName: null, createdById: null })
+  expect(doctrine).toContain('If a scope notice would help other peers')
+  expect(doctrine).toContain('its notice is unavailable and you are about to edit near its work')
+  expect(doctrine).toContain('noticeOmitted is unavailable, not an empty scope')
+  expect(await createAnnounceTool().prompt()).toContain('when a standing scope notice would help other peers')
+})
+
+test('Auto classifies the whole notice without an acceptEdits bypass', async () => {
+  if (!feature('TRANSCRIPT_CLASSIFIER')) {
+    const child = spawnSync(process.execPath, ['--feature=TRANSCRIPT_CLASSIFIER', 'test', import.meta.path, '-t', 'Auto classifies the whole notice'], {
+      encoding: 'utf8', timeout: 30000,
+    })
+    expect(child.stderr + child.stdout).toContain('1 pass')
+    expect(child.status).toBe(0)
+    return
+  }
+  const tool = createAnnounceTool()
+  const input = { doing: 'Editing', touches: ['shared-file'], note: 'Standing text requiring analysis' }
+  const toolPermissionContext = {
+    mode: 'auto', additionalWorkingDirectories: new Map(), alwaysAllowRules: {}, alwaysDenyRules: {},
+    alwaysAskRules: {}, isBypassPermissionsModeAvailable: false,
+  }
+  const context = {
+    getAppState: () => ({ toolPermissionContext }),
+    setAppState: () => {},
+    abortController: new AbortController(),
+    messages: [], options: { tools: [tool] },
+  } as unknown as ToolUseContext
+  const spy = spyOn(classifier, 'classifyYoloAction').mockResolvedValue({ shouldBlock: true, reason: 'fixture denied notice', model: 'fixture-classifier' })
+  try {
+    const decision = await hasPermissionsToUseTool(tool, input, context, { message: { id: 'notice' } } as never, 'notice-call')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(spy.mock.calls[0]?.[1])).toContain(input.note)
+    expect(JSON.stringify(spy.mock.calls[0]?.[1])).toContain(input.touches[0])
+    expect(JSON.stringify(spy.mock.calls[0]?.[1])).toContain(input.doing)
+    expect(decision.behavior).toBe('deny')
+    for (const mode of ['default', 'acceptEdits', 'dontAsk', 'plan', 'bypassPermissions']) {
+      toolPermissionContext.mode = mode
+      expect((await tool.checkPermissions(input, context)).behavior).toBe('allow')
+    }
+  } finally {
+    spy.mockRestore()
+  }
 })

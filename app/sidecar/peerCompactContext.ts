@@ -6,6 +6,7 @@ import type { PostCompactRuntimeAttachmentsInput } from '../../src/Tool.js'
 import type { PeerDescriptor } from '../shared/protocol.js'
 import {
   requestPeerHost,
+  requestPeerRoster,
   type PeerHostRequester,
 } from './peerHostRequester.js'
 
@@ -95,9 +96,8 @@ export function createPeerCompactContext({
     if (agentId !== undefined) return []
 
     try {
-      const outcome = await requestHost(
-        'peers.list',
-        {},
+      const outcome = await requestPeerRoster(
+        requestHost,
         { timeoutMs: PEER_COMPACT_CONTEXT_TIMEOUT_MS },
       )
       if (!outcome.ok) return []

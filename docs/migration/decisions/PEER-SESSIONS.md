@@ -149,7 +149,8 @@ transport, effectively-once processing.
   and `CATCODE_SIDECAR_CWD` (`app/supervisor/supervisor.ts:355-359`):
   `CATCODE_SIDECAR_NAME`, `CATCODE_SIDECAR_CREATED_BY`. Main/host-owned input,
   never renderer-authored, the same trust class as the cwd.
-- **Uniqueness scope is the registry** (≤ `MAX_REGISTRY_SESSIONS` 256 rows), so
+- **Uniqueness scope is the registry** (`MAX_REGISTRY_SESSIONS` is a 256-row
+  reap target, not a ceiling for manual live/parked tabs), so
   a name is unique among everything restorable. It survives park and restore
   because the row does. It is released when the row is reaped, and may then be
   reused. Duplicate-on-exhaustion follows the picker's suffix rule.
@@ -255,7 +256,7 @@ Three populations exist and only one is addressable:
 | population | size | addressable? |
 |---|---|---|
 | live engines | soft cap `MAX_LIVE_ENGINES` 4 (park driver), hard cap `MAX_LIVE_SESSIONS` 32 | yes, now |
-| registry rows (live + parked + closed-restorable) | ≤ 256 | yes, after a wake |
+| registry rows (live + parked + closed-restorable) | 256-row reap target; manual live/parked tabs can exceed it | yes, after a wake |
 | catalog transcripts (`SESSIONS_CATALOG_STAT_LIMIT` 1000+) | thousands | no: no row, no process, no name |
 
 **The axis is addressability, and time is a sort key, never a membership
@@ -328,7 +329,19 @@ peer. If necessary, title/model/effort are omitted together from rows in reverse
 roster order, with `detailsOmitted: true` on each affected row. This does not
 mean those values are unknown. The tool preserves and explains that marker.
 The ordinary five-closed-peer display bound still runs in the tool; `all: true`
-returns the entire roster, subject to the same explicit detail omissions.
+includes the older closed rows on the requested page, subject to the same
+explicit detail omissions.
+
+Manual parked tabs can exceed the reap target. If mandatory rows alone do not
+fit, main returns a bounded page with `nextCursor` and `remainingPeers`.
+Continuation selects the next stable app-session-ID range, then applies the
+normal status/recency sort within that page. Activity or park/restore changes
+cannot shift already-existing peers across that ID boundary. A fresh call
+without a cursor starts a new listing, including newly created rows. Internal
+ReadPeer and post-compact readers follow pages within one total request timeout
+and fail explicitly rather than treating a partial roster as complete.
+ListPeers opts out of generic result previews and Codex middle truncation:
+its whole answer is already bounded by main.
 
 **Scope notices, 2026-10-17.** A live or parked row may carry the writer's
 notice (`doing`, optional `touches` and `note`) with an absolute `postedAt`.
@@ -350,7 +363,7 @@ in-process file read.
 
 | tool | args | notes |
 |---|---|---|
-| `ListPeers` | none | §3. Read-only, no prompt. |
+| `ListPeers` | optional `all`, `cursor` | §3. Read-only, no prompt. Pass the returned nextCursor to continue a paginated roster. |
 | `Announce` | `doing`, optional `touches`, `note` | One standing scope notice per session, replaced whole. Only the main conversational agent may call; workers are refused before a host request. Main validates the closed shape, stamps the absolute posted time, and stores opaque text on the registry row. No delivery, wake or notification. Retained through park/restore, removed on close/quit. Serialized content is at most 1 KiB excluding the timestamp; `touches` has at most 16 non-empty strings. See [the built design](../../design/2026-10-17-peer-announce.md). |
 | `SendToPeer` | `to` (name), `text` | Every message is a request: a busy recipient reads it between tool calls, an idle one starts a turn, a parked or closed one wakes (HOST-REQUEST-PLANE §4). The hop chain is main-derived per pair (step 2); the sidecar never authors hops. Result states the outcome. Ordinary permission gate. (A `notify` kind that starts no turn was designed, reviewed and cut, §0a; its sketch is HOST-REQUEST-PLANE §4 step 4a, marked DEFERRED.) |
 | `ReadPeer` | `peer`, `before` (turn cursor from `nextPosition`), `query` (present means search, absent means tail), `maxBytes` (default 32 KiB, max 128 KiB) | §8. Same workspace only, read-only, no prompt. Returns TURNS (`asked` / `said` / `touched`), not messages. 🔁 AMENDED 2026-09-05: `view`, `limit` and `includeToolResults` were removed, see §8. |
@@ -368,7 +381,10 @@ and it sees `CreatePeer` and `SendToPeer` only if they project. `CreatePeer`
 projects its full prompt and overrides; `SendToPeer` projects recipient, kind
 and full text. `Announce` projects its full input as JSON, including all scope
 and standing context. It has no ordinary permission prompt; Auto still evaluates
-the projection. `ListPeers` and
+the projection. Its permission check requests classification in effective Auto
+mode and the engine excludes Announce from its acceptEdits shortcut, alongside
+Agent and REPL. A post that could not reach disk remains visible for this run and
+returns `saved: false` with a warning rather than claiming saved scope. `ListPeers` and
 `ReadPeer` are read-only and project `''` deliberately. Tests: a `SendToPeer`
 whose text relays a denied action is evaluated, not skipped.
 
@@ -438,14 +454,15 @@ context, constraints, uncertainty, and exact identifiers; no fixed template is
 required. Answer blocking questions promptly when possible; sending a message
 does not guarantee an answer.
 
-When you know roughly what you will work on, especially before you edit files,
-post a notice with Announce: what you are doing, and the areas or shared files
-you expect to touch. Replace it only if your scope changes; it is not for
-progress or momentary state. Include work you hand to subagents; only the main
-conversational agent posts the notice. Before asking a peer what it is doing or
-which files it is editing, read its notice in ListPeers. Ask about its scope only
-when your scope overlaps its notice, or it has no notice and you are about to
-edit near its work.
+If a scope notice would help other peers and you know roughly what you will work
+on, especially before you edit files, post one with Announce: what you are doing,
+and the areas or shared files you expect to touch. Replace it only if your scope
+changes; it is not for progress or momentary state. Include work you hand to
+subagents; only the main conversational agent posts the notice. Before asking a
+peer what it is doing or which files it is editing, read its notice in ListPeers.
+Ask about its scope only when your scope overlaps its notice, or its notice is
+unavailable and you are about to edit near its work. A notice marked noticeOmitted
+is unavailable, not an empty scope.
 
 When the user asks for a session, create a peer; when they ask to reach a
 session that exists, message it; when they ask for a prompt, write text; do not

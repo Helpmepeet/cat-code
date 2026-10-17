@@ -822,7 +822,7 @@ export type HostRequestArgs = {
   /** Internal cwd coordination only, never a model-authored destination. See HOST-REQUEST-PLANE. */
   'workspace.transition.begin': { operationId: string }
   'workspace.transition.finish': { operationId: string; cwd: string }
-  'peers.list': Record<string, never>
+  'peers.list': { cursor?: string }
   'peer.announce': PeerNoticeInput
   'peer.create': { prompt: string; model?: string; effort?: string }
   'peer.deliver': {
@@ -852,8 +852,8 @@ export type HostRequestValues = {
   'workspace.cancel': { operationId: string; status: 'cancelled' | 'not_accepted' }
   'workspace.transition.begin': { operationId: string }
   'workspace.transition.finish': { operationId: string }
-  'peers.list': { peers: PeerDescriptor[] }
-  'peer.announce': { postedAt: number }
+  'peers.list': { peers: PeerDescriptor[]; nextCursor?: string; remainingPeers?: number }
+  'peer.announce': { postedAt: number; saved?: false }
   'peer.create': {
     name: string
     appSessionId: SessionId

@@ -126,6 +126,28 @@ test('an unrelated stale registry writer cannot erase a notice or resurrect it a
   expect(readDoc(registryPath).sessions[0]?.peerNotice).toBeUndefined()
 })
 
+test('a failed notice write keeps the in-memory notice but reports that it was not saved', async () => {
+  let fail = false
+  const { registry, registryPath } = makeRegistry({
+    acquireLock: async () => {
+      if (fail) throw new Error('fixture lock failure')
+      return async () => {}
+    },
+  })
+  await registry.launch()
+  await registry.upsertOnSpawn({ appSessionId: 'notice', cwd: '/workspace' })
+  const before = readFileSync(registryPath, 'utf8')
+  fail = true
+  const result = await registry.setPeerNotice('notice', { doing: 'New scope' })
+  expect(result?.saved).toBe(false)
+  expect(registry.sessions[0]?.peerNotice?.doing).toBe('New scope')
+  expect(registry.sessions[0]?.peerNotice).not.toHaveProperty('saved')
+  expect(readFileSync(registryPath, 'utf8')).toBe(before)
+  fail = false
+  await registry.markParked('notice')
+  expect(readDoc(registryPath).sessions[0]?.peerNotice?.doing).toBe('New scope')
+})
+
 test('synchronous quit drops notices from both live and parked rows', async () => {
   const { registry, storageDir, registryPath } = makeRegistry()
   await registry.launch()
