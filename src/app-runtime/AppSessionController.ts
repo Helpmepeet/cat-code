@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { queryTimingBoundary } from '../utils/queryProfiler.js'
 import { withLidWorkRun, noteLidWorkApproval, noteLidWorkProgress } from '../services/lidClosedWork.js'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
@@ -182,11 +183,14 @@ export class AppSessionController {
   async startHandoffContinuation(): Promise<{ completion: Promise<void> }> {
     const execution = this.handoffExecution
     if (!execution || !this.adapter.sealResumeCheckpoint || this.handoffReservation !== execution.configuration.identity.operationId || this.requiresUserReconciliation) throw new Error('Workspace continuation unavailable')
-    return execution.claim(() => this.continueHandoff(execution.configuration.identity.operationId, {
-      uuid: execution.configuration.identity.continuationId,
-      onHandoffInputCommitted: checkpoint => execution.inputCommitted(checkpoint),
-      onExecutionClosed: outcome => execution.close(outcome),
-    }), () => this.adapter.sealResumeCheckpoint!())
+    return execution.claim(() => {
+      queryTimingBoundary({ stage: 'continuation_accepted', engineSessionId: execution.configuration.identity.engineSessionId, operationId: execution.configuration.identity.operationId })
+      return this.continueHandoff(execution.configuration.identity.operationId, {
+        uuid: execution.configuration.identity.continuationId,
+        onHandoffInputCommitted: checkpoint => execution.inputCommitted(checkpoint),
+        onExecutionClosed: outcome => execution.close(outcome),
+      })
+    }, () => this.adapter.sealResumeCheckpoint!())
   }
   async cancelWorkspaceHandoff(cancelId: string): Promise<void> {
     if (!this.handoffExecution) throw new Error('Workspace execution unavailable')

@@ -3,6 +3,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
+import { createWorkspaceJumpTiming, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 import { isWorkspaceHandoffSnapshot, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import type { WorkspaceControlAction, WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import type { Host, CwdValidation } from '../host/host.js'
@@ -37,6 +38,7 @@ export type WorkspaceJumpCoordinatorDeps = {
   onStateChanged?: (state: WorkspaceJumpStateV2) => void
   directory?: string
   now?: () => number
+  timing?: WorkspaceJumpTimingSink
 }
 
 const refuse = (message: string): { ok: false; error: HostRequestError } => ({ ok: false, error: { code: 'unavailable', message } })
@@ -45,6 +47,8 @@ const MAX_CANCELLED_OPERATIONS_PER_GENERATION = 128
 type GenerationCancellations = { engineSessionId: string; generation: string; operationIds: Set<string>; closed: boolean }
 
 export class WorkspaceJumpCoordinator {
+  private readonly timing
+  private readonly acceptedTimings = new Map<string, { operationId: string; end: (outcome?: 'completed' | 'failed' | 'unavailable') => void; boundary: (outcome?: 'completed' | 'failed' | 'unavailable') => void; admission?: (outcome?: 'completed' | 'failed' | 'unavailable') => void; providerObserved?: boolean; admissionObserved?: boolean }>()
   private readonly directory: string
   private readonly handles = new Map<string, { appSessionId: string; generation: string; path: string }>()
   private readonly running = new Map<string, Promise<void>>()
@@ -54,14 +58,34 @@ export class WorkspaceJumpCoordinator {
   private readonly effectKeys = new Set<string>()
   private readonly accepting = new Map<string, string>()
   private readonly cancellations = new Map<string, GenerationCancellations>()
-  constructor(private readonly deps: WorkspaceJumpCoordinatorDeps) { this.directory = deps.directory ?? workspaceJumpDirectory() }
+  constructor(private readonly deps: WorkspaceJumpCoordinatorDeps) {
+    this.directory = deps.directory ?? workspaceJumpDirectory()
+    this.timing = createWorkspaceJumpTiming(deps.timing)
+  }
+
+  /** Main observes the provider marker's delivery, not a foreign process clock. */
+  observeProviderRequest(appSessionId: string, engineSessionId: string, operationId: string, generation: string): void {
+    const state = this.snapshot(appSessionId)
+    const pending = this.acceptedTimings.get(appSessionId)
+    if (!pending || pending.operationId !== operationId || state?.operationId !== operationId ||
+        state.engineSessionId !== engineSessionId || state.location !== 'destination' ||
+        state.continuation.admissionGeneration !== generation || this.identity(appSessionId)?.generation !== generation) return
+    pending.end()
+    pending.providerObserved = true
+    if (pending.admissionObserved) this.acceptedTimings.delete(appSessionId)
+  }
 
   snapshot(appSessionId: string): WorkspaceJumpStateV2 | null { const state = readWorkspaceJump(appSessionId, this.directory); return state ? upgradeWorkspaceJumpState(state) : null }
   loadRetention(): ReturnType<typeof loadWorkspaceJumpRetention> { return loadWorkspaceJumpRetention(this.directory) }
   /** Retire only ephemeral discovery authority; durable history is never erased. */
   forgetHandles(appSessionId: string): void {
     for (const [handle, entry] of this.handles) if (entry.appSessionId === appSessionId) this.handles.delete(handle)
-    if (!this.identity(appSessionId)) this.cancellations.delete(appSessionId)
+    if (!this.identity(appSessionId)) {
+      this.cancellations.delete(appSessionId)
+      const pending = this.acceptedTimings.get(appSessionId)
+      pending?.end('unavailable'); pending?.boundary('unavailable'); pending?.admission?.('unavailable')
+      this.acceptedTimings.delete(appSessionId)
+    }
   }
   retains(appSessionId: string): boolean {
     try { const s = this.snapshot(appSessionId); return !!s && workspaceJumpRequiresRetention(s, this.identity(appSessionId)?.generation) }
@@ -214,6 +238,9 @@ export class WorkspaceJumpCoordinator {
         ...(previous?.compensation ? { compensation: previous.compensation } : {}),
         continuation: { id: randomUUID(), admissionGeneration: null, dispatch: 'none', outcome: 'pending', receiptRevision: null, checkpointSha256: null },
       } as WorkspaceJumpStateV2)
+      this.acceptedTimings.set(appSessionId, { operationId,
+        end: this.timing.start({ ...identity, operationId }, 'accepted_to_provider_request_observed'),
+        boundary: this.timing.start({ ...identity, operationId }, 'accepted_to_source_boundary') })
       return { ok: true, value: { operationId, status: 'accepted' } }
     } catch {
       if (reserved) {
@@ -245,12 +272,13 @@ export class WorkspaceJumpCoordinator {
     if (!current || current.operationId !== state.operationId || current.phase !== 'accepted' || current.cancellation ||
         this.identity(appSessionId)?.generation !== state.sourceGeneration) return refuse('This workspace change was cancelled or replaced')
     this.save({ ...current, phase: 'ready', boundary })
+    this.acceptedTimings.get(appSessionId)?.boundary()
     return { ok: true, value: { operationId: state.operationId, status: 'ready' } }
   }
   async handleRequest(appSessionId: string, request: WorkspaceRequest): Promise<Result> {
     try {
       switch (request.verb) {
-        case 'workspaces.list': return await this.list(appSessionId)
+        case 'workspaces.list': return await this.timing.span({ ...this.identity(appSessionId), appSessionId }, 'catalog', () => this.list(appSessionId))
         case 'workspace.jump': return await this.accept(appSessionId, request.operationId, request.destinationHandle)
         case 'workspace.ready': return await this.ready(appSessionId, request)
         case 'workspace.cancel': {
@@ -300,6 +328,13 @@ export class WorkspaceJumpCoordinator {
       const current = this.snapshot(appSessionId)
       if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation) return
       if (delivery.kind === 'result' && delivery.result.status) this.observe(appSessionId, delivery.result.status)
+      if (action.action === 'continue' && delivery.kind === 'result' &&
+          (delivery.result.disposition === 'accepted' || delivery.result.disposition === 'already_applied')) {
+        const pending = this.acceptedTimings.get(appSessionId)
+        pending?.admission?.()
+        if (pending) pending.admissionObserved = true
+        if (pending?.providerObserved) this.acceptedTimings.delete(appSessionId)
+      }
     }).finally(() => {
       this.effectKeys.delete(key)
       this.effects.delete(task)
@@ -329,6 +364,9 @@ export class WorkspaceJumpCoordinator {
     }
   }
   private settleWarning(appSessionId: string, outcome: 'failed' | 'cancelled' | 'uncertain'): void {
+    const pending = this.acceptedTimings.get(appSessionId)
+    pending?.end('unavailable'); pending?.boundary('unavailable'); pending?.admission?.('unavailable')
+    this.acceptedTimings.delete(appSessionId)
     const state = this.snapshot(appSessionId)
     if (!state || state.location === 'unknown') return
     this.save({ ...state, phase: 'settled', review: { ...state.review, required: true } })
@@ -400,6 +438,8 @@ export class WorkspaceJumpCoordinator {
     const generation = this.identity(appSessionId)?.generation
     if (!generation) return
     this.save({ ...next, phase: 'settled', continuation: { ...next.continuation, admissionGeneration: generation, dispatch: 'unknown' } })
+    const pending = this.acceptedTimings.get(appSessionId)
+    if (pending?.operationId === operationId) pending.admission = this.timing.start({ appSessionId, engineSessionId: state.engineSessionId, operationId, generation }, 'admission_to_continuation')
     this.effect(appSessionId, { action: 'continue', continuationId: next.continuation.id })
   }
   async settleRecovery(appSessionId: string, operationId: string): Promise<boolean> {

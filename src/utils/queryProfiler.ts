@@ -31,6 +31,26 @@ import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import { formatMs, formatTimelineLine, getPerformance } from './profilerBase.js'
 
+export type QueryTimingBoundary = {
+  stage: 'submit_received' | 'catalog_available' | 'catalog_unavailable' | 'continuation_accepted' | 'provider_request' | 'provider_response' | 'provider_failed'
+  engineSessionId: string
+  operationId?: string
+  durationMs?: number
+}
+const timingObservers = new Set<(boundary: QueryTimingBoundary) => void>()
+
+/** Metadata-only observers are independent of the opt-in, contentful profiler. */
+export function observeQueryTiming(observer: (boundary: QueryTimingBoundary) => void): () => void {
+  timingObservers.add(observer)
+  return () => { timingObservers.delete(observer) }
+}
+
+export function queryTimingBoundary(boundary: QueryTimingBoundary): void {
+  for (const observer of timingObservers) {
+    try { observer(boundary) } catch { /* Diagnostics cannot change execution. */ }
+  }
+}
+
 // Module-level state - initialized once when the module loads
 // eslint-disable-next-line custom-rules/no-process-env-top-level
 const ENABLED = isEnvTruthy(process.env.CLAUDE_CODE_PROFILE_QUERY)

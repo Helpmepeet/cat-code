@@ -1,5 +1,8 @@
 import { validateWorkspaceJumpStartup } from './workspaceJumpStartup.js'
 import { setWorkspaceJumpAdmission } from './workspaceJumpTools.js'
+import { readWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
+import { observeQueryTiming } from '../../src/utils/queryProfiler.js'
+import { createWorkspaceJumpTiming, type WorkspaceJumpTimingIdentity } from '../shared/workspaceJumpTiming.js'
 /**
  * Headless Bun engine sidecar — entrypoint (net-new, small).
  *
@@ -90,6 +93,7 @@ import { createSidecarCleanup, type SidecarCleanup } from './sidecarCleanup.js'
 const DEFAULT_SIDECAR_IDLE_TTL_MS = 15 * 60 * 1000
 
 let activeOperationalLogger: SidecarOperationalLogger | null = null
+let activeTimingIdentity: WorkspaceJumpTimingIdentity = { appSessionId: 'unknown' }
 let activeAppSessionId: string | undefined
 let activeEngineSessionId: string | undefined
 let activeSidecarCleanup: SidecarCleanup | null = null
@@ -195,6 +199,8 @@ async function projectCurrentDisplayHistory(
   truncated: boolean
   unavailableParentToolUseIds: string[]
 }> {
+  const timing = createWorkspaceJumpTiming(input => activeOperationalLogger?.write(input))
+  const displayEnd = timing.start(activeTimingIdentity, 'display_history')
   const seedHistoryEvents = projectResumedHistory(retainedMessages)
   const display = await loadDisplayTranscriptFromJsonlPath(getTranscriptPath(), {
     maxMessages: MAX_HISTORY_REPLAY_FRAMES,
@@ -204,11 +210,12 @@ async function projectCurrentDisplayHistory(
     display.messages,
     seedHistoryEvents,
   )
-  const restored = await withRestoredSubagentHistory(
+  displayEnd()
+  const restored = await timing.span(activeTimingIdentity, 'subagent_history', () => withRestoredSubagentHistory(
     getSessionId(),
     merged.history,
     message => process.stderr.write(`${message}\n`),
-  )
+  ))
   return {
     history: restored.history,
     truncated: display.truncated || merged.truncated,
@@ -294,6 +301,40 @@ async function main(): Promise<void> {
       : null,
   )
   const operational = createSidecarOperationalLogger({ appSessionId: args.sessionId })
+  const timing = createWorkspaceJumpTiming(input => operational.write(input))
+  const timingIdentity: WorkspaceJumpTimingIdentity = { appSessionId: args.sessionId, generation: args.generation,
+    ...(args.resumeEngineSessionId ? { engineSessionId: args.resumeEngineSessionId } : {}) }
+  try { timingIdentity.operationId = readWorkspaceJump(args.sessionId)?.operationId } catch { /* Runtime validates state independently. */ }
+  activeTimingIdentity = timingIdentity
+  let firstSubmitEnd: ReturnType<typeof timing.start> | undefined
+  let firstSubmitResponseEnd: ReturnType<typeof timing.start> | undefined
+  let submitted = false
+  let continuationEnd: ReturnType<typeof timing.start> | undefined
+  let continuationOperation: string | undefined
+  observeQueryTiming(boundary => {
+    if (boundary.engineSessionId !== activeEngineSessionId) return
+    if (boundary.stage === 'submit_received' && !submitted) {
+      submitted = true
+      firstSubmitEnd = timing.start(timingIdentity, 'first_submit_to_catalog')
+      firstSubmitResponseEnd = timing.start(timingIdentity, 'first_submit_to_provider_response')
+    } else if (boundary.stage === 'catalog_available' || boundary.stage === 'catalog_unavailable') {
+      firstSubmitEnd?.(boundary.stage === 'catalog_available' ? 'completed' : 'unavailable')
+    } else if (boundary.stage === 'continuation_accepted') {
+      continuationOperation = boundary.operationId
+      continuationEnd = timing.start({ ...timingIdentity, operationId: boundary.operationId }, 'continuation_to_provider_request')
+    } else if (boundary.stage === 'provider_request') {
+      continuationEnd?.()
+      continuationEnd = undefined
+      timing.write({ ...timingIdentity, operationId: continuationOperation }, 'provider_request_to_response', 'started', 0)
+    } else if ((boundary.stage === 'provider_response' || boundary.stage === 'provider_failed') && boundary.durationMs !== undefined) {
+      const outcome = boundary.stage === 'provider_response' ? 'completed' : 'failed'
+      if (outcome === 'completed') {
+        firstSubmitResponseEnd?.()
+        firstSubmitResponseEnd = undefined
+      }
+      timing.write({ ...timingIdentity, operationId: continuationOperation }, 'provider_request_to_response', outcome, boundary.durationMs)
+    }
+  })
   activeOperationalLogger = operational
   activeAppSessionId = args.sessionId
   operational.write({
@@ -331,6 +372,7 @@ async function main(): Promise<void> {
   if (!args.probeOnAttach) {
     await validateWorkspaceJumpStartup(args.sessionId, args.cwd, args.resumeEngineSessionId ?? args.freshEngineSessionId, args.binding)
     await initializeSidecarRuntime()
+    timing.write(timingIdentity, 'replacement_to_runtime_init', 'completed', process.uptime() * 1000)
   }
   if (args.freshEngineSessionId) {
     // An empty Chat can already have metadata or companion artifacts. Reject a
@@ -370,11 +412,11 @@ async function main(): Promise<void> {
   // testing it here is the same condition and lets the resume call see a
   // defined catalog.
   if (agentDefinitions && args.resumeEngineSessionId) {
-    resumed = await resumeEngineSession(
-      args.resumeEngineSessionId,
+    resumed = await timing.span(timingIdentity, 'resume', () => resumeEngineSession(
+      args.resumeEngineSessionId!,
       args.cwd,
       agentDefinitions,
-    )
+    ))
     resumedMessages = resumed.messages
     turnInterrupted = resumed.turnInterrupted
     undeliveredPrompts = resumed.undeliveredPrompts
@@ -401,6 +443,7 @@ async function main(): Promise<void> {
     ? `probe:${args.sessionId}`
     : getSessionId()
   activeEngineSessionId = engineSessionId
+  timingIdentity.engineSessionId = engineSessionId
 
   // The fresh half of the same seam. A resumed session already ran its
   // SessionStart hooks — the engine's own loader fires the 'resume' source and
@@ -456,7 +499,7 @@ async function main(): Promise<void> {
     contextBreakdown,
     startMcpLifecycle,
     slashCatalog,
-  } = await createSidecarSessionController({
+  } = await timing.span(timingIdentity, 'controller', () => createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: runtimeCwd,
     appSessionId: args.sessionId,
@@ -476,7 +519,9 @@ async function main(): Promise<void> {
     onMcpLifecycleCreated: dispose => {
       disposeMcpLifecycle = dispose
     },
-  })
+    timing: input => operational.write(input),
+    timingIdentity,
+  }))
   const spawnPermissionMode = readSpawnPermissionMode()
   const spawnPrePlanMode = readSpawnPrePlanMode()
   if (spawnPrePlanMode && spawnPermissionMode !== 'plan') {
@@ -544,6 +589,7 @@ async function main(): Promise<void> {
   const exitCleanly = sidecarCleanup.exit
 
   const server = new SidecarServer({
+    onConnectionReady: () => listeningEnd?.(),
     workspaceObserver: args.probeOnAttach ? undefined : await createWorkspaceObserver(resumed),
     sessionId: args.sessionId,
     engineSessionId,
@@ -697,6 +743,7 @@ async function main(): Promise<void> {
     // not present — fine
   }
 
+  let listeningEnd: ReturnType<typeof timing.start> | undefined
   bunListen({
     unix: args.socketPath,
     socket: {
@@ -782,6 +829,7 @@ async function main(): Promise<void> {
     },
   })
 
+  listeningEnd = timing.start(timingIdentity, 'listening_to_ready_frame')
   // The supervisor's random parent directory authenticates path ownership;
   // this closes the second leg by preventing other local users from connecting
   // when a permissive umask would otherwise create a world-readable socket.

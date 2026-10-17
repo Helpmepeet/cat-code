@@ -1405,7 +1405,14 @@ function createSupervisor(): SidecarSupervisor {
     // as the supervisor-wide default for probe/legacy callers.
     sidecarCwd: process.cwd(),
     log: line => logLegacyDiagnostic(line, 'supervisor', 'supervisor'),
-    onOperationalRecord: record => operationalLog.writeRecord(record),
+    onOperationalRecord: record => {
+      operationalLog.writeRecord(record)
+      if (record.event === 'workspace.jump.timing' && record.fields.phase === 'continuation_to_provider_request' &&
+          record.fields.outcome === 'completed' && record.appSessionId && record.engineSessionId &&
+          typeof record.fields.operationId === 'string' && typeof record.fields.generation === 'string') {
+        workspaceJump?.observeProviderRequest(record.appSessionId, record.engineSessionId, record.fields.operationId, record.fields.generation)
+      }
+    },
     onDeliveryTraceRecord: record => deliveryTrace.mark({
       sessionId: record.sessionId,
       trace: record.trace,
@@ -4428,6 +4435,7 @@ function ensureHost(): Host {
   registryLaunchSettled = launched
 
   host = new Host({
+    timing: input => operationalLog.write({ ...input, process: 'host' }),
     hasPendingSubmit,
     supervisor,
     registry,
@@ -4513,6 +4521,7 @@ function ensureHost(): Host {
   }, 30_000)
   workspaceStatusTimer.unref()
   workspaceJump = new WorkspaceJumpCoordinator({
+    timing: input => operationalLog.write({ ...input, process: 'main' }),
     host,
     row: appSessionId => registry.sessions.find(row => row.appSessionId === appSessionId),
     knownProjects: () => [
