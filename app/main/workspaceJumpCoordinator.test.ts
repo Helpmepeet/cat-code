@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,8 +13,10 @@ import { readWorkspaceJump, writeWorkspaceJump, workspaceJumpOperationSha256, up
 import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 
 const paths: string[] = []
+const coordinators: WorkspaceJumpCoordinator[] = []
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 afterEach(() => {
+  for (const coordinator of coordinators.splice(0)) coordinator.dispose()
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true })
@@ -61,12 +63,18 @@ function harness() {
         if (holdMove) await holdMove()
         if (!beforeMutation()) return { result: { ok: false, error: { code: 'session_unreachable', message: 'cancelled' } }, location: 'source', relocation: null }
         moved++
+        if (finalLocation === 'destination') {
+          row.cwd = _cwd
+          row.binding = { kind: 'project' }
+          generation = randomUUID()
+        }
         return { result: finalLocation === 'destination' ? { ok: true, value: {} as never } : { ok: false, error: { code: 'session_unreachable', message: 'lost result' } },
           location: finalLocation, relocation: null }
       },
     },
   }
   const coordinator = new WorkspaceJumpCoordinator(deps)
+  coordinators.push(coordinator)
   const operationId = randomUUID()
   const ready = { verb: 'workspace.ready' as const, operationId, tipUuid: randomUUID(), toolUseId: 'call_move' }
   async function accept() {
@@ -399,6 +407,159 @@ function snapshot(h: ReturnType<typeof harness>, sequence: number, record?: Part
 const checkpoint = () => ({ version: 1 as const, prefixBytes: 10, prefixSha256: 'a'.repeat(64), projectionSha256: 'b'.repeat(64), activeTipUuid: randomUUID(), messageCount: 1 })
 async function arrive(h: ReturnType<typeof harness>) { await h.accept(); await h.coordinator.handleRequest(h.appSessionId, h.ready); h.coordinator.afterResponse(h.appSessionId, h.ready, true); await h.coordinator.waitForSettlement(h.appSessionId) }
 
+test('owned fresh destination ready and concurrent periodic observation do not precede durable admission', async () => {
+  const h = harness()
+  const actions: string[] = []
+  let beforeAdmission: string[] = []
+  h.deps.control = async (state, action) => {
+    actions.push(action.action)
+    if (action.action === 'continue') {
+      expect(state.location).toBe('destination')
+      expect(state.continuation.admissionGeneration).toBe(h.generation())
+    }
+    return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId, action: action.action, disposition: 'accepted' } }
+  }
+  h.deps.host.moveWorkspaceJump = async (_id, _operation, cwd, start) => {
+    expect(start()).toBe(true)
+    h.row.cwd = cwd
+    h.row.binding = { kind: 'project' }
+    h.setGeneration()
+    // Main receives ready before the host's restored-controls wait returns.
+    h.coordinator.queryStatus(h.appSessionId, true)
+    h.coordinator.queryStatus(h.appSessionId)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    beforeAdmission = [...actions]
+    return { result: { ok: true, value: {} as never }, location: 'destination', relocation: null }
+  }
+  await arrive(h)
+  expect(beforeAdmission).toEqual([])
+  expect(actions).toEqual(['continue'])
+})
+
+test.each(['unavailable', 'disconnected', 'timeout', 'busy'] as const)(
+  'first continuation %s requests bounded fresh evidence without a periodic tick',
+  async failure => {
+    const h = harness()
+    const actions: string[] = []
+    h.deps.control = async (state, action) => {
+      actions.push(action.action)
+      if (action.action === 'continue') {
+        if (failure !== 'busy') return { kind: failure }
+        return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId,
+          action: action.action, disposition: 'busy', reason: 'conflict' } }
+      }
+      return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId,
+        action: action.action, disposition: 'accepted' } }
+    }
+    await arrive(h)
+    const deadline = Date.now() + 1_000
+    while (!actions.includes('status') && Date.now() < deadline) await Bun.sleep(10)
+    expect(actions).toContain('status')
+    // No authenticated absent/idle snapshot was returned. Failure is not retry authority.
+    expect(actions.filter(action => action === 'continue')).toHaveLength(1)
+    expect(actions.filter(action => action === 'status').length).toBeLessThanOrEqual(2)
+  },
+)
+
+test.each(['cancel', 'replace'] as const)('destination %s during restored-controls wait cannot dispatch late continuation', async interruption => {
+  const h = harness()
+  const actions: string[] = []
+  h.deps.control = async (state, action) => {
+    actions.push(action.action)
+    return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId,
+      action: action.action, disposition: 'accepted' } }
+  }
+  h.deps.host.moveWorkspaceJump = async (_id, _operation, cwd, start) => {
+    expect(start()).toBe(true)
+    h.row.cwd = cwd
+    h.row.binding = { kind: 'project' }
+    h.setGeneration()
+    h.coordinator.queryStatus(h.appSessionId, true)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    if (interruption === 'cancel') await h.coordinator.cancel(h.appSessionId)
+    else {
+      h.setGeneration()
+      h.coordinator.recover(h.appSessionId)
+    }
+    return { result: { ok: true, value: {} as never }, location: 'destination', relocation: null }
+  }
+  await arrive(h)
+  expect(actions.filter(action => action === 'continue')).toEqual([])
+})
+
+test('unavailable observation uses three delayed attempts without a hot loop or speculative continuation retry', async () => {
+  const callbacks: Array<() => void> = [], delays: number[] = []
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
+    callbacks.push(callback); delays.push(delay)
+    return callbacks.length as unknown as ReturnType<typeof setTimeout>
+  }) as typeof setTimeout)
+  try {
+    const h = harness(), actions: string[] = []
+    h.deps.control = async (_state, action) => { actions.push(action.action); return { kind: 'unavailable' } }
+    await arrive(h)
+    expect(actions).toEqual(['continue'])
+    for (let index = 0; index < 3; index++) {
+      expect(callbacks).toHaveLength(index + 1)
+      callbacks[index]!()
+      await h.coordinator.waitForSettlement(h.appSessionId)
+    }
+    expect(delays).toEqual([250, 1_000, 4_000])
+    expect(actions).toEqual(['continue', 'status', 'status', 'status'])
+  } finally { timer.mockRestore() }
+})
+
+test.each(['engine', 'operation', 'continuation', 'source', 'observer', 'admission', 'digest'] as const)(
+  'retry rejects unauthenticated %s evidence and retains the single retry for fresh matching evidence',
+  async mismatch => {
+    const h = harness()
+    await arrive(h)
+    const wrong = { ...snapshot(h, 1) }
+    if (mismatch === 'engine') wrong.engineSessionId = randomUUID()
+    if (mismatch === 'operation') wrong.operationId = randomUUID()
+    if (mismatch === 'continuation') wrong.continuationId = randomUUID()
+    if (mismatch === 'source') wrong.sourceGeneration = randomUUID()
+    if (mismatch === 'observer') wrong.observerGeneration = randomUUID()
+    if (mismatch === 'admission') wrong.admissionGeneration = randomUUID()
+    if (mismatch === 'digest') wrong.operationSha256 = 'f'.repeat(64)
+    expect(h.coordinator.observe(h.appSessionId, wrong)).toBe(false)
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(h.continuations()).toBe(1)
+    expect(h.coordinator.observe(h.appSessionId, snapshot(h, 2))).toBe(true)
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(h.continuations()).toBe(2)
+    h.coordinator.observe(h.appSessionId, snapshot(h, 3))
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(h.continuations()).toBe(2)
+  },
+)
+
+test('hard continuation refusal cannot use a later idle absent snapshot to replay', async () => {
+  const h = harness(), actions: string[] = []
+  h.deps.control = async (state, action) => {
+    actions.push(action.action)
+    return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId,
+      action: action.action, disposition: 'refused', reason: 'not_trusted', status: snapshot(h, 1) } }
+  }
+  await arrive(h)
+  expect(h.coordinator.observe(h.appSessionId, snapshot(h, 2))).toBe(true)
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(actions).toEqual(['continue'])
+})
+
+test('restored destination without a live move owner retains ready observation and never dispatches', async () => {
+  const h = harness()
+  await arrive(h)
+  const actions: string[] = []
+  const restored = new WorkspaceJumpCoordinator({ ...h.deps, control: async (state, action) => {
+    actions.push(action.action)
+    return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId, action: action.action, disposition: 'accepted' } }
+  } })
+  restored.recover(h.appSessionId)
+  restored.queryStatus(h.appSessionId, true)
+  await restored.waitForSettlement(h.appSessionId)
+  expect(actions).toEqual(['status'])
+})
+
 test('arrived continuation lists and announces project peers without releasing its handoff reservation', async () => {
   const h = harness()
   expect(h.coordinator.isPeerAccessBlocked(h.appSessionId)).toBe(false)
@@ -619,10 +780,13 @@ for (const interruption of ['none', 'cancel', 'replace'] as const) test(`status 
     if (action.action === 'continue' && delivery.kind === 'unavailable') unavailableContinuations++
     return delivery
   }
+  h.deps.waitForControlSlot = (id, operationId, generation) => control.waitForSlot(id, operationId, generation)
+  h.deps.controlSlotOccupied = (id, operationId) => control.isSlotOccupied(id, operationId)
   const move = h.deps.host.moveWorkspaceJump
   h.deps.host.moveWorkspaceJump = async (...args) => {
     const result = await move(...args)
-    h.coordinator.queryStatus(h.appSessionId, true)
+    // A command already admitted by the control plane, not a redundant ready observation.
+    void control.request(h.appSessionId, h.operationId, { action: 'status' })
     return result
   }
   try {
@@ -630,12 +794,12 @@ for (const interruption of ['none', 'cancel', 'replace'] as const) test(`status 
     await h.coordinator.handleRequest(h.appSessionId, h.ready)
     h.coordinator.afterResponse(h.appSessionId, h.ready, true)
     await new Promise<void>(resolve => setImmediate(resolve))
-    expect(unavailableContinuations).toBe(1)
+    expect(unavailableContinuations).toBe(0)
     expect(sent.map(message => message.action)).toEqual(['status'])
     const observed = snapshot(h, ++sequence)
     control.receiveState(h.appSessionId, observed)
     await new Promise<void>(resolve => setImmediate(resolve))
-    expect(unavailableContinuations).toBe(1)
+    expect(unavailableContinuations).toBe(0)
     expect(sent.map(message => message.action)).toEqual(['status'])
     if (interruption === 'cancel') await h.coordinator.cancel(h.appSessionId)
     if (interruption === 'replace') h.setGeneration()
@@ -660,6 +824,15 @@ test('verified source compensation permits a later request but a later manual re
   h.deps.host.moveWorkspaceJump = async (_id, _operation, _cwd, start) => {
     start()
     const state = h.coordinator.snapshot(h.appSessionId)!
+    h.row.cwd = state.target.cwd
+    h.row.binding = state.target.binding
+    h.setGeneration()
+    h.coordinator.queryStatus(h.appSessionId, true)
+    h.row.cwd = state.source.cwd
+    h.row.binding = state.source.binding
+    h.setGeneration()
+    // A compensated source attachment must remain observable despite the destination owner.
+    h.coordinator.queryStatus(h.appSessionId, true)
     compensation = { version: 1, engineSessionId: state.engineSessionId, appSessionId: h.appSessionId,
       original: state.source, source: state.target, target: state.source, phase: 'complete',
       controls: { mode: 'default' }, backup: join(process.env.CLAUDE_CONFIG_DIR!, 'backup'), movedAt: Date.now() }
@@ -668,6 +841,9 @@ test('verified source compensation permits a later request but a later manual re
   }
   h.coordinator.afterResponse(h.appSessionId, h.ready, true)
   await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(h.coordinator.snapshot(h.appSessionId)?.location).toBe('source')
+  expect(h.coordinator.snapshot(h.appSessionId)?.compensation).toBeDefined()
+  expect(h.continuations()).toBe(0)
   const notice = { displayUuid: randomUUID(), contextUuid: randomUUID(), outcome: 'failed' as const, checkpoint: checkpoint() }
   const evidence = { consumed: false, inputCommitted: false, terminal: { outcome: 'not_started' as const, order: 1, checkpoint: checkpoint() }, notice }
   h.coordinator.observe(h.appSessionId, snapshot(h, 1, evidence, { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true }))

@@ -14,6 +14,7 @@ import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
 import { WorkspaceHandoffControl } from '../main/workspaceHandoffControl.js'
 import { validateHostRequest, type WorkspaceHostRequest } from '../main/peerRequestPlane.js'
 import type { OperationalRecordInput } from '../shared/operationalLog.js'
+import type { WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 
 async function until(read: () => boolean, timeout = 60_000) {
   const deadline = performance.now() + timeout
@@ -40,7 +41,7 @@ const samples = Number(process.env.CATCODE_JUMP_BASELINE_SAMPLES ?? 1)
 function withoutInheritedLaunchKeys() {
   return Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('CATCODE_')).map(key => [key, undefined])) as unknown as Record<string, string>
 }
-for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installation']) for (let sample = 0; sample < samples; sample++) test(`isolated real workspace jump baseline ${fixture} sample ${sample + 1}`, async () => {
+for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installation', 'lost_continue_command', 'lost_continue_ack', 'exhausted_snapshot_window']) for (let sample = 0; sample < (fixture.startsWith('lost_') || fixture === 'exhausted_snapshot_window' ? 1 : samples); sample++) test(`isolated real workspace jump baseline ${fixture} sample ${sample + 1}`, async () => {
   const unresolved = fixture === 'unresolved_installation'
   const retained = fixture === 'retained'
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'jump-baseline-')))
@@ -67,6 +68,9 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
       hooks: { InstructionsLoaded: [{ hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
   }
   let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0
+  const destinationCommands: string[] = []
+  let dropped = false, sawNullAdmission = false, destinationPermission = false, destinationReady = false
+  let initialSnapshot: WorkspaceHandoffSnapshot | undefined
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     if (!new URL(request.url).pathname.endsWith('/messages')) return new Response('{}', { status: 503 })
     const body = await request.text()
@@ -119,16 +123,47 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
         const delivery = await control!.request(identity.appSessionId, state.operationId, { action: 'verify', ...boundary })
         return delivery.kind === 'result' && delivery.result.disposition === 'accepted'
       }, control: (state, action) => control!.request(state.appSessionId, state.operationId, action),
+      waitForControlSlot: (id, operationId, generation) => control!.waitForSlot(id, operationId, generation),
+      controlSlotOccupied: (id, operationId) => control!.isSlotOccupied(id, operationId),
       onStateChanged: state => { observations.push({ phase: state.phase, location: state.location, dispatch: state.continuation.dispatch, outcome: state.continuation.outcome }); host.publishWorkspaceJumpDisplay(state) },
     })
     control = new WorkspaceHandoffControl({ generation: id => supervisor.getSessionGeneration(id),
-      send: (id, message) => { supervisor.send(id, message); return true },
+      send: (id, message) => {
+        if (registry.findSession(id)?.cwd === cwd) {
+          destinationCommands.push(message.action)
+          if (message.action === 'continue') {
+            expect(destinationReady).toBe(true)
+            expect(destinationPermission).toBe(true)
+            expect(coordinator!.snapshot(id)).toMatchObject({ location: 'destination',
+              continuation: { admissionGeneration: supervisor.getSessionGeneration(id) } })
+            if (fixture === 'lost_continue_command' && !dropped) { dropped = true; return true }
+            if (fixture === 'exhausted_snapshot_window' && !dropped) {
+              expect(initialSnapshot).toBeDefined()
+              // Replay genuine attachment evidence to exhaust the receiving window.
+              for (let index = 0; index < 33; index++) control!.receiveState(id, initialSnapshot!)
+              dropped = true
+              return false
+            }
+          }
+        }
+        supervisor.send(id, message); return true
+      },
       acceptsStatus: (id, status) => registry.findSession(id)?.engineSessionId === status.engineSessionId,
-      observe: (id, status) => { coordinator!.observe(id, status) }, recover: id => coordinator!.queryStatus(id) })
+      observe: (id, status) => { coordinator!.observe(id, status) }, recover: id => coordinator!.requestFreshEvidence(id) })
     const pending = new Set<Promise<void>>()
     supervisor.subscribe(event => {
       if (event.type !== 'frame') return
       const { deliveryTrace: _trace, ...frame } = event.frame
+      if (registry.findSession(event.sessionId)?.cwd === cwd) {
+        if (frame.kind === 'ready') destinationReady = true
+        if (frame.kind === 'permission.context') destinationPermission = true
+        if (frame.kind === 'workspace.handoff.state' && frame.status.admissionGeneration === null) {
+          sawNullAdmission = true
+          initialSnapshot = frame.status
+        }
+        if (fixture === 'lost_continue_ack' && frame.kind === 'workspace.handoff.result' &&
+            frame.action === 'continue' && !dropped) { dropped = true; return }
+      }
       if (frame.kind === 'event' && frame.replay && frame.event.type === 'message' &&
           'parent_tool_use_id' in frame.event.message && frame.event.message.parent_tool_use_id === 'baseline-agent-tool' &&
           registry.findSession(event.sessionId)?.cwd === cwd) retainedReplayCount++
@@ -179,6 +214,10 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     }
     expect(sourceRequests).toBe(1)
     expect(destinationRequests).toBe(1)
+    expect(sawNullAdmission).toBe(true)
+    expect(destinationCommands[0]).toBe('continue')
+    expect(destinationCommands.filter(action => action === 'continue')).toHaveLength(fixture === 'lost_continue_command' || fixture === 'exhausted_snapshot_window' ? 2 : 1)
+    if (fixture.startsWith('lost_')) expect(dropped).toBe(true)
     if (retained) expect(retainedReplayCount).toBeGreaterThanOrEqual(100)
     expect(registry.findSession(id)?.cwd).toBe(cwd)
     const completed = timings.filter(record => record.fields?.outcome === 'completed')
@@ -186,7 +225,8 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     expect(providerResponses).toHaveLength(2)
     expect(Number(providerResponses.at(-1)?.fields?.durationMs)).toBeGreaterThanOrEqual(25)
     for (const phase of ['first_submit_to_catalog', 'first_submit_to_provider_response', 'accepted_to_source_boundary', 'park_to_clean_exit', 'relocation_worker', 'resume', 'controller', 'display_history', 'subagent_history', 'listening_to_ready_frame', 'ready_to_controls', 'admission_to_continuation', 'continuation_to_provider_request', 'provider_request_to_response', 'accepted_to_provider_request_observed']) {
-      expect(completed.some(record => record.fields?.phase === phase), phase).toBe(true)
+      // This stage observes the acknowledgement, deliberately absent in this fault case.
+      expect(completed.some(record => record.fields?.phase === phase), phase).toBe(!(fixture === 'lost_continue_ack' && phase === 'admission_to_continuation'))
     }
     process.stdout.write(JSON.stringify({ fixture, savedRows: savedRows.length, folders: roots.length, validationCalls, pairs: retained ? 200 : 0, subagentMessages: retained ? 100 : 0, sample: sample + 1,
       stages: completed.map(record => ({ stage: record.fields!.phase, ms: Math.round(Number(record.fields!.durationMs) * 100) / 100 })) }) + '\n')
@@ -195,6 +235,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     process.stderr.write(diagnostics.slice(-12).join('\n') + '\n')
     throw error
   } finally {
+    coordinator?.dispose()
     control?.dispose()
     supervisor.shutdown()
     server.stop(true)

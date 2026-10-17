@@ -539,7 +539,7 @@ test('agent move reports durable destination when relocation commits but its res
   }
 })
 
-async function movedReservedJump(storageRoot: string): Promise<{ h: Harness; state: WorkspaceJumpStateV2 }> {
+async function movedReservedJump(storageRoot: string, beforePermission?: (h: Harness, appSessionId: SessionId) => Promise<void>): Promise<{ h: Harness; state: WorkspaceJumpStateV2 }> {
   const managedStorage = new ManagedStorage({ appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership') })
   const h = makeHost({ managedStorage,
     validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
@@ -566,8 +566,14 @@ async function movedReservedJump(storageRoot: string): Promise<{ h: Harness; sta
     if ((message as { type?: string }).type === 'app.park') h.supervisor.emitPark(id)
   }
   const moving = h.host.moveWorkspaceJump(appSessionId, operationId, h.cwd, () => true)
+  let completed = false
+  void moving.then(() => { completed = true })
   await settle(() => h.supervisor.spawnedIds.length === 2)
   h.supervisor.emitReady(appSessionId, engineSessionId)
+  if (beforePermission) {
+    await beforePermission(h, appSessionId)
+    expect(completed).toBe(false)
+  }
   emitMoveReadyContext(h.supervisor, appSessionId)
   const moved = await moving
   expect(moved.result.ok).toBe(true)
@@ -585,6 +591,24 @@ async function movedReservedJump(storageRoot: string): Promise<{ h: Harness; sta
   writeWorkspaceJump(state)
   return { h, state }
 }
+
+test('workspace jump ready cannot complete host movement before restored permission context', async () => {
+  const storageRoot = tempDir(), previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  try {
+    await movedReservedJump(storageRoot, async (h, id) => {
+      h.supervisor.emit({ type: 'frame', sessionId: id, frame: {
+        kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: id,
+        runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
+      } as never })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(h.host.isMoving(id)).toBe(true)
+    })
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
 
 for (const localReservation of [false, true]) {
   test.each(['exited', 'failed', 'disconnected'] as const)(
