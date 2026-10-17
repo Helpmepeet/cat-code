@@ -64,6 +64,13 @@ import {
   type PeerToolPresentation,
 } from './peerSurfaces.js'
 import {
+  LIST_PEERS_STATE_LABEL,
+  formatNoticePostedAt,
+  parseListPeersResult,
+  type ListPeersRow,
+  type ListPeersState,
+} from './listPeersCard.js'
+import {
   renderMarkdownTree,
   type MarkdownComponents,
   type MountedMarkdownLeaf,
@@ -2693,6 +2700,96 @@ function ToolCardShell({
   )
 }
 
+/** Static classes per state: an interpolated arbitrary class never emits. The
+ * idle dot is the sidebar's live halo; running and waiting take the tab
+ * strip's busy and warn tones. A parked row draws no dot, like a not-live
+ * sidebar row. */
+const LIST_PEERS_DOT_CLASS: Readonly<Record<Exclude<ListPeersState, 'parked'>, string>> = {
+  running: 'h-1.5 w-1.5 rounded-full bg-accent',
+  needs_user: 'h-1.5 w-1.5 rounded-full bg-tone-warn',
+  idle: 'h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]',
+}
+
+/**
+ * The roster as the user reads it: open sessions only, each with its title and
+ * any scope notice it posted (Announce). The raw result stays the model's.
+ */
+function ListPeersCard({ row, peers }: { row: ToolUseNestedRow; peers: ListPeersRow[] }) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const { turnLive } = useContext(TranscriptMotionContext)
+  const presentation = peerToolPresentation(row.toolName, row.input) ?? undefined
+  const names = peers.map(peer => peer.name).join(', ')
+  const target = peers.length === 0 ? 'no open sessions' : names
+  const targetNode =
+    peers.length === 0 ? (
+      <span className="text-text-muted">no open sessions</span>
+    ) : (
+      <span className="font-medium text-text-primary">{names}</span>
+    )
+  const now = Date.now()
+  return (
+    <div className="w-full">
+      <ToolCardShell
+        family={row.toolFamily}
+        presentation={presentation}
+        tone={PEER_TONE_CLASS}
+        targetNode={targetNode}
+        target={target}
+        status={row.status}
+        expansionKey={row.toolUseId}
+        defaultExpanded={toolsExpanded}
+      >
+        {peers.length === 0 ? null : (
+          <div>
+            {peers.map((peer, index) => (
+              <div key={`${index}:${peer.name}`}>
+                <div className="flex min-h-5 items-center gap-2">
+                  <span className="flex h-[17px] w-1.5 shrink-0 items-center">
+                    {peer.state === 'parked' ? null : (
+                      <span
+                        className={`${LIST_PEERS_DOT_CLASS[peer.state]} ${
+                          peer.state === 'running' && turnLive ? 'animate-pulse' : ''
+                        }`}
+                        role="img"
+                        aria-label={LIST_PEERS_STATE_LABEL[peer.state]}
+                        title={LIST_PEERS_STATE_LABEL[peer.state]}
+                      />
+                    )}
+                  </span>
+                  <span className="shrink-0 text-xs font-medium text-peer">{peer.name}</span>
+                  {peer.title === null ? null : (
+                    <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
+                      {peer.title}
+                    </span>
+                  )}
+                </div>
+                {peer.notice === null ? null : (
+                  <div className="mb-1 ml-3.5 text-[11.5px] leading-normal">
+                    <div className="text-text-subtle">
+                      {peer.notice.doing}{' '}
+                      <span className="font-mono text-[10.5px] text-text-ghost">
+                        {formatNoticePostedAt(peer.notice.postedAt, now)}
+                      </span>
+                    </div>
+                    {peer.notice.touches.length === 0 ? null : (
+                      <div className="font-mono text-[11px] text-text-faint">
+                        {peer.notice.touches.join(', ')}
+                      </div>
+                    )}
+                    {peer.notice.note === null ? null : (
+                      <div className="text-text-faint">{peer.notice.note}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </ToolCardShell>
+    </div>
+  )
+}
+
 function createPeerPrompt(row: ToolUseNestedRow): string {
   const prompt = row.input['prompt']
   return typeof prompt === 'string' && prompt.length > 0
@@ -2944,6 +3041,10 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
     if (row.status === 'success' && row.result?.createdPeer) {
       return <CreatedPeerCard row={row} />
     }
+  }
+  if (row.toolName === 'ListPeers' && row.status === 'success' && row.result && !row.result.isError) {
+    const peers = parseListPeersResult(row.result.content)
+    if (peers !== null) return <ListPeersCard row={row} peers={peers} />
   }
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.
