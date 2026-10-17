@@ -101,6 +101,15 @@ test('manual mode starts without any running Cat Code work', async () => {
   } finally { await f.cleanup() }
 })
 
+test('five-minute mode reaches the native owner as a 300-second allowance', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'start', minutes: 5 })
+    expect(f.mode.read()).toMatchObject({ phase: 'active', allowance: 5, remainingSeconds: 300 })
+  } finally { await f.cleanup() }
+})
+
 test('a start refused for low battery can start again once charged', async () => {
   const f = fixture()
   try {

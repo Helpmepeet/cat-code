@@ -1,6 +1,6 @@
 # Lid-closed runtime contract
 
-Updated 2026-10-16 for the user's manual, whole-Mac personal-use mode. This
+Updated 2026-10-17 to add the five-minute preset to the user's manual, whole-Mac personal-use mode. This
 implements the current [product specification](2026-10-13-lid-closed-mode-spec.md).
 See [qualification results](../research/2026-10-16-systemwide-lid-mode.md) for
 observed behavior and remaining hardware/installation limits.
@@ -9,7 +9,7 @@ observed behavior and remaining hardware/installation limits.
 
 | Boundary | Contract |
 |---|---|
-| Renderer → preload → main | Fixed read, command and changed channels. Owning-window checks and a closed command schema permit only four presets and named lifecycle actions. No paths, shell commands or permission rules. |
+| Renderer → preload → main | Fixed read, command and changed channels. Owning-window checks and a closed command schema permit only five presets and named lifecycle actions. No paths, shell commands or permission rules. |
 | Main owner | One manually activated lease across views. No session inventory or job enrollment. Direct pulses supervise native authority. Native menu makes activation available without a job; detaching the owner disables menu controls. |
 | Main/native clients → root XPC | Any process in the configured account may launch the fixed root-owned bridge. The receiver authenticates kernel effective UID, exact installed bridge path and signature, with a per-message NSXPC code requirement. Parent app identity is deliberately not required. |
 | Root helper → macOS | Fixed power operations only; root journal persists intent before changes. Deadline, reserve, thermal/monitoring checks, stale supervision and independent recovery remain native. |
@@ -52,7 +52,7 @@ Legacy lid-open records remain readable for restoration only.
 Native Start checks initially open lid, exclusive global override, qualification
 and monitoring before recording intent or changing power. Later lid transitions
 do not end/reset the lease. Adjustments calculate the deadline from original
-start, not the adjustment. Root allows fixed 900/1800/3600/7200-second presets.
+start, not the adjustment. Root allows fixed 300/900/1800/3600/7200-second presets.
 A restrictive application trial accepts normal inputs but admits one activation
 capped at 60 seconds, including activation delay; its independent guardian also
 bounds stale/unused experimental authority.

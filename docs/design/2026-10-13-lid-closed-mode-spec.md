@@ -8,7 +8,10 @@ timer ends.” See the [current runtime contract](2026-10-15-lid-closed-runtime-
 
 - Start is manual and needs no Cat Code job. The whole Mac stays awake for all
   apps; completing a job, approval, provider state or new work does not end it.
-- Keep numeric 15/30/60/120-minute presets. Adjustments use elapsed time from
+- Numeric presets are 5/15/30/60/120 minutes, adding five minutes at the user's
+  request on 2026-10-17. The cup starts at five minutes, then cycles through
+  the larger presets to off. Its five ticks and equal fill bands follow these
+  presets. Adjustments use elapsed time from
   the original start. Opening or closing the lid neither ends nor renews the
   timer. There is no Continue or protected-app reopen step.
 - One administrator setup grants this account access through the fixed native
