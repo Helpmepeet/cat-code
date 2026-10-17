@@ -234,7 +234,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     expect(observations).toBe(1)
   })
 
-  test('destination continuation leaves queued user input for a later turn across tool rounds', async () => {
+  test('destination continuation delivers new human input at each tool boundary and seals it once', async () => {
     const setup = await config()
     const readTool = setup.queryEngineConfig.tools.find(tool => tool.name === 'Read')
     expect(readTool).toBeDefined()
@@ -243,18 +243,19 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     writeFileSync(firstPath, 'CONTINUATION_TOOL_RESULT_ONE')
     writeFileSync(secondPath, 'CONTINUATION_TOOL_RESULT_TWO')
 
-    const queuedPrompt = 'QUEUED_AFTER_WORKSPACE_CONTINUATION'
-    enqueue({ mode: 'prompt', value: queuedPrompt, uuid: randomUUID() })
+    const firstPrompt = 'Stop investigating the wording. Focus on missing peers.'
+    const secondPrompt = 'Check the workspace reservation before changing anything.'
+    const firstUuid = randomUUID()
+    const secondUuid = randomUUID()
+    const continuationUuid = randomUUID()
 
     let providerCalls = 0
     const requestBodies: string[] = []
     spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* (request) {
       providerCalls++
-      requestBodies.push(JSON.stringify({
-        messages: request.messages,
-        inputMessages: request.openAIInstructionAssembly?.inputMessages,
-      }))
+      requestBodies.push(JSON.stringify(request.openAIInstructionAssembly?.inputMessages ?? request.messages))
       if (providerCalls === 1) {
+        enqueue({ mode: 'prompt', value: firstPrompt, uuid: firstUuid })
         yield assistant([{
           type: 'tool_use',
           id: 'continuation-read-one',
@@ -262,6 +263,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
           input: { file_path: firstPath },
         }])
       } else if (providerCalls === 2) {
+        enqueue({ mode: 'prompt', value: secondPrompt, uuid: secondUuid })
         yield assistant([{
           type: 'tool_use',
           id: 'continuation-read-two',
@@ -276,10 +278,11 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     const runtime = new QueryEngine({
       ...setup.queryEngineConfig,
       thinkingConfig: { type: 'disabled' },
+      replayUserMessages: true,
       canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
     })
     const events = await drain(
-      runtime.continueHandoff(randomUUID(), { uuid: randomUUID() }),
+      runtime.continueHandoff(randomUUID(), { uuid: continuationUuid }),
     )
 
     expect(events.findLast(event => event.type === 'result')).toMatchObject({
@@ -289,9 +292,51 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     expect(providerCalls).toBe(3)
     expect(requestBodies[1]).toContain('CONTINUATION_TOOL_RESULT_ONE')
     expect(requestBodies[2]).toContain('CONTINUATION_TOOL_RESULT_TWO')
-    expect(requestBodies.every(body => !body.includes(queuedPrompt))).toBe(true)
+    expect(requestBodies[0]).not.toContain(firstPrompt)
+    expect(requestBodies[1]!.split(firstPrompt)).toHaveLength(2)
+    expect(requestBodies[1]).not.toContain(secondPrompt)
+    expect(requestBodies[2]!.split(firstPrompt)).toHaveLength(2)
+    expect(requestBodies[2]!.split(secondPrompt)).toHaveLength(2)
+    expect(getCommandQueueSnapshot()).toEqual([])
+    for (const uuid of [firstUuid, secondUuid]) {
+      expect(events.filter(event => event.type === 'user' && event.uuid === uuid)).toHaveLength(1)
+      expect(runtime.getMessages().filter(message => message.type === 'attachment' &&
+        message.attachment !== null && typeof message.attachment === 'object' &&
+        'type' in message.attachment && message.attachment.type === 'queued_command' &&
+        'source_uuid' in message.attachment && message.attachment.source_uuid === uuid)).toHaveLength(1)
+    }
+    expect(runtime.getMessages().filter(message => message.type === 'user' && message.uuid === continuationUuid)).toHaveLength(1)
+
+    const checkpoint = await runtime.sealResumeCheckpoint()
+    await runtime.verifyResumeCheckpoint(checkpoint)
+    const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()))
+    const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+    expect(active.messages.map(message => message.uuid)).toEqual(runtime.getMessages().map(message => message.uuid))
+  })
+
+  test('destination continuation without another tool round leaves human input queued for a later turn', async () => {
+    const setup = await config()
+    const queuedPrompt = 'Please check the other sessions too.'
+    const uuid = randomUUID()
+    const requestBodies: string[] = []
+    spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* (request) {
+      requestBodies.push(JSON.stringify(request.openAIInstructionAssembly?.inputMessages ?? request.messages))
+      enqueue({ mode: 'prompt', value: queuedPrompt, uuid })
+      yield assistant([{ type: 'text', text: 'The continuation is complete.' }])
+    }))
+    const runtime = new QueryEngine({
+      ...setup.queryEngineConfig,
+      thinkingConfig: { type: 'disabled' },
+      canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+    })
+    const events = await drain(runtime.continueHandoff(randomUUID(), { uuid: randomUUID() }))
+
+    expect(events.findLast(event => event.type === 'result')).toMatchObject({ subtype: 'success' })
+    expect(requestBodies).toHaveLength(1)
+    expect(requestBodies[0]).not.toContain(queuedPrompt)
+    expect(events.some(event => event.type === 'user' && event.uuid === uuid)).toBe(false)
     expect(getCommandQueueSnapshot()).toMatchObject([
-      { mode: 'prompt', value: queuedPrompt },
+      { mode: 'prompt', value: queuedPrompt, uuid },
     ])
   })
 }

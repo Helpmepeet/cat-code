@@ -313,8 +313,6 @@ export type QueryParams = {
   querySource: QuerySource
   maxOutputTokensOverride?: number
   maxTurns?: number
-  /** A workspace destination continuation must not absorb a later user turn. */
-  holdQueuedUserPrompts?: boolean
   skipCacheWrite?: boolean
   outputFormat?: BetaJSONOutputFormat
   // API task_budget (output_config.task_budget, beta task-budgets-2026-03-13).
@@ -2346,7 +2344,6 @@ async function* queryLoop(
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
       if (cmd.origin?.kind === 'deferred-continuation') return false
-      if (params.holdQueuedUserPrompts && cmd.mode === 'prompt') return false
       if (isMainThread) return cmd.agentId === undefined
       // Subagents only drain task-notifications addressed to them — never
       // user prompts, even if someone stamps an agentId on one.

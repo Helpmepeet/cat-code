@@ -101,7 +101,7 @@ export type PeerRequestPlaneDeps = {
     handleRequest: (appSessionId: string, request: WorkspaceHostRequest) => Promise<
       { ok: true; value: HostRequestValues[WorkspaceHostRequest['verb']] } | { ok: false; error: HostRequestError }>
     afterResponse?: (appSessionId: string, request: WorkspaceHostRequest, answered: boolean) => void
-    isReserved: (appSessionId: string) => boolean
+    isPeerAccessBlocked: (appSessionId: string) => boolean
   }
   /** Every current registry row, live and dead alike. Read-only. */
   rows: () => readonly PeerRegistryRow[]
@@ -1587,7 +1587,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       })
       return
     }
-    if (isMoving(sessionId) || deps.workspaceRequests?.isReserved(sessionId)) {
+    if (isMoving(sessionId) || deps.workspaceRequests?.isPeerAccessBlocked(sessionId)) {
       answer(sessionId, validated.requestId, {
         ok: false,
         error: fail('session_not_found', 'this session is changing workspace'),

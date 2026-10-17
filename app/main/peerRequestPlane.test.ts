@@ -379,7 +379,7 @@ test('managed workspace verbs retain connection authority and do not grant peer 
   let answeredBeforeMovement = false
   const h = harness({ rows: [row(ALEX, 'Alex', { binding: { kind: 'managed', storageRootId: ALEX, storageId: BEAR } })],
     workspaceRequests: {
-      isReserved: () => false,
+      isPeerAccessBlocked: () => false,
       handleRequest: async id => { handled.push(id); return { ok: true, value: { operationId: 'op-1', status: 'ready' } } },
       afterResponse: () => { answeredBeforeMovement = h.lastResult()?.ok === true },
     },
@@ -401,7 +401,7 @@ test.each([
 ] as const)('workspace verb %s rejects malformed or authority-widening args', async (verb, args) => {
   let dispatched = false
   const h = harness({ workspaceRequests: {
-    isReserved: () => false,
+    isPeerAccessBlocked: () => false,
     handleRequest: async () => { dispatched = true; return { ok: true, value: { eligible: false, workspaces: [] } } },
   } })
   await h.plane.handleRequest(ALEX, request(verb, args))
@@ -412,7 +412,7 @@ test.each([
 test('handoff control remains reachable after model verb allowance is exhausted', async () => {
   let controls = 0
   const h = harness({ workspaceRequests: {
-    isReserved: () => true,
+    isPeerAccessBlocked: () => true,
     handleRequest: async (_id, request) => {
       if (request.verb === 'workspace.cancel') { controls++; return { ok: true, value: { operationId: request.operationId, status: 'cancelled' } } }
       return { ok: true, value: { eligible: false, workspaces: [] } }
