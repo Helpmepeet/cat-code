@@ -1644,7 +1644,7 @@ export function ComposerActionsBar({
       aria-orientation="horizontal"
       onKeyDown={onToolbarKeyDown}
       onBlur={onToolbarBlur}
-      className="composer-actions mt-3 flex items-center gap-4 px-1"
+      className="composer-actions mt-3 flex items-center gap-[7px] px-1"
     >
       {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
        * #a1a1aa on hover. The owner opens main's native file picker. */}
