@@ -29,6 +29,13 @@ const SAVED_USAGE_FITTING_VERSION = 1;
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Accounting fields only; Skill identifiers are allowlisted, never arguments or bodies. */
+function unclassifiedOversized(quality: string): boolean {
+    try {
+        const value: unknown = JSON.parse(quality);
+        return object(value) && typeof value.oversizedRecords === 'number' && value.oversizedRecords > 0 && value.oversizedToolResults === undefined;
+    } catch { return false; }
+}
+
 function projectRecord(v: unknown): unknown {
     if (!object(v) || !['assistant', 'user', 'system', 'attachment'].includes(String(v.type))) return null;
     const row: Record<string, unknown> = {};
@@ -242,14 +249,17 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             const cached = db.query<{ fingerprint: string; quality: string }, [string]>('SELECT fingerprint,quality FROM sources WHERE path=?').get(file);
             let before;
             try { before = await stat(file); } catch { before = null; }
-            if (before && cached?.fingerprint === fingerprint(before)) continue;
+            // Sources indexed before oversized tool results were classified keep an
+            // unclassified loss until one full re-read classifies those lines.
+            const unclassified = !!cached && unclassifiedOversized(cached.quality);
+            if (before && cached?.fingerprint === fingerprint(before) && !unclassified) continue;
             changed = true;
             metrics.sourcesChanged++;
             try {
                 options.onReadSource?.(file);
                 let checkpoint: StatsCheckpoint | null = null, continued = false;
                 let prior: StatsCheckpoint | undefined;
-                try { prior = cached ? (JSON.parse(cached.quality) as StatsReadQuality & { checkpoint?: StatsCheckpoint }).checkpoint : undefined; } catch { /* Rebuild invalid continuation metadata. */ }
+                try { prior = cached && !unclassified ? (JSON.parse(cached.quality) as StatsReadQuality & { checkpoint?: StatsCheckpoint }).checkpoint : undefined; } catch { /* Rebuild invalid continuation metadata. */ }
                 const quality = await readStatsRecords(file, item => {
                     check();
                     const value = projectRecord(item.value);
@@ -267,6 +277,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                     const previous = JSON.parse(cached.quality) as StatsReadQuality;
                     quality.parseErrors += previous.parseErrors;
                     quality.oversizedRecords += previous.oversizedRecords;
+                    quality.oversizedToolResults += previous.oversizedToolResults;
                 }
                 const after = await stat(file);
                 // Retry changing files next time. The current bounded read remains
