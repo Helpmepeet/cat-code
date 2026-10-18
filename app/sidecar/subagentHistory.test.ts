@@ -416,7 +416,7 @@ describe('subagent run ownership on restore', () => {
       .toEqual([['tu-legacy', 2], ['tu-resume', 2]])
   })
 
-  test('live publication and restore give one stored message the same frame', () => {
+  test('restore stamps a stored message exactly as live publication stamps it', () => {
     const stored = createAssistantMessage({
       content: [
         { type: 'thinking', thinking: 'weighing it', signature: 'sig' },
@@ -487,5 +487,36 @@ describe('restored resumed runs through the real reader', () => {
         [uuids[4], 'tu-resume-b'], [uuids[5], 'tu-resume-b'],
       ])
     expect(restored.unavailableParentToolUseIds).toEqual([])
+  })
+
+  test('a run whose card is outside the restored window spends no replay budget', async () => {
+    const agentId = asAgentId('earlier-run-out-of-window')
+    const uuids = [randomUUID(), randomUUID()]
+    await writeAgentMetadata(agentId, {
+      agentType: 'Explore', parentSessionId: sessionId, parentToolUseId: 'tu-recent',
+      spawnedAt: '2026-10-17T00:00:00.000Z',
+      runs: [
+        { parentToolUseId: 'tu-old', firstMessageUuid: uuids[0]! },
+        { parentToolUseId: 'tu-recent', firstMessageUuid: uuids[1]! },
+      ],
+    })
+    const path = getAgentTranscriptPathForSession(sessionId, agentId)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, ['old run step', 'recent run step'].map((text, index) => JSON.stringify({
+      type: 'assistant', agentId, sessionId, isSidechain: true,
+      uuid: uuids[index], parentUuid: index === 0 ? null : uuids[index - 1],
+      timestamp: '2026-10-17T00:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    })).join('\n') + '\n')
+    // Exactly one frame of headroom: the recent run fits only if the old run is not charged.
+    const history = [spawnFrame('tu-recent', 'spawn-recent'), ...Array.from(
+      { length: MAX_HISTORY_REPLAY_FRAMES - 2 }, (_, index) => plainFrame(`row-${index}`),
+    )]
+
+    const restored = await withRestoredSubagentHistory(sessionId, history)
+
+    expect(restored.unavailableParentToolUseIds).toEqual([])
+    expect(restored.history.filter(frame => 'parent_tool_use_id' in frame && frame.parent_tool_use_id === 'tu-recent').map(frame => frame.uuid))
+      .toEqual([uuids[1]])
   })
 })

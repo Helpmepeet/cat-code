@@ -1035,6 +1035,24 @@ test('the view anchor skips streamed partials and non-transcript frames', () => 
   )
 })
 
+test('the view anchor skips a subagent step, whose place in the deeper read is not its arrival order', () => {
+  const buffer = new FrameReplayBuffer(3)
+  buffer.record(SID, readyFrame())
+  for (let index = 1; index <= 4; index++) {
+    buffer.record(SID, assistantEventFrame(index))
+  }
+  const step = assistantEventFrame(8)
+  if (step.kind !== 'event' || step.event.type !== 'message') throw new Error('fixture')
+  ;(step.event.message as { parent_tool_use_id: string | null }).parent_tool_use_id = 'toolu_background'
+  buffer.record(SID, step)
+  buffer.record(SID, assistantEventFrame(9))
+  buffer.record(SID, assistantEventFrame(10))
+
+  expect(buffer.viewAnchorUuid(SID)).toBe(
+    '00000000-0000-4000-8000-000000000009',
+  )
+})
+
 test('an unbuffered session has no view anchor', () => {
   const buffer = new FrameReplayBuffer()
   expect(buffer.viewAnchorUuid('never-seen')).toBeUndefined()

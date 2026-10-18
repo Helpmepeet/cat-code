@@ -279,6 +279,9 @@ export async function loadBranchesWithinBudget(
     frameBytes: MAX_HISTORY_REPLAY_BYTES,
   },
   onError?: (message: string) => void,
+  /** Cards present in the restored window. A run whose card is absent would
+   * be dropped by the splice, so it must not spend the shared budget. */
+  reachable?: ReadonlySet<string>,
 ): Promise<RestoredSubagentBranches> {
   const branches: SubagentBranch[] = []
   const unavailable = new Set<string>()
@@ -321,6 +324,7 @@ export async function loadBranchesWithinBudget(
       continue
     }
     const runBranches = splitAgentRuns(transcript.messages, candidate.runs, candidate.parentToolUseId)
+      .filter(segment => !reachable || reachable.has(segment.parentToolUseId))
       .map(segment => ({
         parentToolUseId: segment.parentToolUseId,
         frames: projectBranchFrames(segment.messages, segment.parentToolUseId, candidate.agentName, seenUuids),
@@ -405,6 +409,7 @@ export async function withRestoredSubagentHistory(
         getDisplayAgentTranscriptForSession,
         work,
         onError,
+        reachable,
       )
       for (const id of loaded.unavailableParentToolUseIds) {
         if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)

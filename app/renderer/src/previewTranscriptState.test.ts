@@ -749,6 +749,16 @@ test('run facts come from the cached session: newest model, real context', () =>
  * no result cached, the live selector would return a real 0% gauge, which
  * asserts "this session used no context". Null lets the rail render nothing.
  */
+test('a subagent step newer than the parent does not become the session model', () => {
+  const step = assistantFrame('claude-haiku-5-5', 2)
+  if (step.kind !== 'event' || step.event.type !== 'message') throw new Error('fixture')
+  ;(step.event.message as { parent_tool_use_id?: string }).parent_tool_use_id = 'toolu_background'
+  const entry = projectPreviewTranscriptCache(
+    cache([assistantFrame('gpt-5.6-terra', 1), resultFrame(10), step]),
+  )
+  expect(entry.runFacts.model).toBe('gpt-5.6-terra')
+})
+
 test('a cache with no result reports no usage rather than zero', () => {
   const entry = projectPreviewTranscriptCache(
     cache([assistantFrame('claude-sonnet-5', 0)]),

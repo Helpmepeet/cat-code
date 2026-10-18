@@ -142,7 +142,7 @@ large pill treatments within one control group.
   `--source-project` arrival wash. Hover or keyboard focus reveals only additional
   details in a two-line strip attached to the row, with a clamped popover when
   left space is tight.
-  Foreground workers alone show live activity. Background tasks remain available
+  In the dock, only foreground workers name their current activity. Background tasks remain available
   through ⌘K “Background tasks”. See `SubagentDock.tsx`,
   `subagentDockState.ts`, and `subagentDockPersistence.ts`.
   Clicking an inspectable worker opens its read-only live steps in a 480px

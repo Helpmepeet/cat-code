@@ -478,7 +478,8 @@ describe('runAgent terminal escalation', () => {
    */
   async function collectEscalatingRun({
     isError = false,
-  }: { isError?: boolean } = {}): Promise<Message[]> {
+    publish,
+  }: { isError?: boolean; publish?: (frame: unknown) => void } = {}): Promise<Message[]> {
     queryScript = async function* () {
       yield createAssistantMessage({
         content: [
@@ -503,7 +504,11 @@ describe('runAgent terminal escalation', () => {
       yield createAssistantMessage({ content: KEPT_GOING })
     }
     const collected: Message[] = []
-    for await (const message of startAgent(createAppStateHarness())) {
+    const harness = createAppStateHarness()
+    for await (const message of startAgent(harness, publish ? {
+      parentContext: { ...createParentContext(harness), publishSubagentFrame: publish },
+      publishDisplaySteps: true,
+    } : {})) {
       collected.push(message)
     }
     return collected
@@ -521,6 +526,14 @@ describe('runAgent terminal escalation', () => {
       .content.map(block => block.text)
       .join('\n')
   }
+
+  test('publishes the blocked handoff live, as a restore will show it', async () => {
+    const published: Array<{ uuid?: string }> = []
+    const collected = await collectEscalatingRun({ publish: frame => published.push(frame as { uuid?: string }) })
+    const handoff = collected.at(-1)!
+    expect(JSON.stringify(handoff.type === 'assistant' && handoff.message.content)).toContain('status: blocked')
+    expect(published.at(-1)?.uuid).toBe(handoff.uuid)
+  })
 
   test('ends the run instead of letting the worker take another turn', async () => {
     const collected = await collectEscalatingRun()
