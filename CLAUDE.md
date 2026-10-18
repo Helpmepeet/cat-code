@@ -13,7 +13,8 @@ user requirement or security constraint. Flag meaningful documentation drift.
 - `src/`, `scripts/`: terminal engine and shared runtime, using the root package.
 - `app/`: desktop package with separate build and typecheck boundaries.
 - `app/renderer/src/theme.css` owns exact UI tokens.
-- `docs/maps/`: navigation maintained against source. Dated plans and migration
+- `docs/` is deliberately local-only and absent from fresh checkouts.
+  `docs/maps/`: navigation maintained against source. Dated plans and migration
   program records describe past work; decision records may contain later amendments.
 
 There is no public compatibility or rollout obligation. Preserve the user's
@@ -21,12 +22,14 @@ saved sessions, settings, credentials, and running work when changing formats.
 
 ## 2. Finding the owner
 
-For repository work, read [the workspace map](docs/maps/WORKSPACE_MAP.md)
-once at the start, even when files or an owner are supplied. Then start with
+For repository work, read `docs/maps/WORKSPACE_MAP.md` once at the start when
+available, even when files or an owner are supplied. Without local docs, route
+directly from source and tracked package scripts; do not claim maps were checked.
+Then start with
 those files or use the map to find the owner. Read only relevant focused maps
 and references, not the whole repository.
 
-- Prompt/instruction work: [prompt surfaces](docs/prompts/2026-04-30-prompt-surfaces.md).
+- Prompt/instruction work: `docs/prompts/2026-04-30-prompt-surfaces.md` when available.
 
 ## 3. Verification
 
@@ -51,7 +54,7 @@ need the broader affected package checks.
 - Use the dev build; `bun run build` and `./cli` require an explicit request.
   `cat-code exec` exercises the Claude harness only, not Codex or Cat Code.
 - Avoid bare `bun test`: some account suites require file-isolated runs.
-  [Test routing and build caveats](docs/maps/build-release-testing.md) give details.
+  Local `docs/maps/build-release-testing.md`, when available, gives details.
 - Root typecheck has existing engine errors. Require no new diagnostics from
   the change; `build:dev:full` includes the separate undefined-name gate.
   The sidecar typecheck wrapper scopes errors to owned sidecar/shared files.

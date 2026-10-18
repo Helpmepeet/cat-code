@@ -41,6 +41,35 @@ function hook(repo: string, name: string, script: string) {
 afterEach(() => { setSystemTime(); for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }) })
 
 describe('Git-backed workspace map refresh', () => {
+  test('fresh checkout without local docs cannot record a successful refresh', () => {
+    const options = fixture()
+    rmSync(join(options.repoRoot, 'docs'), { recursive: true })
+    expect(() => startRefresh(options)).toThrow('local workspace maps unavailable; refresh not started')
+    expect(existsSync(join(options.stateDir, 'state.json'))).toBe(false)
+  })
+
+  test('ignored local maps finish without staging or committing and retain a reviewed baseline', () => {
+    const options = fixture()
+    git(options.repoRoot, 'rm', '-r', '--cached', '--', 'docs')
+    writeFileSync(join(options.repoRoot, '.gitignore'), '/docs/\n')
+    git(options.repoRoot, 'add', '--', '.gitignore')
+    git(options.repoRoot, 'commit', '-q', '-m', 'Keep docs local')
+    const head = git(options.repoRoot, 'rev-parse', 'HEAD')
+    const run = startRefresh(options).run!
+    const completed = finish(options, run.runId)
+    expect(completed.run?.status).toBe('complete')
+    expect(completed.cursor?.localMaps?.[map]).toBeTruthy()
+    expect(git(options.repoRoot, 'rev-parse', 'HEAD')).toBe(head)
+    expect(git(options.repoRoot, 'status', '--porcelain')).toBe('')
+    const next = startRefresh(options).run!
+    expect(next.coverage).toBe('incremental')
+    expect(checkRefresh({ ...options, runId: next.runId }).changedMaps).toEqual([])
+    append(options.repoRoot, map, '\nReviewed local edit.\n')
+    expect(checkRefresh({ ...options, runId: next.runId }).changedMaps).toEqual([map])
+    expect(finish(options, next.runId).run?.status).toBe('complete')
+    expect(git(options.repoRoot, 'rev-parse', 'HEAD')).toBe(head)
+  })
+
   test('commits maps in a large repository and preserves unrelated staged and unstaged work', () => {
     const options = fixture()
     const { repoRoot, stateDir } = options

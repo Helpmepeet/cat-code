@@ -28,6 +28,20 @@ afterEach(() => {
 })
 
 describe('workspace map lint', () => {
+  test('explicitly skips unavailable local maps but rejects incomplete map sets', () => {
+    const root = fixture()
+    rmSync(join(root, 'docs'), { recursive: true })
+    const result = validateWorkspaceMaps(root)
+    expect(result.errors).toEqual([])
+    expect(result.mapCount).toBe(0)
+    expect(result.warnings).toContain('local workspace maps unavailable; map validation skipped')
+    const cli = Bun.spawnSync([process.execPath, join(import.meta.dir, 'workspaceMapLint.ts'), root])
+    expect(cli.exitCode).toBe(0)
+    expect(cli.stdout.toString()).toContain('lint skipped')
+    mkdirSync(join(root, 'docs/maps'), { recursive: true })
+    expect(validateWorkspaceMaps(root).errors).toContain('missing docs/maps/WORKSPACE_MAP.md')
+  })
+
   test('accepts a complete indexed map set', () => {
     const result = validateWorkspaceMaps(fixture())
     expect(result.errors).toEqual([])

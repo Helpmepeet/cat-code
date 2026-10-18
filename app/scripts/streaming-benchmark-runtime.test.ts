@@ -3,7 +3,7 @@ import { advanceDocumentSubscription, clockAlignmentUncertaintyMs, isCurrentDocu
 import { markerTracedBootstrap } from './streaming-benchmark-runtime.js'
 import { DeliveryAckQueue } from '../preload/deliveryAckQueue.js'
 import { createRendererIpcGuard } from '../preload/rendererIpcGuard.js'
-import { createFixture, manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
+import { createFixture, manifest } from './streaming-benchmark-fixture.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgementStage } from '../shared/deliveryTrace.js'
 import type { ServerFrame } from '../shared/protocol.js'
 import { readFileSync } from 'node:fs'

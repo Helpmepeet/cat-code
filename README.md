@@ -102,7 +102,10 @@ to the configured provider.
 
 - [`app/`](app/): desktop application.
 - [`src/`](src/): coding-agent engine and shared runtime.
-- [Workspace map](docs/maps/WORKSPACE_MAP.md): guide to the codebase.
+- Local workspace map: `docs/maps/WORKSPACE_MAP.md`, when available. `docs/` is
+  deliberately ignored and not included in fresh checkouts. `bun run maps:lint`
+  explicitly skips unavailable maps; local maps are validated when present.
+  Refresh tooling records ignored maps locally without adding them to Git.
 - [Repository instructions](CLAUDE.md): development workflow and verification.
 
 Cat Code is a private fork of Claude Code. This repository does not

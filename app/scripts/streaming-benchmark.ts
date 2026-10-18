@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
+import { manifest } from './streaming-benchmark-fixture.js'
 import { boundedFailureDetail, OwnedProcessGroupLifecycle } from './streaming-benchmark-cleanup.js'
 
 const run = process.argv.includes('--run')
@@ -23,7 +23,7 @@ const sourcePaths = [
   'scripts/streaming-benchmark.ts', 'scripts/streaming-benchmark-main.ts', 'scripts/streaming-benchmark-observer.ts',
   'scripts/streaming-benchmark-cleanup.ts', 'scripts/streaming-benchmark.vite.config.ts', 'package.json',
   'scripts/streaming-benchmark-runtime.ts',
-  '../docs/reports/2026-09-12-live-streaming-measurements/fixture.ts',
+  'scripts/streaming-benchmark-fixture.ts',
 ] as const
 const hashesBefore = sourceHashes()
 const scratch = mkdtempSync(join(tmpdir(), 'catcode-streaming-benchmark-'))

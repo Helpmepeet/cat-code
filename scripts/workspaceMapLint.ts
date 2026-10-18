@@ -166,6 +166,9 @@ export function validateWorkspaceMaps(
   }
 
   if (!existsSync(workspacePath)) {
+    if (!existsSync(mapsDir)) {
+      return { errors: [], mapCount: 0, warnings: ['local workspace maps unavailable; map validation skipped'] }
+    }
     return { errors: ['missing docs/maps/WORKSPACE_MAP.md'], mapCount: 0, warnings }
   }
 
@@ -248,6 +251,6 @@ if (import.meta.main) {
     console.error(`workspace map lint failed: ${result.errors.length} error(s), ${result.warnings.length} warning(s)`)
     process.exitCode = 1
   } else {
-    console.log(`workspace map lint passed: ${result.mapCount} map(s), ${result.warnings.length} warning(s)`)
+    console.log(result.mapCount === 0 ? 'workspace map lint skipped: local maps unavailable' : `workspace map lint passed: ${result.mapCount} map(s), ${result.warnings.length} warning(s)`)
   }
 }

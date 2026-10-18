@@ -7,9 +7,9 @@ import { writeFileAtomicDurableSync } from '../src/utils/atomicFile.js'
 import { acquireMutationLockSync } from '../src/utils/lockfile.js'
 import { validateWorkspaceMaps, type MapLintResult } from './workspaceMapLint.js'
 
-// Git is the durable map snapshot. This one file owns the successful cursor and
-// the current transaction; memory.md is only a human-readable projection.
-type Cursor = { sourceSha: string; mapCommitSha: string; runId: string; completedAt: string }
+// Tracked maps use Git snapshots; ignored maps keep reviewed hashes in the cursor.
+// This file owns the transaction; memory.md is only a human-readable projection.
+type Cursor = { sourceSha: string; mapCommitSha: string; runId: string; completedAt: string; localMaps?: Record<string, string> }
 type ChangedPath = { path: string; status: string; previousPath?: string }
 type PreparedCommit = { mapHash: string; paths: string[]; summary: string }
 export type RefreshRun = {
@@ -138,18 +138,23 @@ function projectMemory(state: RefreshState, dir: string): void {
   writeFileAtomicDurableSync(file, [
     `Last run: ${cursor.completedAt}`, '', `- Run ID: ${cursor.runId}`,
     `- Processed source SHA: ${cursor.sourceSha}`, `- Map commit SHA: ${cursor.mapCommitSha}`,
-    `- Result: ${state.run?.prepared?.paths.length ? 'committed map changes' : 'verified no-op'}`,
+    `- Result: ${cursor.localMaps ? 'validated local maps; not committed' : state.run?.prepared?.paths.length ? 'committed map changes' : 'verified no-op'}`,
     `- Summary: ${state.run?.prepared?.summary ?? ''}`,
     '- Authoritative cursor and run status: state.json. Legacy manifest/snapshot/patch files are retired.', '',
   ].join('\n'), { mode: 0o600 })
 }
 function complete(state: RefreshState, run: RefreshRun, commit: string, save: () => void, dir: string): void {
   state.cursor = { sourceSha: run.targetSha, mapCommitSha: commit, runId: run.runId, completedAt: now() }
+  if (localOnlyMaps(state.repositoryRoot)) state.cursor.localMaps = workingMaps(state.repositoryRoot)
   run.status = 'complete'
   run.mapCommitSha = commit
   run.blockers = []
   save() // The cursor and completion are one atomic write; memory is derived.
   projectMemory(state, dir)
+}
+function localOnlyMaps(repo: string): boolean {
+  return git(repo, ['ls-files', '--', 'docs/maps']).trim() === '' &&
+    git(repo, ['ls-files', '--others', '--ignored', '--exclude-standard', '--', 'docs/maps/WORKSPACE_MAP.md']).trim() !== ''
 }
 function verifyCommit(repo: string, run: RefreshRun, sha: string): void {
   const prepared = run.prepared!
@@ -189,11 +194,12 @@ export function recoverRefresh(options: Options): RefreshState {
   return withState(options, (state, save, dir) => { recover(state, save, dir); return state })
 }
 export function startRefresh(options: Options & { adoptMaps?: string[] }): RefreshState {
+  if (!existsSync(join(options.repoRoot, 'docs/maps/WORKSPACE_MAP.md'))) throw new Error('local workspace maps unavailable; refresh not started')
   return withState(options, (state, save, dir) => {
     recover(state, save, dir)
     if (state.run && ['reviewing', 'committing'].includes(state.run.status)) throw new Error(`refresh ${state.run.runId} still holds its lease; do not recover a live review as interrupted`)
     const current = identity(options.repoRoot)
-    const committed = committedMaps(current.root, current.head)
+    const committed = localOnlyMaps(current.root) ? state.cursor?.localMaps ?? workingMaps(current.root) : committedMaps(current.root, current.head)
     const dirty = [...new Set([
       ...changedMaps(committed, workingMaps(current.root)),
       ...git(current.root, ['diff', '--cached', '--name-only', '--', 'docs/maps']).trim().split('\n').filter(Boolean),
@@ -220,17 +226,17 @@ export function startRefresh(options: Options & { adoptMaps?: string[] }): Refre
     return state
   })
 }
-function check(repo: string, run: RefreshRun) {
+function check(repo: string, run: RefreshRun, cursor: Cursor | null) {
   assertTarget(repo, run)
   const files = workingMaps(repo)
   const validation = validateWorkspaceMaps(repo, { sourceCommit: run.targetSha })
   git(repo, ['diff', run.targetSha, '--check', '--', 'docs/maps'])
   if (!same(files, workingMaps(repo))) throw new Error('map files changed during validation')
   if (validation.errors.length) throw new Error(validation.errors.join('\n'))
-  return { mapHash: mapHash(files), changedMaps: changedMaps(committedMaps(repo, run.targetSha), files), validation }
+  return { mapHash: mapHash(files), changedMaps: changedMaps(localOnlyMaps(repo) ? cursor?.localMaps ?? {} : committedMaps(repo, run.targetSha), files), validation }
 }
 export function checkRefresh(options: Options & { runId: string }) {
-  return withState(options, state => check(state.repositoryRoot, requireRun(state, options.runId)))
+  return withState(options, state => check(state.repositoryRoot, requireRun(state, options.runId), state.cursor))
 }
 export function blockRefresh(options: Options & { runId: string; blocker: string }): RefreshState {
   return withState(options, (state, save) => {
@@ -252,7 +258,7 @@ export function finishRefresh(options: Options & { runId: string; reviewedMapHas
       if (Date.now() > Date.parse(run.leaseUntil)) throw new Error('review lease expired; restart after inspecting retained work')
       if (run.coverage !== 'incremental' && !options.baselineReviewed) throw new Error('full routing baseline review must be explicitly acknowledged')
       if (!options.summary.trim()) throw new Error('a semantic review summary is required')
-      const checked = check(state.repositoryRoot, run)
+      const checked = check(state.repositoryRoot, run, state.cursor)
       const paths = [...new Set(options.maps)].sort()
       if (!same(paths, checked.changedMaps) || paths.some(path => !MAP_PATH.test(path))) throw new Error('explicit map paths do not match the reviewed map diff')
       if (options.reviewedMapHash !== checked.mapHash) throw new Error('map bytes changed since review; review the new diff before finishing')
@@ -266,6 +272,12 @@ export function finishRefresh(options: Options & { runId: string; reviewedMapHas
       }
       run.prepared = { mapHash: checked.mapHash, paths, summary: options.summary.trim() }
       run.validation = checked.validation
+      if (localOnlyMaps(state.repositoryRoot)) {
+        assertTarget(state.repositoryRoot, run)
+        if (mapHash(workingMaps(state.repositoryRoot)) !== checked.mapHash) throw new Error('map files changed before completion')
+        complete(state, run, run.targetSha, save, dir)
+        return state
+      }
       run.status = 'committing'
       save() // This intent identifies an already-created commit after a crash.
       if (paths.length === 0) {
@@ -304,7 +316,7 @@ if (import.meta.main) {
       finish: ['repo-root', 'state-dir', 'run-id', 'reviewed-map-hash', 'map', 'summary', 'baseline-reviewed'],
     }
     if (command === 'help' || args.includes('--help')) {
-      console.log('Workspace map refresh: start → review → check → finish (validates, commits, records cursor).\nCommands: start, check, finish, block, recover.\nAll commands: --state-dir <path> [--repo-root <path>]\nstart: [--adopt-map <reviewed dirty map>] (repeatable; normal runs require clean maps)\ncheck: --run-id <id>\nfinish: --run-id <id> --reviewed-map-hash <hash from check> --summary <semantic review> [--map <owned path>]... [--baseline-reviewed]\nblock: --run-id <id> --blocker <reason>\nrecover: finish a recorded commit, or expire a review after six hours. Never steals an active lease.\nstate.json is authoritative; Git replaces legacy snapshots and recovery patches.')
+      console.log('Workspace map refresh: start → review → check → finish (validates and records cursor; commits tracked maps only).\nUnavailable local maps prevent refresh; ignored maps remain local and store reviewed hashes in state.json.\nCommands: start, check, finish, block, recover.\nAll commands: --state-dir <path> [--repo-root <path>]\nstart: [--adopt-map <reviewed dirty map>] (repeatable; normal runs require clean maps)\ncheck: --run-id <id>\nfinish: --run-id <id> --reviewed-map-hash <hash from check> --summary <semantic review> [--map <owned path>]... [--baseline-reviewed]\nblock: --run-id <id> --blocker <reason>\nrecover: finish a recorded commit, or expire a review after six hours. Never steals an active lease.\nstate.json is authoritative; tracked maps use Git snapshots.')
     } else {
       for (let i = 0; i < args.length; i++) {
         const key = args[i]!.replace(/^--/, '')
