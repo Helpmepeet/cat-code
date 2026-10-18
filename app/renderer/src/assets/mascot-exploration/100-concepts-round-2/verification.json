@@ -1,0 +1,58 @@
+{
+  "conceptCount": 100,
+  "sheetCount": 10,
+  "ids": {
+    "first": 101,
+    "last": 200,
+    "missing": [],
+    "duplicates": []
+  },
+  "generation": {
+    "tool": "built-in image_gen",
+    "calls": 10,
+    "promptSet": "prompts.json"
+  },
+  "visualReview": {
+    "originalSheetsReviewed": 10,
+    "newSheetsReviewed": 10,
+    "layout": "5 columns by 2 rows",
+    "numbering": "101–200 visually confirmed in row-major order",
+    "framing": "All 100 characters fully visible; no clipped ears, paws, clothing or tails observed",
+    "artworkText": "Concept IDs only"
+  },
+  "fileChecks": {
+    "pngSignature": "passed",
+    "allChunkCrcs": "passed",
+    "pixelDecompression": "passed",
+    "galleryImageReferences": "10 unique paths resolve",
+    "galleryDimensions": "match all PNGs",
+    "galleryScriptSyntax": "passed",
+    "networkDependencies": "none",
+    "mapsLint": "passed",
+    "originalArtworkAndActionsHashes": "unchanged"
+  },
+  "gallery": {
+    "features": [
+      "individual enlargement",
+      "previous and next",
+      "arrow-key navigation",
+      "sheet filter",
+      "shortlist filter",
+      "localStorage shortlist",
+      "shortlist ID download"
+    ],
+    "runtimeVerification": "Not performed: browser tool blocked file:// URLs. Interaction handlers reviewed in source; rendered layout and persistence across browser reload remain unverified."
+  },
+  "additionalVerification": {
+    "ocr": "Local Vision OCR failed with nilError in both default and CPU-only mode; numbering verification relies on visual inspection."
+  },
+  "boundaries": {
+    "applicationCodeModified": false,
+    "currentMascotAssetsReplaced": false,
+    "actionsFileModified": false,
+    "scheduleModified": false,
+    "committed": false,
+    "pushed": false,
+    "paidApiFallbackUsed": false
+  }
+}
