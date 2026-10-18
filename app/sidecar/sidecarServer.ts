@@ -2273,6 +2273,7 @@ export class SidecarServer {
     announcePrompt = true,
     onRejected,
     onSettled,
+    onAccepted,
   }: {
     prompt: AppSessionPrompt
     uuid?: string
@@ -2291,12 +2292,14 @@ export class SidecarServer {
     announcePrompt?: boolean
     onRejected?: (error: Error) => void
     onSettled?: (error?: Error) => void
+    onAccepted?: () => void
   }): boolean {
     if (this.parking || this.activeTurn || this.conversationMutationInFlight || this.controller.getHandoffReservation() || (isMeta && this.controller.requiresHandoffReconciliation())) {
       return false
     }
     this.runControls?.lockProviderSwitches()
     this.activeTurn = true
+    onAccepted?.()
     this.beginTurnObservation()
     if (announcePrompt) {
       this.broadcastPromptMessage(prompt, uuid, isMeta, origin)
@@ -2983,7 +2986,6 @@ export class SidecarServer {
     message: AppSubmitMessage,
     submitId: string | undefined,
   ): void {
-    queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
     const refuseSubmit = (
       code: ErrorFrame['code'],
       text: string,
@@ -3138,6 +3140,7 @@ export class SidecarServer {
         return
       }
       this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta)
+      queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
       // Staged, so the prompt is taken: the running turn's next tool round
       // drains it. Answered HERE rather than off the staged snapshot the enqueue
       // publishes, because that snapshot is republished on every queue change and
@@ -3148,6 +3151,7 @@ export class SidecarServer {
 
     const started = this.startTurn({
       prompt: message.prompt,
+      onAccepted: () => queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId }),
       isMeta: message.options?.isMeta,
       goalSnapshot,
       generateTitle: true,

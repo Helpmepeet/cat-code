@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { observeQueryTiming, queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import { installLidWorkRuntime } from '../../src/services/lidClosedWork.js'
 /**
  * SidecarServer security-boundary unit tests (SECURITY-MINIMUM T4/T5a/T6/T6b/T7).
@@ -7431,6 +7432,30 @@ test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no
   expect(turnRan).toBe(false)
   // No turn side effects: no live user/assistant event frames were broadcast.
   expect(received.some(f => f.kind === 'event')).toBe(false)
+})
+
+test('first-submit timing ignores refused input and precedes accepted provider activity', async () => {
+  const stages: string[] = []
+  let trusted = false
+  const trust = fakeWorkspaceTrust(null)
+  trust.getSnapshot = () => ({ trusted, detectedRepo: null, trustRoot: '/repo' })
+  const controller = new AppSessionController({
+    async *runTurn() {
+      queryTimingBoundary({ stage: 'provider_response', engineSessionId: 'timing-test', durationMs: 1 })
+    },
+  })
+  const stop = observeQueryTiming(boundary => stages.push(boundary.stage))
+  const { server, conn } = connect(controller, { workspaceTrust: trust })
+  try {
+    server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'refused', prompt: 'no' }))
+    expect(stages).toEqual([])
+    trusted = true
+    server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'accepted', prompt: 'yes' }))
+    await waitFor(() => stages.includes('provider_response'))
+    expect(stages).toEqual(['submit_received', 'provider_response'])
+  } finally {
+    stop()
+  }
 })
 
 test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off when trusted)', async () => {
