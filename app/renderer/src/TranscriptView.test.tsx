@@ -6905,6 +6905,21 @@ test('a roster with only closed sessions says none are open', () => {
   expect(text).not.toContain('Homunculus')
 })
 
+test('ListPeers renders newly starting live peers without inventing an idle state', () => {
+  const html = renderExpanded(listPeersRow(JSON.stringify({ peers: [{ name: 'New', status: 'live' }] })))
+  expect(visibleText(html)).toContain('New')
+  expect(html).toContain('aria-label="Starting"')
+  expect(html).not.toContain('aria-label="Idle"')
+})
+
+test('a closed-only partial ListPeers page does not claim the whole roster is closed', () => {
+  const text = visibleText(renderExpanded(listPeersRow(JSON.stringify({
+    peers: [{ name: 'Old', status: 'closed' }], nextCursor: 'next', remainingPeers: 12,
+  }))))
+  expect(text).toContain('no open sessions on this page')
+  expect(text).toContain('12 more sessions on later pages')
+})
+
 test('a ListPeers result that is not a roster keeps the raw text', () => {
   const sentence = 'No other sessions in this workspace.'
   expect(visibleText(renderExpanded(listPeersRow(sentence)))).toContain(sentence)

@@ -2706,6 +2706,7 @@ function ToolCardShell({
  * strip's busy and warn tones. A parked row draws no dot, like a not-live
  * sidebar row. */
 const LIST_PEERS_DOT_CLASS: Readonly<Record<Exclude<ListPeersState, 'parked'>, string>> = {
+  starting: 'h-1.5 w-1.5 rounded-full bg-text-muted',
   running: 'h-1.5 w-1.5 rounded-full bg-accent',
   needs_user: 'h-1.5 w-1.5 rounded-full bg-tone-warn',
   idle: 'h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]',
@@ -2715,15 +2716,16 @@ const LIST_PEERS_DOT_CLASS: Readonly<Record<Exclude<ListPeersState, 'parked'>, s
  * The roster as the user reads it: open sessions only, each with its title and
  * any scope notice it posted (Announce). The raw result stays the model's.
  */
-function ListPeersCard({ row, peers }: { row: ToolUseNestedRow; peers: ListPeersRow[] }) {
+function ListPeersCard({ row, roster }: { row: ToolUseNestedRow; roster: { peers: ListPeersRow[]; nextCursor?: string; remainingPeers?: number } }) {
+  const { peers, nextCursor, remainingPeers } = roster
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   const { turnLive } = useContext(TranscriptMotionContext)
   const presentation = peerToolPresentation(row.toolName, row.input) ?? undefined
   const names = peers.map(peer => peer.name).join(', ')
-  const target = peers.length === 0 ? 'no open sessions' : names
+  const target = peers.length === 0 ? (nextCursor ? 'no open sessions on this page' : 'no open sessions') : names
   const targetNode =
     peers.length === 0 ? (
-      <span className="text-text-muted">no open sessions</span>
+      <span className="text-text-muted">{target}</span>
     ) : (
       <span className="font-medium text-text-primary">{names}</span>
     )
@@ -2740,6 +2742,7 @@ function ListPeersCard({ row, peers }: { row: ToolUseNestedRow; peers: ListPeers
         expansionKey={row.toolUseId}
         defaultExpanded={toolsExpanded}
       >
+        {nextCursor ? <p className="text-xs text-text-muted">{remainingPeers} more sessions on later pages</p> : null}
         {peers.length === 0 ? null : (
           <div>
             {peers.map((peer, index) => (
@@ -3156,7 +3159,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   if (row.toolName === 'Announce') return <AnnounceCard row={row} />
   if (row.toolName === 'ListPeers' && row.status === 'success' && row.result && !row.result.isError) {
     const peers = parseListPeersResult(row.result.content)
-    if (peers !== null) return <ListPeersCard row={row} peers={peers} />
+    if (peers !== null) return <ListPeersCard row={row} roster={peers} />
   }
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.

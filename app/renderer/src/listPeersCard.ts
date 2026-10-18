@@ -13,7 +13,7 @@
 
 import { formatRunTime } from './scheduledTasksModel.js'
 
-export type ListPeersState = 'running' | 'needs_user' | 'idle' | 'parked'
+export type ListPeersState = 'running' | 'needs_user' | 'idle' | 'parked' | 'starting'
 
 export type ListPeersNotice = {
   doing: string
@@ -68,6 +68,8 @@ function readState(status: unknown, presence: unknown): ListPeersState | 'closed
         case 'needs_user':
         case 'idle':
           return presence
+        case undefined:
+          return 'starting'
         default:
           return null
       }
@@ -77,7 +79,7 @@ function readState(status: unknown, presence: unknown): ListPeersState | 'closed
 }
 
 /** The open sessions in a ListPeers result, or null when it is not a roster. */
-export function parseListPeersResult(content: string): ListPeersRow[] | null {
+export function parseListPeersResult(content: string): { peers: ListPeersRow[]; nextCursor?: string; remainingPeers?: number } | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(content)
@@ -85,6 +87,9 @@ export function parseListPeersResult(content: string): ListPeersRow[] | null {
     return null
   }
   if (!isRecord(parsed) || !Array.isArray(parsed.peers)) return null
+  if (parsed.nextCursor !== undefined && (typeof parsed.nextCursor !== 'string' || !parsed.nextCursor.length
+    || !Number.isSafeInteger(parsed.remainingPeers) || (parsed.remainingPeers as number) < 0)) return null
+  if (parsed.nextCursor === undefined && parsed.remainingPeers !== undefined) return null
   const rows: ListPeersRow[] = []
   for (const peer of parsed.peers) {
     if (!isRecord(peer) || typeof peer.name !== 'string' || peer.name.length === 0) return null
@@ -96,7 +101,13 @@ export function parseListPeersResult(content: string): ListPeersRow[] | null {
     const title = typeof peer.title === 'string' && peer.title.length > 0 ? unescapeData(peer.title) : null
     rows.push({ name: unescapeData(peer.name), title, state, notice })
   }
-  return rows
+  return {
+    peers: rows,
+    ...(typeof parsed.nextCursor === 'string' ? {
+      nextCursor: unescapeData(parsed.nextCursor),
+      remainingPeers: parsed.remainingPeers as number,
+    } : {}),
+  }
 }
 
 /** Wall time of a notice; today's notices carry no day label. */
@@ -111,4 +122,5 @@ export const LIST_PEERS_STATE_LABEL: Readonly<Record<ListPeersState, string>> = 
   needs_user: 'Waiting on the user',
   idle: 'Idle',
   parked: 'Parked',
+  starting: 'Starting',
 }

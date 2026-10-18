@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { MAX_PEER_ROSTER_BYTES } from '../shared/limits.js'
 import { getPersistenceThreshold } from '../../src/utils/toolResultStorage.js'
 import { translateToCodexBody } from '../../src/services/api/codex-fetch-adapter.js'
 import type {
@@ -118,6 +119,35 @@ test('the complete bounded roster survives persistence policy and Codex translat
   expect(JSON.parse(wire!).peers).toHaveLength(peers.length)
 })
 
+test('ListPeers bounds the final escaped result while retaining every peer and continuation', async () => {
+  const peers = Array.from({ length: 80 }, (_, i) => ({
+    ...liveRow, name: `Peer${i}`, title: '&<>'.repeat(400),
+  }))
+  expect(Buffer.byteLength(JSON.stringify({ peers }))).toBeLessThan(MAX_PEER_ROSTER_BYTES)
+  const { requestHost } = requesterReturning(() => ({
+    peers, nextCursor: 'next-page', remainingPeers: 20,
+  }))
+  const tool = createListPeersTool(requestHost)
+  const result = await tool.call({ all: true })
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'escaped')
+  expect(block.is_error).not.toBe(true)
+  expect(Buffer.byteLength(String(block.content))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+  const rendered = JSON.parse(String(block.content))
+  expect(rendered.peers).toHaveLength(80)
+  expect(rendered.peers.every((peer: PeerView) => peer.detailsOmitted && peer.title === null)).toBe(true)
+  expect(rendered).toMatchObject({ nextCursor: 'next-page', remainingPeers: 20 })
+})
+
+test('ListPeers refuses an escaped roster whose identities alone exceed the budget', () => {
+  const tool = createListPeersTool(requesterReturning(() => ({ peers: [] })).requestHost)
+  const block = tool.mapToolResultToToolResultBlockParam({
+    ok: true, asOf: '2026-10-18T00:00:00Z', notListed: 0,
+    peers: [{ name: '&'.repeat(MAX_PEER_ROSTER_BYTES / 2), status: 'live', title: null, lastActivity: 'x' }],
+  }, 'oversize')
+  expect(block.is_error).toBe(true)
+  expect(Buffer.byteLength(String(block.content))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+})
+
 test('ListPeers exposes page continuation instead of implying absent peers', async () => {
   const { requestHost, asked } = requesterReturning(() => ({
     peers: [liveRow], nextCursor: 'next-page', remainingPeers: 400,
@@ -128,6 +158,16 @@ test('ListPeers exposes page continuation instead of implying absent peers', asy
   const rendered = JSON.parse(String(tool.mapToolResultToToolResultBlockParam(result.data, 'page').content))
   expect(rendered).toMatchObject({ cursor: 'previous-page', nextCursor: 'next-page', remainingPeers: 400 })
   expect(rendered.peers[0].name).toBe('Bear')
+})
+
+test('an empty page with continuation remains a partial roster', async () => {
+  const { requestHost } = requesterReturning(() => ({
+    peers: [], nextCursor: 'next-page', remainingPeers: 4,
+  }))
+  const tool = createListPeersTool(requestHost)
+  const result = await tool.call({})
+  expect(JSON.parse(String(tool.mapToolResultToToolResultBlockParam(result.data, 'empty-page').content)))
+    .toMatchObject({ peers: [], nextCursor: 'next-page', remainingPeers: 4 })
 })
 
 test('roster detail omissions stay explicit without dropping a peer', () => {

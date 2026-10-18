@@ -14,7 +14,7 @@ const ROSTER = JSON.stringify({
 })
 
 test('keeps open sessions only, with their state, title and notice', () => {
-  expect(parseListPeersResult(ROSTER)).toEqual([
+  expect(parseListPeersResult(ROSTER)?.peers).toEqual([
     { name: 'Litharge', title: 'Add five-minute awake lid option', state: 'running', notice: null },
     {
       name: 'Moonstone',
@@ -40,7 +40,18 @@ test('a result that is not a narrowable roster falls back to the raw text', () =
 })
 
 test('an all-closed roster has no open sessions', () => {
-  expect(parseListPeersResult(JSON.stringify({ peers: [{ name: 'A', status: 'closed', title: 't' }] }))).toEqual([])
+  expect(parseListPeersResult(JSON.stringify({ peers: [{ name: 'A', status: 'closed', title: 't' }] }))).toEqual({ peers: [] })
+})
+
+test('starting peers and page continuation survive parsing', () => {
+  expect(parseListPeersResult(JSON.stringify({
+    peers: [{ name: 'New', status: 'live' }], nextCursor: 'next', remainingPeers: 8,
+  }))).toEqual({
+    peers: [{ name: 'New', title: null, state: 'starting', notice: null }],
+    nextCursor: 'next', remainingPeers: 8,
+  })
+  expect(parseListPeersResult('{"peers":[],"nextCursor":42,"remainingPeers":8}')).toBeNull()
+  expect(parseListPeersResult('{"peers":[],"nextCursor":"next","remainingPeers":-1}')).toBeNull()
 })
 
 test('notice times are bare today and day-labelled otherwise', () => {

@@ -32,7 +32,7 @@ import { lazySchema } from '../../src/utils/lazySchema.js'
 import { jsonStringify } from '../../src/utils/slowOperations.js'
 import type { PeerDescriptor } from '../shared/protocol.js'
 import { parsePeerNotice, type PeerNoticeInput } from '../shared/peerNotice.js'
-import { MAX_HOST_REQUEST_ARG_CHARS } from '../shared/limits.js'
+import { MAX_HOST_REQUEST_ARG_CHARS, MAX_PEER_ROSTER_BYTES } from '../shared/limits.js'
 import { quoteAsData } from './readPeerTool.js'
 import {
   describeHostRequestError,
@@ -365,7 +365,7 @@ export function createListPeersTool(
           is_error: true,
         }
       }
-      if (data.peers.length === 0) {
+      if (data.peers.length === 0 && !data.nextCursor) {
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
@@ -389,22 +389,35 @@ export function createListPeersTool(
                   : `${data.notListed} peers that closed earlier are not listed. Set all to true${data.cursor ? ' with the same cursor' : ''} to see them.`,
             }
           : {}
+      const render = (peers: PeerView[]) => quoteAsData(jsonStringify({
+        asOf: data.asOf,
+        peers,
+        ...note,
+        ...(data.cursor ? { cursor: data.cursor } : {}),
+        ...(data.nextCursor ? { nextCursor: data.nextCursor, remainingPeers: data.remainingPeers } : {}),
+        ...(peers.some(peer => peer.notice) ? { noticeContext: PEER_NOTICE_CONTEXT } : {}),
+      }))
+      let content = render(data.peers)
+      if (Buffer.byteLength(content, 'utf8') > MAX_PEER_ROSTER_BYTES) {
+        content = render(data.peers.map(peer => ({
+          name: peer.name, status: peer.status, title: null, lastActivity: peer.lastActivity,
+          ...(peer.presence ? { presence: peer.presence } : {}),
+          detailsOmitted: true,
+          ...(peer.notice || peer.noticeOmitted ? { noticeOmitted: true } : {}),
+        })))
+      }
+      if (Buffer.byteLength(content, 'utf8') > MAX_PEER_ROSTER_BYTES) {
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: 'The peer list is too large to display safely.',
+          is_error: true,
+        }
+      }
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: quoteAsData(jsonStringify({
-          asOf: data.asOf,
-          peers: data.peers,
-          ...note,
-          ...(data.cursor ? { cursor: data.cursor } : {}),
-          ...(data.nextCursor ? {
-            nextCursor: data.nextCursor,
-            remainingPeers: data.remainingPeers,
-          } : {}),
-          ...(data.peers.some(peer => peer.notice) ? {
-            noticeContext: PEER_NOTICE_CONTEXT,
-          } : {}),
-        })),
+        content,
       }
     },
     renderToolUseMessage() {
