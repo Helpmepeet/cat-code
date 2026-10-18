@@ -143,7 +143,7 @@ function plus(a: number, b: number): number { const n = a + b; if (!safe(n))
 function addTokens(a: UsageTokens, b: UsageTokens) { for (const key of Object.keys(a) as (keyof UsageTokens)[])
     a[key] = plus(a[key], b[key]); if (!safe(total(a)))
     throw new UsageResourceError('Usage total overflow', { guard: 'counter-overflow' }); }
-export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 });
+export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 });
 /** Desktop retained-history accounting; never reads or rewrites legacy aggregate caches. */
 export async function collectRetainedUsage(files: readonly string[], asOf: string, options: {
     deadline?: number;
@@ -1139,8 +1139,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         try {
             const q = await (options.readRecords ?? readStatsRecords)(file, item => readOne(file, item), { signal: options.signal, deadline });
             coverage.sourcesRead++;
-            for (const key of ['parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources'] as const)
-                coverage[key] = plus(coverage[key], q[key]);
+            for (const key of ['parseErrors', 'oversizedRecords', 'oversizedToolResults', 'pendingTailBytes', 'shortReads', 'changedSources'] as const)
+                coverage[key] = plus(coverage[key], q[key] ?? 0);
         }
         catch (error) {
             if (error instanceof UsageFailure || options.signal?.aborted || Date.now() > deadline)

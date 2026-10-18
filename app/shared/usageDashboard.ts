@@ -276,6 +276,8 @@ export type UsageCoverage = {
     sourcesRead: number;
     parseErrors: number;
     oversizedRecords: number;
+    /** Oversized user records shown to hold only tool results: no usage is lost, their tool results are uncounted. Not a coverage loss. */
+    oversizedToolResults: number;
     pendingTailBytes: number;
     shortReads: number;
     changedSources: number;

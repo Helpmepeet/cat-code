@@ -620,3 +620,28 @@ including legacy values republished by an older running sidecar. Refresh replays
 unchanged redacted indexed events, without rereading transcripts or rebuilding
 the source index, then atomically saves the current wrapper. Subsequent unchanged
 refreshes remain warm. This adds no engine-state migration or account access.
+
+## Oversized tool-result coverage amendment, 2026-10-18
+
+The operator approved classifying oversized transcript lines so that screenshot
+tool results no longer suppress the whole dashboard's coverage. On the live
+history, ten lines over the 4 MiB reader bound, every one a user tool result with
+images, kept coverage partial. That hid every previous-period indicator and kept
+the incomplete-activity status visible, although no usage was missing.
+
+`src/utils/statsReader.ts` keeps at most the first 64 KiB of a line that exceeds
+the bound. `oversizedToolResultPrefix` counts the line as
+`oversizedToolResults` only when that prefix proves a top-level `user` type and a
+`message.content` array whose observed blocks are all `tool_result`. Projection
+retains nothing else from such a record, and user records carry no usage, so token,
+request, session and comparison accounting is unchanged. The line's tool results
+remain uncounted: matching tool uses stay unmatched, and error rates keep using
+matched results. Anything the prefix cannot prove, including a top-level type it
+never reaches, remains `oversizedRecords` and still makes coverage partial.
+
+`UsageCoverage.oversizedToolResults` is a required wire count, not a coverage
+loss. Saved snapshots without it fail validation and rebuild from the index.
+Sources indexed with an unclassified oversized count and no classified count are
+read once more from the start, without continuation, then stay warm. The record
+bound, frame limits and the 2026-09-16 rule that incomplete coverage omits
+indicators are unchanged.

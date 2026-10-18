@@ -659,6 +659,30 @@ test('cold and warm index snapshots retain owning-session attribution without re
         expect(projected).not.toContain('DO NOT INDEX TOOL INPUT');
     } finally { db.close(); }
 });
+test('oversized tool-result lines keep coverage complete; sources indexed before classification re-read once', async () => {
+    const { path, file } = await fixture();
+    const screenshot = { type: 'user', sessionId: 's', message: { role: 'user', content: [{ tool_use_id: 'toolu_1', type: 'tool_result', content: [{ type: 'image', source: { data: 'A'.repeat(4 * 1024 * 1024 + 1024) } }] }] }, uuid: 'shot', timestamp: cutoff };
+    await writeFile(file, [row('old', '2026-08-01T00:00:00.000Z'), row('a'), screenshot].map(r => JSON.stringify(r)).join('\n') + '\n');
+    const first = await collectIndexedUsage([file], cutoff, opts(path));
+    expect(first.coverage).toMatchObject({ state: 'complete', oversizedRecords: 0, oversizedToolResults: 1 });
+    expect(first.ranges['7d'].previousPeriod).toBeDefined();
+    const db = new Database(path);
+    try {
+        const quality = JSON.parse(db.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file)!.quality);
+        delete quality.oversizedToolResults;
+        db.query('UPDATE sources SET quality=? WHERE path=?').run(JSON.stringify({ ...quality, oversizedRecords: 1 }), file);
+    } finally { db.close(); }
+    let reads = 0;
+    const reclassified = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource: () => { reads++; } });
+    expect(reads).toBe(1);
+    expect(reclassified.coverage).toMatchObject({ state: 'complete', oversizedRecords: 0, oversizedToolResults: 1 });
+    await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource: () => { reads++; } });
+    expect(reads).toBe(1);
+    await appendFile(file, JSON.stringify({ type: 'assistant', sessionId: 's', uuid: 'big', timestamp: cutoff, message: { id: 'big', content: [{ type: 'text', text: 'x'.repeat(4 * 1024 * 1024 + 1024) }] } }) + '\n');
+    const unknown = await collectIndexedUsage([file], cutoff, opts(path));
+    expect(unknown.coverage).toMatchObject({ state: 'partial', oversizedRecords: 1, oversizedToolResults: 1 });
+    expect(unknown.ranges['7d'].previousPeriod).toBeUndefined();
+});
 test('replacement and incomplete tails invalidate cached file accounting', async () => {
     const { path, file } = await fixture();
     await writeFile(file, JSON.stringify(row('a')) + '\n{"type":"assistant"');

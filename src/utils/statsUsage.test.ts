@@ -193,7 +193,7 @@ test('Auto-mode collection releases completed source records without losing aggr
     ];
     const readRecords: NonNullable<Parameters<typeof collectRetainedUsage>[2]>['readRecords'] = async (_path, consume) => {
         for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'source-budget' });
-        return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
     };
     const expected = await collectRetainedUsage(files, asOf, { timezone: 'UTC', readRecords });
     const bounded = await collectRetainedUsage(files, asOf, { timezone: 'UTC', readRecords, maxStateBytes: 64 * 1024 });
@@ -212,7 +212,7 @@ test('one oversized Auto-mode source still respects the state budget', async () 
             for (let offset = 0; offset < 100; offset++) {
                 await consume({ value: { type: 'system', subtype: 'auto_permission_start', schema_version: 1, uuid: `start-${offset}`, timestamp: asOf, attempt_id: `attempt-${offset}`, tool_use_id: `tool-${offset}`, tool_kind: 'bash', auto_mode: 'auto', initial: true }, offset, generation: 'large-source' });
             }
-            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
         },
     })).rejects.toBeInstanceOf(UsageResourceError);
 });
