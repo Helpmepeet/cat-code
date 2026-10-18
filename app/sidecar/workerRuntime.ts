@@ -65,7 +65,7 @@ export function emitWorkerRecord(
  */
 export async function bootstrapWorkerEngine(): Promise<void> {
   const [{ ensureEngineMacro }, { enableConfigs }] = await workerTiming('worker_bootstrap_imports', () => Promise.all([
-    import('./initializeRuntime.js'),
+    import('./engineMetadata.js'),
     import('../../src/utils/config.js'),
   ]))
   ensureEngineMacro()

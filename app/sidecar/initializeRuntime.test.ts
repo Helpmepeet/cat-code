@@ -1,40 +1,48 @@
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 test('normal sidecar bootstrap enables config reads before the first turn', async () => {
-  const child = Bun.spawn(
-    [
-      'bun',
-      '-e',
-      `
-        import { initializeSidecarRuntime } from './app/sidecar/initializeRuntime.ts'
-        import { getGlobalConfig } from './src/utils/config.ts'
-        await initializeSidecarRuntime()
-        getGlobalConfig()
-        if (typeof MACRO === 'undefined') {
-          process.stderr.write('MACRO is not initialized')
-          process.exit(1)
-        }
-        process.stdout.write('runtime-ready:' + MACRO.VERSION)
-        process.exit(0)
-      `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_ENV: 'development' },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-  )
+  const root = mkdtempSync(join(tmpdir(), 'sidecar-runtime-'))
+  try {
+    const child = Bun.spawn(
+      [
+        'bun',
+        '-e',
+        `
+          import { initializeSidecarRuntime } from './app/sidecar/initializeRuntime.ts'
+          import { getGlobalConfig } from './src/utils/config.ts'
+          globalThis.fetch = async () => { throw new Error('Network disabled in runtime test') }
+          await initializeSidecarRuntime()
+          getGlobalConfig()
+          if (typeof MACRO === 'undefined') {
+            process.stderr.write('MACRO is not initialized')
+            process.exit(1)
+          }
+          process.stdout.write('runtime-ready:' + MACRO.VERSION)
+          process.exit(0)
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, NODE_ENV: 'test', HOME: root, XDG_CONFIG_HOME: root,
+          CLAUDE_CONFIG_DIR: root, CLAUDE_CODE_SIMPLE: '1', ANTHROPIC_API_KEY: 'sk-ant-isolated-test' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
 
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ])
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
 
-  expect(exitCode).toBe(0)
-  expect(stderr).toBe('')
-  expect(stdout).toMatch(
-    /^runtime-ready:(?:unknown|\d+\.\d+\.\d+-desktop\.sha[0-9a-f]{7,8}(?:-dirty)?)$/,
-  )
+    expect(exitCode).toBe(0)
+    expect(stderr).toBe('')
+    expect(stdout).toMatch(
+      /^runtime-ready:(?:unknown|\d+\.\d+\.\d+-desktop\.sha[0-9a-f]{7,8}(?:-dirty)?)$/,
+    )
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
