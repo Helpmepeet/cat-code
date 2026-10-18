@@ -24,6 +24,7 @@ import {
 import {
   _attachmentsForTest,
   createAttachmentMessage,
+  getAttachments,
   getTaskReminderAttachments,
   getTodoReminderAttachments,
   TODO_REMINDER_CONFIG,
@@ -44,6 +45,77 @@ type FakeAppState = {
   tasks: Record<string, unknown>
   inbox: { messages: Array<{ id: string; status: string }> }
 }
+
+describe('turn-start runtime attachments', () => {
+  const keys = ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_DISABLE_ATTACHMENTS', 'CLAUDE_CODE_SIMPLE'] as const
+  let previous: Array<string | undefined>
+  let directory: string
+
+  beforeEach(() => {
+    previous = keys.map(key => process.env[key])
+    directory = mkdtempSync(join(tmpdir(), 'turn-start-attachments-'))
+    process.env.CLAUDE_CONFIG_DIR = directory
+    delete process.env.CLAUDE_CODE_DISABLE_ATTACHMENTS
+    delete process.env.CLAUDE_CODE_SIMPLE
+  })
+
+  afterEach(() => {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key]
+      else process.env[key] = previous[index]
+    })
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  function context(hook: NonNullable<ToolUseContext['getTurnStartRuntimeAttachments']>, agentId?: string): ToolUseContext {
+    return {
+      agentId,
+      getTurnStartRuntimeAttachments: hook,
+      abortController: new AbortController(),
+      options: {
+        tools: [], commands: [], mcpClients: [], mcpResources: {},
+        mainLoopModel: 'test', agentDefinitions: { activeAgents: [], allAgents: [] },
+      },
+      getAppState: () => ({
+        tasks: {}, todos: {}, inbox: { messages: [] },
+        toolPermissionContext: { mode: 'default' },
+      }),
+      readFileState: new Map(),
+      nestedMemoryAttachmentTriggers: new Set(),
+      dynamicSkillDirTriggers: new Set(),
+    } as unknown as ToolUseContext
+  }
+
+  test('invokes the hook with main-thread messages, but not for subagents', async () => {
+    const snapshot: Attachment = {
+      type: 'peer_roster_snapshot', workspace: '/workspace',
+      asOf: '2026-10-18T00:00:00Z', quotedRoster: '> Bear: tests',
+    }
+    const messages = [createAssistantMessage({ content: 'Hello' })]
+    const calls: unknown[] = []
+    const hook = async (input: unknown) => { calls.push(input); return [snapshot] }
+    const main = await getAttachments(null, context(hook), null, [], messages)
+    expect(main).toContainEqual(snapshot)
+    expect(calls).toEqual([{ agentId: undefined, messages }])
+    const subagent = await getAttachments(null, context(hook, 'worker'), null, [], messages)
+    expect(subagent).not.toContainEqual(snapshot)
+    expect(calls).toHaveLength(1)
+  })
+
+  test('throwing hooks fail soft', async () => {
+    const result = await getAttachments(null, context(async () => {
+      throw new Error('runtime snapshot unavailable')
+    }), null, [])
+    expect(result.filter(a => a.type === 'peer_roster_snapshot')).toEqual([])
+  })
+
+  test('never-settling hooks return no runtime attachments at the attachment deadline', async () => {
+    const start = Date.now()
+    const result = await getAttachments(null, context(() => new Promise(() => {})), null, [])
+    expect(result.filter(a => a.type === 'peer_roster_snapshot')).toEqual([])
+    expect(Date.now() - start).toBeLessThan(2000)
+  })
+})
 
 describe('task reminders', () => {
   const envKeys = [

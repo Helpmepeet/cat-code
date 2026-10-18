@@ -43,6 +43,7 @@ export type QueryEngineAppSessionSetup = {
   replayUserMessages?: boolean
   handleElicitation?: ToolUseContext['handleElicitation']
   getPostCompactRuntimeAttachments?: ToolUseContext['getPostCompactRuntimeAttachments']
+  getTurnStartRuntimeAttachments?: ToolUseContext['getTurnStartRuntimeAttachments']
   setSDKStatus?: QueryEngineAppSessionConfig['setSDKStatus']
 }
 
@@ -76,6 +77,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
   replayUserMessages,
   handleElicitation,
   getPostCompactRuntimeAttachments,
+  getTurnStartRuntimeAttachments,
   setSDKStatus,
 }: QueryEngineAppSessionSetup): QueryEngineAppSessionConfig {
   const setupTools = [...tools]
@@ -142,6 +144,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
     replayUserMessages,
     handleElicitation,
     getPostCompactRuntimeAttachments,
+    getTurnStartRuntimeAttachments,
     includePartialMessages: true,
     setSDKStatus,
   }

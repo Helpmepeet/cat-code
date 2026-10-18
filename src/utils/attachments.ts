@@ -635,6 +635,7 @@ export type Attachment =
       outputFilePath?: string
     }
   | PeerCoordinationStateAttachment
+  | PeerRosterSnapshotAttachment
   | AsyncHookResponseAttachment
   | {
       type: 'token_usage'
@@ -744,6 +745,14 @@ export type PeerCoordinationStateAttachment = {
     presence?: 'running' | 'needs_user' | 'idle'
   }>
   /** Number of directly created peers omitted by the attachment budget. */
+  omittedCount?: number
+}
+
+export type PeerRosterSnapshotAttachment = {
+  type: 'peer_roster_snapshot'
+  workspace: string
+  asOf: string
+  quotedRoster: string
   omittedCount?: number
 }
 
@@ -975,6 +984,9 @@ export async function getAttachments(
   // Attachments which are semantically only for the main conversation or don't have concurrency-safe implementations
   const mainThreadAttachments = isMainThread
     ? [
+        maybe('turn_start_runtime', () =>
+          getTurnStartRuntimeAttachments(context, messages ?? []),
+        ),
         maybe('ide_selection', async () =>
           getSelectedLinesFromIDE(ideSelection, toolUseContext),
         ),
@@ -1032,6 +1044,32 @@ export async function getAttachments(
     ...threadAttachmentResults.flat(),
     ...mainThreadAttachmentResults.flat(),
   ].filter(a => a !== undefined && a !== null)
+}
+
+async function getTurnStartRuntimeAttachments(
+  context: ToolUseContext,
+  messages: readonly Message[],
+): Promise<Attachment[]> {
+  const hook = context.getTurnStartRuntimeAttachments
+  const signal = context.abortController.signal
+  if (!hook || signal.aborted) return []
+
+  // Runtime providers are advisory and may not cooperate with cancellation.
+  let onAbort: () => void = () => {}
+  const aborted = new Promise<Attachment[]>(resolve => {
+    onAbort = () => resolve([])
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([
+      aborted,
+      Promise.resolve().then(() =>
+        signal.aborted ? [] : hook({ agentId: context.agentId, messages }),
+      ),
+    ])
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
 }
 
 async function maybe<A>(label: string, f: () => Promise<A[]>): Promise<A[]> {
