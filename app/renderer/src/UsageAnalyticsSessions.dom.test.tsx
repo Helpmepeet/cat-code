@@ -103,6 +103,16 @@ test('five range figures retain collector median and top ten share after envelop
     summary.rankedSessions.omitted = 22;
     const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
     expect([...tree.container.querySelectorAll('.uas-figures dd')].map(element => element.textContent)).toEqual(['22', '90.0%', '20.0%', '10.0%', '37']);
+    expect(tree.container.textContent).toContain('Ranked session detail is unavailable for this range.');
+    expect(tree.container.textContent).toContain('0 ranked sessions shown; 22 omitted. Range totals include all sessions.');
+    expect(tree.container.textContent).not.toContain('No contributing sessions recorded.');
+});
+test('only a truly empty contributor population says no contributing sessions were recorded', async () => {
+    const summary = (await collectRetainedUsage([], '2026-10-18T12:00:00Z')).ranges['7d'];
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    expect(tree.container.textContent).toContain('No contributing sessions recorded.');
+    expect(tree.container.textContent).not.toContain('Ranked session detail is unavailable');
+    expect(tree.container.textContent).not.toContain('omitted');
 });
 test('session metadata, error cues, compact tools and source shares survive expansion', async () => {
     const summary = await fixture();

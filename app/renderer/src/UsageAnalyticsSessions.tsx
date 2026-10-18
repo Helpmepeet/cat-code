@@ -113,7 +113,7 @@ export function UsageAnalyticsSessions({ summary, sessionRows = [], onOpenSessio
                     {open && <tr className="uas-detail-row"><td colSpan={7}><SessionDetail item={item} summary={summary} row={row} onOpenSession={onOpenSession} /></td></tr>}
                 </Fragment>;
             })}</tbody></table></div>
-        {!items.length && <p className="uas-note">No contributing sessions recorded.</p>}
+        {!items.length && <p className="uas-note">{summary.rankedSessions.omitted > 0 ? 'Ranked session detail is unavailable for this range.' : 'No contributing sessions recorded.'}</p>}
         {summary.rankedSessions.state === 'truncated' && <p className="uas-note">{usageNumber(items.length)} ranked sessions shown; {usageNumber(summary.rankedSessions.omitted)} omitted. Range totals include all sessions.</p>}
     </div></section>;
 }

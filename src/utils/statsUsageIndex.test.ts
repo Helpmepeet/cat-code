@@ -16,6 +16,13 @@ const row = (id: string, timestamp = cutoff, tokens = 10) => ({ type: 'assistant
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'usage-index-')); roots.push(root); return { path: join(root, 'cache.sqlite'), file: join(root, 's.jsonl') }; }
 const opts = (path: string) => ({ path, deadline: Date.now() + 60000 });
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+function replaceSavedSnapshot(path: string, snapshot: unknown) {
+    const db = new Database(path);
+    try {
+        const saved = JSON.parse(db.query<{ value: string }, []>('SELECT value FROM snapshot WHERE id=1').get()!.value);
+        db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify({ ...saved, snapshot }));
+    } finally { db.close(); }
+}
 test('max_page_count belongs to each connection and can be raised without rebuilding an existing file', async () => {
     const { path } = await fixture();
     const first = new Database(path, { create: true });
@@ -445,10 +452,7 @@ test('v14 comparison snapshots rebuild from indexed records without rereading so
     const legacy = structuredClone(original) as any;
     legacy.countingVersion = 14;
     legacy.ranges['7d'].previousPeriod.tokens.fresh = 999;
-    const { Database } = await import('bun:sqlite');
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, legacy);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
@@ -685,9 +689,7 @@ test('pre-span saved aggregates rebuild from unchanged indexed events and then s
     const original = await collectIndexedUsage([file], cutoff, opts(path));
     const legacy = structuredClone(original);
     delete legacy.ranges['30d'].rankedSessions.items[0]!.firstActiveAt;
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, legacy);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0, aggregates = 0;
     const options = { ...opts(path), onReadSource() { reads++; }, finalize(snapshot: typeof original) { aggregates++; return snapshot; } };
@@ -704,16 +706,43 @@ test('pre-span saved aggregates rebuild from unchanged indexed events and then s
     expect(warm.ranges).toEqual(rebuilt.ranges);
 });
 
+test.each(['unversioned', 'outdated'] as const)('%s fitted aggregates rebuild omitted rows from unchanged indexed events, then stay warm', async format => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('contributor')));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const stale = structuredClone(original);
+    for (const key of ['7d', '30d', 'all'] as const) stale.ranges[key] = groupUsageSummary(stale.ranges[key], 8, 10, 0, 0, 0, 0);
+    const db = new Database(path);
+    try {
+        db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(format === 'unversioned' ? stale : { fittingVersion: 0, snapshot: stale }));
+    } finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let aggregates = 0;
+    const options = {
+        ...opts(path),
+        onReadSource() { throw new Error('Unchanged sources must reuse indexed events'); },
+        finalize(snapshot: typeof original) { aggregates++; return fitUsageDashboardSnapshot(snapshot); },
+    };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(aggregates).toBe(1);
+    for (const key of ['7d', '30d', 'all'] as const) {
+        expect(rebuilt.ranges[key].rankedSessions.items).toHaveLength(1);
+        expect(rebuilt.ranges[key].rankedSessions.omitted).toBe(0);
+        expect(rebuilt.ranges[key].tokens).toEqual(stale.ranges[key].tokens);
+    }
+    expect(readSavedUsage(path)?.ranges).toEqual(rebuilt.ranges);
+    const warm = await collectIndexedUsage([file], cutoff, options);
+    expect(aggregates).toBe(1);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
+});
+
 test('legacy two-window cache rebuilds All from indexed records without reading unchanged sources', async () => {
     const { path, file } = await fixture();
     await writeFile(file, [row('old', '2020-01-01T00:00:00.000Z', 7), row('recent', cutoff, 11)].map(item => JSON.stringify(item)).join('\n'));
     const original = await collectIndexedUsage([file], cutoff, opts(path));
     const legacy = structuredClone(original) as any;
     delete legacy.ranges.all;
-    const { Database } = await import('bun:sqlite');
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, legacy);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
@@ -733,10 +762,7 @@ test('v17 grouped snapshots rebuild named categories from indexed records withou
         '30d': groupUsageSummary(legacy.ranges['30d'], 0, 0, 0),
         all: groupUsageSummary(legacy.ranges.all, 0, 0, 0),
     };
-    const { Database } = await import('bun:sqlite');
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, legacy);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
@@ -771,9 +797,7 @@ test('v19 snapshots hiding edit tools rebuild diagnostics from unchanged indexed
     const legacy = structuredClone(original) as any;
     legacy.countingVersion = 19;
     for (const range of ['7d', '30d', 'all'] as const) legacy.ranges[range] = groupUsageSummary(legacy.ranges[range], 8, 0, 0, 0);
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, legacy);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
@@ -816,9 +840,7 @@ test('v20 grouped snapshots restore recent tool identities from indexed records 
     stale.ranges['30d'] = groupUsageSummary(stale.ranges['30d'], 8, 4, 0, 1);
     stale.ranges.all = groupUsageSummary(stale.ranges.all, 8, 4, 0, 1);
     expect(stale.ranges['7d'].tools.filter((tool: { kind: string }) => tool.kind === 'named')).toHaveLength(4);
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(stale)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, stale);
     expect(readSavedUsage(path)).toBeNull();
 
     let reads = 0;
@@ -845,10 +867,7 @@ test('pricing-rate revisions invalidate saved summaries without rereading unchan
     const original = await collectIndexedUsage([file], cutoff, opts(path));
     const staleRates = structuredClone(original) as any;
     staleRates.pricingVersion = 0;
-    const { Database } = await import('bun:sqlite');
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(staleRates)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, staleRates);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
@@ -873,10 +892,7 @@ test('older snapshots rebuild hourly tokens and daily outcomes from the index, t
         delete (day as Partial<typeof day>).results;
         delete (day as Partial<typeof day>).errors;
     }
-    const { Database } = await import('bun:sqlite');
-    const db = new Database(path);
-    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
-    finally { db.close(); }
+    replaceSavedSnapshot(path, legacy);
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
     const options = { ...opts(path), onReadSource() { reads++; } };
