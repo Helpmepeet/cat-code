@@ -152,7 +152,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
   let control: WorkspaceHandoffControl | undefined
   const diagnostics: string[] = []
   const observations: unknown[] = []
-  const supervisor = new SidecarSupervisor({ sidecarCommand: launch.command, sidecarArgs: launchArgs(blocker, 'session', unresolved ? 'app/sidecar/optionalInstallation.fixture.ts' : undefined), sidecarEnv: env,
+  const supervisor = new SidecarSupervisor({ socketDir: join(root, 's'), sidecarCommand: launch.command, sidecarArgs: launchArgs(blocker, 'session', unresolved ? 'app/sidecar/optionalInstallation.fixture.ts' : undefined), sidecarEnv: env,
     log: line => { diagnostics.push(line) }, onOperationalRecord: record => {
       if (record.event !== 'workspace.jump.timing') return
       timings.push(record)
@@ -240,6 +240,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     const id = created.value.appSessionId
     await until(() => supervisor.listSessions().some(row => row.sessionId === id && row.status === 'ready'))
     await until(() => registry.findSession(id)?.engineSessionId != null)
+    expect(supervisor.getSessionSocketPath(id)?.startsWith(`${join(root, 's')}/`)).toBe(true)
     if (retained) {
       supervisor.send(id, { type: 'app.park', requestId: randomUUID() })
       await until(() => registry.findSession(id)?.shutdown === 'parked')
@@ -254,6 +255,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: 'Run the isolated jump fixture.' })
     await until(() => destinationRequests === 1)
     await until(() => coordinator!.snapshot(id)?.continuation.outcome === 'success')
+    expect(supervisor.getSessionSocketPath(id)?.startsWith(`${join(root, 's')}/`)).toBe(true)
     await Promise.all(pending)
     await coordinator.waitForSettlement(id)
     if (unresolved) {
