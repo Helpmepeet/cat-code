@@ -16,6 +16,23 @@ const step = (parent: string) => ({
 }) as unknown as SDKMessage
 
 describe('turn frame ownership', () => {
+  test('tracks multiple foreground levels and retires descendants on background acknowledgement', () => {
+    const turn = createTurnFrameOwnership()
+    const nested = (message: SDKMessage, parent: string) =>
+      ({ ...message, parent_tool_use_id: parent }) as SDKMessage
+    turn.observe(launch('root'))
+    expect(turn.observe(nested(launch('child'), 'root'))).toBe(true)
+    expect(turn.observe(nested(launch('grandchild'), 'child'))).toBe(true)
+    expect(turn.observe(step('grandchild'))).toBe(true)
+    expect(turn.observe(nested(result('child'), 'root'))).toBe(true)
+    expect(turn.observe(step('child'))).toBe(false)
+    expect(turn.observe(step('grandchild'))).toBe(false)
+    expect(turn.observe(step('root'))).toBe(true)
+    expect(turn.observe(nested(launch('orphan'), 'child'))).toBe(false)
+    expect(turn.observe(step('orphan'))).toBe(false)
+    turn.observe(result('root'))
+    expect(turn.observe(step('root'))).toBe(false)
+  })
   test('a foreground run is the turn\'s activity until it returns', () => {
     const turn = createTurnFrameOwnership()
     expect(turn.observe(launch('fg'))).toBe(true)

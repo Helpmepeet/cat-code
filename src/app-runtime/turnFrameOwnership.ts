@@ -16,15 +16,25 @@ import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
  */
 export function createTurnFrameOwnership() {
   const pending = new Set<string>()
+  const parents = new Map<string, string>()
+  const retire = (id: string) => {
+    pending.delete(id)
+    parents.delete(id)
+    for (const [child, parent] of parents) {
+      if (parent === id) retire(child)
+    }
+  }
   return {
     /** Call at each turn boundary. */
     reset(): void {
       pending.clear()
+      parents.clear()
     },
     /** Track this frame and answer whether it is the current turn's own. */
     observe(message: SDKMessage): boolean {
       const parent = 'parent_tool_use_id' in message ? message.parent_tool_use_id : null
-      if (typeof parent === 'string' && parent.length > 0) return pending.has(parent)
+      const nested = typeof parent === 'string' && parent.length > 0
+      if (nested && !pending.has(parent)) return false
       if (message.type !== 'assistant' && message.type !== 'user') return true
       const content: unknown = message.message.content
       if (!Array.isArray(content)) return true
@@ -33,8 +43,9 @@ export function createTurnFrameOwnership() {
         const typed = block as { type?: unknown; id?: unknown; tool_use_id?: unknown }
         if (message.type === 'assistant' && typed.type === 'tool_use' && typeof typed.id === 'string') {
           pending.add(typed.id)
+          if (nested) parents.set(typed.id, parent)
         } else if (message.type === 'user' && typed.type === 'tool_result' && typeof typed.tool_use_id === 'string') {
-          pending.delete(typed.tool_use_id)
+          retire(typed.tool_use_id)
         }
       }
       return true

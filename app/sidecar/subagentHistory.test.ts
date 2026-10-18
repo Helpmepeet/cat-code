@@ -448,6 +448,38 @@ describe('restored resumed runs through the real reader', () => {
     rmSync(directory, { recursive: true, force: true })
   })
 
+  test('an oversized unreachable prefix does not hide a complete resume or starve a visible sibling', async () => {
+    const write = async (name: string, parents: string[], texts: string[]) => {
+      const agentId = asAgentId(name)
+      const uuids = texts.map(() => randomUUID())
+      await writeAgentMetadata(agentId, {
+        agentType: 'Explore', parentSessionId: sessionId, parentToolUseId: parents.at(-1)!,
+        spawnedAt: name,
+        runs: parents.map((parentToolUseId, index) => ({ parentToolUseId, firstMessageUuid: uuids[index]! })),
+      })
+      const path = getAgentTranscriptPathForSession(sessionId, agentId)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, texts.map((text, index) => JSON.stringify({
+        type: 'assistant', agentId, sessionId, isSidechain: true,
+        uuid: uuids[index], parentUuid: index === 0 ? null : uuids[index - 1],
+        timestamp: '2026-10-17T00:00:00.000Z',
+        message: { role: 'assistant', content: [{ type: 'text', text }] },
+      })).join('\n') + '\n')
+      return uuids
+    }
+    const resumed = await write('a-resumed', ['tu-old', 'tu-visible'], [
+      'x'.repeat(MAX_HISTORY_REPLAY_BYTES + 1000), 'short visible resume',
+    ])
+    const sibling = await write('b-sibling', ['tu-sibling'], ['visible sibling'])
+    const restored = await withRestoredSubagentHistory(sessionId, [
+      spawnFrame('tu-visible', 'resume-card'), spawnFrame('tu-sibling', 'sibling-card'),
+    ])
+    expect(restored.unavailableParentToolUseIds).toEqual([])
+    expect(restored.history.map(frame => frame.uuid)).toEqual([
+      'resume-card', resumed[1], 'sibling-card', sibling[0],
+    ])
+  })
+
   test('each run returns under its own card after a restore', async () => {
     const agentId = asAgentId('resumed-twice')
     const texts = ['original prompt', 'original work', 'resume A prompt', 'resume A work', 'resume B prompt', 'resume B work']

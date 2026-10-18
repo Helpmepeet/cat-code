@@ -23,6 +23,7 @@ export const LITE_READ_BUF_SIZE = 65536
 export async function readDisplayTranscriptTail(
   filePath: string,
   maxBytes: number,
+  startMessageUuids?: readonly string[],
 ): Promise<{ buffer: Buffer; truncated: boolean; bytesRead: number }> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error('Display transcript byte limit must be a positive safe integer')
@@ -31,6 +32,50 @@ export async function readDisplayTranscriptTail(
   try {
     const { size } = await fd.stat()
     const start = Math.max(0, size - maxBytes)
+    // Run starts let display callers stop before an unrelated, older run.
+    // Read backwards in small chunks, charging every byte read.
+    if (startMessageUuids?.length) {
+      // The run-aware caller shares a strict aggregate source-read allowance.
+      // Reserve its alignment probe without changing the plain tail contract.
+      const start = size <= maxBytes ? 0 : size - Math.max(0, maxBytes - 1)
+      const buffer = Buffer.allocUnsafe(size - start)
+      let position = size
+      let bytesRead = 0
+      const missing = new Set(startMessageUuids)
+      let lineEnd = buffer.length
+      let firstComplete = buffer.length
+      const observeLine = (from: number, to: number) => {
+        if (from === to) return
+        try {
+          const entry = JSON.parse(buffer.subarray(from, to).toString('utf8'))
+          if (typeof entry?.uuid === 'string') missing.delete(entry.uuid)
+        } catch { /* Non-message lines do not establish a run start. */ }
+      }
+      while (position > start && missing.size > 0) {
+        const length = Math.min(4096, position - start)
+        const offset = position - start - length
+        const read = await fd.read(buffer, offset, length, position - length)
+        bytesRead += read.bytesRead
+        if (read.bytesRead !== length) throw new Error('Incomplete display transcript read')
+        position -= length
+        for (let index = offset + length - 1; index >= offset; index--) {
+          if (buffer[index] !== 0x0a) continue
+          observeLine(index + 1, lineEnd)
+          lineEnd = index
+          firstComplete = index + 1
+        }
+      }
+      let aligned = position === 0
+      if (position > 0) {
+        const probe = Buffer.allocUnsafe(1)
+        const read = await fd.read(probe, 0, 1, position - 1)
+        bytesRead += read.bytesRead
+        aligned = read.bytesRead === 1 && probe[0] === 0x0a
+      }
+      if (aligned) observeLine(position - start, lineEnd)
+      const from = aligned ? position - start : firstComplete
+      return { buffer: buffer.subarray(from), truncated: position > 0, bytesRead }
+    }
     const tail = Buffer.allocUnsafe(size - start)
     let bytesRead = 0
     let offset = 0

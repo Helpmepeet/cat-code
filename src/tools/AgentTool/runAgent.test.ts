@@ -1571,6 +1571,33 @@ describe('runAgent display step publication', () => {
     expect(published).toEqual([])
   })
 
+  for (const isAsync of [false, true]) {
+    test(`nested ${isAsync ? 'background' : 'foreground'} runs publish through the inherited context`, async () => {
+      const harness = createAppStateHarness()
+      const published: Array<Record<string, unknown>> = []
+      const childStep = createAssistantMessage({ content: 'grandchild work' })
+      let inChild = false
+      queryScript = async function* (context) {
+        if (inChild) {
+          yield childStep
+          return
+        }
+        inChild = true
+        for await (const _message of startAgent(harness, {
+          parentContext: { ...context, toolUseId: 'tu-grandchild' },
+          promptMessages: [createUserMessage({ content: 'nested task' })],
+          publishDisplaySteps: true,
+          isAsync,
+        })) { /* Drain the real nested run. */ }
+      }
+      for await (const _message of startAgent(harness, {
+        parentContext: publishingContext(harness, frame => published.push(frame as Record<string, unknown>)),
+        publishDisplaySteps: true,
+      })) { /* Drain the parent run. */ }
+      expect(published.some(frame => frame.uuid === childStep.uuid && frame.parent_tool_use_id === 'tu-grandchild')).toBe(true)
+    })
+  }
+
   test('a failing display subscriber does not change the run', async () => {
     const harness = createAppStateHarness()
     const step = createAssistantMessage({ content: 'working' })

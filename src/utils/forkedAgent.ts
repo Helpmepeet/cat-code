@@ -443,6 +443,7 @@ export function createSubagentContext(
     // Attribution is scoped and functional (prev => next) — safe to share even
     // when setAppState is stubbed. Concurrent calls compose via React's state queue.
     updateAttributionState: parentContext.updateAttributionState,
+    publishSubagentFrame: parentContext.publishSubagentFrame,
 
     // UI callbacks - undefined for subagents (can't control parent UI)
     addNotification: undefined,

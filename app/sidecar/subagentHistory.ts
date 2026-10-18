@@ -302,6 +302,10 @@ export async function loadBranchesWithinBudget(
       transcript = await loadTranscript(sessionId, candidate.agentId, {
         maxBytes: work.readBytes - 1,
         maxMessages: work.readMessages,
+        startMessageUuids: reachable
+          ? candidate.runs?.filter(run => reachable.has(run.parentToolUseId))
+            .map(run => run.firstMessageUuid).filter((uuid): uuid is NonNullable<typeof uuid> => uuid !== undefined)
+          : undefined,
       })
     } catch (error) {
       // A failed read has no byte receipt. Do not give its siblings a fresh
@@ -319,18 +323,29 @@ export async function loadBranchesWithinBudget(
     }
     work.readBytes -= transcript.bytesRead
     work.readMessages -= transcript.messages.length
-    if (transcript.truncated) {
-      omit()
-      continue
-    }
     const runBranches = splitAgentRuns(transcript.messages, candidate.runs, candidate.parentToolUseId)
       .filter(segment => !reachable || reachable.has(segment.parentToolUseId))
+      .filter(segment => {
+        if (!transcript.truncated) return true
+        const run = candidate.runs?.find(run => run.parentToolUseId === segment.parentToolUseId)
+        const complete = run?.firstMessageUuid !== undefined &&
+          segment.messages.some(message => message.uuid === run.firstMessageUuid)
+        if (!complete) unavailable.add(segment.parentToolUseId)
+        return complete
+      })
       .map(segment => ({
         parentToolUseId: segment.parentToolUseId,
         frames: projectBranchFrames(segment.messages, segment.parentToolUseId, candidate.agentName, seenUuids),
       }))
       .filter(branch => branch.frames.length > 0)
     const frames = runBranches.flatMap(branch => branch.frames)
+    if (transcript.truncated) {
+      for (const id of candidateParentIds(candidate)) {
+        if ((!reachable || reachable.has(id)) && !runBranches.some(branch => branch.parentToolUseId === id)) {
+          if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)
+        }
+      }
+    }
     // Empty and inherited-only branches have no omitted display steps.
     if (frames.length === 0) continue
     if (frames.length > remaining) {

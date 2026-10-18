@@ -4923,6 +4923,7 @@ export async function loadTranscriptFile(
     keepAllLeaves?: boolean
     keepCompactedHistory?: boolean
     maxReadBytes?: number
+    displayStartMessageUuids?: readonly string[]
     /** Exact newline-aligned prefix for durable resume proof. */
     prefixBytes?: number
     strict?: boolean
@@ -5066,6 +5067,7 @@ export async function loadTranscriptFile(
       const tail = await readDisplayTranscriptTail(
         filePath,
         opts.maxReadBytes ?? Number.MAX_SAFE_INTEGER,
+        opts.displayStartMessageUuids,
       )
       buf = tail.buffer
       sourceTruncated = tail.truncated
@@ -5937,12 +5939,15 @@ export async function getAgentTranscriptForSession(
 export async function getDisplayAgentTranscriptForSession(
   sessionId: string,
   agentId: AgentId,
-  options: { maxBytes: number; maxMessages: number },
+  options: { maxBytes: number; maxMessages: number; startMessageUuids?: readonly string[] },
 ): Promise<{ messages: Message[]; bytesRead: number; truncated: boolean } | null> {
   try {
     const loaded = await loadTranscriptFile(
       getAgentTranscriptPathForSession(sessionId, agentId),
-      { keepCompactedHistory: true, maxReadBytes: options.maxBytes },
+      {
+        keepCompactedHistory: true, maxReadBytes: options.maxBytes,
+        displayStartMessageUuids: options.startMessageUuids,
+      },
     )
     const own = [...loaded.messages.values()].filter(
       message => message.agentId === agentId && message.isSidechain,
@@ -5952,9 +5957,13 @@ export async function getDisplayAgentTranscriptForSession(
     const chain = tip
       ? buildDisplayConversationChain(loaded.messages, tip).filter(message => message.agentId === agentId)
       : []
-    const capped = chain.length > options.maxMessages
+    const startIndex = options.startMessageUuids?.length
+      ? chain.findIndex(message => options.startMessageUuids!.includes(message.uuid))
+      : -1
+    const selected = startIndex >= 0 ? chain.slice(startIndex) : chain
+    const capped = selected.length > options.maxMessages
     return {
-      messages: (capped ? chain.slice(-options.maxMessages) : chain).map(
+      messages: (capped ? selected.slice(-options.maxMessages) : selected).map(
         ({ isSidechain, parentUuid, ...message }) => message,
       ),
       bytesRead: loaded.sourceBytesRead,
