@@ -4,7 +4,7 @@ import { type UsageDashboardState, type UsageSelection, usageFailureMessage, usa
 import type { MergedSessionRow } from './sessionsCatalogState.js';
 import { UsageMetrics } from './UsageMetrics.js';
 import { UsageDailyChart, UsageDailyDetail } from './UsageDailyChart.js';
-import { usageDailySeries, usagePinnedBucket, type UsageDailyMetric, type UsageTokenGrouping } from './usageDailyChartState.js';
+import { usageDailySeries, usageModelRequestCount, usagePinnedBucket, type UsageDailyMetric, type UsageTokenGrouping } from './usageDailyChartState.js';
 import { UsageAnalyticsCache, UsageAnalyticsActivity, UsageAnalyticsModels, UsageAnalyticsReliability } from './UsageAnalyticsDetails.js';
 import { analyticsFamilyLabels } from './usageAnalyticsDetailsState.js';
 import { UsageAnalyticsSessions, UsageAnalyticsIntegrations } from './UsageAnalyticsSessions.js';
@@ -67,7 +67,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const unavailable = state.status === 'unavailable';
     const partial = snapshot?.coverage.state === 'partial';
     const selected = summary?.days.find(day => day.date === selectedDate);
-    const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0 && Object.values(summary.autoMode.allTools.outcomes).every(count => count === 0);
+    const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0 && usageModelRequestCount(summary) === 0 && summary.timing.models.outcomes.started === 0 && summary.timing.tools.outcomes.started === 0 && Object.values(summary.autoMode.allTools.outcomes).every(count => count === 0);
     const refreshing = state.status === 'loading';
     const refreshFailed = state.status === 'error' && !!snapshot;
     const refreshLabel = refreshing ? 'Refreshing analytics' : refreshFailed ? 'Refresh failed. Try again' : 'Refresh analytics';

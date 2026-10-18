@@ -1,15 +1,64 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test';
 import { act, useState, type ComponentProps } from 'react';
 import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js';
 import { UsagePage } from './UsagePage.js';
 import { initialUsageSelection } from './usageDashboardState.js';
+import { usageModelRequestCount } from './usageDailyChartState.js';
 
 let harness: DomTestHarness;
 beforeAll(async () => { harness = await createDomTestHarness(); });
 afterEach(async () => { await harness.unmountAll(); });
 afterAll(async () => { await harness.teardown(); });
+
+for (const activity of ['zero-token response', 'model timing', 'tool timing'] as const) {
+    test(`subagent-only ${activity} keeps meaningful analytics visible`, async () => {
+        const root = await mkdtemp(join(tmpdir(), 'analytics-subagent-'));
+        try {
+            const directory = join(root, 'session', 'subagents');
+            await mkdir(directory, { recursive: true });
+            const path = join(directory, 'agent-a0123456789abcdef.jsonl');
+            const timestamp = '2026-09-13T10:00:00.000Z';
+            const system = (subtype: string, fields: Record<string, unknown>) => ({ type: 'system', subtype, uuid: subtype, sessionId: 'session', timestamp, schema_version: 1, ...fields });
+            const rows = activity === 'zero-token response' ? [{
+                type: 'assistant', uuid: 'zero-token', sessionId: 'session', timestamp,
+                message: { id: 'canonical-zero-token-api', model: 'gpt-6.1-sol', content: [], usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+            }] : activity === 'model timing' ? [
+                system('model_attempt_start', { call_id: 'call', attempt_id: 'attempt', attempt_index: 1, provider: 'openai', model: 'gpt-6.1-sol', mode: 'streaming' }),
+                system('model_attempt_end', { call_id: 'call', attempt_id: 'attempt', outcome: 'succeeded', duration_ms: 10 }),
+            ] : [
+                system('tool_execution_start', { tool_use_id: 'tool' }),
+                system('tool_execution_end', { tool_use_id: 'tool', outcome: 'succeeded', duration_ms: 10 }),
+            ];
+            await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+            const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
+            const summary = snapshot.ranges['7d'];
+            expect(summary.tokens).toEqual({ fresh: 0, read: 0, write: 0, output: 0 });
+            expect(summary.records).toBe(0);
+            expect(summary.sessions).toBe(0);
+            expect(summary.requests).toBe(0);
+            if (activity === 'zero-token response') expect(usageModelRequestCount(summary)).toBe(1);
+            else expect(summary.timing[activity === 'model timing' ? 'models' : 'tools'].outcomes.started).toBe(1);
+            const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
+            expect(tree.container.textContent).not.toContain('No recorded activity in this period.');
+            expect(tree.container.querySelector('[aria-label="Reliability"]')).not.toBeNull();
+            if (activity === 'zero-token response') expect(tree.container.querySelector('.usage-metric-requests strong')?.textContent).toBe('1');
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+}
+
+test('a genuinely empty collector result still shows the empty state', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
+    const tree = await harness.mount(<AnalyticsOwner state={{ snapshot, status: 'ready' }}/>);
+    expect(tree.container.textContent).toContain('No recorded activity in this period.');
+    expect(tree.container.querySelector('[aria-label="Reliability"]')).toBeNull();
+});
 
 test('only analytics clears the expanded overlay beyond the reserved rail at variable sidebar widths', async () => {
     const css = readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8');
