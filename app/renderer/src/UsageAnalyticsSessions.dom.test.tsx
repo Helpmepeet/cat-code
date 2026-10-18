@@ -17,6 +17,12 @@ async function fixture() {
     summary.rankedSessions = { state: 'truncated', omitted: 20, medianTokens: 37, top10Tokens: 900, items: [a, { ...a, id: 'b', engineSessionId: 'b', errors: 8, tokens: { ...zero, fresh: 10 } }] };
     return summary;
 }
+test('last active dates use the dashboard reporting timezone', async () => {
+    const summary = await fixture();
+    summary.rankedSessions.items[0]!.lastActiveAt = '2026-10-17T23:30:00Z';
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} timezone="Asia/Bangkok" />);
+    expect(tree.container.querySelector('time[datetime="2026-10-17T23:30:00Z"]')?.textContent).toBe('Oct 18');
+});
 test('session rows expand with Enter, Space and click; catalog navigation remains a separate action', async () => {
     const summary = await fixture(); const opened: string[] = [];
     const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} partial onOpenSession={value => opened.push(value.sessionId)} />);

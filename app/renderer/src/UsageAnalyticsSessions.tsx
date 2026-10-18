@@ -78,7 +78,7 @@ function SessionDetail({ item, summary, row, onOpenSession }: { item: UsageRanke
         </div>
     </div>;
 }
-export function UsageAnalyticsSessions({ summary, sessionRows = [], onOpenSession, partial }: { summary: UsageRangeSummary; sessionRows?: readonly MergedSessionRow[]; onOpenSession?: (row: MergedSessionRow) => void; partial: boolean }) {
+export function UsageAnalyticsSessions({ summary, sessionRows = [], onOpenSession, partial, timezone = 'UTC' }: { summary: UsageRangeSummary; sessionRows?: readonly MergedSessionRow[]; onOpenSession?: (row: MergedSessionRow) => void; partial: boolean; timezone?: string }) {
     const [sort, setSort] = useState<SessionSortKey>('tokens');
     const [ascending, setAscending] = useState(false);
     const [expanded, setExpanded] = useState<string[]>([]);
@@ -108,7 +108,7 @@ export function UsageAnalyticsSessions({ summary, sessionRows = [], onOpenSessio
                         <td className="uas-secondary">{usageNumber(item.requests)}</td>
                         <td><span className="uas-session-number">{usageNumber(item.errors)}</span><svg className="uas-meter uas-error-meter" viewBox="0 0 100 3" aria-hidden="true"><rect width={item.errors / maxErrors * 100} height="3" /></svg></td>
                         <td><span className={hot ? 'uas-flag' : undefined}>{usagePercent(item.results ? item.errors / item.results * 100 : null)}</span></td>
-                        <td className="uas-secondary"><time dateTime={item.lastActiveAt} title={item.lastActiveAt}>{sessionLastActive(item.lastActiveAt)}</time>{span && <small>{span}</small>}</td>
+                        <td className="uas-secondary"><time dateTime={item.lastActiveAt} title={item.lastActiveAt}>{sessionLastActive(item.lastActiveAt, timezone)}</time>{span && <small>{span}</small>}</td>
                     </tr>
                     {open && <tr className="uas-detail-row"><td colSpan={7}><SessionDetail item={item} summary={summary} row={row} onOpenSession={onOpenSession} /></td></tr>}
                 </Fragment>;

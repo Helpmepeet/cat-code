@@ -44,8 +44,8 @@ export function sessionFigures(summary: UsageRangeSummary) {
         subagents: total ? sources.subagents / total * 100 : null, compaction: total ? sources.compaction / total * 100 : null,
         median: summary.rankedSessions.medianTokens };
 }
-export function sessionLastActive(timestamp: string): string {
-    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(timestamp));
+export function sessionLastActive(timestamp: string, timezone = 'UTC'): string {
+    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: timezone }).format(new Date(timestamp));
 }
 export function sessionSpan(item: UsageRankedSession): string | null {
     if (!item.firstActiveAt) return null;

@@ -410,6 +410,44 @@ test('standard token estimates price configured models only and report token cov
     expect(summary.days.at(-1)!.contributors.items[0]!.tokenCost).toEqual({ usd: 60.9 / 1_000_000, pricedTokens: 15 });
     expect(summary.days.at(-1)!.contributors.items[0]!.tokens).toEqual({ fresh: 20, read: 6, write: 8, output: 4 });
 });
+test('cumulative Haiku usage reprices the full request when crossing 100K', async () => {
+    const rows = [99_000, 101_000].map((input, index) => {
+        const row = msg(`2026-09-13T10:0${index}:00.000Z`, 'request', input);
+        row.message.model = 'claude-haiku-5-5';
+        row.message.usage.output_tokens = 0;
+        row.message.usage.cache_read_input_tokens = 0;
+        row.message.usage.cache_creation_input_tokens = 0;
+        return row;
+    });
+    const path = await file(rows);
+    const direct = await collectRetainedUsage([path], asOf, { timezone: 'UTC' });
+    const indexed = await collectIndexedUsage([path], asOf, { timezone: 'UTC', path: join(roots.at(-1)!, 'index.sqlite'), deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    for (const range of Object.values(direct.ranges)) {
+        expect(range.tokens.fresh).toBe(101_000);
+        const costs = [range.models[0]!.tokenCost, range.rankedSessions.items[0]!.tokenCost, range.rankedSessions.items[0]!.models[0]!.tokenCost];
+        if (range.range !== 'all') costs.push(range.days.at(-1)!.contributors.items[0]!.tokenCost, range.days.at(-1)!.contributors.items[0]!.models[0]!.tokenCost);
+        for (const cost of costs) {
+            expect(cost!.usd).toBeCloseTo(.0505, 10);
+            expect(cost!.pricedTokens).toBe(101_000);
+        }
+    }
+});
+
+test('auto-only dates have chart buckets without session activity', async () => {
+    const path = await file([
+        { type: 'system', uuid: 'start', timestamp: '2026-03-01T10:00:00.000Z', subtype: 'auto_permission_start', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
+        { type: 'system', uuid: 'end', timestamp: '2026-03-01T10:01:00.000Z', subtype: 'auto_permission_end', schema_version: 1, attempt_id: 'attempt', raw_result: 'allow', disposition: 'allowed', route: 'stage1' },
+        msg(asOf, 'ordinary', 1),
+    ]);
+    const all = (await collectRetainedUsage([path], asOf, { timezone: 'UTC' })).ranges.all;
+    const day = all.days.find(day => day.date === '2026-03-01')!;
+    expect(day).toBeDefined();
+    expect(day.sessions).toBe(0);
+    expect(day.tokens.fresh).toBe(0);
+    expect(all.activeDays).toBe(1);
+});
+
 test('state and integer overflow are explicit collection errors', async () => {
     const path = await file([msg(asOf, 'a', 5)]);
     await expect(collectRetainedUsage([path], asOf, { maxIdentities: 1 })).rejects.toBeInstanceOf(UsageResourceError);

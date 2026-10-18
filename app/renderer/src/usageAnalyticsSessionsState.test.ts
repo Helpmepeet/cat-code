@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { usageProjectId, type UsageRankedSession } from '../../shared/usageDashboard.js';
 import type { MergedSessionRow } from './sessionsCatalogState.js';
-import { analyticsCalendarTickIndices, analyticsLine, analyticsMonotone, analyticsNearestIndex, analyticsScale, integrationSeries, rankedSessions, sessionDailySeries, sessionFigures, sessionLabel, sessionSourceSegments, sessionSpan, sessionSpend } from './usageAnalyticsSessionsState.js';
+import { analyticsCalendarTickIndices, analyticsLine, analyticsMonotone, analyticsNearestIndex, analyticsScale, integrationSeries, rankedSessions, sessionDailySeries, sessionFigures, sessionLabel, sessionLastActive, sessionSourceSegments, sessionSpan, sessionSpend } from './usageAnalyticsSessionsState.js';
+
+test('last active uses the reporting timezone across midnight', () => {
+    expect(sessionLastActive('2026-10-17T23:30:00Z', 'Asia/Bangkok')).toBe('Oct 18');
+    expect(sessionLastActive('2026-10-18T01:30:00Z', 'America/Los_Angeles')).toBe('Oct 17');
+});
 
 const zero = { fresh: 0, read: 0, write: 0, output: 0 };
 function item(id = 'a'): UsageRankedSession {

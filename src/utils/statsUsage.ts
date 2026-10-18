@@ -1102,7 +1102,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 s.models.set(cat.id, model);
             }
             addTokens(model.tokens, delta);
-            const tokenCost = standardTokenCost(modelName, delta, maximum.fresh + maximum.read + maximum.write);
+            const tokenCost = standardTokenCost(modelName, maximum, maximum.fresh + maximum.read + maximum.write);
+            if (prior) {
+                const previousCost = standardTokenCost(modelName, prior.tokens, prior.tokens.fresh + prior.tokens.read + prior.tokens.write);
+                tokenCost.usd -= previousCost.usd;
+                tokenCost.pricedTokens -= previousCost.pricedTokens;
+            }
             addCost(rangeSession.item.tokenCost!, tokenCost);
             let rangeModel = rangeSession.item.models.find(model => model.id === cat.id);
             if (!rangeModel) {
@@ -1155,6 +1160,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     }
     for (const s of states) {
         s.summary.autoMode = s.autoModeAccumulator.finish([...autoModeSources.values()], s.summary.startInclusive);
+        for (const bucket of s.summary.autoMode.buckets) ensureDay(s, bucket.date);
         const window = { start: s.start, end: s.end, cutoff };
         const accumulator = createUsageTimingAccumulator();
         // Call order groups retried attempts; the accumulator needs no per-call map.

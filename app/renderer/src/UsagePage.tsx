@@ -89,7 +89,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
             <div ref={cacheRef}><UsageAnalyticsCache summary={summary} partial={!!partial} selectedDate={selected?.date ?? ''} onSelectDate={setSelectedDate}/></div>
             <UsageAnalyticsActivity summary={summary} timezone={snapshot.timezone} partial={!!partial} selectedDate={selected?.date ?? ''} onSelectDate={setSelectedDate}/>
             <UsageAnalyticsModels summary={summary} partial={!!partial} modelFamilies={modelFamilies} onModelFamiliesChange={families => { setModelFamilies(families); setGrouping('family'); setHidden(current => ({ ...current, tokens: [] })); }}/>
-            <UsageAnalyticsSessions summary={summary} partial={!!partial} sessionRows={sessionRows} onOpenSession={onOpenSession}/>
+            <UsageAnalyticsSessions summary={summary} timezone={snapshot.timezone} partial={!!partial} sessionRows={sessionRows} onOpenSession={onOpenSession}/>
             <UsageAnalyticsIntegrations summary={summary} partial={!!partial}/>
             <div ref={buildRef}><UsageAnalyticsReliability summary={summary} partial={!!partial} selectedToolId={selectedToolId} onSelectTool={id => { selectMetric('toolErrors'); setHidden(current => ({ ...current, toolErrors: usageDailySeries(summary, 'toolErrors', grouping).filter(item => item.id !== id).map(item => item.id) })); }} onSelectRoute={() => { selectMetric('auto'); setHidden(current => ({ ...current, auto: ['allowed'] })); }} onSelectBuild={scrollToBuildChart}/></div>
         </>}

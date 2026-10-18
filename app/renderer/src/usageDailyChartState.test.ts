@@ -2,6 +2,25 @@ import { expect, test } from 'bun:test';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { usageAnalyticsFamily, usageAnalyticsFamilyColor, usageCalendarAverage, usageDailyBar, usageDailyCalendar, usageDailyComposition, usageDailyDateLabels, usageDailyDeltaTone, usageDailyDonut, usageDailyLine, usageDailyMarks, usageDailyMetricDelta, usageDailyPlot, usageDailySeries, usageDailyTextWidth, usageDailyTooltip, usageDailyTotal, usageLatestBuild, usageMetricSpark, usageSelectedToolId, usageToolRate } from './usageDailyChartState.js';
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+test('All auto series includes auto-only dates without session activity', async () => {
+    const rows = [
+        { type: 'system', uuid: 'start', timestamp: '2026-03-01T10:00:00Z', subtype: 'auto_permission_start', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
+        { type: 'system', uuid: 'end', timestamp: '2026-03-01T10:01:00Z', subtype: 'auto_permission_end', schema_version: 1, attempt_id: 'attempt', raw_result: 'allow', disposition: 'allowed', route: 'stage1' },
+    ];
+    const collected = await collectRetainedUsage(['/isolated/auto-only.jsonl'], '2026-09-13T12:00:00Z', {
+        timezone: 'UTC',
+        readRecords: async (_path, consume) => {
+            for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'test' });
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        },
+    });
+    const summary = collected.ranges.all;
+    const series = usageDailySeries(summary, 'auto', 'source');
+    expect(summary.days.map(day => day.date)).toEqual(['2026-03-01']);
+    expect(summary.days.map(day => series.reduce((sum, item) => sum + (item.value(day) ?? 0), 0))).toEqual([1]);
+    expect(summary.sessions).toBe(0);
+    expect(summary.activeDays).toBe(0);
+});
 test('sparse All buckets retain real calendar spacing and include empty days in the average', () => {
     const summary = structuredClone(snapshot.ranges.all);
     summary.startDate = '2026-09-01'; summary.endDateExclusive = '2026-09-11'; summary.bucketDays = 1;
