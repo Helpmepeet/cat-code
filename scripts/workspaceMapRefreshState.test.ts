@@ -117,14 +117,14 @@ describe('Git-backed workspace map refresh', () => {
     expect(startRefresh(options).run?.coverage).toBe('incremental')
   })
 
-  test('checks immutable source including Markdown links and paths inside commands', () => {
+  test('checks immutable source paths inside commands while accepting local docs links', () => {
     const options = fixture()
     const run = startRefresh(options).run!
     writeFileSync(join(options.repoRoot, 'src/new.ts'), 'uncommitted\n')
     writeFileSync(join(options.repoRoot, 'docs/guide.md'), 'uncommitted\n')
     append(options.repoRoot, map, '\n`bun test src/{owner,new}.ts`\n[Guide](../guide.md)\n')
     expect(() => checkRefresh({ ...options, runId: run.runId })).toThrow('src/new.ts')
-    expect(() => finishRefresh({ ...options, runId: run.runId, maps: [map], reviewedMapHash: 'unused', summary: 'review', baselineReviewed: true })).toThrow('broken link target')
+    expect(() => finishRefresh({ ...options, runId: run.runId, maps: [map], reviewedMapHash: 'unused', summary: 'review', baselineReviewed: true })).toThrow('src/new.ts')
     expect(state(options).run?.status).toBe('blocked')
     expect(state(options).cursor).toBeNull()
     expect(blockRefresh({ ...options, runId: run.runId, blocker: 'source is not committed' }).run?.blockers).toContain('source is not committed')

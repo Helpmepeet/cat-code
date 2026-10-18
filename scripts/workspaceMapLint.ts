@@ -11,8 +11,8 @@ export type MapLintResult = {
 
 export type WorkspaceMapValidationOptions = {
   /**
-   * Optional immutable source tree used for source-owner citations. Map files
-   * and their local links remain read from `repoRoot`, so uncommitted map work
+   * Optional immutable source tree used for source-owner citations. Local docs
+   * remain read from `repoRoot`, so uncommitted map work
    * can be checked against a committed source snapshot without hiding it.
    */
   sourceRoot?: string
@@ -155,14 +155,14 @@ export function validateWorkspaceMaps(
   function referenceExists(path: string): boolean {
     const normalized = relative(canonicalRepoRoot, resolve(canonicalRepoRoot, path)).replace(/\\/g, '/').replace(/\/$/, '')
     if (normalized === '..' || normalized.startsWith('../') || isAbsolute(normalized)) return false
-    const mapLocal = normalized.startsWith('docs/maps/') || normalized === 'docs/maps'
-    const root = mapLocal ? repoRoot : sourceRoot
+    const docsLocal = normalized.startsWith('docs/') || normalized === 'docs'
+    const root = docsLocal ? repoRoot : sourceRoot
     if (/[*?[]/.test(normalized)) {
       const glob = new Bun.Glob(normalized)
-      if (inventory && !mapLocal) return [...inventory].some(candidate => glob.match(candidate))
+      if (inventory && !docsLocal) return [...inventory].some(candidate => glob.match(candidate))
       return [...glob.scanSync({ cwd: root, onlyFiles: false, dot: true, followSymlinks: false })].some(candidate => pathExistsWithinRoot(root, candidate))
     }
-    return inventory && !mapLocal ? inventory.has(normalized) : pathExistsWithinRoot(root, normalized)
+    return inventory && !docsLocal ? inventory.has(normalized) : pathExistsWithinRoot(root, normalized)
   }
 
   if (!existsSync(workspacePath)) {

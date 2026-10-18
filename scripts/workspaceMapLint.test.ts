@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { validateWorkspaceMaps } from './workspaceMapLint.js'
@@ -111,8 +112,34 @@ describe('workspace map lint', () => {
 
     const result = validateWorkspaceMaps(root, { sourceRoot })
 
-    expect(result.errors).toContain('docs/maps/domain.md: cited path does not exist: docs/guide.md')
+    expect(result.errors).not.toContain('docs/maps/domain.md: cited path does not exist: docs/guide.md')
     expect(result.errors).toContain('docs/maps/domain.md: cited path does not exist: AGENTS.md')
+  })
+
+  test('accepts ignored local docs while pinning code to Git and rejecting escaping docs', () => {
+    const root = fixture()
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+    writeFileSync(join(root, '.gitignore'), '/docs/\n')
+    git('init', '-q')
+    git('add', '--', '.gitignore', 'src/owner.ts')
+    git('-c', 'user.name=Map Test', '-c', 'user.email=map@example.com', 'commit', '-qm', 'Source snapshot')
+    writeFileSync(join(root, 'src/uncommitted.ts'), 'export {}\n')
+    writeFileSync(join(root, 'docs/guide.md'), 'Local guide\n')
+    const outside = mkdtempSync(join(tmpdir(), 'workspace-map-outside-'))
+    roots.push(outside)
+    writeFileSync(join(outside, 'escape.md'), 'Outside repository\n')
+    symlinkSync(outside, join(root, 'docs/outside'))
+    writeFileSync(
+      join(root, 'docs/maps/domain.md'),
+      '# Domain\n\nLast refreshed: 2026-07-14\n\n`docs/guide.md`\n`docs/*.md`\n`src/owner.ts`\n`src/uncommitted.ts`\n`src/missing.ts`\n`docs/outside/escape.md`\n`docs/outside/*.md`\n',
+    )
+    expect(git('check-ignore', 'docs/guide.md').trim()).toBe('docs/guide.md')
+    expect(validateWorkspaceMaps(root, { sourceCommit: 'HEAD' }).errors).toEqual([
+      'docs/maps/domain.md: cited path does not exist: docs/outside/*.md',
+      'docs/maps/domain.md: cited path does not exist: docs/outside/escape.md',
+      'docs/maps/domain.md: cited path does not exist: src/missing.ts',
+      'docs/maps/domain.md: cited path does not exist: src/uncommitted.ts',
+    ])
   })
 })
 
