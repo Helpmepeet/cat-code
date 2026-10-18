@@ -68,7 +68,7 @@ export async function runUsageStatsWorker(options: UsageRunOptions): Promise<Usa
     })();
     // At most one record per failed refresh. A parent kill has no phase of its own.
     const diagnostic: UsageDiagnostic | null = result.type !== 'error' ? null
-        : workerDiagnostic ?? (timedOut ? { reason: 'deadline', phase: 'unknown', elapsedMs: Date.now() - startedAt } : null);
+        : workerDiagnostic ?? { reason: timedOut ? 'deadline' : 'unexpected', phase: 'unknown', elapsedMs: Date.now() - startedAt };
     if (diagnostic) {
         try { options.onDiagnostic?.(diagnostic); }
         catch { /* Diagnostics are best effort. */ }

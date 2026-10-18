@@ -36,3 +36,13 @@ test('collector guards report which budget and the observed value against its li
 test('a throwing diagnostic sink never changes the result', async () => {
     await expect(collect(new UsageFailure('x', 'deadline', 'replay'), () => { throw new Error('sink down'); })).resolves.toEqual({ type: 'error', version: 1, code: 'timeout' });
 });
+
+test('an invalid aggregate emits one bounded diagnostic without including the invalid snapshot', async () => {
+    const seen: UsageDiagnostic[] = [];
+    const aggregate = (async () => ({ private: '/private/transcript/body' })) as never;
+    await expect(collectUsageDashboard({ aggregate, onDiagnostic: d => seen.push(d) })).resolves.toEqual({ type: 'error', version: 1, code: 'invalid-output' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ reason: 'unexpected', phase: 'finalize' });
+    expect(JSON.stringify(seen)).not.toContain('/private');
+    await expect(collectUsageDashboard({ aggregate, onDiagnostic() { throw new Error('sink down'); } })).resolves.toEqual({ type: 'error', version: 1, code: 'invalid-output' });
+});

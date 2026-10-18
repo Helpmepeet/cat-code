@@ -191,18 +191,30 @@ export async function collectIndexedUsage(files: readonly string[], asOf: string
 
 async function collectIndexedUsageLocked(files: readonly string[], asOf: string, options: UsageIndexOptions): Promise<UsageDashboardSnapshot> {
     const path = options.path ?? usageIndexPath();
-    const db = new Database(path, { create: true });
-    // Identity maps are scratch for one aggregation, never restart state.
-    // A bounded in-memory SQLite store avoids inserting and deleting them in
-    // the durable index/WAL on every small append.
-    let scratch = new Database(':memory:');
+    let openedDb: Database | undefined;
+    let openedScratch: Database | undefined;
     let scratchDirectory: string | undefined;
     let phase: UsageFailurePhase = 'index';
     // Counters are cheap, so failures can report sizes even when the caller passed none.
     const metrics = options.metrics ?? emptyUsageIndexMetrics();
     const phaseStartedAt = performance.now();
     const check = () => { if (Date.now() > options.deadline) throw usageDeadlineFailure(phase); };
+    const cleanupScratch = () => {
+        let failure: unknown;
+        try { openedScratch?.close(); openedScratch = undefined; }
+        catch (error) { failure = error; }
+        try {
+            if (scratchDirectory) rmSync(scratchDirectory, { recursive: true, force: true });
+            scratchDirectory = undefined;
+        } catch (error) { failure ??= error; }
+        if (failure) throw classifyStorageError(failure, phase, 'Usage scratch cleanup failure');
+    };
     try {
+        const db = openedDb = new Database(path, { create: true });
+        // Identity maps are scratch for one aggregation, never restart state.
+        // A bounded in-memory SQLite store avoids inserting and deleting them in
+        // the durable index/WAL on every small append.
+        let scratch = openedScratch = new Database(':memory:');
         // SQLite serializes writers, atomically publishes the index and snapshot,
         // and rolls back an interrupted refresh. Readers retain the last commit.
         db.exec(`PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA cache_size=-4096; PRAGMA max_page_count=${DISK_MAX_PAGE_COUNT};`);
@@ -347,9 +359,12 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                         finishScratchWrite(disk);
                     }
                     commitScratchBatch(disk);
-                } catch (error) { disk.close(); throw error; }
-                scratch.close();
-                scratch = disk;
+                    scratch.close();
+                } catch (error) {
+                    try { disk.close(); } catch { /* Preserve the storage failure. */ }
+                    throw error;
+                }
+                scratch = openedScratch = disk;
                 get = scratch.query('SELECT value FROM identities WHERE kind=? AND key=?');
                 put = scratch.query('INSERT OR REPLACE INTO identities VALUES (?,?,?)');
                 timingStatements = prepareTimings();
@@ -410,14 +425,20 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             };
             snapshot = await collectRetainedUsage(files, asOf, { deadline: options.deadline, timezone, identities, metrics: metrics.retained,
                 readRecords: async (file, consume) => {
-                    const source = db.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file);
-                    if (!source) throw new Error('Usage source unavailable');
-                    for (const row of db.query<{ value: string; offset: number; generation: string }, [string]>('SELECT value,offset,generation FROM records WHERE path=? ORDER BY offset').iterate(file)) {
-                        check();
-                        metrics.rowsReplayed++;
-                        await consume({ value: JSON.parse(row.value), offset: row.offset, generation: row.generation });
+                    try {
+                        const source = db.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file);
+                        if (!source) throw new Error('Usage source unavailable');
+                        for (const row of db.query<{ value: string; offset: number; generation: string }, [string]>('SELECT value,offset,generation FROM records WHERE path=? ORDER BY offset').iterate(file)) {
+                            check();
+                            metrics.rowsReplayed++;
+                            await consume({ value: JSON.parse(row.value), offset: row.offset, generation: row.generation });
+                        }
+                        return JSON.parse(source.quality) as StatsReadQuality;
+                    } catch (error) {
+                        // Includes scratch reads performed by consume: these are
+                        // storage failures, never unreadable transcript sources.
+                        throw classifyEscapedError(error, 'replay');
                     }
-                    return JSON.parse(source.quality) as StatsReadQuality;
                 },
             });
             // A failed disk write can make SQLite roll back its transaction
@@ -434,13 +455,15 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             snapshot = options.finalize?.(snapshot) ?? snapshot;
         }
         phase = 'finalize';
+        // Cleanup can fail too. Finish it while publication can still roll back.
+        cleanupScratch();
         check();
         db.query('INSERT OR REPLACE INTO snapshot VALUES (1,?)').run(JSON.stringify({ fittingVersion: SAVED_USAGE_FITTING_VERSION, snapshot }));
         db.exec('DELETE FROM identities; COMMIT;');
         metrics.finalizeMs = performance.now() - finalizeStartedAt;
         return snapshot;
     } catch (error) {
-        try { db.exec('ROLLBACK'); } catch { /* Opening/schema failures have no transaction. */ }
+        try { openedDb?.exec('ROLLBACK'); } catch { /* Opening/schema failures have no transaction. */ }
         // collectIndexedUsage repairs these two codes by rebuilding; every other SQLite fault is classified here.
         const code = sqliteCodeOf(error);
         if (code === 'SQLITE_CORRUPT' || code === 'SQLITE_NOTADB') throw error;
@@ -451,7 +474,16 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
         }
         throw failure;
     } finally {
-        scratch.close(); db.close();
-        if (scratchDirectory) rmSync(scratchDirectory, { recursive: true, force: true });
+        // Attempt every teardown without masking the failure or rejecting a commit.
+        try { cleanupScratch(); }
+        catch {
+            try { logForDebugging('Usage scratch cleanup failed', { level: 'warn' }); }
+            catch { /* Diagnostic writes must not interrupt teardown. */ }
+        }
+        try { openedDb?.close(); }
+        catch {
+            try { logForDebugging('Usage index connection close failed', { level: 'warn' }); }
+            catch { /* Diagnostic writes must not reject a committed snapshot. */ }
+        }
     }
 }

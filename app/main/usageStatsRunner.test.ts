@@ -84,11 +84,29 @@ describe('worker diagnostics', () => {
         const { seen } = await collect({ stderr: `${formatUsageDiagnostic(diagnostic)}\n${formatUsageDiagnostic(second)}\n`, stdout: line(err('resource-limit')) });
         expect(seen).toEqual([diagnostic]);
     });
-    test('malformed, unrelated, widened and oversized stderr is ignored', async () => {
+    test('malformed, unrelated, widened and oversized stderr is ignored in favor of a safe fallback', async () => {
         for (const stderr of ['fatal: boom', `${USAGE_DIAGNOSTIC_TAG} {bad`, `${USAGE_DIAGNOSTIC_TAG} ${JSON.stringify({ v: 1, ...diagnostic, path: '/Users/me/x' })}`, `${USAGE_DIAGNOSTIC_TAG} ${'x'.repeat(100_000)}\n`]) {
             const { result, seen } = await collect({ stderr, stdout: line(err('collection')) });
             expect(result).toEqual(err('collection'));
-            expect(seen).toEqual([]);
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toMatchObject({ reason: 'unexpected', phase: 'unknown' });
+            expect(JSON.stringify(seen)).not.toContain(stderr);
+        }
+    });
+    test('every unexplained error gets one diagnostic, including nonzero exit and broken stdout', async () => {
+        for (const config of [
+            { stdout: line(err('collection')) },
+            { stdout: line(err('invalid-output')) },
+            { stdout: '{bad}\n' },
+            { stdout: line(err()), exitCode: 1 },
+            { exitCode: 1 },
+            { emitError: new Error('spawn failed /private/path') },
+        ]) {
+            const { result, seen } = await collect(config);
+            expect(result.type).toBe('error');
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toMatchObject({ reason: 'unexpected', phase: 'unknown' });
+            expect(JSON.stringify(seen)).not.toContain('/private');
         }
     });
     test('a throwing sink cannot change any result', async () => {

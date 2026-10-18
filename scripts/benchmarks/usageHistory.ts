@@ -7,7 +7,7 @@
  * Every case builds its own config home and index under the OS temp directory,
  * freezes asOf and TZ, and runs the production `aggregateUsageDashboard` path
  * (discovery, indexing, replay, fitting). Retained-state figures are the
- * collector's own estimate; `peakRssMiBSampled` is the child's sampled resident peak (20 ms ticks, so a floor).
+ * collector's own estimate; `peakRssMiBSampled` is each step's sampled resident peak (20 ms ticks, so a floor).
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -64,9 +64,6 @@ async function runCase(name: string): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), 'cat-usage-bench-'))
   process.env.CLAUDE_CONFIG_DIR = home
   process.env.TZ = 'UTC'
-  // Bun reports no maxRSS, so sample resident memory while the collector yields.
-  let peakRss = process.memoryUsage().rss
-  const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss) }, 20)
   try {
     const shape: Shape = { sources: arg('sources', 200), requests: arg('requests', 500), timingCalls: arg('timing', 0) }
     const { aggregateUsageDashboard } = await import('../../src/utils/stats.js')
@@ -76,11 +73,15 @@ async function runCase(name: string): Promise<void> {
     const indexPath = join(home, 'index.sqlite')
     const files = writeFixture(home, shape)
     const run = async (label: string, asOf = ASOF) => {
+      // Bun reports no maxRSS; reset sampling so prior steps cannot set this peak.
+      let peakRss = process.memoryUsage().rss
+      const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss) }, 20)
       const metrics = emptyUsageIndexMetrics()
       const started = performance.now()
       let outcome: Record<string, unknown> = { ok: true }
       try { await aggregateUsageDashboard(asOf, { indexPath, finalize: fitUsageDashboardSnapshot, metrics }) }
       catch (error) { outcome = { ok: false, ...usageDiagnosticFromError(error, performance.now() - started) } }
+      finally { clearInterval(sampler) }
       const { retained, ...rest } = metrics
       const round = (value: number) => Math.round(value * 10) / 10
       return { case: name, step: label, ...shape, totalMs: round(performance.now() - started), indexMs: round(rest.indexMs), replayMs: round(rest.replayMs), finalizeMs: round(rest.finalizeMs),
@@ -95,7 +96,7 @@ async function runCase(name: string): Promise<void> {
       out.push(await run('append-one-record', new Date(Date.parse(ASOF) + 120_000).toISOString()))
     }
     for (const row of out) console.log(`BENCH ${JSON.stringify(row)}`)
-  } finally { clearInterval(sampler); rmSync(home, { recursive: true, force: true }) }
+  } finally { rmSync(home, { recursive: true, force: true }) }
 }
 
 if (caseName) await runCase(caseName)

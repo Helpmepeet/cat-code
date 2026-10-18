@@ -12,13 +12,19 @@ export async function collectUsageDashboard(options: {
   const { parseUsageCollectionResult } = await import('../shared/usageStatsWorker.js')
   const { usageDiagnosticFromError } = await import('../shared/usageDiagnostic.js')
   const startedAt = Date.now()
-  try {
-    const snapshot = await aggregateUsageDashboard(undefined, { finalize: fitUsageDashboardSnapshot })
-    return parseUsageCollectionResult({ type: 'usage', version: 1, snapshot }) ?? { type: 'error', version: 1, code: 'invalid-output' }
-  } catch (error) {
-    const diagnostic = usageDiagnosticFromError(error, Date.now() - startedAt)
+  const report = (diagnostic: UsageDiagnostic) => {
     // A failing diagnostic sink must never change the result.
     try { options.onDiagnostic?.(diagnostic) } catch { /* diagnostics are best effort */ }
+  }
+  try {
+    const snapshot = await aggregateUsageDashboard(undefined, { finalize: fitUsageDashboardSnapshot })
+    const result = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })
+    if (result) return result
+    report({ reason: 'unexpected', phase: 'finalize', elapsedMs: Date.now() - startedAt })
+    return { type: 'error', version: 1, code: 'invalid-output' }
+  } catch (error) {
+    const diagnostic = usageDiagnosticFromError(error, Date.now() - startedAt)
+    report(diagnostic)
     return { type: 'error', version: 1, code: publicCodeForFailure(diagnostic.reason) }
   }
 }
