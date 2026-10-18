@@ -2132,9 +2132,12 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       return
     }
     if (frame.kind === 'host.request') {
+      // Main-local receipt of the supervisor-delivered frame, before tracing
+      // and peer-plane validation. Never sourced from the request payload.
+      const receivedAt = performance.now()
       const received = traceFrame(frame, 'supervisor.socket.received')
       traceFrame(received, 'host.received')
-      void peerPlane?.handleRequest(event.sessionId, frame)
+      void peerPlane?.handleRequest(event.sessionId, frame, receivedAt)
       return
     }
     if (frame.kind === 'workspace.handoff.result' || frame.kind === 'workspace.handoff.state') {
@@ -4445,12 +4448,18 @@ function ensureHost(): Host {
     registry,
     validateCwd,
     managedStorage,
-    relocate: request => runSessionRelocationWorker({
-      command: sidecarLaunch().command,
-      args: sidecarLaunch().argsFor('relocation'),
-      cwd: request.source.cwd,
-      request: { type: 'session-relocation', version: 1, ...request },
-    }),
+    relocate: request => {
+      const invocation = randomUUID()
+      return runSessionRelocationWorker({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('relocation'),
+        cwd: request.source.cwd,
+        request: { type: 'session-relocation', version: 1, ...request },
+        onTiming: measurement => operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+          appSessionId: request.appSessionId, engineSessionId: request.engineSessionId,
+          fields: { ...measurement, invocationId: invocation } }),
+      })
+    },
     peerMoveState: appSessionId => ({
       presence: peerPlane?.presenceOf(appSessionId),
       pending: peerPlane?.pendingFor(appSessionId).length ?? 0,
@@ -4538,9 +4547,24 @@ function ensureHost(): Host {
       })),
     ],
     validateCwd,
-    trustedProjectRoots: roots => runWorkspaceListingWorker({ command: sidecarLaunch().command,
-      args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),
-      request: { type: 'workspace-list', version: 1, roots: [...roots] } }),
+    trustedProjectRoots: async roots => {
+      const invocation = randomUUID()
+      const started = performance.now()
+      let outcome: 'completed' | 'failed' = 'failed'
+      // Invocation identity binds child-local durations to this complete main
+      // wait. Child clocks are never compared with main's monotonic clock.
+      const record = (measurement: { phase: string; durationMs: number; outcome: 'completed' | 'failed' }) => {
+        try { operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+          fields: { ...measurement, invocationId: invocation } }) } catch { /* Observation only. */ }
+      }
+      try {
+        const result = await runWorkspaceListingWorker({ command: sidecarLaunch().command,
+          args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),
+          request: { type: 'workspace-list', version: 1, roots: [...roots] }, onTiming: record })
+        outcome = 'completed'
+        return result
+      } finally { record({ phase: 'listing_worker', durationMs: performance.now() - started, outcome }) }
+    },
     verifyReady: async (identity, boundary, state) => {
       const observed = observedWorkspaceHandoffs.get(identity.appSessionId)
       if (!observed || observed.generation !== identity.generation || observed.operationId !== state.operationId ||
@@ -4577,7 +4601,8 @@ function ensureHost(): Host {
       finish: (id, operationId, cwd) => liveHost.finishWorkspaceTransition(id, operationId, cwd),
     },
     workspaceRequests: {
-      handleRequest: (appSessionId, request) => workspaceJump!.handleRequest(appSessionId, request),
+      // Carry the main frame-receive clock through validation and dispatch.
+      handleRequest: (appSessionId, request, receivedAt) => workspaceJump!.handleRequest(appSessionId, request, receivedAt),
       afterResponse: (appSessionId, request, answered) => workspaceJump!.afterResponse(appSessionId, request, answered),
       isPeerAccessBlocked: appSessionId => workspaceJump!.isPeerAccessBlocked(appSessionId),
     },

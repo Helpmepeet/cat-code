@@ -112,7 +112,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
   'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'rendersCommitted', 'phase',
   'from', 'to', 'kind', 'messageId', 'outcome',
-  'operationId', 'generation',
+  'operationId', 'generation', 'invocationId',
 ])
 
 /**
@@ -122,7 +122,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
  * another event.
  */
 const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly string[]>> = {
-  'workspace.jump.timing': ['phase', 'outcome', 'durationMs', 'operationId', 'generation'],
+  'workspace.jump.timing': ['phase', 'outcome', 'durationMs', 'operationId', 'generation', 'invocationId'],
   'app.start': ['version', 'packaged', 'platform', 'arch'],
   'app.ready': ['durationMs'],
   'app.shutdown.started': ['reason'],
@@ -280,7 +280,8 @@ export function sanitizeOperationalFields(
         !['started', 'completed', 'failed', 'unavailable'].includes(String(fields.outcome)) ||
         typeof fields.durationMs !== 'number' || !Number.isFinite(fields.durationMs) || fields.durationMs < 0 ||
         (fields.operationId !== undefined && !isOpaqueIdentifier(fields.operationId)) ||
-        (fields.generation !== undefined && !isOpaqueIdentifier(fields.generation))) {
+        (fields.generation !== undefined && !isOpaqueIdentifier(fields.generation)) ||
+        (fields.invocationId !== undefined && !isOpaqueIdentifier(fields.invocationId))) {
       throw new Error('invalid workspace jump timing')
     }
   }

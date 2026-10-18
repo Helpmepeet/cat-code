@@ -1,4 +1,5 @@
 import type { OperationalRecordInput } from './operationalLog.js'
+import { WORKER_TIMING_STAGES } from './workerTiming.js'
 
 export const WORKSPACE_JUMP_STAGES = [
   'first_submit_to_catalog', 'first_submit_to_provider_response', 'catalog', 'accepted_to_source_boundary',
@@ -8,6 +9,9 @@ export const WORKSPACE_JUMP_STAGES = [
   'listening_to_ready_frame', 'ready_to_controls', 'admission_to_continuation',
   'continuation_to_provider_request', 'provider_request_to_response',
   'accepted_to_provider_request_observed',
+  'request_received_to_acceptance', 'request_received_to_provider_request_observed',
+  'startup_validation', 'runtime_initialize_body',
+  'listing_worker', ...WORKER_TIMING_STAGES,
 ] as const
 export type WorkspaceJumpStage = typeof WORKSPACE_JUMP_STAGES[number]
 export type WorkspaceJumpTimingIdentity = { appSessionId: string; engineSessionId?: string; operationId?: string; generation?: string }
@@ -23,8 +27,7 @@ export function createWorkspaceJumpTiming(sink: WorkspaceJumpTimingSink = () => 
           ...(operationId ? { operationId } : {}), ...(generation ? { generation } : {}) } })
     } catch { /* Observation must not change admission or recovery. */ }
   }
-  function start(identity: WorkspaceJumpTimingIdentity, stage: WorkspaceJumpStage) {
-    const started = now()
+  function start(identity: WorkspaceJumpTimingIdentity, stage: WorkspaceJumpStage, started = now()) {
     write(identity, stage, 'started', 0)
     let finished = false
     return (outcome: 'completed' | 'failed' | 'unavailable' = 'completed') => {
@@ -37,5 +40,5 @@ export function createWorkspaceJumpTiming(sink: WorkspaceJumpTimingSink = () => 
     const end = start(identity, stage)
     try { const result = await work(); end(); return result } catch (error) { end('failed'); throw error }
   }
-  return { start, span, write }
+  return { start, span, write, now }
 }
