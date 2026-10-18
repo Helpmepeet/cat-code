@@ -74,12 +74,16 @@ test('a memory-only post is explicit rather than promising saved scope', async (
   expect(JSON.stringify(result.data)).toContain('could not be saved')
 })
 
-test('scope guidance keeps posting optional and treats omitted notices as unavailable', async () => {
+test('scope guidance keeps posting optional, replaces only for a new task, and treats omitted notices as unavailable', async () => {
   const doctrine = buildPeerDoctrine({ name: 'Bear', createdByName: null, createdById: null })
-  expect(doctrine).toContain('If a scope notice would help other peers')
+  expect(doctrine).toContain('If a scope notice would save peers asking what you are doing')
+  expect(doctrine).toContain('Replace it only when you are given a different task or must edit a shared file outside your areas; finishing is not a reason.')
+  expect(doctrine).not.toContain('especially before you edit files')
   expect(doctrine).toContain('its notice is unavailable and you are about to edit near its work')
   expect(doctrine).toContain('noticeOmitted is unavailable, not an empty scope')
-  expect(await createAnnounceTool().prompt()).toContain('when a standing scope notice would help other peers')
+  const prompt = await createAnnounceTool().prompt()
+  expect(prompt).toContain('when it would save peers asking what you are doing')
+  expect(prompt).toContain('replace it only when you are given a different one')
 })
 
 test('Auto classifies the whole notice without an acceptEdits bypass', async () => {
