@@ -38,6 +38,10 @@ test('accepts analytics fields and rejects invalid source, comparison, ranking, 
     });
     const value = { type: 'usage', version: 1, snapshot: actual };
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    expect(actual.ranges['7d'].rankedSessions.items[0]!.firstActiveAt).toBe('2026-09-13T10:00:00.000Z');
+    const legacySpan = structuredClone(value);
+    for (const range of Object.values(legacySpan.snapshot.ranges)) for (const item of range.rankedSessions.items) delete item.firstActiveAt;
+    expect(parseUsageCollectionResult(legacySpan)?.type).toBe('usage');
     expect(actual.ranges['7d'].integrations).toHaveLength(6);
     expect(actual.ranges['7d'].previousPeriod!.modelRequests).toBe(1);
     const zeroModelBaseline = structuredClone(value);
@@ -79,6 +83,10 @@ test('accepts analytics fields and rejects invalid source, comparison, ranking, 
         range => { range.rankedSessions.top10Tokens = Number.MAX_SAFE_INTEGER + 1; },
         range => { range.rankedSessions.top10Tokens++; },
         range => { delete range.rankedSessions.items[0].lastActiveAt; },
+        range => { range.rankedSessions.items[0].firstActiveAt = 'not-a-date'; },
+        range => { range.rankedSessions.items[0].firstActiveAt = '2026-09-06T10:00:00.000Z'; },
+        range => { range.rankedSessions.items[0].firstActiveAt = '2026-09-13T11:00:00.000Z'; },
+        range => { range.rankedSessions.items[0].firstActiveAt = null; },
         range => { range.rankedSessions.items[0].lastActiveAt = 'not-a-date'; },
         range => { range.rankedSessions.items[0].lastActiveAt = '2026-09-06T10:00:00.000Z'; },
         range => { range.rankedSessions.items[0].lastActiveAt = '2026-09-13T13:00:00.000Z'; },

@@ -145,17 +145,20 @@ test('session median and top-ten totals precede caps while last activity follows
     }));
     await writeFile(main, [...rows,
         { type: 'user', sessionId: 'session100', uuid: 'excluded-sidechain', timestamp: '2026-09-13T11:00:00.000Z', isSidechain: true },
+        { type: 'user', sessionId: 'session100', uuid: 'excluded-early-sidechain', timestamp: '2026-09-07T00:00:00.000Z', isSidechain: true },
     ].map(row => JSON.stringify(row)).join('\n'));
     const files = [main];
     for (const [session, agent, timestamp] of [
         ['session100', 'agent-a0123456789abcdef', '2026-09-13T08:00:00.000Z'],
         ['session100', 'agent-acompact-0123456789abcdef', '2026-09-13T09:00:00.000Z'],
+        ['session100', 'agent-early', '2026-09-08T09:00:00.000Z'],
         ['orphan', 'agent-a0123456789abcdef', '2026-09-13T10:00:00.000Z'],
     ]) {
         const directory = join(root, session!, 'subagents'); await mkdir(directory, { recursive: true });
         const path = join(directory, `${agent}.jsonl`);
         await writeFile(path, [
             { type: 'attachment', sessionId: session, uuid: `${agent}-activity`, timestamp },
+            { type: 'attachment', sessionId: session, uuid: `${agent}-outside-week`, timestamp: '2026-09-06T09:00:00.000Z' },
             { type: 'attachment', sessionId: session, uuid: `${agent}-future`, timestamp: '2026-09-14T00:00:00.000Z' },
             { type: 'attachment', sessionId: session, uuid: `${agent}-invalid`, timestamp: 'not-a-date' },
         ].map(row => JSON.stringify(row)).join('\n'));
@@ -172,6 +175,8 @@ test('session median and top-ten totals precede caps while last activity follows
     const retained = ranked.items.map(item => item.tokens.fresh).sort((a, b) => a - b);
     expect((retained[Math.floor((retained.length - 1) / 2)]! + retained[Math.floor(retained.length / 2)]!) / 2).not.toBe(ranked.medianTokens);
     expect(ranked.items.find(item => item.rank.tokens === 1)!.lastActiveAt).toBe('2026-09-13T09:00:00.000Z');
+    expect(ranked.items.find(item => item.rank.tokens === 1)!.firstActiveAt).toBe('2026-09-08T09:00:00.000Z');
+    expect(direct.ranges['30d'].rankedSessions.items.find(item => item.rank.tokens === 1)!.firstActiveAt).toBe('2026-09-06T09:00:00.000Z');
     const empty = (await collectRetainedUsage([], asOf, { timezone: 'UTC' })).ranges['7d'].rankedSessions;
     expect(empty).toEqual({ state: 'full', omitted: 0, medianTokens: null, top10Tokens: 0, items: [] });
 });

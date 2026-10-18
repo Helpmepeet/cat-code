@@ -679,6 +679,31 @@ test('indexed result flags match direct accounting without persisting result con
 });
 
 
+test('pre-span saved aggregates rebuild from unchanged indexed events and then stay warm', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, [row('first', '2026-09-12T09:00:00.000Z'), row('last', cutoff)].map(value => JSON.stringify(value)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const legacy = structuredClone(original);
+    delete legacy.ranges['30d'].rankedSessions.items[0]!.firstActiveAt;
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let reads = 0, aggregates = 0;
+    const options = { ...opts(path), onReadSource() { reads++; }, finalize(snapshot: typeof original) { aggregates++; return snapshot; } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(aggregates).toBe(1);
+    expect(rebuilt.ranges).toEqual(original.ranges);
+    expect(rebuilt.ranges['30d'].rankedSessions.items[0]!.firstActiveAt).toBe('2026-09-12T09:00:00.000Z');
+    expect(rebuilt.countingVersion).toBe(original.countingVersion);
+    expect(readSavedUsage(path)?.ranges).toEqual(rebuilt.ranges);
+    const warm = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(aggregates).toBe(1);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
+});
+
 test('legacy two-window cache rebuilds All from indexed records without reading unchanged sources', async () => {
     const { path, file } = await fixture();
     await writeFile(file, [row('old', '2020-01-01T00:00:00.000Z', 7), row('recent', cutoff, 11)].map(item => JSON.stringify(item)).join('\n'));
