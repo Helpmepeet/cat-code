@@ -683,6 +683,26 @@ test('oversized tool-result lines keep coverage complete; sources indexed before
     expect(unknown.coverage).toMatchObject({ state: 'partial', oversizedRecords: 1, oversizedToolResults: 1 });
     expect(unknown.ranges['7d'].previousPeriod).toBeUndefined();
 });
+test('appending to a source indexed before classification continues without a classified count', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('a')) + '\n');
+    await collectIndexedUsage([file], cutoff, opts(path));
+    const db = new Database(path);
+    try {
+        const quality = JSON.parse(db.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file)!.quality);
+        delete quality.oversizedToolResults;
+        db.query('UPDATE sources SET quality=? WHERE path=?').run(JSON.stringify(quality), file);
+    } finally { db.close(); }
+    await appendFile(file, JSON.stringify(row('b')) + '\n');
+    const metrics = emptyUsageIndexMetrics();
+    const next = await collectIndexedUsage([file], cutoff, { ...opts(path), metrics });
+    expect(metrics.prefixVerifiedBytes).toBeGreaterThan(0);
+    expect(next.coverage).toMatchObject({ state: 'complete', oversizedToolResults: 0 });
+    expect(next.ranges['7d'].requests).toBe(2);
+    const stored = new Database(path, { readonly: true });
+    try { expect(JSON.parse(stored.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file)!.quality).oversizedToolResults).toBe(0); }
+    finally { stored.close(); }
+});
 test('replacement and incomplete tails invalidate cached file accounting', async () => {
     const { path, file } = await fixture();
     await writeFile(file, JSON.stringify(row('a')) + '\n{"type":"assistant"');
