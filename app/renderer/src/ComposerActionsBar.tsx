@@ -250,7 +250,12 @@ function RunControl({
     onSetModel != null || onSetEffort != null || onSetFast != null
   )
   const modelEnabled = snapshot != null && onSetModel != null && snapshot.model.options.length > 0
-  const groups = groupOptionsByProvider(snapshot?.model.options ?? [])
+  // The provider-default row is not offered: it names no model, so picking it
+  // hands the choice back to the engine. A session already on it still reads
+  // its resolved model on the face.
+  const groups = groupOptionsByProvider(
+    (snapshot?.model.options ?? []).filter(option => option.value !== null),
+  )
   const contents = (
     <>
       {provider && label ? <ProviderLogo provider={provider} size={12} className={`composer-provider-logo composer-provider-${provider}`} /> : null}
@@ -359,6 +364,7 @@ function RunControl({
                     key={JSON.stringify([snapshot.model.provider, snapshot.model.current, snapshot.effort.options])}
                     levels={snapshot.effort.options}
                     selected={snapshot.effort.selected}
+                    applied={snapshot.effort.current}
                     onSelect={onSetEffort}
                   />
                 </div>
@@ -423,7 +429,7 @@ function RunControl({
                     const active = snapshot.model.selected === option.value
                     return (
                       <button
-                        key={option.value ?? '__provider_default__'}
+                        key={option.value}
                         type="button"
                         role="menuitemradio"
                         aria-checked={active}
@@ -443,18 +449,6 @@ function RunControl({
                         >
                           {option.label}
                         </span>
-                        <span className="flex shrink-0 items-center gap-1.5">
-                          {/* What "Default" currently resolves to, and only while
-                            * it is the live selection — `label` is the engine's
-                            * name for the model this session RUNS, which answers
-                            * for the Default row only when Default is what is
-                            * selected. */}
-                          {option.value === null && active && label ? (
-                            <span className="text-[11px] text-text-ghost">
-                              {label}
-                            </span>
-                          ) : null}
-                        </span>
                       </button>
                     )
                   })}
@@ -470,7 +464,7 @@ function RunControl({
 }
 
 /** Provider groups in first-appearance order, so the engine's own option order
- * (`getModelOptions()`, Default first) survives the grouping. */
+ * (`getModelOptions()`) survives the grouping. */
 function groupOptionsByProvider(
   options: RunControlModelOption[],
 ): { provider: RunControlProvider; options: RunControlModelOption[] }[] {
@@ -507,7 +501,7 @@ function StepChevron() {
  * Where a key lands inside the rail, as an index into the rungs. The rail is a
  * horizontal control living inside a vertical menu, so it answers Left/Right
  * itself and leaves Up/Down to the menu's own roving, which walks the face's
- * items in order (back, Auto, then the rungs).
+ * items in order (back, then the rungs).
  *
  * Home/End are answered here too, for the same reason: inside the rail they
  * mean the ends of the SCALE, which is not what they mean in the menu around
@@ -564,8 +558,8 @@ function rungIndexAt(rail: HTMLElement, clientX: number, count: number): number 
  *
  * `selected` is the RAW session selection, not the applied tier: an env or
  * provider default must not read back as a level the user chose.
- * Auto is therefore an empty track, and it is a control of
- * its own rather than a rung, because it is not a point on the scale.
+ * A session with no selection is therefore an empty track, with the level it
+ * actually runs at named in muted text. Auto is not offered as a choice.
  *
  * Each rung stays a real `menuitemradio` button so the menu's Up/Down roving and
  * Enter/Space activation reach it; the track around the buttons adds pointer
@@ -575,14 +569,15 @@ function rungIndexAt(rail: HTMLElement, clientX: number, count: number): number 
 function EffortSlider({
   levels,
   selected,
+  applied,
   onSelect,
 }: {
   levels: string[]
   selected: string | null
+  applied: string | null
   onSelect: (effort: string) => void
 }) {
   const currentIndex = selected === null ? -1 : levels.indexOf(selected)
-  const isAuto = selected === null
   const railRef = useRef<HTMLDivElement>(null)
   // The rung under the pointer while a press is held; it drives the fill and
   // thumb so a drag shows where it will land before it commits.
@@ -670,30 +665,21 @@ function EffortSlider({
 
   return (
     <div className="px-2 pb-2">
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center pb-2">
+      <div className="flex items-center justify-between pb-2">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
           Effort
         </span>
         <span
           className={`min-h-5 text-[15px] font-semibold leading-5 transition-colors ${
-            labelIndex === currentIndex ? 'text-accent' : 'text-text-muted'
+            labelIndex >= 0 && labelIndex === currentIndex ? 'text-accent' : 'text-text-muted'
           }`}
         >
-          {labelIndex >= 0 ? formatEffort(levels[labelIndex]!) : null}
+          {labelIndex >= 0
+            ? formatEffort(levels[labelIndex]!)
+            : applied
+              ? formatEffort(applied)
+              : null}
         </span>
-        <button
-          type="button"
-          role="menuitemradio"
-          aria-checked={isAuto}
-          onClick={() => onSelect('auto')}
-          className={`${MENU_FOCUS_RING} justify-self-end rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-            isAuto
-              ? 'bg-accent/15 text-accent'
-              : 'text-text-subtle hover:bg-text-primary/[0.06] hover:text-text-primary'
-          }`}
-        >
-          Auto
-        </button>
       </div>
       <div
         ref={railRef}
@@ -1644,7 +1630,7 @@ export function ComposerActionsBar({
       aria-orientation="horizontal"
       onKeyDown={onToolbarKeyDown}
       onBlur={onToolbarBlur}
-      className="composer-actions mt-3 flex items-center gap-4 px-1"
+      className="composer-actions mt-3 flex items-center gap-[7px] px-1"
     >
       {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
        * #a1a1aa on hover. The owner opens main's native file picker. */}

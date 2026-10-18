@@ -5,7 +5,7 @@ import { readStatsRecords, type StatsRecord } from './statsReader.js';
 import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, localMidnight, shiftLocalCalendarDays, usageWindow, usageTimestampEligible } from './usageWindow.js';
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent, UsageEffort, UsageEffortLevel, UsageParallel } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
-import { getConfiguredStandardModelCosts } from './modelCostRates.js';
+import { getConfiguredStandardModelCosts, ratesForPrompt } from './modelCostRates.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
@@ -41,10 +41,13 @@ const effortLevel = (value: unknown): UsageEffortLevel | null =>
     USAGE_EFFORT_LEVELS.find(level => level === value) ?? null;
 const zeroCost = (): UsageTokenCostEstimate => ({ usd: 0, pricedTokens: 0 });
 const total = (t: UsageTokens) => t.fresh + t.read + t.write + t.output;
-function standardTokenCost(model: string | null, tokens: UsageTokens): UsageTokenCostEstimate {
+// `promptTokens` is the whole request's prompt, not the delta being priced:
+// a tiered model's rates depend on how large the request was.
+function standardTokenCost(model: string | null, tokens: UsageTokens, promptTokens: number): UsageTokenCostEstimate {
     if (!model) return zeroCost();
-    const rates = getConfiguredStandardModelCosts(model);
-    if (!rates) return zeroCost();
+    const configured = getConfiguredStandardModelCosts(model);
+    if (!configured) return zeroCost();
+    const rates = ratesForPrompt(configured, promptTokens);
     return {
         usd: (tokens.fresh * rates.inputTokens + tokens.read * rates.promptCacheReadTokens + tokens.output * rates.outputTokens) / 1_000_000,
         // The index does not retain cache-write TTL, so writes cannot be priced.
@@ -943,7 +946,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 s.models.set(cat.id, model);
             }
             addTokens(model.tokens, delta);
-            const tokenCost = standardTokenCost(modelName, delta);
+            const tokenCost = standardTokenCost(modelName, delta, maximum.fresh + maximum.read + maximum.write);
             addCost(model.tokenCost!, tokenCost);
             if (contributor) addCost(contributor.tokenCost!, tokenCost);
             if (contributor) {

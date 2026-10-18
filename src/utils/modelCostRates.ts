@@ -4,6 +4,7 @@ import {
   CLAUDE_3_7_SONNET_CONFIG,
   CLAUDE_FABLE_5_CONFIG,
   CLAUDE_HAIKU_4_5_CONFIG,
+  CLAUDE_HAIKU_5_5_CONFIG,
   CLAUDE_OPUS_4_1_CONFIG,
   CLAUDE_OPUS_4_5_CONFIG,
   CLAUDE_OPUS_4_6_CONFIG,
@@ -25,6 +26,12 @@ export type ModelCosts = {
   promptCacheWriteTokens: number
   promptCacheReadTokens: number
   webSearchRequests: number
+  /**
+   * Rates that replace these for a request whose PROMPT (fresh input + cache
+   * reads + cache writes) exceeds `promptTokens`. Output and cache rates tier
+   * with the prompt, not separately.
+   */
+  longPrompt?: { promptTokens: number; rates: Omit<ModelCosts, 'longPrompt'> }
 }
 
 export const COST_TIER_3_15 = { inputTokens: 3, outputTokens: 15, promptCacheWriteTokens: 3.75, promptCacheReadTokens: 0.3, webSearchRequests: 0.01 } as const satisfies ModelCosts
@@ -33,6 +40,17 @@ export const COST_TIER_5_25 = { inputTokens: 5, outputTokens: 25, promptCacheWri
 export const COST_TIER_30_150 = { inputTokens: 30, outputTokens: 150, promptCacheWriteTokens: 37.5, promptCacheReadTokens: 3, webSearchRequests: 0.01 } as const satisfies ModelCosts
 export const COST_HAIKU_35 = { inputTokens: 0.8, outputTokens: 4, promptCacheWriteTokens: 1, promptCacheReadTokens: 0.08, webSearchRequests: 0.01 } as const satisfies ModelCosts
 export const COST_HAIKU_45 = { inputTokens: 1, outputTokens: 5, promptCacheWriteTokens: 1.25, promptCacheReadTokens: 0.1, webSearchRequests: 0.01 } as const satisfies ModelCosts
+export const COST_HAIKU_55 = {
+  inputTokens: 0.1,
+  outputTokens: 0.5,
+  promptCacheWriteTokens: 0.125,
+  promptCacheReadTokens: 0.01,
+  webSearchRequests: 0.01,
+  longPrompt: {
+    promptTokens: 100_000,
+    rates: { inputTokens: 0.5, outputTokens: 2.5, promptCacheWriteTokens: 0.625, promptCacheReadTokens: 0.05, webSearchRequests: 0.01 },
+  },
+} as const satisfies ModelCosts
 export const COST_FABLE_10_50 = { inputTokens: 10, outputTokens: 50, promptCacheWriteTokens: 12.5, promptCacheReadTokens: 1, webSearchRequests: 0.01 } as const satisfies ModelCosts
 
 export const COST_SONNET_55 = { inputTokens: 2, outputTokens: 10, promptCacheWriteTokens: 2.5, promptCacheReadTokens: 0.2, webSearchRequests: 0.01 } as const satisfies ModelCosts
@@ -43,6 +61,7 @@ export const COST_OPUS_55 = { inputTokens: 4, outputTokens: 20, promptCacheWrite
 const STANDARD_CONFIG_COSTS = [
   [CLAUDE_3_5_HAIKU_CONFIG, COST_HAIKU_35],
   [CLAUDE_HAIKU_4_5_CONFIG, COST_HAIKU_45],
+  [CLAUDE_HAIKU_5_5_CONFIG, COST_HAIKU_55],
   [CLAUDE_3_5_V2_SONNET_CONFIG, COST_TIER_3_15],
   [CLAUDE_3_7_SONNET_CONFIG, COST_TIER_3_15],
   [CLAUDE_SONNET_4_CONFIG, COST_TIER_3_15],
@@ -86,4 +105,10 @@ function standardCanonicalId(model: string): string {
 export function getConfiguredStandardModelCosts(model: string): ModelCosts | undefined {
   const configuredId = model.trim().toLowerCase().replace(/\[1m\]$/i, '')
   return CONFIGURED_STANDARD_MODEL_COSTS.get(configuredId)
+}
+
+/** The rates that apply to one request, given its prompt size in tokens. */
+export function ratesForPrompt(costs: ModelCosts, promptTokens: number): Omit<ModelCosts, 'longPrompt'> {
+  const tier = costs.longPrompt
+  return tier && promptTokens > tier.promptTokens ? tier.rates : costs
 }

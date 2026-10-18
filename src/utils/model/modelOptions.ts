@@ -22,6 +22,7 @@ import {
   COST_FABLE_10_50,
   COST_HAIKU_35,
   COST_HAIKU_45,
+  COST_HAIKU_55,
   formatModelPricing,
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
@@ -218,6 +219,17 @@ function getCustomHaikuOption(): ModelOption | undefined {
   }
 }
 
+function getHaiku55Option(): ModelOption {
+  const is3P = getAPIProvider() !== 'firstParty'
+  return {
+    value: 'haiku',
+    label: 'Haiku 5.5',
+    description: `Haiku 5.5 · Fast, low cost for quick answers${is3P ? '' : ` · ${formatModelPricing(COST_HAIKU_55)}`}`,
+    descriptionForModel:
+      'Haiku 5.5 - fast, low-cost model for quick answers. Less capable than Sonnet 5.5.',
+  }
+}
+
 function getHaiku45Option(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   return {
@@ -324,12 +336,6 @@ const MaxSonnet55Option: ModelOption = {
   description: 'Sonnet 5.5 · Best for everyday tasks',
 }
 
-const MaxHaiku45Option: ModelOption = {
-  value: 'haiku',
-  label: 'Haiku 4.5',
-  description: 'Haiku 4.5 · Fastest for quick answers',
-}
-
 function getOpusPlanOption(): ModelOption {
   return {
     value: 'opusplan',
@@ -353,7 +359,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       getDefaultOptionForUser(),
       ...antModelOptions,
       getMergedOpus1MOption(fastMode),
-      getHaiku45Option(),
+      getHaiku55Option(),
     ]
   }
 
@@ -376,7 +382,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         getFable5Option(),
         getOpus55Option(),
         getSonnet55Option(),
-        getHaiku45Option(),
+        getHaiku55Option(),
       )
     }
     return codexOptions
@@ -396,7 +402,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         premiumOptions.push(getMaxOpus46_1MOption(fastMode))
       }
       premiumOptions.push(MaxSonnet55Option)
-      premiumOptions.push(MaxHaiku45Option)
+      premiumOptions.push(getHaiku55Option())
       return premiumOptions
     }
 
@@ -411,7 +417,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         standardOptions.push(getMaxOpus46_1MOption(fastMode))
       }
     }
-    standardOptions.push(MaxHaiku45Option)
+    standardOptions.push(getHaiku55Option())
     return standardOptions
   }
 
@@ -427,7 +433,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         payg1POptions.push(getOpus46_1MOption(fastMode))
       }
     }
-    payg1POptions.push(getHaiku45Option())
+    payg1POptions.push(getHaiku55Option())
     return payg1POptions
   }
 

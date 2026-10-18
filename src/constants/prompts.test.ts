@@ -281,7 +281,7 @@ describe('mechanical prompt cleanup', () => {
     expect(promptsSource).not.toContain('FRONTIER_MODEL_NAME')
     expect(promptsSource).not.toContain('CLAUDE_4_5_OR_4_6_MODEL_IDS')
     expect(prompt).toContain(
-      'The most recent Claude models are the Claude 5 family and Haiku 4.5',
+      'The most recent Claude models are the Claude 5 family. Model IDs',
     )
     expect(promptsSource).toContain(
       'In agent threads, a \\`cd\\` applies only to the current Bash call',

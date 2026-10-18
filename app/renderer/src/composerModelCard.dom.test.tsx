@@ -237,11 +237,22 @@ test('the card opens on a provider-grouped model list, one row per option', asyn
   // Grouped, so the provider is said ONCE per group instead of on all four rows.
   expect(panel?.textContent).toContain('OpenAI')
   expect(panel?.textContent).toContain('Anthropic')
-  expect(rows(tree)).toHaveLength(4)
+  expect(rows(tree)).toHaveLength(3)
   expect(rowNamed(tree, 'Opus 5')).toBeTruthy()
-  // The Default row names what it currently resolves to, and only because it is
-  // the live selection would it ever be able to.
-  expect(rowNamed(tree, 'Default (recommended)')?.textContent).not.toContain(
+  // The engine still offers a provider-default row; it names no model, so the
+  // picker leaves it out.
+  expect(rowNamed(tree, 'Default (recommended)')).toBeUndefined()
+})
+
+test('a session on the provider default still opens a picker with no checked row', async () => {
+  const tree = await mountBar(recorder(), {
+    runControls: runControls({ selected: null }),
+  })
+  await openCard(tree)
+
+  expect(rows(tree)).toHaveLength(3)
+  expect(rows(tree).some(row => row.getAttribute('aria-checked') === 'true')).toBe(false)
+  expect(menu(tree)?.querySelector('[aria-label="Back to run controls"]')?.textContent).toContain(
     'GPT-5.6 Sol',
   )
 })
@@ -348,15 +359,30 @@ test('a rung writes the effort verb and leaves the card open to show the change'
   expect(menu(tree)).toBeTruthy()
 })
 
-test('Auto is a control of its own, not the bottom rung', async () => {
-  const recorded = recorder()
-  const tree = await mountBar(recorded)
-  await openLadder(tree)
-  const auto = rows(tree).find(row => row.textContent === 'Auto')
-  await click(auto)
+test('the effort header names the current level on the right and offers no Auto control', async () => {
+  const tree = await mountBar(recorder())
+  await openEffort(tree)
 
-  expect(recorded.efforts).toEqual(['auto'])
-  expect(auto?.getAttribute('aria-label')).toBeNull()
+  const header = menu(tree)?.querySelector('.flex.justify-between')
+  expect(header?.textContent).toBe('EffortHigh')
+  expect(header?.lastElementChild?.textContent).toBe('High')
+  expect(rows(tree).find(row => row.textContent === 'Auto')).toBeUndefined()
+})
+
+test('with no level selected the header shows the applied level muted and no rung is checked', async () => {
+  const tree = await mountBar(recorder(), {
+    runControls: {
+      ...runControls(),
+      effort: { current: 'medium', selected: null, supported: true, options: GPT_LEVELS },
+    },
+  })
+  await openEffort(tree)
+
+  const label = menu(tree)?.querySelector('.flex.justify-between')?.lastElementChild
+  expect(label?.textContent).toBe('Medium')
+  expect(label?.className).toContain('text-text-muted')
+  expect(label?.className).not.toContain('text-accent')
+  expect(rungs(tree).some(rung => rung.getAttribute('aria-checked') === 'true')).toBe(false)
 })
 
 test('a model with no effort levels applies and returns to the main controls', async () => {
@@ -416,7 +442,7 @@ test('a locked cross-provider group is inert and reads as one dimmed block', asy
 /* ── keyboard ──────────────────────────────────────────────────────────────
  * The rail is a horizontal control inside a vertical menu, so the two
  * keyboards have to divide the arrows between them: the menu keeps Up/Down
- * (and walks back, Auto, then the rungs), the rail answers Left/Right, and
+ * (and walks the model row, then the rungs), the rail answers Left/Right, and
  * Home/End mean the ends of the SCALE while focus is inside it.
  */
 
@@ -429,16 +455,17 @@ test('arriving on the ladder lands focus on the level already set', async () => 
   expect(focused()?.getAttribute('aria-label')).toBe('High')
 })
 
-test('arriving with no level set lands on Auto, the control that is checked', async () => {
+test('arriving with no level set lands on the model row', async () => {
   const tree = await mountBar(recorder(), {
     runControls: {
       ...runControls(),
       effort: { current: null, selected: null, supported: true, options: GPT_LEVELS },
     },
   })
-  await openLadder(tree)
+  await openEffort(tree)
+  await harness.nextFrame()
 
-  expect(focused()?.textContent).toBe('Auto')
+  expect(focused()?.getAttribute('aria-label')).toBe('Model: GPT-5.6 Sol')
 })
 
 test('left and right walk the rail, and stop at its ends', async () => {
@@ -475,15 +502,14 @@ test('up and down still walk the whole face, rail included', async () => {
   const tree = await mountBar(recorder())
   await openLadder(tree)
 
-  // The menu's own roving is untouched, so the back control and Auto stay
-  // reachable from the rail without a pointer.
+  // The menu's own roving is untouched, so the model row stays reachable from
+  // the rail without a pointer.
   await press(focused()!, 'ArrowUp')
   expect(focused()?.getAttribute('aria-label')).toBe('Medium')
   await press(focused()!, 'ArrowUp')
   await press(focused()!, 'ArrowUp')
-  expect(focused()?.textContent).toBe('Auto')
-  await press(focused()!, 'ArrowUp')
   expect(focused()?.getAttribute('role')).toBe('menuitem')
+  expect(focused()?.getAttribute('aria-label')).toBe('Model: GPT-5.6 Sol')
 })
 
 test('Escape unwinds Model to main and restores its owning row', async () => {
@@ -577,7 +603,7 @@ test('vertical roving reaches the selected effort instead of treating it as Auto
   expect(focused() === selected).toBe(true)
 })
 
-test('the main face keeps the full effort scale and its separate Auto control', async () => {
+test('the main face keeps the full effort scale without an Auto control', async () => {
   const tree = await mountBar(recorder())
   await openEffort(tree)
 
@@ -590,10 +616,10 @@ test('the main face keeps the full effort scale and its separate Auto control', 
     'Max',
     'Ultra',
   ])
-  expect(rows(tree).find(row => row.textContent === 'Auto')).toBeTruthy()
+  expect(rows(tree).find(row => row.textContent === 'Auto')).toBeUndefined()
 })
 
-test('the effort slider flow tracks filled levels and skips the lowest and Auto', async () => {
+test('the effort slider flow tracks filled levels and skips the lowest and an unset level', async () => {
   const tree = await mountBar(recorder())
   await openEffort(tree)
 
