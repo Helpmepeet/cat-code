@@ -99,7 +99,7 @@ describe('TaskOutputTool', () => {
       /\b(?:prefer|use)\s+(?:the\s+)?Read\b[^\n.]*\b(?:task output|output file|file path|path)\b/i,
     )
     expect(prompt).toContain(
-      'Use block=true (default) to wait for task completion when your next step depends on the result.',
+      'For agents, await automatic notification. Use block=true for intentional shell joins or user-requested waits.',
     )
     expect(prompt).toContain(
       'running local agents do not return transcript content',
@@ -207,7 +207,7 @@ describe('TaskOutputTool', () => {
 
       expect(result.data.retrieval_status).toBe('not_ready')
       expect(result.data.task?.output).toBe(
-        'Final answer is not available yet. Use block=true to wait for completion.',
+        'Still running; await the automatic completion notification.',
       )
       expect(result.data.task?.result).toBeUndefined()
       expect(result.data.task?.output).not.toContain(
@@ -236,7 +236,8 @@ describe('TaskOutputTool', () => {
     expect(await output()).toContain('not seen yet: "Report the current result."')
     settleAgentMessageDeliveries(task.id, ids, task.runId, 'delivered', 'completed response', context.setAppState)
     const seen = await output(true)
-    expect(seen).toContain('Final answer is not available yet.')
+    expect(seen).toContain('Still running; await the automatic completion notification.')
+    expect(seen).not.toContain('block=true')
     expect(seen).toContain('seen: "Report the current result."')
     expect(seen).not.toContain('not seen yet')
     expect(state.current.tasks[task.id].notified).toBe(false)

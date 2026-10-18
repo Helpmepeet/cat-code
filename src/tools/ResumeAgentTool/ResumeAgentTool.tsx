@@ -156,7 +156,7 @@ export const ResumeAgentTool = buildTool({
       return {
         data: {
           success: true,
-          message: `Resumed "${resolved.displayName}" in the background.${formatResumedContextNotice(resolved.contextTokens, resolved.contextWindowTokens)}`,
+          message: `Resumed "${resolved.displayName}" in the background.${formatResumedContextNotice(resolved.contextTokens, resolved.contextWindowTokens)} You will be notified when it completes; do independent work or yield.`,
         },
       }
     } catch (e) {

@@ -237,7 +237,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()
       ? `AGENT FORK: Calling ${AGENT_TOOL_NAME} without a subagent_type creates a background fork. Use it when research or multi-step implementation would fill your context with output you won't need again. IF YOU ARE THE FORK: execute directly; do not re-delegate.`
-      : `AGENT TOOL: Work directly unless delegation has a concrete benefit from independent parallel work, isolating substantial intermediate output, or an explicit user request. Review, audit, and verification requests do not imply permission to spawn a reviewer; an independent review agent requires an explicit request. While a background agent owns a subtask, do not duplicate its investigation. Work on an independent part or wait for its result.`
+      : `AGENT TOOL: Work directly unless delegation has a concrete benefit from independent parallel work, isolating substantial intermediate output, or an explicit user request. Review, audit, and verification requests do not imply permission to spawn a reviewer; an independent review agent requires an explicit request. While a background agent owns a subtask, do not duplicate its investigation. Work on an independent part or yield until notified.`
     : null
 
   const items = [

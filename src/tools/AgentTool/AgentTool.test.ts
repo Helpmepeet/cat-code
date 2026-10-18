@@ -749,8 +749,9 @@ describe('AgentTool UI', () => {
       : block.content
 
     expect(text).toContain(
-      'TaskOutput is available for explicit status checks, manual retrieval, or intentional waits',
+      'TaskOutput is available for explicit status checks or manual retrieval',
     )
+    expect(text).not.toContain('intentional waits')
     expect(text).toContain('not the default background-agent result handoff')
     expect(text).not.toContain('block: true')
     expect(text).not.toContain('call TaskOutput')
