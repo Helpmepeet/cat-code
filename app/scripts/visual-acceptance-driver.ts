@@ -134,7 +134,7 @@ const SHOTS: Shot[] = process.env.CATCODE_CAPTURE_SCENE === 'usage' ? [
   }, verify: `document.querySelector('.usage-page').dataset.range === '7d' && document.querySelector('.usage-analytics-details[aria-label="Activity"] .uad-readout').textContent.includes('tool requests')` },
   { name: 'usage-activity-narrow', prepare: async window => {
     window.setContentSize(520, 1100)
-    await window.webContents.executeJavaScript(`document.querySelector('.uad-controls[aria-label="Activity view"] button:nth-child(2)').click()`)
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Activity view"] button:nth-child(2)').click()`)
     await waitForUsage(window, `Boolean(document.querySelector('[aria-label="Ten-minute concurrency heatmap"]'))`, 'ten-minute concurrency')
     await window.webContents.executeJavaScript(`document.querySelector('.uad-heatmap').scrollIntoView({ block: 'center' })`)
   }, verify: `(() => { const chart = document.querySelector('[aria-label="Ten-minute concurrency heatmap"]'); const rect = chart.getBoundingClientRect(); return innerWidth === 520 && !!document.querySelector('.uad-concurrency') && rect.top >= document.querySelector('.usage-sticky-top').getBoundingClientRect().bottom && rect.bottom <= document.querySelector('.usage-page').getBoundingClientRect().bottom; })()` },
