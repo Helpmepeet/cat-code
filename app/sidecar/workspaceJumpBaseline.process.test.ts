@@ -90,6 +90,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
   }
   let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0
   const destinationCommands: string[] = []
+  const peerRosterHolds: boolean[] = []
   let dropped = false, sawNullAdmission = false, destinationPermission = false, destinationReady = false
   let initialSnapshot: WorkspaceHandoffSnapshot | undefined
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -226,6 +227,17 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
       // captured before validating the request. No wire clock is consumed.
       const receivedAt = performance.now()
       const validated = validateHostRequest(frame)
+      if (validated.ok && validated.request.verb === 'peers.list') {
+        const blocked = coordinator!.isPeerAccessBlocked(event.sessionId)
+        peerRosterHolds.push(blocked)
+        supervisor.send(event.sessionId, {
+          type: 'host.result', requestId: validated.requestId,
+          ...(blocked
+            ? { ok: false as const, error: { code: 'session_not_found' as const, message: 'this session is changing workspace' } }
+            : { ok: true as const, value: { peers: [] } }),
+        })
+        return
+      }
       if (!validated.ok || !['workspaces.list', 'workspace.jump', 'workspace.ready', 'workspace.cancel'].includes(validated.request.verb)) throw new Error('Unexpected baseline host request')
       const request = validated.request as WorkspaceHostRequest
       const task = (async () => {
@@ -270,6 +282,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     }
     expect(sourceRequests).toBe(1)
     expect(destinationRequests).toBe(1)
+    expect(peerRosterHolds).toEqual([true])
     expect(sawNullAdmission).toBe(true)
     expect(destinationCommands[0]).toBe('continue')
     expect(destinationCommands.filter(action => action === 'continue')).toHaveLength(fixture === 'lost_continue_command' || fixture === 'exhausted_snapshot_window' ? 2 : 1)
