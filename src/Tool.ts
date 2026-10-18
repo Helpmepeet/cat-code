@@ -77,6 +77,7 @@ export type {
 import type { SpinnerMode } from './components/Spinner.js'
 import type { QuerySource } from './constants/querySource.js'
 import type { SDKStatus } from './entrypoints/agentSdkTypes.js'
+import type { SubagentDisplayFrame } from './utils/messages/mappers.js'
 import type { AppState } from './state/AppState.js'
 import type {
   HookProgress,
@@ -315,6 +316,12 @@ export type ToolUseContext = {
   setStreamMode?: (mode: SpinnerMode) => void
   onCompactProgress?: (event: CompactProgressEvent) => void
   setSDKStatus?: (status: SDKStatus) => void
+  /**
+   * Desktop only: publish one Agent or ResumeAgent run's display step outside
+   * the turn stream, so background and resumed runs show steps live. Unset in
+   * the terminal, where steps keep riding `onProgress`.
+   */
+  publishSubagentFrame?: (frame: SubagentDisplayFrame) => void
   openMessageSelector?: () => void
   updateFileHistoryState: (
     updater: (prev: FileHistoryState) => FileHistoryState,

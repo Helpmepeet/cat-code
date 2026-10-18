@@ -258,7 +258,7 @@ describe('ResumeAgentTool', () => {
     expect(result).toEqual({
       data: {
         success: true,
-        message: 'Resumed "@worker-one" in the background.',
+        message: 'Resumed "@worker-one" in the background. You will be notified when it completes; do independent work or yield.',
       },
     })
   })
@@ -591,7 +591,7 @@ describe('ResumeAgentTool', () => {
 
     expect(result.data).toEqual({
       success: true,
-      message: 'Resumed "Evicted worker" in the background.',
+      message: 'Resumed "Evicted worker" in the background. You will be notified when it completes; do independent work or yield.',
     })
     expect(getState().tasks[agentId].status).toBe('running')
     expect(getState().tasks[agentId].prompt).toBe('resume evicted')
@@ -601,7 +601,7 @@ describe('ResumeAgentTool', () => {
     )
   })
 
-  test('reports resumed context against the model window without post-action advice', async () => {
+  test('reports resumed context against the model window alongside completion guidance', async () => {
     const runAsyncAgentLifecycle = spyOn(
       agentToolUtils,
       'runAsyncAgentLifecycle',
@@ -629,7 +629,7 @@ describe('ResumeAgentTool', () => {
     expect(result.data).toEqual({
       success: true,
       message:
-        'Resumed "Context worker" in the background. Previous context: ~53k / 200k tokens (27%).',
+        'Resumed "Context worker" in the background. Previous context: ~53k / 200k tokens (27%). You will be notified when it completes; do independent work or yield.',
     })
     expect(result.data.message).not.toContain('fresh agent may be cheaper')
     expect(result.data.message).not.toContain('last checkpoint')
@@ -691,7 +691,7 @@ describe('ResumeAgentTool', () => {
 
     expect(result.data).toEqual({
       success: true,
-      message: 'Resumed "@worker-one" in the background.',
+      message: 'Resumed "@worker-one" in the background. You will be notified when it completes; do independent work or yield.',
     })
     expect(getState().tasks[agentId].pendingMessages).toEqual([
       {
@@ -741,7 +741,7 @@ describe('ResumeAgentTool', () => {
 
     expect(result.data).toEqual({
       success: true,
-      message: 'Resumed "@worker-one" in the background.',
+      message: 'Resumed "@worker-one" in the background. You will be notified when it completes; do independent work or yield.',
     })
   })
 })

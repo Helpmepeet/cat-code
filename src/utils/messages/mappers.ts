@@ -402,6 +402,37 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
   })
 }
 
+export type SubagentDisplayFrame = Extract<SDKMessage, { type: 'assistant' | 'user' }>
+
+/**
+ * A subagent's display steps, nested under the run that owns them.
+ *
+ * Live publication and restore both stamp `toSDKMessages` output here, so one
+ * stored message reaches the desktop as one frame under its stored uuid either
+ * way. Splitting by block (`normalizeMessages`) would mint derived uuids that
+ * restore never produces, and the renderer dedupes on uuid.
+ *
+ * Only assistant and user frames survive: a subagent's own system frames (its
+ * compact boundary, statuses) have no nested projection and would read as the
+ * parent's.
+ */
+export function stampSubagentFrames(
+  frames: readonly SDKMessage[],
+  parentToolUseId: string,
+  agentName: string | undefined,
+): SubagentDisplayFrame[] {
+  const stamped: SubagentDisplayFrame[] = []
+  for (const frame of frames) {
+    if (frame.type !== 'assistant' && frame.type !== 'user') continue
+    stamped.push({
+      ...frame,
+      parent_tool_use_id: parentToolUseId,
+      ...(agentName !== undefined ? { agent_name: agentName } : {}),
+    })
+  }
+  return stamped
+}
+
 /**
  * Converts local command output (e.g. /voice, /cost) to a well-formed
  * SDKAssistantMessage so downstream consumers (mobile apps, session-ingress

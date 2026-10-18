@@ -1,5 +1,6 @@
 import type { AppSessionController } from './AppSessionController.js'
 import type { AppSessionEvent } from './sessionEvents.js'
+import { createTurnFrameOwnership } from './turnFrameOwnership.js'
 import { isRateLimitErrorMessage } from '../services/rateLimitMessages.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
 import {
@@ -169,7 +170,10 @@ export function attachThreadGoalScheduler({
     },
   })
 
+  const turnFrames = createTurnFrameOwnership()
+
   function beginTurn(): void {
+    turnFrames.reset()
     turnAttempt = scheduler.getRunningAttempt()
     turnGoalId = getGoal()?.goalId ?? null
     turnStartMs = now()
@@ -294,7 +298,8 @@ export function attachThreadGoalScheduler({
 
   const unsubscribe = controller.subscribe((event: AppSessionEvent) => {
     if (event.type === 'message') {
-      observeMessage(event.message)
+      // A worker from an earlier turn is not this turn's progress.
+      if (turnFrames.observe(event.message)) observeMessage(event.message)
       return
     }
     if (event.type !== 'turn.status') return

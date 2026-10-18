@@ -52,6 +52,9 @@ export function createRuntimeBackedAppSession({
         uuid: randomUUID(),
       })
     },
+    // Background and resumed runs outlive the turn that launched them, so their
+    // steps have no turn stream to ride. Same late-bound controller as above.
+    publishSubagentFrame: frame => controller?.emitMessage(frame),
   })
   controller = createQueryEngineSessionController(session)
   let requiresReconciliation = false

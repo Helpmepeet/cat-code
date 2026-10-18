@@ -27,9 +27,12 @@
  */
 import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import {
+  type AgentRunRecord,
   getDisplayAgentTranscriptForSession,
   listAgentMetadataForSession,
+  previousAgentRuns,
 } from '../../src/utils/sessionStorage.js'
+import { stampSubagentFrames } from '../../src/utils/messages/mappers.js'
 
 import { MAX_HISTORY_REPLAY_BYTES, MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
 import { projectResumedHistory } from './historyProjection.js'
@@ -54,8 +57,63 @@ export type RestoredSubagentBranches = {
 /** A subagent worth reading: metadata that actually carries the join key. */
 export type BranchCandidate = {
   agentId: Parameters<typeof getDisplayAgentTranscriptForSession>[1]
+  /** The latest run's card. Files written before `runs` existed know only this. */
   parentToolUseId: string
   agentName: string | undefined
+  runs?: readonly AgentRunRecord[]
+}
+
+function candidateParentIds(candidate: BranchCandidate): string[] {
+  return [...new Set([
+    ...(candidate.runs ?? []).map(run => run.parentToolUseId),
+    candidate.parentToolUseId,
+  ])]
+}
+
+type DisplayMessage = Parameters<typeof projectResumedHistory>[0][number]
+
+/**
+ * One agent's sidechain, cut into the runs that produced it.
+ *
+ * Original launch and every resume append to ONE chain, so stamping the whole
+ * file with the latest card's id moved earlier runs' steps under the newest
+ * ResumeAgent card. Each run records the uuid it starts at
+ * (`runAgent` → `AgentMetadata.runs`). Messages before the first located start
+ * belong to the run just before it: for a file that predates the record, that
+ * is its one recorded run, the same card every step went to before.
+ */
+export function splitAgentRuns(
+  messages: readonly DisplayMessage[],
+  runs: readonly AgentRunRecord[] | undefined,
+  latestParentToolUseId: string,
+): { parentToolUseId: string; messages: DisplayMessage[] }[] {
+  if (!runs || runs.length === 0) {
+    return [{ parentToolUseId: latestParentToolUseId, messages: [...messages] }]
+  }
+  const indexByUuid = new Map(messages.map((message, index) => [message.uuid, index]))
+  const starts: { runIndex: number; at: number }[] = []
+  runs.forEach((run, runIndex) => {
+    const at = run.firstMessageUuid === undefined ? undefined : indexByUuid.get(run.firstMessageUuid)
+    if (at !== undefined && (starts.length === 0 || at > starts[starts.length - 1]!.at)) {
+      starts.push({ runIndex, at })
+    }
+  })
+  if (starts.length === 0) {
+    return [{ parentToolUseId: runs[runs.length - 1]!.parentToolUseId, messages: [...messages] }]
+  }
+  const segments: { parentToolUseId: string; messages: DisplayMessage[] }[] = []
+  const first = starts[0]!
+  if (first.at > 0) {
+    const owner = runs[Math.max(0, first.runIndex - 1)]!
+    segments.push({ parentToolUseId: owner.parentToolUseId, messages: messages.slice(0, first.at) })
+  }
+  starts.forEach((start, index) => {
+    segments.push({
+      parentToolUseId: runs[start.runIndex]!.parentToolUseId,
+      messages: messages.slice(start.at, starts[index + 1]?.at ?? messages.length),
+    })
+  })
+  return segments
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -127,17 +185,10 @@ export function projectBranchFrames(
   agentName: string | undefined,
   seenUuids: ReadonlySet<string> = new Set(),
 ): SDKMessage[] {
-  const frames: SDKMessage[] = []
-  for (const frame of projectResumedHistory(messages)) {
-    if (frame.type !== 'assistant' && frame.type !== 'user') continue
-    if (typeof frame.uuid === 'string' && seenUuids.has(frame.uuid)) continue
-    frames.push({
-      ...frame,
-      parent_tool_use_id: parentToolUseId,
-      ...(agentName !== undefined ? { agent_name: agentName } : {}),
-    })
-  }
-  return frames
+  // Same stamping as live publication (`runAgent`'s display publisher), so a
+  // restore over live frames lands on the same identities.
+  return stampSubagentFrames(projectResumedHistory(messages), parentToolUseId, agentName)
+    .filter(frame => typeof frame.uuid !== 'string' || !seenUuids.has(frame.uuid))
 }
 
 /**
@@ -198,10 +249,12 @@ async function loadBranchCandidates(
   for (const { agentId, metadata } of spawnOrder) {
     const parentToolUseId = nonEmptyString(metadata.parentToolUseId)
     if (parentToolUseId === undefined) continue
+    const runs = previousAgentRuns(metadata)
     candidates.push({
       agentId,
       parentToolUseId,
       agentName: nonEmptyString(metadata.agentName),
+      ...(Array.isArray(metadata.runs) && runs.length > 0 ? { runs } : {}),
     })
   }
   return candidates
@@ -232,8 +285,8 @@ export async function loadBranchesWithinBudget(
   let remaining = budget
   for (const candidate of candidates) {
     const omit = () => {
-      if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) {
-        unavailable.add(candidate.parentToolUseId)
+      for (const id of candidateParentIds(candidate)) {
+        if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)
       }
     }
     // Exhaustion prevents reads, but does not make a reachable branch empty.
@@ -267,12 +320,13 @@ export async function loadBranchesWithinBudget(
       omit()
       continue
     }
-    const frames = projectBranchFrames(
-      transcript.messages,
-      candidate.parentToolUseId,
-      candidate.agentName,
-      seenUuids,
-    )
+    const runBranches = splitAgentRuns(transcript.messages, candidate.runs, candidate.parentToolUseId)
+      .map(segment => ({
+        parentToolUseId: segment.parentToolUseId,
+        frames: projectBranchFrames(segment.messages, segment.parentToolUseId, candidate.agentName, seenUuids),
+      }))
+      .filter(branch => branch.frames.length > 0)
+    const frames = runBranches.flatMap(branch => branch.frames)
     // Empty and inherited-only branches have no omitted display steps.
     if (frames.length === 0) continue
     if (frames.length > remaining) {
@@ -288,8 +342,7 @@ export async function loadBranchesWithinBudget(
       omit()
       continue
     }
-    const branch = { parentToolUseId: candidate.parentToolUseId, frames }
-    branches.push(branch)
+    branches.push(...runBranches)
     remaining -= frames.length
     work.frameBytes -= frameBytes
     for (const frame of frames) {
@@ -338,13 +391,11 @@ export async function withRestoredSubagentHistory(
     }
     while (pending.length > 0) {
       const reachable = collectToolUseIds(assembled)
-      const matched = pending.filter(candidate =>
-        reachable.has(candidate.parentToolUseId),
-      )
+      const isReachable = (candidate: BranchCandidate) =>
+        candidateParentIds(candidate).some(id => reachable.has(id))
+      const matched = pending.filter(isReachable)
       if (matched.length === 0) break
-      pending = pending.filter(
-        candidate => !reachable.has(candidate.parentToolUseId),
-      )
+      pending = pending.filter(candidate => !isReachable(candidate))
       const seenUuids = collectUuids(assembled)
       const loaded = await loadBranchesWithinBudget(
         sessionId,

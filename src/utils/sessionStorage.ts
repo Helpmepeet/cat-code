@@ -470,6 +470,41 @@ export type AgentMetadata = {
   parentToolUseId?: string
   /** ISO timestamp when this subagent was spawned. Optional — older files lack this. */
   spawnedAt?: string
+  /**
+   * Every run of this agent in start order: the original launch, then each
+   * resume. The sidechain file holds all of them as one chain, and
+   * `parentToolUseId` above names only the latest, so this is what lets a
+   * restore put each step back under the card of the run that produced it.
+   * `firstMessageUuid` is absent for a run recorded before this field existed;
+   * such a run starts at the chain head when it is first, and is otherwise
+   * not attributable. Older files lack the whole field.
+   */
+  runs?: AgentRunRecord[]
+}
+
+export type AgentRunRecord = { parentToolUseId: string; firstMessageUuid?: string }
+
+/** Runs older than this window fold into the earliest kept one. */
+export const MAX_AGENT_RUN_RECORDS = 64
+
+/**
+ * The run list to extend when a new run of `previous` starts. Field types are
+ * re-checked because `readAgentMetadata` parses with an unchecked cast. A file
+ * written before `runs` existed contributes its one known run, with no start.
+ */
+export function previousAgentRuns(previous: AgentMetadata | null): AgentRunRecord[] {
+  if (!previous) return []
+  if (Array.isArray(previous.runs)) {
+    return previous.runs.filter((run): run is AgentRunRecord =>
+      typeof run?.parentToolUseId === 'string' && run.parentToolUseId.length > 0 &&
+      (run.firstMessageUuid === undefined || typeof run.firstMessageUuid === 'string'))
+      .map(run => run.firstMessageUuid === undefined
+        ? { parentToolUseId: run.parentToolUseId }
+        : { parentToolUseId: run.parentToolUseId, firstMessageUuid: run.firstMessageUuid })
+  }
+  return typeof previous.parentToolUseId === 'string' && previous.parentToolUseId.length > 0
+    ? [{ parentToolUseId: previous.parentToolUseId }]
+    : []
 }
 
 /**

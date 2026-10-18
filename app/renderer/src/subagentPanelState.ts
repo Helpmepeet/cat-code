@@ -1,4 +1,4 @@
-import type { SubagentDockRow } from './subagentDockState.js'
+import { isSubagentDockTerminal, type SubagentDockRow } from './subagentDockState.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 const EMPTY_STEPS: NestedTranscriptRow[] = []
@@ -15,14 +15,18 @@ export function selectSubagentPanelBranch(rows: readonly NestedTranscriptRow[], 
   }
 }
 
-/** Async launches and resumed background runs do not forward live step frames. */
+/**
+ * Every Agent and ResumeAgent run publishes its steps under its own tool use,
+ * foreground or background (`runAgent` `publishDisplaySteps`), so a live run
+ * opens before its first step arrives.
+ */
 export function canOpenSubagentPanel(row: SubagentDockRow, rows: readonly NestedTranscriptRow[]): boolean {
-  if (row.toolUseId === null || row.state === 'background' || row.state === 'resumed') return false
+  if (row.toolUseId === null) return false
   // A synthetic resume key has no run-owned transcript correlation. Its reveal
   // target can still point at the previous run.
   if (row.runKey.startsWith('resume:') && row.runKey !== row.toolUseId) return false
   const branch = selectSubagentPanelBranch(rows, row.toolUseId)
-  // Waiting and finished async runs can have only their launch acknowledgement.
-  // A foreground launch may open before its first step arrives.
-  return row.state === 'running' || branch.steps.length > 0 || branch.incomplete
+  // A finished run recorded before steps were published has only its launch
+  // acknowledgement, and keeps the reveal fallback.
+  return !isSubagentDockTerminal(row.state) || branch.steps.length > 0 || branch.incomplete
 }

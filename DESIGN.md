@@ -154,8 +154,9 @@ large pill treatments within one control group.
   workers; the open face is marked. Its two-line Agent identity header omits
   running activity, shows waiting with the assistant baton, and shows settled
   usage on finish. Steps reuse the main transcript and reasoning layout, follow
-  new work until the reader scrolls up, and resume at the bottom. Live
-  background/resumed workers and streamless finished launches keep the existing
+  new work until the reader scrolls up, and resume at the bottom. Background
+  and resumed runs stream steps the same way as foreground runs. A finished
+  launch recorded before runs published their steps keeps the existing
   reveal/Workers fallback. An open panel does not follow identity into a different
   run; an evicted finished selection retains its last observed state.
   See `SubagentWorkspace.tsx` and

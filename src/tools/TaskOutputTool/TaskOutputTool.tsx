@@ -54,7 +54,7 @@ type TaskOutputToolOutput = {
 };
 
 const LOCAL_AGENT_PENDING_OUTPUT =
-  'Final answer is not available yet. Use block=true to wait for completion.';
+  'Still running; await the automatic completion notification.';
 const MESSAGE_RECEIPT_DESCRIPTION =
   "Seen: the worker's model received the message. Not seen yet: it is waiting for the worker's next step. Not confirmed: the request carrying it was cut or failed, so the worker may or may not have read it.";
 const MESSAGE_RECEIPT_LABELS: Record<LocalAgentMessageDeliveryStatus, string> = {
@@ -209,7 +209,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
 - For local agents, the output file can be a full JSONL transcript; this tool returns the clean final answer when available.
 - Takes a task_id parameter identifying the task.
 - Returns task status, output, and type-specific fields.
-- Use block=true (default) to wait for task completion when your next step depends on the result.
+- For agents, await automatic notification. Use block=true for intentional shell joins or user-requested waits.
 - Use block=false for a non-blocking status check; running local agents do not return transcript content.
 - ${MESSAGE_RECEIPT_DESCRIPTION}
 - Task IDs are shown in background task launch results and task notifications.
