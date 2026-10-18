@@ -1,5 +1,7 @@
-import { expect, test } from 'bun:test'
-import { spawn } from 'node:child_process'
+import { expect, spyOn, test } from 'bun:test'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import { NativePowerObservation, parsePowerObservation, unknownPowerObservation, type PowerObservation } from './powerObservation.js'
 
 const open: PowerObservation = { ...unknownPowerObservation(), lid: 'open', thermal: 'nominal', lidNotifications: true }
@@ -7,6 +9,79 @@ const wait = async (predicate: () => boolean) => {
   for (let i = 0; i < 300 && !predicate(); i++) await Bun.sleep(10)
   expect(predicate()).toBe(true)
 }
+
+function controlledChild() {
+  return Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(),
+    unref() {}, kill() { return true }, pid: 123,
+  }) as unknown as ChildProcessWithoutNullStreams
+}
+
+test('reactivation waits for the deliberately stopped child then replaces it without retry', () => {
+  const children: ChildProcessWithoutNullStreams[] = []
+  const observer = new NativePowerObservation('unused', () => {}, () => {
+    const child = controlledChild(); children.push(child); return child
+  })
+  try {
+    observer.setActive(true)
+    observer.setActive(false)
+    observer.setActive(true)
+    expect(children).toHaveLength(1)
+    children[0]!.emit('close')
+    expect(children).toHaveLength(2)
+    expect(observer.read().failures).toBe(0)
+    children[0]!.emit('close')
+    expect(children).toHaveLength(2)
+  } finally {
+    observer.setActive(false)
+    children.at(-1)?.emit('close')
+  }
+})
+
+test('sustained observations reset retry streak but not diagnostic failures', () => {
+  const children: ChildProcessWithoutNullStreams[] = []
+  const scheduled: { callback: () => void; delay: number; timer: ReturnType<typeof setTimeout> }[] = []
+  const originalTimeout = globalThis.setTimeout
+  const timeout = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
+    const timer = originalTimeout(callback, delay)
+    scheduled.push({ callback, delay, timer })
+    return timer
+  }) as typeof setTimeout)
+  let now = 1000
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  const observer = new NativePowerObservation('unused', () => {}, () => {
+    const child = controlledChild(); children.push(child); return child
+  })
+  const emitObservation = () => children.at(-1)!.stdout.emit('data', JSON.stringify(open) + '\n')
+  const failAndRetry = (delay: number) => {
+    children.at(-1)!.emit('close')
+    const retry = scheduled.at(-1)!
+    expect(retry.delay).toBe(delay)
+    clearTimeout(retry.timer)
+    retry.callback()
+  }
+  try {
+    observer.setActive(true)
+    emitObservation()
+    failAndRetry(1000)
+    emitObservation()
+    failAndRetry(2000)
+    emitObservation()
+    now += 60_000
+    emitObservation()
+    failAndRetry(1000)
+    expect(observer.read().failures).toBe(3)
+    emitObservation()
+    failAndRetry(2000)
+    expect(observer.read().failures).toBe(4)
+  } finally {
+    observer.setActive(false)
+    children.at(-1)?.emit('close')
+    for (const entry of scheduled) clearTimeout(entry.timer)
+    timeout.mockRestore()
+    clock.mockRestore()
+  }
+})
 
 test('hardware vocabulary preserves uncertainty and forbids open-lid display observations', () => {
   expect(parsePowerObservation(open)).toEqual(open)

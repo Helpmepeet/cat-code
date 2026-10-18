@@ -42,10 +42,12 @@ export class NativePowerObservation {
   private pulse?: ReturnType<typeof setInterval>
   private wanted = false
   private failures = 0
+  private consecutiveFailures = 0
   private buffer = ''
   private observation = unknownPowerObservation()
   private observedAt?: number
   private stopping = false
+  private intentionallyStopped = false
 
   constructor(private readonly helper: string, private readonly changed: (reason: string) => void,
     private readonly launch = () => spawn(helper, ['--observe-power'], { stdio: 'pipe' })) {}
@@ -66,7 +68,8 @@ export class NativePowerObservation {
     if (!this.wanted || this.child || this.timer) return
     let child: ChildProcessWithoutNullStreams
     try { child = this.launch() } catch { this.failed(); return }
-    this.child = child; this.stopping = false; this.buffer = ''; this.observedAt = undefined
+    this.child = child; this.stopping = false; this.intentionallyStopped = false; this.buffer = ''; this.observedAt = undefined
+    let healthySince: number | undefined
     child.unref()
     const timeout = setTimeout(() => { if (this.observedAt === undefined) this.retire(child) }, 5000)
     timeout.unref()
@@ -90,6 +93,9 @@ export class NativePowerObservation {
         const different = JSON.stringify(this.observation) !== JSON.stringify(observation)
         const first = this.observedAt === undefined
         this.observation = observation; this.observedAt = Date.now()
+        healthySince ??= this.observedAt
+        // A startup frame alone does not make an immediately crashing child healthy.
+        if (this.observedAt - healthySince >= 60_000) this.consecutiveFailures = 0
         if (different || first) this.changed('hardware-state')
       }
     })
@@ -104,14 +110,18 @@ export class NativePowerObservation {
       this.pulse = undefined; this.child = undefined; this.observedAt = undefined
       if (this.timer) clearTimeout(this.timer)
       this.timer = undefined
-      if (this.wanted) this.failed()
+      if (this.wanted) {
+        if (this.intentionallyStopped) this.start()
+        else this.failed()
+      }
     })
   }
   private failed(): void {
     this.failures++
+    this.consecutiveFailures++
     this.changed('hardware-observer-unavailable')
     if (!this.wanted || this.timer) return
-    this.timer = setTimeout(() => { this.timer = undefined; this.start() }, Math.min(60_000, 1000 * 2 ** Math.min(this.failures - 1, 6)))
+    this.timer = setTimeout(() => { this.timer = undefined; this.start() }, Math.min(60_000, 1000 * 2 ** Math.min(this.consecutiveFailures - 1, 6)))
     this.timer.unref()
   }
   private retire(child: ChildProcessWithoutNullStreams): void {
@@ -126,6 +136,7 @@ export class NativePowerObservation {
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
     if (this.child) {
+      this.intentionallyStopped = true
       if (this.stopping) this.child.kill('SIGKILL')
       else this.retire(this.child)
     }
