@@ -9,7 +9,7 @@ export function buildLidHelper(): void {
   const source = join(dirname(fileURLToPath(import.meta.url)), '../native/lid-closed')
   const output = join(source, 'dist')
   mkdirSync(output, { recursive: true })
-  const sources = ['LidCore.swift','LidSecurity.swift','LidPlatform.swift','main.swift','install.sh','uninstall.sh']
+  const sources = ['LidCore.swift','LidSecurity.swift','LidPlatform.swift','PowerObservation.swift','main.swift','install.sh','uninstall.sh']
   const digest = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url)))
     .update(sources.map(name => readFileSync(join(source, name), 'utf8')).join('\n')).digest('hex')
   const manifestPath = join(output, 'manifest.json')

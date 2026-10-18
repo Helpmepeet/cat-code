@@ -66,6 +66,17 @@ import Darwin
         reject(["op": "start", "identity": id, "allowance": 900])
         precondition(mutations == 0 && !controller.snapshot().record.needsRestore, "closed-lid Start changed power or admitted intent")
         safety.lidClosed = false
+        try start(300)
+        precondition(controller.snapshot().record.allowance == 300 && controller.snapshot().record.deadline == time + 300, "five-minute Start did not reach native authority")
+        for _ in 0..<75 { time += 4; _ = try controller.command(["op": "pulse", "identity": id]) }
+        precondition(controller.snapshot().record.reason == "expired" && safety.sleepDisabled == false, "five-minute lease did not expire and restore")
+        try start()
+        let shortBegan = time
+        time += 4
+        _ = try controller.command(["op": "adjust", "identity": id, "allowance": 300])
+        precondition(controller.snapshot().record.deadline == shortBegan + 300, "five-minute adjustment reset elapsed time")
+        reject(["op": "adjust", "identity": id, "allowance": 600])
+        _ = try controller.command(["op": "stop", "identity": id])
         try start()
         precondition(controller.snapshot().record.phase == "active")
         let original = controller.snapshot().record.deadline

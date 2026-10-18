@@ -18,6 +18,14 @@ async function verifiedLidAssets(assets: string): Promise<Record<string, Buffer>
   }
   return result
 }
+export async function lidHelperCurrent(assets: string, helper = LID_HELPER): Promise<boolean> {
+  const verified = await verifiedLidAssets(assets)
+  try { return (await readFile(helper)).equals(verified.helper!) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
 export type LidNativeSnapshot = {
   record: { phase: string; identity?: string; began: number; deadline: number; allowance: number;
     reason?: string; error?: string; needsRestore: boolean; sleepRequested: boolean;

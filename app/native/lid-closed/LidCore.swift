@@ -271,7 +271,7 @@ final class LidController {
                       let id, UUID(uuidString: id) != nil, input.count == 3,
                       let number = input["allowance"] as? NSNumber,
                       case let seconds = number.doubleValue, seconds.isFinite,
-                      experiment ? (seconds >= 10 && seconds <= 60) : [900.0, 1800, 3600, 7200].contains(seconds) else {
+                      experiment ? (seconds >= 10 && seconds <= 60) : [300.0, 900, 1800, 3600, 7200].contains(seconds) else {
                     throw LidFailure("start-refused")
                 }
                 guard experiment || qualified else { throw LidFailure("hardware-unqualified") }
@@ -309,7 +309,7 @@ final class LidController {
             case "adjust":
                 guard (!record.draining || applicationTrial), !experiment, input.count == 3, record.phase == "active", record.identity == id,
                       let number = input["allowance"] as? NSNumber,
-                      case let seconds = number.doubleValue, [900.0, 1800, 3600, 7200].contains(seconds) else { throw LidFailure("adjust-refused") }
+                      case let seconds = number.doubleValue, [300.0, 900, 1800, 3600, 7200].contains(seconds) else { throw LidFailure("adjust-refused") }
                 guard record.boot == boot, time < record.deadline, time - record.clientPulse <= lidHeartbeatLimit else {
                     try restore(&record, reason: time >= record.deadline ? "expired" : "supervision-lost", sleep: safety.lidClosed == true); return
                 }

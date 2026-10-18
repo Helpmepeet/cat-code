@@ -4,6 +4,8 @@ import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from
 import { join } from 'node:path'
 import { release as osRelease } from 'node:os'
 import { parseOperationalRecord } from '../shared/operationalLog.js'
+import type { DesktopPower } from './desktopPower.js'
+import { parsePowerObservation, unknownPowerObservation, POWER_OBSERVATION_LIMITATIONS } from './powerObservation.js'
 import {
   DELIVERY_ANOMALY_KINDS,
   DELIVERY_ROLLUP_FILE_PREFIX,
@@ -72,6 +74,7 @@ export function buildDiagnosticsBundle({
   currentLaunchId,
   buildId,
   commitId,
+  power,
 }: {
   logsDirectory: string
   appVersion: string
@@ -80,6 +83,7 @@ export function buildDiagnosticsBundle({
   currentLaunchId: string
   buildId?: string
   commitId?: string
+  power?: () => ReturnType<DesktopPower['read']> | undefined
 }): string {
   const streams: { operational: unknown[]; deliveryTrace: TraceRecord[]; deliveryRollup: TraceRecord[] } =
     { operational: [], deliveryTrace: [], deliveryRollup: [] }
@@ -208,6 +212,7 @@ export function buildDiagnosticsBundle({
       { sourceWindowTruncated, bundleLimitReached: bundleLimitReached || rollupLimitReached, sourceReadFailures, recordsRejected },
     ),
     stuckSessions: deriveStuckSessionSummaries(streams.deliveryTrace),
+    power: projectPowerDiagnostics(power?.()),
     streams,
     excluded: [
       'transcripts', 'transcript caches', 'settings', 'vaults', 'account files',
@@ -218,6 +223,30 @@ export function buildDiagnosticsBundle({
   // Entry admission is capped at half the bundle budget, so a normal manifest
   // cannot make the JSON invalid by requiring a post-serialization slice.
   return JSON.stringify(result, null, 2)
+}
+
+/** A second-pass allowlist keeps future operational payloads out of exports. */
+function projectPowerDiagnostics(value: ReturnType<DesktopPower['read']> | undefined) {
+  if (!value) return undefined
+  const count = (n: number) => Number.isSafeInteger(n) && n >= 0 ? n : 0
+  const a = value.assertion
+  const h = value.hardware
+  return {
+    sessions: count(value.sessions),
+    assertion: {
+      desired: a.desired === true, references: count(a.references), suppressed: a.suppressed === true,
+      active: count(a.active), starting: count(a.starting), retiring: count(a.retiring), tracked: count(a.tracked),
+      failures: count(a.failures), recoveries: count(a.recoveries), retryPending: a.retryPending === true,
+      health: ['idle', 'process-running', 'recovering'].includes(a.health) ? a.health : 'unknown',
+    },
+    hardware: {
+      status: ['inactive', 'observing', 'unavailable'].includes(h.status) ? h.status : 'unavailable',
+      observation: parsePowerObservation(h.observation) ?? unknownPowerObservation(),
+      observedAt: h.observedAt !== null && Number.isSafeInteger(h.observedAt) && h.observedAt >= 0 ? h.observedAt : null,
+      failures: count(h.failures),
+    },
+    limitations: { ...POWER_OBSERVATION_LIMITATIONS },
+  }
 }
 
 export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {

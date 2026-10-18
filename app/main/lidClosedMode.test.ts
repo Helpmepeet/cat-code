@@ -11,6 +11,7 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'cat-lid-owner-'))
   const marker = join(directory, 'pending.json')
   let installed = false
+  let outdated = false
   let installGate: ReturnType<typeof deferred> | undefined
   let startGate: ReturnType<typeof deferred> | undefined
   let failRestore = false
@@ -27,12 +28,14 @@ function fixture() {
   const calls: string[] = []
   const deps = {
     marker, installed: () => installed,
+    current: async () => installed && !outdated,
     hardware: async () => ({ qualified: true, evidence: 'fixture', model: 'fixture', osBuild: 'fixture', safety: snapshot.safety }),
     install: async () => {
       calls.push('install'); await installGate?.promise
       if (failInstall) throw new Error('Authorization cancelled')
       if (cancelInstall) throw new LidSetupCancelled('Administrator setup was cancelled.')
       installed = true
+      outdated = false
       if (partialInstallFailure) {
         partialInstallFailure = false; failRestore = true
         snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'unresolved', identity: randomUUID(), needsRestore: true }, safety: { ...snapshot.safety, sleepDisabled: true } }
@@ -63,6 +66,7 @@ function fixture() {
   }
   let mode = new LidClosedMode(deps)
   return { get mode() { return mode }, marker, calls, phases,
+    existingHelper(stale = false) { installed = true; outdated = stale },
     setupGate() { installGate = deferred(); return installGate },
     nativeStartGate() { startGate = deferred(); return startGate },
     failRestore(value: boolean) { failRestore = value },
@@ -98,6 +102,68 @@ test('manual mode starts without any running Cat Code work', async () => {
     expect(f.mode.read().phase).toBe('active')
     await until(() => f.calls.includes('pulse'))
     expect(f.mode.read().phase).toBe('active')
+  } finally { await f.cleanup() }
+})
+
+test('five-minute mode reaches the native owner as a 300-second allowance', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'start', minutes: 5 })
+    expect(f.mode.read()).toMatchObject({ phase: 'active', allowance: 5, remainingSeconds: 300 })
+  } finally { await f.cleanup() }
+})
+
+test('an older installed helper is upgraded on start, not during initialization', async () => {
+  const f = fixture()
+  try {
+    f.existingHelper(true)
+    await f.mode.initialize()
+    expect(f.calls).toEqual(['status'])
+    await f.mode.command({ action: 'start', minutes: 5 })
+    expect(f.calls).toEqual(['status', 'install', 'start'])
+    expect(f.mode.read()).toMatchObject({ phase: 'active', allowance: 5, remainingSeconds: 300 })
+  } finally { await f.cleanup() }
+})
+
+test('an unchanged installed helper starts without administrator setup', async () => {
+  const f = fixture()
+  try {
+    f.existingHelper()
+    await f.mode.initialize()
+    await f.mode.command({ action: 'start', minutes: 5 })
+    expect(f.calls).toEqual(['status', 'start'])
+    expect(f.mode.read().phase).toBe('active')
+  } finally { await f.cleanup() }
+})
+
+test('cancelling a helper upgrade preserves confirmed normal sleep without starting', async () => {
+  const f = fixture()
+  try {
+    f.existingHelper(true)
+    await f.mode.initialize()
+    f.cancelAdministratorDialog()
+    await f.mode.command({ action: 'start', minutes: 5 })
+    expect(f.calls).toEqual(['status', 'install'])
+    expect(f.mode.read()).toMatchObject({ phase: 'off', installed: true })
+    expect(f.mode.read().error).toBeUndefined()
+    expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+  } finally { await f.cleanup() }
+})
+
+test('cancelling during an upgrade cannot activate the newly installed helper', async () => {
+  const f = fixture()
+  try {
+    f.existingHelper(true)
+    await f.mode.initialize()
+    const gate = f.setupGate()
+    const start = f.mode.command({ action: 'start', minutes: 5 })
+    await until(() => f.calls.includes('install'))
+    const cancel = f.mode.command({ action: 'cancel' })
+    gate.resolve()
+    await Promise.all([start, cancel])
+    expect(f.calls).not.toContain('start')
+    expect(f.mode.read().phase).toBe('off')
   } finally { await f.cleanup() }
 })
 

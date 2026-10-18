@@ -1,6 +1,6 @@
 // Host-owned controls. No renderer method forwards these to an engine.
 // Contract: docs/design/2026-10-15-lid-closed-runtime-contract.md.
-export const LID_PRESETS = [15, 30, 60, 120] as const
+export const LID_PRESETS = [5, 15, 30, 60, 120] as const
 export type LidPreset = typeof LID_PRESETS[number]
 export type LidWorkRun = {
   id: string

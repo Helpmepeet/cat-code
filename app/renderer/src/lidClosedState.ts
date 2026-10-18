@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { LidModeCommand, LidModeView } from '../../shared/lidClosed.js'
+import { LID_PRESETS, type LidModeCommand, type LidModeView } from '../../shared/lidClosed.js'
 export type LidPresentation = {
   view: LidModeView
   command(value: LidModeCommand): void
@@ -8,9 +8,9 @@ export type LidPresentation = {
 export const LidClosedContext = createContext<LidPresentation | null>(null)
 export function useLidClosed(): LidPresentation | null { return useContext(LidClosedContext) }
 export function lidFill(minutes: number): number {
-  const ticks = [0,15,30,60,120]
+  const ticks = [0, ...LID_PRESETS]
   const value = Math.max(0, Math.min(120, minutes))
-  for (let i = 1; i < ticks.length; i++) if (value <= ticks[i]!) return ((i - 1) + (value - ticks[i - 1]!) / (ticks[i]! - ticks[i - 1]!)) / 4
+  for (let i = 1; i < ticks.length; i++) if (value <= ticks[i]!) return ((i - 1) + (value - ticks[i - 1]!) / (ticks[i]! - ticks[i - 1]!)) / LID_PRESETS.length
   return 1
 }
 export function lidReason(reason?: string): string {
