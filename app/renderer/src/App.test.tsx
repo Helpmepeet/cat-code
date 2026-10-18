@@ -241,7 +241,7 @@ test('CC-91 wiring tripwire: App owns one presentation state and passes its pend
   const normalized = source.replace(/\s+/g, ' ')
 
   expect(normalized).toContain(
-    'useAccountsPoolPresentationState( accounts.pool !== null, )',
+    'useAccountsPoolPresentationState( hasCompleteAccountsUsage(accounts.pool), )',
   )
   expect(normalized).toContain(
     "const accountsUsagePending = accountsPoolPresentationState === 'pending'",

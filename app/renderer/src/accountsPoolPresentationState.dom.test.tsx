@@ -9,7 +9,10 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import {
   ACCOUNTS_POOL_PRESENTATION_TIMEOUT_MS,
   useAccountsPoolPresentationState,
+  hasCompleteAccountsUsage,
 } from './accountsState.js'
+import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+import { useAccountUsageWindows } from './welcomeUsage.js'
 
 let harness: DomTestHarness
 
@@ -127,4 +130,38 @@ test('StrictMode cleanup prevents a late duplicate presentation transition', asy
 
   expect(readState(tree.container)).toBe('loaded')
   expect(states).not.toContain('unavailable')
+})
+
+test('partial cached startup stays pending until every row has a reading', async () => {
+  const snapshot = {
+    accounts: [
+      { usagePrimary: 42, usageWeekly: null, usageStale: true },
+      { usagePrimary: null, usageWeekly: null },
+    ],
+    anthropicAccounts: [],
+  } as unknown as AccountsSnapshot
+  const tree = await harness.mount(
+    <Probe hasGlobalPool={hasCompleteAccountsUsage(snapshot)} />,
+  )
+  expect(readState(tree.container)).toBe('pending')
+  snapshot.accounts[1]!.usagePrimary = 20
+  await tree.render(<Probe hasGlobalPool={hasCompleteAccountsUsage(snapshot)} />)
+  expect(readState(tree.container)).toBe('loaded')
+})
+
+test('a mounted fresh usage snapshot expires at reset without another publication', async () => {
+  const reset = (Date.now() + 150) / 1000
+  const account = {
+    usagePrimary: 42, usageResetAt: reset, usagePrimaryWindowSeconds: 18_000,
+    usageWeekly: null, usageWeeklyResetAt: null, usageSecondaryWindowSeconds: null,
+    usageStale: false,
+  } as AccountStatus
+  function UsageProbe() {
+    const windows = useAccountUsageWindows(account)
+    return <span data-testid="state">{windows.fiveHour?.percent ?? 'expired'}</span>
+  }
+  const tree = await harness.mount(<UsageProbe />)
+  expect(readState(tree.container)).toBe('42')
+  await settle(250)
+  expect(readState(tree.container)).toBe('expired')
 })

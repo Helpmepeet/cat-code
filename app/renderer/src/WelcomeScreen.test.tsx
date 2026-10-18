@@ -417,7 +417,7 @@ test('weekly-only usage expands across the full usage track', () => {
       accounts={pool([account({
         usagePrimary: 37,
         usagePrimaryWindowSeconds: 604_800,
-        usageResetAt: 1_700_000_000,
+        usageResetAt: Math.floor(Date.now() / 1000) + 86400,
         usageSecondaryWindowSeconds: null,
         usageWeeklyResetAt: null,
       })])}

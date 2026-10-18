@@ -248,6 +248,7 @@ import {
   selectGlobalAccountsSnapshot,
   selectWelcomeAccountsSnapshot,
   useAccountsPoolPresentationState,
+  hasCompleteAccountsUsage,
 } from './accountsState.js'
 import { selectAccountHealthBanner } from './accountHealthBanner.js'
 import { BannerStack, type BannerNotice } from './BannerStack.js'
@@ -852,7 +853,7 @@ export function App() {
     createAccountsState,
   )
   const accountsPoolPresentationState = useAccountsPoolPresentationState(
-    accounts.pool !== null,
+    hasCompleteAccountsUsage(accounts.pool),
   )
   const accountsUsagePending = accountsPoolPresentationState === 'pending'
   const [workspaceTrust, dispatchWorkspaceTrust] = useReducer(

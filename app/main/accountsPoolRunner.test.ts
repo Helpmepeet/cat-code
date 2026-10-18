@@ -257,6 +257,22 @@ describe('cache-first account usage refresh', () => {
     expect(delivered.map(snapshot => snapshot.accounts[0]!.alias)).toEqual(['fresh'])
   })
 
+  test('preserves partial saved readings while an uncached account awaits refresh', async () => {
+    const saved = pool(['saved', 'uncached'])
+    saved.accounts[0]!.usageStale = true
+    saved.accounts[1]!.usagePrimary = null
+    saved.accounts[1]!.usageWeekly = null
+    const delivered: AccountsSnapshot[] = []
+    await runAccountsPoolRefresh({
+      command: 'bun', args: [], cwd: process.cwd(),
+      spawnWorker: sequence([{ pool: saved }, { pool: pool(['fresh', 'fresh']) }], []),
+      onPool: snapshot => delivered.push(snapshot),
+    }, true)
+    expect(delivered).toHaveLength(2)
+    expect(delivered[0]!.accounts[0]!.usagePrimary).toBe(42)
+    expect(delivered[0]!.accounts[1]!.usagePrimary).toBeNull()
+  })
+
   test('a failed saved-cache worker does not prevent the live refresh', async () => {
     const delivered: AccountsSnapshot[] = []
     const logs: string[] = []

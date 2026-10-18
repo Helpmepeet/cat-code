@@ -432,9 +432,18 @@ export type AccountsPoolPresentationState = 'pending' | 'loaded' | 'unavailable'
  */
 export const ACCOUNTS_POOL_PRESENTATION_TIMEOUT_MS = 2 * 60 * 1000
 
+/** Partial saved snapshots can paint readings without completing missing rows. */
+export function hasCompleteAccountsUsage(snapshot: AccountsSnapshot | null): boolean {
+  return snapshot !== null &&
+    snapshot.accounts.every(account =>
+      account.usagePrimary !== null || account.usageWeekly !== null) &&
+    snapshot.anthropicAccounts.every(account =>
+      account.usageFiveHour != null || account.usageWeekly != null)
+}
+
 /**
- * Keeps the Welcome usage rail neutral until main has published its first
- * global pool event, then latches that arrival for this mounted document.
+ * Keeps missing Welcome usage neutral until the pool has readings for all rows
+ * or the local deadline passes. Partial snapshots still paint their saved rows.
  */
 export function useAccountsPoolPresentationState(
   hasGlobalPool: boolean,

@@ -13,6 +13,7 @@ import { dirname, join } from 'path'
 import { z } from 'zod/v4'
 import { writeFileAtomicDurable } from '../../utils/atomicFile.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { lock } from '../../utils/lockfile.js'
 import type { ClaudePoolAccount } from './claudeAccountPool.js'
 import { fetchUtilizationForToken, type Utilization } from './usage.js'
 
@@ -102,9 +103,12 @@ function toWindow(
 function current(
   window: ClaudeUsageWindow | null,
   now: number,
+  fetchedAt: number,
 ): ClaudeUsageWindow | null {
   if (!window) return null
-  return window.resetAt !== null && window.resetAt * 1000 <= now ? null : window
+  return window.resetAt === null
+    ? (now - fetchedAt < CLAUDE_USAGE_FRESH_MS ? window : null)
+    : (window.resetAt * 1000 <= now ? null : window)
 }
 
 /** Same five-minute margin as `isOAuthTokenExpired`, against the caller's clock. */
@@ -164,7 +168,36 @@ export async function fetchClaudePoolUsage(
   if (Object.keys(cached).some(id => !(id in next))) changed = true
   if (changed) {
     try {
-      await writeCache(cacheFile, next)
+      mkdirSync(dirname(cacheFile), { recursive: true, mode: 0o700 })
+      const release = await lock(cacheFile, {
+        realpath: false,
+        stale: 120_000,
+        update: 30_000,
+        retries: { retries: 100, minTimeout: 20, maxTimeout: 100 },
+      })
+      try {
+        const latest = readCache(cacheFile)
+        const merged = { ...latest }
+        for (const id of Object.keys(cached)) {
+          if (!(id in next) && latest[id]?.fetchedAt === cached[id]?.fetchedAt) {
+            delete merged[id]
+          }
+        }
+        for (const [id, entry] of Object.entries(next)) {
+          // A concurrent removal wins over a refresh based on the old cache.
+          if (cached[id] && !latest[id]) continue
+          if (!latest[id] || entry.fetchedAt > latest[id].fetchedAt) {
+            merged[id] = entry
+          }
+        }
+        await writeCache(cacheFile, merged)
+        for (const id of Object.keys(next)) {
+          if (merged[id]) next[id] = merged[id]
+          else delete next[id]
+        }
+      } finally {
+        await release()
+      }
     } catch {
       // A display cache that cannot be written only costs a re-read next time.
     }
@@ -172,8 +205,8 @@ export async function fetchClaudePoolUsage(
 
   const usage = new Map<string, ClaudeAccountUsage>()
   for (const [id, entry] of Object.entries(next)) {
-    const fiveHour = current(entry.fiveHour, now)
-    const weekly = current(entry.weekly, now)
+    const fiveHour = current(entry.fiveHour, now, entry.fetchedAt)
+    const weekly = current(entry.weekly, now, entry.fetchedAt)
     if (fiveHour || weekly) usage.set(id, { fiveHour, weekly })
   }
   return usage

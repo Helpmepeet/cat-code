@@ -172,3 +172,68 @@ test('removed accounts leave the cache and a corrupt cache is ignored', async ()
     accounts: {},
   })
 })
+
+test('unknown or invalid resets expire by observation age while known windows survive', async () => {
+  for (const resets_at of [null, 'invalid']) {
+    await fetchClaudePoolUsage([account({ accountUuid: 'a' })], {
+      now: NOW, cacheFile,
+      fetchUsage: async () => ({
+        five_hour: { utilization: 40, resets_at },
+        seven_day: reading(0, 70).seven_day,
+      } as Utilization),
+    })
+    const fresh = await fetchClaudePoolUsage([account({ accountUuid: 'a' })], {
+      now: NOW + CLAUDE_USAGE_FRESH_MS - 1, cacheFile, cachedOnly: true,
+    })
+    expect(fresh.get('a')?.fiveHour?.percent).toBe(40)
+    const old = await fetchClaudePoolUsage([account({ accountUuid: 'a' })], {
+      now: NOW + CLAUDE_USAGE_FRESH_MS, cacheFile, cachedOnly: true,
+    })
+    expect(old.get('a')?.fiveHour).toBeNull()
+    expect(old.get('a')?.weekly?.percent).toBe(70)
+    rmSync(cacheFile)
+  }
+})
+
+test('a delayed process cannot overwrite newer observations or resurrect a removed cached account', async () => {
+  const accounts = [account({ accountUuid: 'a' }), account({ accountUuid: 'removed' })]
+  await fetchClaudePoolUsage(accounts, {
+    now: NOW, cacheFile, fetchUsage: async () => reading(10, 10),
+  })
+  const modulePath = new URL('./claudePoolUsage.ts', import.meta.url).href
+  const child = Bun.spawn([process.execPath, '-e', `
+    const { fetchClaudePoolUsage } = await import(${JSON.stringify(modulePath)});
+    let waiting = false;
+    await fetchClaudePoolUsage(${JSON.stringify(accounts)}, {
+      now: ${NOW + CLAUDE_USAGE_FRESH_MS}, cacheFile: ${JSON.stringify(cacheFile)},
+      fetchUsage: async () => {
+        if (!waiting) {
+          waiting = true;
+          process.stdout.write('ready\\n');
+          await Bun.stdin.stream().getReader().read();
+        }
+        return ${JSON.stringify(reading(20, 20))};
+      },
+    });
+  `], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })
+  try {
+    const reader = child.stdout.getReader()
+    const ready = await reader.read()
+    expect(new TextDecoder().decode(ready.value)).toContain('ready')
+    await fetchClaudePoolUsage([accounts[0]!, account({ accountUuid: 'new' })], {
+      now: NOW + 2 * CLAUDE_USAGE_FRESH_MS, cacheFile,
+      fetchUsage: async () => reading(90, 90),
+    })
+    child.stdin.write('continue\n')
+    child.stdin.end()
+    expect(await child.exited).toBe(0)
+    expect(await new Response(child.stderr).text()).toBe('')
+    const saved = JSON.parse(readFileSync(cacheFile, 'utf8')).accounts
+    expect(saved.a.fiveHour.percent).toBe(90)
+    expect(saved.new.fiveHour.percent).toBe(90)
+    expect(saved.removed).toBeUndefined()
+  } finally {
+    if (child.exitCode === null) child.kill()
+    await child.exited
+  }
+})

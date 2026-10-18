@@ -35,8 +35,8 @@ export function selectWelcomeUsageWindows(
   let fiveHour: WelcomeUsageWindow | null = null
   let weekly: WelcomeUsageWindow | null = null
   for (const candidate of candidates) {
-    if (account.usageStale &&
-      (candidate.resetAt == null || candidate.resetAt * 1000 <= now)) continue
+    if ((candidate.resetAt != null && candidate.resetAt * 1000 <= now) ||
+      (account.usageStale && candidate.resetAt == null)) continue
     if (candidate.duration === FIVE_HOUR_WINDOW_SECONDS) {
       fiveHour ??= { percent: candidate.percent, resetAt: candidate.resetAt ?? null }
     } else if (candidate.duration === WEEKLY_WINDOW_SECONDS) {
@@ -51,7 +51,6 @@ export function selectWelcomeUsageWindows(
 export function useAccountUsageWindows(account: AccountStatus): WelcomeUsageWindows {
   const [, setNow] = useState(0)
   useEffect(() => {
-    if (!account.usageStale) return
     const now = Date.now()
     const resets = [account.usageResetAt, account.usageWeeklyResetAt]
       .filter((reset): reset is number => reset != null && reset * 1000 > now)
