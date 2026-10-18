@@ -407,12 +407,25 @@ async function* queryLoop(
   } = params
   const deps = params.deps ?? productionDeps()
 
+  // Cache-sharing children inherit transcript rows, but the starting roster is
+  // main-only. Filter the child view without changing the parent's saved history.
+  const initialMessages = params.toolUseContext.agentId
+    ? params.messages.filter(message => {
+        if (message.type !== 'attachment') return true
+        const attachment = message.attachment
+        return !(typeof attachment === 'object' && attachment !== null &&
+          'type' in attachment && attachment.type === 'peer_roster_snapshot')
+      })
+    : params.messages
+
   // Mutable cross-iteration state. The loop body destructures this at the top
   // of each iteration so reads stay bare-name (`messages`, `toolUseContext`).
   // Continue sites write `state = { ... }` instead of 9 separate assignments.
   let state: State = {
-    messages: params.messages,
-    toolUseContext: params.toolUseContext,
+    messages: initialMessages,
+    toolUseContext: initialMessages === params.messages
+      ? params.toolUseContext
+      : { ...params.toolUseContext, messages: initialMessages },
     maxOutputTokensOverride: params.maxOutputTokensOverride,
     autoCompactTracking: getPersistedAutoCompactTracking(params.toolUseContext),
     stopHookActive: undefined,

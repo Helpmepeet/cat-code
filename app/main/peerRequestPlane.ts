@@ -55,6 +55,7 @@ import {
   MAX_HOST_REQUEST_FRAMES_PER_WINDOW,
   MAX_PEER_DELIVERY_ATTEMPTS,
   MAX_PEER_HOPS,
+  MAX_PEER_ROSTER_BYTES,
   MAX_PEER_TEXT_BYTES,
   MAX_PENDING_PEER_MESSAGES,
   PEER_CHAIN_WINDOW_MS,
@@ -64,6 +65,7 @@ import {
   PEER_WAKE_TIMEOUT_MS,
 } from '../shared/limits.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
+import { parsePeerNoticeInput, type PeerNotice, type PeerNoticeInput } from '../shared/peerNotice.js'
 
 /* ------------------------------------------------------------------------- *
  * Injected dependencies — the narrowest slice of each collaborator, so this
@@ -80,6 +82,7 @@ export type PeerRegistryRow = {
   name?: string
   createdBy?: string
   peerWakeBlocked?: boolean
+  peerNotice?: PeerNotice
   lastAttachedAt: number
   lastMessageSentAt: number | null
   shutdown: 'clean' | 'crashed' | 'parked' | null
@@ -102,6 +105,7 @@ export type PeerRequestPlaneDeps = {
   }
   /** Every current registry row, live and dead alike. Read-only. */
   rows: () => readonly PeerRegistryRow[]
+  setPeerNotice: (appSessionId: SessionId, notice: PeerNoticeInput) => Promise<(PeerNotice & { saved?: false }) | null>
   /** Does a sidecar record still EXIST for this row, live or in between? */
   isLive: (appSessionId: SessionId) => boolean
   /**
@@ -218,7 +222,8 @@ const VERB_ARG_KEYS: Record<
   HostRequestVerb,
   { required: readonly string[]; optional: readonly string[] }
 > = {
-  'peers.list': { required: [], optional: [] },
+  'peers.list': { required: [], optional: ['cursor'] },
+  'peer.announce': { required: ['doing'], optional: ['touches', 'note'] },
   'peer.create': { required: ['prompt'], optional: ['model', 'effort'] },
   // `expectCreatorId` is optional and is checked exactly like `model` /
   // `effort`: a string, bounded by `MAX_HOST_REQUEST_ARG_CHARS`. It narrows a
@@ -282,7 +287,8 @@ function readRequestId(frame: unknown): string | null {
 
 /** The validated request, narrowed to one verb and its own arg shape. */
 export type ValidatedHostRequest =
-  | { verb: 'peers.list' }
+  | { verb: 'peers.list'; cursor?: string }
+  | { verb: 'peer.announce'; notice: PeerNoticeInput }
   | { verb: 'peer.create'; prompt: string; model?: string; effort?: string }
   | {
       verb: 'peer.deliver'
@@ -367,6 +373,12 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
       return { ok: false, requestId, error: fail('bad_request', `unexpected arg "${key}"`) }
     }
   }
+  if (verb === 'peer.announce') {
+    const notice = parsePeerNoticeInput(args)
+    return notice
+      ? { ok: true, requestId, request: { verb, notice } }
+      : { ok: false, requestId, error: fail('bad_request', 'Notice needs one non-empty doing line, up to 16 areas, and at most 1 KiB of text.') }
+  }
   const strings: Record<string, string> = {}
   for (const key of shape.required) {
     const value = args[key]
@@ -399,7 +411,7 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
 
   switch (verb) {
     case 'peers.list':
-      return { ok: true, requestId, request: { verb } }
+      return { ok: true, requestId, request: { verb, ...(strings.cursor !== undefined ? { cursor: strings.cursor } : {}) } }
     case 'peer.create':
       return {
         ok: true,
@@ -1054,14 +1066,61 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * Verbs
    * --------------------------------------------------------------------- */
 
-  function handlePeersList(requesterRow: PeerRegistryRow): HostRequestValues['peers.list'] {
-    const peers = peersOf(requesterRow)
+  function handlePeersList(requesterRow: PeerRegistryRow, cursor?: string): HostRequestValues['peers.list'] {
+    let peers = peersOf(requesterRow)
+      .filter(row => cursor === undefined || row.appSessionId > cursor)
       .map(describe)
       .sort(
         (a, b) =>
           STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity,
       )
-    return { peers }
+    // Reserve every omission marker before budgeting any text.
+    const notices = peers.flatMap(peer => {
+      const notice = peer.status === 'closed' ? undefined : rowFor(peer.appSessionId)?.peerNotice
+      if (!notice) return []
+      peer.noticeOmitted = true
+      return [{ peer, notice }]
+    }).sort((a, b) => b.notice.postedAt - a.notice.postedAt)
+    // Keep addressability intact, even with every registry row parked. Optional
+    // display details yield oldest/closed-first; the wire, not the tool's later
+    // closed-tail filter, is the boundary that needs the byte bound.
+    for (let i = peers.length - 1; utf8Bytes(JSON.stringify({ peers })) > MAX_PEER_ROSTER_BYTES && i >= 0; i--) {
+      const peer = peers[i]!
+      if (peer.title === null && peer.model === undefined && peer.effort === undefined) continue
+      peer.title = null
+      delete peer.model
+      delete peer.effort
+      peer.detailsOmitted = true
+    }
+    let response: HostRequestValues['peers.list'] = { peers }
+    if (utf8Bytes(JSON.stringify(response)) > MAX_PEER_ROSTER_BYTES) {
+      // Manual tabs can exceed the registry's reap target. Page by stable IDs,
+      // not shifting activity/status offsets, if even mandatory rows do not fit.
+      const ordered = [...peers].sort((a, b) => a.appSessionId < b.appSessionId ? -1 : a.appSessionId > b.appSessionId ? 1 : 0)
+      const page: PeerDescriptor[] = []
+      let bytes = 512 // bounded continuation metadata and array punctuation
+      for (const peer of ordered) {
+        const cost = utf8Bytes(JSON.stringify(peer)) + 1
+        if (bytes + cost > MAX_PEER_ROSTER_BYTES) break
+        page.push(peer)
+        bytes += cost
+      }
+      const lastId = page.at(-1)?.appSessionId
+      if (!lastId) throw new Error('Peer descriptor cannot fit in a roster page')
+      peers = page.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity)
+      response = { peers, nextCursor: lastId, remainingPeers: ordered.length - page.length }
+    }
+    const listedIds = new Set(peers.map(peer => peer.appSessionId))
+    for (const { peer, notice } of notices) {
+      if (!listedIds.has(peer.appSessionId)) continue
+      delete peer.noticeOmitted
+      peer.notice = notice
+      if (utf8Bytes(JSON.stringify(response)) > MAX_PEER_ROSTER_BYTES) {
+        delete peer.notice
+        peer.noticeOmitted = true
+      }
+    }
+    return response
   }
 
   async function handlePeerCreate(
@@ -1541,9 +1600,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         case 'peers.list':
           answer(sessionId, validated.requestId, {
             ok: true,
-            value: handlePeersList(requesterRow),
+            value: handlePeersList(requesterRow, request.cursor),
           })
           return
+        case 'peer.announce': {
+          const notice = await deps.setPeerNotice(sessionId, request.notice)
+          answer(sessionId, validated.requestId, notice
+            ? { ok: true, value: { postedAt: notice.postedAt, ...(notice.saved === false ? { saved: false as const } : {}) } }
+            : { ok: false, error: fail('session_not_found', 'This conversation is no longer available.') })
+          return
+        }
         case 'peer.create':
           answer(
             sessionId,

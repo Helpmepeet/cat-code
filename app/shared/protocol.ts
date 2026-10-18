@@ -85,6 +85,7 @@ import type {
   WorkspaceBranchObservation,
 } from './hostApi.js'
 import type { SessionBinding } from './sessionBinding.js'
+import type { PeerNotice, PeerNoticeInput } from './peerNotice.js'
 import type { DebugRendererSnapshot } from './debugState.js'
 import type {
   EditableSettingSource,
@@ -619,6 +620,8 @@ export type HistoryLoadEarlierMessage = {
  */
 export const HOST_REQUEST_VERBS = [
   'peers.list',
+  // Additive verb, not a new inbound kind. See design/2026-10-17-peer-announce.md.
+  'peer.announce',
   'peer.create',
   'peer.deliver',
   'peer.ack',
@@ -744,6 +747,11 @@ export type PeerDescriptor = {
   createdBy?: { appSessionId: SessionId; name: string | null }
   title: string | null
   lastActivity: number
+  /** Title/model/effort left out to fit the roster; the peer itself is still listed. */
+  detailsOmitted?: true
+  notice?: PeerNotice
+  /** A notice exists but its text did not fit the whole-answer budget. */
+  noticeOmitted?: true
 }
 
 /** Why main refused to route a peer message (HRP §4 step 6). */
@@ -814,7 +822,8 @@ export type HostRequestArgs = {
   /** Internal cwd coordination only, never a model-authored destination. See HOST-REQUEST-PLANE. */
   'workspace.transition.begin': { operationId: string }
   'workspace.transition.finish': { operationId: string; cwd: string }
-  'peers.list': Record<string, never>
+  'peers.list': { cursor?: string }
+  'peer.announce': PeerNoticeInput
   'peer.create': { prompt: string; model?: string; effort?: string }
   'peer.deliver': {
     to: string
@@ -843,7 +852,8 @@ export type HostRequestValues = {
   'workspace.cancel': { operationId: string; status: 'cancelled' | 'not_accepted' }
   'workspace.transition.begin': { operationId: string }
   'workspace.transition.finish': { operationId: string }
-  'peers.list': { peers: PeerDescriptor[] }
+  'peers.list': { peers: PeerDescriptor[]; nextCursor?: string; remainingPeers?: number }
+  'peer.announce': { postedAt: number; saved?: false }
   'peer.create': {
     name: string
     appSessionId: SessionId

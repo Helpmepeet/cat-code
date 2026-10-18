@@ -730,10 +730,12 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // acceptEdits mode, which would silently bypass the classifier. REPL
       // code can contain VM escapes between inner tool calls; the classifier
       // must see the glue JavaScript, not just the inner tool calls.
+      // Announce publishes peer text; file-edit approval cannot approve that text.
       if (
         result.behavior === 'ask' &&
         tool.name !== AGENT_TOOL_NAME &&
-        tool.name !== REPL_TOOL_NAME
+        tool.name !== REPL_TOOL_NAME &&
+        tool.name !== 'Announce'
       ) {
         try {
           const parsedInput = tool.inputSchema.parse(input)

@@ -39,6 +39,7 @@ import type { AssistantMessage, Message } from './types/message.js'
 import type { AppState } from './state/AppStateStore.js'
 import type { QueryEngineConfig } from './QueryEngine.js'
 import type { SDKMessage } from './entrypoints/agentSdkTypes.js'
+import type { ToolUseContext } from './Tool.js'
 
 const originalSession = bootstrap.getSessionId()
 const originalProject = bootstrap.getSessionProjectDir()
@@ -294,6 +295,119 @@ test('handoff emits its durable boundary and source usage, then internal continu
   expect(stopHooks).toBe(1)
   expect(runtime.getMessages().filter(m => m.type === 'user' && m.uuid === continuationId)).toHaveLength(1)
   expect(runtime.getMessages().filter(m => m.type === 'user' && m.message.content === 'What is the selected project?')).toHaveLength(1)
+})
+
+test('jump continuation retries its held roster after a tool round and restores the snapshot on resume', async () => {
+  delete process.env.CLAUDE_CODE_SIMPLE
+  const { createPeerStartContext } = await import('../app/sidecar/peerStartContext.js')
+  const { normalizeMessagesForAPI } = await import('./utils/messages.js')
+  const prompts: string[] = []
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages, tools }) {
+    prompts.push(JSON.stringify(normalizeMessagesForAPI(messages, tools)))
+    yield assistant(prompts.length === 1
+      ? [{ type: 'tool_use', id: 'jump-peer-snapshot', name: 'Jump', input: {} }]
+      : prompts.length === 2
+        ? [{ type: 'tool_use', id: 'destination-observe', name: 'Observe', input: {} }]
+        : [{ type: 'text', text: 'continued at destination' }])
+  }))
+  const targetCwd = join(root, 'destination')
+  mkdirSync(targetCwd, { recursive: true })
+  const source = engine([jumpTool()])
+  await drain(source.submitMessage('Move and continue the request'))
+
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const restored = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(restored).not.toBeNull()
+  const observe = buildTool({
+    name: 'Observe', inputSchema: z.object({}), description: async () => 'observe', prompt: async () => 'observe',
+    maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+    async call() { return { data: 'observed' } },
+    mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'observed' }),
+  })
+  let rosterCalls = 0
+  let inputCommitted = false
+  const destination = engine([observe], {
+    cwd: targetCwd, initialMessages: restored!.messages,
+    getTurnStartRuntimeAttachments: createPeerStartContext({
+      cwd: targetCwd, mode: 'jump',
+      requestHost: async () => {
+        rosterCalls++
+        if (!inputCommitted) return { ok: false, error: { code: 'session_not_found', message: 'changing workspace' } } as never
+        return { ok: true, value: { peers: [{
+          name: 'DestinationPeer', status: 'live', presence: 'running', title: 'Destination work',
+          lastActivity: 0, appSessionId: 'peer-app', engineSessionId: 'peer-engine',
+        }] } } as never
+      },
+    }),
+  })
+  await drain(destination.continueHandoff('operation-test', {
+    onHandoffInputCommitted: async () => { inputCommitted = true },
+  }))
+  expect(rosterCalls).toBe(2)
+  expect(prompts).toHaveLength(3)
+  expect(prompts[0]).not.toContain('DestinationPeer')
+  expect(prompts[1]).not.toContain('DestinationPeer')
+  expect(prompts[2]).toContain('DestinationPeer')
+  expect(prompts[2]).toContain(`Other sessions open in this workspace (${targetCwd})`)
+
+  await storage.flushSessionStorage()
+  const resumedDestination = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(resumedDestination).not.toBeNull()
+  const snapshotMessages = resumedDestination!.messages.filter(message =>
+    message.type === 'attachment' &&
+    (message.attachment as { type?: string }).type === 'peer_roster_snapshot',
+  )
+  expect(snapshotMessages).toHaveLength(1)
+  expect((snapshotMessages[0] as { attachment: unknown }).attachment).toMatchObject({
+    type: 'peer_roster_snapshot', workspace: targetCwd,
+  })
+})
+
+test('a real forked agent omits the parent roster from its model request without changing parent history', async () => {
+  const { runForkedAgent } = await import('./utils/forkedAgent.js')
+  const { asSystemPrompt } = await import('./utils/systemPromptType.js')
+  const { createAttachmentMessage } = await import('./utils/attachments.js')
+  const { createUserMessage, normalizeMessagesForAPI } = await import('./utils/messages.js')
+  const snapshot = createAttachmentMessage({
+    type: 'peer_roster_snapshot', workspace: join(root, 'workspace'),
+    asOf: '2026-10-18T00:00:00.000Z',
+    quotedRoster: '{"peers":[{"name":"ParentSnapshotPeerOnly","status":"live"}]}',
+  })
+  const parentMessages = [createUserMessage({ content: 'Parent request' }), snapshot]
+  const config = engineConfig([])
+  const context = {
+    messages: parentMessages, getAppState: config.getAppState, setAppState: config.setAppState,
+    abortController: new AbortController(), readFileState: config.readFileCache,
+    setInProgressToolUseIDs: () => {}, setResponseLength: () => {},
+    updateFileHistoryState: () => {}, updateAttributionState: () => {},
+    options: {
+      tools: [], commands: [], mcpClients: [], mcpResources: {},
+      mainLoopModel: 'gpt-5.6-terra', mainLoopProvider: 'openai',
+      thinkingConfig: { type: 'disabled' }, isNonInteractiveSession: true,
+      agentDefinitions: { activeAgents: [], allAgents: [] },
+    },
+  } as unknown as ToolUseContext
+  const prompts: string[] = []
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages, tools, options }) {
+    expect(options.agentId).toBeDefined()
+    prompts.push(JSON.stringify(normalizeMessagesForAPI(messages, tools)))
+    yield assistant([{ type: 'text', text: 'Fork task complete.' }])
+  }))
+  const result = await runForkedAgent({
+    promptMessages: [createUserMessage({ content: 'Perform the child task' })],
+    cacheSafeParams: {
+      systemPrompt: asSystemPrompt(['test instructions']), userContext: {}, systemContext: {},
+      toolUseContext: context, forkContextMessages: parentMessages,
+    },
+    canUseTool: async () => ({ behavior: 'deny', message: 'No tools expected' }),
+    querySource: 'session_memory', forkLabel: 'roster-isolation', skipTranscript: true, maxTurns: 1,
+  })
+  expect(result.messages).toHaveLength(1)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).not.toContain('ParentSnapshotPeerOnly')
+  expect(prompts[0]).not.toContain('Other sessions open in this workspace')
+  expect(parentMessages).toContain(snapshot)
+  expect(JSON.stringify(normalizeMessagesForAPI(parentMessages, []))).toContain('ParentSnapshotPeerOnly')
 })
 
 test('accepted move without persistence emits failure and never publishes readiness', async () => {

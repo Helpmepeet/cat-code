@@ -4567,6 +4567,7 @@ function ensureHost(): Host {
       isReserved: appSessionId => workspaceJump!.isReserved(appSessionId),
     },
     rows: () => liveRegistry.sessions,
+    setPeerNotice: (appSessionId, notice) => liveRegistry.setPeerNotice(appSessionId, notice),
     // Membership in `listSessions()` is NOT liveness: the supervisor keeps a
     // record after the child exits, and an idle park IS an exit. The predicate
     // lives in `mainDecisions.ts` so it is executable by a test rather than

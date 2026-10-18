@@ -9372,6 +9372,38 @@ test('internal cwd transition results accept only their bounded operation shape'
   }
 })
 
+test('Announce results and roster notices are validated at the receiving boundary', async () => {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+  async function answer(verb: 'peer.announce' | 'peers.list', value: unknown) {
+    const pending = verb === 'peer.announce'
+      ? server.requestHost(verb, { doing: 'Reading only' })
+      : server.requestHost(verb, {})
+    const requestId = (received.filter(frame => frame.kind === 'host.request').at(-1) as { requestId: string }).requestId
+    server.handleData(conn, hostPlaneFrame({ type: 'host.result', requestId, ok: true, value }))
+    return pending
+  }
+  expect((await answer('peer.announce', { postedAt: 10000 })).ok).toBe(true)
+  expect((await answer('peer.announce', { postedAt: 10000, saved: false })).ok).toBe(true)
+  expect((await answer('peer.announce', { postedAt: 10000, saved: true })).ok).toBe(false)
+  for (const value of [{}, { postedAt: 'today' }, { postedAt: -1 }, { postedAt: 10000, from: 'forged' }]) {
+    expect((await answer('peer.announce', value)).ok).toBe(false)
+  }
+  const notice = { doing: 'Editing scope', touches: ['app', '../opaque'], note: 'Context', postedAt: 10000 }
+  expect((await answer('peers.list', { peers: [{ ...BEAR_DESCRIPTOR, notice }] })).ok).toBe(true)
+  expect((await answer('peers.list', { peers: [{ ...BEAR_DESCRIPTOR, noticeOmitted: true }] })).ok).toBe(true)
+  expect((await answer('peers.list', { peers: [BEAR_DESCRIPTOR], nextCursor: 'next', remainingPeers: 500 })).ok).toBe(true)
+  expect((await answer('peers.list', { peers: [BEAR_DESCRIPTOR], nextCursor: 500, remainingPeers: 500 })).ok).toBe(false)
+  expect((await answer('peers.list', { peers: [BEAR_DESCRIPTOR], nextCursor: 'next', remainingPeers: -1 })).ok).toBe(false)
+  for (const invalid of [
+    { ...notice, doing: '' }, { ...notice, doing: 'two\nlines' },
+    { ...notice, touches: [42] }, { ...notice, extra: 'unknown' },
+    { ...notice, note: '界'.repeat(1024) }, { ...notice, postedAt: 'today' },
+  ]) {
+    expect((await answer('peers.list', { peers: [{ ...BEAR_DESCRIPTOR, notice: invalid }] })).ok).toBe(false)
+  }
+  expect((await answer('peers.list', { peers: [{ ...BEAR_DESCRIPTOR, noticeOmitted: 'yes' }] })).ok).toBe(false)
+})
+
 test('HR5/F6 — a host.result whose value does not match its verb is refused, not handed on', async () => {
   // `value` was the one inbound field on this plane with no schema behind it:
   // `z.unknown()` plus a cast, with every tool told to narrow defensively. A
@@ -9418,6 +9450,7 @@ test('HR5/F6 — a peers.list row carries the model and effort main observed, an
     ...BEAR_DESCRIPTOR,
     model: 'a-model-that-does-not-exist-yet',
     effort: 'high',
+    detailsOmitted: true,
   }
   server.handleData(
     conn,

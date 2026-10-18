@@ -67,6 +67,7 @@ import { getTranscriptPath } from '../../src/utils/sessionStorage.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
 import { createListPeersTool } from './listPeersTool.js'
+import { createAnnounceTool } from './announceTool.js'
 import {
   createCreatePeerTool,
   inheritedEffort,
@@ -74,6 +75,7 @@ import {
 import { createSendToPeerTool } from './sendToPeerTool.js'
 import { createReadPeerTool } from './readPeerTool.js'
 import { createPeerCompactContext } from './peerCompactContext.js'
+import { createPeerStartContext, getPeerStartSnapshotMode } from './peerStartContext.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -454,6 +456,7 @@ export async function createNormalSidecarQueryEngineConfig(
       ? []
       : [
           createListPeersTool(),
+          createAnnounceTool(),
           createCreatePeerTool(),
           createSendToPeerTool(),
           createReadPeerTool(),
@@ -565,6 +568,16 @@ export async function createNormalSidecarQueryEngineConfig(
           ? {
               getPostCompactRuntimeAttachments: createPeerCompactContext({
                 appSessionId,
+              }),
+              getTurnStartRuntimeAttachments: createPeerStartContext({
+                cwd,
+                mode: getPeerStartSnapshotMode({
+                  managed: false,
+                  cwd,
+                  initialMessages,
+                  resumedInitialState,
+                  workspaceJump,
+                }),
               }),
             }
           : {}),

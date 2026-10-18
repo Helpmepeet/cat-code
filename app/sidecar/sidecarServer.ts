@@ -85,8 +85,10 @@ import {
   omitUndefinedObjectProperties,
 } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { parsePeerNotice } from '../shared/peerNotice.js'
 import {
   HOST_REQUEST_TIMEOUT_MS,
+  MAX_HOST_REQUEST_ARG_CHARS,
   HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
@@ -6419,6 +6421,15 @@ const hostResultEnvelopeSchema = z.object({
 const peerNameSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 const peerIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 
+// Peer Announce uses the same bounded opaque-text contract as main; see the
+// approved design/2026-10-17-peer-announce.md. No new inbound frame kind.
+const peerNoticeSchema = z.unknown().transform((value, context) => {
+  const notice = parsePeerNotice(value)
+  if (notice) return notice
+  context.addIssue({ code: 'custom', message: 'Invalid peer notice' })
+  return z.NEVER
+})
+
 const peerDescriptorSchema = z
   .object({
     name: peerNameSchema,
@@ -6439,6 +6450,9 @@ const peerDescriptorSchema = z
       .optional(),
     title: z.string().max(MAX_TEXT_FIELD_CHARS).nullable(),
     lastActivity: z.number().finite(),
+    detailsOmitted: z.literal(true).optional(),
+    notice: peerNoticeSchema.optional(),
+    noticeOmitted: z.literal(true).optional(),
   })
   .strict()
 
@@ -6450,7 +6464,12 @@ const peerDeliverOutcomeSchema = z.union([
 
 /** One schema per verb, keyed so the pending request selects its own. */
 const HOST_RESULT_VALUE_SCHEMAS = {
-  'peers.list': z.object({ peers: z.array(peerDescriptorSchema) }).strict(),
+  'peers.list': z.object({
+    peers: z.array(peerDescriptorSchema),
+    nextCursor: z.string().min(1).max(MAX_HOST_REQUEST_ARG_CHARS).optional(),
+    remainingPeers: z.number().int().safe().positive().optional(),
+  }).strict(),
+  'peer.announce': z.object({ postedAt: z.number().int().safe().min(0).max(8.64e15), saved: z.literal(false).optional() }).strict(),
   'peer.create': z
     .object({
       name: peerNameSchema,

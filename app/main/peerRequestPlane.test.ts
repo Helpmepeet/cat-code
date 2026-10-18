@@ -17,6 +17,10 @@ import {
 } from './peerRequestPlane.js'
 import {
   MAX_HOST_REQUEST_ARG_CHARS,
+  MAX_FRAME_BYTES,
+  MAX_PEER_ROSTER_BYTES,
+  MAX_PEER_NOTICE_BYTES,
+  MAX_PEER_NOTICE_TOUCHES,
   MAX_HOST_REQUEST_FRAMES_PER_WINDOW,
   MAX_HOST_REQUESTS_PER_WINDOW,
   MAX_PEER_DELIVERY_ATTEMPTS,
@@ -31,6 +35,8 @@ import {
   type PeerDeliverMessage,
   type SidecarClientMessage,
 } from '../shared/protocol.js'
+import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
+import { MAX_SESSION_TITLE_CHARS } from '../shared/hostApi.js'
 
 const ALEX = 'aaaaaaaa-0000-4000-8000-000000000001'
 const BEAR = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -94,6 +100,7 @@ function harness(
     moving?: Set<string>
     workspaceRequests?: PeerRequestPlaneDeps['workspaceRequests']
     workspaceTransitions?: PeerRequestPlaneDeps['workspaceTransitions']
+    setPeerNotice?: PeerRequestPlaneDeps['setPeerNotice']
   } = {},
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
@@ -108,6 +115,13 @@ function harness(
 
   const plane = createPeerRequestPlane({
     rows: () => rows,
+    setPeerNotice: options.setPeerNotice ?? (async (id, content) => {
+      const target = rows.find(row => row.appSessionId === id)
+      if (!target) return null
+      const notice = { ...content, postedAt: clock }
+      target.peerNotice = notice
+      return notice
+    }),
     isLive: id => live.has(id),
     isReady: id => (ready ?? live).has(id),
     canResume: id => options.unresumable?.has(id) !== true,
@@ -196,6 +210,147 @@ function request(
     args,
   }
 }
+
+test.each(['x', '界', '\u0001'])('full registry roster fits the inbound frame with maximum titles (%s)', async character => {
+  const rows = Array.from({ length: MAX_REGISTRY_SESSIONS }, (_, i) => {
+    const id = `eeeeeeee-0000-4000-8000-${String(i).padStart(12, '0')}`
+    return row(id, `Peer-${i}`, {
+      engineSessionId: id,
+      title: character.repeat(MAX_SESSION_TITLE_CHARS),
+      createdBy: ALEX,
+      shutdown: i < 32 ? null : 'parked',
+    })
+  })
+  const h = harness({ rows: [row(ALEX, 'Alex'), ...rows.slice(1)], live: new Set([ALEX, ...rows.slice(1, 32).map(r => r.appSessionId)]) })
+  await h.plane.handleRequest(ALEX, request('peers.list', {}, 'r'.repeat(MAX_HOST_REQUEST_ARG_CHARS)))
+  const result = h.lastResult()!
+  expect(result.ok).toBe(true)
+  const value = result.value as { peers: Array<{ appSessionId: string; detailsOmitted?: true; title: string | null }> }
+  expect(value.peers.map(peer => peer.appSessionId).sort()).toEqual(rows.slice(1).map(r => r.appSessionId).sort())
+  expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+  expect(Buffer.byteLength(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, sessionId: ALEX, ...result }))).toBeLessThan(MAX_FRAME_BYTES)
+  for (const peer of value.peers) {
+    expect(peer.title === null).toBe(peer.detailsOmitted === true)
+  }
+  if (character !== 'x') expect(value.peers.some(peer => peer.detailsOmitted)).toBe(true)
+})
+
+test('Announce replaces only the connection owner’s notice and never delivers or spawns', async () => {
+  const h = harness()
+  await h.plane.handleRequest(ALEX, { ...request('peer.announce', { doing: 'Editing peer tools', touches: ['app/sidecar', '../opaque'], note: 'Includes worker edits' }), sessionId: BEAR })
+  expect(h.lastResult()).toMatchObject({ ok: true, value: { postedAt: 10000 } })
+  expect(h.rows[0]?.peerNotice).toEqual({ doing: 'Editing peer tools', touches: ['app/sidecar', '../opaque'], note: 'Includes worker edits', postedAt: 10000 })
+  expect(h.rows[1]?.peerNotice).toBeUndefined()
+  h.advance(1000)
+  await h.plane.handleRequest(ALEX, request('peer.announce', { doing: 'Reading only' }))
+  expect(h.rows[0]?.peerNotice).toEqual({ doing: 'Reading only', postedAt: 11000 })
+  expect(h.deliveries()).toEqual([])
+  expect(h.restored).toEqual([])
+  expect(h.logged).toEqual([])
+})
+
+test.each([
+  {}, { doing: '' }, { doing: ' ' }, { doing: 'a\nb' }, { doing: 'a\rb' },
+  { doing: 'a\u2028b' }, { doing: 1 }, { doing: 'x', note: [] },
+  { doing: 'x', touches: 'path' }, { doing: 'x', touches: [1] },
+  { doing: 'x', touches: [' '] }, { doing: 'x', touches: Array(MAX_PEER_NOTICE_TOUCHES + 1).fill('area') },
+  { doing: 'x', note: '界'.repeat(MAX_PEER_NOTICE_BYTES) },
+  { doing: 'x', postedAt: 0 }, { doing: 'x', from: BEAR },
+])('main rejects an invalid notice without changing the previous one (%j)', async args => {
+  const previous = { doing: 'Original', postedAt: 100 }
+  const h = harness({ rows: [row(ALEX, 'Alex', { peerNotice: previous })] })
+  await h.plane.handleRequest(ALEX, request('peer.announce', args))
+  expect(h.lastResult()).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+  expect(h.rows[0]?.peerNotice).toEqual(previous)
+})
+
+test.each(['x', '界', '\u0001'])('whole roster with maximum notices and titles stays bounded (%s)', async character => {
+  const content = { doing: 'Editing shared scope', note: '' }
+  content.note = 'n'.repeat(MAX_PEER_NOTICE_BYTES - Buffer.byteLength(JSON.stringify(content)))
+  expect(Buffer.byteLength(JSON.stringify(content))).toBe(MAX_PEER_NOTICE_BYTES)
+  expect(validateHostRequest(request('peer.announce', content)).ok).toBe(true)
+  const rows = Array.from({ length: MAX_REGISTRY_SESSIONS - 1 }, (_, i) =>
+    row(`eeeeeeee-0000-4000-8000-${String(i).padStart(12, '0')}`, `Peer-${i}`, {
+      engineSessionId: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      title: character.repeat(MAX_SESSION_TITLE_CHARS), createdBy: ALEX,
+      shutdown: 'parked', peerNotice: { ...content, postedAt: 10000 + i },
+    }))
+  const h = harness({ rows: [row(ALEX, 'Alex'), ...rows], live: new Set([ALEX]) })
+  await h.plane.handleRequest(ALEX, request('peers.list', {}, 'r'.repeat(MAX_HOST_REQUEST_ARG_CHARS)))
+  const result = h.lastResult()!
+  const value = result.value as { peers: Array<{ notice?: { postedAt: number }; noticeOmitted?: true }> }
+  expect(value.peers).toHaveLength(MAX_REGISTRY_SESSIONS - 1)
+  expect(value.peers.every(peer => Boolean(peer.notice) !== Boolean(peer.noticeOmitted))).toBe(true)
+  expect(value.peers.some(peer => peer.noticeOmitted)).toBe(true)
+  expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+  expect(Buffer.byteLength(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, sessionId: ALEX, ...result }))).toBeLessThan(MAX_FRAME_BYTES)
+})
+
+test('when notices compete for space, the newest posted notice is included first', async () => {
+  const rows = Array.from({ length: MAX_REGISTRY_SESSIONS - 1 }, (_, i) =>
+    row(`peer-${i}`, `Peer-${i}`, {
+      shutdown: 'parked',
+      peerNotice: { doing: 'Reading only', note: 'x'.repeat(950), postedAt: 10000 + i },
+    }))
+  const h = harness({ rows: [row(ALEX, 'Alex'), ...rows], live: new Set([ALEX]) })
+  await h.plane.handleRequest(ALEX, request('peers.list'))
+  const value = h.lastResult()!.value as { peers: Array<{ notice?: { postedAt: number }; noticeOmitted?: true }> }
+  expect(value.peers.at(-1)?.notice?.postedAt).toBe(10000 + rows.length - 1)
+  expect(value.peers[0]?.noticeOmitted).toBe(true)
+  expect(value.peers.some(peer => peer.notice)).toBe(true)
+  expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+})
+
+test('an irreducible roster pages without losing live or parked peers as activity changes', async () => {
+  const rows = Array.from({ length: 900 }, (_, i) => row(
+    `eeeeeeee-0000-4000-8000-${String(i).padStart(12, '0')}`, `Peer-${i}`, {
+      engineSessionId: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      shutdown: i < 31 ? null : 'parked',
+      createdBy: ALEX,
+      peerNotice: { doing: 'Reading only', postedAt: 10000 },
+    }))
+  const h = harness({
+    rows: [row(ALEX, 'Alex'), ...rows],
+    live: new Set([ALEX, ...rows.slice(0, 31).map(row => row.appSessionId)]),
+  })
+  const seen: string[] = []
+  let cursor: string | undefined
+  let pages = 0
+  do {
+    await h.plane.handleRequest(ALEX, request('peers.list', cursor ? { cursor } : {}))
+    const result = h.lastResult()!
+    expect(result.ok).toBe(true)
+    const value = result.value as { peers: Array<{ appSessionId: string; status: string }>; nextCursor?: string; remainingPeers?: number }
+    expect(value.peers.every(peer => peer.status === 'live' || peer.status === 'parked')).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(MAX_PEER_ROSTER_BYTES)
+    expect(Buffer.byteLength(JSON.stringify({ protocolVersion: PROTOCOL_VERSION, sessionId: ALEX, ...result }))).toBeLessThan(MAX_FRAME_BYTES)
+    seen.push(...value.peers.map(peer => peer.appSessionId))
+    if (value.nextCursor) expect(value.remainingPeers).toBe(rows.length - seen.length)
+    cursor = value.nextCursor
+    pages++
+    for (const [index, row] of rows.entries()) {
+      row.lastMessageSentAt = 20000 + pages
+      if ((index + pages) % rows.length < 31) {
+        h.live.add(row.appSessionId)
+        row.shutdown = null
+      } else {
+        h.live.delete(row.appSessionId)
+        row.shutdown = 'parked'
+      }
+    }
+  } while (cursor)
+  expect(pages).toBeGreaterThan(1)
+  expect(seen.sort()).toEqual(rows.map(row => row.appSessionId).sort())
+  expect(new Set(seen).size).toBe(rows.length)
+  expect(validateHostRequest(request('peers.list', { cursor: 12 })).ok).toBe(false)
+  expect(validateHostRequest(request('peers.list', { cursor: 'x'.repeat(MAX_HOST_REQUEST_ARG_CHARS + 1) })).ok).toBe(false)
+})
+
+test('main preserves the notice persistence warning on its result', async () => {
+  const h = harness({ setPeerNotice: async (_id, content) => ({ ...content, postedAt: 10000, saved: false }) })
+  await h.plane.handleRequest(ALEX, request('peer.announce', { doing: 'Editing' }))
+  expect(h.lastResult()).toMatchObject({ ok: true, value: { postedAt: 10000, saved: false } })
+})
 
 test('internal cwd transitions validate closed shapes and use connection identity', async () => {
   const calls: unknown[][] = []
