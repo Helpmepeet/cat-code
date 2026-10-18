@@ -1349,7 +1349,8 @@ async function* runAgentInCleanupScope({
         if (message.type !== 'progress') {
           lastRecordedUuid = message.uuid
         }
-        // After the record, so a restore can always reproduce what was shown.
+        // After the record attempt, in record order. A failed record still
+        // publishes; restore then reports the run's steps as not fully loaded.
         publishSteps([message])
         yield message
 
@@ -1388,6 +1389,7 @@ async function* runAgentInCleanupScope({
             logForDebugging(`Failed to record sidechain transcript: ${err}`),
           )
           lastRecordedUuid = handoff.uuid
+          publishSteps([handoff])
           yield handoff
           break
         }

@@ -283,6 +283,38 @@ test('projects one durable stopped seam without interruption protocol text', () 
   ])
 })
 
+test('a stopped subagent does not hide the parent turn\'s own interrupted result', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+  play({
+    type: 'user',
+    message: { role: 'user', content: '<interruption-protocol body that must not render>' },
+    parent_tool_use_id: 'toolu_background',
+    uuid: '00000000-0000-4000-8000-000000000906',
+    origin: { kind: 'interruption' },
+  })
+  play({
+    type: 'result',
+    subtype: 'interrupted',
+    duration_ms: 10,
+    duration_api_ms: 8,
+    is_error: false,
+    num_turns: 1,
+    stop_reason: 'interrupted',
+    total_cost_usd: 0,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    modelUsage: {},
+    permission_denials: [],
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000907',
+  })
+
+  expect(selectTranscriptRows(state, 'session-1').map(row => row.kind)).toContain('result')
+})
+
 test('marks a persisted cancelled tool result separately from a failure', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
@@ -5448,7 +5480,7 @@ test('an agent whose every step is hidden-tier traffic is never labelled', () =>
   expect(revealed?.stepsNotLoaded).toBeUndefined()
 })
 
-test('a background launch record is never labelled: its steps never join this pane', () => {
+test('a background launch record is never labelled from its launch acknowledgement alone', () => {
   const state = restoredAgentState(
     agentSpawnFrame('session-1', 'toolu_agent_1', {
       subagent_type: 'Explore',
