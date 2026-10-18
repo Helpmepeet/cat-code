@@ -91,7 +91,7 @@ test('sign-in and first-use setup show no lid banner', async () => {
   expect(notice.container.querySelectorAll('.lid-notice')).toHaveLength(0)
 })
 
-test('the cup tooltip explains endings the user did not choose and refused starts', async () => {
+test('the cup tooltip explains safety endings and refused starts', async () => {
   let receive!: (view: LidModeView) => void
   const view = initial()
   window.catcode = { lidClosed: { read: async () => view, command: async () => view,
@@ -102,7 +102,10 @@ test('the cup tooltip explains endings the user did not choose and refused start
   expect(title()).toBe('Keep working with lid closed')
   expect(tree.container.querySelector('.lid-mark')).toBeNull()
   await act(async () => { receive({ ...view, phase: 'ended', reason: 'expired' }) })
-  expect(title()).toBe('Lid-closed mode reached its time limit.')
+  expect(title()).toBe('Keep working with lid closed')
+  expect(tree.container.querySelector('.lid-mark')).toBeNull()
+  await act(async () => { receive({ ...view, phase: 'ended', reason: 'thermal' }) })
+  expect(title()).toBe('Lid-closed mode ended because your Mac got too hot.')
   expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
   await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
   expect(title()).toBe('Charge above 20% before starting.')
@@ -140,7 +143,8 @@ test('restored power settings do not imply an unconfirmed Sleep request succeede
   await act(async () => { cup.focus() })
   expect(commands).toEqual([])
   await act(async () => { receive({ ...view, reason: 'sleep-requested', sleepRequested: true }) })
-  expect(cup.title).toBe('Normal sleep restored. Sleep was requested.')
+  expect(cup.title).toBe('Keep working with lid closed')
+  expect(tree.container.querySelector('.lid-mark')).toBeNull()
 })
 
 test('the numeral shows remaining minutes, the allowance while adjusting or starting, and warns at five minutes', async () => {
@@ -170,7 +174,7 @@ test('the numeral shows remaining minutes, the allowance while adjusting or star
     await act(async () => { receive({ ...view, phase, reason: 'expired' }) }), expect(digits()).toBeNull()
 })
 
-test('a stop the user chose looks exactly like off; unexpected endings keep the amber mark', async () => {
+test('normal endings look exactly like off; safety endings and errors keep the amber mark', async () => {
   let receive!: (view: LidModeView) => void
   const view = initial()
   window.catcode = { lidClosed: { read: async () => view, command: async () => view,
@@ -179,10 +183,19 @@ test('a stop the user chose looks exactly like off; unexpected endings keep the 
   const face = () => tree.container.querySelector('.lid-cup-slot')!.outerHTML.replaceAll(/id="[^"]*"|url\(#[^)]*\)/g, '')
   await act(async () => { receive({ ...view, phase: 'off', remainingSeconds: 0 }) })
   const off = face()
-  await act(async () => { receive({ ...view, phase: 'ended', reason: 'stopped', remainingSeconds: 0 }) })
-  expect(face()).toBe(off)
-  expect(tree.container.querySelector('.lid-cup-slot')!.classList.contains('lid-ended')).toBe(false)
-  await act(async () => { receive({ ...view, phase: 'ended', reason: 'thermal', remainingSeconds: 0 }) })
-  expect(tree.container.querySelector('.lid-cup-slot')!.classList.contains('lid-ended')).toBe(true)
-  expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
+  for (const reason of ['stopped', 'expired', 'sleep-requested']) {
+    await act(async () => { receive({ ...view, phase: 'ended', reason, remainingSeconds: 0 }) })
+    expect(face()).toBe(off)
+    expect(tree.container.querySelector('.lid-mark')).toBeNull()
+  }
+  for (const reason of ['thermal', 'battery-reserve', 'supervision-lost', 'monitoring-unavailable', 'override-conflict', 'sleep-unconfirmed', 'unknown', undefined]) {
+    await act(async () => { receive({ ...view, phase: 'ended', reason, remainingSeconds: 0 }) })
+    expect(tree.container.querySelector('.lid-cup-slot')!.classList.contains('lid-ended')).toBe(true)
+    expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
+  }
+  for (const reason of ['stopped', 'expired', 'sleep-requested']) {
+    await act(async () => { receive({ ...view, phase: 'ended', reason, error: 'sleep-request-failed', remainingSeconds: 0 }) })
+    expect(tree.container.querySelector('.lid-cup-slot')!.classList.contains('lid-ended')).toBe(true)
+    expect(tree.container.querySelector('.lid-mark')).not.toBeNull()
+  }
 })

@@ -31,8 +31,8 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const minute = Math.ceil(v.remainingSeconds / 60)
   const adjusting = Date.now() < selectedUntil
   const shown = adjusting || v.phase === 'starting' ? v.allowance : minute
-  const unexpectedEnd = v.phase === 'ended' && (v.reason !== 'stopped' || !!v.error)
-  // A stop the user chose reads as off; only unexpected endings keep the amber ending look.
+  const unexpectedEnd = v.phase === 'ended' && (!['stopped', 'expired', 'sleep-requested'].includes(v.reason ?? '') || !!v.error)
+  // Normal endings read as off; safety stops and errors keep the amber warning.
   const phase = v.phase === 'ended' && !unexpectedEnd ? 'off' : v.phase
   const showNumeral = active || v.phase === 'starting'
   const fill = active ? lidFill(v.remainingSeconds / 60) : 0
