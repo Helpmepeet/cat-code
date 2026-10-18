@@ -376,20 +376,33 @@ test('internal cwd transitions validate closed shapes and use connection identit
 
 test('managed workspace verbs retain connection authority and do not grant peer privileges', async () => {
   const handled: string[] = []
+  const receivedClocks: Array<number | undefined> = []
   let answeredBeforeMovement = false
   const h = harness({ rows: [row(ALEX, 'Alex', { binding: { kind: 'managed', storageRootId: ALEX, storageId: BEAR } })],
     workspaceRequests: {
       isPeerAccessBlocked: () => false,
-      handleRequest: async id => { handled.push(id); return { ok: true, value: { operationId: 'op-1', status: 'ready' } } },
+      handleRequest: async (id, _request, receivedAt) => { handled.push(id); receivedClocks.push(receivedAt); return { ok: true, value: { operationId: 'op-1', status: 'ready' } } },
       afterResponse: () => { answeredBeforeMovement = h.lastResult()?.ok === true },
     },
   })
-  await h.plane.handleRequest(ALEX, { ...request('workspace.ready', { operationId: 'op-1', tipUuid: 'tip-1', toolUseId: 'tool-1' }), sessionId: BEAR })
+  await h.plane.handleRequest(ALEX, { ...request('workspace.ready', { operationId: 'op-1', tipUuid: 'tip-1', toolUseId: 'tool-1' }), sessionId: BEAR }, 123)
   expect(handled).toEqual([ALEX])
+  expect(receivedClocks).toEqual([123])
   expect(answeredBeforeMovement).toBe(true)
   await h.plane.handleRequest(ALEX, request('peers.list'))
   expect(h.lastResult()?.ok).toBe(false)
   expect(handled).toEqual([ALEX])
+})
+
+test('workspace receipt clocks cannot be supplied on the wire', async () => {
+  let handled = false
+  const h = harness({ workspaceRequests: {
+    isPeerAccessBlocked: () => false,
+    handleRequest: async () => { handled = true; return { ok: false, error: { code: 'unavailable', message: 'unused' } } },
+  } })
+  await h.plane.handleRequest(ALEX, request('workspace.jump', { operationId: 'op', destinationHandle: 'handle', receivedAt: 1 }), 123)
+  expect(handled).toBe(false)
+  expect(h.lastResult()?.ok).toBe(false)
 })
 
 test.each([

@@ -371,8 +371,10 @@ async function main(): Promise<void> {
   })
   activeSidecarCleanup = sidecarCleanup
   if (!args.probeOnAttach) {
-    await validateWorkspaceJumpStartup(args.sessionId, args.cwd, args.resumeEngineSessionId ?? args.freshEngineSessionId, args.binding)
-    await initializeSidecarRuntime()
+    await timing.span(timingIdentity, 'startup_validation', () => validateWorkspaceJumpStartup(args.sessionId, args.cwd, args.resumeEngineSessionId ?? args.freshEngineSessionId, args.binding))
+    await timing.span(timingIdentity, 'runtime_initialize_body', () => initializeSidecarRuntime())
+    // Process age includes pre-entrypoint module loading and startup validation;
+    // it is not the duration of initializeSidecarRuntime (measured above).
     timing.write(timingIdentity, 'replacement_to_runtime_init', 'completed', process.uptime() * 1000)
   }
   if (args.freshEngineSessionId) {

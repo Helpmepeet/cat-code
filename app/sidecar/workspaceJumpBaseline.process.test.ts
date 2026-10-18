@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -7,7 +8,7 @@ import { Host } from '../host/host.js'
 import { ManagedStorage } from '../host/managedStorage.js'
 import { SessionRegistry } from '../host/registry.js'
 import { SidecarSupervisor } from '../supervisor/supervisor.js'
-import { SIDECAR_RUNTIME_ARGS } from '../main/mainDecisions.js'
+import { resolveSidecarLaunch, type SidecarMode } from '../main/mainDecisions.js'
 import { runSessionRelocationWorker } from '../main/sessionRelocationRunner.js'
 import { runWorkspaceListingWorker } from '../main/workspaceListingRunner.js'
 import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
@@ -15,6 +16,26 @@ import { WorkspaceHandoffControl } from '../main/workspaceHandoffControl.js'
 import { validateHostRequest, type WorkspaceHostRequest } from '../main/peerRequestPlane.js'
 import type { OperationalRecordInput } from '../shared/operationalLog.js'
 import type { WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
+import type { WorkerTiming } from '../shared/workerTiming.js'
+
+const launch = resolveSidecarLaunch({ packaged: false, mainDir: resolve('app/main') })
+function launchArgs(blocker: string, mode: SidecarMode, fixture?: string) {
+  const args = launch.argsFor(mode)
+  // Fixture wrappers replace only the entrypoint, retaining session features.
+  if (fixture) args[args.length - 1] = resolve(fixture)
+  return [`--preload=${blocker}`, ...args]
+}
+
+test('baseline launch policy keeps session features off listing and relocation workers', () => {
+  for (const [mode, file] of [['workspace-listing', 'workspaceListingWorker.ts'], ['relocation', 'sessionRelocationWorker.ts']] as const) {
+    expect(launchArgs('network.ts', mode)).toEqual(['--preload=network.ts', 'run', resolve('app/sidecar', file)])
+  }
+  const session = launchArgs('network.ts', 'session')
+  expect(session.some(arg => arg.startsWith('--feature='))).toBe(true)
+  for (const fixture of ['optionalInstallation.fixture.ts', 'workspaceJumpBaseline.fixture.ts']) {
+    expect(launchArgs('network.ts', 'session', `app/sidecar/${fixture}`)).toEqual([...session.slice(0, -1), resolve('app/sidecar', fixture)])
+  }
+})
 
 async function until(read: () => boolean, timeout = 60_000) {
   const deadline = performance.now() + timeout
@@ -96,12 +117,42 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     CLAUDE_CODE_USE_OPENAI: '', CLAUDE_CODE_USE_BEDROCK: '', CLAUDE_CODE_USE_VERTEX: '',
     CLAUDE_CODE_SIMPLE: '', DISABLE_TELEMETRY: '1', NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1' }
   const timings: OperationalRecordInput[] = []
+  const requestContext = new AsyncLocalStorage<string>()
+  const workerInvocations: Array<{
+    invocationId: string; kind: 'listing' | 'relocation'; request: string;
+    startBoundary: number; endBoundary?: number; durationMs?: number;
+    outcome?: 'completed' | 'failed'; childStages: WorkerTiming[];
+  }> = []
+  let workerBoundary = 0
+  async function observeWorker<T>(kind: 'listing' | 'relocation', run: (onTiming: (measurement: WorkerTiming) => void) => Promise<T>): Promise<T> {
+    const invocation: typeof workerInvocations[number] = {
+      invocationId: randomUUID(), kind, request: requestContext.getStore() ?? 'host.relocation',
+      startBoundary: ++workerBoundary, childStages: [],
+    }
+    workerInvocations.push(invocation)
+    const started = performance.now()
+    invocation.outcome = 'failed'
+    try {
+      const result = await run(measurement => {
+        invocation.childStages.push(measurement)
+        timings.push({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+          fields: { ...measurement, invocationId: invocation.invocationId } })
+      })
+      invocation.outcome = 'completed'
+      return result
+    } finally {
+      invocation.durationMs = performance.now() - started
+      invocation.endBoundary = ++workerBoundary
+      if (kind === 'listing') timings.push({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+        fields: { phase: 'listing_worker', outcome: invocation.outcome, durationMs: invocation.durationMs, invocationId: invocation.invocationId } })
+    }
+  }
   const registry = new SessionRegistry({ storageDir: join(root, 'registry'), log: () => {} })
   let coordinator: WorkspaceJumpCoordinator | undefined
   let control: WorkspaceHandoffControl | undefined
   const diagnostics: string[] = []
   const observations: unknown[] = []
-  const supervisor = new SidecarSupervisor({ sidecarCommand: 'bun', sidecarArgs: [`--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve(unresolved ? 'app/sidecar/optionalInstallation.fixture.ts' : 'app/sidecar/index.ts')], sidecarEnv: env,
+  const supervisor = new SidecarSupervisor({ sidecarCommand: launch.command, sidecarArgs: launchArgs(blocker, 'session', unresolved ? 'app/sidecar/optionalInstallation.fixture.ts' : undefined), sidecarEnv: env,
     log: line => { diagnostics.push(line) }, onOperationalRecord: record => {
       if (record.event !== 'workspace.jump.timing') return
       timings.push(record)
@@ -112,12 +163,12 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     const host = new Host({ supervisor, registry, timing: input => { timings.push(input) }, log: () => {},
       managedStorage: new ManagedStorage({ appDataBase: join(root, 'app'), ownershipDir: join(config, 'chat-workspaces') }),
       validateCwd: path => { try { return { ok: true, realpath: realpathSync(path) } } catch { return { ok: false } } },
-      relocate: request => runSessionRelocationWorker({ command: 'bun', args: [`--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/sessionRelocationWorker.ts')], cwd: request.source.cwd, request: { type: 'session-relocation', version: 1, ...request }, env }),
+      relocate: request => observeWorker('relocation', onTiming => runSessionRelocationWorker({ command: launch.command, args: launchArgs(blocker, 'relocation'), cwd: request.source.cwd, request: { type: 'session-relocation', version: 1, ...request }, env, onTiming })),
     })
     coordinator = new WorkspaceJumpCoordinator({ host, row: id => registry.findSession(id), knownProjects: () => savedRows,
       validateCwd: path => { validationCalls++; try { return { ok: true, realpath: realpathSync(path) } } catch { return { ok: false } } },
-      trustedProjectRoots: roots => runWorkspaceListingWorker({ command: 'bun', args: [`--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/workspaceListingWorker.ts')],
-        cwd: root, request: { type: 'workspace-list', version: 1, roots: [...roots] }, env }),
+      trustedProjectRoots: roots => observeWorker('listing', onTiming => runWorkspaceListingWorker({ command: launch.command, args: launchArgs(blocker, 'workspace-listing'),
+        cwd: root, request: { type: 'workspace-list', version: 1, roots: [...roots] }, env, onTiming })),
       timing: input => { timings.push(input) },
       verifyReady: async (identity, boundary, state) => {
         const delivery = await control!.request(identity.appSessionId, state.operationId, { action: 'verify', ...boundary })
@@ -171,11 +222,14 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
       control!.receiveFrame(event.sessionId, frame)
       if (frame.kind === 'ready' && coordinator!.snapshot(event.sessionId)) coordinator!.queryStatus(event.sessionId, true)
       if (frame.kind !== 'host.request') return
+      // Same main-local frame-receive boundary as the production adapter,
+      // captured before validating the request. No wire clock is consumed.
+      const receivedAt = performance.now()
       const validated = validateHostRequest(frame)
       if (!validated.ok || !['workspaces.list', 'workspace.jump', 'workspace.ready', 'workspace.cancel'].includes(validated.request.verb)) throw new Error('Unexpected baseline host request')
       const request = validated.request as WorkspaceHostRequest
       const task = (async () => {
-        const result = await coordinator!.handleRequest(event.sessionId, request)
+        const result = await requestContext.run(request.verb, () => coordinator!.handleRequest(event.sessionId, request, receivedAt))
         supervisor.send(event.sessionId, { type: 'host.result', requestId: validated.requestId, ...result })
         coordinator!.afterResponse(event.sessionId, request, true)
       })()
@@ -190,7 +244,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
       supervisor.send(id, { type: 'app.park', requestId: randomUUID() })
       await until(() => registry.findSession(id)?.shutdown === 'parked')
       const original = registry.findSession(id)!
-      const minter = Bun.spawn(['bun', `--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/workspaceJumpBaseline.fixture.ts'), 'mint', original.engineSessionId!],
+      const minter = Bun.spawn([launch.command, ...launchArgs(blocker, 'session', 'app/sidecar/workspaceJumpBaseline.fixture.ts'), 'mint', original.engineSessionId!],
         { cwd: original.cwd, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe' })
       const [code, error] = await Promise.all([minter.exited, new Response(minter.stderr).text(), new Response(minter.stdout).text()])
       expect(code, error).toBe(0)
@@ -224,12 +278,49 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     const providerResponses = completed.filter(record => record.fields?.phase === 'provider_request_to_response')
     expect(providerResponses).toHaveLength(2)
     expect(Number(providerResponses.at(-1)?.fields?.durationMs)).toBeGreaterThanOrEqual(25)
-    for (const phase of ['first_submit_to_catalog', 'first_submit_to_provider_response', 'accepted_to_source_boundary', 'park_to_clean_exit', 'relocation_worker', 'resume', 'controller', 'display_history', 'subagent_history', 'listening_to_ready_frame', 'ready_to_controls', 'admission_to_continuation', 'continuation_to_provider_request', 'provider_request_to_response', 'accepted_to_provider_request_observed']) {
+    for (const phase of ['first_submit_to_catalog', 'first_submit_to_provider_response', 'accepted_to_source_boundary', 'park_to_clean_exit', 'relocation_worker', 'resume', 'controller', 'display_history', 'subagent_history', 'listening_to_ready_frame', 'ready_to_controls', 'admission_to_continuation', 'continuation_to_provider_request', 'provider_request_to_response', 'accepted_to_provider_request_observed', 'request_received_to_acceptance', 'request_received_to_provider_request_observed', 'startup_validation', 'runtime_initialize_body', 'replacement_to_runtime_init', 'listing_worker', 'worker_bootstrap_imports', 'build_metadata', 'build_provenance_git', 'configuration_prepare', 'trust_evaluation', 'relocation_module_load', 'relocation_work']) {
       // This stage observes the acknowledgement, deliberately absent in this fault case.
       expect(completed.some(record => record.fields?.phase === phase), phase).toBe(!(fixture === 'lost_continue_ack' && phase === 'admission_to_continuation'))
     }
+    const listingInvocations = workerInvocations.filter(invocation => invocation.kind === 'listing')
+    expect(listingInvocations.map(invocation => invocation.request)).toEqual(['workspaces.list', 'workspace.jump', 'workspace.ready'])
+    expect(workerInvocations.filter(invocation => invocation.kind === 'relocation')).toHaveLength(1)
+    expect(new Set(workerInvocations.map(invocation => invocation.invocationId)).size).toBe(4)
+    for (const invocation of workerInvocations) {
+      expect(invocation.outcome).toBe('completed')
+      expect(invocation.durationMs).toBeGreaterThanOrEqual(0)
+      expect(invocation.endBoundary!).toBeGreaterThan(invocation.startBoundary)
+      expect(invocation.childStages.map(stage => stage.phase)).toEqual([
+        'worker_bootstrap_imports', 'build_provenance_git', 'build_metadata', 'configuration_prepare',
+        ...(invocation.kind === 'listing' ? ['trust_evaluation'] as const : ['relocation_module_load', 'relocation_work'] as const),
+      ])
+      expect(invocation.childStages.every(stage => stage.outcome === 'completed' && stage.durationMs >= 0)).toBe(true)
+    }
+    for (let index = 1; index < workerInvocations.length; index++) {
+      expect(workerInvocations[index]!.startBoundary).toBeGreaterThan(workerInvocations[index - 1]!.endBoundary!)
+    }
+    const oneCompletion = (phase: string) => {
+      const records = completed.filter(record => record.fields?.phase === phase)
+      expect(records, phase).toHaveLength(1)
+      return records[0]!
+    }
+    const acceptance = oneCompletion('request_received_to_acceptance')
+    const requestedProvider = oneCompletion('request_received_to_provider_request_observed')
+    const acceptedProvider = oneCompletion('accepted_to_provider_request_observed')
+    expect(acceptance.fields?.operationId).toBe(acceptedProvider.fields?.operationId)
+    expect(requestedProvider.fields?.operationId).toBe(acceptedProvider.fields?.operationId)
+    expect(timings.indexOf(acceptance)).toBeLessThan(timings.indexOf(acceptedProvider))
+    expect(timings.indexOf(acceptedProvider)).toBeLessThan(timings.indexOf(requestedProvider))
+    // These three durations all use the coordinator's own monotonic clock.
+    // No child timestamps or enclosing/overlapping spans are subtracted.
+    expect(Number(requestedProvider.fields?.durationMs)).toBeGreaterThanOrEqual(Number(acceptedProvider.fields?.durationMs))
+    expect(Number(requestedProvider.fields?.durationMs)).toBeGreaterThanOrEqual(Number(acceptance.fields?.durationMs))
     process.stdout.write(JSON.stringify({ fixture, savedRows: savedRows.length, folders: roots.length, validationCalls, pairs: retained ? 200 : 0, subagentMessages: retained ? 100 : 0, sample: sample + 1,
-      stages: completed.map(record => ({ stage: record.fields!.phase, ms: Math.round(Number(record.fields!.durationMs) * 100) / 100 })) }) + '\n')
+      workerInvocations,
+      stages: completed.map(record => ({ stage: record.fields!.phase, ms: Math.round(Number(record.fields!.durationMs) * 100) / 100,
+        ...(record.fields!.generation ? { generation: record.fields!.generation } : {}),
+        ...(record.fields!.invocationId ? { invocationId: record.fields!.invocationId } : {}),
+        ...(record.fields!.operationId ? { operationId: record.fields!.operationId } : {}) })) }) + '\n')
   } catch (error) {
     process.stderr.write(JSON.stringify({ sourceRequests, destinationRequests, observations, timings: timings.filter(record => record.fields?.outcome === 'completed').map(record => record.fields) }) + '\n')
     process.stderr.write(diagnostics.slice(-12).join('\n') + '\n')
@@ -252,7 +343,7 @@ for (const delay of [200, -1]) test(`normal controller installation baseline ${d
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } }))
   const blocker = join(root, 'network.ts')
   writeFileSync(blocker, 'globalThis.fetch = (async () => new Response("Network disabled", { status: 503 })) as typeof fetch')
-  const child = Bun.spawn(['bun', `--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/workspaceJumpBaseline.fixture.ts'), 'diagnostics', String(delay)], {
+  const child = Bun.spawn([launch.command, ...launchArgs(blocker, 'session', 'app/sidecar/workspaceJumpBaseline.fixture.ts'), 'diagnostics', String(delay)], {
     cwd, env: { ...process.env, ...withoutInheritedLaunchKeys(), CLAUDE_CONFIG_DIR: config, HOME: home, ANTHROPIC_API_KEY: 'sk-ant-isolated-baseline',
       CATCODE_SIDECAR_MODEL: '', CATCODE_SIDECAR_PREFER_SPAWN_MODEL: '', CATCODE_SIDECAR_FRESH_SESSION_ID: '',
       CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_AUTH_TOKEN: '', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '',

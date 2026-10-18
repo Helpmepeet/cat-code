@@ -77,11 +77,11 @@ function harness() {
   coordinators.push(coordinator)
   const operationId = randomUUID()
   const ready = { verb: 'workspace.ready' as const, operationId, tipUuid: randomUUID(), toolUseId: 'call_move' }
-  async function accept() {
+  async function accept(receivedAt?: number) {
     const list = await coordinator.handleRequest(appSessionId, { verb: 'workspaces.list' })
     if (!list.ok || !('workspaces' in list.value)) throw new Error('listing failed')
     const handle = list.value.workspaces[0]!.handle
-    return coordinator.handleRequest(appSessionId, { verb: 'workspace.jump', operationId, destinationHandle: handle })
+    return coordinator.handleRequest(appSessionId, { verb: 'workspace.jump', operationId, destinationHandle: handle }, receivedAt)
   }
   return { coordinator, deps, row, appSessionId, directory, operationId, ready, held, accept, timings, generation: () => generation,
     moved: () => moved, continuations: () => continuationCalls, terminals: () => terminalCalls,
@@ -94,19 +94,33 @@ function harness() {
 
 test('jump timings require matching destination provider identity and do not alter dispatch', async () => {
   const h = harness()
-  expect((await h.accept()).ok).toBe(true)
+  expect((await h.accept(performance.now() - 1_000)).ok).toBe(true)
+  expect(h.timings.filter(input => input.fields?.phase === 'request_received_to_acceptance' && input.fields.outcome === 'completed')).toHaveLength(1)
+  expect(Number(h.timings.find(input => input.fields?.phase === 'request_received_to_acceptance' && input.fields.outcome === 'completed')?.fields?.durationMs)).toBeGreaterThanOrEqual(1_000)
   expect((await h.coordinator.handleRequest(h.appSessionId, h.ready)).ok).toBe(true)
   h.coordinator.afterResponse(h.appSessionId, h.ready, true)
   await h.coordinator.waitForSettlement(h.appSessionId)
   const completions = () => h.timings.filter(input => input.fields?.phase === 'accepted_to_provider_request_observed' && input.fields.outcome === 'completed')
   h.coordinator.observeProviderRequest(h.appSessionId, h.row.engineSessionId!, h.operationId, randomUUID())
   expect(completions()).toHaveLength(0)
+  expect(h.timings.filter(input => input.fields?.phase === 'request_received_to_provider_request_observed' && input.fields.outcome === 'completed')).toHaveLength(0)
   h.coordinator.observeProviderRequest(h.appSessionId, h.row.engineSessionId!, h.operationId, h.generation())
   h.coordinator.observeProviderRequest(h.appSessionId, h.row.engineSessionId!, h.operationId, h.generation())
   expect(completions()).toHaveLength(1)
+  expect(h.timings.filter(input => input.fields?.phase === 'request_received_to_provider_request_observed' && input.fields.outcome === 'completed')).toHaveLength(1)
   expect(h.timings.some(input => input.fields?.phase === 'accepted_to_source_boundary' && input.fields.outcome === 'completed')).toBe(true)
   expect(h.timings.some(input => input.fields?.phase === 'admission_to_continuation' && input.fields.outcome === 'completed')).toBe(true)
   expect(h.continuations()).toBe(1)
+})
+
+test('refusal and cancellation never report a completed request-to-provider span', async () => {
+  const h = harness()
+  await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.jump', operationId: h.operationId, destinationHandle: 'missing' })
+  expect(h.timings.filter(input => input.fields?.phase === 'request_received_to_acceptance' && input.fields.outcome === 'unavailable')).toHaveLength(1)
+  expect((await h.accept()).ok).toBe(true)
+  await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspace.cancel', operationId: h.operationId })
+  expect(h.timings.filter(input => input.fields?.phase === 'request_received_to_provider_request_observed' && input.fields.outcome === 'completed')).toHaveLength(0)
+  expect(h.timings.filter(input => input.fields?.phase === 'request_received_to_provider_request_observed' && input.fields.outcome === 'unavailable')).toHaveLength(2)
 })
 
 test('acceptance cannot move; durable readiness, response delivery, and one-use survive reopening', async () => {

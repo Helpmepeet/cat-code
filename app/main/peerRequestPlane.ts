@@ -98,7 +98,7 @@ export type PeerRequestPlaneDeps = {
   }
   /** Agent-directed jump verbs have separate authority from peer operations. */
   workspaceRequests?: {
-    handleRequest: (appSessionId: string, request: WorkspaceHostRequest) => Promise<
+    handleRequest: (appSessionId: string, request: WorkspaceHostRequest, receivedAt?: number) => Promise<
       { ok: true; value: HostRequestValues[WorkspaceHostRequest['verb']] } | { ok: false; error: HostRequestError }>
     afterResponse?: (appSessionId: string, request: WorkspaceHostRequest, answered: boolean) => void
     isPeerAccessBlocked: (appSessionId: string) => boolean
@@ -554,7 +554,7 @@ export type PeerRunControls = { model: string | null; effort: string | null }
 
 export type PeerRequestPlane = {
   /** One decoded `host.request` from `sessionId`'s socket. */
-  handleRequest: (sessionId: SessionId, frame: unknown) => Promise<void>
+  handleRequest: (sessionId: SessionId, frame: unknown, receivedAt?: number) => Promise<void>
   /** The row's latest `activity`. */
   recordActivity: (sessionId: SessionId, presence: ActivityPresence) => void
   /**
@@ -1475,7 +1475,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * Entry points
    * --------------------------------------------------------------------- */
 
-  async function handleRequest(sessionId: SessionId, frame: unknown): Promise<void> {
+  async function handleRequest(sessionId: SessionId, frame: unknown, receivedAt?: number): Promise<void> {
     // HR1 / A6 — the flood bound FIRST, before the frame is parsed, serialized
     // or measured. Charging only what survives validation bounded nothing that
     // mattered: an invalid or unknown-verb request answered and returned without
@@ -1572,7 +1572,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         return
       }
       try {
-        const result = await handler.handleRequest(sessionId, request)
+        const result = await handler.handleRequest(sessionId, request, receivedAt)
         const answered = answer(sessionId, validated.requestId, result)
         if (result.ok) handler.afterResponse?.(sessionId, request, answered)
       } catch {

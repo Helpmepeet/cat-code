@@ -4,6 +4,7 @@ import { getSessionId, onSessionSwitch } from '../../src/bootstrap/state.js'
 import { init } from '../../src/entrypoints/init.js'
 import { setCodexPromptCacheKey } from '../../src/services/api/codex-fetch-adapter.js'
 import { readSourceBuildId } from '../../src/utils/buildProvenance.js'
+import { workerTimingSync } from '../shared/workerTiming.js'
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -13,7 +14,7 @@ function directSourceEngineVersion(): string {
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
     ) as { version?: unknown }
     if (typeof pkg.version !== 'string') return 'unknown'
-    const buildId = readSourceBuildId(repoRoot)
+    const buildId = workerTimingSync('build_provenance_git', () => readSourceBuildId(repoRoot))
     return buildId === 'unknown'
       ? 'unknown'
       : `${pkg.version}-desktop.sha${buildId}`
@@ -46,7 +47,7 @@ export function ensureEngineMacro(): void {
         }
       }
     ).MACRO = {
-      VERSION: directSourceEngineVersion(),
+      VERSION: workerTimingSync('build_metadata', () => directSourceEngineVersion()),
       BUILD_TIME: new Date().toISOString(),
       PACKAGE_URL: 'claude-code-source-snapshot',
       FEEDBACK_CHANNEL: 'github',

@@ -1,8 +1,10 @@
 import { runNdjsonWorker } from './ndjsonWorker.js'
+import { parseWorkerTimings, type WorkerTiming } from '../shared/workerTiming.js'
 import { MAX_RELOCATION_RECORD_BYTES, parseSessionRelocationRequest, parseSessionRelocationResult, type SessionRelocationRequest } from '../shared/sessionRelocationWorker.js'
 
 export async function runSessionRelocationWorker(options: {
   command: string; args: string[]; cwd: string; request: SessionRelocationRequest; env?: NodeJS.ProcessEnv
+  onTiming?: (timing: WorkerTiming) => void
 }): Promise<void> {
   if (!parseSessionRelocationRequest(options.request)) throw new Error('Invalid move request')
   let accepted = false
@@ -10,12 +12,16 @@ export async function runSessionRelocationWorker(options: {
   let workerError = ''
   const terminal = await runNdjsonWorker({
     ...options,
+    env: { ...process.env, ...options.env, CAT_CODE_WORKER_TIMING: options.onTiming ? '1' : '0' },
     simpleMode: false,
     input: `${JSON.stringify(options.request)}\n`,
     timeoutMs: 120_000,
     forceKillOnAbort: true,
     maxRecordBytes: MAX_RELOCATION_RECORD_BYTES,
-    log: line => { workerError = line },
+    log: line => {
+      for (const timing of parseWorkerTimings(line)) { try { options.onTiming?.(timing) } catch { /* Observation only. */ } }
+      workerError = line.split('\n').filter(value => !value.startsWith('cat-worker-timing:')).join('\n')
+    },
     onOversizeRecord: () => { invalid = true },
     onRecord: line => {
       try {
