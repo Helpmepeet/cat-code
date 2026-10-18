@@ -1,10 +1,11 @@
-.usage-page { overflow:auto; flex:1; min-width:0; padding:24px 28px 52px; background:var(--color-app-bg); color:var(--color-text-primary); }
-/* The dashboard owns a full-page surface above the shared window ground. Clear
- * only that surface in glass mode so the window material reaches the space
- * around the cards; metrics and panels keep their opaque card backgrounds. */
+.usage-page { overflow:auto; flex:1; min-width:0; padding:24px 28px 52px; color:var(--color-text-primary); }
+/* Sidebar already reserves the collapsed rail in flow; clear only its overlay. */
+aside.sidebar-expanded + .lid-content .usage-page { margin-left:max(0px,calc(var(--sidebar-expanded-width,18rem) - 48px)); }
+/* Keep the shared window material visible between cards in glass mode. */
 html[data-glass='on'] .usage-page { background:transparent; }
 .usage-content {
-  max-width:1180px; margin:auto;
+  max-width:1180px; margin:auto; container:usage / inline-size;
+  --provider-claude:light-dark(#d97757,#ce6c4b);
   --usage-panel:var(--color-surface-raised);
   --usage-muted:var(--color-text-subtle);
   --usage-grid:var(--color-shell-seam);
@@ -295,18 +296,12 @@ html[data-glass='on'] .usage-page { background:transparent; }
 html[data-glass='on'] .usage-sticky-top { background:transparent; }
 html[data-glass='on'] .usage-sticky-scrolled { background:light-dark(rgba(250,250,252,.6),rgba(28,28,32,.55)); backdrop-filter:blur(28px) saturate(1.7); -webkit-backdrop-filter:blur(28px) saturate(1.7); }
 html[data-glass='on'] .usage-content { --usage-panel:light-dark(rgba(255,255,255,.5),rgba(52,52,60,.36)); --usage-glass-line:light-dark(rgba(0,0,0,.08),rgba(255,255,255,.08)); --usage-glass-edge:light-dark(rgba(255,255,255,.85),rgba(255,255,255,.12)); }
-html[data-glass='on'] .usage-panel,html[data-glass='on'] .usage-cards,html[data-glass='on'] .usage-values-sections>section { border:0; border-radius:14px; background:var(--usage-panel); box-shadow:inset 0 .5px 0 var(--usage-glass-edge),inset 0 0 0 .5px var(--usage-glass-line),0 8px 30px rgba(0,0,0,.12); backdrop-filter:blur(28px) saturate(1.7); -webkit-backdrop-filter:blur(28px) saturate(1.7); }
-html[data-glass='on'] .usage-cards { gap:0; overflow:hidden; }
-html[data-glass='on'] .usage-metric { background:transparent; border-left:.5px solid var(--usage-glass-line); }
-html[data-glass='on'] .usage-metric:first-child { border-left:0; }
+html[data-glass='on'] .usage-panel,html[data-glass='on'] .usage-metric,html[data-glass='on'] .usage-values-sections>section { border:0; border-radius:14px; background:var(--usage-panel); box-shadow:inset 0 .5px 0 var(--usage-glass-edge),inset 0 0 0 .5px var(--usage-glass-line),0 8px 30px rgba(0,0,0,.12); backdrop-filter:blur(28px) saturate(1.7); -webkit-backdrop-filter:blur(28px) saturate(1.7); }
 html[data-glass='on'] .usage-refresh { background:var(--usage-panel); border-color:var(--usage-glass-line); }
 html[data-glass='on'] .usage-chart-tooltip > rect { fill:light-dark(rgba(255,255,255,.76),rgba(40,40,46,.76)); }
 @keyframes usage-settle-7d { from { opacity:.7; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
 @keyframes usage-settle-30d { from { opacity:.7; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
 @keyframes usage-settle-all { from { opacity:.7; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
-html[data-glass='on'] .usage-page[data-range='7d'] .usage-panel,html[data-glass='on'] .usage-page[data-range='7d'] .usage-cards { animation:usage-settle-7d var(--motion-panel) var(--ease-enter) both; }
-html[data-glass='on'] .usage-page[data-range='30d'] .usage-panel,html[data-glass='on'] .usage-page[data-range='30d'] .usage-cards { animation:usage-settle-30d var(--motion-panel) var(--ease-enter) both; }
-html[data-glass='on'] .usage-page[data-range='all'] .usage-panel,html[data-glass='on'] .usage-page[data-range='all'] .usage-cards { animation:usage-settle-all var(--motion-panel) var(--ease-enter) both; }
 @media(max-width:850px) { .usage-tool-pair { grid-template-columns:1fr; } }
 @media(max-width:680px) { .usage-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .usage-sticky-top { top:-16px; margin:0 -16px; padding:16px 16px 10px; } }
 @media(prefers-reduced-motion:reduce) { .usage-page .usage-panel,.usage-page .usage-cards,html[data-glass] .usage-page[data-range] .usage-panel,html[data-glass] .usage-page[data-range] .usage-cards { animation:none; transition:none; } .usage-segmented::before { transition:none; } }
