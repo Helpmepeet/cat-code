@@ -25,7 +25,7 @@ test('session rows expand with Enter, Space and click; catalog navigation remain
     expect(session.getAttribute('aria-expanded')).toBe('false');
     await act(async () => session.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(session.getAttribute('aria-expanded')).toBe('true');
-    expect(tree.container.textContent).toContain('Tokens by source');
+    expect(tree.container.textContent).toContain('Spent by');
     expect(tree.container.textContent).toContain('Bash');
     expect(tree.container.textContent).toContain('Unpriced');
     await act(async () => tree.container.querySelector<HTMLButtonElement>('.uas-open')!.click());
@@ -103,4 +103,93 @@ test('five range figures retain collector median and top ten share after envelop
     summary.rankedSessions.omitted = 22;
     const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
     expect([...tree.container.querySelectorAll('.uas-figures dd')].map(element => element.textContent)).toEqual(['22', '90.0%', '20.0%', '10.0%', '37']);
+});
+test('session metadata, error cues, compact tools and source shares survive expansion', async () => {
+    const summary = await fixture();
+    const a = summary.rankedSessions.items[0]!;
+    a.firstActiveAt = '2026-10-17T10:00:00.000Z';
+    a.models = [{ id: 'sol', kind: 'named', label: 'Sol', tokens: a.tokens }];
+    a.days = [{ date: '2026-10-17', tokens: a.tokens, requests: 2, results: 2, errors: 0 }];
+    summary.rankedSessions.items[1]!.errors = 1;
+    summary.rankedSessions.items[1]!.results = 20;
+    summary.rankedSessions.items.push({ ...a, id: 'hot', engineSessionId: 'hot', errors: 20, results: 20 });
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} partial={false} />);
+    expect(tree.container.querySelector('.uas-title')?.getAttribute('title')).toBe('Catalog title');
+    expect(tree.container.querySelector('.uas-meta')?.textContent).toContain('Sol');
+    expect(tree.container.querySelector('time')?.textContent).toBe('Oct 17');
+    expect(tree.container.textContent).toContain('2.0 h');
+    expect(tree.container.querySelectorAll('.uas-error-meter')).toHaveLength(3);
+    expect(tree.container.querySelectorAll('.uas-flag')).toHaveLength(1);
+    await act(async () => tree.container.querySelector<HTMLTableRowElement>('.uas-session-row')!.click());
+    expect(tree.container.querySelector('.uas-single')?.textContent).toBe('100 on Oct 17');
+    expect(tree.container.querySelector('.uas-tools')?.textContent).toContain('Bash2—');
+    expect(tree.container.querySelectorAll('.uas-composition-list .uas-key')).toHaveLength(2);
+    expect(tree.container.querySelector('.uas-composition-list')?.textContent).toContain('100.0%');
+    const source = tree.container.querySelector('.uas-composition rect')!;
+    await act(async () => source.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    expect(tree.container.querySelector('.uas-source-tip')?.textContent).toBe('Chat · 100 · 100.0%');
+});
+test('multi-day session chart is 120px high and spans only its retained daily dates', async () => {
+    const summary = await fixture();
+    const a = summary.rankedSessions.items[0]!;
+    a.days = ['2026-10-15', '2026-10-17'].map(date => ({ date, tokens: a.tokens, requests: 2, results: 2, errors: 0 }));
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    await act(async () => tree.container.querySelector<HTMLTableRowElement>('.uas-session-row')!.click());
+    const chart = tree.container.querySelector('.uas-chart svg')!;
+    expect(chart.getAttribute('height')).toBe('120');
+    expect(chart.textContent).toContain('Oct 15');
+    expect(chart.textContent).toContain('Oct 17');
+    expect(chart.textContent).not.toContain('Oct 12');
+});
+test('integration plot has fixed height, smooth paths and full-plot nearest hover with sorted transient tooltip', async () => {
+    const summary = await fixture();
+    summary.skills = [{ id: 'a', kind: 'named', label: 'Alpha', requests: 10 }, { id: 'b', kind: 'named', label: 'Beta', requests: 8 }];
+    summary.days[3]!.skills = [{ ...summary.skills[0]!, requests: 2 }, { ...summary.skills[1]!, requests: 8 }];
+    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial={false} />);
+    const svg = tree.container.querySelector('.uas-chart svg')!;
+    expect(svg.getAttribute('height')).toBe('220');
+    expect(svg.querySelector('path')?.getAttribute('d')).toContain(' C');
+    expect(svg.querySelectorAll('.uas-grid').length).toBeGreaterThan(1);
+    expect(svg.querySelectorAll('circle')).toHaveLength(0);
+    const pick = svg.querySelector('.uas-pick')!;
+    await act(async () => pick.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 265 })));
+    expect(svg.querySelectorAll('.uas-crosshair circle')).toHaveLength(2);
+    expect(svg.querySelector('.uas-tip')?.textContent).toContain('Beta8Alpha2');
+    expect(tree.container.querySelector('.uas-legend')?.textContent).toBe('AlphaBeta');
+    await act(async () => pick.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+    expect(svg.querySelector('.uas-tip')).toBeNull();
+});
+test('All integration date labels thin by physical bounds without removing clustered data points', async () => {
+    const summary = await fixture();
+    summary.range = 'all'; summary.bucketDays = 1; summary.startDate = '2026-08-15';
+    const dates = ['2026-08-15', '2026-09-28', '2026-10-11', '2026-10-12', '2026-10-14', '2026-10-15', '2026-10-17', '2026-10-18'];
+    const skill = { id: 'review', kind: 'named' as const, label: 'Review', requests: 1 };
+    summary.skills = [{ ...skill, requests: dates.length }];
+    summary.days = dates.map(date => ({ ...summary.days[0]!, date, skills: [skill] }));
+    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial={false} />);
+    const svg = tree.container.querySelector('.uas-chart svg')!;
+    expect([...svg.querySelectorAll('.uas-x-axis-label')].map(node => node.textContent)).toEqual(['Aug 15', 'Sep 28', 'Oct 18']);
+    expect(svg.querySelector('.uas-line')?.getAttribute('d')?.split(' C')).toHaveLength(dates.length);
+});
+test('only token and error numbers carry the session numeric emphasis', async () => {
+    const summary = await fixture();
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    const rows = [...tree.container.querySelectorAll('.uas-session-row')];
+    for (const row of rows) {
+        expect([...row.querySelectorAll('.uas-session-number')].map(number => [...row.children].indexOf(number.parentElement!))).toEqual([1, 4]);
+        expect(row.querySelectorAll('.uas-session-number')).toHaveLength(2);
+    }
+});
+test('integration headings include every qualification before the chart separation', async () => {
+    const summary = await fixture();
+    summary.range = '30d';
+    summary.skills = [{ id: 'review', kind: 'named', label: 'Review', requests: 3 }];
+    summary.days[0]!.skills = summary.skills;
+    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial />);
+    const card = tree.container.querySelector<HTMLDivElement>('.uas-integrations .uas-card')!;
+    const header = card.querySelector('.uas-integration-header')!;
+    expect(header.textContent).toContain('Skills used3Partial retained history.Weekly totals');
+    expect(header.querySelectorAll('.uas-note')).toHaveLength(2);
+    expect(header.nextElementSibling?.classList.contains('uas-chart')).toBe(true);
+    expect(header.parentElement).toBe(card);
 });

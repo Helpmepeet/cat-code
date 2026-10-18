@@ -44,13 +44,40 @@ test('inspector remains present with no model attribution and uses reported cach
     expect(html).toContain('Pinned day'); expect(html).toContain('Tokens</dt><dd>123'); expect(html).toContain('80.0%');
 });
 
-test('frame has content-width breakpoints, reduced motion and no dashboard-owned background', () => {
+test('frame has content-width breakpoints, reduced motion and page-owned surfaces', () => {
     const frame = readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8');
     const daily = readFileSync(new URL('./usageDailyChart.css', import.meta.url), 'utf8');
     expect(frame.split('\n')[0]).not.toContain('background:');
     expect(frame).toContain('container:usage / inline-size');
     expect(daily).toContain('@container usage (max-width:999px)'); expect(daily).toContain('@container usage (max-width:759px)');
     expect(daily).toContain('prefers-reduced-motion'); expect(daily).toContain('var(--accent) 55%');
+    expect(daily).toContain('border-radius:14px');
+    expect(daily).toContain('gap:14px');
+    expect(daily).toContain('top:-24px; margin:-24px -28px 18px');
+    expect(daily).toContain('min-width:224px');
+    expect(daily).toContain('@container usage (max-width:560px)');
+    expect(daily).toContain('@container usage-inspector (min-width:620px)');
+    expect(daily).toContain('grid-template-columns:repeat(6,minmax(0,1fr))');
+    expect(daily).toContain(".usage-metric-delta { display:block; font:400 11px 'DM Sans',sans-serif");
+    expect(daily).toContain('.usage-metric-foot { display:block');
+    expect(daily).toContain('grid-template-rows:auto auto 1fr');
+    expect(daily).toContain('stroke-dasharray:1; animation:usage-analytics-draw 700ms');
+    expect(daily).toContain('transform-origin:0 calc(100% - 26px); animation:usage-analytics-grow 300ms');
+    expect(daily).not.toContain('usage-daily-detail { transition:box-shadow');
+    expect(daily).toContain('height:300px; min-height:300px; flex:1 1 300px');
+    expect(daily).toContain('font-size:14px;\n  line-height:normal;');
+    expect(daily).toContain('grid-template-columns:repeat(12,minmax(0,1fr))');
+    expect(daily).toContain('.usage-daily-explorer { grid-column:span 8; }');
+    expect(daily).toContain('.usage-daily-detail { grid-column:span 4; }');
+    expect(daily).toContain('.usage-daily-grid > .usage-panel { grid-column:span 12; }');
+    const track = (1092 - 11 * 14) / 12;
+    expect(track * 8 + 7 * 14).toBeCloseTo(723.333333);
+    expect(track * 4 + 3 * 14).toBeCloseTo(354.666667);
+    const content = daily.match(/\.usage-content \{([\s\S]*?)\n\}/)![1]!;
+    expect(content).not.toContain('background:');
+    expect(daily).toContain('background:light-dark(var(--color-shell-chrome),var(--color-app-bg))');
+    expect(frame).toContain("html[data-glass='on'] .usage-page { background:transparent; }");
+    expect(frame).toContain("html[data-glass='on'] .usage-sticky-top { background:transparent; }");
 });
 
 test('analytics overrides the inherited Claude token for both palette modes without changing the global theme', () => {

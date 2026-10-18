@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { usageProjectId, type UsageRankedSession } from '../../shared/usageDashboard.js';
 import type { MergedSessionRow } from './sessionsCatalogState.js';
-import { analyticsLine, integrationSeries, rankedSessions, sessionDailySeries, sessionFigures, sessionLabel, sessionSpend } from './usageAnalyticsSessionsState.js';
+import { analyticsCalendarTickIndices, analyticsLine, analyticsMonotone, analyticsNearestIndex, analyticsScale, integrationSeries, rankedSessions, sessionDailySeries, sessionFigures, sessionLabel, sessionSourceSegments, sessionSpan, sessionSpend } from './usageAnalyticsSessionsState.js';
 
 const zero = { fresh: 0, read: 0, write: 0, output: 0 };
 function item(id = 'a'): UsageRankedSession {
@@ -45,12 +46,13 @@ test('every session column sorts its own values rather than inherited token orde
     s.rankedSessions.items = [{ ...a, results: 0 }, b];
     expect(rankedSessions(s, 'errorRate', true).map(value => value.id)).toEqual(['b', 'a']);
 });
-test('sparse recent session detail fills local calendar keys and all-history stays unavailable', async () => {
+test('session detail uses its active span and all-history stays unavailable', async () => {
     const s = await summary(); const a = item();
     const points = sessionDailySeries(a, s);
-    expect(points).toHaveLength(7);
+    expect(points).toHaveLength(1);
     expect(points.find(point => point.date === '2026-10-17')?.values).toEqual([10]);
-    expect(points.filter(point => point.values[0] === 0)).toHaveLength(6);
+    a.days.push({ ...a.days[0]!, date: '2026-10-15' });
+    expect(sessionDailySeries(a, s).map(point => point.values[0])).toEqual([10, 0, 10]);
     expect(sessionDailySeries({ ...a, days: [], dailyDetail: 'unavailable' }, s)).toEqual([]);
     expect(sessionSpend(a)).toBe('Unpriced');
     expect(sessionSpend({ ...a, tokenCost: { usd: 0.5, pricedTokens: 5 } })).toBe('$0.50 partial');
@@ -77,4 +79,73 @@ test('all-history sparse buckets retain calendar spacing without fabricated zero
     expect(data.points.map(point => point.date)).toEqual(s.days.map(day => day.date));
     expect(data.points[1]!.endDate).toBe(s.endDateExclusive);
     expect(analyticsLine(data.points, 0, s.startDate, s.endDateExclusive, 3)).toBe('M32.00,20.00 L576.00,20.00');
+});
+test('chart scale, monotone geometry, nearest picking and optional retained span', () => {
+    expect(analyticsScale(83)).toEqual({ top: 100, ticks: [0, 20, 40, 60, 80, 100] });
+    expect(analyticsNearestIndex(250, 30, 490, 7)).toBe(3);
+    expect(analyticsNearestIndex(-1, 30, 490, 7)).toBe(0);
+    expect(analyticsNearestIndex(999, 30, 490, 7)).toBe(6);
+    const path = analyticsMonotone([{ x: 0, y: 0 }, { x: 30, y: 100 }, { x: 60, y: 0 }]);
+    expect(path).toContain(' C');
+    expect(path).not.toContain('NaN');
+    expect(sessionSpan(item())).toBeNull();
+    expect(sessionSpan({ ...item(), firstActiveAt: '2026-10-17T10:00:00Z' })).toBe('2.0 h');
+});
+test('source composition reserves two physical pixels per gap at every measured width', () => {
+    const a = item();
+    a.tokenSources = { chat: { ...zero, fresh: 50 }, subagents: { ...zero, fresh: 40 }, compaction: { ...zero, fresh: 10 } };
+    for (const width of [100, 223, 400]) {
+        const segments = sessionSourceSegments(a, width);
+        expect(segments.map(value => value.source)).toEqual(['chat', 'subagents', 'compaction']);
+        expect(segments[1]!.x - segments[0]!.x - segments[0]!.width).toBeCloseTo(2);
+        expect(segments[2]!.x - segments[1]!.x - segments[1]!.width).toBeCloseTo(2);
+        expect(segments[2]!.x + segments[2]!.width).toBeCloseTo(width);
+        expect(segments[0]!.width / segments[1]!.width).toBeCloseTo(50 / 40);
+    }
+    a.tokenSources.subagents = zero;
+    a.tokenSources.compaction = zero;
+    expect(sessionSourceSegments(a, 223)).toEqual([{ source: 'chat', x: 0, width: 223 }]);
+    a.tokenSources.chat = zero;
+    expect(sessionSourceSegments(a, 223)).toEqual([]);
+});
+test('Sessions stylesheet uses final source ink, chart text and shared surfaces', () => {
+    const css = readFileSync(new URL('./usageAnalyticsSessions.css', import.meta.url), 'utf8');
+    expect(css).toContain('.uas-source-subagents { fill: var(--uas-c2); }');
+    expect(css).toContain('.uas-source-key-subagents { color: var(--uas-c2); }');
+    expect(css).toContain('.uas-family-luna { color: var(--uas-c1); }');
+    expect(css).toContain('.uas-chart text { font-size: 11px;');
+    expect(css).toContain('box-shadow: var(--usage-card-shadow);');
+    expect(css).toContain('background: light-dark(var(--usage-panel), #1c1c1f);');
+    expect(css).not.toContain('.uas-composition rect { stroke:');
+    expect(css).toContain('.uas-session-number { font-weight: 600; }');
+    expect(css).toContain('.uas-card > .uas-integration-header { display: flow-root; margin-bottom: 16px; }');
+    expect(css).toContain('margin-bottom: 16px;');
+    expect(css).toContain('.uas-integration-header > .uas-note:last-child { margin-bottom: 0; }');
+});
+test('Sessions physical sizes use the prototype 14px base without depending on the app root rem', () => {
+    const css = readFileSync(new URL('./usageAnalyticsSessions.css', import.meta.url), 'utf8');
+    for (const declaration of [
+        'font-size: 17.5px;', 'font-size: 21px;', 'font-size: 28px;',
+        'max-height: 420px;', 'max-width: 392px;', 'max-width: 364px;', 'max-width: 210px;',
+        'grid-template-columns: minmax(0,1fr) 49px 63px;',
+        'gap: 12px; padding: 0 0 12px; margin: 0 0 12px;',
+        'min-height: 1.2em;', 'min-height: 1.1em;',
+    ]) expect(css).toContain(declaration);
+    expect(css).not.toMatch(/\d(?:\.\d+)?rem\b/);
+    expect(css).toContain('.uas-figures dt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }');
+    expect(css).toContain('.uas-chart text { font-size: 11px;');
+});
+test('sparse All calendar ticks reserve physical label bounds at the clustered right edge', () => {
+    const positions = [30, 340, 450, 457, 464, 472, 480], widths = positions.map(() => 39);
+    const ticks = [...analyticsCalendarTickIndices(positions, widths)];
+    expect(ticks).toEqual([0, 1, 6]);
+    for (let i = 1; i < ticks.length; i++) {
+        const before = ticks[i - 1]!, after = ticks[i]!;
+        const right = positions[before]! + (before === 0 ? widths[before]! : widths[before]! / 2);
+        const left = positions[after]! - (after === positions.length - 1 ? widths[after]! : widths[after]! / 2);
+        expect(left - right).toBeGreaterThanOrEqual(12);
+    }
+    expect([...analyticsCalendarTickIndices([], [])]).toEqual([]);
+    expect([...analyticsCalendarTickIndices([50], [39])]).toEqual([0]);
+    expect([...analyticsCalendarTickIndices([30, 35], [39, 39])]).toEqual([0]);
 });

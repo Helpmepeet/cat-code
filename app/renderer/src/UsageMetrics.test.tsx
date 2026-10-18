@@ -46,5 +46,34 @@ test('latest build is explicitly qualified and has a meaningful empty sample sta
     expect(render()).toContain('<code>abcdef1</code>');
     expect(render()).not.toContain('<code>newest</code>');
     expect(render()).toContain('newer builds below that threshold are excluded');
-    expect(render()).toContain('≥200 results');
+    expect(render()).toContain('Latest build with at least 200 tool results');
+});
+
+test('summary sparks and rate changes use prototype forms without losing write qualifications', () => {
+    const summary = comparable();
+    summary.cacheWriteReporting = 'partial';
+    const html = renderToStaticMarkup(<UsageMetrics summary={summary} unknown="–" partial={false}/>);
+    expect(html).toContain('viewBox="0 0 63 28"');
+    expect(html).toContain('offset="0.25"');
+    expect(html).toContain('usage-metric-delta usage-change-good');
+    expect(html).toContain('Writes partly reported');
+    summary.previousPeriod!.errors = 1;
+    const worse = renderToStaticMarkup(<UsageMetrics summary={summary} unknown="–" partial={false}/>);
+    expect(worse).toContain('usage-metric-delta usage-change-bad');
+    expect(worse).not.toContain('usage-delta-up');
+});
+
+test('latest build shares a baseline with its median and retains per-build hover values', () => {
+    const summary = comparable();
+    summary.days[0]!.tools = [{ id: 'bash', requests: 400, results: 400, errors: 22, builds: { items: [
+        { sha: 'old-build', dirty: false, requests: 200, results: 200, errors: 2, firstObservedAt: '2026-09-07T00:00:00Z' },
+        { sha: 'new-build', dirty: true, requests: 200, results: 200, errors: 20, firstObservedAt: '2026-09-08T00:00:00Z' },
+    ] } }];
+    const html = renderToStaticMarkup(<UsageMetrics summary={summary} unknown="–" partial={false}/>);
+    expect(html).toContain('usage-build-rate-bad');
+    expect(html).toContain('<span class="usage-build-median">median 5.5%</span>');
+    expect(html).toContain('<title>new-build (uncommitted): 10.0% tool errors</title>');
+    expect(html).toContain('usage-build-chart');
+    summary.days[0]!.tools[0]!.builds!.items[0]!.firstObservedAt = '2026-09-09T00:00:00Z';
+    expect(renderToStaticMarkup(<UsageMetrics summary={summary} unknown="–" partial={false}/>)).toContain('usage-build-rate-good');
 });

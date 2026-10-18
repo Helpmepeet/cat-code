@@ -6,7 +6,7 @@ export type UsageAnalyticsDetailProps = { summary: UsageRangeSummary; partial: b
 export type UsageAnalyticsDateProps = UsageAnalyticsDetailProps & { selectedDate: string; onSelectDate: (date: string) => void };
 export type UsageAnalyticsActivityProps = UsageAnalyticsDateProps & { timezone: string };
 export type UsageAnalyticsModelsProps = UsageAnalyticsDetailProps & { modelFamilies: readonly string[]; onModelFamiliesChange: (families: string[]) => void };
-export type UsageAnalyticsReliabilityProps = UsageAnalyticsDetailProps & { onSelectTool: (id: string) => void; onSelectRoute: (route: AutoModeUsageRoute) => void; onSelectBuild: (sha: string) => void };
+export type UsageAnalyticsReliabilityProps = UsageAnalyticsDetailProps & { selectedToolId?: string; onSelectTool: (id: string) => void; onSelectRoute: (route: AutoModeUsageRoute) => void; onSelectBuild: (sha: string) => void };
 export const detailTotal = (t: UsageTokens) => t.fresh + t.read + t.write + t.output;
 export const detailInput = (t: UsageTokens) => t.fresh + t.read + t.write;
 export const detailRate = (t: UsageTokens) => detailInput(t) ? t.read / detailInput(t) * 100 : null;
@@ -18,7 +18,7 @@ export function analyticsDuration(ms: number | null): string {
     if (ms < 60000) return `${Number((ms / 1000).toFixed(2))} s`;
     return `${Number((ms / 60000).toFixed(2))} min`;
 }
-export function analyticsModelLatency(models: UsageTimingSummary['models']) {
+export function analyticsModelLatency(models: UsageTimingSummary['models'], tools?: UsageTimingSummary['tools'], width = 590, measure = (text: string) => text.length * 6.1) {
     const rows = [
         { id: 'response', label: 'Model response', ...models.responseDuration },
         { id: 'first-text', label: 'First text', ...models.firstText },
@@ -28,13 +28,31 @@ export function analyticsModelLatency(models: UsageTimingSummary['models']) {
         p95Ms: models.state === 'available' && row.samples > 0 ? row.p95Ms : null,
         samples: models.state === 'available' ? row.samples : 0,
     }));
+    if (tools) rows.push({
+        id: 'tool', label: 'Tool run', ...tools.duration,
+        p50Ms: tools.state === 'available' && tools.duration.samples > 0 ? tools.duration.p50Ms : null,
+        p95Ms: tools.state === 'available' && tools.duration.samples > 0 ? tools.duration.p95Ms : null,
+        samples: tools.state === 'available' ? tools.duration.samples : 0,
+    });
     const positive = rows.flatMap(row => [row.p50Ms, row.p95Ms]).filter((n): n is number => n !== null && n > 0);
-    const low = Math.min(1, ...positive.map(n => n / 2));
+    const hasZero = rows.some(row => row.p50Ms === 0 || row.p95Ms === 0);
+    const low = positive.length ? Math.min(hasZero ? 1 : Infinity, ...positive.map(n => n / 2)) : 1;
     const high = Math.max(low * 10, ...positive.map(n => n * 1.6));
+    const labelWidth = Math.max(...rows.flatMap(row => [measure(row.label), measure(`${row.samples.toLocaleString()} samples`)]));
+    const zeroX = labelWidth + 16 + measure('0 ms') / 2;
+    const positiveLeft = zeroX + measure('0 ms') / 2 + 20;
     // Zero has a separate labelled rail; it is never replaced by a log-scale floor.
-    const x = (ms: number) => ms === 0 ? 150 : 195 + (Math.log(ms) - Math.log(low)) / (Math.log(high) - Math.log(low)) * 365;
-    const ticks = [0.01, 0.1, 1, 10, 100, 1000, 10000, 60000, 600000, 3600000].filter(n => n >= low && n <= high);
-    return { rows, x, ticks };
+    const x = (ms: number) => ms === 0 ? zeroX : positiveLeft + (Math.log(ms) - Math.log(low)) / (Math.log(high) - Math.log(low)) * Math.max(1, width - positiveLeft - 16);
+    const candidates = [0.01, 0.1, 1, 10, 100, 1000, 10000, 60000, 600000, 3600000].filter(n => n >= low && n <= high);
+    if (!candidates.length) candidates.push(low, high);
+    let previousRight = zeroX + measure('0 ms') / 2;
+    const ticks = candidates.filter(tick => {
+        const half = measure(analyticsDuration(tick)) / 2;
+        if (x(tick) - half < previousRight + 8 || x(tick) + half > width) return false;
+        previousRight = x(tick) + half;
+        return true;
+    });
+    return { rows, x, ticks, zeroX, positiveLeft };
 }
 export function analyticsBucketAxis(summary: UsageRangeSummary) {
     const first = Date.parse(`${summary.startDate}T00:00:00Z`);
@@ -133,7 +151,7 @@ export function analyticsBuilds(summary: UsageRangeSummary) {
     return { items: [...rows.values()].sort((a, b) => a.first.localeCompare(b.first)), omitted, attributed };
 }
 /** Squarified rows retain relative area without turning small routes into slivers. */
-export function analyticsRouteTiles(summary: UsageRangeSummary) {
+export function analyticsRouteTiles(summary: UsageRangeSummary, width = 600, height = 240) {
     const counts = new Map<AutoModeUsageRoute, { count: number; notAllowed: number }>();
     for (const item of summary.autoMode.routes) {
         const row = counts.get(item.route) ?? { count: 0, notAllowed: 0 };
@@ -142,7 +160,7 @@ export function analyticsRouteTiles(summary: UsageRangeSummary) {
         counts.set(item.route, row);
     }
     const items = [...counts].filter(([, row]) => row.count > 0).sort((a, b) => b[1].count - a[1].count);
-    let x = 0, y = 0, w = 600, h = 240;
+    let x = 0, y = 0, w = width, h = height;
     let remaining = items.reduce((sum, [, row]) => sum + row.count, 0);
     const tiles: Array<{ route: AutoModeUsageRoute; count: number; notAllowed: number; x: number; y: number; width: number; height: number }> = [];
     let index = 0;
@@ -174,6 +192,11 @@ export function analyticsRouteTiles(summary: UsageRangeSummary) {
         if (vertical) { x += thickness; w -= thickness; } else { y += thickness; h -= thickness; }
         remaining -= sum; index = end;
     }
-    return tiles;
+    return tiles.map(tile => ({
+        ...tile,
+        x: Math.round(tile.x), y: Math.round(tile.y),
+        width: Math.round(tile.x + tile.width) - Math.round(tile.x),
+        height: Math.round(tile.y + tile.height) - Math.round(tile.y),
+    }));
 }
 export const analyticsRouteLabels: Record<AutoModeUsageRoute, string> = { base: 'Base rules', forced: 'Forced', guard: 'Guard', accept_edits: 'Accept edits', allowlist: 'Allowed tools', stage1: 'Classifier, first pass', stage2: 'Classifier, second pass', unknown: 'Unknown route' };
