@@ -19,6 +19,9 @@ function usageLastDate(exclusive: string): string {
 function usageInstantDayText(instant: string, timezone: string): string {
     return new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'short', day: 'numeric' }).format(new Date(instant));
 }
+function usageScrollTo(element: Element | null | undefined, block: ScrollLogicalPosition) {
+    element?.scrollIntoView?.({ block, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+}
 function usageUpdated(asOf: string, timezone: string): string {
     const date = new Date(asOf), now = new Date();
     const day = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -40,11 +43,11 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const [modelFamilies, setModelFamilies] = useState<string[]>([]);
     const cacheRef = useRef<HTMLDivElement>(null);
     const buildRef = useRef<HTMLDivElement>(null);
-    const scrollToBuildChart = () => buildRef.current?.querySelector<HTMLElement>('.uad-build-card')?.scrollIntoView?.({ block: 'center' });
+    const scrollToBuildChart = () => usageScrollTo(buildRef.current?.querySelector('.uad-build-card'), 'center');
     const dailyRef = useRef<HTMLDivElement>(null);
     const selectMetric = (next: UsageDailyMetric) => {
         setMetric(next);
-        dailyRef.current?.scrollIntoView?.({ block: 'center' });
+        usageScrollTo(dailyRef.current, 'center');
     };
     const changeGrouping = (next: UsageTokenGrouping) => {
         if (next === grouping) return;
@@ -78,7 +81,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
         {partial && !empty && <p className="usage-status" role="status">Activity for this period is incomplete.</p>}
         {refreshFailed && <p className="usage-status" role="status">{usageFailureMessage(state.errorCode)} Showing the last available update.</p>}
         {summary && snapshot && !unavailable && !empty && <>
-            <UsageMetrics summary={summary} unknown="–" partial={!!partial} metric={metric} onMetricChange={selectMetric} onCacheSelect={() => cacheRef.current?.scrollIntoView?.({ block: 'start' })} onBuildSelect={scrollToBuildChart}/>
+            <UsageMetrics summary={summary} unknown="–" partial={!!partial} metric={metric} onMetricChange={selectMetric} onCacheSelect={() => usageScrollTo(cacheRef.current, 'start')} onBuildSelect={scrollToBuildChart}/>
             <div ref={dailyRef} className="usage-daily-grid">
                 <UsageDailyChart partial={!!partial} summary={summary} metric={metric} grouping={grouping} hidden={hidden[metric] ?? []} modelFamily={modelFamilies.map(id => analyticsFamilyLabels[id] ?? id)} selected={selected?.date ?? ''} onMetricChange={setMetric} onGroupingChange={changeGrouping} onHiddenChange={ids => setHidden(current => ({ ...current, [metric]: ids }))} onModelFamilyChange={families => setModelFamilies(families.map(label => Object.keys(analyticsFamilyLabels).find(id => analyticsFamilyLabels[id] === label) ?? label))} onSelect={setSelectedDate}/>
                 <UsageDailyDetail summary={summary} selected={selected?.date ?? ''} onClear={() => setSelectedDate('')}/>

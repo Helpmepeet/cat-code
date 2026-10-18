@@ -474,14 +474,23 @@ test('route and latest-build cross-filters navigate without changing the pinned 
     expect(button(tree.container, 'Auto mode', '.usage-daily-metrics button').getAttribute('aria-selected')).toBe('true');
     expect(button(tree.container.querySelector<HTMLElement>('.usage-daily-chips')!, 'Allowed').getAttribute('aria-pressed')).toBe('false');
     expect(tree.container.querySelector('.usage-pinned')).not.toBeNull();
-    let buildScrolls = 0, cacheScrolls = 0;
+    const buildScrolls: unknown[] = [], cacheScrolls: unknown[] = [];
     const reliability = tree.container.querySelector<HTMLElement>('.uad-build-card')!;
     const cache = tree.container.querySelector('[aria-label="Cache"]')!.parentElement!;
-    reliability.scrollIntoView = () => { buildScrolls++; };
-    cache.scrollIntoView = () => { cacheScrolls++; };
+    reliability.scrollIntoView = options => { buildScrolls.push(options); };
+    cache.scrollIntoView = options => { cacheScrolls.push(options); };
     await click(tree.container.querySelector('.usage-latest-build')!);
     await click(tree.container.querySelector('.usage-metric-cache')!);
-    expect(buildScrolls).toBe(1); expect(cacheScrolls).toBe(1);
+    expect(buildScrolls).toEqual([{ block: 'center', behavior: 'smooth' }]);
+    expect(cacheScrolls).toEqual([{ block: 'start', behavior: 'smooth' }]);
+    const matchMedia = window.matchMedia;
+    window.matchMedia = (query => ({ matches: query === '(prefers-reduced-motion: reduce)' })) as typeof window.matchMedia;
+    try {
+        await click(tree.container.querySelector('.usage-metric-cache')!);
+    } finally {
+        window.matchMedia = matchMedia;
+    }
+    expect(cacheScrolls.at(-1)).toEqual({ block: 'start', behavior: 'instant' });
 });
 
 test('sparse All chart marks leave calendar gaps and clamp a partial final bucket', async () => {
