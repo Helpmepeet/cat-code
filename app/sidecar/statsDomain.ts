@@ -1,13 +1,24 @@
+import type { UsageDiagnostic } from '../shared/usageDiagnostic.js'
+
 /** Retained-history analytics collected by the independent usage worker. */
-export async function collectUsageDashboard(): Promise<import('../shared/usageDashboard.js').UsageCollectionResult> {
-  const { aggregateUsageDashboard } = await import('../../src/utils/stats.js')
-  const { UsageResourceError } = await import('../../src/utils/statsUsage.js')
+export async function collectUsageDashboard(options: {
+  onDiagnostic?: (diagnostic: UsageDiagnostic) => void
+  /** Test seam for failure mapping; production always uses the real aggregation. */
+  aggregate?: typeof import('../../src/utils/stats.js').aggregateUsageDashboard
+} = {}): Promise<import('../shared/usageDashboard.js').UsageCollectionResult> {
+  const aggregateUsageDashboard = options.aggregate ?? (await import('../../src/utils/stats.js')).aggregateUsageDashboard
+  const { publicCodeForFailure } = await import('../../src/utils/statsFailure.js')
   const { fitUsageDashboardSnapshot } = await import('./usageSummary.js')
   const { parseUsageCollectionResult } = await import('../shared/usageStatsWorker.js')
+  const { usageDiagnosticFromError } = await import('../shared/usageDiagnostic.js')
+  const startedAt = Date.now()
   try {
     const snapshot = await aggregateUsageDashboard(undefined, { finalize: fitUsageDashboardSnapshot })
     return parseUsageCollectionResult({ type: 'usage', version: 1, snapshot }) ?? { type: 'error', version: 1, code: 'invalid-output' }
   } catch (error) {
-    return { type: 'error', version: 1, code: error instanceof UsageResourceError || (error instanceof Error && /resource limit/.test(error.message)) ? 'resource-limit' : error instanceof Error && /timeout/i.test(error.message) ? 'timeout' : 'collection' }
+    const diagnostic = usageDiagnosticFromError(error, Date.now() - startedAt)
+    // A failing diagnostic sink must never change the result.
+    try { options.onDiagnostic?.(diagnostic) } catch { /* diagnostics are best effort */ }
+    return { type: 'error', version: 1, code: publicCodeForFailure(diagnostic.reason) }
   }
 }

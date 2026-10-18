@@ -2,8 +2,17 @@
 process.env.CLAUDE_CODE_SIMPLE = '1';
 import { MAX_USAGE_RECORD_BYTES, type UsageCollectionResult } from '../shared/usageDashboard.js';
 import { scanForSecrets } from '../shared/secretGuard.js';
+import { formatUsageDiagnostic, usageDiagnosticFromError, type UsageDiagnostic } from '../shared/usageDiagnostic.js';
 import { bootstrapWorkerEngine, emitWorkerRecord, runDisposableWorker } from './workerRuntime.js';
+// One tagged line per failed refresh; main parses it through the bounded stderr collector.
+function reportDiagnostic(diagnostic: UsageDiagnostic): void {
+    try {
+        process.stderr.write(`${formatUsageDiagnostic(diagnostic)}\n`);
+    }
+    catch { /* A broken stderr must not alter the stdout result. */ }
+}
 runDisposableWorker('usage-worker', async () => {
+    const startedAt = Date.now();
     let result: UsageCollectionResult;
     try {
         if (process.argv.includes('--cached')) {
@@ -16,10 +25,11 @@ runDisposableWorker('usage-worker', async () => {
         } else {
             await bootstrapWorkerEngine();
             const { collectUsageDashboard } = await import('./statsDomain.js');
-            result = await collectUsageDashboard();
+            result = await collectUsageDashboard({ onDiagnostic: reportDiagnostic });
         }
     }
-    catch {
+    catch (error) {
+        reportDiagnostic(usageDiagnosticFromError(error, Date.now() - startedAt));
         result = { type: 'error', version: 1, code: 'collection' };
     }
     if (!scanForSecrets(result).ok)
