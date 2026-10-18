@@ -2392,7 +2392,8 @@ function projectResultFrame(
   if (
     subtype === 'interrupted' &&
     (message.stop_reason === 'interrupt' ||
-      draft.session.rows.some(row => row.kind === 'turn-stopped'))
+      // A stopped subagent is not a stopped parent turn.
+      draft.session.rows.some(row => row.kind === 'turn-stopped' && !row.parentToolUseId))
   ) {
     markFrameSeen(draft, frameId)
     return true

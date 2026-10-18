@@ -873,10 +873,11 @@ export class SidecarServer {
       this.scheduleDiagnostics()
     })
     this.unsubscribe = this.controller.subscribe(event => {
-      // A worker's tool results are not the conversation continuing, and
-      // background workers emit them out of turn.
-      if (event.type === 'message' && (event.message.type === 'user' || event.message.type === 'result') &&
-          !('parent_tool_use_id' in event.message && event.message.parent_tool_use_id != null)) {
+      // One verdict per event: `observe` also tracks the turn's pending tool
+      // uses. A background worker's out-of-turn steps are not the conversation
+      // continuing; a foreground worker's steps are part of its turn.
+      const turnOwned = event.type !== 'message' || this.turnFrames.observe(event.message)
+      if (event.type === 'message' && (event.message.type === 'user' || event.message.type === 'result') && turnOwned) {
         void this.workspaceObserver?.conversationContinued().then(() => {
           for (const connection of this.connections) this.sendActivity(connection, this.currentPresence())
         }).catch(error => this.log(`[sidecar] workspace branch observation failed: ${String(error)}`))
@@ -909,7 +910,7 @@ export class SidecarServer {
           this.scheduleDiagnostics()
         })
       }
-      this.observeTurnEvent(event)
+      this.observeTurnEvent(event, turnOwned)
       this.broadcastEvent(event)
       this.observeGeneratedImageEvent(event)
       // HOST-REQUEST-PLANE §4 step 4a — the three events that can move presence,
@@ -2395,19 +2396,20 @@ export class SidecarServer {
     if (this.turnStartedAtMs === 0) return
     const durationMs = Date.now() - this.turnStartedAtMs
     this.turnStartedAtMs = 0
+    this.turnFrames.reset()
     this.clearTurnStallTimer()
     this.onTurnLifecycle?.({ kind: 'completed', durationMs, outcome })
   }
 
   /** Engine liveness for the running turn, and the one phase fact we hold. */
-  private observeTurnEvent(event: AppSessionEvent): void {
+  private observeTurnEvent(event: AppSessionEvent, turnOwned: boolean): void {
     if (this.turnStartedAtMs === 0) return
     // Messages ONLY. `turn.status` is this controller's own bookkeeping and it
     // fires at both ends of every turn, so counting it as liveness would have
     // reset the quiet clock without the engine having produced anything.
     if (event.type !== 'message') return
     // A worker launched by an earlier turn must not keep this one looking alive.
-    if (!this.turnFrames.observe(event.message)) return
+    if (!turnOwned) return
     this.turnEventCount++
     this.turnLastEventAtMs = Date.now()
     if (event.message.type === 'result') {

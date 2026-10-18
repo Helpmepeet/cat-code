@@ -538,11 +538,17 @@ export class FrameReplayBuffer {
    * of a message, not one), and `result`/`system` frames because the engine's
    * display projection does not emit them — an anchor the deeper read cannot
    * find is a refusal, so it must be a uuid that read is certain to contain.
+   *
+   * Top-level frames only. The deeper read splices each subagent's steps right
+   * after the tool use that launched it, but a background run's steps arrive
+   * later, after parent frames the read places below them. Anchored on such a
+   * step, "everything above the anchor" would skip those parent frames for good.
    */
   viewAnchorUuid(sessionId: SessionId): string | undefined {
     const entry = this.sessions.get(sessionId)
     if (!entry || !entry.truncated) return undefined
     for (const frame of entry.recent) {
+      if (isNestedMessageFrame(frame)) continue
       const uuid = displayMessageUuid(frame)
       if (uuid !== undefined) return uuid
     }
@@ -716,6 +722,12 @@ function retainedMessageCount(frames: readonly ServerFrame[]): number {
  * display projection emits (`toSDKMessages`, via `projectResumedHistory`), so an
  * anchor built from this is a uuid the sidecar's deeper read can actually find.
  */
+function isNestedMessageFrame(frame: ServerFrame): boolean {
+  if (frame.kind !== 'event' || frame.event.type !== 'message') return false
+  const parent: unknown = frame.event.message.parent_tool_use_id
+  return typeof parent === 'string' && parent.length > 0
+}
+
 function displayMessageUuid(frame: ServerFrame): string | undefined {
   if (frame.kind !== 'event') return undefined
   if (frame.event.type !== 'message') return undefined

@@ -358,3 +358,38 @@ test('steps from a worker launched by an earlier turn do not keep a stuck turn l
   expect(events.filter(event => event.kind === 'stalled')).toHaveLength(1)
   held.release?.()
 })
+
+test('workspace observation follows a foreground worker\'s steps but not out-of-turn ones', async () => {
+  const user = (uuid: string, parent: string | null, toolUseId: string) => ({
+    type: 'user' as const, session_id: ENGINE_SESSION, parent_tool_use_id: parent,
+    uuid: `00000000-0000-4000-8000-${uuid.padStart(12, '0')}`,
+    message: { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: toolUseId, content: 'ok' }] },
+  })
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield { ...assistantMessage(), message: { ...assistantMessage().message,
+        content: [{ type: 'tool_use', id: 'tu-fg', name: 'Agent', input: {} }] } } as never
+      // The foreground worker's own tool result, while its card is pending.
+      yield user('11', 'tu-fg', 'tu-read') as never
+      yield user('12', null, 'tu-fg') as never
+      yield {
+        type: 'result' as const, subtype: 'success' as const, duration_ms: 1, duration_api_ms: 1,
+        is_error: false, num_turns: 1, result: 'done', session_id: ENGINE_SESSION, total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 }, uuid: '00000000-0000-4000-8000-000000000013',
+      } as never
+    },
+  })
+  let continued = 0
+  const server = new SidecarServer({
+    sessionId: SESSION, engineSessionId: ENGINE_SESSION, controller, turnStallMs: STALL_MS, log: () => {},
+    workspaceObserver: { getSnapshot: () => ({ cwd: '/repo', lastWorkingBranch: 'main' }), conversationContinued: async () => { continued++ } },
+  })
+  servers.push(server)
+  submit(server, server.addConnection({ write() {}, end() {} }))
+  await sleep(STALL_MS)
+  expect(continued).toBe(3)
+
+  // Out of turn: a background worker's tool result is not the conversation continuing.
+  controller.emitMessage(user('14', 'tu-bg', 'tu-grep') as never)
+  expect(continued).toBe(3)
+})

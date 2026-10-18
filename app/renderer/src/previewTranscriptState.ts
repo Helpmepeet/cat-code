@@ -263,7 +263,9 @@ function selectRunFactsFromFrames(
 }
 
 function readAssistantModel(message: SDKMessage): string | null {
-  if (message.type !== 'assistant') return null
+  // A subagent's model is not the session's, and background steps are often
+  // the newest frames in the cache.
+  if (message.type !== 'assistant' || message.parent_tool_use_id) return null
   const inner: unknown = message.message
   if (!isRecord(inner)) return null
   return typeof inner.model === 'string' && inner.model ? inner.model : null

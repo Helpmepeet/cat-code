@@ -177,6 +177,8 @@ test('Finished, background, resumed and waiting runs open; only an unbound row k
   await click(tree.container, '[data-dock-row="bg"]')
   expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-bg, background')
   expect(tree.container.querySelector('.subagent-side-availability')).toBeNull()
+  // A background run is working, so its face pulses like a foreground one.
+  expect(tree.container.querySelector('.subagent-side-header .animate-face-pulse')).not.toBeNull()
   await tree.render(workspace({
     active: [a, background, resumed, waiting, unbound],
     rows: [agent(), { ...launch('bg'), children: [prose('bg-step', 'Background step')] }, launch('resumed'), agent('waiting', []), agent('c', [prose('answer-c', 'Finished answer')])],
@@ -322,6 +324,8 @@ test('finished launches recorded before steps were published keep fallback, whil
   await click(restored.container, '[data-finished-toggle]')
   await click(restored.container, '[data-dock-row="async"]')
   expect(restored.container.querySelector('aside')?.textContent).toContain('Restored worker steps')
+  await click(restored.container, '[aria-label="Close subagent panel"]')
+  expect(restored.container.querySelector('[data-finished-toggle]')?.getAttribute('aria-expanded')).toBe('true')
 })
 
 test('a real completed resume cannot use its retained reveal target as current-run steps', () => {
