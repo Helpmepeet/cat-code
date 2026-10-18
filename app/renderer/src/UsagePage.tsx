@@ -4,7 +4,7 @@ import { type UsageDashboardState, type UsageSelection, usageFailureMessage, usa
 import type { MergedSessionRow } from './sessionsCatalogState.js';
 import { UsageMetrics } from './UsageMetrics.js';
 import { UsageDailyChart, UsageDailyDetail } from './UsageDailyChart.js';
-import { usageDailySeries, usageModelRequestCount, usagePinnedBucket, type UsageDailyMetric, type UsageTokenGrouping } from './usageDailyChartState.js';
+import { usageDailySeries, usageModelRequestCount, usagePinnedBucket, usageSelectedToolId, type UsageDailyMetric, type UsageTokenGrouping } from './usageDailyChartState.js';
 import { UsageAnalyticsCache, UsageAnalyticsActivity, UsageAnalyticsModels, UsageAnalyticsReliability } from './UsageAnalyticsDetails.js';
 import { analyticsFamilyLabels } from './usageAnalyticsDetailsState.js';
 import { UsageAnalyticsSessions, UsageAnalyticsIntegrations } from './UsageAnalyticsSessions.js';
@@ -58,6 +58,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
         onSelectionChange({ range, date });
     };
     const snapshot = state.snapshot, summary = snapshot?.ranges[range];
+    const selectedToolId = usageSelectedToolId(summary, metric, hidden.toolErrors ?? []);
     useEffect(() => {
         if (selectedDate && summary) {
             const date = usagePinnedBucket(summary, selectedDate);
@@ -87,7 +88,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
             <UsageAnalyticsModels summary={summary} partial={!!partial} modelFamilies={modelFamilies} onModelFamiliesChange={families => { setModelFamilies(families); setGrouping('family'); setHidden(current => ({ ...current, tokens: [] })); }}/>
             <UsageAnalyticsSessions summary={summary} partial={!!partial} sessionRows={sessionRows} onOpenSession={onOpenSession}/>
             <UsageAnalyticsIntegrations summary={summary} partial={!!partial}/>
-            <div ref={buildRef}><UsageAnalyticsReliability summary={summary} partial={!!partial} onSelectTool={id => { selectMetric('toolErrors'); setHidden(current => ({ ...current, toolErrors: usageDailySeries(summary, 'toolErrors', grouping).filter(item => item.id !== id).map(item => item.id) })); }} onSelectRoute={() => { selectMetric('auto'); setHidden(current => ({ ...current, auto: ['allowed'] })); }} onSelectBuild={scrollToBuildChart}/></div>
+            <div ref={buildRef}><UsageAnalyticsReliability summary={summary} partial={!!partial} selectedToolId={selectedToolId} onSelectTool={id => { selectMetric('toolErrors'); setHidden(current => ({ ...current, toolErrors: usageDailySeries(summary, 'toolErrors', grouping).filter(item => item.id !== id).map(item => item.id) })); }} onSelectRoute={() => { selectMetric('auto'); setHidden(current => ({ ...current, auto: ['allowed'] })); }} onSelectBuild={scrollToBuildChart}/></div>
         </>}
     </div></main>;
 }
