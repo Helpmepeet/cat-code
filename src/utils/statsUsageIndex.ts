@@ -19,6 +19,8 @@ export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashbo
 // Applied on every connection, so changing this does not require a rebuild.
 const DISK_MAX_PAGE_COUNT = 67108864;
 const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
+// Fitting changes must replay indexed events, even when source files are unchanged.
+const SAVED_USAGE_FITTING_VERSION = 1;
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Accounting fields only; Skill identifiers are allowlisted, never arguments or bodies. */
@@ -90,7 +92,9 @@ export function readSavedUsage(path = usageIndexPath()): UsageDashboardSnapshot 
     try {
         db = new Database(path, { readonly: true });
         const row = db.query<{ value: string }, []>('SELECT value FROM snapshot WHERE id=1 AND length(CAST(value AS BLOB)) <= 262144').get();
-        const parsed = row ? parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: JSON.parse(row.value) }) : null;
+        const saved: unknown = row ? JSON.parse(row.value) : null;
+        if (!object(saved) || saved.fittingVersion !== SAVED_USAGE_FITTING_VERSION) return null;
+        const parsed = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: saved.snapshot });
         if (parsed?.type !== 'usage') return null;
         // Wire compatibility does not make pre-span aggregates current. Reuse the indexed events.
         return Object.values(parsed.snapshot.ranges).every(range => range.rankedSessions.items.every(item => item.firstActiveAt !== undefined))
@@ -350,7 +354,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             snapshot = options.finalize?.(snapshot) ?? snapshot;
         }
         check();
-        db.query('INSERT OR REPLACE INTO snapshot VALUES (1,?)').run(JSON.stringify(snapshot));
+        db.query('INSERT OR REPLACE INTO snapshot VALUES (1,?)').run(JSON.stringify({ fittingVersion: SAVED_USAGE_FITTING_VERSION, snapshot }));
         db.exec('DELETE FROM identities; COMMIT;');
         return snapshot;
     } catch (error) {

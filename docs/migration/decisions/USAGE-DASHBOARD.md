@@ -590,5 +590,33 @@ Wire validation remains compatible with missing endpoints, but saved aggregate
 reuse requires `firstActiveAt` on every retained ranked item. A pre-field saved
 snapshot is invalidated by `readSavedUsage`; refresh rebuilds the aggregate from
 the existing indexed events without rereading unchanged transcript files.
-Empty ranked lists remain reusable. This is aggregate validity, not a projection
-or counting-version migration.
+Empty ranked lists remain reusable when their saved fitting revision is current.
+This is aggregate validity, not a projection or counting-version migration.
+
+## Ranked session envelope preservation amendment, 2026-10-18
+
+The Sessions table must not disappear merely because an earlier detail tier fits
+after dropping every row. This supersedes the earlier direction to shrink ranked
+rows independently before reducing other detail. Fitting may first reduce the
+45-row cap to five, using the existing token/error leader union. It reserves up
+to five rows in each of the three ranges while searching the daily contributor,
+timeline, build, named category, and skill fallback tiers. All-history tools may
+reduce to three, then two error-prioritized identities before recent tool
+identities shrink, but this stage retains up to four recorded error leaders
+before reducing recent named-tool capacity. All ranges share the same 256 KiB
+validated worker record; there is no separate range budget.
+Only if minimal detail with five rows per range cannot fit may the common
+allowance shrink to three, one, or zero. Omitted counts, range statistics, row
+accounting, activity timestamps, and the exact pre-cap median/top-ten values
+remain truthful. No wire field, validation relaxation, or larger limit is added.
+
+An empty ranked list with omitted contributors means unavailable ranked detail,
+not an absence of contributing sessions. The renderer distinguishes those states
+and retains the shown/omitted qualification and complete range figures.
+
+The derived SQLite snapshot value now wraps the existing wire snapshot with a
+local `fittingVersion` of 1. Unversioned or obsolete fitted values are not reused,
+including legacy values republished by an older running sidecar. Refresh replays
+unchanged redacted indexed events, without rereading transcripts or rebuilding
+the source index, then atomically saves the current wrapper. Subsequent unchanged
+refreshes remain warm. This adds no engine-state migration or account access.

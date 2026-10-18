@@ -184,7 +184,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     };
 }
 
-/** All-history detail must not force recent error trends into Other. */
+/** Reserve ranked leaders across all ranges before exhausting other detail tiers. */
 export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): UsageDashboardSnapshot {
     const raw = snapshot.ranges;
     const detailTiers = [
@@ -193,9 +193,9 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         { models: 8, tools: 10, contributors: 5, builds: 2, timeline: 1 },
     ] as const;
     type Tier = { models: number; tools: number; contributors: number; builds: number; timeline: number };
-    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>, skills = MAX_USAGE_SKILLS) => {
+    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>, skills = MAX_USAGE_SKILLS, sessionFloor = 5) => {
         const limit = recent.contributors >= 20 ? 45 : recent.contributors * 2;
-        for (const sessions of [...new Set([limit, Math.min(limit, 5), 0])]) {
+        for (const sessions of [...new Set([Math.max(limit, sessionFloor), sessionFloor])]) {
             snapshot.ranges = {
                 '7d': groupUsageSummary(raw['7d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills),
                 '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills),
@@ -220,6 +220,8 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         { models: 4, tools: 1, builds: 0 },
         { models: 0, tools: 4, builds: 1 },
         { models: 0, tools: 4, builds: 0 },
+        { models: 0, tools: 3, builds: 0 },
+        { models: 0, tools: 2, builds: 0 },
         { models: 0, tools: 1, builds: 0 },
         { models: 0, tools: 0, builds: 0 },
     ] as const;
@@ -228,9 +230,10 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         for (const all of allTiers.filter(tier => tier.models === 8 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;
     }
     const allBuildTiers = [...allTiers.filter(tier => tier.builds === 1), ...allTiers.filter(tier => tier.builds === 0)];
+    const allToolFloor = Math.max(2, Math.min(4, raw.all.tools.filter(tool => tool.kind === 'named' && tool.errors > 0).length));
     for (const tools of [10, 8, 6]) for (const builds of [2, 1]) for (const contributors of [5, 0]) {
         const recent = { models: 8, tools, contributors, builds, timeline: contributors ? 1 : 0 };
-        for (const all of allBuildTiers.filter(tier => tier.tools >= 4)) if (fit(recent, all)) return snapshot;
+        for (const all of allBuildTiers.filter(tier => tier.tools >= allToolFloor)) if (fit(recent, all)) return snapshot;
     }
     for (const models of [8, 4]) {
         const recent = { models, tools: 4, contributors: 0, builds: 1, timeline: 0 };
@@ -245,5 +248,9 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
         if (fit(minimal, minimal, skills)) return snapshot;
     }
+    // Only after five leaders per populated range cannot fit with minimal
+    // detail may the common allowance shrink. Omitted counts still reconcile.
+    const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
+    for (const sessions of [3, 1, 0]) if (fit(minimal, minimal, 0, sessions)) return snapshot;
     throw new Error('Invalid usage summary');
 }
