@@ -11,6 +11,7 @@ import { SYNTHETIC_MODEL } from './messages.js'
 import { getProjectsDir, isTranscriptMessage } from './sessionStorage.js'
 import { SHELL_TOOL_NAMES } from './shell/shellToolUtils.js'
 import { jsonParse } from './slowOperations.js'
+import { UsageFailure, usageDeadlineFailure } from './statsFailure.js'
 import {
   getTodayDateString,
   getYesterdayDateString,
@@ -449,14 +450,22 @@ async function getAllSessionFiles(limits?: { deadline: number; maxSources: numbe
   const fs = getFsImplementation()
   const files: string[] = []
   let sourcePathBytes = 0
+  const MAX_PATH_BYTES = 16 * 1024 * 1024
   const addFile = (path: string) => {
     sourcePathBytes += path.length * 2
-    if (limits && sourcePathBytes > 16 * 1024 * 1024) throw new Error('Usage discovery resource limit')
+    if (limits && sourcePathBytes > MAX_PATH_BYTES) {
+      throw new UsageFailure('Usage discovery resource limit', 'discovery-limit', 'discovery', { guard: 'path-bytes', observed: sourcePathBytes, limit: MAX_PATH_BYTES })
+    }
     files.push(path)
   }
   const check = (entries = 0) => {
-    if (limits && (Date.now() > limits.deadline || entries > limits.maxSources || files.length > limits.maxSources)) {
-      throw new Error('Usage discovery resource limit or timeout')
+    if (!limits) return
+    if (Date.now() > limits.deadline) throw usageDeadlineFailure('discovery')
+    if (entries > limits.maxSources) {
+      throw new UsageFailure('Usage discovery resource limit', 'discovery-limit', 'discovery', { guard: 'directory-entries', observed: entries, limit: limits.maxSources })
+    }
+    if (files.length > limits.maxSources) {
+      throw new UsageFailure('Usage discovery resource limit', 'discovery-limit', 'discovery', { guard: 'sources', observed: files.length, limit: limits.maxSources })
     }
   }
   const readDirectory = async (path: string) => {
@@ -1209,10 +1218,11 @@ function getEmptyStats(): ClaudeCodeStats {
 export async function aggregateUsageDashboard(asOf = new Date().toISOString(), options: {
   finalize?: (snapshot: import('../../app/shared/usageDashboard.js').UsageDashboardSnapshot) => import('../../app/shared/usageDashboard.js').UsageDashboardSnapshot;
   indexPath?: string;
+  metrics?: import('./statsUsageIndex.js').UsageIndexMetrics;
 } = {}) {
   const { USAGE_COLLECTION_TIMEOUT_MS } = await import('./statsUsage.js')
   const { collectIndexedUsage } = await import('./statsUsageIndex.js')
   const deadline = Date.now() + USAGE_COLLECTION_TIMEOUT_MS
   const files = await getAllSessionFiles({ deadline, maxSources: 25_000 })
-  return collectIndexedUsage(files, asOf, { deadline, finalize: options.finalize, path: options.indexPath })
+  return collectIndexedUsage(files, asOf, { deadline, finalize: options.finalize, path: options.indexPath, metrics: options.metrics })
 }

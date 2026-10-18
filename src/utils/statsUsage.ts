@@ -2,12 +2,14 @@ import { usageCategory as category } from './usageCategory.js';
 import { basename, dirname, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readStatsRecords, type StatsRecord } from './statsReader.js';
+import { UsageFailure, usageDeadlineFailure, type UsageFailureDetail, type UsageFailurePhase } from './statsFailure.js';
 import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, localMidnight, shiftLocalCalendarDays, usageWindow, usageTimestampEligible } from './usageWindow.js';
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent, UsageEffort, UsageEffortLevel, UsageParallel } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts, ratesForPrompt } from './modelCostRates.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
-import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
+import type { UsageTokenSources, UsageCallCount, UsageRankedSession } from '../../app/shared/usageDashboard.js';
+import { createUsageTimingAccumulator, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
     classifyHistoricalAutoModeToolResult,
     createAutoModeUsageAccumulator,
@@ -28,13 +30,83 @@ export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
 // Leave room for named tool outcomes and build observations in all three ranges.
 const ALL_DETAIL_BUCKETS = Math.min(MAX_USAGE_ALL_BUCKETS, 60);
-export class UsageResourceError extends Error {
+/** Collector or index resource guard; storage faults use `UsageFailure` directly. */
+export class UsageResourceError extends UsageFailure {
+    constructor(message: string, detail: UsageFailureDetail = {}, phase: UsageFailurePhase = 'replay') {
+        super(message, 'state-budget', phase, detail);
+    }
 }
+/** Optional high-water marks for benchmarking; estimated, not measured process memory. */
+export type UsageCollectionMetrics = { retainedEntries: number; retainedBytes: number };
 export interface UsageIdentityStore {
     map<T>(name: string): { get(key: string): T | undefined; set(key: string, value: T): unknown };
     set(name: string): { has(key: string): boolean; add(key: string): unknown };
+    /** Model and tool timing state; absent means the collector keeps it on the heap. */
+    timings?: UsageTimingStore;
 }
+export type StoredModelTiming = MeasuredModelAttempt & {
+    id: string;
+    scope: string;
+    session: string;
+    startedAt: number;
+    date: string;
+    callId: string;
+    attempt: number;
+    provider: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai';
+    label: string;
+};
+export type StoredToolTiming = MeasuredToolExecution & {
+    id: string;
+    scope: string;
+    session: string;
+    startedAt: number;
+    date: string;
+    toolUseId: string;
+};
+export type UsageTimingWindow = { start: number; end: number; cutoff: number };
+/**
+ * One table of timing state keyed by the caller's identity. Stores may return
+ * copies, so a changed entry only persists through an explicit `put`.
+ */
+export interface UsageTimingTable<T> {
+    get(key: string): T | undefined;
+    put(key: string, value: T): void;
+    /** Entries inside the window, either as first seen or grouped by logical call. */
+    scan(window: UsageTimingWindow, order: 'insertion' | 'call'): Iterable<T>;
+}
+export interface UsageTimingStore {
+    model: UsageTimingTable<StoredModelTiming>;
+    tool: UsageTimingTable<StoredToolTiming>;
+}
+/** The call identity a model attempt is grouped by, shared by every store. */
+export const usageTimingCall = (timing: { scope: string; callId: string }) => `${timing.scope}:${timing.callId}`;
+function createHeapTimingTable<T extends { startedAt: number }>(callOf: (value: T) => string): UsageTimingTable<T> {
+    const entries = new Map<string, T>();
+    return {
+        get: key => entries.get(key),
+        put: (key, value) => { entries.set(key, value); },
+        *scan(window, order) {
+            const eligible = [...entries.values()].filter(value => usageTimestampEligible(value.startedAt, window.start, window.end, window.cutoff));
+            if (order === 'call') eligible.sort((a, b) => { const x = callOf(a), y = callOf(b); return x < y ? -1 : x > y ? 1 : 0; });
+            yield* eligible;
+        },
+    };
+}
+export const createHeapTimingStore = (): UsageTimingStore => ({
+    model: createHeapTimingTable<StoredModelTiming>(usageTimingCall),
+    tool: createHeapTimingTable<StoredToolTiming>(() => ''),
+});
 const zero = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
+const zeroSources = (): UsageTokenSources => ({ chat: zero(), subagents: zero(), compaction: zero() });
+const integration = (name: string | null): string | null => {
+    if (['SendToPeer', 'ReadPeer', 'ListPeers', 'CreatePeer', 'Announce'].includes(name ?? '')) return 'peers';
+    if (['WebFetch', 'WebSearch'].includes(name ?? '')) return 'web';
+    if (['JumpWorkspace', 'ListWorkspaces'].includes(name ?? '')) return 'workspaces';
+    if (name?.startsWith('mcp__cua-driver__')) return 'computer';
+    if (name === 'ImageGen' || name === 'GenerateImage') return 'image';
+    if (name === 'ClaudeCli') return 'claude-cli';
+    return null;
+};
 const zeroEffort = (): UsageEffort => ({ state: 'unavailable', requests: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0, ultra: 0 }, tokens: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0, ultra: 0 }, unattributedRequests: 0 });
 const zeroParallel = (): UsageParallel => ({ state: 'unavailable', minutes: [0, 0, 0], peak: 0 });
 const effortLevel = (value: unknown): UsageEffortLevel | null =>
@@ -67,11 +139,11 @@ const buildVersion = (value: unknown): Pick<UsageToolBuildObservation, 'sha' | '
     return match ? { sha: match[1]!.toLowerCase(), dirty: match[2] === '-dirty' } : null;
 };
 function plus(a: number, b: number): number { const n = a + b; if (!safe(n))
-    throw new UsageResourceError('Usage count overflow'); return n; }
+    throw new UsageResourceError('Usage count overflow', { guard: 'counter-overflow' }); return n; }
 function addTokens(a: UsageTokens, b: UsageTokens) { for (const key of Object.keys(a) as (keyof UsageTokens)[])
     a[key] = plus(a[key], b[key]); if (!safe(total(a)))
-    throw new UsageResourceError('Usage total overflow'); }
-export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 });
+    throw new UsageResourceError('Usage total overflow', { guard: 'counter-overflow' }); }
+export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 });
 /** Desktop retained-history accounting; never reads or rewrites legacy aggregate caches. */
 export async function collectRetainedUsage(files: readonly string[], asOf: string, options: {
     deadline?: number;
@@ -81,6 +153,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     timezone?: string;
     identities?: UsageIdentityStore;
     readRecords?: typeof readStatsRecords;
+    metrics?: UsageCollectionMetrics;
 } = {}): Promise<UsageDashboardSnapshot> {
     const cutoff = Date.parse(asOf), deadline = options.deadline ?? Date.now() + USAGE_COLLECTION_TIMEOUT_MS;
     if (!Number.isFinite(cutoff))
@@ -209,8 +282,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const reserveState = (entries: number, bytes: number) => {
         identities += entries;
         stateBytes += bytes;
-        if (identities > (options.maxIdentities ?? MAX_USAGE_IDENTITIES) || stateBytes > (options.maxStateBytes ?? MAX_USAGE_STATE_BYTES))
-            throw new UsageResourceError('Usage state budget exceeded');
+        if (options.metrics) {
+            options.metrics.retainedEntries = Math.max(options.metrics.retainedEntries, identities);
+            options.metrics.retainedBytes = Math.max(options.metrics.retainedBytes, stateBytes);
+        }
+        const maxEntries = options.maxIdentities ?? MAX_USAGE_IDENTITIES, maxBytes = options.maxStateBytes ?? MAX_USAGE_STATE_BYTES;
+        if (identities > maxEntries)
+            throw new UsageResourceError('Usage state budget exceeded', { guard: 'state-entries', observed: identities, limit: maxEntries });
+        if (stateBytes > maxBytes)
+            throw new UsageResourceError('Usage state budget exceeded', { guard: 'state-bytes', observed: stateBytes, limit: maxBytes });
     };
     const reserve = (key: string, payloadBytes = 512) => reserveState(1, key.length * 2 + payloadBytes);
     const retainAutoModeRecord = (value: RetainedAutoModeRecord) => {
@@ -228,7 +308,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         autoModeRecords.length = 0;
     };
     if (files.length > MAX_USAGE_IDENTITIES)
-        throw new UsageResourceError('Usage source budget exceeded');
+        throw new UsageResourceError('Usage source budget exceeded', { guard: 'sources', observed: files.length, limit: MAX_USAGE_IDENTITIES });
     type ComparisonState = {
         days: number;
         start: number;
@@ -240,10 +320,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         cacheWriteUnreported: boolean;
         cacheWriteUnknown: boolean;
     };
+    const firstActivity = new Map<string, string>();
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf, timezone);
         if (range === 'all') { bounds.startDate = localDateKey(cutoff, timezone); bounds.startInclusive = new Date(localMidnight(bounds.startDate, timezone)).toISOString(); bounds.dates = []; }
-        const summary: UsageRangeSummary = { range, startDate: bounds.startDate, endDateExclusive: bounds.endDateExclusive, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, ...(range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf, timezone }), parallel: zeroParallel(), effort: zeroEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        const summary: UsageRangeSummary = { rankedSessions: { state: "full", omitted: 0, medianTokens: null, top10Tokens: 0, items: [] }, skills: [], integrations: [], range, startDate: bounds.startDate, endDateExclusive: bounds.endDateExclusive, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, ...(range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokenSources: zeroSources(), skills: [], integrations: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf, timezone }), parallel: zeroParallel(), effort: zeroEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
         const autoModeAccumulator = createAutoModeUsageAccumulator({
             rangeStart: range === 'all' ? '0000-01-01T00:00:00.000Z' : bounds.startInclusive,
             rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(),
@@ -251,7 +332,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             timezone,
             onRetain: reserveState,
         });
-        return { summary, autoModeAccumulator, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
+        return { summary, autoModeAccumulator, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), lastActivity: new Map<string, string>(), rangeContributors: new Map<string, UsageRankedSession>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
             }>() };
@@ -263,7 +344,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const end = shiftLocalCalendarDays(cutoff, -days, timezone);
         return { days, start, end, sessions: new Set(), activeDays: new Set(), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, summary: {
             startInclusive: new Date(start).toISOString(), endInclusive: new Date(end).toISOString(),
-            tokens: zero(), sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
+            tokens: zero(), sessions: 0, records: 0, requests: 0, results: 0, errors: 0, modelRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
         } };
     });
     const eligibleComparisons = (timestamp: number) => comparisons.filter(s => timestamp >= s.start && timestamp <= s.end);
@@ -272,7 +353,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         let day = s.dayMap.get(date);
         if (!day) {
             reserve(date, 1024);
-            day = { date, ...(s.summary.range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() };
+            day = { date, ...(s.summary.range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokenSources: zeroSources(), skills: [], integrations: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() };
             s.dayMap.set(date, day);
             s.summary.days.push(day);
             if (date < s.summary.startDate) {
@@ -303,6 +384,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         return tool;
     };
+    const countDimension = (items: UsageCallCount[], value: string | null, integrationGroup = false) => {
+        const cat = integrationGroup && value ? { id: value, kind: 'named' as const, label: value } : category(value);
+        let item = items.find(item => item.id === cat.id);
+        if (!item) { reserve(`dimension:${cat.id}`, 512); item = { ...cat, requests: 0 }; items.push(item); }
+        item.requests = plus(item.requests, 1);
+    };
     const addBuildRequest = (tool: UsageDayTool, build: ToolValue['build'], timestamp: number) => {
         if (!build) return;
         tool.builds ??= { items: [] };
@@ -319,26 +406,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const usage = options.identities?.map<UsageValue>('usage') ?? new Map<string, UsageValue>();
     const toolLedger = options.identities?.map<ToolValue>('tools') ?? new Map<string, ToolValue>();
     const results = options.identities?.map<{ timestamp: number; error: boolean; counted: boolean }>('results') ?? new Map<string, { timestamp: number; error: boolean; counted: boolean }>();
-    type ModelTiming = MeasuredModelAttempt & {
-        id: string;
-        scope: string;
-        session: string;
-        startedAt: number;
-        date: string;
-        attempt: number;
-        provider: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai';
-        label: string;
-    };
-    type ToolTiming = MeasuredToolExecution & {
-        id: string;
-        scope: string;
-        session: string;
-        startedAt: number;
-        date: string;
-        toolUseId: string;
-    };
-    const modelTimings = new Map<string, ModelTiming>();
-    const toolTimings = new Map<string, ToolTiming>();
+    // Timing state grows with every logged call, so an injected store keeps it off the heap and out of the state budget.
+    const timings = options.identities?.timings ?? createHeapTimingStore();
+    const reserveTiming = (key: string, bytes: number) => { if (!options.identities?.timings) reserve(key, bytes); };
     const recordIds = options.identities?.set('records') ?? new Set<string>();
     const sessionMetadata = new Map<string, { projectId: string | null; label: string | null; conflicted: boolean; engineSessionId: string | null }>();
     const contributorSessions = new Map<string, string>();
@@ -348,6 +418,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const timingOutcome = (value: unknown): value is Exclude<UsageExecutionOutcome, 'incomplete'> => value === 'succeeded' || value === 'failed' || value === 'cancelled';
     const duration = (value: unknown): value is number => safe(value);
     const sessionUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : null;
+    // Ordered oldest to newest; whatever falls off the front is counted, never kept.
+    const trimTimeline = (contributor: UsageSessionContributor) => {
+        const timeline = contributor.timeline;
+        timeline.items.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+        if (timeline.items.length > MAX_USAGE_TIMELINE_EVENTS) {
+            timeline.omitted += timeline.items.length - MAX_USAGE_TIMELINE_EVENTS;
+            timeline.items = timeline.items.slice(-MAX_USAGE_TIMELINE_EVENTS);
+        }
+    };
     const ensureContributor = (s: typeof states[number], session: string, date: string): UsageSessionContributor => {
         const key = JSON.stringify([date, session]);
         let contributor = s.dailyContributors.get(key);
@@ -361,6 +440,28 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         return contributor;
     };
+    const rangeContributor = (s: typeof states[number], session: string, date: string) => {
+        let item = s.rangeContributors.get(session);
+        if (!item) {
+            reserve(`range:${session}`, 1536);
+            const meta = sessionMetadata.get(session)!;
+            item = { lastActiveAt: s.lastActivity.get(session)!, id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), tokenSources: zeroSources(), requests: 0, results: 0, errors: 0, rank: { tokens: 0, requests: 0, errors: 0 }, tokenCost: zeroCost(), models: [], tools: [], days: [], dailyDetail: s.summary.range === 'all' ? 'unavailable' : 'full', modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } };
+            s.rangeContributors.set(session, item);
+        }
+        let day = item.days.find(item => item.date === date);
+        if (!day && item.dailyDetail === 'full') {
+            reserve(`range-day:${session}:${date}`, 256);
+            day = { date, tokens: zero(), requests: 0, results: 0, errors: 0 };
+            item.days.push(day);
+        }
+        return { item, day };
+    };
+    const sessionTool = (item: UsageRankedSession, name: string | null) => {
+        const cat = category(name);
+        let tool = item.tools.find(tool => tool.id === cat.id);
+        if (!tool) { reserve(`session-tool:${item.id}:${cat.id}`, 384); tool = { ...cat, requests: 0, results: 0, errors: 0 }; item.tools.push(tool); }
+        return tool;
+    };
     // Disk-backed identities have a separate storage cap; category/session maps
     // still use the original bounded heap budget.
     const reserveIdentity = (key: string, bytes?: number) => { if (!options.identities) reserve(key, bytes); };
@@ -371,7 +472,17 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!request || !result || result.counted || result.timestamp < request.timestamp) return;
         result.counted = true;
         results.set(key, result);
+        for (const s of eligibleComparisons(request.timestamp)) {
+            s.summary.results = plus(s.summary.results, 1);
+            if (result.error) s.summary.errors = plus(s.summary.errors, 1);
+        }
         for (const s of states.filter(s => usageTimestampEligible(request.timestamp, s.start, s.end, cutoff))) {
+            const { item, day: sessionDay } = rangeContributor(s, request.session, request.date);
+            const sessionToolCount = sessionTool(item, request.name);
+            for (const target of [item, sessionToolCount, ...(sessionDay ? [sessionDay] : [])]) {
+                target.results = plus(target.results, 1);
+                if (result.error) target.errors = plus(target.errors, 1);
+            }
             const tool = s.tools.get(category(request.name).id)!;
             tool.results = plus(tool.results, 1);
             if (result.error) tool.errors = plus(tool.errors, 1);
@@ -465,13 +576,29 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     const readOne = async (file: string, item: StatsRecord) => {
         if (Date.now() > deadline)
-            throw new Error('Usage collection timeout');
+            throw usageDeadlineFailure('replay');
         const row = item.value;
         if (!record(row) || !['assistant', 'user', 'attachment', 'system'].includes(String(row.type)))
             return;
         const isSubagent = file.includes(`${sep}subagents${sep}`);
+        const tokenSource = !isSubagent ? 'chat' : /^agent-acompact-[0-9a-f]{16}\.jsonl$/.test(basename(file)) ? 'compaction' : 'subagents';
         if (!isSubagent && row.isSidechain === true)
             return;
+        const activityAt = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+        if (Number.isFinite(activityAt) && activityAt >= Date.parse('0000-01-01T00:00:00.000Z') && activityAt < Date.parse('+010000-01-01T00:00:00.000Z') && activityAt <= cutoff) {
+            const project = isSubagent ? dirname(dirname(dirname(file))) : dirname(file);
+            const mainId = nonempty(row.sessionId) ? row.sessionId : isSubagent ? basename(dirname(dirname(file))) : basename(file, '.jsonl');
+            const session = JSON.stringify([project, mainId]);
+            const at = new Date(activityAt).toISOString();
+            for (const s of states.filter(s => usageTimestampEligible(activityAt, s.start, s.end, cutoff))) {
+                const previous = s.lastActivity.get(session);
+                if (!previous) reserve(`last-activity:${session}`, 160);
+                if (!previous || at > previous) s.lastActivity.set(session, at);
+                const key = `${s.summary.range}:${session}`;
+                const first = firstActivity.get(key);
+                if (!first || at < first) firstActivity.set(key, at);
+            }
+        }
         const autoModeCapability = row.type === 'system'
             ? projectAutoModeCapability(row)
             : null;
@@ -588,6 +715,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             if (!isSubagent && !alreadyRecorded) {
+                rangeContributor(s, session, date);
                 s.summary.records = plus(s.summary.records, 1);
                 day.records = plus(day.records, 1);
                 if (!s.sessions.has(session)) {
@@ -624,9 +752,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     (row.mode === 'streaming' || row.mode === 'non_streaming');
                 if (!valid) { coverage.invalidTimings++; return; }
                 const key = JSON.stringify([scope, row.attempt_id]);
-                if (modelTimings.has(key)) { coverage.invalidTimings++; return; }
-                reserve(key, 640);
-                modelTimings.set(key, {
+                if (timings.model.get(key) !== undefined) { coverage.invalidTimings++; return; }
+                reserveTiming(key, 640);
+                timings.model.put(key, {
                     id: timingId(`model:${key}`),
                     scope,
                     session,
@@ -634,8 +762,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     date,
                     callId: row.call_id as string,
                     attempt: row.attempt_index as number,
-                    provider: row.provider as ModelTiming['provider'],
-                    mode: row.mode as ModelTiming['mode'],
+                    provider: row.provider as StoredModelTiming['provider'],
+                    mode: row.mode as StoredModelTiming['mode'],
                     label: category(row.model as string).label,
                     outcome: 'incomplete',
                     durationMs: null,
@@ -645,17 +773,20 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             if (row.subtype === 'model_attempt_first_text') {
                 if (row.schema_version !== 1 || !timingIdentity(row.attempt_id) || !timingIdentity(row.call_id) || !duration(row.duration_ms)) { coverage.invalidTimings++; return; }
-                const timing = modelTimings.get(JSON.stringify([scope, row.attempt_id]));
+                const key = JSON.stringify([scope, row.attempt_id]);
+                const timing = timings.model.get(key);
                 if (!timing || timing.callId !== row.call_id || timing.mode !== 'streaming' || timing.firstTextMs !== null || timing.durationMs !== null && row.duration_ms > timing.durationMs) {
                     coverage.invalidTimings++;
                     return;
                 }
                 timing.firstTextMs = row.duration_ms;
+                timings.model.put(key, timing);
                 return;
             }
             if (row.subtype === 'model_attempt_end') {
                 if (row.schema_version !== 1 || !timingIdentity(row.attempt_id) || !timingIdentity(row.call_id) || !timingOutcome(row.outcome) || !duration(row.duration_ms)) { coverage.invalidTimings++; return; }
-                const timing = modelTimings.get(JSON.stringify([scope, row.attempt_id]));
+                const key = JSON.stringify([scope, row.attempt_id]);
+                const timing = timings.model.get(key);
                 if (!timing || timing.callId !== row.call_id || timing.outcome !== 'incomplete') {
                     coverage.invalidTimings++;
                     return;
@@ -666,14 +797,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     timing.firstTextMs = null;
                     coverage.invalidTimings++;
                 }
+                timings.model.put(key, timing);
                 return;
             }
             if (row.subtype === 'tool_execution_start') {
                 if (row.schema_version !== 1 || !timingIdentity(row.tool_use_id)) { coverage.invalidTimings++; return; }
                 const key = JSON.stringify([scope, row.tool_use_id]);
-                if (toolTimings.has(key)) { coverage.invalidTimings++; return; }
-                reserve(key, 448);
-                toolTimings.set(key, {
+                if (timings.tool.get(key) !== undefined) { coverage.invalidTimings++; return; }
+                reserveTiming(key, 448);
+                timings.tool.put(key, {
                     id: timingId(`tool:${key}`),
                     scope,
                     session,
@@ -687,10 +819,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             if (row.subtype === 'tool_execution_end') {
                 if (row.schema_version !== 1 || !timingIdentity(row.tool_use_id) || !timingOutcome(row.outcome) || !duration(row.duration_ms)) { coverage.invalidTimings++; return; }
-                const timing = toolTimings.get(JSON.stringify([scope, row.tool_use_id]));
+                const key = JSON.stringify([scope, row.tool_use_id]);
+                const timing = timings.tool.get(key);
                 if (!timing || timing.outcome !== 'incomplete') { coverage.invalidTimings++; return; }
                 timing.outcome = row.outcome;
                 timing.durationMs = row.duration_ms;
+                timings.tool.put(key, timing);
                 return;
             }
             return;
@@ -730,7 +864,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                             historical.pendingResults.size >=
                                 (options.maxIdentities ?? MAX_USAGE_IDENTITIES)
                         ) {
-                            throw new UsageResourceError('Usage historical result budget exceeded');
+                            throw new UsageResourceError('Usage historical result budget exceeded', { guard: 'historical-results', observed: historical.pendingResults.size, limit: options.maxIdentities ?? MAX_USAGE_IDENTITIES });
                         }
                         historical.pendingResults.set(
                             block.tool_use_id,
@@ -785,7 +919,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                             historical.candidates.size >=
                             (options.maxIdentities ?? MAX_USAGE_IDENTITIES)
                         ) {
-                            throw new UsageResourceError('Usage historical tool budget exceeded');
+                            throw new UsageResourceError('Usage historical tool budget exceeded', { guard: 'historical-tools', observed: historical.candidates.size, limit: options.maxIdentities ?? MAX_USAGE_IDENTITIES });
                         }
                         historical.candidates.set(block.id, candidate);
                     } else {
@@ -822,6 +956,21 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const cat = category(name);
                 for (const s of eligibleStates) {
                     const day = ensureDay(s, date);
+                    const { item, day: sessionDay } = rangeContributor(s, session, date);
+                    item.requests = plus(item.requests, 1);
+                    const tally = sessionTool(item, name);
+                    tally.requests = plus(tally.requests, 1);
+                    if (sessionDay) sessionDay.requests = plus(sessionDay.requests, 1);
+                    if (name === 'Skill') {
+                        const skill = record(block.input) && typeof block.input.skill === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(block.input.skill) && new TextEncoder().encode(block.input.skill).byteLength <= 160 ? block.input.skill : null;
+                        countDimension(s.summary.skills, skill);
+                        countDimension(day.skills, skill);
+                    }
+                    const group = integration(name);
+                    if (group) {
+                        countDimension(s.summary.integrations, group, true);
+                        countDimension(day.integrations, group, true);
+                    }
                     s.summary.requests = plus(s.summary.requests, 1);
                     day.requests = plus(day.requests, 1);
                     const dayTool = ensureDayTool(day, cat.id);
@@ -912,6 +1061,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             reserveIdentity(key);
         const effort = prior ? prior.effort : currentEffort.get(file) ?? null;
         usage.set(key, { tokens: maximum, model: cat.id, effort });
+        if (!prior) for (const s of eligibleComparisons(timestamp))
+            s.summary.modelRequests = plus(s.summary.modelRequests, 1);
         if (!prior) for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             if (effort) day.effort.requests[effort] = plus(day.effort.requests[effort], 1);
@@ -931,6 +1082,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const day = ensureDay(s, date);
             addTokens(s.summary.tokens, delta);
             addTokens(day.tokens, delta);
+            addTokens(day.tokenSources[tokenSource], delta);
+            const rangeSession = rangeContributor(s, session, date);
+            addTokens(rangeSession.item.tokens, delta);
+            addTokens(rangeSession.item.tokenSources[tokenSource], delta);
+            if (rangeSession.day) addTokens(rangeSession.day.tokens, delta);
             if (day.hours) {
                 const hourIndex = Math.floor((timestamp - Date.parse(day.hours[0]!.startAt!)) / 3600000);
                 const slot = day.hours[hourIndex];
@@ -947,6 +1103,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             addTokens(model.tokens, delta);
             const tokenCost = standardTokenCost(modelName, delta, maximum.fresh + maximum.read + maximum.write);
+            addCost(rangeSession.item.tokenCost!, tokenCost);
+            let rangeModel = rangeSession.item.models.find(model => model.id === cat.id);
+            if (!rangeModel) {
+                reserve(`range-model:${session}:${cat.id}`, 384);
+                rangeModel = { ...cat, tokens: zero(), tokenCost: zeroCost() };
+                rangeSession.item.models.push(rangeModel);
+            }
+            addTokens(rangeModel.tokens, delta);
+            addCost(rangeModel.tokenCost!, tokenCost);
             addCost(model.tokenCost!, tokenCost);
             if (contributor) addCost(contributor.tokenCost!, tokenCost);
             if (contributor) {
@@ -974,11 +1139,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         try {
             const q = await (options.readRecords ?? readStatsRecords)(file, item => readOne(file, item), { signal: options.signal, deadline });
             coverage.sourcesRead++;
-            for (const key of ['parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources'] as const)
-                coverage[key] = plus(coverage[key], q[key]);
+            for (const key of ['parseErrors', 'oversizedRecords', 'oversizedToolResults', 'pendingTailBytes', 'shortReads', 'changedSources'] as const)
+                coverage[key] = plus(coverage[key], q[key] ?? 0);
         }
         catch (error) {
-            if (error instanceof UsageResourceError || options.signal?.aborted || Date.now() > deadline)
+            if (error instanceof UsageFailure || options.signal?.aborted || Date.now() > deadline)
                 throw error;
             coverage.readErrors++;
         }
@@ -990,19 +1155,25 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     }
     for (const s of states) {
         s.summary.autoMode = s.autoModeAccumulator.finish([...autoModeSources.values()], s.summary.startInclusive);
-        const models = [...modelTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
-        const tools = [...toolTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
-        s.summary.timing = summarizeUsageTiming(
-            models.map(timing => ({ ...timing, callId: `${timing.scope}:${timing.callId}` })),
-            tools,
-        );
+        const window = { start: s.start, end: s.end, cutoff };
+        const accumulator = createUsageTimingAccumulator();
+        // Call order groups retried attempts; the accumulator needs no per-call map.
+        for (const timing of timings.model.scan(window, 'call')) accumulator.addModel({ ...timing, callId: usageTimingCall(timing) });
+        for (const timing of timings.tool.scan(window, 'insertion')) accumulator.addTool(timing);
+        s.summary.timing = accumulator.finish();
         if (s.summary.range === 'all') continue;
-        for (const timing of models) {
+        // Contributors keep only the newest events, so memory stays bounded however many were logged.
+        const addTimeline = (contributor: UsageSessionContributor, event: UsageTimelineEvent) => {
+            const items = contributor.timeline.items;
+            items.push(event);
+            if (items.length >= 2 * MAX_USAGE_TIMELINE_EVENTS) trimTimeline(contributor);
+        };
+        for (const timing of timings.model.scan(window, 'insertion')) {
             const contributor = ensureContributor(s, timing.session, timing.date);
             const event: UsageTimelineEvent = {
                 id: timing.id,
                 kind: 'model',
-                callId: timingId(`${timing.scope}:${timing.callId}`),
+                callId: timingId(usageTimingCall(timing)),
                 startedAt: new Date(timing.startedAt).toISOString(),
                 label: timing.label,
                 provider: timing.provider,
@@ -1012,9 +1183,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 durationMs: timing.durationMs,
                 firstTextMs: timing.firstTextMs,
             };
-            contributor.timeline.items.push(event);
+            addTimeline(contributor, event);
         }
-        for (const timing of tools) {
+        for (const timing of timings.tool.scan(window, 'insertion')) {
             const contributor = ensureContributor(s, timing.session, timing.date);
             const request = toolLedger.get(JSON.stringify([timing.scope, ['id', timing.toolUseId]]));
             const event: UsageTimelineEvent = {
@@ -1025,7 +1196,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 outcome: timing.outcome,
                 durationMs: timing.durationMs,
             };
-            contributor.timeline.items.push(event);
+            addTimeline(contributor, event);
         }
     }
     coverage.state = coverage.sourcesRead !== coverage.sourcesDiscovered || [coverage.parseErrors, coverage.oversizedRecords, coverage.pendingTailBytes, coverage.shortReads, coverage.changedSources, coverage.readErrors, coverage.invalidTimestamps, coverage.invalidUsage].some(Boolean) ? 'partial' : 'complete';
@@ -1052,6 +1223,31 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         day.parallel.tenMinutePeaks?.sort((a, b) => a[0] - b[0]);
     for (const s of states) {
         s.summary.days.sort((a, b) => a.date.localeCompare(b.date));
+        const rangeItems = [...s.rangeContributors.entries()].map(([session, item]) => {
+            item.lastActiveAt = s.lastActivity.get(session)!;
+            item.firstActiveAt = firstActivity.get(`${s.summary.range}:${session}`)!;
+            const meta = sessionMetadata.get(session);
+            if (meta?.projectId && meta.label && !meta.conflicted) item.project = { id: meta.projectId, label: meta.label };
+            if (meta?.conflicted) item.engineSessionId = null;
+            item.days.sort((a, b) => a.date.localeCompare(b.date));
+            return item;
+        });
+        const ordered = {
+            tokens: [...rangeItems].sort((a, b) => total(b.tokens) - total(a.tokens) || a.id.localeCompare(b.id)),
+            requests: [...rangeItems].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)),
+            errors: [...rangeItems].sort((a, b) => b.errors - a.errors || total(b.tokens) - total(a.tokens) || a.id.localeCompare(b.id)),
+        };
+        for (const metric of ['tokens', 'requests', 'errors'] as const)
+            ordered[metric].forEach((item, index) => { item.rank ??= { tokens: 0, requests: 0, errors: 0 }; item.rank[metric] = index + 1; });
+        const selected = new Set([...ordered.tokens.slice(0, 30), ...ordered.errors.slice(0, 15)]);
+        const items = ordered.tokens.filter(item => selected.has(item));
+        const omitted = rangeItems.length - items.length;
+        const middle = Math.floor(ordered.tokens.length / 2);
+        const medianTokens = ordered.tokens.length === 0 ? null : ordered.tokens.length % 2
+            ? total(ordered.tokens[middle]!.tokens)
+            : total(ordered.tokens[middle - 1]!.tokens) + (total(ordered.tokens[middle]!.tokens) - total(ordered.tokens[middle - 1]!.tokens)) / 2;
+        const top10Tokens = ordered.tokens.slice(0, 10).reduce((sum, item) => plus(sum, total(item.tokens)), 0);
+        s.summary.rankedSessions = { state: omitted ? 'truncated' : 'full', omitted, medianTokens, top10Tokens, items };
         s.summary.models = [...s.models.values()];
         s.summary.tools = [...s.tools.values()];
         s.summary.activeDays = s.summary.days.filter(d => total(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length;
@@ -1067,12 +1263,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const meta = session ? sessionMetadata.get(session) : undefined;
                 if (meta?.projectId && meta.label && !meta.conflicted) contributor.project = { id: meta.projectId, label: meta.label };
                 if (meta?.conflicted) contributor.engineSessionId = null;
-                contributor.timeline.items.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
-                if (contributor.timeline.items.length > MAX_USAGE_TIMELINE_EVENTS) {
-                    contributor.timeline.omitted = contributor.timeline.items.length - MAX_USAGE_TIMELINE_EVENTS;
-                    contributor.timeline.items = contributor.timeline.items.slice(-MAX_USAGE_TIMELINE_EVENTS);
-                    contributor.timeline.state = 'truncated';
-                }
+                trimTimeline(contributor);
+                if (contributor.timeline.omitted > 0) contributor.timeline.state = 'truncated';
                 else if (contributor.timeline.items.length > 0) contributor.timeline.state = 'available';
             }
             if (day.contributors.state !== 'unavailable') {
@@ -1131,7 +1323,13 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const day of all.summary.days) {
             const date = bucketDate(day.date);
             let bucket = buckets.get(date);
-            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, models: [], cacheWriteReporting: 'unavailable', parallel: zeroParallel(), effort: zeroEffort() }; buckets.set(date, bucket); }
+            if (!bucket) { bucket = { ...day, date, tokens: zero(), tokenSources: zeroSources(), skills: [], integrations: [], requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, models: [], cacheWriteReporting: 'unavailable', parallel: zeroParallel(), effort: zeroEffort() }; buckets.set(date, bucket); }
+            for (const source of ['chat', 'subagents', 'compaction'] as const) addTokens(bucket.tokenSources[source], day.tokenSources[source]);
+            for (const dimension of ['skills', 'integrations'] as const) for (const value of day[dimension]) {
+                let target = bucket[dimension].find(item => item.id === value.id);
+                if (!target) { reserve(`bucket:${date}:${dimension}:${value.id}`, 512); target = { ...value, requests: 0 }; bucket[dimension].push(target); }
+                target.requests = plus(target.requests, value.requests);
+            }
             for (const i of [0, 1, 2] as const) bucket.parallel.minutes[i] = plus(bucket.parallel.minutes[i], day.parallel.minutes[i]);
             bucket.parallel.peak = Math.max(bucket.parallel.peak, day.parallel.peak);
             if (day.parallel.state === 'available') bucket.parallel.state = 'available';
@@ -1237,5 +1435,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 21, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 22, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

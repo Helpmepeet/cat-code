@@ -22,6 +22,11 @@ test.each(runs)('$runner cleans its owned resources on $outcome', async ({ runne
   // Run the real entrypoint with harmless build/child executables, never Electron.
   copyFileSync(new URL(`./${runner}.ts`, import.meta.url), join(scripts, `${runner}.ts`))
   copyFileSync(new URL('./devLauncher.ts', import.meta.url), join(scripts, 'devLauncher.ts'))
+  if (runner === 'visual-acceptance') {
+    for (const helper of ['prepare-dev-electron.ts', 'visualAcceptanceFixture.ts', 'nativeCaptureLifetime.ts']) {
+      copyFileSync(new URL(`./${helper}`, import.meta.url), join(scripts, helper))
+    }
+  }
   writeFileSync(join(scripts, `${runner}-driver.ts`), 'export {}\n')
   writeFileSync(join(bin, 'bun'), '#!/bin/sh\n[ "$RUNNER_OUTCOME" != build-failure ] || exit 23\n', { mode: 0o755 })
   writeFileSync(join(bin, 'bunx'), `#!${process.execPath}

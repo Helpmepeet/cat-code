@@ -2,6 +2,7 @@ import type { spawn } from 'node:child_process';
 import { MAX_USAGE_RECORD_BYTES, type UsageCollectionResult, type UsageDashboardSnapshot } from '../shared/usageDashboard.js';
 import { parseUsageCollectionLine } from '../shared/usageStatsWorker.js';
 import { scanForSecrets } from '../shared/secretGuard.js';
+import { parseUsageDiagnostic, type UsageDiagnostic } from '../shared/usageDiagnostic.js';
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js';
 export const USAGE_REFRESH_INTERVAL_MS = 5 * 60000;
 export const USAGE_WORKER_TIMEOUT_MS = 125000;
@@ -24,37 +25,55 @@ export type UsageRunOptions = {
     timeoutMs?: number;
     spawnWorker?: typeof spawn;
     onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void;
+    /** At most once per failed run; a throwing callback never changes the result. */
+    onDiagnostic?: (diagnostic: UsageDiagnostic) => void;
 };
 /** Exactly one bounded record, accepted only after a clean process exit. */
 export async function runUsageStatsWorker(options: UsageRunOptions): Promise<UsageCollectionResult> {
-    let accepted: UsageCollectionResult | null = null, seen = false, invalid = false;
-    try {
-        const outcome = await runNdjsonWorker({ ...options, timeoutMs: options.timeoutMs ?? USAGE_WORKER_TIMEOUT_MS, maxRecordBytes: MAX_USAGE_RECORD_BYTES, forceKillOnAbort: true, escalateKillAfterMs: 2000,
-            onOversizeRecord: () => { invalid = true; },
-            onRecord: line => {
-                if (seen) {
-                    invalid = true;
-                    return 'stop';
-                }
-                seen = true;
-                const parsed = parseUsageCollectionLine(line.toString('utf8'));
-                if (!parsed || !scanForSecrets(parsed).ok) {
-                    invalid = true;
-                    return 'stop';
-                }
-                accepted = parsed;
-                return 'continue';
-            },
-        });
-        if (outcome.timedOut)
-            return { type: 'error', version: 1, code: 'timeout' };
-        if (outcome.aborted || outcome.code !== 0 || outcome.stdinError || outcome.trailingBytes || !seen || invalid || !accepted)
-            return { type: 'error', version: 1, code: 'invalid-output' };
-        return accepted;
+    let accepted: UsageCollectionResult | null = null, seen = false, invalid = false, timedOut = false;
+    let workerDiagnostic: UsageDiagnostic | null = null;
+    const startedAt = Date.now();
+    const result = await (async (): Promise<UsageCollectionResult> => {
+        try {
+            const outcome = await runNdjsonWorker({ ...options, timeoutMs: options.timeoutMs ?? USAGE_WORKER_TIMEOUT_MS, maxRecordBytes: MAX_USAGE_RECORD_BYTES, forceKillOnAbort: true, escalateKillAfterMs: 2000,
+                onOversizeRecord: () => { invalid = true; },
+                // Only the tagged line is read; raw stderr is never forwarded or logged.
+                log: stderr => { workerDiagnostic = parseUsageDiagnostic(stderr); },
+                onRecord: line => {
+                    if (seen) {
+                        invalid = true;
+                        return 'stop';
+                    }
+                    seen = true;
+                    const parsed = parseUsageCollectionLine(line.toString('utf8'));
+                    if (!parsed || !scanForSecrets(parsed).ok) {
+                        invalid = true;
+                        return 'stop';
+                    }
+                    accepted = parsed;
+                    return 'continue';
+                },
+            });
+            if (outcome.timedOut) {
+                timedOut = true;
+                return { type: 'error', version: 1, code: 'timeout' };
+            }
+            if (outcome.aborted || outcome.code !== 0 || outcome.stdinError || outcome.trailingBytes || !seen || invalid || !accepted)
+                return { type: 'error', version: 1, code: 'invalid-output' };
+            return accepted;
+        }
+        catch {
+            return { type: 'error', version: 1, code: 'collection' };
+        }
+    })();
+    // At most one record per failed refresh. A parent kill has no phase of its own.
+    const diagnostic: UsageDiagnostic | null = result.type !== 'error' ? null
+        : workerDiagnostic ?? { reason: timedOut ? 'deadline' : 'unexpected', phase: 'unknown', elapsedMs: Date.now() - startedAt };
+    if (diagnostic) {
+        try { options.onDiagnostic?.(diagnostic); }
+        catch { /* Diagnostics are best effort. */ }
     }
-    catch {
-        return { type: 'error', version: 1, code: 'collection' };
-    }
+    return result;
 }
 /** Independent generation and retained result; account operations cannot invalidate it. */
 export function createUsagePublication() {

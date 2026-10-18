@@ -1,6 +1,7 @@
 import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
+import { MAX_USAGE_SKILLS, type UsageCallCount, type UsageRankedSession } from '../shared/usageDashboard.js';
 export { usageCategory } from '../../src/utils/usageCategory.js';
 export const tokenTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const emptyTokens = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
@@ -30,7 +31,7 @@ function withDayRanks(items: UsageSessionContributor[]): UsageSessionContributor
 /** Group only after complete accounting. The same model selection applies to every day. */
 export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_USAGE_MODELS, toolLimit = MAX_USAGE_TOOLS, contributorLimit = MAX_USAGE_DAY_CONTRIBUTORS, buildLimit = toolLimit >= MAX_USAGE_TOOLS ? MAX_USAGE_TOOL_BUILDS_PER_DAY : toolLimit >= 4 ? 4 : 0, timelineLimit = contributorLimit <= 5
         ? Math.min(1, contributorLimit)
-        : Math.min(MAX_USAGE_TIMELINE_EVENTS, Math.ceil(contributorLimit * 0.6))): UsageRangeSummary {
+        : Math.min(MAX_USAGE_TIMELINE_EVENTS, Math.ceil(contributorLimit * 0.6)), sessionLimit = 45, skillLimit = MAX_USAGE_SKILLS): UsageRangeSummary {
     const boundedTimeline = (timeline: UsageSessionTimeline): UsageSessionTimeline => {
         if (timeline.state === 'unavailable') return { ...timeline, items: [] };
         const omitted = timeline.omitted + Math.max(0, timeline.items.length - timelineLimit);
@@ -59,6 +60,32 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
           addCost(otherCost, m.tokenCost); }
     const keptModelIds = new Set(models.filter(keepModel).map(m => m.id));
     const keptToolIds = new Set(tools.filter(keepTool).map(tool => tool.id));
+    const skillIds = new Set([...summary.skills].filter(item => item.kind === 'named')
+        .sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)).slice(0, skillLimit).map(item => item.id));
+    const groupSkills = (items: UsageCallCount[]) => {
+        const kept = items.filter(item => item.kind === 'unknown' || skillIds.has(item.id));
+        const other = items.filter(item => !kept.includes(item)).reduce((sum, item) => sum + item.requests, 0);
+        return [...kept, ...(other ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: other }] : [])];
+    };
+    const groupSession = (item: UsageRankedSession): UsageRankedSession => {
+        const ordered = [...item.models].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id));
+        const chosen = new Set(ordered.filter(model => model.kind === 'named').slice(0, MAX_USAGE_CONTRIBUTOR_MODELS).map(model => model.id));
+        const retained = ordered.filter(model => model.kind === 'unknown' || chosen.has(model.id));
+        const omitted = ordered.filter(model => !retained.includes(model));
+        const tokens = emptyTokens(), tokenCost = emptyCost();
+        for (const model of omitted) {
+            for (const key of Object.keys(tokens) as (keyof UsageTokens)[]) tokens[key] += model.tokens[key];
+            addCost(tokenCost, model.tokenCost);
+        }
+        const omittedCount = item.modelDetail.omitted + omitted.filter(model => model.kind !== 'other').length;
+        const named = [...item.tools].filter(tool => tool.kind === 'named').sort((a, b) => b.errors - a.errors || b.requests - a.requests || a.id.localeCompare(b.id)).slice(0, MAX_USAGE_TOOLS);
+        const toolIds = new Set(named.map(tool => tool.id));
+        const kept = item.tools.filter(tool => tool.kind === 'unknown' || toolIds.has(tool.id));
+        const other = item.tools.filter(tool => !kept.includes(tool));
+        return { ...item, models: [...retained, ...(omitted.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', tokens, tokenCost }] : [])],
+            modelDetail: { state: omittedCount ? 'grouped' : 'full', omitted: omittedCount },
+            tools: [...kept, ...(other.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: other.reduce((sum, tool) => sum + tool.requests, 0), results: other.reduce((sum, tool) => sum + tool.results, 0), errors: other.reduce((sum, tool) => sum + tool.errors, 0) }] : [])] };
+    };
     const groupDayTools = (items: UsageDayTool[]): UsageDayTool[] => {
         const grouped = new Map<string, UsageDayTool>();
         for (const source of items) {
@@ -107,15 +134,34 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     };
     return {
         ...summary,
+        skills: groupSkills(summary.skills),
+        rankedSessions: {
+            medianTokens: summary.rankedSessions.medianTokens,
+            top10Tokens: summary.rankedSessions.top10Tokens,
+            state: summary.rankedSessions.omitted + Math.max(0, summary.rankedSessions.items.length - sessionLimit) ? 'truncated' : 'full',
+            omitted: summary.rankedSessions.omitted + Math.max(0, summary.rankedSessions.items.length - sessionLimit),
+            items: [...new Set([
+                ...[...summary.rankedSessions.items].sort((a, b) => a.rank!.tokens - b.rank!.tokens).slice(0, Math.ceil(sessionLimit * 2 / 3)),
+                ...[...summary.rankedSessions.items].sort((a, b) => a.rank!.errors - b.rank!.errors).slice(0, Math.floor(sessionLimit / 3)),
+                ...summary.rankedSessions.items,
+            ])].slice(0, sessionLimit).map(groupSession),
+        },
         models: [...models.filter(keepModel), ...(omittedModels.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', tokens: otherTokens, tokenCost: otherCost }] : [])].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id)),
         tools: [...tools.filter(keepTool), ...(omittedTools.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: omittedTools.reduce((n, t) => n + t.requests, 0), results: omittedTools.reduce((n, t) => n + t.results, 0), errors: omittedTools.reduce((n, t) => n + t.errors, 0) }] : [])].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)),
         days: summary.days.map(day => {
+            day = { ...day, skills: groupSkills(day.skills) };
             const kept = day.models.filter(m => keptModelIds.has(m.id));
             const other = day.models.filter(m => !keptModelIds.has(m.id)).reduce((n, m) => n + m.total, 0);
             const tools = groupDayTools(day.tools);
             if (day.contributors.state === 'unavailable') return { ...day, tools, models: [...kept, ...(other ? [{ id: 'other', total: other }] : [])] };
             const ranked = withDayRanks([...day.contributors.items]);
-            const selected = new Set([...ranked].sort((a, b) => a.rank!.tokens - b.rank!.tokens).slice(0, contributorLimit));
+            const perMetric = Math.floor(contributorLimit / 3);
+            const selected = new Set((['tokens', 'requests', 'errors'] as const).flatMap(metric =>
+                [...ranked].sort((a, b) => a.rank![metric] - b.rank![metric]).slice(0, perMetric)));
+            for (const item of [...ranked].sort((a, b) => a.rank!.tokens - b.rank!.tokens)) {
+                if (selected.size >= contributorLimit) break;
+                selected.add(item);
+            }
             const contributors = [...selected].sort((a, b) => a.rank!.tokens - b.rank!.tokens).map(contributor => {
                 const models = [...contributor.models].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id));
                 const named = models.filter(model => model.kind === 'named');
@@ -138,7 +184,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     };
 }
 
-/** All-history detail must not force recent error trends into Other. */
+/** Reserve ranked leaders across all ranges before exhausting other detail tiers. */
 export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): UsageDashboardSnapshot {
     const raw = snapshot.ranges;
     const detailTiers = [
@@ -147,13 +193,17 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         { models: 8, tools: 10, contributors: 5, builds: 2, timeline: 1 },
     ] as const;
     type Tier = { models: number; tools: number; contributors: number; builds: number; timeline: number };
-    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>) => {
-        snapshot.ranges = {
-            '7d': groupUsageSummary(raw['7d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline),
-            '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline),
-            all: groupUsageSummary(raw.all, all.models, all.tools, 0, all.builds, 0),
-        };
-        return parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage';
+    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>, skills = MAX_USAGE_SKILLS, sessionFloor = 5) => {
+        const limit = recent.contributors >= 20 ? 45 : recent.contributors * 2;
+        for (const sessions of [...new Set([Math.max(limit, sessionFloor), sessionFloor])]) {
+            snapshot.ranges = {
+                '7d': groupUsageSummary(raw['7d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills),
+                '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills),
+                all: groupUsageSummary(raw.all, all.models, all.tools, 0, all.builds, 0, sessions, skills),
+            };
+            if (parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage') return true;
+        }
+        return false;
     };
     for (const tier of detailTiers) if (fit(tier, tier)) return snapshot;
     const allTiers = [
@@ -168,6 +218,10 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         { models: 4, tools: 4, builds: 1 },
         { models: 4, tools: 2, builds: 1 },
         { models: 4, tools: 1, builds: 0 },
+        { models: 0, tools: 4, builds: 1 },
+        { models: 0, tools: 4, builds: 0 },
+        { models: 0, tools: 3, builds: 0 },
+        { models: 0, tools: 2, builds: 0 },
         { models: 0, tools: 1, builds: 0 },
         { models: 0, tools: 0, builds: 0 },
     ] as const;
@@ -176,18 +230,27 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         for (const all of allTiers.filter(tier => tier.models === 8 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;
     }
     const allBuildTiers = [...allTiers.filter(tier => tier.builds === 1), ...allTiers.filter(tier => tier.builds === 0)];
-    for (const tools of [10, 8, 6]) for (const builds of [2, 1, 0]) for (const contributors of [5, 0]) {
+    const allToolFloor = Math.max(2, Math.min(4, raw.all.tools.filter(tool => tool.kind === 'named' && tool.errors > 0).length));
+    for (const tools of [10, 8, 6]) for (const builds of [2, 1]) for (const contributors of [5, 0]) {
         const recent = { models: 8, tools, contributors, builds, timeline: contributors ? 1 : 0 };
-        for (const all of allBuildTiers) if (fit(recent, all)) return snapshot;
+        for (const all of allBuildTiers.filter(tier => tier.tools >= allToolFloor)) if (fit(recent, all)) return snapshot;
     }
     for (const models of [8, 4]) {
         const recent = { models, tools: 4, contributors: 0, builds: 1, timeline: 0 };
-        for (const all of allTiers.filter(tier => tier.models >= 4 && tier.tools >= 4)) if (fit(recent, all)) return snapshot;
+        for (const all of allTiers.filter(tier => tier.tools >= 4)) if (fit(recent, all)) return snapshot;
     }
     // Pathological histories still fit through explicit, reconciled omissions.
     for (const models of [8, 4, 0]) for (const tools of [10, 4, 2, 1, 0]) {
         const recent = { models, tools, contributors: 0, builds: tools ? 1 : 0, timeline: 0 };
         for (const all of allTiers) if (fit(recent, all)) return snapshot;
     }
+    for (const skills of [2, 0]) {
+        const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
+        if (fit(minimal, minimal, skills)) return snapshot;
+    }
+    // Only after five leaders per populated range cannot fit with minimal
+    // detail may the common allowance shrink. Omitted counts still reconcile.
+    const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
+    for (const sessions of [3, 1, 0]) if (fit(minimal, minimal, 0, sessions)) return snapshot;
     throw new Error('Invalid usage summary');
 }

@@ -16,12 +16,123 @@ function snapshot(label = 'Model'): Record<string, unknown> {
     const days = Array.from({ length: 30 }, (_, i) => {
         const d = new Date('2026-08-15T00:00:00.000Z');
         d.setUTCDate(d.getUTCDate() + i);
-        return { date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, tools: i === 29 ? [{ id: 'tool-a', requests: 3, results: 2, errors: 1 }] : [], tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, parallel: emptyParallel(), effort: emptyEffort(), contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] : [] } };
+        return { skills: [], integrations: [], tokenSources: { chat: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, subagents: { fresh: 0, read: 0, write: 0, output: 0 }, compaction: { fresh: 0, read: 0, write: 0, output: 0 } }, date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, tools: i === 29 ? [{ id: 'tool-a', requests: 3, results: 2, errors: 1 }] : [], tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, parallel: emptyParallel(), effort: emptyEffort(), contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] : [] } };
     });
-    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startDate: start, endDateExclusive: '2026-09-14', startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), autoMode: structuredClone(autoMode), parallel: emptyParallel(), effort: emptyEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
-    return { version: 2, metricVersion: 1, countingVersion: 21, pricingVersion: 3, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, offsetMinutes: 0, startAt: `${day.date}T${String(hour).padStart(2, '0')}:00:00.000Z`, requests: index === 6 && hour === 12 ? 3 : 0, tokens: index === 6 && hour === 12 ? 10 : 0 })) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
+    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ rankedSessions: { state: "truncated", omitted: 1, medianTokens: 10, top10Tokens: 10, items: [] }, skills: [], integrations: [], range, startDate: start, endDateExclusive: '2026-09-14', startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), autoMode: structuredClone(autoMode), parallel: emptyParallel(), effort: emptyEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
+    return { version: 2, metricVersion: 1, countingVersion: 22, pricingVersion: 3, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, offsetMinutes: 0, startAt: `${day.date}T${String(hour).padStart(2, '0')}:00:00.000Z`, requests: index === 6 && hour === 12 ? 3 : 0, tokens: index === 6 && hour === 12 ? 10 : 0 })) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
 }
 function usage(over: Record<string, unknown> = {}) { return { type: 'usage', version: 1, snapshot: { ...snapshot(), ...over } }; }
+test('accepts analytics fields and rejects invalid source, comparison, ranking, skill and integration contracts', async () => {
+    const rows = [
+        { type: 'assistant', sessionId: 's', uuid: 'old', timestamp: '2026-07-01T00:00:00.000Z', message: { id: 'old', model: 'model', usage: { input_tokens: 1 } } },
+        { type: 'assistant', sessionId: 's', uuid: 'prior', timestamp: '2026-09-05T00:00:00.000Z', message: { id: 'prior', model: 'model', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'prior', name: 'Bash' }] } },
+        { type: 'user', sessionId: 's', uuid: 'result', timestamp: '2026-09-05T01:00:00.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'prior', is_error: true }] } },
+        { type: 'assistant', sessionId: 's', uuid: 'now', timestamp: '2026-09-13T10:00:00.000Z', message: { id: 'now', model: 'model', usage: { input_tokens: 10 }, content: [{ type: 'tool_use', id: 'skill', name: 'Skill', input: { skill: 'review' } }, ...['WebFetch', 'SendToPeer', 'GenerateImage', 'mcp__cua-driver__click', 'JumpWorkspace', 'ClaudeCli'].map(name => ({ type: 'tool_use', id: name, name }))] } },
+    ];
+    const actual = await collectRetainedUsage(['/isolated/project/s.jsonl'], '2026-09-13T12:00:00.000Z', {
+        timezone: 'UTC',
+        readRecords: async (_path, consume) => {
+            for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'analytics' });
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        },
+    });
+    const value = { type: 'usage', version: 1, snapshot: actual };
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    expect(actual.ranges['7d'].rankedSessions.items[0]!.firstActiveAt).toBe('2026-09-13T10:00:00.000Z');
+    const legacySpan = structuredClone(value);
+    for (const range of Object.values(legacySpan.snapshot.ranges)) for (const item of range.rankedSessions.items) delete item.firstActiveAt;
+    expect(parseUsageCollectionResult(legacySpan)?.type).toBe('usage');
+    expect(actual.ranges['7d'].integrations).toHaveLength(6);
+    expect(actual.ranges['7d'].previousPeriod!.modelRequests).toBe(1);
+    const zeroModelBaseline = structuredClone(value);
+    zeroModelBaseline.snapshot.ranges['7d'].previousPeriod!.modelRequests = 0;
+    expect(parseUsageCollectionResult(zeroModelBaseline)?.type).toBe('usage');
+    const invalid: ((range: any) => void)[] = [
+        range => { delete range.days.at(-1).tokenSources; },
+        range => { range.days.at(-1).tokenSources.chat.fresh++; },
+        range => { range.days.at(-1).tokenSources.subagents.read = -1; },
+        range => { range.days.at(-1).tokenSources.compaction = { fresh: '1', read: 0, write: 0, output: 0 }; },
+        range => { range.days.at(-1).tokenSources.extra = {}; },
+        range => { delete range.previousPeriod.results; },
+        range => { delete range.previousPeriod.modelRequests; },
+        range => { range.previousPeriod.modelRequests = -1; },
+        range => { range.previousPeriod.modelRequests = 0.5; },
+        range => { range.previousPeriod.modelRequests = Number.MAX_SAFE_INTEGER + 1; },
+        range => { range.previousPeriod.modelRequests = 1000; },
+        range => { range.previousPeriod.results = -1; },
+        range => { range.previousPeriod.errors = range.previousPeriod.results + 1; },
+        range => { range.previousPeriod.errors = Number.MAX_SAFE_INTEGER + 1; },
+        range => { range.rankedSessions.items[0].tokenSources.chat.output++; },
+        range => { range.rankedSessions.items[0].tools[0].requests++; },
+        range => { range.rankedSessions.items[0].tools[0].input = 'secret'; },
+        range => { range.rankedSessions.items[0].days[0].tokens.fresh++; },
+        range => { range.rankedSessions.items[0].days[0].requests++; },
+        range => { range.rankedSessions.items[0].days[0].results = -1; },
+        range => { range.rankedSessions.items[0].days[0].errors = 1; },
+        range => { range.rankedSessions.items[0].days[0].date = '2026-01-01'; },
+        range => { range.rankedSessions.items[0].dailyDetail = 'invented'; },
+        range => { range.rankedSessions.items[0].rank.tokens = 100; },
+        range => { range.rankedSessions.items.push(structuredClone(range.rankedSessions.items[0])); },
+        range => { range.rankedSessions.omitted = -1; },
+        range => { delete range.rankedSessions.medianTokens; },
+        range => { range.rankedSessions.medianTokens = null; },
+        range => { range.rankedSessions.medianTokens = 0.25; },
+        range => { range.rankedSessions.medianTokens = Infinity; },
+        range => { range.rankedSessions.medianTokens = 9; },
+        range => { range.rankedSessions.top10Tokens = -1; },
+        range => { range.rankedSessions.top10Tokens = Number.MAX_SAFE_INTEGER + 1; },
+        range => { range.rankedSessions.top10Tokens++; },
+        range => { delete range.rankedSessions.items[0].lastActiveAt; },
+        range => { range.rankedSessions.items[0].firstActiveAt = 'not-a-date'; },
+        range => { range.rankedSessions.items[0].firstActiveAt = '2026-09-06T10:00:00.000Z'; },
+        range => { range.rankedSessions.items[0].firstActiveAt = '2026-09-13T11:00:00.000Z'; },
+        range => { range.rankedSessions.items[0].firstActiveAt = null; },
+        range => { range.rankedSessions.items[0].lastActiveAt = 'not-a-date'; },
+        range => { range.rankedSessions.items[0].lastActiveAt = '2026-09-06T10:00:00.000Z'; },
+        range => { range.rankedSessions.items[0].lastActiveAt = '2026-09-13T13:00:00.000Z'; },
+        range => { range.skills[0].requests = 100; },
+        range => { range.skills[0].label = '界'.repeat(54); },
+        range => { range.skills[0].args = 'secret'; },
+        range => { range.skills[0].label = '../ invalid skill'; },
+        range => { range.days.at(-1).skills = []; },
+        range => { range.integrations[0].id = 'unapproved'; },
+        range => { range.integrations[0].requests = -1; },
+        range => { range.integrations[0].label = 'not-a-group'; },
+        range => { range.days.at(-1).integrations = []; },
+        range => { delete range.integrations; },
+    ];
+    for (const mutate of invalid) {
+        const bad = structuredClone(value);
+        mutate(bad.snapshot.ranges['7d']);
+        expect(parseUsageCollectionResult(bad)).toBeNull();
+    }
+});
+test('accepts exact half-token session medians and null empty medians with preserved truncated statistics', async () => {
+    const snapshot = await collectRetainedUsage(['/isolated/project/s.jsonl'], '2026-09-13T12:00:00.000Z', {
+        timezone: 'UTC',
+        readRecords: async (_path, consume) => {
+            for (let index = 0; index < 2; index++) await consume({
+                value: { type: 'assistant', sessionId: `s${index}`, uuid: `row-${index}`, timestamp: '2026-09-13T10:00:00.000Z', message: { id: `api-${index}`, model: 'model', usage: { input_tokens: index + 4 } } },
+                offset: index, generation: 'median',
+            });
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        },
+    });
+    const value = { type: 'usage', version: 1, snapshot };
+    expect(snapshot.ranges['7d'].rankedSessions).toMatchObject({ medianTokens: 4.5, top10Tokens: 9 });
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    const truncated = structuredClone(value);
+    truncated.snapshot.ranges['7d'].rankedSessions.items = [];
+    truncated.snapshot.ranges['7d'].rankedSessions.omitted = 2;
+    truncated.snapshot.ranges['7d'].rankedSessions.state = 'truncated';
+    expect(parseUsageCollectionResult(truncated)?.type).toBe('usage');
+    truncated.snapshot.ranges['7d'].rankedSessions.omitted = 100;
+    expect(parseUsageCollectionResult(truncated)).toBeNull();
+    const empty = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: empty })?.type).toBe('usage');
+    empty.ranges['7d'].rankedSessions.medianTokens = 0;
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: empty })).toBeNull();
+});
 test('accepts a valid three-range snapshot and JSON line', () => {
     const value = usage();
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
@@ -86,6 +197,17 @@ test('accepts excluded timing records without marking token and tool coverage pa
     (value.snapshot as any).coverage.invalidTimings = 2;
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
 });
+test('complete coverage accepts classified oversized tool results and requires their count', () => {
+    const value = usage();
+    (value.snapshot as any).coverage.oversizedToolResults = 10;
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    const legacy = usage();
+    delete (legacy.snapshot as any).coverage.oversizedToolResults;
+    expect(parseUsageCollectionResult(legacy)).toBeNull();
+    const unknown = usage();
+    (unknown.snapshot as any).coverage.oversizedRecords = 1;
+    expect(parseUsageCollectionResult(unknown)).toBeNull();
+});
 test('rejects unknown keys, versions, counts, ratios, and grouping collisions', () => {
     const base = usage();
     expect(parseUsageCollectionResult({ ...base, extra: true })).toBeNull();
@@ -110,7 +232,7 @@ test('previous periods require complete coverage and bounded truthful accounting
     const base = snapshot() as any;
     base.ranges['7d'].previousPeriod = {
         startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T12:00:00.000Z',
-        tokens: { fresh: 0, read: 0, write: 0, output: 0 }, sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
+        tokens: { fresh: 0, read: 0, write: 0, output: 0 }, sessions: 0, records: 0, requests: 0, results: 0, errors: 0, modelRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
     };
     expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: base })?.type).toBe('usage');
     const partial = structuredClone(base);

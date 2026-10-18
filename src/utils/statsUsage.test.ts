@@ -9,6 +9,177 @@ const roots: string[] = [];
 afterEach(async () => { for (const path of roots.splice(0))
     await rm(path, { recursive: true, force: true }); });
 const asOf = '2026-09-13T12:00:00.000Z';
+test('analytics sources, exact prior outcomes and independent named dimensions survive indexed canonical replay', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'usage-analytics-')); roots.push(root);
+    await mkdir(join(root, 's', 'subagents'), { recursive: true });
+    const make = (id: string, timestamp: string, input: number, name = 'Skill') => ({
+        type: 'assistant', sessionId: 's', uuid: id, timestamp, message: {
+            id, model: 'gpt-6.1-sol', usage: { input_tokens: input },
+            content: [{ type: 'tool_use', id, name, input: { skill: 'review:typescript', args: 'PRIVATE_ARGUMENT' } }],
+        },
+    });
+    const mainRows = [
+        make('history', '2026-07-01T00:00:00.000Z', 1),
+        make('prior', '2026-09-05T10:00:00.000Z', 10),
+        { type: 'user', sessionId: 's', uuid: 'prior-result', timestamp: '2026-09-12T10:00:00.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'prior', is_error: true }] } },
+        make('chat', '2026-09-12T10:00:00.000Z', 20),
+        make('chat', '2026-09-12T11:00:00.000Z', 25),
+        ...Array.from({ length: 15 }, (_, i) => make(`custom-${i}`, '2026-09-12T11:00:00.000Z', 0, `Custom${i}`)),
+        ...['SendToPeer', 'WebFetch', 'GenerateImage', 'mcp__cua-driver__click', 'JumpWorkspace', 'ClaudeCli'].map(name => make(name, '2026-09-12T11:00:00.000Z', 0, name)),
+    ];
+    const main = join(root, 's.jsonl'), copy = join(root, 'z-copy.jsonl');
+    await writeFile(main, mainRows.map(row => JSON.stringify(row)).join('\n'));
+    await copyFile(main, copy);
+    const agent = join(root, 's', 'subagents', 'agent-a0123456789abcdef.jsonl');
+    const compact = join(root, 's', 'subagents', 'agent-acompact-0123456789abcdef.jsonl');
+    await writeFile(agent, JSON.stringify(make('agent', '2026-09-12T10:00:00.000Z', 30)));
+    await writeFile(compact, JSON.stringify(make('compact', '2026-09-12T10:00:00.000Z', 40)));
+    const files = [copy, compact, agent, main];
+    const direct = await collectRetainedUsage(files, asOf, { timezone: 'UTC' });
+    const path = join(root, 'index.sqlite');
+    const indexed = await collectIndexedUsage(files, asOf, { path, timezone: 'UTC', deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    const range = direct.ranges['7d'], day = range.days.find(day => day.date === '2026-09-12')!;
+    expect(day.tokenSources).toEqual({ chat: { fresh: 25, read: 0, write: 0, output: 0 }, subagents: { fresh: 30, read: 0, write: 0, output: 0 }, compaction: { fresh: 40, read: 0, write: 0, output: 0 } });
+    expect(range.previousPeriod).toMatchObject({ requests: 1, results: 1, errors: 1 });
+    expect(range.rankedSessions.items).toHaveLength(1);
+    expect(range.rankedSessions.items[0]).toMatchObject({ tokens: { fresh: 95 }, tokenSources: day.tokenSources, requests: 24, dailyDetail: 'full', days: [{ date: day.date, tokens: day.tokens, requests: 24, results: 0, errors: 0 }] });
+    expect(range.skills).toMatchObject([{ label: 'review:typescript', requests: 3 }]);
+    expect(range.integrations.map(item => item.id).sort()).toEqual(['claude-cli', 'computer', 'image', 'peers', 'web', 'workspaces']);
+    expect(range.rankedSessions.items[0]!.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(range.requests);
+    const db = new (await import('bun:sqlite')).Database(path, { readonly: true });
+    try {
+        const projection = JSON.stringify(db.query('SELECT value FROM records').all());
+        expect(projection).toContain('review:typescript');
+        expect(projection).not.toContain('PRIVATE_ARGUMENT');
+    } finally { db.close(); }
+    const warm = await collectIndexedUsage(files, asOf, { path, timezone: 'UTC', deadline: Date.now() + 60000, onReadSource() { throw new Error('unexpected transcript read'); } });
+    expect(warm.ranges).toEqual(indexed.ranges);
+});
+
+test('range ranking retains leaders absent from every capped day list', async () => {
+    const rows = [];
+    for (const date of ['2026-09-11', '2026-09-12']) {
+        rows.push(msg(`${date}T10:00:00.000Z`, `leader-${date}`, 90, `leader-tool-${date}`, 'range-leader'));
+        for (let i = 0; i < 25; i++) rows.push(msg(`${date}T10:00:00.000Z`, `local-${date}-${i}`, 100, `local-tool-${date}-${i}`, `local-${date}-${i}`));
+    }
+    const path = await file(rows);
+    const snapshot = await collectRetainedUsage([path], asOf, { timezone: 'UTC' });
+    const range = snapshot.ranges['7d'];
+    const leader = range.rankedSessions.items.find(item => item.rank!.tokens === 1)!;
+    expect(leader.tokens.fresh).toBe(180);
+    expect(leader.days).toHaveLength(2);
+    expect(range.rankedSessions.items.length).toBeLessThanOrEqual(45);
+    expect(range.rankedSessions.omitted + range.rankedSessions.items.length).toBe(51);
+    for (const day of range.days.filter(day => day.requests > 0))
+        expect(day.contributors.items.find(item => item.id === leader.id)!.rank!.tokens).toBe(26);
+});
+test('skill projection bounds identifiers and excludes arbitrary input in direct and indexed accounting', async () => {
+    const names = ['a'.repeat(160), 'b'.repeat(161), '../ invalid', null];
+    const path = await file(names.map((skill, index) => ({
+        type: 'assistant', sessionId: 's', uuid: `skill-${index}`, timestamp: '2026-09-12T10:00:00.000Z',
+        message: { id: `skill-${index}`, content: [{ type: 'tool_use', id: `skill-${index}`, name: 'Skill', input: { skill, args: 'DO_NOT_PROJECT' } }] },
+    })));
+    const direct = await collectRetainedUsage([path], asOf, { timezone: 'UTC' });
+    const indexed = await collectIndexedUsage([path], asOf, { path: join(roots.at(-1)!, 'index.sqlite'), timezone: 'UTC', deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    expect(direct.ranges['7d'].skills).toMatchObject([
+        { kind: 'named', label: 'a'.repeat(160), requests: 1 },
+        { kind: 'unknown', requests: 3 },
+    ]);
+});
+test('previous model requests use first canonical valid-usage identities, not tool counts or cumulative deltas', async () => {
+    const make = (uuid: string, id: string | undefined, timestamp: string, input: number) => ({
+        type: 'assistant', sessionId: 's', uuid, timestamp,
+        message: { id, model: 'model', usage: { input_tokens: input } },
+    });
+    const path = await file([
+        make('history', 'history', '2026-07-01T00:00:00.000Z', 1),
+        make('carried-before', 'carried', '2026-08-30T00:00:00.000Z', 3),
+        make('carried-inside', 'carried', '2026-09-05T00:00:00.000Z', 5),
+        make('new-first', 'new', '2026-09-05T01:00:00.000Z', 10),
+        make('new-cumulative', 'new', '2026-09-05T02:00:00.000Z', 12),
+        make('zero-first', 'zero', '2026-09-05T03:00:00.000Z', 0),
+        make('zero-copy', 'zero', '2026-09-05T04:00:00.000Z', 0),
+        make('future-ignored', 'future', '2026-10-01T00:00:00.000Z', 100),
+        make('eligible-after-future', 'future', '2026-09-05T05:00:00.000Z', 0),
+        make('fallback', undefined, '2026-09-05T06:00:00.000Z', 0),
+        make('fallback', undefined, '2026-09-05T07:00:00.000Z', 2),
+        { ...make('current', 'current', '2026-09-12T00:00:00.000Z', 4), message: { id: 'current', model: 'model', usage: { input_tokens: 4 }, content: [{ type: 'tool_use', id: 'tool-a', name: 'Read' }, { type: 'tool_use', id: 'tool-b', name: 'Bash' }] } },
+    ]);
+    const root = roots.at(-1)!;
+    const copy = join(root, 'z-copy.jsonl');
+    await copyFile(path, copy);
+    await mkdir(join(root, 's', 'subagents'), { recursive: true });
+    const agent = join(root, 's', 'subagents', 'agent-a0123456789abcdef.jsonl');
+    await writeFile(agent, JSON.stringify(make('sub-zero', 'zero', '2026-09-05T08:00:00.000Z', 0)));
+    const files = [copy, agent, path];
+    const direct = await collectRetainedUsage(files, asOf, { timezone: 'UTC' });
+    const indexed = await collectIndexedUsage(files, asOf, { path: join(root, 'index.sqlite'), timezone: 'UTC', deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    expect(direct.ranges['7d'].previousPeriod).toMatchObject({ modelRequests: 5, requests: 0, tokens: { fresh: 16 } });
+    expect(direct.ranges['30d'].previousPeriod!.modelRequests).toBe(0);
+    const requests = (range: typeof direct.ranges['7d']) => Object.values(range.effort.requests).reduce((sum, count) => sum + count, range.effort.unattributedRequests);
+    expect(requests(direct.ranges['7d'])).toBe(1);
+    expect(direct.ranges['7d'].requests).toBe(2);
+    expect(requests(direct.ranges.all)).toBe(8);
+});
+test('invalid usage cannot seed a model request identity before its first valid zero-token response', async () => {
+    const path = await file([
+        { type: 'assistant', sessionId: 's', uuid: 'invalid', timestamp: '2026-09-11T00:00:00.000Z', message: { id: 'same', model: 'model', usage: { input_tokens: -1 } } },
+        { type: 'assistant', sessionId: 's', uuid: 'valid', timestamp: '2026-09-12T00:00:00.000Z', message: { id: 'same', model: 'model', usage: { input_tokens: 0 } } },
+    ]);
+    const direct = await collectRetainedUsage([path], asOf, { timezone: 'UTC' });
+    const indexed = await collectIndexedUsage([path], asOf, { path: join(roots.at(-1)!, 'index.sqlite'), timezone: 'UTC', deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    expect(direct.ranges['7d'].days.find(day => day.date === '2026-09-11')!.effort.unattributedRequests).toBe(0);
+    expect(direct.ranges['7d'].days.find(day => day.date === '2026-09-12')!.effort.unattributedRequests).toBe(1);
+    expect(direct.ranges['7d'].previousPeriod).toBeUndefined();
+});
+test('session median and top-ten totals precede caps while last activity follows attributed sources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'usage-session-figures-')); roots.push(root);
+    const main = join(root, 'main.jsonl');
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+        type: 'assistant', sessionId: `session${index + 1}`, uuid: `row-${index}`, timestamp: '2026-09-12T10:00:00.000Z',
+        message: { id: `api-${index}`, model: 'model', usage: { input_tokens: index + 1 } },
+    }));
+    await writeFile(main, [...rows,
+        { type: 'user', sessionId: 'session100', uuid: 'excluded-sidechain', timestamp: '2026-09-13T11:00:00.000Z', isSidechain: true },
+        { type: 'user', sessionId: 'session100', uuid: 'excluded-early-sidechain', timestamp: '2026-09-07T00:00:00.000Z', isSidechain: true },
+    ].map(row => JSON.stringify(row)).join('\n'));
+    const files = [main];
+    for (const [session, agent, timestamp] of [
+        ['session100', 'agent-a0123456789abcdef', '2026-09-13T08:00:00.000Z'],
+        ['session100', 'agent-acompact-0123456789abcdef', '2026-09-13T09:00:00.000Z'],
+        ['session100', 'agent-early', '2026-09-08T09:00:00.000Z'],
+        ['orphan', 'agent-a0123456789abcdef', '2026-09-13T10:00:00.000Z'],
+    ]) {
+        const directory = join(root, session!, 'subagents'); await mkdir(directory, { recursive: true });
+        const path = join(directory, `${agent}.jsonl`);
+        await writeFile(path, [
+            { type: 'attachment', sessionId: session, uuid: `${agent}-activity`, timestamp },
+            { type: 'attachment', sessionId: session, uuid: `${agent}-outside-week`, timestamp: '2026-09-06T09:00:00.000Z' },
+            { type: 'attachment', sessionId: session, uuid: `${agent}-future`, timestamp: '2026-09-14T00:00:00.000Z' },
+            { type: 'attachment', sessionId: session, uuid: `${agent}-invalid`, timestamp: 'not-a-date' },
+        ].map(row => JSON.stringify(row)).join('\n'));
+        files.push(path);
+    }
+    const direct = await collectRetainedUsage(files, asOf, { timezone: 'UTC' });
+    const indexed = await collectIndexedUsage(files, asOf, { path: join(root, 'index.sqlite'), timezone: 'UTC', deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    const ranked = direct.ranges['7d'].rankedSessions;
+    expect(ranked.items.length).toBeLessThanOrEqual(45);
+    expect(ranked.omitted + ranked.items.length).toBe(100);
+    expect(ranked.medianTokens).toBe(50.5);
+    expect(ranked.top10Tokens).toBe(955);
+    const retained = ranked.items.map(item => item.tokens.fresh).sort((a, b) => a - b);
+    expect((retained[Math.floor((retained.length - 1) / 2)]! + retained[Math.floor(retained.length / 2)]!) / 2).not.toBe(ranked.medianTokens);
+    expect(ranked.items.find(item => item.rank.tokens === 1)!.lastActiveAt).toBe('2026-09-13T09:00:00.000Z');
+    expect(ranked.items.find(item => item.rank.tokens === 1)!.firstActiveAt).toBe('2026-09-08T09:00:00.000Z');
+    expect(direct.ranges['30d'].rankedSessions.items.find(item => item.rank.tokens === 1)!.firstActiveAt).toBe('2026-09-06T09:00:00.000Z');
+    const empty = (await collectRetainedUsage([], asOf, { timezone: 'UTC' })).ranges['7d'].rankedSessions;
+    expect(empty).toEqual({ state: 'full', omitted: 0, medianTokens: null, top10Tokens: 0, items: [] });
+});
 const msg = (timestamp: string, id: string, input: number, tool = 't1', sessionId = 's') => ({ type: 'assistant', sessionId, uuid: id + timestamp, timestamp, message: { id, model: 'model', usage: { input_tokens: input, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, content: [{ type: 'tool_use', id: tool, name: 'Bash' }] } });
 async function file(rows: unknown[]) { const dir = await mkdtemp(join(tmpdir(), 'usage-count-')); roots.push(dir); const path = join(dir, 's.jsonl'); await writeFile(path, rows.map(r => JSON.stringify(r)).join('\n')); return path; }
 test('Auto-mode collection releases completed source records without losing aggregate counts', async () => {
@@ -22,7 +193,7 @@ test('Auto-mode collection releases completed source records without losing aggr
     ];
     const readRecords: NonNullable<Parameters<typeof collectRetainedUsage>[2]>['readRecords'] = async (_path, consume) => {
         for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'source-budget' });
-        return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
     };
     const expected = await collectRetainedUsage(files, asOf, { timezone: 'UTC', readRecords });
     const bounded = await collectRetainedUsage(files, asOf, { timezone: 'UTC', readRecords, maxStateBytes: 64 * 1024 });
@@ -41,7 +212,7 @@ test('one oversized Auto-mode source still respects the state budget', async () 
             for (let offset = 0; offset < 100; offset++) {
                 await consume({ value: { type: 'system', subtype: 'auto_permission_start', schema_version: 1, uuid: `start-${offset}`, timestamp: asOf, attempt_id: `attempt-${offset}`, tool_use_id: `tool-${offset}`, tool_kind: 'bash', auto_mode: 'auto', initial: true }, offset, generation: 'large-source' });
             }
-            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
         },
     })).rejects.toBeInstanceOf(UsageResourceError);
 });
@@ -266,6 +437,32 @@ test('state and integer overflow are explicit collection errors', async () => {
         maxIdentities: 0,
         maxStateBytes: 0,
     })).rejects.toBeInstanceOf(UsageResourceError);
+});
+
+test('each collector guard names its budget and records the observed value against its limit', async () => {
+    const path = await file([msg(asOf, 'a', 5)]);
+    const entries = await collectRetainedUsage([path], asOf, { maxIdentities: 1 }).then(() => null, (e: unknown) => e as UsageResourceError);
+    expect(entries).toMatchObject({ reason: 'state-budget', detail: { guard: 'state-entries', limit: 1 } });
+    expect(entries!.detail.observed).toBeGreaterThan(1);
+    const bytes = await collectRetainedUsage([path], asOf, { maxStateBytes: 1 }).then(() => null, (e: unknown) => e as UsageResourceError);
+    expect(bytes).toMatchObject({ reason: 'state-budget', detail: { guard: 'state-bytes', limit: 1 } });
+    expect(bytes!.detail.observed).toBeGreaterThan(1);
+    const huge = msg(asOf, 'a', Number.MAX_SAFE_INTEGER);
+    huge.message.usage.output_tokens = 0;
+    huge.message.usage.cache_read_input_tokens = 0;
+    huge.message.usage.cache_creation_input_tokens = 0;
+    await writeFile(path, [huge, msg(asOf, 'b', 1, 't2')].map(row => JSON.stringify(row)).join('\n'));
+    const overflow = await collectRetainedUsage([path], asOf).then(() => null, (e: unknown) => e as UsageResourceError);
+    expect(overflow).toMatchObject({ reason: 'state-budget', detail: { guard: 'counter-overflow' } });
+});
+test('retained-state metrics report the estimated high-water mark and never exceed the enforced budget', async () => {
+    const metrics = { retainedEntries: 0, retainedBytes: 0 };
+    await collectRetainedUsage([await file([msg(asOf, 'a', 5), msg(asOf, 'b', 7, 't2')])], asOf, { metrics });
+    expect(metrics.retainedEntries).toBeGreaterThan(0);
+    expect(metrics.retainedBytes).toBeGreaterThan(metrics.retainedEntries);
+    const tight = { retainedEntries: 0, retainedBytes: 0 };
+    await expect(collectRetainedUsage([await file([msg(asOf, 'a', 5)])], asOf, { maxIdentities: 3, metrics: tight })).rejects.toBeInstanceOf(UsageResourceError);
+    expect(tight.retainedEntries).toBeGreaterThan(3);
 });
 
 test('hourly requests and matched errors deduplicate and respect request windows and cutoff', async () => {

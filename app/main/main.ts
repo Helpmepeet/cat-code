@@ -1148,6 +1148,18 @@ function startUsageRefresh(): void {
       command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('usage-stats', ['--bare']),
       cwd: process.cwd(), signal: abort.signal,
+      onDiagnostic: diagnostic => logOperational('worker.failed', 'warn', {
+        role: 'usage-stats',
+        reason: diagnostic.reason,
+        phase: diagnostic.phase,
+        elapsedMs: diagnostic.elapsedMs,
+        ...(diagnostic.guard ? { category: diagnostic.guard } : {}),
+        ...(diagnostic.observed === undefined ? {} : { count: diagnostic.observed }),
+        ...(diagnostic.limit === undefined ? {} : { limit: diagnostic.limit }),
+        ...(diagnostic.sqliteCode ? { code: diagnostic.sqliteCode } : {}),
+        ...(diagnostic.sources === undefined ? {} : { sources: diagnostic.sources }),
+        ...(diagnostic.rows === undefined ? {} : { rows: diagnostic.rows }),
+      }),
     })
     usagePending = false
     if (!abort.signal.aborted && usagePublication.accept(generation, result)) sendHostEvent({ type: 'usage-dashboard', result })

@@ -106,7 +106,7 @@ export type OperationalFields = Readonly<Record<string, SafeOperationalValue>>
 const OPERATIONAL_FIELD_KEYS = new Set([
   'arch', 'category', 'code', 'count', 'durationMs', 'elapsedMs', 'eventLoopLagMs', 'exitCode',
   'frame', 'messageCount', 'missed', 'navigation', 'packaged', 'pid',
-  'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
+  'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version', 'limit', 'sources', 'rows',
   'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'rendersCommitted', 'phase',
   'from', 'to', 'kind', 'messageId', 'outcome',
 ])
@@ -158,6 +158,11 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // `samples` is the health ring, encoded as one capped string because this
   // vocabulary admits no arrays: see `createRendererHealthFlightRecorder`.
   'renderer.health.flight_recorder': ['reason', 'count', 'samples'],
+  // A disposable worker's failure category. `reason`/`phase`/`category` are closed
+  // enums chosen by the worker's own guards; `count` and `limit` are the
+  // observed and permitted magnitudes, `code` a SQLite result name, and
+  // `sources`/`rows` the size of the history being processed.
+  'worker.failed': ['role', 'reason', 'phase', 'category', 'elapsedMs', 'count', 'limit', 'code', 'sources', 'rows'],
   'sidecar.spawn.started': ['pid'],
   'sidecar.spawn.failed': ['reason'],
   'sidecar.ready': ['frame', 'pid'],

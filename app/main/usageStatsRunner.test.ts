@@ -3,8 +3,12 @@ import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import type { spawn } from 'node:child_process';
 import { runUsageStatsWorker, createUsagePublication, isUsageDashboardEnabled } from './usageStatsRunner.js';
+import { formatUsageDiagnostic, USAGE_DIAGNOSTIC_TAG, type UsageDiagnostic } from '../shared/usageDiagnostic.js';
 function fakeSpawn(config: {
     stdout?: string;
+    stderr?: string;
+    /** Emitted at spawn, so a worker can explain itself and then hang. */
+    earlyStderr?: string;
     exitCode?: number;
     emitError?: Error;
     autoClose?: boolean;
@@ -20,9 +24,12 @@ function fakeSpawn(config: {
         c.stdin.end = () => { };
         c.kill = (s: NodeJS.Signals = 'SIGTERM') => { config.onKill?.(s); c.signalCode = s; if (s === 'SIGKILL')
             c.emit('close', null, s); return true; };
+        if (config.earlyStderr !== undefined)
+            setTimeout(() => c.stderr.emit('data', Buffer.from(config.earlyStderr!)), 0);
         if (config.autoClose !== false)
             setTimeout(() => { if (config.emitError)
-                return c.emit('error', config.emitError); if (config.stdout !== undefined)
+                return c.emit('error', config.emitError); if (config.stderr !== undefined)
+                c.stderr.emit('data', Buffer.from(config.stderr)); if (config.stdout !== undefined)
                 c.stdout.emit('data', Buffer.from(config.stdout)); c.exitCode = config.exitCode ?? 0; c.emit('close', c.exitCode, null); }, 0);
         return c;
     }) as unknown) as typeof spawn;
@@ -58,6 +65,68 @@ describe('runUsageStatsWorker boundary', () => {
         controller.abort();
         await expect(pending).resolves.toEqual(err('invalid-output'));
         await expect(run({ emitError: new Error('spawn failed') })).resolves.toEqual(err('collection'));
+    });
+});
+describe('worker diagnostics', () => {
+    const diagnostic: UsageDiagnostic = { reason: 'state-budget', phase: 'replay', elapsedMs: 900, guard: 'state-bytes', observed: 70_000_000, limit: 67_108_864 };
+    const collect = async (config: Parameters<typeof fakeSpawn>[0], extra: Record<string, unknown> = {}) => {
+        const seen: UsageDiagnostic[] = [];
+        const result = await run(config, { onDiagnostic: (d: UsageDiagnostic) => seen.push(d), ...extra });
+        return { result, seen };
+    };
+    test('a tagged stderr line is delivered once while the strict stdout result is unchanged', async () => {
+        const { result, seen } = await collect({ stderr: `warming up\n${formatUsageDiagnostic(diagnostic)}\n`, stdout: line(err('resource-limit')) });
+        expect(result).toEqual(err('resource-limit'));
+        expect(seen).toEqual([diagnostic]);
+    });
+    test('only the first valid diagnostic is reported for one failed run', async () => {
+        const second: UsageDiagnostic = { reason: 'deadline', phase: 'index', elapsedMs: 5 };
+        const { seen } = await collect({ stderr: `${formatUsageDiagnostic(diagnostic)}\n${formatUsageDiagnostic(second)}\n`, stdout: line(err('resource-limit')) });
+        expect(seen).toEqual([diagnostic]);
+    });
+    test('malformed, unrelated, widened and oversized stderr is ignored in favor of a safe fallback', async () => {
+        for (const stderr of ['fatal: boom', `${USAGE_DIAGNOSTIC_TAG} {bad`, `${USAGE_DIAGNOSTIC_TAG} ${JSON.stringify({ v: 1, ...diagnostic, path: '/Users/me/x' })}`, `${USAGE_DIAGNOSTIC_TAG} ${'x'.repeat(100_000)}\n`]) {
+            const { result, seen } = await collect({ stderr, stdout: line(err('collection')) });
+            expect(result).toEqual(err('collection'));
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toMatchObject({ reason: 'unexpected', phase: 'unknown' });
+            expect(JSON.stringify(seen)).not.toContain(stderr);
+        }
+    });
+    test('every unexplained error gets one diagnostic, including nonzero exit and broken stdout', async () => {
+        for (const config of [
+            { stdout: line(err('collection')) },
+            { stdout: line(err('invalid-output')) },
+            { stdout: '{bad}\n' },
+            { stdout: line(err()), exitCode: 1 },
+            { exitCode: 1 },
+            { emitError: new Error('spawn failed /private/path') },
+        ]) {
+            const { result, seen } = await collect(config);
+            expect(result.type).toBe('error');
+            expect(seen).toHaveLength(1);
+            expect(seen[0]).toMatchObject({ reason: 'unexpected', phase: 'unknown' });
+            expect(JSON.stringify(seen)).not.toContain('/private');
+        }
+    });
+    test('a throwing sink cannot change any result', async () => {
+        const throwing = { onDiagnostic: () => { throw new Error('operational log down'); } };
+        await expect(run({ stderr: `${formatUsageDiagnostic(diagnostic)}\n`, stdout: line(err('resource-limit')) }, throwing)).resolves.toEqual(err('resource-limit'));
+        await expect(run({ autoClose: false }, { ...throwing, timeoutMs: 5 })).resolves.toEqual(err('timeout'));
+    });
+    test('a parent kill reports a deadline with an unknown phase, unless the worker already explained itself', async () => {
+        const killed = await collect({ autoClose: false }, { timeoutMs: 5 });
+        expect(killed.result).toEqual(err('timeout'));
+        expect(killed.seen).toHaveLength(1);
+        expect(killed.seen[0]).toMatchObject({ reason: 'deadline', phase: 'unknown' });
+        const explained = await collect({ autoClose: false, earlyStderr: `${formatUsageDiagnostic(diagnostic)}\n` }, { timeoutMs: 5 });
+        expect(explained.result).toEqual(err('timeout'));
+        expect(explained.seen).toEqual([diagnostic]);
+    });
+    test('a diagnostic is never reported for a successful result', async () => {
+        const { result, seen } = await collect({ stdout: line({ type: 'usage', version: 1, snapshot: await (await import('../../src/utils/statsUsage.js')).collectRetainedUsage([], new Date().toISOString()) }), stderr: `${formatUsageDiagnostic(diagnostic)}\n` });
+        expect(result.type).toBe('usage');
+        expect(seen).toEqual([]);
     });
 });
 describe('createUsagePublication', () => {

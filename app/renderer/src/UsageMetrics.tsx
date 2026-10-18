@@ -1,30 +1,31 @@
-import { usageMetricDelta } from './usageMetricDelta.js';
+import { useId } from 'react';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
-import { usageCacheReadRate, usageCompact, usageNumber, usagePercent, usageTotal } from './usageDashboardState.js';
-export function UsageMetrics({ summary, unknown, partial }: { summary?: UsageRangeSummary; unknown: string; partial: boolean }) {
+import { usageCompact, usageNumber, usagePercent } from './usageDashboardState.js';
+import { usageBuildSpark, usageCacheCoverageLabel, usageDailyDeltaTone, usageDailyGradientStops, usageDailyMetricDelta, usageLatestBuild, usageMetricSpark, usageModelRequestCount, usageToolRate, usageRangeOutcomes, useUsageBuildChartWidth, type UsageDailyMetric } from './usageDailyChartState.js';
+
+function MetricSpark({ values, color }: { values: readonly (number | null)[]; color: string }) {
+    const id = `usage-spark-${useId().replaceAll(':', '')}`;
+    const spark = usageMetricSpark(values);
+    if (!spark) return null;
+    return <svg viewBox="0 0 63 28" aria-hidden="true"><defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1">{usageDailyGradientStops.map(([offset, opacity]) => <stop key={offset} offset={offset} stopColor={color} stopOpacity={opacity}/>)}</linearGradient></defs><path d={spark.wash} fill={`url(#${id})`}/><path d={spark.line} stroke={color} strokeWidth="1.75" fill="none" strokeLinecap="round" strokeLinejoin="round"/><circle cx={spark.last.x} cy={spark.last.y} r="3" fill={color} stroke="var(--usage-panel)" strokeWidth="1.5"/></svg>;
+}
+function BuildSpark({ builds }: { builds: ReturnType<typeof usageLatestBuild> }) {
+    const chart = useUsageBuildChartWidth(), { recent, x, y, color, path } = usageBuildSpark(builds, chart.width);
+    return <span className="usage-build-chart"><svg ref={chart.ref} className="usage-build-mini" viewBox={`0 0 ${chart.width} 40`} aria-hidden="true">{builds.median !== null && <line x1="0" x2={chart.width} y1={y(builds.median)} y2={y(builds.median)} className="usage-average-line"/>}<path d={path} fill="none" stroke="var(--usage-grid)" strokeWidth="1.5"/>{recent.map((build, index) => <circle key={`${build.sha}:${build.dirty}`} cx={x(index)} cy={y(usageToolRate(build) ?? 0)} r={build === builds.latest ? 5 : 3.5} fill={build.dirty ? 'var(--usage-panel)' : color(build)} stroke={color(build)} strokeWidth={build.dirty ? 1.75 : 0}><title>{`${build.sha}${build.dirty ? ' (uncommitted)' : ''}: ${usagePercent(usageToolRate(build) ?? 0)} tool errors`}</title></circle>)}</svg></span>;
+}
+export function UsageMetrics({ summary, unknown, partial, metric = 'tokens', onMetricChange, onCacheSelect, onBuildSelect }: { summary?: UsageRangeSummary; unknown: string; partial: boolean; metric?: UsageDailyMetric; onMetricChange?: (metric: UsageDailyMetric) => void; onCacheSelect?: () => void; onBuildSelect?: () => void }) {
     const previous = !partial && summary?.range !== 'all' ? summary?.previousPeriod : undefined;
-    const average = (tokens: UsageRangeSummary['tokens'], activeDays: number) => activeDays ? usageTotal(tokens) / activeDays : 0;
-    const delta = (current: number | null, baseline: number | null | undefined, points = false) => previous ? usageMetricDelta(current, baseline ?? null, points ? 'points' : 'percent') : null;
-    const comparison = previous ? `vs prior ${summary?.range === '7d' ? '7' : '30'} days` : '';
-    const cacheReadRate = summary ? usageCacheReadRate(summary.tokens) : null;
-    const previousCacheReadRate = previous ? usageCacheReadRate(previous.tokens) : null;
-    let runningTokens = 0, runningActiveDays = 0;
-    const activeDaySeries = summary?.range === 'all' ? [] : summary?.days.map(day => {
-        const dayTokens = usageTotal(day.tokens);
-        runningTokens += dayTokens;
-        if (dayTokens > 0 || day.requests > 0 || day.records > 0 || day.sessions > 0) runningActiveDays++;
-        return runningActiveDays ? runningTokens / runningActiveDays : 0;
-    }) ?? [];
+    const delta = (current: number | null, baseline: number | null | undefined, points = false) => previous ? usageDailyMetricDelta(current, baseline ?? null, points ? 'points' : 'percent') : null;
+    const comparison = `vs prior ${summary?.range === '7d' ? '7' : '30'} days`;
+    const errorRate = summary ? usageToolRate(usageRangeOutcomes(summary)) : null;
     const items = [
-        { kind: 'tokens', label: 'Total tokens', sub: summary ? `${usageCompact(summary.tokens.output)} output` : '', delta: delta(summary ? usageTotal(summary.tokens) : null, previous ? usageTotal(previous.tokens) : null), value: summary ? usageCompact(usageTotal(summary.tokens)) : unknown, series: summary?.days.map(day => usageTotal(day.tokens)) ?? [] },
-        { kind: 'tokens', label: 'Per active day', sub: summary ? `${usageNumber(summary.activeDays)} active days` : '', delta: delta(summary ? average(summary.tokens, summary.activeDays) : null, previous ? average(previous.tokens, previous.activeDays) : null), value: summary ? usageCompact(summary.activeDays ? usageTotal(summary.tokens) / summary.activeDays : 0) : unknown, series: activeDaySeries },
-        { kind: 'sessions', label: 'Sessions', sub: summary?.activeDays ? `${(summary.sessions / summary.activeDays).toFixed(1)} per active day` : unknown, delta: delta(summary?.sessions ?? null, previous?.sessions), value: summary ? usageNumber(summary.sessions) : unknown, series: summary?.days.map(day => day.sessions) ?? [] },
-        { kind: 'requests', label: 'Tool requests', sub: summary?.sessions ? `${usageNumber(Math.round(summary.requests / summary.sessions))} per session` : unknown, delta: delta(summary?.requests ?? null, previous?.requests), value: summary ? usageNumber(summary.requests) : unknown, series: summary?.days.map(day => day.requests) ?? [] },
-        { kind: 'cache', label: 'Cache read rate', sub: summary ? `${usageCompact(summary.tokens.read)} reads` : '', delta: delta(cacheReadRate, previousCacheReadRate, true), value: cacheReadRate === null ? unknown : usagePercent(cacheReadRate), series: summary?.days.map(day => usageCacheReadRate(day.tokens)).filter((value): value is number => value !== null) ?? [] },
+        { id: 'requests' as const, label: 'Model requests', value: summary ? usageCompact(usageModelRequestCount(summary)) : unknown, color: 'var(--usage-category-0)', delta: delta(summary ? usageModelRequestCount(summary) : null, previous?.modelRequests), series: summary?.days.map(usageModelRequestCount) ?? [], action: () => onMetricChange?.('requests') },
+        { id: 'sessions' as const, label: 'Sessions', value: summary ? usageNumber(summary.sessions) : unknown, color: 'var(--usage-category-2)', delta: delta(summary?.sessions ?? null, previous?.sessions), series: summary?.days.map(day => day.sessions) ?? [], action: () => onMetricChange?.('sessions') },
+        { id: 'cache' as const, label: 'Input from cache', value: summary?.cachedInputShare == null ? unknown : usagePercent(summary.cachedInputShare), color: 'var(--accent)', delta: delta(summary?.cachedInputShare ?? null, previous?.cachedInputShare, true), series: summary?.days.map(day => { const input = day.tokens.fresh + day.tokens.read + day.tokens.write; return input ? day.tokens.read / input * 100 : null; }) ?? [], action: () => onCacheSelect?.() },
+        { id: 'errorRate' as const, label: 'Tool error rate', value: errorRate === null ? unknown : usagePercent(errorRate), color: 'var(--usage-errors)', delta: delta(errorRate, previous ? usageToolRate(previous) : null, true), series: summary?.days.map(usageToolRate) ?? [], action: () => onMetricChange?.('errorRate') },
     ];
-    return <section className="usage-overview" aria-label="Analytics overview"><div className="usage-cards">{items.map(item => {
-        const max = Math.max(1, ...item.series);
-        const points = item.series.map((value, index) => `${1 + index / Math.max(1, item.series.length - 1) * 62},${17 - value / max * 15}`).join(' ');
-        return <section className={`usage-metric usage-metric-${item.kind}`} key={item.label}><h2>{item.label}</h2><strong>{item.value}</strong><span className="usage-metric-sub">{item.sub}</span><div className="usage-metric-foot">{item.delta && <span className={`usage-metric-delta usage-delta-${item.delta.direction}`} role="img" aria-label={`${item.label}: ${item.delta.description}, ${comparison}`} title={`${item.delta.description}, ${comparison}`}>{item.delta.text}</span>}{item.series.length > 1 && <svg viewBox="0 0 64 18" aria-hidden="true"><polyline points={points}/></svg>}</div></section>;
-    })}</div></section>;
+    const builds = summary ? usageLatestBuild(summary) : null;
+    const latestRate = builds?.latest ? usageToolRate(builds.latest) : null;
+    const buildTone = latestRate !== null && builds?.median !== null && builds?.median !== undefined ? latestRate > builds.median * 1.5 ? ' usage-build-rate-bad' : latestRate < builds.median * .9 ? ' usage-build-rate-good' : '' : '';
+    return <section className="usage-overview" aria-label="Analytics overview"><div className="usage-cards">{items.map(item => <button type="button" className={`usage-metric usage-metric-${item.id}`} key={item.label} aria-current={metric === item.id ? 'true' : undefined} onClick={item.action}><span className="usage-metric-label">{item.label}</span><span className="usage-metric-row"><strong>{item.value}</strong><MetricSpark values={item.series} color={item.color}/></span><span className="usage-metric-foot">{item.id === 'cache' && summary && usageCacheCoverageLabel(summary.cacheWriteReporting) && <span className="usage-cache-coverage">{usageCacheCoverageLabel(summary.cacheWriteReporting)}</span>}{item.delta && <span className={`usage-metric-delta${usageDailyDeltaTone(item.id, item.delta)}`} aria-label={`${item.label}: ${item.delta.description}, ${comparison}`}><b>{item.delta.text}</b> {comparison}</span>}</span></button>)}<button type="button" className="usage-metric usage-latest-build" title={builds?.latest ? "Latest build with at least 200 tool results; newer builds below that threshold are excluded." : "No builds have at least 200 tool results in this range."} onClick={onBuildSelect} disabled={!builds?.latest}><span className="usage-build-head"><span className="usage-metric-label">Latest build errors</span><code>{builds?.latest ? `${builds.latest.sha.slice(0, 7)}${builds.latest.dirty ? '*' : ''}` : ''}</code></span><span className="usage-metric-row"><strong className={buildTone}>{latestRate === null ? unknown : usagePercent(latestRate)}</strong>{builds?.median != null && <span className="usage-build-median">median {usagePercent(builds.median)}</span>}</span>{builds?.latest ? <BuildSpark builds={builds}/> : <span className="usage-build-empty">No builds with ≥200 results</span>}</button></div></section>;
 }

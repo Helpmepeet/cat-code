@@ -15,8 +15,9 @@
  * focus, which this must never do.
  */
 import { app, BrowserWindow } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runAnalyticsMatrix } from './visualAcceptanceMatrix.js'
 
 const outDir = mustEnv('CATCODE_CAPTURE_OUT')
 // Isolate the single-instance lock and window preferences from an open dev app.
@@ -26,6 +27,13 @@ app.setPath('userData', join(outDir, 'electron-profile'))
 const settleMs = Number(process.env.CATCODE_CAPTURE_SETTLE_MS ?? '1200')
 
 app.once('browser-window-created', (_event, window) => {
+  const trace = (kind: string, detail: unknown) => {
+    appendFileSync(join(outDir, 'renderer-events.jsonl'), JSON.stringify({ at: new Date().toISOString(), kind, detail }) + '\n')
+  }
+  window.webContents.on('console-message', (_event, level, message) => trace('console', { level, message }))
+  window.webContents.on('did-start-navigation', (_event, url, inPlace, mainFrame) => trace('navigation', { url, inPlace, mainFrame }))
+  window.webContents.on('render-process-gone', (_event, details) => trace('renderer-gone', details))
+  window.webContents.on('did-finish-load', () => trace('loaded', {}))
   window.webContents.once('did-finish-load', () => {
     void run(window)
   })
@@ -42,6 +50,11 @@ async function run(window: BrowserWindow): Promise<void> {
     }
 
     await settle(settleMs)
+    if (process.env.CATCODE_CAPTURE_SCENE === 'analytics-matrix') {
+      await runAnalyticsMatrix(window, outDir)
+      app.quit()
+      return
+    }
     // Animations and the caret are the classic sources of a screenshot that
     // differs from itself. Freeze them before the first frame, not per capture.
     await window.webContents.insertCSS(
@@ -53,6 +66,9 @@ async function run(window: BrowserWindow): Promise<void> {
     for (const shot of SHOTS) {
       if (shot.prepare) await shot.prepare(window)
       await settle(shot.settleMs ?? 250)
+      if (shot.verify && !await window.webContents.executeJavaScript(shot.verify)) {
+        throw new Error(`Capture state did not match: ${shot.name}`)
+      }
       const image = await window.webContents.capturePage()
       if (image.isEmpty()) throw new Error(`capture produced no pixels: ${shot.name}`)
       const file = join(outDir, `${shot.name}.png`)
@@ -63,12 +79,17 @@ async function run(window: BrowserWindow): Promise<void> {
     }
 
     process.stdout.write(`[capture] done ${captured.length}\n`)
-    app.exit(0)
+    writeFileSync(join(outDir, 'result.json'), JSON.stringify({ ok: true, scene: process.env.CATCODE_CAPTURE_SCENE ?? '', captured }))
+    app.quit()
   } catch (error) {
     process.stderr.write(
       `[capture] failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
     )
-    app.exit(1)
+    const image = await window.webContents.capturePage()
+    if (!image.isEmpty()) writeFileSync(join(outDir, 'failure.png'), image.toPNG())
+    writeFileSync(join(outDir, 'result.json'), JSON.stringify({ ok: false, error: String(error) }))
+    process.exitCode = 1
+    app.quit()
   }
 }
 
@@ -76,6 +97,7 @@ type Shot = {
   name: string
   settleMs?: number
   prepare?: (window: BrowserWindow) => Promise<void>
+  verify?: string
 }
 
 /**
@@ -87,36 +109,49 @@ const SHOTS: Shot[] = process.env.CATCODE_CAPTURE_SCENE === 'usage' ? [
   { name: 'usage-normal', prepare: async window => {
     window.setMinimumSize(400, 400)
     window.setContentSize(1200, 900)
-    await window.webContents.executeJavaScript(`document.querySelector('[data-sidebar-nav-id="usage"]')?.click()`)
-    for (let i = 0; i < 100; i++) {
-      if (await window.webContents.executeJavaScript(`Boolean(document.querySelector('.usage-panels .usage-chart'))`)) return
-      await settle(100)
-    }
-    throw new Error('Usage fixture did not arrive')
-  } },
-  { name: 'usage-narrow', prepare: async window => { window.setContentSize(520, 1900) } },
+    await waitForUsage(window, `Boolean(document.querySelector('[data-sidebar-nav-id="usage"]'))`, 'Analytics navigation')
+    await window.webContents.executeJavaScript(`document.querySelector('[data-sidebar-nav-id="usage"]').click()`)
+    await waitForUsage(window, `Boolean(document.querySelector('.usage-daily-svg'))`, 'Analytics fixture')
+    await usageRange(window, '7d')
+  }, verify: `document.querySelector('.usage-page').dataset.range === '7d' && !!document.querySelector('.usage-daily-svg')` },
+  { name: 'usage-narrow', prepare: async window => { window.setContentSize(520, 1900) }, verify: `innerWidth === 520 && !!document.querySelector('.usage-daily-svg')` },
   { name: 'usage-30d', prepare: async window => {
     window.setContentSize(1920, 1056)
-    await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.usage-range button')).find(b => b.textContent === '30 days')?.click()`)
-  } },
+    await usageRange(window, '30d')
+  }, verify: `document.querySelector('.usage-page').dataset.range === '30d' && document.querySelectorAll('.usage-daily-hit').length === 30` },
   { name: 'usage-selected-day', prepare: async window => {
-    await window.webContents.executeJavaScript(`document.querySelectorAll('.usage-panels .usage-chart g[role="button"]')[25]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
-  } },
+    await window.webContents.executeJavaScript(`(() => { const day = document.querySelectorAll('.usage-daily-hit')[25]; if (!day) throw new Error('Missing retained day'); day.scrollIntoView({ block: 'center' }); day.dispatchEvent(new MouseEvent('click', { bubbles: true })); })()`)
+  }, verify: `document.querySelectorAll('.usage-daily-hit')[25].getAttribute('aria-pressed') === 'true' && !!document.querySelector('.usage-pinned')` },
   { name: 'usage-activity', prepare: async window => {
     window.setContentSize(1440, 1056)
-    await window.webContents.executeJavaScript(`document.querySelector('.usage-activity-details').open = true; document.querySelector('.usage-heatmap')?.scrollIntoView({ block: 'start' }); document.querySelectorAll('.usage-heatmap g[role="button"]')[315]?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`)
-  } },
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-analytics-details[aria-label="Activity"]').scrollIntoView({ block: 'center' })`)
+  }, verify: `document.querySelector('.usage-page').dataset.range === '30d' && document.querySelector('.usage-analytics-details[aria-label="Activity"] .uad-empty').textContent.includes('Hourly tool request detail is unavailable')` },
   { name: 'usage-week-activity', prepare: async window => {
     window.setContentSize(1440, 1056)
-    await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.usage-range button')).find(b => b.textContent === '7 days')?.click()`)
-    await settle(100)
-    await window.webContents.executeJavaScript(`document.querySelector('.usage-activity-details').open = true; document.querySelector('.usage-heatmap')?.scrollIntoView({ block: 'center' })`)
-  } },
+    await usageRange(window, '7d')
+    await waitForUsage(window, `Boolean(document.querySelector('[aria-label="Hourly tool request heatmap"]'))`, 'hourly tool requests')
+    await window.webContents.executeJavaScript(`(() => { const heatmap = document.querySelector('.uad-heatmap'); heatmap.scrollIntoView({ block: 'center' }); const cell = heatmap.querySelector('g[role="button"] rect:not(.uad-level-0):not(.uad-missing-cell)'); if (!cell) throw new Error('Missing populated activity cell'); cell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); })()`)
+  }, verify: `document.querySelector('.usage-page').dataset.range === '7d' && document.querySelector('.usage-analytics-details[aria-label="Activity"] .uad-readout').textContent.includes('tool requests')` },
   { name: 'usage-activity-narrow', prepare: async window => {
     window.setContentSize(520, 1100)
-    await window.webContents.executeJavaScript(`document.querySelector('.usage-activity-details').open = true; document.querySelector('.usage-heatmap')?.scrollIntoView({ block: 'start' })`)
-  } },
+    await window.webContents.executeJavaScript(`document.querySelector('[aria-label="Activity view"] button:nth-child(2)').click()`)
+    await waitForUsage(window, `Boolean(document.querySelector('[aria-label="Ten-minute concurrency heatmap"]'))`, 'ten-minute concurrency')
+    await window.webContents.executeJavaScript(`document.querySelector('.uad-heatmap').scrollIntoView({ block: 'center' })`)
+  }, verify: `(() => { const chart = document.querySelector('[aria-label="Ten-minute concurrency heatmap"]'); const rect = chart.getBoundingClientRect(); return innerWidth === 520 && !!document.querySelector('.uad-concurrency') && rect.top >= document.querySelector('.usage-sticky-top').getBoundingClientRect().bottom && rect.bottom <= document.querySelector('.usage-page').getBoundingClientRect().bottom; })()` },
 ] : [{ name: 'shell-default', settleMs: 400 }]
+
+async function waitForUsage(window: BrowserWindow, expression: string, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await window.webContents.executeJavaScript(expression)) return
+    await settle(100)
+  }
+  throw new Error(`Timed out waiting for ${label}`)
+}
+
+async function usageRange(window: BrowserWindow, range: '7d' | '30d'): Promise<void> {
+  await window.webContents.executeJavaScript(`document.querySelector('.usage-range button:nth-child(${range === '7d' ? 1 : 2})').click()`)
+  await waitForUsage(window, `document.querySelector('.usage-page')?.dataset.range === ${JSON.stringify(range)}`, `Analytics period ${range}`)
+}
 
 function settle(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))

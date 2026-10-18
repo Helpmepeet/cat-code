@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtemp, writeFile, rm, open, appendFile, rename, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readStatsRecords, type StatsCheckpoint } from './statsReader.js';
+import { oversizedToolResultPrefix, readStatsRecords, STATS_RECORD_BYTES, type StatsCheckpoint } from './statsReader.js';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true }); });
@@ -42,6 +42,32 @@ test('C3: oversized record is skipped with loss and reading resumes', async () =
     const q = await readStatsRecords(path, r => { rows.push(r.value); }, { maxRecordBytes: 64, chunkBytes: 16 });
     expect(q.oversizedRecords).toBe(1);
     expect(rows).toEqual([{ ok: 1 }]);
+});
+test('oversized user tool-result line is classified apart from unknown oversized loss', async () => {
+    const image = 'A'.repeat(STATS_RECORD_BYTES + 1024);
+    const toolResult = { parentUuid: 'p', isSidechain: false, type: 'user', message: { role: 'user', content: [{ tool_use_id: 'toolu_1', type: 'tool_result', content: [{ type: 'image', source: { data: image } }] }] }, uuid: 'u', timestamp: '2026-10-16T18:14:51.107Z', sessionId: 's' };
+    const assistant = { type: 'assistant', message: { id: 'm', content: [{ type: 'text', text: image }], usage: { input_tokens: 1, output_tokens: 1 } } };
+    const path = await file(`${JSON.stringify(toolResult)}\n${JSON.stringify(assistant)}\n{"ok":1}\n`);
+    const rows: unknown[] = [];
+    const q = await readStatsRecords(path, r => { rows.push(r.value); });
+    expect(q.oversizedToolResults).toBe(1);
+    expect(q.oversizedRecords).toBe(1);
+    expect(rows).toEqual([{ ok: 1 }]);
+});
+test('oversized prefix classification proves a user record of only tool results', () => {
+    const user = (content: string, before = '"type":"user",', after = '') => `{"parentUuid":"p",${before}"message":{"role":"user","content":${content}}${after}`;
+    expect(oversizedToolResultPrefix(user('[{"tool_use_id":"t","type":"tool_result","content":[{"type":"image","source":{"data":"AAAA'))).toBe(true);
+    expect(oversizedToolResultPrefix(user('[{"type":"tool_result","tool_use_id":"a","content":"x"},{"type":"tool_result","tool_use_id":"b","content":"y'))).toBe(true);
+    expect(oversizedToolResultPrefix(user('[{"type":"tool_result","content":"x"},{"type":"text","text":"y'))).toBe(false);
+    expect(oversizedToolResultPrefix(user('[{"type":"text","text":"hello'))).toBe(false);
+    expect(oversizedToolResultPrefix(user('"plain prompt text'))).toBe(false);
+    expect(oversizedToolResultPrefix(user('[{"content":"x'))).toBe(false);
+    expect(oversizedToolResultPrefix(user('[{"type":"tool_result","content":"x', ''))).toBe(false);
+    expect(oversizedToolResultPrefix(user('[{"type":"tool_result","content":"x', '"type":"assistant",'))).toBe(false);
+    expect(oversizedToolResultPrefix('{"message":{"content":[{"type":"tool_result","content":"x"}]},"type":"user","uuid":"u')).toBe(true);
+    expect(oversizedToolResultPrefix('{"message":{"content":[{"type":"tool_result","content":"x')).toBe(false);
+    expect(oversizedToolResultPrefix('{"type":"user","nested":{"message":{"content":[{"type":"tool_result","content":"x')).toBe(false);
+    expect(oversizedToolResultPrefix('{"type":"us')).toBe(false);
 });
 test('T3: captures boundary before appends; rescans from zero', async () => {
     const path = await file('{"ok":1}\n');
