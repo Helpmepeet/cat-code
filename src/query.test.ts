@@ -21,7 +21,7 @@ import * as toolUseSummaryGenerator from './services/toolUseSummary/toolUseSumma
 import * as sessionStorage from './utils/sessionStorage.js'
 import type { CompactionResult } from './services/compact/compact.js'
 import type { AssistantMessage, Message, SystemMessage } from './types/message.js'
-import { createUserMessage } from './utils/messages.js'
+import { createUserMessage, normalizeMessagesForAPI } from './utils/messages.js'
 import {
   enqueue,
   getCommandQueueSnapshot,
@@ -39,7 +39,8 @@ import { spawnShellTask } from './tasks/LocalShellTask/LocalShellTask.js'
 import type { ExecResult, ShellCommand } from './utils/ShellCommand.js'
 import { TaskOutput } from './utils/task/TaskOutput.js'
 import { getDefaultAppState } from './state/AppStateStore.js'
-import type { Attachment } from './utils/attachments.js'
+import { createAttachmentMessage, type Attachment } from './utils/attachments.js'
+import { asAgentId } from './types/ids.js'
 import {
   resetStateForTests,
   setMainLoopModelOverride,
@@ -117,6 +118,63 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
     messages,
   } as unknown as ToolUseContext
 }
+
+describe('peer roster snapshot inheritance', () => {
+  for (const child of [false, true]) {
+    test(`${child ? 'child' : 'main'} query sees only its eligible peer attachments`, async () => {
+      const snapshot = createAttachmentMessage({
+        type: 'peer_roster_snapshot', workspace: '/workspace',
+        asOf: '2026-10-18T00:00:00.000Z',
+        quotedRoster: '{"peers":[{"name":"SnapshotPeerOnly","status":"live"}]}',
+      })
+      const messages = [
+        createUserMessage({ content: 'Continue the assigned task.' }),
+        snapshot,
+        createAttachmentMessage({
+          type: 'peer_coordination_state', asOf: '2026-10-18T00:00:00.000Z',
+          peers: [{ name: 'CompactPeerRetained', status: 'parked' }],
+        }),
+      ]
+      const context = createToolUseContext(messages)
+      if (child) context.agentId = asAgentId('roster-child')
+      const requests: Message[][] = []
+      const openAIRequests: Message[][] = []
+      const deps: QueryDeps = {
+        uuid: () => 'roster-inheritance-query',
+        microcompact: async input => ({ messages: input }),
+        autocompact: async () => ({ wasCompacted: false }),
+        callModel: async function* ({ messages, openAIInstructionAssembly }) {
+          requests.push([...messages])
+          if (openAIInstructionAssembly) openAIRequests.push([...openAIInstructionAssembly.inputMessages])
+          yield createAssistantMessage('Assigned task complete.', 'roster-inheritance-response')
+        },
+      }
+      for await (const _message of query({
+        messages, toolUseContext: context, deps,
+        systemPrompt: asSystemPrompt(['test instructions']), userContext: {}, systemContext: {},
+        querySource: child ? 'agent:verification' : 'repl_main_thread',
+        canUseTool: async () => ({ behavior: 'deny', message: 'No tools expected' }),
+      })) { /* Drain the real query loop to its provider seam. */ }
+
+      expect(requests).toHaveLength(1)
+      expect(openAIRequests).toHaveLength(1)
+      for (const request of [requests[0]!, openAIRequests[0]!]) {
+        const text = JSON.stringify(normalizeMessagesForAPI(request, []))
+        expect(text).toContain('CompactPeerRetained')
+        if (child) {
+          expect(request).not.toContain(snapshot)
+          expect(text).not.toContain('SnapshotPeerOnly')
+          expect(text).not.toContain('Other sessions open in this workspace')
+        } else {
+          expect(request).toContain(snapshot)
+          expect(text).toContain('SnapshotPeerOnly')
+        }
+      }
+      expect(messages).toContain(snapshot)
+      expect(context.messages).toContain(snapshot)
+    })
+  }
+})
 
 describe('query auto-compaction request assembly', () => {
   test('uses the resolved plan-mode model only for the current compaction request', async () => {
