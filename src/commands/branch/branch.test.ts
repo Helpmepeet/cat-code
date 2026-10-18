@@ -1,18 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs'
 import { writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { homedir, tmpdir } from 'os'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import {
+  getOriginalCwd,
   getSessionId,
   getSessionProjectDir,
+  setOriginalCwd,
   switchSession,
 } from '../../bootstrap/state.js'
 import { asSessionId } from '../../types/ids.js'
 import { deriveUUID } from '../../utils/messages.js'
 import {
   enrichLogs,
+  getProjectDir,
+  getProjectsDir,
   getSessionFilesLite,
   getTranscriptPathForSession,
   loadTranscriptFromFile,
@@ -23,20 +27,53 @@ import { createFork, createForkBeforeUserMessage } from './branch.js'
 describe('conversation branching', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
+  const originalCwd = getOriginalCwd()
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const realConfigDir = originalConfigDir ?? join(homedir(), '.cat-code')
+  let testRoot: string
+  let configDir: string
   let tempDir: string
   let sessionId: UUID
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'conversation-branch-'))
+    testRoot = mkdtempSync(join(tmpdir(), 'conversation-branch-'))
+    configDir = join(testRoot, 'config')
+    tempDir = join(testRoot, 'workspace')
+    mkdirSync(tempDir, { recursive: true })
+    // Fork output and title lookup use the configured store plus original cwd.
+    // Use a fresh cwd because getProjectDir memoizes by cwd, not config dir.
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    setOriginalCwd(tempDir)
     sessionId = randomUUID()
     switchSession(asSessionId(sessionId), tempDir)
     resetProjectForTesting()
+    const sourcePath = getTranscriptPathForSession(sessionId)
+    expect(getProjectsDir()).toBe(join(configDir, 'projects'))
+    expect(pathIsWithin(sourcePath, testRoot)).toBe(true)
+    expect(pathIsWithin(sourcePath, realConfigDir)).toBe(false)
   })
 
   afterEach(() => {
-    resetProjectForTesting()
-    switchSession(asSessionId(originalSessionId), originalProjectDir)
-    rmSync(tempDir, { recursive: true, force: true })
+    try {
+      resetProjectForTesting()
+    } finally {
+      try {
+        setOriginalCwd(originalCwd)
+        switchSession(asSessionId(originalSessionId), originalProjectDir)
+      } finally {
+        if (originalConfigDir === undefined) {
+          delete process.env.CLAUDE_CONFIG_DIR
+        } else {
+          process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+        }
+        rmSync(testRoot, { recursive: true, force: true })
+        expect(existsSync(testRoot)).toBe(false)
+        expect(getOriginalCwd()).toBe(originalCwd)
+        expect(getSessionId()).toBe(originalSessionId)
+        expect(getSessionProjectDir()).toBe(originalProjectDir)
+        expect(process.env.CLAUDE_CONFIG_DIR).toBe(originalConfigDir)
+      }
+    }
   })
 
   test('HEAD forks the canonical active chain instead of file order', async () => {
@@ -81,6 +118,33 @@ describe('conversation branching', () => {
       firstUser,
       firstAssistant,
     ])
+  })
+
+  test('repeated forks use isolated storage for title collision searches', async () => {
+    const firstUser = randomUUID()
+    await writeTranscript([
+      messageEntry('user', firstUser, null, '2026-08-24T00:00:00.000Z', {
+        role: 'user',
+        content: 'retained prompt',
+      }),
+    ])
+
+    const expectedProjectDir = getProjectDir(tempDir)
+
+    const first = await createFork()
+    const second = await createFork()
+
+    expect(first.title).toBe('retained prompt (Branch)')
+    expect(second.title).toBe('retained prompt (Branch 2)')
+    expect(new Set([first.title, second.title]).size).toBe(2)
+    for (const fork of [first, second]) {
+      expect(fork.forkPath).toBe(
+        join(expectedProjectDir, `${fork.sessionId}.jsonl`),
+      )
+      expect(pathIsWithin(fork.forkPath, testRoot)).toBe(true)
+      expect(pathIsWithin(fork.forkPath, realConfigDir)).toBe(false)
+      expect((await loadTranscriptFromFile(fork.forkPath)).forked).toBe(true)
+    }
   })
 
   test('a branch of a legacy large managed prompt remains a managed catalog entry', async () => {
@@ -230,9 +294,21 @@ describe('conversation branching', () => {
   }
 
   async function writeTranscript(entries: Record<string, unknown>[]): Promise<void> {
+    const path = getTranscriptPathForSession(sessionId)
+    mkdirSync(dirname(path), { recursive: true })
     await writeFile(
-      getTranscriptPathForSession(sessionId),
+      path,
       `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
     )
   }
 })
+
+function pathIsWithin(path: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path))
+  return (
+    relativePath === '' ||
+    (relativePath !== '..' &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
+  )
+}

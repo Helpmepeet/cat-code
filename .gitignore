@@ -39,5 +39,8 @@ ds-bundle/
 /docs/design-html/2026-10-09-handoff-checkpoint-stuck-session.html
 /docs/design-html/2026-10-10-workspace-jump-quiet-gap.html
 
+# Keep project documentation local
+/docs/
+
 # Local API replay recordings
 /.vcr/
