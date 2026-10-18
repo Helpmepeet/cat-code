@@ -86,6 +86,7 @@ import {
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
+  const cachedOnly = process.argv.includes('--cached')
   const deleteRequest = process.argv.includes('--account-delete')
     ? await readDeleteRequest()
     : null
@@ -102,7 +103,7 @@ async function main(): Promise<void> {
   // ~189 MB engine import is paid only here, per run.
   const [
     { getCodexProfileInventory, getPoolStatus, loadPoolForObservation },
-    { loadClaudePoolForObservation },
+    { getClaudePoolStatus, loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
     { recoverCodexAccountSignOut, signOutCodexAccount },
   ] = await Promise.all([
@@ -186,12 +187,38 @@ async function main(): Promise<void> {
   // Live usage headroom — the reason this page polls at all. Best-effort: an
   // offline or stale-token run still emits the pool with whatever usage the
   // accounts already carry.
+  const {
+    readCodexUsageDisplayCache,
+    updateCodexUsageDisplayCache,
+  } = await import('../../src/services/api/codexUsageDisplayCache.js')
+  let codexDisplayUsage = readCodexUsageDisplayCache(getPoolStatus().accounts)
   try {
-    const { fetchPoolUsage } = await import('../../src/services/api/codexUsage.js')
-    await fetchPoolUsage({ updateRoutingHints: true })
+    if (!cachedOnly) {
+      const { fetchPoolUsage } = await import('../../src/services/api/codexUsage.js')
+      const snapshot = await fetchPoolUsage({ updateRoutingHints: true })
+      codexDisplayUsage = await updateCodexUsageDisplayCache(
+        getPoolStatus().accounts, snapshot,
+      )
+    }
   } catch (error) {
     process.stderr.write(
       `[accounts-worker] usage refresh skipped: ${errorText(error)}\n`,
+    )
+  }
+
+  // Claude usage, read with each account's own stored token. Like the Codex read
+  // above it never refreshes a credential; see `claudePoolUsage.ts`.
+  let anthropicUsage
+  try {
+    const { fetchClaudePoolUsage } = await import(
+      '../../src/services/api/claudePoolUsage.js'
+    )
+    anthropicUsage = await fetchClaudePoolUsage(
+      getClaudePoolStatus().accounts, { cachedOnly },
+    )
+  } catch (error) {
+    process.stderr.write(
+      `[accounts-worker] anthropic usage skipped: ${errorText(error)}\n`,
     )
   }
 
@@ -215,6 +242,8 @@ async function main(): Promise<void> {
       anthropic.routeAvailable,
       anthropic.subscriptionActive,
       getCodexProfileInventory(),
+      anthropicUsage,
+      codexDisplayUsage,
     )
   } catch (error) {
     // A read failure degrades to "no pool" — main keeps its last good snapshot

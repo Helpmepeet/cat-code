@@ -2591,6 +2591,8 @@ export type AccountStatus = {
   usageResetAt: number | null
   /** Upstream secondary-position reset, Unix SECONDS, or null when omitted. */
   usageWeeklyResetAt?: number | null
+  /** Display-only fallback from a previous successful usage read. */
+  usageStale?: boolean
   lastRefreshIso: string | null
   /** Normalized block reason (no token content by construction), or null. */
   lastError: string | null
@@ -2612,6 +2614,21 @@ export type AnthropicAccountStatus = {
   isDefault: boolean
   hasVaultProfile: boolean
   subscriptionType: string | null
+  /**
+   * True for a non-active account whose stored login expired more than a week
+   * ago without renewal, so nothing shows it still works. Absent means false.
+   */
+  loginStale?: boolean
+  /**
+   * Five-hour and weekly used percentages (0 to 100) and their resets in Unix
+   * SECONDS. Absent when no current reading exists for this account, which
+   * includes every session sidecar snapshot: only the global accounts-pool
+   * worker reads Claude usage.
+   */
+  usageFiveHour?: number | null
+  usageFiveHourResetAt?: number | null
+  usageWeekly?: number | null
+  usageWeeklyResetAt?: number | null
 }
 
 /**

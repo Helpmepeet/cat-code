@@ -43,6 +43,7 @@ import {
 } from '../../src/services/api/codexAccountSignOut.js'
 import {
   buildAccountsSnapshot,
+  buildAnthropicAccountStatus,
   buildAccountStatus,
   createRealOAuthLoginRunner,
   createRealAnthropicOAuthLoginRunner,
@@ -286,6 +287,33 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
 })
 
 describe('P4-5 read-seam — projection semantics', () => {
+  test('saved display readings never override availability, limits, or switchability', () => {
+    const account = poolAccount({
+      usagePrimary: undefined, usageWeekly: undefined,
+      usagePrimaryWindowSeconds: undefined, usageSecondaryWindowSeconds: undefined,
+      usageResetAt: undefined, usageWeeklyResetAt: undefined,
+    })
+    const before = structuredClone(account)
+    const now = Date.now()
+    const ordinary = buildAccountStatus(account, false, now)
+    const displayed = buildAccountStatus(account, false, now, {
+      primaryWindow: {
+        usedPercent: 100, limitWindowSeconds: 18_000,
+        resetAt: now / 1000 + 60, resetAfterSeconds: 60,
+      },
+      secondaryWindow: null, fetchedAt: now - 1_000, stale: true,
+    })
+    expect(displayed.usagePrimary).toBe(100)
+    expect(displayed.usageStale).toBe(true)
+    expect(displayed.usageWeekly).toBeNull()
+    expect(displayed.availability).toBe(ordinary.availability)
+    expect(displayed.availabilityLabel).toBe(ordinary.availabilityLabel)
+    expect(displayed.usageLimitReached).toBe(false)
+    expect(displayed.switchable).toBe(ordinary.switchable)
+    expect(account).toEqual(before)
+    expect(scanForSecrets(displayed).ok).toBe(true)
+  })
+
   test('projection carries the weekly reset independently of the 5h reset', () => {
     const status = buildAccountStatus(poolAccount({
       usageResetAt: 1_700_000_000,
@@ -331,11 +359,75 @@ describe('P4-5 read-seam — projection semantics', () => {
         isDefault: true,
         hasVaultProfile: true,
         subscriptionType: 'pro',
+        loginStale: false,
       },
     ])
     const serialized = JSON.stringify(snapshot)
     expect(serialized).not.toContain('SECRET-claude')
     expect(serialized).not.toContain('/Users/secret')
+  })
+
+  test('an idle Claude account is stale only after a week past login expiry', () => {
+    const now = Date.UTC(2026, 9, 17)
+    const day = 24 * 60 * 60 * 1000
+    const claude = (expiresAt: number): ClaudePoolAccount => ({
+      accountUuid: 'claude',
+      emailAddress: 'claude@example.com',
+      accessToken: 'SECRET-claude-access',
+      refreshToken: 'SECRET-claude-refresh',
+      expiresAt,
+      status: 'healthy',
+    })
+    const stale = (expiresAt: number, isDefault: boolean) =>
+      buildAnthropicAccountStatus(claude(expiresAt), isDefault, undefined, now)
+        .loginStale
+
+    expect(stale(now + day, false)).toBe(false)
+    expect(stale(now - 6 * day, false)).toBe(false)
+    expect(stale(now - 8 * day, false)).toBe(true)
+    // The active account renews on its next request, so it is never stale.
+    expect(stale(now - 160 * day, true)).toBe(false)
+  })
+
+  test('Anthropic rows carry supplied usage readings and omit the fields otherwise', () => {
+    const claudeAccount = (accountUuid: string): ClaudePoolAccount => ({
+      accountUuid,
+      emailAddress: `${accountUuid}@example.com`,
+      accessToken: 'SECRET-claude-access',
+      refreshToken: 'SECRET-claude-refresh',
+      expiresAt: 9_999_999_999,
+      status: 'healthy',
+    })
+    const snapshot = buildAccountsSnapshot(
+      { accounts: [], activeIndex: -1, initialized: true },
+      Date.now(),
+      {
+        accounts: [claudeAccount('read'), claudeAccount('unread')],
+        activeIndex: 0,
+        initialized: true,
+      },
+      true,
+      true,
+      undefined,
+      new Map([
+        [
+          'read',
+          {
+            fiveHour: { percent: 42, resetAt: 1_792_300_000 },
+            weekly: null,
+          },
+        ],
+      ]),
+    )
+    const [read, unread] = snapshot.anthropicAccounts
+    expect(read).toMatchObject({
+      usageFiveHour: 42,
+      usageFiveHourResetAt: 1_792_300_000,
+      usageWeekly: null,
+      usageWeeklyResetAt: null,
+    })
+    expect(unread).not.toHaveProperty('usageFiveHour')
+    expect(JSON.stringify(snapshot)).not.toContain('SECRET-claude')
   })
 
   test('snapshot derives readyCount / activeAccountId / switchable', () => {

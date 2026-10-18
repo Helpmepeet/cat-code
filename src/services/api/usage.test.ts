@@ -37,6 +37,7 @@ async function installMocks() {
   }))
   await mock.module('src/constants/oauth.js', () => ({
     getOauthConfig: () => ({ BASE_API_URL: 'https://example.test' }),
+    OAUTH_BETA_HEADER: 'oauth-test',
   }))
   await mock.module('axios', () => ({ default: { get: axiosGet } }))
 }

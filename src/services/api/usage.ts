@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getOauthConfig } from '../../constants/oauth.js'
+import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getClaudeAIOAuthTokens,
@@ -29,6 +29,28 @@ export type Utilization = {
   seven_day_opus?: RateLimit | null
   seven_day_sonnet?: RateLimit | null
   extra_usage?: ExtraUsage | null
+}
+
+/**
+ * Read utilization for one specific Claude subscription token, independent of
+ * which account is active. Never refreshes the token; callers skip expired ones.
+ */
+export async function fetchUtilizationForToken(
+  accessToken: string,
+): Promise<Utilization> {
+  const response = await axios.get<Utilization>(
+    `${getOauthConfig().BASE_API_URL}/api/oauth/usage`,
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': getClaudeCodeUserAgent(),
+        Authorization: `Bearer ${accessToken}`,
+        'anthropic-beta': OAUTH_BETA_HEADER,
+      },
+      timeout: 5000,
+    },
+  )
+  return response.data
 }
 
 export async function fetchUtilization(): Promise<Utilization | null> {

@@ -90,3 +90,21 @@ test('reversed dual windows resolve by duration rather than position', () => {
     weekly: { percent: 37, resetAt: 111 },
   })
 })
+
+test('saved windows expire independently at their reset, without fabricating a new reading', () => {
+  const saved = account({ usageStale: true })
+  expect(selectWelcomeUsageWindows(saved, 99_999)).toEqual({
+    fiveHour: { percent: 20, resetAt: 100 },
+    weekly: { percent: 30, resetAt: 200 },
+  })
+  expect(selectWelcomeUsageWindows(saved, 100_000)).toEqual({
+    fiveHour: null, weekly: { percent: 30, resetAt: 200 },
+  })
+  expect(selectWelcomeUsageWindows(saved, 200_000)).toEqual({
+    fiveHour: null, weekly: null,
+  })
+  expect(selectWelcomeUsageWindows(
+    account({ usageStale: true, usageResetAt: null, usageWeeklyResetAt: null }),
+    0,
+  )).toEqual({ fiveHour: null, weekly: null })
+})

@@ -309,6 +309,7 @@ function parseAccountStatus(value: unknown): AccountStatus | null {
     usageLimitReached: isBoolean,
     usageResetAt: isNumberOrNull,
     usageWeeklyResetAt: optional(isNumberOrNull),
+    usageStale: optional(isBoolean),
     lastRefreshIso: isStringOrNull,
     lastError: isStringOrNull,
     planType: isStringOrNull,
@@ -354,6 +355,11 @@ function parseAnthropicAccountStatus(
     isDefault: isBoolean,
     hasVaultProfile: isBoolean,
     subscriptionType: isStringOrNull,
+    loginStale: optional(isBoolean),
+    usageFiveHour: optional(isNonNegativeFiniteNumberOrNull),
+    usageFiveHourResetAt: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeekly: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeeklyResetAt: optional(isNonNegativeFiniteNumberOrNull),
   })
 }
 

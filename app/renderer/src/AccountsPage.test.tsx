@@ -96,6 +96,20 @@ test('renders the pool rows and the ready label from a snapshot', () => {
   expect(html).not.toContain('MOCK')
 })
 
+test('saved usage is labeled without changing current account availability', () => {
+  const resetAt = Date.now() / 1000 + 60
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snapshot([account({
+      isDefault: true, usageStale: true, usagePrimary: 100,
+      usageResetAt: resetAt, usageWeeklyResetAt: resetAt,
+    })])} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('Stale usage')
+  expect(html).toContain('Showing the last successful usage check.')
+  expect(html).toContain('1 of 1 ready')
+  expect(html).not.toContain('usage limit reached')
+})
+
 test('renders saved signed-out profiles outside credentialed pool counts', () => {
   const snap = snapshot([])
   snap.signedOutProfiles = [

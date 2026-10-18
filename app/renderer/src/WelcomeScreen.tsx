@@ -1,8 +1,8 @@
 /**
  * WelcomeScreen (P4-17) — the first-run / empty-session launcher (`Welcome.jsx`),
- * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a neon-cat
+ * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a cat mascot
  * hero + wordmark, an interactive meta strip (Project · Start-in),
- * and the read-only Codex pool table. It replaces the minimal `EmptyShell`.
+ * and the read-only Anthropic and Codex pool tables. It replaces the minimal `EmptyShell`.
  *
  * It is PURELY PRESENTATIONAL — it reads props App wires from the EXISTING domain
  * seams and grows no new feed (WELCOME-LAUNCHER §6):
@@ -50,33 +50,27 @@ import {
   handleMenuRovingKeyDown,
   usePopover,
 } from './composerPopover.js'
-import sleepingCat from './assets/sleeping-cat.png'
-import catCoding from './assets/welcome-cat-coding.png'
-import catEating from './assets/welcome-cat-eating.png'
-import catHunting from './assets/welcome-cat-hunting.png'
-import catScratching from './assets/welcome-cat-scratching.png'
-import catStretching from './assets/welcome-cat-stretching.png'
-import catThinking from './assets/welcome-cat-thinking.png'
-import catYarning from './assets/welcome-cat-yarn.png'
-import catYawning from './assets/welcome-cat-yawning.png'
+import catBase from './assets/mascot-100/base.png'
+import catCoding from './assets/mascot-100/coding.png'
+import sleepingCat from './assets/mascot-100/sleeping.png'
+import catStretching from './assets/mascot-100/stretching.png'
+import catThinking from './assets/mascot-100/thinking.png'
+import catWaving from './assets/mascot-100/waving.png'
 import { basename } from './pathUtils.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
-import { selectWelcomeUsageWindows } from './welcomeUsage.js'
+import { useAccountUsageWindows } from './welcomeUsage.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 import type { HostResult, WorkspaceBranches } from '../../shared/hostApi.js'
 
 const welcomeCats = [
+  catBase,
   sleepingCat,
   catCoding,
-  catEating,
-  catHunting,
-  catScratching,
   catStretching,
   catThinking,
-  catYarning,
-  catYawning,
+  catWaving,
 ] as const
 
 // Pick once per renderer load so every Welcome surface in the window shares its cat.
@@ -170,6 +164,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
           <div className="flex justify-center">
             <img
               src={welcomeCat}
+              className="h-[211px] w-[248px] max-w-full object-contain"
               alt=""
               width={248}
               height={211}
@@ -251,6 +246,11 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
             </div>
           </div>
         </div>
+
+        <AnthropicTable
+          accounts={accounts}
+          accountsUsagePending={props.accountsUsagePending ?? false}
+        />
 
         {/* Codex account table — read-only pool status (P4-5) */}
         <CodexTable
@@ -530,8 +530,6 @@ function ProjectPicker({
     )
   }
 
-  const triggerLabel = recents.length > 0 ? recents[0]!.name : 'Open a project'
-
   return (
     <div ref={ref} className="relative inline-block">
       <button
@@ -542,8 +540,10 @@ function ProjectPicker({
         onClick={() => setOpen(value => !value)}
         className="inline-flex max-w-full items-center gap-1.5"
       >
+        {/* An action, not a selection: New Chat starts without a project, so
+            naming the latest recent here would claim a choice nothing uses. */}
         <span className="truncate font-mono text-[13px] text-text-muted">
-          {triggerLabel}
+          Open a project
         </span>
         <ChevronIcon open={open} />
       </button>
@@ -698,34 +698,11 @@ function CodexTable({
   const healthyCount = rows.filter(a => a.status === 'healthy').length
   return (
     <div className="border-t border-shell-seam">
-      <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
-        <div className="flex items-center gap-2.5">
-          <span className="flex text-accent">
-            <ProviderLogo provider="openai" size={16} />
-          </span>
-          <span className="text-[16px] font-semibold text-text-primary">
-            Codex
-          </span>
-        </div>
-        {accounts ? (
-          <div className="flex items-center gap-2 text-[12.5px] text-text-muted">
-            <span>
-              <span className="text-text-primary">{rows.length}</span>{' '}
-              account{rows.length === 1 ? '' : 's'}
-            </span>
-            <span className="text-text-subtle">·</span>
-            <span>
-              <span className="text-text-primary">{healthyCount}</span> healthy
-            </span>
-            <span
-              className={
-                'h-2 w-2 rounded-full ' +
-                (healthyCount > 0 ? 'bg-tone-good' : 'bg-tone-warn')
-              }
-            />
-          </div>
-        ) : null}
-      </div>
+      <PoolHeader
+        provider="openai"
+        title="Codex"
+        counts={accounts ? { total: rows.length, healthy: healthyCount } : null}
+      />
 
       {rows.length === 0 ? (
         <div className="border-t border-shell-seam px-1 py-6 text-[12.5px] text-text-subtle">
@@ -744,6 +721,131 @@ function CodexTable({
   )
 }
 
+/** Table title row: brand-colored provider mark, name, and pool counts. */
+function PoolHeader({
+  provider,
+  title,
+  counts,
+}: {
+  provider: 'anthropic' | 'openai'
+  title: string
+  /** `healthy` is null when every listed row is healthy by construction. */
+  counts: { total: number; healthy: number | null } | null
+}) {
+  const live = counts ? (counts.healthy ?? counts.total) : 0
+  return (
+    <div className="flex items-center justify-between px-1 pb-3.5 pt-5">
+      <div className="flex items-center gap-2.5">
+        <span
+          className={
+            'flex ' +
+            (provider === 'anthropic' ? 'text-provider-claude' : 'text-provider-openai')
+          }
+        >
+          <ProviderLogo provider={provider} size={16} />
+        </span>
+        <span className="text-[16px] font-semibold text-text-primary">
+          {title}
+        </span>
+      </div>
+      {counts ? (
+        <div className="flex items-center gap-2 text-[12.5px] text-text-muted">
+          <span>
+            <span className="text-text-primary">{counts.total}</span>{' '}
+            account{counts.total === 1 ? '' : 's'}
+          </span>
+          {counts.healthy !== null ? (
+            <>
+              <span className="text-text-subtle">·</span>
+              <span>
+                <span className="text-text-primary">{counts.healthy}</span> healthy
+              </span>
+            </>
+          ) : null}
+          <span
+            className={
+              'h-2 w-2 rounded-full ' + (live > 0 ? 'bg-tone-good' : 'bg-tone-warn')
+            }
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/* ── Anthropic account table (read-only) ────────────────────────────────── */
+
+/**
+ * Claude subscription accounts from the same pool snapshot. Dead accounts and
+ * idle ones whose login has gone stale are hidden like Codex re-login rows,
+ * which leaves every listed row usable, so the header carries the count alone.
+ * Usage arrives only on the global pool snapshot, and an idle account keeps its
+ * last reading until that window resets.
+ */
+function AnthropicTable({
+  accounts,
+  accountsUsagePending,
+}: {
+  accounts: AccountsSnapshot | null
+  accountsUsagePending: boolean
+}) {
+  const rows = (accounts?.anthropicAccounts ?? []).filter(
+    account => account.status === 'healthy' && account.loginStale !== true,
+  )
+  return (
+    <div className="border-t border-shell-seam">
+      <PoolHeader
+        provider="anthropic"
+        title="Anthropic"
+        counts={accounts ? { total: rows.length, healthy: null } : null}
+      />
+
+      {rows.length === 0 ? (
+        <div className="border-t border-shell-seam px-1 py-6 text-[12.5px] text-text-subtle">
+          {!accounts
+            ? 'No Anthropic account data for this view yet.'
+            : accounts.anthropicRouteAvailable
+              ? 'Using an API key or cloud provider.'
+              : 'No usable Anthropic accounts.'}
+        </div>
+      ) : (
+        rows.map(account => {
+          const fiveHour = anthropicWindow(
+            account.usageFiveHour,
+            account.usageFiveHourResetAt,
+          )
+          const weekly = anthropicWindow(
+            account.usageWeekly,
+            account.usageWeeklyResetAt,
+          )
+          return (
+            <AccountUsageRow
+              key={account.id}
+              name={account.alias ?? account.email}
+              isDefault={account.isDefault}
+              capped={
+                (fiveHour?.percent ?? 0) >= 100 || (weekly?.percent ?? 0) >= 100
+              }
+              fiveHour={fiveHour}
+              weekly={weekly}
+              accountsUsagePending={accountsUsagePending}
+            />
+          )
+        })
+      )}
+    </div>
+  )
+}
+
+function anthropicWindow(
+  percent: number | null | undefined,
+  resetAt: number | null | undefined,
+): UsageWindow | null {
+  return percent == null && resetAt == null
+    ? null
+    : { percent: percent ?? null, resetAt: resetAt ?? null }
+}
+
 function CodexRow({
   account,
   accountsUsagePending,
@@ -751,17 +853,56 @@ function CodexRow({
   account: AccountStatus
   accountsUsagePending: boolean
 }) {
-  const capped = account.status === 'capped' || account.usageLimitReached
-  const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
+  const { fiveHour, weekly } = useAccountUsageWindows(account)
+  return (
+    <AccountUsageRow
+      name={account.alias ?? account.id}
+      isDefault={account.isDefault}
+      capped={account.status === 'capped' || account.usageLimitReached}
+      fiveHour={fiveHour}
+      weekly={weekly}
+      accountsUsagePending={accountsUsagePending}
+      usageStale={account.usageStale}
+    />
+  )
+}
+
+type UsageWindow = { percent: number | null; resetAt: number | null }
+
+function AccountUsageRow({
+  name,
+  isDefault,
+  capped,
+  fiveHour,
+  weekly,
+  accountsUsagePending,
+  usageStale,
+}: {
+  name: string
+  isDefault: boolean
+  capped: boolean
+  fiveHour: UsageWindow | null
+  weekly: UsageWindow | null
+  accountsUsagePending: boolean
+  usageStale?: boolean
+}) {
   const hasSupportedWindow = fiveHour !== null || weekly !== null
   const hasBothWindows = fiveHour !== null && weekly !== null
   return (
     <div className="grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
-        <Radio on={account.isDefault} />
+        <Radio on={isDefault} />
         <span className="truncate font-medium text-text-primary">
-          {account.alias ?? account.id}
+          {name}
         </span>
+        {usageStale && hasSupportedWindow ? (
+          <span
+            title="Showing the last successful usage check."
+            className="shrink-0 text-[10px] text-text-faint"
+          >
+            Stale
+          </span>
+        ) : null}
         {capped ? (
           <span className="shrink-0 rounded border border-accent/20 bg-accent/10 px-[7px] py-0.5 text-[9.5px] font-bold uppercase tracking-[0.08em] text-accent">
             capped

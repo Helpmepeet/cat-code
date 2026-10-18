@@ -83,7 +83,7 @@ import {
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import { toneClasses, type Tone } from './tone.js'
-import { selectWelcomeUsageWindows } from './welcomeUsage.js'
+import { useAccountUsageWindows } from './welcomeUsage.js'
 import { getBridge } from './bridge.js'
 import { ProviderLogo } from './ProviderLogo.js'
 
@@ -619,7 +619,7 @@ function PoolRow({
   // DOT carries the pink-for-default override — decoupled per the prototype
   // (Pages.jsx:409 dot vs :417 label).
   const labelTone = toneClasses(statusLabelTone(account))
-  const usage = selectWelcomeUsageWindows(account)
+  const usage = useAccountUsageWindows(account)
   const alias = account.alias ?? account.id
   const transitionLabel =
     signOutState === 'submitting'
@@ -661,6 +661,11 @@ function PoolRow({
           </span>
           {account.lastError ? (
             <span className="text-text-faint"> · {account.lastError}</span>
+          ) : null}
+          {account.usageStale && (usage.fiveHour || usage.weekly) ? (
+            <span title="Showing the last successful usage check." className="text-text-faint">
+              {' · Stale usage'}
+            </span>
           ) : null}
         </div>
       </div>
@@ -794,7 +799,7 @@ function SignedOutProfileRow({
 /* ── header pieces ── */
 
 function ActiveHeadroom({ account }: { account: AccountStatus }) {
-  const usage = selectWelcomeUsageWindows(account)
+  const usage = useAccountUsageWindows(account)
   return (
     <div className="rounded-[10px] border border-accent/[0.18] bg-accent/[0.04] px-4 py-2.5">
       <div className="mb-[9px] flex items-center gap-1.5">
@@ -805,7 +810,12 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
         <span className="rounded bg-accent/[0.12] px-[5px] py-[1.5px] text-[8.5px] font-bold uppercase tracking-[0.06em] text-accent">
           active
         </span>
-        <span className="ml-0.5 text-[10.5px] text-text-faint">used</span>
+        <span
+          title={account.usageStale ? 'Showing the last successful usage check.' : undefined}
+          className="ml-0.5 text-[10.5px] text-text-faint"
+        >
+          {account.usageStale && (usage.fiveHour || usage.weekly) ? 'stale usage' : 'used'}
+        </span>
       </div>
       <div className="flex gap-[18px]">
         {(
