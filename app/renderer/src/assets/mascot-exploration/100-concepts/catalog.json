@@ -1,0 +1,102 @@
+[
+  {
+    "sheet": 1,
+    "title": "Silhouettes",
+    "range": "001\u2013010",
+    "file": "01-silhouettes-001-010.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 1,
+    "last": 10
+  },
+  {
+    "sheet": 2,
+    "title": "Outfits",
+    "range": "011\u2013020",
+    "file": "02-outfits-011-020.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 11,
+    "last": 20
+  },
+  {
+    "sheet": 3,
+    "title": "Code motifs",
+    "range": "021\u2013030",
+    "file": "03-code-motifs-021-030.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 21,
+    "last": 30
+  },
+  {
+    "sheet": 4,
+    "title": "Editorial cartoons",
+    "range": "031\u2013040",
+    "file": "04-editorial-cartoons-031-040.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 31,
+    "last": 40
+  },
+  {
+    "sheet": 5,
+    "title": "Soft forms",
+    "range": "041\u2013050",
+    "file": "05-soft-forms-041-050.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 41,
+    "last": 50
+  },
+  {
+    "sheet": 6,
+    "title": "Graphic shapes",
+    "range": "051\u2013060",
+    "file": "06-graphic-shapes-051-060.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 51,
+    "last": 60
+  },
+  {
+    "sheet": 7,
+    "title": "Retro computing",
+    "range": "061\u2013070",
+    "file": "07-retro-computing-061-070.png",
+    "width": 1774,
+    "height": 887,
+    "first": 61,
+    "last": 70
+  },
+  {
+    "sheet": 8,
+    "title": "Ink and color",
+    "range": "071\u2013080",
+    "file": "08-ink-and-color-071-080.png",
+    "width": 1536,
+    "height": 1024,
+    "first": 71,
+    "last": 80
+  },
+  {
+    "sheet": 9,
+    "title": "Experimental",
+    "range": "081\u2013090",
+    "file": "09-experimental-081-090.png",
+    "width": 1774,
+    "height": 887,
+    "first": 81,
+    "last": 90
+  },
+  {
+    "sheet": 10,
+    "title": "Hybrids",
+    "range": "091\u2013100",
+    "file": "10-hybrids-091-100.png",
+    "width": 1774,
+    "height": 887,
+    "first": 91,
+    "last": 100
+  }
+]
