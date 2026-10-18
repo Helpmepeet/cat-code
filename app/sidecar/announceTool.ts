@@ -7,8 +7,8 @@ import { MAX_PEER_NOTICE_TOUCHES } from '../shared/limits.js'
 import { describeHostRequestError, requestPeerHost, type PeerHostRequester } from './peerHostRequester.js'
 
 const inputSchema = lazySchema(() => z.strictObject({
-  doing: z.string().min(1).describe('One line: what you are working on, and whether you are editing files or only reading.'),
-  touches: z.array(z.string().min(1)).max(MAX_PEER_NOTICE_TOUCHES).optional().describe('Areas you expect to work in, such as folders or subsystems, plus any shared file you know you will edit. Include files your subagents edit.'),
+  doing: z.string().min(1).describe('One line: the task, and whether it may edit files.'),
+  touches: z.array(z.string().min(1)).max(MAX_PEER_NOTICE_TOUCHES).optional().describe('Areas you expect to work in, such as folders or subsystems, plus shared files you already know you will edit. Include areas your subagents edit.'),
   note: z.string().optional().describe('Anything else that stays true for this whole task and that a peer working nearby should know.'),
 }).refine(value => parsePeerNoticeInput(value) !== null, {
   message: 'Use one doing line and at most 1 KiB for the whole notice.',
@@ -35,7 +35,7 @@ export function createAnnounceTool(requestHost: PeerHostRequester = requestPeerH
     toAutoClassifierInput: input => JSON.stringify(input),
     async description() { return 'Post or replace your scope notice on the peer roster' },
     async prompt() {
-      return 'Post or replace your notice on the peer roster when a standing scope notice would help other peers. Other sessions in this workspace see it when they call ListPeers; posting notifies no one. Describe your scope, not your progress: post it once you know what you will work on, and replace it only if that changes. Only the main conversational agent may call this tool; subagents report their scope to it instead. The whole notice must fit in 1 KiB, with up to 16 entries in touches.'
+      return 'Post your notice on the peer roster when it would save peers asking what you are doing. Other sessions in this workspace see it when they call ListPeers; posting notifies no one. Describe the whole task, not your progress: post it once you know the task, and replace it only when you are given a different one. Only the main conversational agent may call this tool; subagents report their scope to it instead. The whole notice must fit in 1 KiB, with up to 16 entries in touches.'
     },
     async call(input, context): Promise<{ data: Output }> {
       if (context.agentId) return { data: { ok: false, message: 'Only the main conversational agent may post the session’s notice. Report your scope to it instead.' } }
