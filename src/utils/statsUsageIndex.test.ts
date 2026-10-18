@@ -2,6 +2,7 @@ import { afterEach, expect, test, spyOn } from 'bun:test';
 import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir, rename, readdir, stat, utimes } from 'node:fs/promises';
 import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectIndexedUsage, emptyUsageIndexMetrics, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
@@ -10,6 +11,7 @@ import { projectAutoModeDiagnosticPayload, reduceAutoModeUsage, type RetainedAut
 import { UsageFailure } from './statsFailure.js';
 import { usageProjectId } from '../../app/shared/usageDashboard.js';
 import { fitUsageDashboardSnapshot, groupUsageSummary } from '../../app/sidecar/usageSummary.js';
+import * as debug from './debug.js';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 const cutoff = '2026-09-13T12:00:00.000Z';
@@ -974,6 +976,92 @@ for (const statement of ['INSERT INTO records', 'INSERT OR REPLACE INTO sources'
     expect({ reason: error!.reason, phase: error!.phase, sqliteCode: error!.detail.sqliteCode }).toEqual({ reason: 'storage-failure', phase: 'index', sqliteCode: 'SQLITE_IOERR' });
     await expectLastGood(path, saved);
 });
+test('a database open failure is classified as index storage failure and releases the writer lock', async () => {
+    const { path } = await fixture();
+    await mkdir(path);
+    await expect(collectIndexedUsage([], cutoff, opts(path))).rejects.toMatchObject({
+        reason: 'storage-failure', phase: 'index', detail: { sqliteCode: 'SQLITE_CANTOPEN' },
+    });
+    expect(existsSync(path + '.lock')).toBe(false);
+});
+for (const failure of ['close', 'remove'] as const) test(`scratch ${failure} failure rolls back before publication and still attempts every teardown`, async () => {
+    const { path, file, saved } = await savedWithAppend();
+    const exec = Database.prototype.exec, close = Database.prototype.close, remove = fs.rmSync;
+    let injected = false, diskPath = '', writerClosed = false;
+    const error = await failedIndex(path, file, restore => {
+        const cap = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+            const result = exec.call(this, sql);
+            if (this.filename === ':memory:') exec.call(this, 'PRAGMA max_page_count=8');
+            return result;
+        });
+        const closing = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+            if (this.filename.endsWith('/scratch.sqlite')) {
+                diskPath = this.filename;
+                if (failure === 'close' && !injected) {
+                    injected = true;
+                    throw Object.assign(new Error('scratch close failed'), { code: 'SQLITE_IOERR' });
+                }
+            }
+            if (this.filename === path && injected) writerClosed = true;
+            return close.apply(this, args);
+        });
+        const removing = spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+            if (failure === 'remove' && diskPath && String(target) === dirname(diskPath) && !injected) {
+                injected = true;
+                throw Object.assign(new Error('scratch removal denied'), { code: 'EACCES' });
+            }
+            return remove(target, options);
+        });
+        restore.push(() => cap.mockRestore(), () => closing.mockRestore(), () => removing.mockRestore());
+    });
+    expect(injected).toBe(true);
+    expect(error).toMatchObject({ reason: 'storage-failure', phase: 'finalize' });
+    expect(writerClosed).toBe(true);
+    expect(existsSync(dirname(diskPath))).toBe(false);
+    await expectLastGood(path, saved);
+});
+test('cleanup failure cannot mask a collection failure or skip durable connection teardown', async () => {
+    const { path, file, saved } = await savedWithAppend();
+    const close = Database.prototype.close;
+    const original = new UsageFailure('original failure', 'deadline', 'finalize');
+    let injected = false, writerClosed = false;
+    const closing = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        if (this.filename === ':memory:') {
+            injected = true;
+            close.apply(this, args);
+            throw new Error('secondary close failure');
+        }
+        if (this.filename === path && injected) writerClosed = true;
+        return close.apply(this, args);
+    });
+    try {
+        await expect(collectIndexedUsage([file], cutoff, { ...opts(path), finalize() { throw original; } })).rejects.toBe(original);
+        expect(injected).toBe(true);
+        expect(writerClosed).toBe(true);
+    } finally { closing.mockRestore(); }
+    await expectLastGood(path, saved);
+});
+test('a durable close error after commit cannot report the published refresh as failed', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('published')) + '\n');
+    const exec = Database.prototype.exec, close = Database.prototype.close;
+    let writer: Database | undefined, injected = false;
+    const observe = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        if (this.filename === path && sql === 'BEGIN IMMEDIATE') writer = this;
+        return exec.call(this, sql);
+    });
+    const closing = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        const result = close.apply(this, args);
+        if (this === writer) { injected = true; throw new Error('post-commit close failure'); }
+        return result;
+    });
+    const logging = spyOn(debug, 'logForDebugging').mockImplementation(() => { throw new Error('diagnostic sink failed'); });
+    try {
+        const snapshot = await collectIndexedUsage([file], cutoff, opts(path));
+        expect(injected).toBe(true);
+        expect(readSavedUsage(path)).toEqual(snapshot);
+    } finally { observe.mockRestore(); closing.mockRestore(); logging.mockRestore(); }
+});
 test('a deadline during indexing or replay names the phase that was running', async () => {
     const { path, file } = await fixture();
     await writeFile(file, Array.from({ length: 50 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
@@ -1024,6 +1112,45 @@ const timingRows = (calls: number, options: { split?: boolean; session?: string;
 };
 const interleave = (a: unknown[], b: unknown[]) => { const out: unknown[] = []; for (let i = 0; i < Math.max(a.length, b.length); i++) { if (i < a.length) out.push(a[i]); if (i < b.length) out.push(b[i]); } return out; };
 const writeRows = (file: string, rows: unknown[]) => writeFile(file, rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+
+for (const target of ['timings', 'identities', 'sources', 'records'] as const) test(`one-time ${target} read I/O failure during replay rolls back instead of publishing partial coverage`, async () => {
+    const { path, file } = await fixture();
+    await writeRows(file, [row('saved')]);
+    const saved = await collectIndexedUsage([file], cutoff, opts(path));
+    await appendFile(file, timingRows(400).map(item => JSON.stringify(item)).join('\n') + '\n');
+    const exec = Database.prototype.exec, query = Database.prototype.query;
+    let injected = false, spilled = false;
+    const error = await failedIndex(path, file, restore => {
+        const cap = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+            const result = exec.call(this, sql);
+            if (this.filename === ':memory:') exec.call(this, 'PRAGMA max_page_count=16');
+            if (this.filename.endsWith('/scratch.sqlite')) spilled = true;
+            return result;
+        });
+        const read = spyOn(Database.prototype, 'query').mockImplementation(function (this: Database, sql: string) {
+            const prepared = query.call(this, sql);
+            const matches = target === 'timings' || target === 'identities'
+                ? this.filename.endsWith('/scratch.sqlite') && sql === `SELECT value FROM ${target} WHERE kind=? AND key=?`
+                : this.filename === path && (target === 'sources' ? sql.startsWith('SELECT quality FROM sources') : sql.startsWith('SELECT value,offset,generation FROM records'));
+            if (!matches) return prepared;
+            const failOnce = () => {
+                if (injected) return;
+                injected = true;
+                throw Object.assign(new Error('one-time replay read failure'), { code: 'SQLITE_IOERR' });
+            };
+            return target === 'records'
+                ? { *iterate(...args: never[]) { failOnce(); yield* prepared.iterate(...args); } } as never
+                : { get(...args: never[]) { failOnce(); return prepared.get(...args); } } as never;
+        } as never);
+        restore.push(() => cap.mockRestore(), () => read.mockRestore());
+    });
+    expect(injected).toBe(true);
+    if (target === 'timings' || target === 'identities') expect(spilled).toBe(true);
+    expect(error).toMatchObject({ reason: 'storage-failure', phase: 'replay', detail: { sqliteCode: 'SQLITE_IOERR' } });
+    await expectLastGood(path, saved);
+    const recovered = await collectIndexedUsage([file], cutoff, opts(path));
+    expect(recovered.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+});
 
 test('timings read through scratch storage match the heap collector exactly, with a bounded newest-events timeline', async () => {
     const { path, file } = await fixture();

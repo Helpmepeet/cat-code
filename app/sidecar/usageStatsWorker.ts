@@ -13,6 +13,12 @@ function reportDiagnostic(diagnostic: UsageDiagnostic): void {
 }
 runDisposableWorker('usage-worker', async () => {
     const startedAt = Date.now();
+    let reported = false;
+    const reportFailure = (diagnostic: UsageDiagnostic) => {
+        if (reported) return;
+        reported = true;
+        reportDiagnostic(diagnostic);
+    };
     let result: UsageCollectionResult;
     try {
         if (process.argv.includes('--cached')) {
@@ -25,15 +31,23 @@ runDisposableWorker('usage-worker', async () => {
         } else {
             await bootstrapWorkerEngine();
             const { collectUsageDashboard } = await import('./statsDomain.js');
-            result = await collectUsageDashboard({ onDiagnostic: reportDiagnostic });
+            result = await collectUsageDashboard({ onDiagnostic: reportFailure });
         }
     }
     catch (error) {
-        reportDiagnostic(usageDiagnosticFromError(error, Date.now() - startedAt));
+        reportFailure(usageDiagnosticFromError(error, Date.now() - startedAt));
         result = { type: 'error', version: 1, code: 'collection' };
     }
-    if (!scanForSecrets(result).ok)
+    if (!scanForSecrets(result).ok) {
         result = { type: 'error', version: 1, code: 'invalid-output' };
-    await emitWorkerRecord(result, MAX_USAGE_RECORD_BYTES, 'usage result');
+        reportFailure({ reason: 'unexpected', phase: 'finalize', elapsedMs: Date.now() - startedAt });
+    }
+    if (result.type === 'error')
+        reportFailure({ reason: 'unexpected', phase: 'unknown', elapsedMs: Date.now() - startedAt });
+    try { await emitWorkerRecord(result, MAX_USAGE_RECORD_BYTES, 'usage result'); }
+    catch (error) {
+        reportFailure(usageDiagnosticFromError(error, Date.now() - startedAt));
+        throw error;
+    }
     process.exit(0);
 });
