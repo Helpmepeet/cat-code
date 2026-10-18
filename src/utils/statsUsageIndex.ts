@@ -91,7 +91,10 @@ export function readSavedUsage(path = usageIndexPath()): UsageDashboardSnapshot 
         db = new Database(path, { readonly: true });
         const row = db.query<{ value: string }, []>('SELECT value FROM snapshot WHERE id=1 AND length(CAST(value AS BLOB)) <= 262144').get();
         const parsed = row ? parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: JSON.parse(row.value) }) : null;
-        return parsed?.type === 'usage' ? parsed.snapshot : null;
+        if (parsed?.type !== 'usage') return null;
+        // Wire compatibility does not make pre-span aggregates current. Reuse the indexed events.
+        return Object.values(parsed.snapshot.ranges).every(range => range.rankedSessions.items.every(item => item.firstActiveAt !== undefined))
+            ? parsed.snapshot : null;
     } catch { return null; }
     finally { db?.close(); }
 }

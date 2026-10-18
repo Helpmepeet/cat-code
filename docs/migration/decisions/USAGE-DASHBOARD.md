@@ -572,3 +572,23 @@ the prototype's pink. Error colors remain reserved for errors.
 
 This amendment authorizes renderer presentation only. It adds no snapshot field,
 measurement, collector behavior, protocol operation, or frame-size allowance.
+
+## Retained session activity span amendment, 2026-10-18
+
+Ranked sessions may include optional `firstActiveAt`, the earliest timestamp
+from exactly the same valid, range-eligible retained activity population used
+for `lastActiveAt`, including attributed subagents. It is not catalog creation
+time, continuous working time, or a billing duration. The renderer may show the
+elapsed span between these endpoints. Missing metadata means no span is shown.
+The worker validates the timestamp within the range and no later than
+`lastActiveAt`. This additive optional field requires no index projection or
+counting-version change: existing projected events already retain timestamps.
+Existing privacy exclusions, ranked-session caps and the 256 KiB envelope remain
+unchanged; fitting may still omit rows.
+
+Wire validation remains compatible with missing endpoints, but saved aggregate
+reuse requires `firstActiveAt` on every retained ranked item. A pre-field saved
+snapshot is invalidated by `readSavedUsage`; refresh rebuilds the aggregate from
+the existing indexed events without rereading unchanged transcript files.
+Empty ranked lists remain reusable. This is aggregate validity, not a projection
+or counting-version migration.

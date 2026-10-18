@@ -16,6 +16,8 @@ export type UsageTokenSources = Record<'chat' | 'subagents' | 'compaction', Usag
 export type UsageCallCount = UsageCategory & { requests: number };
 export const USAGE_INTEGRATIONS = ['peers', 'web', 'image', 'computer', 'workspaces', 'claude-cli'] as const;
 export type UsageRankedSession = UsageSessionContributor & {
+    /** Earliest valid retained activity in this range, including attributed subagents. */
+    firstActiveAt?: string;
     /** Latest valid retained activity in this range, including attributed subagents. */
     lastActiveAt: string;
     /** Exact ordinal ranks across every range contributor, not daily ranks. */

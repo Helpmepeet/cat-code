@@ -42,6 +42,15 @@ active local features.
 
 ## Analytics And Telemetry Routes
 
+Ranked-session activity spans are collected in `src/utils/statsUsage.ts` from
+the same eligible retained events for both endpoints, including attributed
+subagents. The optional `firstActiveAt` field is validated in
+`app/shared/usageStatsWorker.ts`; missing older metadata suppresses the span.
+`src/utils/statsUsageIndex.ts:readSavedUsage` invalidates pre-span saved aggregates
+so refresh rebuilds endpoints from indexed events without rereading unchanged sources.
+Session chart geometry, nearest-date picking and calendar labels belong to
+`app/renderer/src/usageAnalyticsSessionsState.ts`, not the collector or catalog.
+
 | Change target | Start here | Follow-up files |
 |---|---|---|
 | Add or remove a `logEvent` call | Call site, then `src/services/analytics/index.ts` | `src/services/analytics/metadata.ts` for PII-safe fields; `src/services/api/logging.ts` for API-specific events. |

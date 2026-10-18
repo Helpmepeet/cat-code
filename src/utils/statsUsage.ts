@@ -251,6 +251,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         cacheWriteUnreported: boolean;
         cacheWriteUnknown: boolean;
     };
+    const firstActivity = new Map<string, string>();
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf, timezone);
         if (range === 'all') { bounds.startDate = localDateKey(cutoff, timezone); bounds.startInclusive = new Date(localMidnight(bounds.startDate, timezone)).toISOString(); bounds.dates = []; }
@@ -530,8 +531,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const at = new Date(activityAt).toISOString();
             for (const s of states.filter(s => usageTimestampEligible(activityAt, s.start, s.end, cutoff))) {
                 const previous = s.lastActivity.get(session);
-                if (!previous) reserve(`last-activity:${session}`, 128);
+                if (!previous) reserve(`last-activity:${session}`, 160);
                 if (!previous || at > previous) s.lastActivity.set(session, at);
+                const key = `${s.summary.range}:${session}`;
+                const first = firstActivity.get(key);
+                if (!first || at < first) firstActivity.set(key, at);
             }
         }
         const autoModeCapability = row.type === 'system'
@@ -1148,6 +1152,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         s.summary.days.sort((a, b) => a.date.localeCompare(b.date));
         const rangeItems = [...s.rangeContributors.entries()].map(([session, item]) => {
             item.lastActiveAt = s.lastActivity.get(session)!;
+            item.firstActiveAt = firstActivity.get(`${s.summary.range}:${session}`)!;
             const meta = sessionMetadata.get(session);
             if (meta?.projectId && meta.label && !meta.conflicted) item.project = { id: meta.projectId, label: meta.label };
             if (meta?.conflicted) item.engineSessionId = null;

@@ -181,8 +181,9 @@ function rankedSessions(v: unknown, range: Record<string, unknown>, asOf: string
     const dailyTotals = new Map<string, { tokens: UsageTokens; requests: number; results: number; errors: number }>();
     for (const raw of v.items) {
         if (!obj(raw)) return false;
-        const { tokenSources: sources, tools: toolCounts, days, dailyDetail, lastActiveAt, ...base } = raw;
+        const { tokenSources: sources, tools: toolCounts, days, dailyDetail, firstActiveAt, lastActiveAt, ...base } = raw;
         if (!instant(lastActiveAt) || lastActiveAt < (range.startInclusive as string) || lastActiveAt >= (range.endExclusive as string) || lastActiveAt > asOf) return false;
+        if (firstActiveAt !== undefined && (!instant(firstActiveAt) || firstActiveAt < (range.startInclusive as string) || firstActiveAt > lastActiveAt)) return false;
         if (!contributor(base) || !tokenSources(sources, base.tokens as UsageTokens) || !Array.isArray(toolCounts) || !uniqueCategories(toolCounts, MAX_USAGE_TOOLS) || !toolCounts.every(tool) || !Array.isArray(days) || days.length > 30 || !['full', 'unavailable'].includes(dailyDetail as string) || dailyDetail === 'unavailable' && days.length !== 0 || seen.has(base.id as string)) return false;
         seen.add(base.id as string);
         for (const metric of ['tokens', 'requests', 'errors'] as const) {
