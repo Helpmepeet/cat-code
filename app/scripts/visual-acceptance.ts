@@ -11,7 +11,7 @@
  * driver injection. The difference is what the driver does once it is in.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, readFileSync, cpSync, copyFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +21,9 @@ import {
   waitForRendererReady,
   type ChildExit,
 } from './devLauncher.js'
+import { prepareDevElectron } from './prepare-dev-electron.js'
+import { prepareAnalyticsFixture, isolatedCaptureEnvironment } from './visualAcceptanceFixture.js'
+import { createNativeCaptureRun, nativeCaptureBootstrap, nativeCapturePreservationMessage, preserveNativeCapture, waitForNativeCaptureExit, type NativeCaptureRun } from './nativeCaptureLifetime.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -29,7 +32,7 @@ const capturePort = process.env.CATCODE_CAPTURE_PORT ?? '5173'
 const rendererUrl = `http://localhost:${capturePort}`
 const driverOut = join(here, 'visual-acceptance-driver.cjs')
 
-const outDir = resolve(
+let outDir = resolve(
   process.env.CATCODE_CAPTURE_OUT ?? join(appRoot, '.visual-acceptance'),
 )
 
@@ -37,6 +40,7 @@ let scratch: string | null = null
 let configHome: string | null = null
 let viteProcess: ReturnType<typeof spawn> | null = null
 let electronProcess: ReturnType<typeof spawn> | null = null
+let nativeRun: NativeCaptureRun | null = null
 
 await main()
 process.exit(process.exitCode ?? 0)
@@ -54,6 +58,9 @@ async function main(): Promise<void> {
     scratch = mkdtempSync(join(tmpdir(), 'catcode-visual-cwd-'))
     scratch = realpathSync(scratch)
     configHome = mkdtempSync(join(tmpdir(), 'catcode-visual-config-'))
+    if (process.env.CATCODE_CAPTURE_SCENE === 'analytics-matrix') {
+      prepareAnalyticsFixture(configHome, scratch)
+    }
 
     if (process.env.CATCODE_CAPTURE_SCENE === 'usage') {
       const project = join(configHome, 'projects', 'usage-fixture')
@@ -77,6 +84,7 @@ async function main(): Promise<void> {
       stdio: 'inherit',
     })
     if (build.status !== 0) {
+      process.stderr.write(`[visual] Electron build failed (exit ${build.status ?? 'unknown'})\n`)
       process.exitCode = build.status ?? 1
       return
     }
@@ -118,6 +126,39 @@ async function main(): Promise<void> {
       pollMs: 150,
     })
     if (!readiness.ok) throw new Error(describeReadinessFailure(readiness, rendererUrl))
+
+    if (process.argv.includes('--prepare-native')) {
+      const binary = prepareDevElectron()
+      if (!binary) throw new Error('Cat Code Dev bundle is unavailable')
+      nativeRun = createNativeCaptureRun(outDir)
+      outDir = nativeRun.outDir
+      const runDriver = join(outDir, 'driver.cjs')
+      copyFileSync(driverOut, runDriver)
+      const bootstrap = join(outDir, 'native-bootstrap.cjs')
+      const environment = isolatedCaptureEnvironment(configHome, scratch, outDir, rendererUrl)
+      environment.CATCODE_CAPTURE_SCENE = process.env.CATCODE_CAPTURE_SCENE ?? ''
+      environment.CATCODE_CAPTURE_WIDTHS = process.env.CATCODE_CAPTURE_WIDTHS ?? '1440,1280,900'
+      writeFileSync(bootstrap, nativeCaptureBootstrap(nativeRun) + `
+for (const key of Object.keys(process.env)) if (/API_KEY|OAUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|AUTH_TOKEN/.test(key)) delete process.env[key];
+Object.assign(process.env, ${JSON.stringify(environment)});
+require(${JSON.stringify(runDriver)});
+`)
+      writeFileSync(join(outDir, 'native-launch.json'), JSON.stringify({
+        bundle_id: 'com.github.Electron', bundlePath: resolve(binary, '../../..'),
+        additional_arguments: ['--require', bootstrap, appRoot],
+        creates_new_application_instance: true, electron_debugging_port: 9222,
+        configHome, scratch, outDir, runId: nativeRun.runId,
+      }, null, 2))
+      nativeRun.published = true
+      process.stdout.write(`[visual] native launch ready: ${join(outDir, 'native-launch.json')}\n`)
+      const code = await waitForNativeCaptureExit(nativeRun, 12 * 60_000)
+      const result = JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'))
+      const diagnostics = join(configHome, 'desktop', 'logs')
+      if (existsSync(diagnostics)) cpSync(diagnostics, join(outDir, 'diagnostics'), { recursive: true })
+      process.stdout.write(`[visual] native result: ${JSON.stringify(result)}\n`)
+      process.exitCode = result.ok && code === 0 ? 0 : 1
+      return
+    }
 
     let captured = 0
     const electron = spawn(electronBin, ['--require', driverOut, appRoot], {
@@ -205,6 +246,10 @@ function waitForExit(
 }
 
 async function cleanup(): Promise<void> {
+  if (preserveNativeCapture(nativeRun)) {
+    process.stderr.write(`[visual] ${nativeCapturePreservationMessage(nativeRun!, { scratch, configHome, vitePid: viteProcess?.pid })}\n`)
+    return
+  }
   const vite = viteProcess
   const electron = electronProcess
   viteProcess = null
