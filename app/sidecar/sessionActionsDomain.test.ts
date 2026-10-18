@@ -8,12 +8,14 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { randomUUID } from 'crypto'
-import { mkdtempSync, rmSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs'
+import { homedir, tmpdir } from 'os'
+import { isAbsolute, join, relative, resolve, sep } from 'path'
 import {
+  getOriginalCwd,
   getSessionId,
   getSessionProjectDir,
+  setOriginalCwd,
   switchSession,
 } from '../../src/bootstrap/state.js'
 import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
@@ -23,6 +25,8 @@ import type { Message } from '../../src/types/message.js'
 import type { InterruptedTurnRecordV1 } from '../../src/utils/interruptedTurn.js'
 import { createAssistantMessage, createUserMessage } from '../../src/utils/messages.js'
 import {
+  getProjectsDir,
+  getTranscriptPath,
   loadTranscriptFile,
   recordTranscript,
   resetProjectForTesting,
@@ -509,26 +513,58 @@ describe('sessionActionsDomain — read-only actions never resume', () => {
 describe('sessionActionsDomain — whole-conversation fork durability', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
+  const originalCwd = getOriginalCwd()
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const realConfigDir = originalConfigDir ?? join(homedir(), '.cat-code')
   const originalPersistenceFlag = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+  let testRoot: string
+  let configDir: string
   let tempDir: string
   let sessionId: string
 
   beforeEach(() => {
     process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
-    tempDir = mkdtempSync(join(tmpdir(), 'session-action-fork-'))
+    testRoot = mkdtempSync(join(tmpdir(), 'session-action-fork-'))
+    configDir = join(testRoot, 'config')
+    tempDir = join(testRoot, 'workspace')
+    mkdirSync(tempDir, { recursive: true })
+    // Fork output and title lookup use original cwd/config, not just the active
+    // session's path. The fresh cwd also avoids getProjectDir's cwd-only cache.
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    setOriginalCwd(tempDir)
     sessionId = randomUUID()
     switchSession(asSessionId(sessionId), tempDir)
     resetProjectForTesting()
   })
 
   afterEach(async () => {
-    resetProjectForTesting()
-    switchSession(asSessionId(originalSessionId), originalProjectDir)
-    rmSync(tempDir, { recursive: true, force: true })
-    if (originalPersistenceFlag === undefined) {
-      delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
-    } else {
-      process.env.TEST_ENABLE_SESSION_PERSISTENCE = originalPersistenceFlag
+    try {
+      resetProjectForTesting()
+    } finally {
+      try {
+        setOriginalCwd(originalCwd)
+        switchSession(asSessionId(originalSessionId), originalProjectDir)
+      } finally {
+        if (originalConfigDir === undefined) {
+          delete process.env.CLAUDE_CONFIG_DIR
+        } else {
+          process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+        }
+        if (originalPersistenceFlag === undefined) {
+          delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+        } else {
+          process.env.TEST_ENABLE_SESSION_PERSISTENCE = originalPersistenceFlag
+        }
+        rmSync(testRoot, { recursive: true, force: true })
+        expect(existsSync(testRoot)).toBe(false)
+        expect(getOriginalCwd()).toBe(originalCwd)
+        expect(getSessionId()).toBe(originalSessionId)
+        expect(getSessionProjectDir()).toBe(originalProjectDir)
+        expect(process.env.CLAUDE_CONFIG_DIR).toBe(originalConfigDir)
+        expect(process.env.TEST_ENABLE_SESSION_PERSISTENCE).toBe(
+          originalPersistenceFlag,
+        )
+      }
     }
   })
 
@@ -545,21 +581,76 @@ describe('sessionActionsDomain — whole-conversation fork durability', () => {
     } as unknown as AppSessionController
 
     const executor = createRealSessionActionsExecutor({ tools: [], controller })
-    const result = await executor.branch()
-    const { messages } = await loadTranscriptFile(result.forkPath)
-    const forkedMessages = [...messages.values()]
+    const sourcePath = getTranscriptPath()
+    expect(getProjectsDir()).toBe(join(configDir, 'projects'))
+    expect(sourcePath).toBe(join(tempDir, `${sessionId}.jsonl`))
+    expect(pathIsWithin(sourcePath, testRoot)).toBe(true)
+    expect(pathIsWithin(sourcePath, realConfigDir)).toBe(false)
+
+    const titles: string[] = []
+    for (const expectedTitle of [
+      'persisted prompt (Branch)',
+      'persisted prompt (Branch 2)',
+      'persisted prompt (Branch 3)',
+    ]) {
+      const result = await executor.branch()
+      titles.push(result.title)
+      expect(existsSync(sourcePath)).toBe(true)
+      expect(result.title).toBe(expectedTitle)
+      expect(pathIsWithin(result.forkPath, testRoot)).toBe(true)
+      expect(pathIsWithin(result.forkPath, realConfigDir)).toBe(false)
+
+      const { messages } = await loadTranscriptFile(result.forkPath)
+      const forkedMessages = [...messages.values()]
+      expect(forkedMessages.map(message => message.uuid)).toEqual([
+        user.uuid,
+        earlierAssistant.uuid,
+        latestAssistant.uuid,
+      ])
+      expect(forkedMessages[0]).toMatchObject({
+        type: 'user',
+        message: { content: 'persisted prompt' },
+      })
+      expect(forkedMessages.some(message =>
+        message.type === 'assistant' &&
+        message.message.content.some(
+          block => block.type === 'text' && block.text === 'latest response',
+        ),
+      )).toBe(true)
+
+      const entries = readFileSync(result.forkPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      expect(entries.find(entry => entry.type === 'custom-title')).toMatchObject({
+        sessionId: result.engineSessionId,
+        customTitle: expectedTitle,
+      })
+      expect(entries.find(entry => entry.type === 'forked-session')).toMatchObject({
+        sessionId: result.engineSessionId,
+        sourceSessionId: sessionId,
+      })
+      expect(
+        entries
+          .filter(entry => entry.type === 'user' || entry.type === 'assistant')
+          .every(entry =>
+            (entry.forkedFrom as { sessionId?: string } | undefined)?.sessionId ===
+            sessionId,
+          ),
+      ).toBe(true)
+    }
 
     expect(idleResolved).toBe(true)
-    expect(forkedMessages.map(message => message.uuid)).toEqual([
-      user.uuid,
-      earlierAssistant.uuid,
-      latestAssistant.uuid,
-    ])
-    expect(forkedMessages.some(message =>
-      message.type === 'assistant' &&
-      message.message.content.some(
-        block => block.type === 'text' && block.text === 'latest response',
-      ),
-    )).toBe(true)
+    expect(new Set(titles).size).toBe(titles.length)
   })
 })
+
+function pathIsWithin(path: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path))
+  return (
+    relativePath === '' ||
+    (relativePath !== '..' &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
+  )
+}
